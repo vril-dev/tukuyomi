@@ -4,8 +4,6 @@ Coraza + CRS WAF project
 
 [English](README.md) | [Japanese](README.ja.md)
 
-![Admin Top](docs/images/admin-dashboard-overview.png)
-
 ## Overview
 
 `tukuyomi` is a lightweight yet powerful application protection stack built with Coraza WAF and OWASP Core Rule Set (CRS).

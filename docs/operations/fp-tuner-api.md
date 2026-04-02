@@ -1,0 +1,179 @@
+[English](fp-tuner-api.md) | [日本語](fp-tuner-api.ja.md)
+
+# FP Tuner API Contract (v1)
+
+This document defines the current API contract for FP tuning flow (`mock` and `http` modes).
+
+## Endpoints
+
+- `POST /tukuyomi-api/fp-tuner/propose`
+- `POST /tukuyomi-api/fp-tuner/apply`
+
+## 1) Propose
+
+### Request
+
+```json
+{
+  "target_path": "rules/tukuyomi.conf",
+  "event": {
+    "event_id": "manual-test-001",
+    "method": "GET",
+    "path": "/search",
+    "rule_id": 100004,
+    "status": 403,
+    "matched_variable": "ARGS:q",
+    "matched_value": "select * from users"
+  }
+}
+```
+
+Notes:
+- `event` is optional. If omitted, server tries latest `waf_block` event from `waf-events.ndjson`.
+- Unknown fields are rejected.
+
+### Response
+
+```json
+{
+  "ok": true,
+  "contract_version": "fp_tuner.v1",
+  "mode": "mock",
+  "source": "request",
+  "approval": {
+    "required": true,
+    "token": "6f9d...token..."
+  },
+  "input": {
+    "event_id": "manual-test-001",
+    "method": "GET",
+    "path": "/search",
+    "rule_id": 100004,
+    "status": 403,
+    "matched_variable": "ARGS:q",
+    "matched_value": "select * from users"
+  },
+  "proposal": {
+    "id": "fp-mock-001",
+    "title": "Scoped false-positive tuning suggestion",
+    "summary": "Mock provider response for fp-tuner contract testing.",
+    "reason": "Fixture-based response to test send/receive/apply flow without external LLM API.",
+    "confidence": 0.84,
+    "target_path": "rules/tukuyomi.conf",
+    "rule_line": "SecRule REQUEST_URI \"@beginsWith /search\" \"id:190123,phase:1,pass,nolog,ctl:ruleRemoveTargetById=100004;ARGS:q,msg:'tukuyomi fp_tuner scoped exclusion'\""
+  }
+}
+```
+
+Notes:
+- `approval.required=true` means non-simulated apply requires `approval_token`.
+
+## 2) Apply
+
+### Request
+
+```json
+{
+  "proposal": {
+    "id": "fp-mock-001",
+    "target_path": "rules/tukuyomi.conf",
+    "rule_line": "SecRule REQUEST_URI \"@beginsWith /search\" \"id:190123,phase:1,pass,nolog,ctl:ruleRemoveTargetById=100004;ARGS:q,msg:'tukuyomi fp_tuner scoped exclusion'\""
+  },
+  "simulate": true,
+  "approval_token": "6f9d...token..."
+}
+```
+
+Notes:
+- `simulate` defaults to `true`.
+- `rule_line` is validated against a strict allow-list pattern.
+- When `WAF_FP_TUNER_REQUIRE_APPROVAL=true` and `simulate=false`, `approval_token` is required.
+
+### Response (simulate)
+
+```json
+{
+  "ok": true,
+  "contract_version": "fp_tuner.v1",
+  "simulated": true,
+  "hot_reloaded": false,
+  "reloaded_file": "rules/tukuyomi.conf",
+  "preview_etag": "W/\"sha256:...\""
+}
+```
+
+### Response (real apply)
+
+```json
+{
+  "ok": true,
+  "contract_version": "fp_tuner.v1",
+  "etag": "W/\"sha256:...\"",
+  "hot_reloaded": true,
+  "reloaded_file": "rules/tukuyomi.conf"
+}
+```
+
+## Security Behavior
+
+- Provider request payload is sanitized before external send.
+- Masked categories include bearer/jwt-like tokens, email, IPv4, and common secret query keys.
+- Only scoped exclusion format is accepted for apply.
+- Propose/apply actions are appended to `WAF_FP_TUNER_AUDIT_FILE` (default `logs/coraza/fp-tuner-audit.ndjson`).
+- Ensure the audit path is writable by the runtime UID/GID (`PUID`/`GUID`).
+
+## Related Env Vars
+
+- `WAF_FP_TUNER_REQUIRE_APPROVAL` (`true` by default)
+- `WAF_FP_TUNER_APPROVAL_TTL_SEC` (default `600`)
+- `WAF_FP_TUNER_AUDIT_FILE` (default `logs/coraza/fp-tuner-audit.ndjson`)
+
+## Local HTTP Mode Contract Test
+
+Run `scripts/test_fp_tuner_http.sh` to verify:
+
+- `WAF_FP_TUNER_MODE=http` propose/apply flow
+- provider request masking behavior
+- response contract handling with a local stub provider
+
+## Command Bridge Test
+
+Run `scripts/test_fp_tuner_bridge_command.sh` to verify command-based provider integration.
+
+- Bridge server: `scripts/fp_tuner_provider_bridge.py`
+- Example command provider: `scripts/fp_tuner_provider_cmd_example.sh`
+- Override provider command via `BRIDGE_COMMAND=/path/to/cmd.sh`
+
+### OpenAI-Compatible Command Provider
+
+- Script: `scripts/fp_tuner_provider_openai.sh`
+- Required envs:
+  - `FP_TUNER_OPENAI_API_KEY` (or `OPENAI_API_KEY`)
+  - `FP_TUNER_OPENAI_MODEL` (or `OPENAI_MODEL`, or provider request `model`)
+- Optional envs:
+  - `FP_TUNER_OPENAI_API_TYPE` (`responses` default, or `chat`)
+  - `FP_TUNER_OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
+  - `FP_TUNER_OPENAI_ENDPOINT` (override full endpoint URL)
+  - `FP_TUNER_OPENAI_TIMEOUT_SEC` (default `30`)
+
+Local mock validation:
+
+- `scripts/test_fp_tuner_openai_command.sh`
+
+### Claude Messages Command Provider
+
+- Script: `scripts/fp_tuner_provider_claude.sh`
+- Required envs:
+  - `FP_TUNER_CLAUDE_API_KEY` (or `ANTHROPIC_API_KEY`)
+  - `FP_TUNER_CLAUDE_MODEL` (or `ANTHROPIC_MODEL`, or provider request `model`)
+- Optional envs:
+  - `FP_TUNER_CLAUDE_BASE_URL` (default `https://api.anthropic.com`)
+  - `FP_TUNER_CLAUDE_ENDPOINT` (override full endpoint URL, default `/v1/messages`)
+  - `FP_TUNER_CLAUDE_API_VERSION` (default `2023-06-01`)
+  - `FP_TUNER_CLAUDE_BETA` (optional `anthropic-beta` header value)
+  - `FP_TUNER_CLAUDE_TIMEOUT_SEC` (default `30`)
+  - `FP_TUNER_CLAUDE_MAX_TOKENS` (default `700`)
+
+Local mock validation:
+
+- `scripts/test_fp_tuner_claude_command.sh`

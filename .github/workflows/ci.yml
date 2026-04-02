@@ -1,0 +1,160 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  go-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: coraza/src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.0"
+          cache-dependency-path: coraza/src/go.sum
+      - name: Run unit tests
+        run: go test ./...
+
+  mysql-logstore-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.0"
+          cache-dependency-path: coraza/src/go.sum
+
+      - name: Prepare env file
+        run: cp .env.example .env
+
+      - name: Start MySQL container
+        run: docker compose --profile mysql up -d mysql
+
+      - name: Wait for MySQL healthy
+        run: |
+          for i in $(seq 1 60); do
+            if docker compose --profile mysql exec -T mysql mysqladmin ping -h 127.0.0.1 -uroot -p"${MYSQL_ROOT_PASSWORD:-tukuyomi-root}" --silent >/dev/null 2>&1; then
+              echo "mysql is ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "mysql did not become healthy in time" >&2
+          docker compose --profile mysql ps mysql || true
+          docker compose --profile mysql logs mysql || true
+          exit 1
+
+      - name: Run MySQL log-store integration test
+        working-directory: coraza/src
+        env:
+          WAF_TEST_MYSQL_DSN: tukuyomi:tukuyomi@tcp(127.0.0.1:13306)/tukuyomi?charset=utf8mb4&parseTime=true
+        run: go test ./internal/handler -run TestLogsStatsMySQLStoreAggregatesAndIngestsIncrementally -count=1
+
+      - name: Tear down MySQL container
+        if: always()
+        run: docker compose --profile mysql down -v
+
+  ui-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/tukuyomi-admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: web/tukuyomi-admin/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Run UI tests
+        run: npm test
+
+  compose-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docker compose
+        run: docker compose config >/dev/null
+
+  example-smoke:
+    name: example-smoke (${{ matrix.example }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        example:
+          - api-gateway
+          - nextjs
+          - wordpress
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run protected-host example smoke
+        run: ./scripts/ci_example_smoke.sh ${{ matrix.example }}
+
+  waf-test:
+    name: waf-test (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: file
+            waf_storage_backend: "file"
+            waf_db_enabled: "false"
+          - mode: sqlite
+            waf_storage_backend: "db"
+            waf_db_enabled: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare env file
+        run: cp .env.example .env
+
+      - name: Install CRS
+        run: ./scripts/install_crs.sh
+
+      - name: Run GoTestWAF
+        env:
+          GOTESTWAF_AUTO_DOWN: "1"
+          MIN_BLOCKED_RATIO: "70"
+          WAF_STORAGE_BACKEND: ${{ matrix.waf_storage_backend }}
+          WAF_DB_ENABLED: ${{ matrix.waf_db_enabled }}
+          WAF_DB_RETENTION_DAYS: "30"
+        run: ./scripts/run_gotestwaf.sh
+
+      - name: Validate SQLite DB artifact
+        if: matrix.waf_db_enabled == 'true'
+        run: |
+          if [[ ! -s data/logs/coraza/tukuyomi.db ]]; then
+            echo "expected sqlite db file was not generated" >&2
+            ls -la data/logs/coraza || true
+            exit 1
+          fi
+
+      - name: Publish GoTestWAF summary
+        if: always()
+        run: |
+          if [[ -f data/logs/gotestwaf/gotestwaf-report-summary.md ]]; then
+            cat data/logs/gotestwaf/gotestwaf-report-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload GoTestWAF artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gotestwaf-report-${{ matrix.mode }}
+          path: |
+            data/logs/gotestwaf/gotestwaf-report.json
+            data/logs/gotestwaf/gotestwaf-report-summary.txt
+            data/logs/gotestwaf/gotestwaf-report-summary.md
+            data/logs/coraza/tukuyomi.db
+          if-no-files-found: warn

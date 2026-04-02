@@ -1,0 +1,60 @@
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Code coverage profiles and other test artifacts
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env file
+.env
+
+# Editor/IDE
+# .idea/
+# .vscode/
+
+data/rules/*
+!data/rules/tukuyomi.conf
+data/conf
+!data/conf/cache.conf
+!data/conf/waf.bypass
+!data/conf/crs-disabled.conf
+data/logs/coraza/*
+!data/logs/coraza/empty
+data/logs/nginx/*
+!data/logs/nginx/empty
+# legacy path (pre-nginx migration)
+data/logs/openresty/*
+data/logs/gotestwaf/*
+!data/logs/gotestwaf/empty
+
+# examples
+examples/*/.env
+examples/nextjs/app/node_modules/
+examples/api-gateway/api/node_modules/
+examples/*/data/rules/crs/*
+!examples/*/data/rules/crs/.gitkeep
+examples/*/data/logs/coraza/*
+!examples/*/data/logs/coraza/empty
+examples/*/data/logs/nginx/*
+!examples/*/data/logs/nginx/empty
+# legacy path (pre-nginx migration)
+examples/*/data/logs/openresty/*

@@ -4,12 +4,36 @@ Coraza + CRS WAFプロジェクト
 
 [English](README.md) | [日本語](README.ja.md)
 
-![管理画面トップ](docs/images/admin-dashboard-overview.png)
-
 ## 概要
 
 このプロジェクトは、Coraza WAF と OWASP Core Rule Set (CRS) を組み合わせた
 軽量かつ強力なアプリケーション防御システム「tukuyomi」です。
+
+## tukuyomi エコシステム
+
+`tukuyomi` は tukuyomi セキュリティスイートの OSS 基盤です。  
+各コンポーネントのビルド済みバイナリは公開配布用 [`tukuyomi-releases`](https://github.com/vril-dev/tukuyomi-releases/releases) リポジトリから配布します。  
+リポジトリ全体の releases ページはプロダクトファミリー全体の一覧で、下表は各コンポーネントの最新 tag release へ直接リンクします。  
+それらのページに GitHub が自動生成する source archive は `tukuyomi-releases` リポジトリ自身のものです。
+
+| コンポーネント | 概要 | ライセンス | 配布 |
+|---|---|---|---|
+| tukuyomi | nginx + Coraza WAF（本リポジトリ） | Apache-2.0 | OSS |
+| tukuyomi-proxy | シングルバイナリWAF/Proxy（nginx不要） | MIT | [`v0.7.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.7.6) |
+| tukuyomi-edge | IoTエッジデバイス向けシングルバイナリ | MIT | [`v0.12.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.12.6) |
+| tukuyomi-center | IoTセンター管理向けシングルバイナリ | MIT | [`v0.6.4`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.6.4) |
+| tukuyomi-verify | 検証・テストツール | MIT | [`v0.1.5`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.1.5) |
+
+### バイナリ最新バージョン
+
+| コンポーネント | バージョン | 更新日 |
+|---|---|---|
+| tukuyomi-proxy | v0.7.6 | 2026-04-02 |
+| tukuyomi-edge | v0.12.6 | 2026-04-02 |
+| tukuyomi-center | v0.6.4 | 2026-04-02 |
+| tukuyomi-verify | v0.1.5 | 2026-04-02 |
+
+> バージョン表はリリース毎に更新します。
 
 ## 製品ポジショニング
 
@@ -191,8 +215,6 @@ sudo sysctl --system
 ## 管理ダッシュボード
 
 `web/tukuyomi-admin/` 以下には、React + Vite による管理UIが含まれています。
-
-![管理画面 Dashboard](docs/images/admin-dashboard-overview.png)
 
 ### 主な画面と機能
 
@@ -827,7 +849,11 @@ SQLite 運用手順は以下を参照してください。
 
 ## tukuyomi とは？
 
-**tukuyomi** は日本語の **「護りたまえ」 (mamoritamae)** に由来し、
-「どうか護ってください」や「護りを与えてください」という意味を持ちます。
+**tukuyomi** は、nginx + Coraza WAF をベースとした OSS WAF **mamotama** を前身として発展したプロダクトです。
 
-この名前には、Webアプリケーションとインフラを守るというプロジェクトの目的を込めています。
+名前は **「護りたまえ」(mamoritamae)** という言葉に由来し、
+*「守護を与えよ」* という意味を持ちます。
+
+mamotama が「保護」を核心に据えていたのに対し、
+tukuyomi はより構造的でインテリジェントなアプローチを体現しています——
+Webシステムに秩序・可観測性・制御をもたらすことを目指しています。

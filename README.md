@@ -13,15 +13,16 @@ Coraza + CRS WAF project
 `tukuyomi` is the OSS foundation of the tukuyomi security suite.  
 Pre-built binaries for each component are published from the public [`tukuyomi-releases`](https://github.com/vril-dev/tukuyomi-releases/releases) repository.  
 The repository-wide releases page is an index for the whole product family, while the table below links directly to the latest tagged release for each component.  
+Public landing pages for each binary component are summarized under [`docs/products/`](./docs/products/).  
 GitHub auto-generated source archives on those pages belong to the `tukuyomi-releases` repository itself.
 
-| Component | Description | License | Distribution |
-|---|---|---|---|
-| tukuyomi | nginx + Coraza WAF (this repository) | Apache-2.0 | OSS |
-| tukuyomi-proxy | Single-binary WAF/Proxy, no nginx required | MIT | [`v0.7.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.7.6) |
-| tukuyomi-edge | Single-binary for IoT edge devices | MIT | [`v0.12.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.12.6) |
-| tukuyomi-center | Single-binary for IoT center management | MIT | [`v0.6.4`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.6.4) |
-| tukuyomi-verify | Verification and testing tool | MIT | [`v0.1.5`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.1.5) |
+| Component | Description | License | Distribution | Docs |
+|---|---|---|---|---|
+| tukuyomi | nginx + Coraza WAF (this repository) | Apache-2.0 | OSS | [`README`](README.md) |
+| tukuyomi-proxy | Single-binary WAF/Proxy, no nginx required | MIT | [`v0.7.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.7.6) | [`README`](./docs/products/proxy/README.md) |
+| tukuyomi-edge | Single-binary for IoT edge devices | MIT | [`v0.12.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.12.6) | [`README`](./docs/products/edge/README.md) |
+| tukuyomi-center | Single-binary for IoT center management | MIT | [`v0.6.4`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.6.4) | [`README`](./docs/products/center/README.md) |
+| tukuyomi-verify | Verification and testing tool | MIT | [`v0.1.5`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.1.5) | [`README`](./docs/products/verify/README.md) |
 
 ### Latest Binary Versions
 
@@ -230,6 +231,7 @@ Notes:
 | `/notifications` | View/edit aggregate notification config directly (`conf/notifications.conf`) |
 | `/bot-defense` | View/edit bot-defense config directly (`bot-defense.conf`) |
 | `/semantic` | View/edit semantic security config directly (`semantic.conf`) |
+| `/fp-tuner` | Propose and apply false-positive tuning changes from recent `waf_block` events |
 | `/cache` | Visual + raw editing for cache rules (`cache.conf`), with Validate/Save |
 
 ### Screenshots
@@ -252,8 +254,20 @@ Notes:
 #### Rate Limit
 ![Rate Limit](docs/images/admin-rate-limit.png)
 
+#### IP Reputation
+![IP Reputation](docs/images/admin-ip-reputation.png)
+
 #### Notifications
 ![Notifications](docs/images/admin-notifications.png)
+
+#### Bot Defense
+![Bot Defense](docs/images/admin-bot-defense.png)
+
+#### Semantic Security
+![Semantic Security](docs/images/admin-semantic-security.png)
+
+#### FP Tuner
+![FP Tuner](docs/images/admin-fp-tuner.png)
 
 #### Cache Rules
 ![Cache Rules](docs/images/admin-cache-rules.png)

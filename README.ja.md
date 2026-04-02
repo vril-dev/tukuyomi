@@ -14,15 +14,16 @@ Coraza + CRS WAFプロジェクト
 `tukuyomi` は tukuyomi セキュリティスイートの OSS 基盤です。  
 各コンポーネントのビルド済みバイナリは公開配布用 [`tukuyomi-releases`](https://github.com/vril-dev/tukuyomi-releases/releases) リポジトリから配布します。  
 リポジトリ全体の releases ページはプロダクトファミリー全体の一覧で、下表は各コンポーネントの最新 tag release へ直接リンクします。  
+各バイナリコンポーネントの公開向けランディングページは [`docs/products/`](./docs/products/) 以下にまとめています。  
 それらのページに GitHub が自動生成する source archive は `tukuyomi-releases` リポジトリ自身のものです。
 
-| コンポーネント | 概要 | ライセンス | 配布 |
-|---|---|---|---|
-| tukuyomi | nginx + Coraza WAF（本リポジトリ） | Apache-2.0 | OSS |
-| tukuyomi-proxy | シングルバイナリWAF/Proxy（nginx不要） | MIT | [`v0.7.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.7.6) |
-| tukuyomi-edge | IoTエッジデバイス向けシングルバイナリ | MIT | [`v0.12.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.12.6) |
-| tukuyomi-center | IoTセンター管理向けシングルバイナリ | MIT | [`v0.6.4`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.6.4) |
-| tukuyomi-verify | 検証・テストツール | MIT | [`v0.1.5`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.1.5) |
+| コンポーネント | 概要 | ライセンス | 配布 | Docs |
+|---|---|---|---|---|
+| tukuyomi | nginx + Coraza WAF（本リポジトリ） | Apache-2.0 | OSS | [`README`](README.ja.md) |
+| tukuyomi-proxy | シングルバイナリWAF/Proxy（nginx不要） | MIT | [`v0.7.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.7.6) | [`README`](./docs/products/proxy/README.ja.md) |
+| tukuyomi-edge | IoTエッジデバイス向けシングルバイナリ | MIT | [`v0.12.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.12.6) | [`README`](./docs/products/edge/README.ja.md) |
+| tukuyomi-center | IoTセンター管理向けシングルバイナリ | MIT | [`v0.6.4`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.6.4) | [`README`](./docs/products/center/README.ja.md) |
+| tukuyomi-verify | 検証・テストツール | MIT | [`v0.1.5`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.1.5) | [`README`](./docs/products/verify/README.ja.md) |
 
 ### バイナリ最新バージョン
 
@@ -231,6 +232,7 @@ sudo sysctl --system
 | `/notifications` | 集計通知設定の閲覧・編集（`conf/notifications.conf` を直接操作） |
 | `/bot-defense` | Bot defense設定の閲覧・編集（bot-defense.conf を直接操作） |
 | `/semantic` | Semantic Security設定の閲覧・編集（semantic.conf を直接操作） |
+| `/fp-tuner` | 直近の `waf_block` event から false positive 調整案を提案・適用 |
 | `/cache` | Cache Rules の可視化・編集（cache.conf の表編集／Raw編集、Validate/Save対応） |
 
 ### 画面キャプチャ
@@ -253,8 +255,20 @@ sudo sysctl --system
 #### Rate Limit
 ![Rate Limit](docs/images/admin-rate-limit.png)
 
+#### IP Reputation
+![IP Reputation](docs/images/admin-ip-reputation.png)
+
 #### Notifications
 ![Notifications](docs/images/admin-notifications.png)
+
+#### Bot Defense
+![Bot Defense](docs/images/admin-bot-defense.png)
+
+#### Semantic Security
+![Semantic Security](docs/images/admin-semantic-security.png)
+
+#### FP Tuner
+![FP Tuner](docs/images/admin-fp-tuner.png)
 
 #### Cache Rules
 ![Cache Rules](docs/images/admin-cache-rules.png)

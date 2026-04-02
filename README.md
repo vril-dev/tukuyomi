@@ -10,6 +10,32 @@ Coraza + CRS WAF project
 
 `tukuyomi` is a lightweight yet powerful application protection stack built with Coraza WAF and OWASP Core Rule Set (CRS).
 
+## tukuyomi Ecosystem
+
+`tukuyomi` is the OSS foundation of the tukuyomi security suite.  
+Pre-built binaries for each component are published from the public [`tukuyomi-releases`](https://github.com/vril-dev/tukuyomi-releases/releases) repository.  
+The repository-wide releases page is an index for the whole product family, while the table below links directly to the latest tagged release for each component.  
+GitHub auto-generated source archives on those pages belong to the `tukuyomi-releases` repository itself.
+
+| Component | Description | License | Distribution |
+|---|---|---|---|
+| tukuyomi | nginx + Coraza WAF (this repository) | Apache-2.0 | OSS |
+| tukuyomi-proxy | Single-binary WAF/Proxy, no nginx required | MIT | [`v0.7.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.7.6) |
+| tukuyomi-edge | Single-binary for IoT edge devices | MIT | [`v0.12.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.12.6) |
+| tukuyomi-center | Single-binary for IoT center management | MIT | [`v0.6.4`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.6.4) |
+| tukuyomi-verify | Verification and testing tool | MIT | [`v0.1.5`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.1.5) |
+
+### Latest Binary Versions
+
+| Component | Version | Updated |
+|---|---|---|
+| tukuyomi-proxy | v0.7.6 | 2026-04-02 |
+| tukuyomi-edge | v0.12.6 | 2026-04-02 |
+| tukuyomi-center | v0.6.4 | 2026-04-02 |
+| tukuyomi-verify | v0.1.5 | 2026-04-02 |
+
+> Version table is updated on each release.
+
 ## Product Positioning
 
 `tukuyomi` is the Docker-first WAF stack in the family. It shares core security controls with `tukuyomi-proxy` and `tukuyomi-edge`, but its reverse proxy and TLS entrypoint are primarily delegated to `nginx`.
@@ -190,8 +216,6 @@ Notes:
 ## Admin Dashboard
 
 `web/tukuyomi-admin/` contains the admin UI built with React + Vite.
-
-![Admin Dashboard](docs/images/admin-dashboard-overview.png)
 
 ### Main Screens and Features
 
@@ -825,14 +849,11 @@ SQLite operation notes:
 
 ## What Is tukuyomi?
 
-**tukuyomi** is inspired by the Japanese phrase **「護りたまえ」 (mamoritamae)**,
-which means *"please protect"* or *"grant protection"*.
+**tukuyomi** evolves from **mamotama**, an OSS WAF built on nginx + Coraza WAF.
 
-The name reflects the project's purpose: protecting web applications and infrastructure.
+The name is inspired by **「護りたまえ」(mamoritamae)**,
+meaning *"grant protection"*.
 
----
-
-## Disclaimer
-
-This project is primarily intended for security learning and validation.
-Before production use, perform sufficient evaluation and tuning for your environment.
+While mamotama focused on protection as its core principle,
+tukuyomi represents a more structured and intelligent approach —
+bringing order, observability, and control to web systems.

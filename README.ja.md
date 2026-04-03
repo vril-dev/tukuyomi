@@ -12,29 +12,18 @@ Coraza + CRS WAFプロジェクト
 ## tukuyomi エコシステム
 
 `tukuyomi` は tukuyomi セキュリティスイートの OSS 基盤です。  
-各コンポーネントのビルド済みバイナリは公開配布用 [`tukuyomi-releases`](https://github.com/vril-dev/tukuyomi-releases/releases) リポジトリから配布します。  
-リポジトリ全体の releases ページはプロダクトファミリー全体の一覧で、下表は各コンポーネントの最新 tag release へ直接リンクします。  
+各コンポーネントのビルド済みバイナリは公開配布用 [`tukuyomi-releases`](https://github.com/vril-dev/tukuyomi-releases) リポジトリから配布します。  
+最新バージョンとダウンロードリンクは [`tukuyomi-releases`](https://github.com/vril-dev/tukuyomi-releases) の README を参照してください。  
 各バイナリコンポーネントの公開向けランディングページは [`docs/products/`](./docs/products/) 以下にまとめています。  
-それらのページに GitHub が自動生成する source archive は `tukuyomi-releases` リポジトリ自身のものです。
+その Downloads ページに GitHub が自動生成する source archive は `tukuyomi-releases` リポジトリ自身のものです。
 
 | コンポーネント | 概要 | ライセンス | 配布 | Docs |
 |---|---|---|---|---|
 | tukuyomi | nginx + Coraza WAF（本リポジトリ） | Apache-2.0 | OSS | [`README`](README.ja.md) |
-| tukuyomi-proxy | シングルバイナリWAF/Proxy（nginx不要） | MIT | [`v0.7.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.7.6) | [`README`](./docs/products/proxy/README.ja.md) |
-| tukuyomi-edge | IoTエッジデバイス向けシングルバイナリ | MIT | [`v0.12.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.12.6) | [`README`](./docs/products/edge/README.ja.md) |
-| tukuyomi-center | IoTセンター管理向けシングルバイナリ | MIT | [`v0.6.4`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.6.4) | [`README`](./docs/products/center/README.ja.md) |
-| tukuyomi-verify | 検証・テストツール | MIT | [`v0.1.5`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.1.5) | [`README`](./docs/products/verify/README.ja.md) |
-
-### バイナリ最新バージョン
-
-| コンポーネント | バージョン | 更新日 |
-|---|---|---|
-| tukuyomi-proxy | v0.7.6 | 2026-04-02 |
-| tukuyomi-edge | v0.12.6 | 2026-04-02 |
-| tukuyomi-center | v0.6.4 | 2026-04-02 |
-| tukuyomi-verify | v0.1.5 | 2026-04-02 |
-
-> バージョン表はリリース毎に更新します。
+| tukuyomi-proxy | シングルバイナリWAF/Proxy（nginx不要） | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/proxy/README.ja.md) |
+| tukuyomi-edge | IoTエッジデバイス向けシングルバイナリ | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/edge/README.ja.md) |
+| tukuyomi-center | IoTセンター管理向けシングルバイナリ | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/center/README.ja.md) |
+| tukuyomi-verify | 検証・テストツール | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/verify/README.ja.md) |
 
 ## 製品ポジショニング
 

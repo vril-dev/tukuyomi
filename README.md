@@ -11,29 +11,18 @@ Coraza + CRS WAF project
 ## tukuyomi Ecosystem
 
 `tukuyomi` is the OSS foundation of the tukuyomi security suite.  
-Pre-built binaries for each component are published from the public [`tukuyomi-releases`](https://github.com/vril-dev/tukuyomi-releases/releases) repository.  
-The repository-wide releases page is an index for the whole product family, while the table below links directly to the latest tagged release for each component.  
+Pre-built binaries for each component are published from the public [`tukuyomi-releases`](https://github.com/vril-dev/tukuyomi-releases) repository.  
+For current versions and download links, see the README in [`tukuyomi-releases`](https://github.com/vril-dev/tukuyomi-releases).  
 Public landing pages for each binary component are summarized under [`docs/products/`](./docs/products/).  
-GitHub auto-generated source archives on those pages belong to the `tukuyomi-releases` repository itself.
+GitHub auto-generated source archives on those distribution pages belong to the `tukuyomi-releases` repository itself.
 
 | Component | Description | License | Distribution | Docs |
 |---|---|---|---|---|
 | tukuyomi | nginx + Coraza WAF (this repository) | Apache-2.0 | OSS | [`README`](README.md) |
-| tukuyomi-proxy | Single-binary WAF/Proxy, no nginx required | MIT | [`v0.7.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.7.6) | [`README`](./docs/products/proxy/README.md) |
-| tukuyomi-edge | Single-binary for IoT edge devices | MIT | [`v0.12.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.12.6) | [`README`](./docs/products/edge/README.md) |
-| tukuyomi-center | Single-binary for IoT center management | MIT | [`v0.6.4`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.6.4) | [`README`](./docs/products/center/README.md) |
-| tukuyomi-verify | Verification and testing tool | MIT | [`v0.1.5`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.1.5) | [`README`](./docs/products/verify/README.md) |
-
-### Latest Binary Versions
-
-| Component | Version | Updated |
-|---|---|---|
-| tukuyomi-proxy | v0.7.6 | 2026-04-02 |
-| tukuyomi-edge | v0.12.6 | 2026-04-02 |
-| tukuyomi-center | v0.6.4 | 2026-04-02 |
-| tukuyomi-verify | v0.1.5 | 2026-04-02 |
-
-> Version table is updated on each release.
+| tukuyomi-proxy | Single-binary WAF/Proxy, no nginx required | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/proxy/README.md) |
+| tukuyomi-edge | Single-binary for IoT edge devices | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/edge/README.md) |
+| tukuyomi-center | Single-binary for IoT center management | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/center/README.md) |
+| tukuyomi-verify | Verification and testing tool | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/verify/README.md) |
 
 ## Product Positioning
 

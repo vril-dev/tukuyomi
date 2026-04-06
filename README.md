@@ -309,6 +309,11 @@ make compose-up
 You can change the root path by setting `VITE_APP_BASE_PATH` and `VITE_CORAZA_API_BASE` in `.env`.
 For local hot-reload development of the admin UI, start the optional Vite container with `make web-up` and open port `5173` directly.
 
+### Deployment Guides
+
+- Binary deployment (`systemd`, on-prem, VPS, VM, EC2): [docs/build/binary-deployment.md](/home/ky491/git/vril/tukuyomi/docs/build/binary-deployment.md)
+- Container deployment (ECS, AKS, GKE, Container Apps): [docs/build/container-deployment.md](/home/ky491/git/vril/tukuyomi/docs/build/container-deployment.md)
+
 #### Optional: Local MySQL Container (profile: `mysql`)
 
 For future DB-driver validation, you can start a local MySQL container:

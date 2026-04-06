@@ -310,6 +310,11 @@ make compose-up
 環境変数 `.env` に `VITE_APP_BASE_PATH` および `VITE_CORAZA_API_BASE` を定義することで、ルートパスを変更できます。
 管理UIを hot reload で開発したい場合だけ、任意で `make web-up` を使って `5173` を直接開いてください。
 
+### デプロイガイド
+
+- Binary deployment（`systemd`, オンプレ, VPS, VM, EC2）: [docs/build/binary-deployment.ja.md](/home/ky491/git/vril/tukuyomi/docs/build/binary-deployment.ja.md)
+- Container deployment（ECS, AKS, GKE, Container Apps）: [docs/build/container-deployment.ja.md](/home/ky491/git/vril/tukuyomi/docs/build/container-deployment.ja.md)
+
 #### 任意: ローカル MySQL コンテナ（profile: `mysql`）
 
 将来の DB ドライバ検証用に、ローカル MySQL コンテナを起動できます:

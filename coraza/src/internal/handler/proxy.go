@@ -65,10 +65,20 @@ func ensureProxy() {
 }
 
 func onProxyResponse(res *http.Response) error {
+	sanitizeInternalResponseHeaders(res)
 	annotateWAFHit(res)
 	applyCacheHeaders(res)
 
 	return nil
+}
+
+func sanitizeInternalResponseHeaders(res *http.Response) {
+	if res == nil || res.Header == nil {
+		return
+	}
+
+	res.Header.Del("X-WAF-Hit")
+	res.Header.Del("X-WAF-RuleIDs")
 }
 
 func annotateWAFHit(res *http.Response) {
@@ -80,10 +90,13 @@ func annotateWAFHit(res *http.Response) {
 	if hit, _ := ctx.Value(ctxKeyWafHit).(bool); !hit {
 		return
 	}
+	ruleIDs, _ := ctx.Value(ctxKeyWafRule).(string)
 	if res.Header != nil {
-		res.Header.Set("X-WAF-Hit", "1")
-		if rid, _ := ctx.Value(ctxKeyWafRule).(string); rid != "" {
-			res.Header.Set("X-WAF-RuleIDs", rid)
+		if config.ForwardInternalResponseHeaders {
+			res.Header.Set("X-WAF-Hit", "1")
+			if ruleIDs != "" {
+				res.Header.Set("X-WAF-RuleIDs", ruleIDs)
+			}
 		}
 	}
 
@@ -101,7 +114,7 @@ func annotateWAFHit(res *http.Response) {
 		"ip":      ip,
 		"country": country,
 		"path":    path,
-		"rules":   res.Header.Get("X-WAF-RuleIDs"),
+		"rules":   ruleIDs,
 		"status":  status,
 	})
 }
@@ -134,11 +147,11 @@ func applyCacheHeaders(res *http.Response) {
 }
 
 func ensureRequestID(c *gin.Context) string {
-	reqID := c.Request.Header.Get("X-Request-ID")
+	reqID := trustedRequestID(c)
 	if reqID == "" {
 		reqID = genReqID()
-		c.Request.Header.Set("X-Request-ID", reqID)
 	}
+	c.Request.Header.Set("X-Request-ID", reqID)
 	c.Writer.Header().Set("X-Request-ID", reqID)
 
 	return reqID

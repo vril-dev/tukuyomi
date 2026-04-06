@@ -2,6 +2,7 @@ package config
 
 import (
 	"log"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -11,29 +12,32 @@ import (
 )
 
 var (
-	AppURL                string
-	RulesFile             string
-	BypassFile            string
-	CountryBlockFile      string
-	RateLimitFile         string
-	IPReputationFile      string
-	BotDefenseFile        string
-	SemanticFile          string
-	NotificationFile      string
-	LogFile               string
-	ProxyErrorHTMLFile    string
-	ProxyErrorRedirectURL string
-	StrictOverride        bool
-	APIBasePath           string
-	UIBasePath            string
-	APIKeyPrimary         string
-	APIKeySecondary       string
-	APIAuthDisable        bool
-	APICORSOrigins        []string
-	CRSEnable             bool
-	CRSSetupFile          string
-	CRSRulesDir           string
-	CRSDisabledFile       string
+	AppURL                         string
+	RulesFile                      string
+	BypassFile                     string
+	CountryBlockFile               string
+	RateLimitFile                  string
+	IPReputationFile               string
+	BotDefenseFile                 string
+	SemanticFile                   string
+	NotificationFile               string
+	LogFile                        string
+	ProxyErrorHTMLFile             string
+	ProxyErrorRedirectURL          string
+	StrictOverride                 bool
+	APIBasePath                    string
+	UIBasePath                     string
+	TrustedProxyCIDRs              []string
+	TrustedProxyPrefixes           []netip.Prefix
+	ForwardInternalResponseHeaders bool
+	APIKeyPrimary                  string
+	APIKeySecondary                string
+	APIAuthDisable                 bool
+	APICORSOrigins                 []string
+	CRSEnable                      bool
+	CRSSetupFile                   string
+	CRSRulesDir                    string
+	CRSDisabledFile                string
 
 	AllowInsecureDefaults bool
 
@@ -117,6 +121,8 @@ func LoadEnv() {
 	if UIBasePath == APIBasePath {
 		log.Fatal("WAF_UI_BASEPATH must differ from WAF_API_BASEPATH")
 	}
+	TrustedProxyCIDRs, TrustedProxyPrefixes = parseTrustedProxyCIDRs(os.Getenv("WAF_TRUSTED_PROXY_CIDRS"))
+	ForwardInternalResponseHeaders = isTruthy(os.Getenv("WAF_FORWARD_INTERNAL_RESPONSE_HEADERS"))
 
 	APIKeyPrimary = strings.TrimSpace(os.Getenv("WAF_API_KEY_PRIMARY"))
 	APIKeySecondary = strings.TrimSpace(os.Getenv("WAF_API_KEY_SECONDARY"))
@@ -304,4 +310,36 @@ func parseDBSyncIntervalSec(v string) int {
 		return 3600
 	}
 	return n
+}
+
+func parseTrustedProxyCIDRs(v string) ([]string, []netip.Prefix) {
+	parts := parseCSV(v)
+	if len(parts) == 0 {
+		return nil, nil
+	}
+
+	cidrs := make([]string, 0, len(parts))
+	prefixes := make([]netip.Prefix, 0, len(parts))
+	for _, part := range parts {
+		if prefix, err := netip.ParsePrefix(part); err == nil {
+			prefix = prefix.Masked()
+			cidrs = append(cidrs, prefix.String())
+			prefixes = append(prefixes, prefix)
+			continue
+		}
+		if addr, err := netip.ParseAddr(part); err == nil {
+			addr = addr.Unmap()
+			prefix := netip.PrefixFrom(addr, addr.BitLen())
+			cidrs = append(cidrs, prefix.String())
+			prefixes = append(prefixes, prefix)
+			continue
+		}
+		log.Printf("[CONFIG][WARN] invalid WAF_TRUSTED_PROXY_CIDRS entry ignored: %q", part)
+	}
+
+	if len(cidrs) == 0 {
+		return nil, nil
+	}
+
+	return cidrs, prefixes
 }

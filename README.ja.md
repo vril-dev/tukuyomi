@@ -140,6 +140,8 @@ make preset-check PRESET=minimal
 | `WAF_STRICT_OVERRIDE` | `false` | 特別ルール読み込み失敗時の挙動。`true`で即終了、`false`で警告のみ継続。 |
 | `WAF_API_BASEPATH` | `/tukuyomi-api` | 管理APIのベースパス（Go側のルーティング基準）。 |
 | `WAF_UI_BASEPATH` | `/tukuyomi-admin` | 管理UIのベースパス（Go側のルーティング基準）。末尾スラッシュなしで `VITE_APP_BASE_PATH` と揃えてください。 |
+| `WAF_TRUSTED_PROXY_CIDRS` | `10.0.0.0/8,192.168.0.0/16` | `X-Forwarded-For` / `X-Real-IP` / 転送された `X-Request-ID` を信用する前段プロキシの IP/CIDR。Coraza を直接公開する場合は空のままにします。ALB/ECS/Cloudflare 配下では、実際に信頼する前段の subnet だけを設定してください。 |
+| `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` | `false` | 内部用の `X-WAF-Hit` / `X-WAF-RuleIDs` をレスポンスに残すか。クライアントへ返る前に前段 smart proxy が必ず除去する構成でだけ有効化してください。 |
 | `WAF_API_KEY_PRIMARY` | `…` | 管理API用の主キー（`X-API-Key`）。 |
 | `WAF_API_KEY_SECONDARY` | (空) | 予備キー（ローテーション時の切替用。未使用なら空でOK）。 |
 | `WAF_API_AUTH_DISABLE` | (空) | 認証無効化フラグ。運用では空（false相当）推奨。テストで無効化したいときのみ truthy 値。 |
@@ -162,6 +164,12 @@ make preset-check PRESET=minimal
 
 起動時に `WAF_API_KEY_PRIMARY` が短すぎる/既知の弱い値の場合、Corazaプロセスは安全側で起動失敗します。  
 ローカル検証だけ一時的に緩和したい場合は `WAF_ALLOW_INSECURE_DEFAULTS=1` を利用してください。
+
+forwarded header の信頼境界メモ:
+
+- `WAF_TRUSTED_PROXY_CIDRS` を設定しない場合、Coraza は client 側が送った forwarding header を信用せず、直結 peer の IP を使います。
+- 同梱の Docker/compose 例では、`nginx -> coraza` の従来挙動を保つために private range を trusted proxy とし、nginx 側ログ用に internal response header を有効化しています。
+- `client -> ALB/Cloudflare/nginx -> tukuyomi -> app` へ寄せる場合は、`WAF_TRUSTED_PROXY_CIDRS` を実際の前段 range に絞り、前段で確実に除去しない限り `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` は無効のままにしてください。
 
 ## Host Network Hardening（L3/L4 対策の基礎）
 

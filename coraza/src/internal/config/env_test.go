@@ -117,3 +117,22 @@ func TestParseDBSyncIntervalSec(t *testing.T) {
 		})
 	}
 }
+
+func TestParseTrustedProxyCIDRs(t *testing.T) {
+	cidrs, prefixes := parseTrustedProxyCIDRs("10.0.0.0/8, 192.0.2.10, invalid")
+	if len(cidrs) != 2 {
+		t.Fatalf("cidrs len=%d want=2", len(cidrs))
+	}
+	if cidrs[0] != "10.0.0.0/8" {
+		t.Fatalf("cidrs[0]=%q want=%q", cidrs[0], "10.0.0.0/8")
+	}
+	if cidrs[1] != "192.0.2.10/32" {
+		t.Fatalf("cidrs[1]=%q want=%q", cidrs[1], "192.0.2.10/32")
+	}
+	if len(prefixes) != 2 {
+		t.Fatalf("prefixes len=%d want=2", len(prefixes))
+	}
+	if got := prefixes[1].String(); got != "192.0.2.10/32" {
+		t.Fatalf("prefixes[1]=%q want=%q", got, "192.0.2.10/32")
+	}
+}

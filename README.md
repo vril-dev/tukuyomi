@@ -139,6 +139,8 @@ You can control behavior via `.env`.
 | `WAF_STRICT_OVERRIDE` | `false` | Behavior when a special-rule file fails to load. `true`: fail fast. `false`: warn and continue. |
 | `WAF_API_BASEPATH` | `/tukuyomi-api` | Base path for admin API routing on Go server. |
 | `WAF_UI_BASEPATH` | `/tukuyomi-admin` | Base path for admin UI routing on Go server. This should match `VITE_APP_BASE_PATH` without the trailing slash. |
+| `WAF_TRUSTED_PROXY_CIDRS` | `10.0.0.0/8,192.168.0.0/16` | Trusted front-proxy IPs/CIDRs for `X-Forwarded-For`, `X-Real-IP`, and forwarded `X-Request-ID`. Leave empty when Coraza is directly internet-facing. For ALB/ECS/Cloudflare-style fronting, set this to the proxy/LB subnets you actually trust. |
+| `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` | `false` | Whether to keep internal `X-WAF-Hit` / `X-WAF-RuleIDs` headers on upstream responses. Enable only when a smart front proxy strips them before the client. Leave disabled for direct/ALB-style exposure. |
 | `WAF_API_KEY_PRIMARY` | `...` | Primary admin API key (`X-API-Key`). |
 | `WAF_API_KEY_SECONDARY` | (empty) | Secondary key for rotation/fallback. Leave empty if unused. |
 | `WAF_API_AUTH_DISABLE` | (empty) | Disable API auth flag. Keep empty (false) in production; use only for test environments. |
@@ -161,6 +163,12 @@ Upstream failure response behavior:
 
 At startup, if `WAF_API_KEY_PRIMARY` is too short or known-weak, Coraza fails to start in secure mode.
 For local testing only, you can temporarily relax this with `WAF_ALLOW_INSECURE_DEFAULTS=1`.
+
+Forwarded-header trust notes:
+
+- Without `WAF_TRUSTED_PROXY_CIDRS`, Coraza ignores client-supplied forwarding headers and derives client IP from the direct peer.
+- The bundled Docker/compose examples keep `nginx -> coraza` behavior by setting trusted private ranges and enabling internal response headers for nginx-side logging.
+- When you switch to `client -> ALB/Cloudflare/nginx -> tukuyomi -> app`, tighten `WAF_TRUSTED_PROXY_CIDRS` to the actual front-proxy ranges and turn `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` off unless that front layer strips them.
 
 ## Host Network Hardening (L3/L4 Basics)
 

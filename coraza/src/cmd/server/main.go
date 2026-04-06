@@ -93,9 +93,20 @@ func main() {
 
 	r := gin.Default()
 
-	// Never trust client-sent forwarding headers unless explicitly configured.
-	if err := r.SetTrustedProxies(nil); err != nil {
-		log.Fatalf("failed to configure trusted proxies: %v", err)
+	if len(config.TrustedProxyCIDRs) == 0 {
+		// Never trust client-sent forwarding headers unless explicitly configured.
+		if err := r.SetTrustedProxies(nil); err != nil {
+			log.Fatalf("failed to configure trusted proxies: %v", err)
+		}
+		log.Println("[SECURITY] trusted proxies disabled; forwarded client IP and request ID headers are ignored")
+	} else {
+		if err := r.SetTrustedProxies(config.TrustedProxyCIDRs); err != nil {
+			log.Fatalf("failed to configure trusted proxies: %v", err)
+		}
+		log.Printf("[SECURITY] trusted proxies enabled: %s", strings.Join(config.TrustedProxyCIDRs, ","))
+	}
+	if config.ForwardInternalResponseHeaders {
+		log.Println("[SECURITY][WARN] forwarding internal WAF response headers is enabled; use only behind a front proxy that strips them")
 	}
 
 	// Lightweight unauthenticated probe for container health checks.

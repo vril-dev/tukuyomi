@@ -98,7 +98,7 @@ You can control behavior via `.env`.
 | --- | --- | --- |
 | `NGX_CORAZA_UPSTREAM` | `server coraza:9090;` | Upstream definition for Coraza (Go server). You can list multiple `server host:port;` lines for simple load balancing. |
 | `NGX_BACKEND_RESPONSE_TIMEOUT` | `60s` | Upstream response timeout from Coraza. Applied to `proxy_read_timeout`. |
-| `NGX_CORAZA_ADMIN_URL` | `/tukuyomi-admin/` | Public path for admin UI. Trailing slash required. Requests under this path are proxied to frontend (`web:5173`). |
+| `NGX_CORAZA_ADMIN_URL` | `/tukuyomi-admin/` | Public path for admin UI. Trailing slash required. Requests under this path are proxied to the embedded admin UI served by Coraza. |
 | `NGX_CORAZA_API_BASEPATH` | `/tukuyomi-api/` | Base path for admin API. Trailing slash recommended. This path is always non-cacheable on nginx side. |
 
 ### WAF / Go (Coraza Wrapper)
@@ -138,6 +138,7 @@ You can control behavior via `.env`.
 | `WAF_DB_SYNC_INTERVAL_SEC` | `0` | Periodic DB→runtime sync interval in seconds. `0` disables background polling; `>=1` enables periodic reconciliation across multiple Coraza nodes. |
 | `WAF_STRICT_OVERRIDE` | `false` | Behavior when a special-rule file fails to load. `true`: fail fast. `false`: warn and continue. |
 | `WAF_API_BASEPATH` | `/tukuyomi-api` | Base path for admin API routing on Go server. |
+| `WAF_UI_BASEPATH` | `/tukuyomi-admin` | Base path for admin UI routing on Go server. This should match `VITE_APP_BASE_PATH` without the trailing slash. |
 | `WAF_API_KEY_PRIMARY` | `...` | Primary admin API key (`X-API-Key`). |
 | `WAF_API_KEY_SECONDARY` | (empty) | Secondary key for rotation/fallback. Leave empty if unused. |
 | `WAF_API_AUTH_DISABLE` | (empty) | Disable API auth flag. Keep empty (false) in production; use only for test environments. |
@@ -154,9 +155,9 @@ Upstream failure response behavior:
 
 | Variable | Example | Description |
 | --- | --- | --- |
-| `VITE_CORAZA_API_BASE` | `http://localhost/tukuyomi-api` | Full/relative API base path used by browser-side calls. |
-| `VITE_APP_BASE_PATH` | `/tukuyomi-admin` | Admin UI root path (`react-router` basename). |
-| `VITE_API_KEY` | `...` | API key attached by admin UI (`X-API-Key`). Usually same as `WAF_API_KEY_PRIMARY`. |
+| `VITE_CORAZA_API_BASE` | `/tukuyomi-api` | Full/relative API base path used by browser-side calls. Used when building embedded admin UI assets and when running the optional local Vite dev server. |
+| `VITE_APP_BASE_PATH` | `/tukuyomi-admin` | Admin UI root path (`react-router` basename). Used when building embedded admin UI assets and when running the optional local Vite dev server. |
+| `VITE_API_KEY` | `...` | API key attached by admin UI (`X-API-Key`). Usually same as `WAF_API_KEY_PRIMARY`. This is a client-side value and is embedded into the built admin UI. |
 
 At startup, if `WAF_API_KEY_PRIMARY` is too short or known-weak, Coraza fails to start in secure mode.
 For local testing only, you can temporarily relax this with `WAF_ALLOW_INSECURE_DEFAULTS=1`.
@@ -203,7 +204,7 @@ Notes:
 
 ## Admin Dashboard
 
-`web/tukuyomi-admin/` contains the admin UI built with React + Vite.
+`web/tukuyomi-admin/` contains the admin UI built with React + Vite. Production/container builds compile this frontend and embed it into the Coraza binary.
 
 ### Main Screens and Features
 
@@ -280,11 +281,11 @@ Notes:
 ```bash
 make setup
 make compose-build
-make web-up
 make compose-up
 ```
 
 You can change the root path by setting `VITE_APP_BASE_PATH` and `VITE_CORAZA_API_BASE` in `.env`.
+For local hot-reload development of the admin UI, start the optional Vite container with `make web-up` and open port `5173` directly.
 
 #### Optional: Local MySQL Container (profile: `mysql`)
 

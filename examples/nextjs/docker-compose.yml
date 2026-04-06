@@ -10,13 +10,18 @@ services:
   coraza:
     user: "${PUID}:${GUID}"
     build:
-      context: ../../coraza
-      dockerfile: Dockerfile
+      context: ../..
+      dockerfile: coraza/Dockerfile
+      args:
+        VITE_CORAZA_API_BASE: ${VITE_CORAZA_API_BASE:-/tukuyomi-api}
+        VITE_APP_BASE_PATH: ${VITE_APP_BASE_PATH:-/tukuyomi-admin}
+        VITE_API_KEY: ${VITE_API_KEY:-}
     environment:
       - WAF_APP_URL=${WAF_APP_URL}
       - WAF_LOG_FILE=${WAF_LOG_FILE}
       - WAF_STRICT_OVERRIDE=${WAF_STRICT_OVERRIDE}
       - WAF_API_BASEPATH=${WAF_API_BASEPATH}
+      - WAF_UI_BASEPATH=${VITE_APP_BASE_PATH:-/tukuyomi-admin}
       - WAF_BYPASS_FILE=${WAF_BYPASS_FILE}
       - WAF_BOT_DEFENSE_FILE=${WAF_BOT_DEFENSE_FILE}
       - WAF_SEMANTIC_FILE=${WAF_SEMANTIC_FILE}

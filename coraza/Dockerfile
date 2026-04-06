@@ -1,20 +1,41 @@
+FROM node:22-alpine AS ui-builder
+
+WORKDIR /src/web/tukuyomi-admin
+
+ARG VITE_CORAZA_API_BASE=/tukuyomi-api
+ARG VITE_APP_BASE_PATH=/tukuyomi-admin
+ARG VITE_API_KEY=
+
+ENV VITE_CORAZA_API_BASE=${VITE_CORAZA_API_BASE}
+ENV VITE_APP_BASE_PATH=${VITE_APP_BASE_PATH}
+ENV VITE_API_KEY=${VITE_API_KEY}
+
+COPY web/tukuyomi-admin/package.json web/tukuyomi-admin/package-lock.json ./
+RUN npm ci
+
+COPY web/tukuyomi-admin/ ./
+RUN npm run build
+
+
 FROM golang:1.26.0-alpine AS builder
 
-WORKDIR /app
+WORKDIR /src/coraza/src
 
 RUN apk add --no-cache git
 
-COPY src .
-RUN go mod tidy
+COPY coraza/src/go.mod coraza/src/go.sum ./
 RUN go mod download
 
-RUN go build -o server /app/cmd/server
+COPY coraza/src/ ./
+COPY --from=ui-builder /src/web/tukuyomi-admin/dist ./internal/handler/admin_ui_dist
+
+RUN go build -o /out/server ./cmd/server
 
 FROM alpine:3.19
 
 WORKDIR /app
 
-COPY --from=builder /app/server .
+COPY --from=builder /out/server .
 
 EXPOSE 9090
 

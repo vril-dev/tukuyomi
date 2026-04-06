@@ -21,6 +21,7 @@ GOTESTWAF_AUTO_DOWN ?= 1
 
 CORAZA_SRC := coraza/src
 UI_DIR := web/tukuyomi-admin
+UI_EMBED_DIR := coraza/src/internal/handler/admin_ui_dist
 EXAMPLES := api-gateway nextjs wordpress
 EXAMPLE ?= api-gateway
 PRESET ?= minimal
@@ -33,7 +34,7 @@ STACK_ENV = $(DOCKER_ENV) NGINX_PORT="$(HOST_NGINX_PORT)" OPENRESTY_PORT="$(HOST
 .PHONY: \
 	help setup env-init crs-install \
 	go-test mysql-logstore-test \
-	ui-install ui-test ui-build \
+	ui-install ui-test ui-build ui-sync ui-build-sync \
 	compose-config compose-config-mysql compose-build compose-up compose-down web-up web-down mysql-up mysql-down \
 	preset-list preset-apply preset-check \
 	gotestwaf gotestwaf-file gotestwaf-sqlite \
@@ -52,14 +53,16 @@ help:
 	@echo "  make ui-install             Install admin UI dependencies"
 	@echo "  make ui-test                Run admin UI tests"
 	@echo "  make ui-build               Build admin UI assets"
+	@echo "  make ui-sync                Sync web dist -> go:embed assets"
+	@echo "  make ui-build-sync          Build and sync embedded admin UI assets"
 	@echo ""
 	@echo "  make compose-config         Validate docker compose config"
 	@echo "  make compose-config-mysql   Validate compose config with mysql profile"
 	@echo "  make compose-build          Build coraza/nginx images"
 	@echo "  make compose-up             Start coraza/nginx in background"
 	@echo "  make compose-down           Stop coraza/nginx stack"
-	@echo "  make web-up                 Start Vite admin UI container in background"
-	@echo "  make web-down               Stop Vite admin UI container"
+	@echo "  make web-up                 Start optional Vite admin UI dev container"
+	@echo "  make web-down               Stop optional Vite admin UI dev container"
 	@echo "  make mysql-up               Start local mysql profile service"
 	@echo "  make mysql-down             Stop local mysql profile service"
 	@echo ""
@@ -160,6 +163,21 @@ ui-test: ui-install
 ui-build: ui-install
 	cd $(UI_DIR) && $(NPM) run build
 
+ui-sync:
+	@if [[ ! -d "$(UI_DIR)/dist" ]]; then \
+		echo "[ui-sync] missing $(UI_DIR)/dist (run: make ui-build)"; \
+		exit 1; \
+	fi
+	@mkdir -p $(UI_EMBED_DIR)
+	find "$(UI_EMBED_DIR)" -mindepth 1 \
+		! -name '.gitignore' \
+		! -name 'placeholder.html' \
+		-exec rm -rf {} +
+	cp -a $(UI_DIR)/dist/. $(UI_EMBED_DIR)/
+	@echo "[ui-sync] synced $(UI_DIR)/dist -> $(UI_EMBED_DIR)"
+
+ui-build-sync: ui-build ui-sync
+
 compose-config: env-init
 	docker compose config >/dev/null
 	@echo "[compose-config] ok"
@@ -178,10 +196,10 @@ compose-down:
 	$(STACK_ENV) docker compose down --remove-orphans
 
 web-up: env-init
-	$(STACK_ENV) docker compose up -d web
+	$(STACK_ENV) docker compose --profile dev-ui up -d web
 
 web-down:
-	$(STACK_ENV) docker compose stop web
+	$(STACK_ENV) docker compose --profile dev-ui stop web
 
 mysql-up: env-init
 	$(DOCKER_ENV) docker compose --profile mysql up -d mysql

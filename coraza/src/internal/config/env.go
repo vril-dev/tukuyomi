@@ -25,6 +25,7 @@ var (
 	ProxyErrorRedirectURL string
 	StrictOverride        bool
 	APIBasePath           string
+	UIBasePath            string
 	APIKeyPrimary         string
 	APIKeySecondary       string
 	APIAuthDisable        bool
@@ -99,6 +100,22 @@ func LoadEnv() {
 	}
 	if APIBasePath == "/" {
 		log.Fatal("WAF_API_BASEPATH cannot be root path '/'")
+	}
+	UIBasePath = os.Getenv("WAF_UI_BASEPATH")
+	if UIBasePath == "" {
+		UIBasePath = "/tukuyomi-admin"
+	}
+	if !strings.HasPrefix(UIBasePath, "/") {
+		UIBasePath = "/" + UIBasePath
+	}
+	if UIBasePath != "/" {
+		UIBasePath = strings.TrimRight(UIBasePath, "/")
+	}
+	if UIBasePath == "/" {
+		log.Fatal("WAF_UI_BASEPATH cannot be root path '/'")
+	}
+	if UIBasePath == APIBasePath {
+		log.Fatal("WAF_UI_BASEPATH must differ from WAF_API_BASEPATH")
 	}
 
 	APIKeyPrimary = strings.TrimSpace(os.Getenv("WAF_API_KEY_PRIMARY"))

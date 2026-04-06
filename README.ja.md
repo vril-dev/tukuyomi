@@ -99,7 +99,7 @@ make preset-check PRESET=minimal
 | --- | --- | --- |
 | `NGX_CORAZA_UPSTREAM` | `server coraza:9090;` | Coraza（Goサーバ）の upstream 定義。`server host:port;` を複数行で並べれば簡易ロードバランス可。 |
 | `NGX_BACKEND_RESPONSE_TIMEOUT` | `60s` | 上流（Coraza）からの応答タイムアウト。`proxy_read_timeout` に反映。 |
-| `NGX_CORAZA_ADMIN_URL` | `/tukuyomi-admin/` | 管理UIの公開パス。末尾スラッシュ必須。このパスに来たリクエストをフロント（`web:5173`）へプロキシ。 |
+| `NGX_CORAZA_ADMIN_URL` | `/tukuyomi-admin/` | 管理UIの公開パス。末尾スラッシュ必須。このパスに来たリクエストを、Coraza が配信する埋め込み管理UIへプロキシします。 |
 | `NGX_CORAZA_API_BASEPATH` | `/tukuyomi-api/` | 管理APIのベースパス。末尾スラッシュ推奨。このパス配下は nginx 側で常に非キャッシュ扱い。 |
 
 ### WAF / Go（Coraza ラッパー）
@@ -139,6 +139,7 @@ make preset-check PRESET=minimal
 | `WAF_DB_SYNC_INTERVAL_SEC` | `0` | DB→実行時設定の定期同期間隔（秒）。`0` で無効、`1` 以上で複数Corazaノード間の定期整合を有効化。 |
 | `WAF_STRICT_OVERRIDE` | `false` | 特別ルール読み込み失敗時の挙動。`true`で即終了、`false`で警告のみ継続。 |
 | `WAF_API_BASEPATH` | `/tukuyomi-api` | 管理APIのベースパス（Go側のルーティング基準）。 |
+| `WAF_UI_BASEPATH` | `/tukuyomi-admin` | 管理UIのベースパス（Go側のルーティング基準）。末尾スラッシュなしで `VITE_APP_BASE_PATH` と揃えてください。 |
 | `WAF_API_KEY_PRIMARY` | `…` | 管理API用の主キー（`X-API-Key`）。 |
 | `WAF_API_KEY_SECONDARY` | (空) | 予備キー（ローテーション時の切替用。未使用なら空でOK）。 |
 | `WAF_API_AUTH_DISABLE` | (空) | 認証無効化フラグ。運用では空（false相当）推奨。テストで無効化したいときのみ truthy 値。 |
@@ -155,9 +156,9 @@ make preset-check PRESET=minimal
 
 | 変数名 | 例 | 説明 |
 | --- | --- | --- |
-| `VITE_CORAZA_API_BASE` | `http://localhost/tukuyomi-api` | ブラウザから叩く API のフル/相対ベース。リバースプロキシの都合に合わせて指定。 |
-| `VITE_APP_BASE_PATH` | `/tukuyomi-admin` | 管理UIのルートパス（`react-router` の basename）。 |
-| `VITE_API_KEY` | `…` | 管理UIが API へ付与する `X-API-Key`。通常は `WAF_API_KEY_PRIMARY` と同値。 |
+| `VITE_CORAZA_API_BASE` | `/tukuyomi-api` | ブラウザから叩く API のフル/相対ベース。埋め込み管理UIの build 時と、任意のローカル Vite 開発時に使います。 |
+| `VITE_APP_BASE_PATH` | `/tukuyomi-admin` | 管理UIのルートパス（`react-router` の basename）。埋め込み管理UIの build 時と、任意のローカル Vite 開発時に使います。 |
+| `VITE_API_KEY` | `…` | 管理UIが API へ付与する `X-API-Key`。通常は `WAF_API_KEY_PRIMARY` と同値。client-side の値なので build 済み UI に含まれます。 |
 
 起動時に `WAF_API_KEY_PRIMARY` が短すぎる/既知の弱い値の場合、Corazaプロセスは安全側で起動失敗します。  
 ローカル検証だけ一時的に緩和したい場合は `WAF_ALLOW_INSECURE_DEFAULTS=1` を利用してください。
@@ -204,7 +205,7 @@ sudo sysctl --system
 
 ## 管理ダッシュボード
 
-`web/tukuyomi-admin/` 以下には、React + Vite による管理UIが含まれています。
+`web/tukuyomi-admin/` 以下には、React + Vite による管理UIが含まれています。production/container build ではこの frontend を build し、Coraza バイナリへ埋め込みます。
 
 ### 主な画面と機能
 
@@ -281,11 +282,11 @@ sudo sysctl --system
 ```bash
 make setup
 make compose-build
-make web-up
 make compose-up
 ```
 
 環境変数 `.env` に `VITE_APP_BASE_PATH` および `VITE_CORAZA_API_BASE` を定義することで、ルートパスを変更できます。
+管理UIを hot reload で開発したい場合だけ、任意で `make web-up` を使って `5173` を直接開いてください。
 
 #### 任意: ローカル MySQL コンテナ（profile: `mysql`）
 

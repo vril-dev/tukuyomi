@@ -189,9 +189,15 @@ func main() {
 		api.POST("/fp-tuner/apply", handler.ApplyFPTuning)
 	}
 
+	handler.RegisterAdminUIRoutes(r)
+
 	r.NoRoute(func(c *gin.Context) {
 		p := c.Request.URL.Path
 		if strings.HasPrefix(p, config.APIBasePath) {
+			c.AbortWithStatus(404)
+			return
+		}
+		if p == config.UIBasePath || strings.HasPrefix(p, config.UIBasePath+"/") {
 			c.AbortWithStatus(404)
 			return
 		}

@@ -24,6 +24,9 @@ SCENARIO ?= pass
 CORAZA_SRC := coraza/src
 UI_DIR := web/tukuyomi-admin
 UI_EMBED_DIR := coraza/src/internal/handler/admin_ui_dist
+BIN_DIR ?= bin
+APP_NAME ?= tukuyomi
+APP_PKG ?= ./cmd/server
 EXAMPLES := api-gateway nextjs wordpress
 EXAMPLE ?= api-gateway
 PRESET ?= minimal
@@ -35,7 +38,7 @@ STACK_ENV = $(DOCKER_ENV) NGINX_PORT="$(HOST_NGINX_PORT)" OPENRESTY_PORT="$(HOST
 
 .PHONY: \
 	help setup env-init crs-install \
-	go-test mysql-logstore-test \
+	go-test go-build mysql-logstore-test \
 	ui-install ui-test ui-build ui-sync ui-build-sync \
 	compose-config compose-config-mysql compose-build compose-up compose-down web-up web-down mysql-up mysql-down \
 	preset-list preset-apply preset-check \
@@ -51,6 +54,7 @@ help:
 	@echo "  make crs-install            Install OWASP CRS into ./data/rules/crs"
 	@echo ""
 	@echo "  make go-test                Run Go tests (coraza/src)"
+	@echo "  make go-build               Build single binary into ./bin/$(APP_NAME)"
 	@echo "  make mysql-logstore-test    Run MySQL log-store integration test"
 	@echo ""
 	@echo "  make ui-install             Install admin UI dependencies"
@@ -145,6 +149,11 @@ setup: env-init crs-install
 
 go-test:
 	cd $(CORAZA_SRC) && $(GO) test ./...
+
+go-build:
+	mkdir -p $(abspath $(BIN_DIR))
+	cd $(CORAZA_SRC) && $(GO) build -o "$(abspath $(BIN_DIR))/$(APP_NAME)" $(APP_PKG)
+	@echo "[go-build] built $(abspath $(BIN_DIR))/$(APP_NAME)"
 
 mysql-logstore-test: env-init
 	@set -euo pipefail; \

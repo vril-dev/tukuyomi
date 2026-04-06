@@ -163,6 +163,15 @@ Upstream failure response behavior:
 | `VITE_APP_BASE_PATH` | `/tukuyomi-admin` | Admin UI root path (`react-router` basename). Used when building embedded admin UI assets and when running the optional local Vite dev server. |
 | `VITE_API_KEY` | `...` | API key attached by admin UI (`X-API-Key`). Usually same as `WAF_API_KEY_PRIMARY`. This is a client-side value and is embedded into the built admin UI. |
 
+Manual embedded UI rebuild:
+
+```bash
+make ui-build-sync
+make go-build
+```
+
+If you are using the container path instead of a local Go build, run `make compose-build` after `make ui-build-sync`.
+
 At startup, if `WAF_API_KEY_PRIMARY` is too short or known-weak, Coraza fails to start in secure mode.
 For local testing only, you can temporarily relax this with `WAF_ALLOW_INSECURE_DEFAULTS=1`.
 

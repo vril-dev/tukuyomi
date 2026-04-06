@@ -164,6 +164,15 @@ make preset-check PRESET=minimal
 | `VITE_APP_BASE_PATH` | `/tukuyomi-admin` | 管理UIのルートパス（`react-router` の basename）。埋め込み管理UIの build 時と、任意のローカル Vite 開発時に使います。 |
 | `VITE_API_KEY` | `…` | 管理UIが API へ付与する `X-API-Key`。通常は `WAF_API_KEY_PRIMARY` と同値。client-side の値なので build 済み UI に含まれます。 |
 
+埋め込み管理UIを手動で再生成する場合:
+
+```bash
+make ui-build-sync
+make go-build
+```
+
+ローカル Go build ではなく container build を使う場合は、`make ui-build-sync` の後に `make compose-build` を実行してください。
+
 起動時に `WAF_API_KEY_PRIMARY` が短すぎる/既知の弱い値の場合、Corazaプロセスは安全側で起動失敗します。  
 ローカル検証だけ一時的に緩和したい場合は `WAF_ALLOW_INSECURE_DEFAULTS=1` を利用してください。
 

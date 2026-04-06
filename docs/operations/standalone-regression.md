@@ -55,9 +55,17 @@ This currently runs:
 
 - `make check`
 - `make standalone-smoke-all`
+- `make deployment-smoke`
 
 For `api-gateway`, the standalone wrapper also verifies that repeated login
 requests eventually hit `429`.
+
+If you only want the deployment-guide validation bundle without the broader
+standalone sweep, run:
+
+```bash
+make deployment-smoke
+```
 
 ## Matrix Status
 
@@ -70,10 +78,11 @@ requests eventually hit `429`.
 | Normal app proxy | Automated | `standalone-regression-fast` / `standalone-smoke` | protected host reaches app |
 | WAF block | Automated | `standalone-regression-fast` / `standalone-smoke` | simple XSS probe returns `403` |
 | Rate limit | Partially automated | `standalone-regression-extended` (`api-gateway`) | repeated login requests eventually return `429` |
+| Binary deployment guide | Automated | `deployment-smoke` / `standalone-regression-extended` | staged binary build + runtime tree passes `/healthz`, Admin UI, Admin API, and protected-host smoke |
+| Container deployment guide | Automated | `deployment-smoke` / `standalone-regression-extended` | `docs/build/Dockerfile.example` image passes `/healthz`, Admin UI, Admin API, and protected-host smoke |
 | Bypass rules | Manual for now | admin API + reproducer curl | bypass path should pass while non-bypass path still blocks |
 | Country block | Manual for now | trusted front-proxy fixture + reproducer curl | blocked country should return `403`, untrusted headers should degrade to `UNKNOWN` |
-| nginx-style log parity (`accerr` / `intr`) | Pending later slice | N/A | currently tied to front `nginx` behavior |
-| Cache behavior without nginx | Pending later slice | N/A | currently tied to front `nginx` cache |
+| Cache advanced semantics | Pending later slice | N/A | stale serve / coalescing / disk-backed behavior still differs from `nginx proxy_cache` |
 
 ## Why Some Checks Are Still Manual
 

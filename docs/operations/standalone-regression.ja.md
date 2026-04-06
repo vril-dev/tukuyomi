@@ -54,8 +54,15 @@ make standalone-regression-extended
 
 - `make check`
 - `make standalone-smoke-all`
+- `make deployment-smoke`
 
 さらに `api-gateway` については、login を連打したとき最終的に `429` が返ることも確認します。
+
+standalone 一式までは不要で、deployment guide の検証だけ回したい場合は次を使います。
+
+```bash
+make deployment-smoke
+```
 
 ## Matrix Status
 
@@ -68,10 +75,11 @@ make standalone-regression-extended
 | 通常 app proxy | 自動化済み | `standalone-regression-fast` / `standalone-smoke` | protected host で app に到達する |
 | WAF block | 自動化済み | `standalone-regression-fast` / `standalone-smoke` | 簡単な XSS probe が `403` |
 | Rate limit | 一部自動化 | `standalone-regression-extended`（`api-gateway`） | login 連打で最終的に `429` |
+| Binary deployment guide | 自動化済み | `deployment-smoke` / `standalone-regression-extended` | staged binary build + runtime tree が `/healthz`、Admin UI、Admin API、protected-host smoke を通す |
+| Container deployment guide | 自動化済み | `deployment-smoke` / `standalone-regression-extended` | `docs/build/Dockerfile.example` image が `/healthz`、Admin UI、Admin API、protected-host smoke を通す |
 | Bypass rules | いったん手動 | admin API + reproducer curl | bypass path は通り、それ以外は block 維持 |
 | Country block | いったん手動 | trusted front-proxy fixture + reproducer curl | block 対象国は `403`、信頼できない header は `UNKNOWN` に落ちる |
-| nginx 由来ログ互換 (`accerr` / `intr`) | 後続 slice | N/A | 現在は front `nginx` の挙動に依存 |
-| nginx なし cache | 後続 slice | N/A | 現在は front `nginx` cache に依存 |
+| cache の高度な意味論 | 後続 slice | N/A | stale serve / coalescing / disk-backed はまだ `nginx proxy_cache` と差がある |
 
 ## まだ手動の項目がある理由
 

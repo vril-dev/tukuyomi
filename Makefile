@@ -44,7 +44,7 @@ STACK_ENV = $(DOCKER_ENV) NGINX_PORT="$(HOST_NGINX_PORT)" OPENRESTY_PORT="$(HOST
 	preset-list preset-apply preset-check \
 	gotestwaf gotestwaf-file gotestwaf-sqlite \
 	example-smoke example-smoke-all standalone-smoke standalone-smoke-all standalone-regression-fast standalone-regression-extended \
-	binary-deployment-smoke container-deployment-smoke \
+	binary-deployment-smoke container-deployment-smoke deployment-smoke \
 	benchmark-scenario benchmark-baseline \
 	check ci-local clean
 
@@ -95,6 +95,8 @@ help:
 	@echo "    - optional: EXAMPLE=$(EXAMPLE) (default: api-gateway)"
 	@echo "  make container-deployment-smoke      Validate the docs/build container deployment flow"
 	@echo "    - optional: EXAMPLE=$(EXAMPLE) (default: api-gateway)"
+	@echo "  make deployment-smoke                Run the binary + container deployment smoke bundle"
+	@echo "    - optional: DEPLOYMENT_SMOKE_EXAMPLE=api-gateway"
 	@echo "  make benchmark-scenario    Run one benchmark scenario"
 	@echo "    - optional: EXAMPLE=$(EXAMPLE) TOPOLOGY=$(TOPOLOGY) SCENARIO=$(SCENARIO)"
 	@echo "  make benchmark-baseline    Run the standard benchmark matrix"
@@ -273,13 +275,17 @@ standalone-smoke-all:
 standalone-regression-fast: go-test compose-config
 	$(MAKE) standalone-smoke EXAMPLE="$(EXAMPLE)"
 
-standalone-regression-extended: check standalone-smoke-all
+standalone-regression-extended: check standalone-smoke-all deployment-smoke
 
 binary-deployment-smoke:
 	./scripts/run_binary_deployment_smoke.sh "$(EXAMPLE)"
 
 container-deployment-smoke:
 	./scripts/run_container_deployment_smoke.sh "$(EXAMPLE)"
+
+deployment-smoke:
+	$(MAKE) binary-deployment-smoke EXAMPLE="$${DEPLOYMENT_SMOKE_EXAMPLE:-api-gateway}"
+	$(MAKE) container-deployment-smoke EXAMPLE="$${DEPLOYMENT_SMOKE_EXAMPLE:-api-gateway}"
 
 benchmark-scenario:
 	./scripts/run_capacity_baseline.sh "$(EXAMPLE)" "$(TOPOLOGY)" "$(SCENARIO)"

@@ -369,6 +369,7 @@ See `examples/README.md` for common setup flow. The example compose files now de
 If you want a single entrypoint from the repo root, use `make example-smoke EXAMPLE=api-gateway` or `make example-smoke-all`.
 
 For direct `client -> tukuyomi -> app` checks, use `make standalone-regression-fast EXAMPLE=api-gateway` or `make standalone-smoke-all`.
+For deployment-guide validation, use `make deployment-smoke`.
 The current standalone regression matrix is documented in `docs/operations/standalone-regression.md`.
 
 ### FP Tuner Mock Flow

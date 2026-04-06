@@ -370,6 +370,7 @@ MIN_TRUE_NEGATIVE_PASSED_RATIO=95 MAX_FALSE_POSITIVE_RATIO=5 MAX_BYPASS_RATIO=30
 repo ルートの統一入口として使うなら、`make example-smoke EXAMPLE=api-gateway` または `make example-smoke-all` も利用できます。
 
 direct な `client -> tukuyomi -> app` 確認をしたい場合は、`make standalone-regression-fast EXAMPLE=api-gateway` または `make standalone-smoke-all` を使ってください。
+deployment guide の検証をまとめて回したい場合は、`make deployment-smoke` を使ってください。
 現時点の standalone regression matrix は `docs/operations/standalone-regression.md` にまとめています。
 
 ### FPチューナー（モック）送受信テスト

@@ -40,3 +40,14 @@ For direct `tukuyomi` checks without sending client traffic through example `ngi
 ./scripts/run_standalone_regression.sh api-gateway
 make standalone-smoke-all
 ```
+
+For repeatable latency/RPS baseline capture, use:
+
+```bash
+make benchmark-scenario EXAMPLE=api-gateway TOPOLOGY=front SCENARIO=pass
+make benchmark-baseline
+```
+
+The benchmark runner disables example rate-limit rules by default while it
+starts its own stack. Set `BENCH_DISABLE_RATE_LIMIT=0` if you want to measure
+policy throttling instead.

@@ -18,6 +18,8 @@ WAF_STORAGE_BACKEND ?= file
 WAF_DB_ENABLED ?= false
 WAF_DB_RETENTION_DAYS ?= 30
 GOTESTWAF_AUTO_DOWN ?= 1
+TOPOLOGY ?= front
+SCENARIO ?= pass
 
 CORAZA_SRC := coraza/src
 UI_DIR := web/tukuyomi-admin
@@ -39,6 +41,7 @@ STACK_ENV = $(DOCKER_ENV) NGINX_PORT="$(HOST_NGINX_PORT)" OPENRESTY_PORT="$(HOST
 	preset-list preset-apply preset-check \
 	gotestwaf gotestwaf-file gotestwaf-sqlite \
 	example-smoke example-smoke-all standalone-smoke standalone-smoke-all standalone-regression-fast standalone-regression-extended \
+	benchmark-scenario benchmark-baseline \
 	check ci-local clean
 
 help:
@@ -83,6 +86,9 @@ help:
 	@echo "  make standalone-smoke-all  Run direct-tukuyomi standalone smoke for all examples"
 	@echo "  make standalone-regression-fast      Run fast standalone regression baseline"
 	@echo "  make standalone-regression-extended  Run heavier standalone regression baseline"
+	@echo "  make benchmark-scenario    Run one benchmark scenario"
+	@echo "    - optional: EXAMPLE=$(EXAMPLE) TOPOLOGY=$(TOPOLOGY) SCENARIO=$(SCENARIO)"
+	@echo "  make benchmark-baseline    Run the standard benchmark matrix"
 	@echo ""
 	@echo "  make check                 Run go-test + ui-test + compose config checks"
 	@echo "  make ci-local              Run local CI baseline (check + mysql + examples + GoTestWAF)"
@@ -254,6 +260,20 @@ standalone-regression-fast: go-test compose-config
 	$(MAKE) standalone-smoke EXAMPLE="$(EXAMPLE)"
 
 standalone-regression-extended: check standalone-smoke-all
+
+benchmark-scenario:
+	./scripts/run_capacity_baseline.sh "$(EXAMPLE)" "$(TOPOLOGY)" "$(SCENARIO)"
+
+benchmark-baseline:
+	@set -euo pipefail; \
+	run_id="$$(date +%Y%m%d-%H%M%S)"; \
+	echo "[benchmark-baseline] run_id=$$run_id"; \
+	BENCH_RUN_ID="$$run_id" $(MAKE) benchmark-scenario EXAMPLE=api-gateway TOPOLOGY=front SCENARIO=pass; \
+	BENCH_RUN_ID="$$run_id" $(MAKE) benchmark-scenario EXAMPLE=api-gateway TOPOLOGY=direct SCENARIO=pass; \
+	BENCH_RUN_ID="$$run_id" $(MAKE) benchmark-scenario EXAMPLE=api-gateway TOPOLOGY=front SCENARIO=block; \
+	BENCH_RUN_ID="$$run_id" $(MAKE) benchmark-scenario EXAMPLE=api-gateway TOPOLOGY=direct SCENARIO=block; \
+	BENCH_RUN_ID="$$run_id" $(MAKE) benchmark-scenario EXAMPLE=nextjs TOPOLOGY=front SCENARIO=cache; \
+	BENCH_RUN_ID="$$run_id" BENCH_ADMIN_SIDE_TRAFFIC=1 $(MAKE) benchmark-scenario EXAMPLE=nextjs TOPOLOGY=front SCENARIO=cache
 
 check: go-test ui-test compose-config compose-config-mysql
 

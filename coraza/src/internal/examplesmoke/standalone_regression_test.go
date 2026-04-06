@@ -52,13 +52,20 @@ func TestStandaloneRegressionScriptRunsDirectChecks(t *testing.T) {
 		case "/tukuyomi-admin/":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("<html>ok</html>"))
-		case "/tukuyomi-api/status", "/tukuyomi-api/logs/read":
+		case "/tukuyomi-api/status":
 			if got := r.Header.Get("X-API-Key"); got != "test-api-key-123456" {
 				http.Error(w, "bad api key", http.StatusForbidden)
 				return
 			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/tukuyomi-api/logs/read":
+			if got := r.Header.Get("X-API-Key"); got != "test-api-key-123456" {
+				http.Error(w, "bad api key", http.StatusForbidden)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"lines":[{"event":"waf_hit_allow","status":200}]}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -122,12 +129,19 @@ func TestStandaloneRegressionScriptRunsExtendedAPIGatewayRateLimitCheck(t *testi
 		switch r.URL.Path {
 		case "/healthz", "/tukuyomi-admin/":
 			w.WriteHeader(http.StatusOK)
-		case "/tukuyomi-api/status", "/tukuyomi-api/logs/read":
+		case "/tukuyomi-api/status":
 			if got := r.Header.Get("X-API-Key"); got != "test-api-key-123456" {
 				http.Error(w, "bad api key", http.StatusForbidden)
 				return
 			}
 			w.WriteHeader(http.StatusOK)
+		case "/tukuyomi-api/logs/read":
+			if got := r.Header.Get("X-API-Key"); got != "test-api-key-123456" {
+				http.Error(w, "bad api key", http.StatusForbidden)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"lines":[{"event":"waf_block","status":403}]}`))
 		case "/v1/auth/login":
 			if r.Host != "protected.example.test" {
 				http.Error(w, "bad host", http.StatusBadRequest)

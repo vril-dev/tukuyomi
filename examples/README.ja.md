@@ -40,3 +40,14 @@ example 側の `nginx` を client 経路に入れず、direct に `tukuyomi` を
 ./scripts/run_standalone_regression.sh api-gateway
 make standalone-smoke-all
 ```
+
+繰り返し比較できる latency/RPS baseline を取る場合は次を使います。
+
+```bash
+make benchmark-scenario EXAMPLE=api-gateway TOPOLOGY=front SCENARIO=pass
+make benchmark-baseline
+```
+
+benchmark runner が stack を自分で起動する場合、example の rate-limit は
+default で無効化されます。policy throttling 自体を測りたい場合は
+`BENCH_DISABLE_RATE_LIMIT=0` を付けてください。

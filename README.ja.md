@@ -27,16 +27,16 @@ Coraza + CRS WAFプロジェクト
 
 ## 製品ポジショニング
 
-`tukuyomi` はこのファミリーの Docker 前提 WAF スタックです。`tukuyomi-proxy` と `tukuyomi-edge` と同じ中核セキュリティ機能を持ちますが、リバースプロキシと TLS 入口は主に `nginx` 側に委ねます。
+`tukuyomi` はこのファミリーの front-proxy 指向 WAF スタックです。`tukuyomi-proxy` と `tukuyomi-edge` と同じ中核セキュリティ機能を持ちつつ、Go runtime 自身に app reverse proxy、埋め込み管理UI、任意の standalone response cache を持ちます。TLS 入口や edge 側の一部責務は、引き続き `nginx`、ALB、HAProxy、CDN/LB などの前段で担う想定です。
 
 | 項目 | `tukuyomi` | `tukuyomi-proxy` | `tukuyomi-edge` |
 | --- | --- | --- | --- |
-| 実行形態 | Docker / compose | single binary または Docker | single binary / `systemd` |
-| リバースプロキシ + route | `nginx` 前段、内蔵 route editor なし | 内蔵 gateway + route editor | 内蔵 gateway + route editor |
+| 実行形態 | Docker / compose または local binary | single binary または Docker | single binary / `systemd` |
+| リバースプロキシ + route | app proxy 内蔵、route editor なし。`nginx` / LB 前段をよく併用 | 内蔵 gateway + route editor | 内蔵 gateway + route editor |
 | 中核セキュリティ制御 | IP reputation / bot / semantic / rate / country | IP reputation / bot / semantic / rate / country | IP reputation / bot / semantic / rate / country |
 | Device / center 機能 | × | × | device auth + center link |
-| キャッシュ + bypass | `nginx` キャッシュ + bypass rules | 内部キャッシュ + bypass rules | 内部キャッシュ + bypass rules |
-| TLS + 管理 UI | `nginx` TLS + 別 frontend path | built-in TLS + 内蔵管理 UI | built-in TLS + 内蔵管理 UI |
+| キャッシュ + bypass | 内部 response cache + bypass rules、必要なら前段 cache 併用 | 内部キャッシュ + bypass rules | 内部キャッシュ + bypass rules |
+| TLS + 管理 UI | 前段 proxy / LB の TLS + 埋め込み管理 UI | built-in TLS + 内蔵管理 UI | built-in TLS + 内蔵管理 UI |
 | DB / マルチノード | 共有 DB 対応 | 共有 DB 対応 | ローカルノード指向 |
 | Host hardening | × | × | experimental L3/L4 host hardening |
 

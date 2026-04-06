@@ -26,16 +26,16 @@ GitHub auto-generated source archives on those distribution pages belong to the 
 
 ## Product Positioning
 
-`tukuyomi` is the Docker-first WAF stack in the family. It shares core security controls with `tukuyomi-proxy` and `tukuyomi-edge`, but its reverse proxy and TLS entrypoint are primarily delegated to `nginx`.
+`tukuyomi` is the front-proxy-oriented WAF stack in the family. It shares core security controls with `tukuyomi-proxy` and `tukuyomi-edge`, while keeping its own app reverse proxy, embedded admin UI, and optional standalone response cache inside the Go runtime. TLS entry and some edge-facing duties are still typically handled by `nginx`, ALB, HAProxy, or CDN/LB layers.
 
 | Category | `tukuyomi` | `tukuyomi-proxy` | `tukuyomi-edge` |
 | --- | --- | --- | --- |
-| Runtime shape | Docker / compose | single binary or Docker | single binary / `systemd` |
-| Reverse proxy + routes | `nginx` fronted, no built-in route editor | built-in gateway + route editor | built-in gateway + route editor |
+| Runtime shape | Docker / compose or local binary | single binary or Docker | single binary / `systemd` |
+| Reverse proxy + routes | built-in app proxy, no route editor; often fronted by `nginx` / LB | built-in gateway + route editor | built-in gateway + route editor |
 | Core security controls | IP reputation, bot, semantic, rate, country | IP reputation, bot, semantic, rate, country | IP reputation, bot, semantic, rate, country |
 | Device / center features | × | × | device auth + center link |
-| Cache + bypass | `nginx` cache + bypass rules | internal cache + bypass rules | internal cache + bypass rules |
-| TLS + admin UI | `nginx` TLS + separate frontend path | built-in TLS + embedded admin UI | built-in TLS + embedded admin UI |
+| Cache + bypass | internal response cache + bypass rules, optional front cache | internal cache + bypass rules | internal cache + bypass rules |
+| TLS + admin UI | front proxy / LB TLS + embedded admin UI | built-in TLS + embedded admin UI | built-in TLS + embedded admin UI |
 | DB / multi-node | shared DB capable | shared DB capable | local node oriented |
 | Host hardening | × | × | experimental L3/L4 host hardening |
 

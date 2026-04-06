@@ -66,7 +66,7 @@ requests eventually hit `429`.
 | Health check | Automated | `standalone-regression-fast` / `standalone-smoke` | `GET /healthz = 200` |
 | Admin UI | Automated | `standalone-regression-fast` / `standalone-smoke` | `GET /tukuyomi-admin/ = 200` |
 | Admin API status | Automated | `standalone-regression-fast` / `standalone-smoke` | `GET /tukuyomi-api/status = 200` |
-| Admin logs API reachability | Automated | `standalone-regression-fast` / `standalone-smoke` | `GET /tukuyomi-api/logs/read?src=waf&tail=1 = 200` |
+| Admin logs API parity | Automated | `standalone-regression-fast` / `standalone-smoke` | `src=waf/intr/accerr` returns `200`, and after smoke `intr/accerr` contain at least one line |
 | Normal app proxy | Automated | `standalone-regression-fast` / `standalone-smoke` | protected host reaches app |
 | WAF block | Automated | `standalone-regression-fast` / `standalone-smoke` | simple XSS probe returns `403` |
 | Rate limit | Partially automated | `standalone-regression-extended` (`api-gateway`) | repeated login requests eventually return `429` |

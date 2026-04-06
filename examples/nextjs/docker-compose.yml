@@ -49,7 +49,7 @@ services:
     volumes:
       - ./data/rules:/app/rules
       - ./data/conf:/app/conf
-      - ./data/logs/coraza:/app/logs
+      - ./data/logs:/app/logs
     ports:
       - "${CORAZA_PORT:-19091}:9090"
     extra_hosts:

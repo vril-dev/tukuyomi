@@ -36,6 +36,18 @@ const (
 var proxy *httputil.ReverseProxy
 var proxyInitOnce sync.Once
 
+type proxyStatusRecorder struct {
+	gin.ResponseWriter
+	proxyErr string
+}
+
+func (w *proxyStatusRecorder) markProxyError(err error) {
+	if err == nil {
+		return
+	}
+	w.proxyErr = strings.TrimSpace(err.Error())
+}
+
 func ensureProxy() {
 	proxyInitOnce.Do(func() {
 		u, err := url.Parse(config.AppURL)
@@ -49,6 +61,9 @@ func ensureProxy() {
 		proxy = httputil.NewSingleHostReverseProxy(u)
 		proxy.ModifyResponse = onProxyResponse
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			if rec, ok := w.(*proxyStatusRecorder); ok {
+				rec.markProxyError(err)
+			}
 			emitJSONLog(map[string]any{
 				"ts":      time.Now().UTC().Format(time.RFC3339Nano),
 				"service": "coraza",
@@ -190,6 +205,7 @@ func setWAFContext(c *gin.Context, reqID, clientIP, country string, wafHit bool,
 
 func ProxyHandler(c *gin.Context) {
 	ensureProxy()
+	startedAt := time.Now().UTC()
 
 	reqID := ensureRequestID(c)
 	clientIP := requestClientIP(c)
@@ -209,6 +225,20 @@ func ProxyHandler(c *gin.Context) {
 		}
 		emitJSONLog(evt)
 		_ = appendEventToFile(evt)
+		emitOperationalAccessLogs(operationalLogEntry{
+			Timestamp:      time.Now().UTC(),
+			RequestID:      reqID,
+			IP:             clientIP,
+			Country:        country,
+			Method:         c.Request.Method,
+			Path:           requestPath(c.Request),
+			Query:          c.Request.URL.RawQuery,
+			UserAgent:      c.Request.UserAgent(),
+			Status:         http.StatusForbidden,
+			UpstreamStatus: strconv.Itoa(http.StatusForbidden),
+			Duration:       time.Since(startedAt),
+			Event:          "country_block",
+		})
 		c.AbortWithStatus(http.StatusForbidden)
 		return
 	}
@@ -244,6 +274,20 @@ func ProxyHandler(c *gin.Context) {
 		emitJSONLog(evt)
 		_ = appendEventToFile(evt)
 		c.Header("Retry-After", strconv.Itoa(rateDecision.RetryAfterSeconds))
+		emitOperationalAccessLogs(operationalLogEntry{
+			Timestamp:      time.Now().UTC(),
+			RequestID:      reqID,
+			IP:             clientIP,
+			Country:        country,
+			Method:         c.Request.Method,
+			Path:           requestPath(c.Request),
+			Query:          c.Request.URL.RawQuery,
+			UserAgent:      c.Request.UserAgent(),
+			Status:         rateDecision.Status,
+			UpstreamStatus: strconv.Itoa(rateDecision.Status),
+			Duration:       time.Since(startedAt),
+			Event:          "rate_limited",
+		})
 		c.AbortWithStatus(rateDecision.Status)
 		return
 	}
@@ -252,7 +296,25 @@ func ProxyHandler(c *gin.Context) {
 	wafEngine := selectWAFEngine(reqPath)
 	if wafEngine == nil {
 		log.Printf("[BYPASS][HIT] %s -> skip WAF", reqPath)
-		proxy.ServeHTTP(c.Writer, c.Request)
+		setWAFContext(c, reqID, clientIP, country, false, "")
+		rec := &proxyStatusRecorder{ResponseWriter: c.Writer}
+		c.Writer = rec
+		proxy.ServeHTTP(rec, c.Request)
+		emitOperationalAccessLogs(operationalLogEntry{
+			Timestamp:      time.Now().UTC(),
+			RequestID:      reqID,
+			IP:             clientIP,
+			Country:        country,
+			Method:         c.Request.Method,
+			Path:           requestPath(c.Request),
+			Query:          c.Request.URL.RawQuery,
+			UserAgent:      c.Request.UserAgent(),
+			Status:         recorderStatus(rec),
+			UpstreamStatus: recorderUpstreamStatus(rec),
+			Duration:       time.Since(startedAt),
+			Event:          recorderEvent(rec, false),
+			Error:          rec.proxyErr,
+		})
 		return
 	}
 
@@ -294,11 +356,46 @@ func ProxyHandler(c *gin.Context) {
 		}
 		emitJSONLog(evt)
 		_ = appendEventToFile(evt)
+		emitOperationalAccessLogs(operationalLogEntry{
+			Timestamp:      time.Now().UTC(),
+			RequestID:      reqID,
+			IP:             clientIP,
+			Country:        country,
+			Method:         c.Request.Method,
+			Path:           requestPath(c.Request),
+			Query:          c.Request.URL.RawQuery,
+			UserAgent:      c.Request.UserAgent(),
+			Status:         it.Status,
+			UpstreamStatus: strconv.Itoa(it.Status),
+			Duration:       time.Since(startedAt),
+			WAFHit:         wafHit,
+			WAFRules:       strings.Join(unique(ruleIDs), ","),
+			Event:          "waf_block",
+		})
 		c.AbortWithStatus(it.Status)
 		return
 	}
 
-	proxy.ServeHTTP(c.Writer, c.Request)
+	rec := &proxyStatusRecorder{ResponseWriter: c.Writer}
+	c.Writer = rec
+	proxy.ServeHTTP(rec, c.Request)
+	emitOperationalAccessLogs(operationalLogEntry{
+		Timestamp:      time.Now().UTC(),
+		RequestID:      reqID,
+		IP:             clientIP,
+		Country:        country,
+		Method:         c.Request.Method,
+		Path:           requestPath(c.Request),
+		Query:          c.Request.URL.RawQuery,
+		UserAgent:      c.Request.UserAgent(),
+		Status:         recorderStatus(rec),
+		UpstreamStatus: recorderUpstreamStatus(rec),
+		Duration:       time.Since(startedAt),
+		WAFHit:         wafHit,
+		WAFRules:       strings.Join(unique(ruleIDs), ","),
+		Event:          recorderEvent(rec, wafHit),
+		Error:          rec.proxyErr,
+	})
 }
 
 func genReqID() string {
@@ -330,20 +427,7 @@ func appendEventToFile(obj map[string]any) error {
 	if path == "" {
 		path = "/app/logs/coraza/waf-events.ndjson"
 	}
-
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	b, err := json.Marshal(obj)
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(append(b, '\n'))
-
-	return err
+	return appendJSONLineToPath(path, obj)
 }
 
 func requestPath(r *http.Request) string {
@@ -365,4 +449,31 @@ func requestRemoteIP(r *http.Request) string {
 		return host[:idx]
 	}
 	return host
+}
+
+func recorderStatus(rec *proxyStatusRecorder) int {
+	if rec == nil {
+		return http.StatusOK
+	}
+	if status := rec.Status(); status > 0 {
+		return status
+	}
+	return http.StatusOK
+}
+
+func recorderUpstreamStatus(rec *proxyStatusRecorder) string {
+	if rec == nil || strings.TrimSpace(rec.proxyErr) != "" {
+		return ""
+	}
+	return strconv.Itoa(recorderStatus(rec))
+}
+
+func recorderEvent(rec *proxyStatusRecorder, wafHit bool) string {
+	if rec != nil && strings.TrimSpace(rec.proxyErr) != "" {
+		return "proxy_error"
+	}
+	if wafHit {
+		return "waf_hit_allow"
+	}
+	return "response"
 }

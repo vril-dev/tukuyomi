@@ -64,7 +64,7 @@ make standalone-regression-extended
 | Health check | 自動化済み | `standalone-regression-fast` / `standalone-smoke` | `GET /healthz = 200` |
 | Admin UI | 自動化済み | `standalone-regression-fast` / `standalone-smoke` | `GET /tukuyomi-admin/ = 200` |
 | Admin API status | 自動化済み | `standalone-regression-fast` / `standalone-smoke` | `GET /tukuyomi-api/status = 200` |
-| Admin logs API の到達性 | 自動化済み | `standalone-regression-fast` / `standalone-smoke` | `GET /tukuyomi-api/logs/read?src=waf&tail=1 = 200` |
+| Admin logs API の parity | 自動化済み | `standalone-regression-fast` / `standalone-smoke` | `src=waf/intr/accerr` が `200` を返し、smoke 後は `intr/accerr` に少なくとも 1 行入る |
 | 通常 app proxy | 自動化済み | `standalone-regression-fast` / `standalone-smoke` | protected host で app に到達する |
 | WAF block | 自動化済み | `standalone-regression-fast` / `standalone-smoke` | 簡単な XSS probe が `403` |
 | Rate limit | 一部自動化 | `standalone-regression-extended`（`api-gateway`） | login 連打で最終的に `429` |

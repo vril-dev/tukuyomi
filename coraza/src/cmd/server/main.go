@@ -88,6 +88,15 @@ func main() {
 		}
 		log.Printf("[NOTIFY][INIT] loaded")
 	}
+	if err := handler.InitLogOutput(config.LogOutputFile); err != nil {
+		log.Printf("[LOG_OUTPUT][INIT][ERR] %v (path=%s)", err, config.LogOutputFile)
+	} else {
+		if err := handler.SyncLogOutputStorage(); err != nil {
+			log.Printf("[LOG_OUTPUT][DB][WARN] sync failed (fallback=file): %v", err)
+		}
+		logOutput := handler.GetLogOutputStatus()
+		log.Printf("[LOG_OUTPUT][INIT] loaded provider=%s stdout_streams=%d file_streams=%d", logOutput.Provider, logOutput.StdoutStreams, logOutput.FileStreams)
+	}
 
 	log.Println("[INFO] WAF upstream target:", config.AppURL)
 
@@ -141,6 +150,7 @@ func main() {
 					config.APIBasePath + "/rate-limit-rules",
 					config.APIBasePath + "/notifications",
 					config.APIBasePath + "/notifications/status",
+					config.APIBasePath + "/log-output",
 					config.APIBasePath + "/ip-reputation",
 					config.APIBasePath + "/ip-reputation:validate",
 					config.APIBasePath + "/bot-defense-rules",
@@ -185,6 +195,9 @@ func main() {
 		api.POST("/notifications/validate", handler.ValidateNotificationRules)
 		api.POST("/notifications/test", handler.TestNotificationRules)
 		api.PUT("/notifications", handler.PutNotificationRules)
+		api.GET("/log-output", handler.GetLogOutputConfigHandler)
+		api.POST("/log-output/validate", handler.ValidateLogOutputConfigHandler)
+		api.PUT("/log-output", handler.PutLogOutputConfigHandler)
 		api.GET("/ip-reputation", handler.GetIPReputation)
 		api.POST("/ip-reputation:validate", handler.ValidateIPReputation)
 		api.PUT("/ip-reputation", handler.PutIPReputation)

@@ -2,13 +2,11 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -401,21 +399,6 @@ func unique(in []string) []string {
 	}
 
 	return out
-}
-
-func emitJSONLog(obj map[string]any) {
-	if b, err := json.Marshal(obj); err == nil {
-		log.Println(string(b))
-	}
-	ObserveNotificationLogEvent(obj)
-}
-
-func appendEventToFile(obj map[string]any) error {
-	path := os.Getenv("WAF_EVENTS_FILE")
-	if path == "" {
-		path = "/app/logs/coraza/waf-events.ndjson"
-	}
-	return appendJSONLineToPath(path, obj)
 }
 
 func requestPath(r *http.Request) string {

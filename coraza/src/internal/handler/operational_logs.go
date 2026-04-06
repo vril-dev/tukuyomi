@@ -33,10 +33,10 @@ type operationalLogEntry struct {
 func emitOperationalAccessLogs(entry operationalLogEntry) {
 	line := operationalLogLine(entry)
 	if shouldWriteInterestingLog(entry) {
-		_ = appendJSONLineToPath(logFiles["intr"], line)
+		_ = emitLogOutputStream("intr", line)
 	}
 	if shouldWriteAccessErrorLog(entry) {
-		_ = appendJSONLineToPath(logFiles["accerr"], line)
+		_ = emitLogOutputStream("accerr", line)
 	}
 }
 

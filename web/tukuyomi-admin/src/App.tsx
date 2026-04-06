@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Status from './pages/Status';
 import Logs from './pages/Logs';
+import LogOutputPanel from './pages/LogOutputPanel';
 import Rules from './pages/Rules';
 import RuleSets from './pages/RuleSets';
 import CacheRulePanel from './pages/CacheRulesPanel';
@@ -22,6 +23,7 @@ function App() {
           <Route index element={<Navigate to="/status" />} />
           <Route path="status" element={<Status />} />
           <Route path="logs" element={<Logs />} />
+          <Route path="log-output" element={<LogOutputPanel />} />
           <Route path="rules" element={<Rules />} />
           <Route path="rule-sets" element={<RuleSets />} />
           <Route path="bypass" element={<BypassRulesPanel />} />

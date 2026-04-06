@@ -108,7 +108,8 @@ You can control behavior via `.env`.
 | `WAF_APP_URL` | `http://host.docker.internal:3000` | Upstream application URL (change appropriately for production such as ALB/ECS). |
 | `WAF_PROXY_ERROR_HTML_FILE` | (empty) | Optional maintenance HTML file served when the upstream application is unavailable. |
 | `WAF_PROXY_ERROR_REDIRECT_URL` | (empty) | Optional redirect target used when the upstream application is unavailable. |
-| `WAF_LOG_FILE` | (empty) | WAF log output destination. If empty, stdout is used. |
+| `WAF_LOG_FILE` | (empty) | Legacy override for the default WAF event file path inside the generated log-output profile. Prefer `conf/log-output.json` via Admin UI. |
+| `WAF_LOG_OUTPUT_FILE` | `conf/log-output.json` | Log-output profile path. The Admin UI `Log Output` panel edits this file and can switch stdout/file/dual modes per stream. |
 | `WAF_BYPASS_FILE` | `conf/waf.bypass` | Path for bypass/special-rule definition file. |
 | `WAF_BOT_DEFENSE_FILE` | `conf/bot-defense.conf` | Bot-defense challenge settings file (JSON), editable from admin UI. |
 | `WAF_SEMANTIC_FILE` | `conf/semantic.conf` | Semantic heuristic scoring settings file (JSON), editable from admin UI. |
@@ -223,6 +224,7 @@ Notes:
 | --- | --- |
 | `/status` | WAF runtime status and configuration overview |
 | `/logs` | Fetch and view WAF logs |
+| `/log-output` | View/edit cloud/file log output profile (`conf/log-output.json`) |
 | `/rules` | View/edit active base rule files (`rules/tukuyomi.conf` etc.) |
 | `/rule-sets` | Enable/disable CRS core rule files (`rules/crs/rules/*.conf`) |
 | `/bypass` | View/edit bypass config directly (`waf.bypass`) |

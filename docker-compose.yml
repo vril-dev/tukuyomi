@@ -31,6 +31,7 @@ services:
     environment:
       - WAF_APP_URL=${WAF_APP_URL}
       - WAF_LOG_FILE=${WAF_LOG_FILE}
+      - WAF_LOG_OUTPUT_FILE=${WAF_LOG_OUTPUT_FILE:-conf/log-output.json}
       - WAF_STRICT_OVERRIDE=${WAF_STRICT_OVERRIDE}
       - WAF_API_BASEPATH=${WAF_API_BASEPATH}
       - WAF_UI_BASEPATH=${VITE_APP_BASE_PATH:-/tukuyomi-admin}

@@ -26,6 +26,7 @@ func StatusHandler(c *gin.Context) {
 	botDefenseCfg := GetBotDefenseConfig()
 	botDefenseLatest, botDefenseLatestOK := latestBotDefenseDecision()
 	responseCache := GetResponseCacheStatus()
+	logOutput := GetLogOutputStatus()
 	dbTotalRows := 0
 	dbWAFBlockRows := 0
 	dbSizeBytes := int64(0)
@@ -115,6 +116,17 @@ func StatusHandler(c *gin.Context) {
 		"semantic_challenge_actions":            semanticStats.ChallengeActions,
 		"semantic_block_actions":                semanticStats.BlockActions,
 		"log_file":                              config.LogFile,
+		"log_output_file":                       logOutput.Path,
+		"log_output_provider":                   logOutput.Provider,
+		"log_output_waf_mode":                   logOutput.WAF.Mode,
+		"log_output_waf_file_path":              logOutput.WAF.FilePath,
+		"log_output_interesting_mode":           logOutput.Interesting.Mode,
+		"log_output_interesting_file_path":      logOutput.Interesting.FilePath,
+		"log_output_access_error_mode":          logOutput.AccessError.Mode,
+		"log_output_access_error_file_path":     logOutput.AccessError.FilePath,
+		"log_output_stdout_streams":             logOutput.StdoutStreams,
+		"log_output_file_streams":               logOutput.FileStreams,
+		"log_output_local_read_compatible":      logOutput.LocalReadCompatible,
 		"strict_mode":                           config.StrictOverride,
 		"api_base":                              config.APIBasePath,
 		"ui_base":                               config.UIBasePath,

@@ -9,6 +9,7 @@ type NavItem = {
 const navItems: NavItem[] = [
   { to: "/status", label: "Status", hint: "runtime health" },
   { to: "/logs", label: "Logs", hint: "events and traces" },
+  { to: "/log-output", label: "Log Output", hint: "stdout and file profiles" },
   { to: "/rules", label: "Rules", hint: "base directives" },
   { to: "/rule-sets", label: "Rule Sets", hint: "CRS toggles" },
   { to: "/bypass", label: "Bypass Rules", hint: "path overrides" },

@@ -23,6 +23,7 @@ var (
 	SemanticFile                   string
 	NotificationFile               string
 	LogFile                        string
+	LogOutputFile                  string
 	ProxyErrorHTMLFile             string
 	ProxyErrorRedirectURL          string
 	StrictOverride                 bool
@@ -96,6 +97,10 @@ func LoadEnv() {
 		NotificationFile = "conf/notifications.conf"
 	}
 	LogFile = os.Getenv("WAF_LOG_FILE")
+	LogOutputFile = strings.TrimSpace(os.Getenv("WAF_LOG_OUTPUT_FILE"))
+	if LogOutputFile == "" {
+		LogOutputFile = "conf/log-output.json"
+	}
 	ProxyErrorHTMLFile = strings.TrimSpace(os.Getenv("WAF_PROXY_ERROR_HTML_FILE"))
 	ProxyErrorRedirectURL = strings.TrimSpace(os.Getenv("WAF_PROXY_ERROR_REDIRECT_URL"))
 	StrictOverride = os.Getenv("WAF_STRICT_OVERRIDE") == "true"

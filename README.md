@@ -827,9 +827,11 @@ Field details:
 
 - Go side sets `X-Tukuyomi-Cacheable` and `X-Accel-Expires` on responses matching cache rules
 - `WAF_RESPONSE_CACHE_MODE=memory` enables an in-memory response cache inside tukuyomi itself
+- `WAF_RESPONSE_CACHE_MODE=disk` keeps the same cache behavior but persists entries under `WAF_RESPONSE_CACHE_DIR` so they can be restored after restart
 - `WAF_RESPONSE_CACHE_STALE_SECONDS` controls how long expired cache entries may still be served as `STALE` while a background refresh is attempted
 - `WAF_RESPONSE_CACHE_REFRESH_TIMEOUT_SECONDS` controls the timeout used by the background refresh fetch
 - `WAF_RESPONSE_CACHE_REFRESH_BACKOFF_SECONDS` controls how long stale requests wait before retrying another background refresh after a failed refresh
+- `WAF_RESPONSE_CACHE_DIR` sets the runtime path used by disk-backed cache mode
 - When `WAF_RESPONSE_CACHE_MODE=off`, nginx can still control cache based on the response headers above
 - Requests with auth headers, cookies, or API paths are non-cacheable by default
 - Upstream responses containing `Set-Cookie` are not stored (to prevent shared-cache leakage)
@@ -839,7 +841,7 @@ Field details:
 Check response headers:
 - `X-Tukuyomi-Cacheable: 1`
 - `X-Accel-Expires: <seconds>`
-- `X-Tukuyomi-Cache-Status: MISS|HIT|STALE|BYPASS` when local in-memory cache is enabled
+- `X-Tukuyomi-Cache-Status: MISS|HIT|STALE|BYPASS` when local standalone cache is enabled
 
 You can inspect cache hit state using nginx `X-Cache-Status` header (`MISS`/`HIT`/`BYPASS`, etc.).
 

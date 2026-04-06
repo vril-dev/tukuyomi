@@ -31,6 +31,7 @@ FRONT_PROXY_TRUSTED_PROXY_CIDRS="${FRONT_PROXY_TRUSTED_PROXY_CIDRS:-127.0.0.1/32
 
 COMPOSE_ENV=()
 PENDING_CONF_CLEANUP=()
+PENDING_DIR_CLEANUP=()
 ADMIN_PID=""
 EXAMPLE_CONF_DIR=""
 EXAMPLE_LOG_OUTPUT_PATH=""
@@ -77,6 +78,11 @@ track_optional_conf_cleanup() {
   if [[ ! -e "${path}" ]]; then
     PENDING_CONF_CLEANUP+=("${path}")
   fi
+}
+
+track_dir_cleanup() {
+  local path="$1"
+  PENDING_DIR_CLEANUP+=("${path}")
 }
 
 snapshot_example_conf_artifacts() {
@@ -274,9 +280,24 @@ cleanup() {
   for path in "${PENDING_CONF_CLEANUP[@]:-}"; do
     rm -f "${path}" >/dev/null 2>&1 || true
   done
+  for path in "${PENDING_DIR_CLEANUP[@]:-}"; do
+    rm -rf "${path}" >/dev/null 2>&1 || true
+  done
   cleanup_example_conf_artifacts
 }
 trap cleanup EXIT
+
+runtime_path_to_example_host() {
+  local runtime_path="$1"
+  runtime_path="${runtime_path#./}"
+  case "${runtime_path}" in
+    logs/*)
+      printf '%s/data/%s' "${EXAMPLE_DIR}" "${runtime_path}"
+      return 0
+      ;;
+  esac
+  return 1
+}
 
 if [[ ! -d "${EXAMPLE_DIR}" ]]; then
   fail "unknown example: ${EXAMPLE_NAME}"
@@ -363,7 +384,17 @@ if [[ "${TOPOLOGY}" == "front" ]]; then
   COMPOSE_ENV+=("WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=true")
 fi
 if [[ "${TOPOLOGY}" == "direct" && "${SCENARIO}" == "cache" ]]; then
-  COMPOSE_ENV+=("WAF_RESPONSE_CACHE_MODE=${BENCH_RESPONSE_CACHE_MODE:-memory}")
+  BENCH_RESPONSE_CACHE_MODE_VALUE="${BENCH_RESPONSE_CACHE_MODE:-memory}"
+  COMPOSE_ENV+=("WAF_RESPONSE_CACHE_MODE=${BENCH_RESPONSE_CACHE_MODE_VALUE}")
+  if [[ "${BENCH_RESPONSE_CACHE_MODE_VALUE}" == "disk" ]]; then
+    BENCH_RESPONSE_CACHE_DIR_VALUE="${BENCH_RESPONSE_CACHE_DIR:-logs/coraza/response-cache-benchmark}"
+    COMPOSE_ENV+=("WAF_RESPONSE_CACHE_DIR=${BENCH_RESPONSE_CACHE_DIR_VALUE}")
+    if BENCH_RESPONSE_CACHE_HOST_DIR="$(runtime_path_to_example_host "${BENCH_RESPONSE_CACHE_DIR_VALUE}" 2>/dev/null)"; then
+      rm -rf "${BENCH_RESPONSE_CACHE_HOST_DIR}" >/dev/null 2>&1 || true
+      mkdir -p "$(dirname "${BENCH_RESPONSE_CACHE_HOST_DIR}")"
+      track_dir_cleanup "${BENCH_RESPONSE_CACHE_HOST_DIR}"
+    fi
+  fi
 fi
 
 build_request_shape

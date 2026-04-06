@@ -38,6 +38,7 @@ var (
 	ResponseCacheStaleSeconds      int
 	ResponseCacheRefreshTimeout    time.Duration
 	ResponseCacheRefreshBackoff    time.Duration
+	ResponseCacheDir               string
 	APIKeyPrimary                  string
 	APIKeySecondary                string
 	APIAuthDisable                 bool
@@ -142,6 +143,7 @@ func LoadEnv() {
 	ResponseCacheStaleSeconds = parseResponseCacheStaleSeconds(os.Getenv("WAF_RESPONSE_CACHE_STALE_SECONDS"))
 	ResponseCacheRefreshTimeout = time.Duration(parseResponseCacheRefreshTimeoutSeconds(os.Getenv("WAF_RESPONSE_CACHE_REFRESH_TIMEOUT_SECONDS"))) * time.Second
 	ResponseCacheRefreshBackoff = time.Duration(parseResponseCacheRefreshBackoffSeconds(os.Getenv("WAF_RESPONSE_CACHE_REFRESH_BACKOFF_SECONDS"))) * time.Second
+	ResponseCacheDir = parseResponseCacheDir(os.Getenv("WAF_RESPONSE_CACHE_DIR"))
 
 	APIKeyPrimary = strings.TrimSpace(os.Getenv("WAF_API_KEY_PRIMARY"))
 	APIKeySecondary = strings.TrimSpace(os.Getenv("WAF_API_KEY_SECONDARY"))
@@ -370,10 +372,20 @@ func parseResponseCacheMode(v string) string {
 		return "off"
 	case "memory":
 		return "memory"
+	case "disk":
+		return "disk"
 	default:
 		log.Printf("[CONFIG][WARN] unsupported WAF_RESPONSE_CACHE_MODE=%q, fallback=off", s)
 		return "off"
 	}
+}
+
+func parseResponseCacheDir(v string) string {
+	s := strings.TrimSpace(v)
+	if s == "" {
+		return "logs/coraza/response-cache"
+	}
+	return s
 }
 
 func parseResponseCacheMaxEntries(v string) int {

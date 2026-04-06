@@ -54,7 +54,7 @@ This verifies that the app sees the protected host on `/api/whoami` and that a s
 
 ## Direct Local Cache Check
 
-To verify the standalone in-memory cache without example `nginx`:
+To verify the standalone cache without example `nginx`:
 
 ```bash
 WAF_RESPONSE_CACHE_MODE=memory docker compose up -d --build
@@ -63,6 +63,14 @@ curl -i "http://localhost:19091/"
 ```
 
 The first response should include `X-Tukuyomi-Cache-Status: MISS`, and the second should become `HIT`.
+
+To verify restart-friendly disk-backed cache instead:
+
+```bash
+WAF_RESPONSE_CACHE_MODE=disk docker compose up -d --build
+curl -i "http://localhost:19091/"
+curl -i "http://localhost:19091/"
+```
 
 If you want to inspect a Cloudflare-style country header via the optional front proxy:
 

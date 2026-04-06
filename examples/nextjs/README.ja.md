@@ -54,7 +54,7 @@ PROTECTED_HOST=protected.example.test EXAMPLE_TOPOLOGY=front ./smoke.sh
 
 ## Direct Local Cache Check
 
-example 側の `nginx` を通さず、standalone の in-memory cache を確認したい場合:
+example 側の `nginx` を通さず、standalone cache を確認したい場合:
 
 ```bash
 WAF_RESPONSE_CACHE_MODE=memory docker compose up -d --build
@@ -63,6 +63,14 @@ curl -i "http://localhost:19091/"
 ```
 
 1本目は `X-Tukuyomi-Cache-Status: MISS`、2本目は `HIT` になるはずです。
+
+restart をまたいで cache entry を残したい場合は、disk-backed mode でも同様に確認できます:
+
+```bash
+WAF_RESPONSE_CACHE_MODE=disk docker compose up -d --build
+curl -i "http://localhost:19091/"
+curl -i "http://localhost:19091/"
+```
 
 optional front proxy 経由で Cloudflare-style の country header を見たい場合:
 

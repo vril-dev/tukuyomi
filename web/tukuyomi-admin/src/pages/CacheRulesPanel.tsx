@@ -28,6 +28,9 @@ type CacheRuntimeDTO = {
   response_cache_stale_seconds?: number;
   response_cache_refresh_timeout_sec?: number;
   response_cache_refresh_backoff_sec?: number;
+  response_cache_store_shape?: string;
+  response_cache_store_path?: string;
+  response_cache_disk_bytes?: number;
   response_cache_entry_count?: number;
   response_cache_inflight_keys?: number;
   response_cache_hits?: number;
@@ -217,19 +220,22 @@ export default function CacheRulePanel() {
           <div>
             <h2 className="text-lg font-semibold">Cache Runtime</h2>
             <p className="text-sm text-neutral-500">
-              Runtime counters for the standalone in-memory cache. Mode remains env-driven on [web] for now.
+              Runtime counters for the standalone cache. Mode and store remain env-driven on [web] for now.
             </p>
           </div>
           <div className="flex items-center gap-2">
             <Badge color={cacheEnabled ? "green" : "gray"}>{cacheEnabled ? "Enabled" : "Disabled"}</Badge>
-            <Badge color={cacheMode === "memory" ? "green" : cacheMode === "off" ? "gray" : "amber"}>{cacheMode}</Badge>
+            <Badge color={cacheMode === "memory" ? "green" : cacheMode === "disk" ? "amber" : "gray"}>{cacheMode}</Badge>
           </div>
         </div>
 
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5 text-sm">
           <StatChip label="Mode" value={cacheMode} />
+          <StatChip label="Store Shape" value={String(runtime.response_cache_store_shape ?? "disabled")} />
+          <StatChip label="Store Path" value={String(runtime.response_cache_store_path ?? "-")} />
           <StatChip label="Max Entries" value={String(runtime.response_cache_max_entries ?? 0)} />
           <StatChip label="Max Body Bytes" value={formatBytes(runtime.response_cache_max_body_bytes)} />
+          <StatChip label="On-Disk Bytes" value={formatBytes(runtime.response_cache_disk_bytes)} />
           <StatChip label="Stale Window" value={`${runtime.response_cache_stale_seconds ?? 0}s`} />
           <StatChip label="Refresh Timeout" value={`${runtime.response_cache_refresh_timeout_sec ?? 0}s`} />
           <StatChip label="Refresh Backoff" value={`${runtime.response_cache_refresh_backoff_sec ?? 0}s`} />
@@ -245,7 +251,6 @@ export default function CacheRulePanel() {
           <StatChip label="Refresh Attempts" value={String(runtime.response_cache_stale_refreshes ?? 0)} />
           <StatChip label="Refresh Failures" value={String(runtime.response_cache_stale_failures ?? 0)} />
           <StatChip label="Backoff Skips" value={String(runtime.response_cache_backoff_skips ?? 0)} />
-          <StatChip label="Future Store Shape" value="disk-backed reserved" />
         </div>
       </section>
 

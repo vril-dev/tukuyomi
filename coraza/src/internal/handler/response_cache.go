@@ -22,6 +22,7 @@ import (
 const (
 	responseCacheModeOff    = "off"
 	responseCacheModeMemory = "memory"
+	responseCacheModeDisk   = "disk"
 
 	responseCacheStatusHeader = "X-Tukuyomi-Cache-Status"
 	responseCacheStatusBypass = "BYPASS"
@@ -49,6 +50,7 @@ type responseCacheEntry struct {
 	expiresAt  time.Time
 	staleUntil time.Time
 	refreshAt  time.Time
+	diskPath   string
 }
 
 type responseCacheInflight struct {
@@ -56,27 +58,30 @@ type responseCacheInflight struct {
 }
 
 type responseCacheRuntime struct {
-	mu           sync.Mutex
-	mode         string
-	maxEntries   int
-	maxBodyBytes int64
-	staleWindow  time.Duration
-	refreshTTL   time.Duration
+	mu             sync.Mutex
+	mode           string
+	maxEntries     int
+	maxBodyBytes   int64
+	staleWindow    time.Duration
+	refreshTTL     time.Duration
 	refreshBackoff time.Duration
-	entries      map[string]*list.Element
-	inflight     map[string]*responseCacheInflight
-	lru          list.List
+	storeShape     string
+	storePath      string
+	entries        map[string]*list.Element
+	inflight       map[string]*responseCacheInflight
+	lru            list.List
 
-	hits            atomic.Uint64
-	misses          atomic.Uint64
-	stores          atomic.Uint64
-	bypasses        atomic.Uint64
-	evictions       atomic.Uint64
-	coalescedWaits  atomic.Uint64
-	staleHits       atomic.Uint64
-	staleRefreshes  atomic.Uint64
-	staleFailures   atomic.Uint64
-	backoffSkips    atomic.Uint64
+	hits           atomic.Uint64
+	misses         atomic.Uint64
+	stores         atomic.Uint64
+	bypasses       atomic.Uint64
+	evictions      atomic.Uint64
+	coalescedWaits atomic.Uint64
+	staleHits      atomic.Uint64
+	staleRefreshes atomic.Uint64
+	staleFailures  atomic.Uint64
+	backoffSkips   atomic.Uint64
+	diskBytes      atomic.Int64
 }
 
 type responseCacheStatus struct {
@@ -87,6 +92,9 @@ type responseCacheStatus struct {
 	StaleSeconds   int    `json:"stale_seconds"`
 	RefreshTimeout int    `json:"refresh_timeout_seconds"`
 	RefreshBackoff int    `json:"refresh_backoff_seconds"`
+	StoreShape     string `json:"store_shape"`
+	StorePath      string `json:"store_path"`
+	DiskBytes      int64  `json:"disk_bytes"`
 	EntryCount     int    `json:"entry_count"`
 	InflightKeys   int    `json:"inflight_keys"`
 	Hits           uint64 `json:"hits"`
@@ -126,6 +134,7 @@ func ConfigureResponseCache() {
 		config.ResponseCacheStaleSeconds,
 		config.ResponseCacheRefreshTimeout,
 		config.ResponseCacheRefreshBackoff,
+		config.ResponseCacheDir,
 	)
 }
 
@@ -137,13 +146,15 @@ func GetResponseCacheStatus() responseCacheStatus {
 	return localResponseCache.status()
 }
 
-func (c *responseCacheRuntime) configure(mode string, maxEntries int, maxBodyBytes int64, staleSeconds int, refreshTTL time.Duration, refreshBackoff time.Duration) {
+func (c *responseCacheRuntime) configure(mode string, maxEntries int, maxBodyBytes int64, staleSeconds int, refreshTTL time.Duration, refreshBackoff time.Duration, storePath string) {
 	normalizedMode := strings.ToLower(strings.TrimSpace(mode))
 	switch normalizedMode {
 	case "", responseCacheModeOff:
 		normalizedMode = responseCacheModeOff
 	case responseCacheModeMemory:
 		normalizedMode = responseCacheModeMemory
+	case responseCacheModeDisk:
+		normalizedMode = responseCacheModeDisk
 	default:
 		log.Printf("[CACHE][WARN] unsupported response cache mode %q, fallback=off", normalizedMode)
 		normalizedMode = responseCacheModeOff
@@ -165,6 +176,16 @@ func (c *responseCacheRuntime) configure(mode string, maxEntries int, maxBodyByt
 		refreshBackoff = 0
 	}
 
+	shape := "disabled"
+	normalizedStorePath := ""
+	switch normalizedMode {
+	case responseCacheModeMemory:
+		shape = "in-memory"
+	case responseCacheModeDisk:
+		shape = "disk-backed"
+		normalizedStorePath = strings.TrimSpace(storePath)
+	}
+
 	c.mu.Lock()
 	c.mode = normalizedMode
 	c.maxEntries = maxEntries
@@ -172,6 +193,8 @@ func (c *responseCacheRuntime) configure(mode string, maxEntries int, maxBodyByt
 	c.staleWindow = time.Duration(staleSeconds) * time.Second
 	c.refreshTTL = refreshTTL
 	c.refreshBackoff = refreshBackoff
+	c.storeShape = shape
+	c.storePath = normalizedStorePath
 	c.entries = map[string]*list.Element{}
 	if c.inflight == nil {
 		c.inflight = map[string]*responseCacheInflight{}
@@ -189,13 +212,24 @@ func (c *responseCacheRuntime) configure(mode string, maxEntries int, maxBodyByt
 	c.staleRefreshes.Store(0)
 	c.staleFailures.Store(0)
 	c.backoffSkips.Store(0)
+	c.diskBytes.Store(0)
+
+	if normalizedMode == responseCacheModeDisk && maxEntries > 0 && maxBodyBytes > 0 {
+		c.restoreDiskEntries()
+	}
 }
 
 func (c *responseCacheRuntime) invalidate() {
 	c.mu.Lock()
+	mode := c.mode
+	storePath := c.storePath
 	c.entries = map[string]*list.Element{}
 	c.lru.Init()
 	c.mu.Unlock()
+	c.diskBytes.Store(0)
+	if mode == responseCacheModeDisk {
+		c.clearDiskEntries(storePath)
+	}
 }
 
 func (c *responseCacheRuntime) status() responseCacheStatus {
@@ -208,16 +242,21 @@ func (c *responseCacheRuntime) status() responseCacheStatus {
 	staleWindow := c.staleWindow
 	refreshTTL := c.refreshTTL
 	refreshBackoff := c.refreshBackoff
+	storeShape := c.storeShape
+	storePath := c.storePath
 	c.mu.Unlock()
 
 	return responseCacheStatus{
 		Mode:           mode,
-		Enabled:        mode == responseCacheModeMemory && maxEntries > 0 && maxBodyBytes > 0,
+		Enabled:        mode != responseCacheModeOff && maxEntries > 0 && maxBodyBytes > 0,
 		MaxEntries:     maxEntries,
 		MaxBodyBytes:   maxBodyBytes,
 		StaleSeconds:   int(staleWindow / time.Second),
 		RefreshTimeout: int(refreshTTL / time.Second),
 		RefreshBackoff: int(refreshBackoff / time.Second),
+		StoreShape:     storeShape,
+		StorePath:      storePath,
+		DiskBytes:      c.diskBytes.Load(),
 		EntryCount:     entryCount,
 		InflightKeys:   inflightKeys,
 		Hits:           c.hits.Load(),
@@ -236,7 +275,7 @@ func (c *responseCacheRuntime) status() responseCacheStatus {
 func (c *responseCacheRuntime) enabled() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.mode == responseCacheModeMemory && c.maxEntries > 0 && c.maxBodyBytes > 0
+	return c.mode != responseCacheModeOff && c.maxEntries > 0 && c.maxBodyBytes > 0
 }
 
 func (c *responseCacheRuntime) maxBodyBytesLimit() int64 {
@@ -381,13 +420,13 @@ func (c *responseCacheRuntime) prepare(plan *responseCachePlan) responseCachePre
 		return responseCachePreparation{
 			cacheStatus: responseCacheStatusMiss,
 			release: func() {
-			c.mu.Lock()
-			current, ok := c.inflight[plan.Key]
-			if ok && current == inflight {
-				delete(c.inflight, plan.Key)
-				close(inflight.done)
-			}
-			c.mu.Unlock()
+				c.mu.Lock()
+				current, ok := c.inflight[plan.Key]
+				if ok && current == inflight {
+					delete(c.inflight, plan.Key)
+					close(inflight.done)
+				}
+				c.mu.Unlock()
 			},
 		}
 	}
@@ -410,17 +449,32 @@ func (c *responseCacheRuntime) store(plan *responseCachePlan, res *http.Response
 		refreshAt:  time.Time{},
 	}
 
+	if c.diskEnabled() {
+		entry.diskPath = c.diskPath(plan.Key)
+		if err := c.persistDiskEntry(entry); err != nil {
+			log.Printf("[CACHE][WARN] disk cache store failed: %v", err)
+			return false
+		}
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry.staleUntil = entry.expiresAt.Add(c.staleWindow)
 
 	c.cleanupExpiredLocked(now)
 	if elem, ok := c.entries[plan.Key]; ok {
+		existing, _ := elem.Value.(*responseCacheEntry)
+		if existing != nil && existing.diskPath != "" {
+			c.diskBytes.Add(-int64(len(existing.body)))
+		}
 		elem.Value = entry
 		c.lru.MoveToFront(elem)
 	} else {
 		elem := c.lru.PushFront(entry)
 		c.entries[plan.Key] = elem
+	}
+	if entry.diskPath != "" {
+		c.diskBytes.Add(int64(len(entry.body)))
 	}
 	for len(c.entries) > c.maxEntries {
 		c.removeLocked(c.lru.Back())
@@ -437,6 +491,7 @@ func (c *responseCacheRuntime) removeLocked(elem *list.Element) {
 	entry, _ := elem.Value.(*responseCacheEntry)
 	if entry != nil {
 		delete(c.entries, entry.key)
+		c.deleteDiskEntry(entry)
 	}
 	c.lru.Remove(elem)
 	c.evictions.Add(1)
@@ -757,6 +812,7 @@ func cloneResponseCacheEntry(src *responseCacheEntry) *responseCacheEntry {
 		expiresAt:  src.expiresAt,
 		staleUntil: src.staleUntil,
 		refreshAt:  src.refreshAt,
+		diskPath:   src.diskPath,
 	}
 }
 

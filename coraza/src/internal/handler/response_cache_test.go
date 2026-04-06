@@ -79,6 +79,138 @@ func TestProxyHandlerServesResponseFromInMemoryCache(t *testing.T) {
 	}
 }
 
+func TestProxyHandlerServesResponseFromDiskBackedCache(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	restore := saveResponseCacheRuntimeConfig()
+	defer restore()
+
+	var upstreamHits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := upstreamHits.Add(1)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("disk-cache-body-" + string(rune('0'+n))))
+	}))
+	defer upstream.Close()
+
+	config.AppURL = upstream.URL
+	config.APIBasePath = "/tukuyomi-api"
+	config.ForwardInternalResponseHeaders = false
+	config.ResponseCacheMode = "disk"
+	config.ResponseCacheDir = t.TempDir()
+	config.ResponseCacheMaxEntries = 16
+	config.ResponseCacheMaxBodyBytes = 4096
+	config.ResponseCacheStaleSeconds = 30
+	config.ResponseCacheRefreshTimeout = time.Second
+	config.ResponseCacheRefreshBackoff = time.Second
+	ConfigureResponseCache()
+	cacheconf.Set(&cacheconf.Ruleset{
+		Rules: []cacheconf.Rule{{
+			Kind:    "ALLOW",
+			Prefix:  "/",
+			Methods: map[string]bool{"GET": true, "HEAD": true},
+			TTL:     60,
+		}},
+	})
+
+	router := gin.New()
+	router.Any("/*path", ProxyHandler)
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	res1 := mustProxyRequest(t, srv.URL+"/disk", "", "")
+	if got := res1.Header.Get(responseCacheStatusHeader); got != responseCacheStatusMiss {
+		t.Fatalf("first response cache status=%q want=%q", got, responseCacheStatusMiss)
+	}
+	body1 := readBody(t, res1)
+
+	res2 := mustProxyRequest(t, srv.URL+"/disk", "", "")
+	if got := res2.Header.Get(responseCacheStatusHeader); got != responseCacheStatusHit {
+		t.Fatalf("second response cache status=%q want=%q", got, responseCacheStatusHit)
+	}
+	if body2 := readBody(t, res2); body2 != body1 {
+		t.Fatalf("disk-backed cached body=%q want=%q", body2, body1)
+	}
+
+	status := GetResponseCacheStatus()
+	if status.StoreShape != "disk-backed" {
+		t.Fatalf("store shape=%q want=%q", status.StoreShape, "disk-backed")
+	}
+	if status.StorePath != config.ResponseCacheDir {
+		t.Fatalf("store path=%q want=%q", status.StorePath, config.ResponseCacheDir)
+	}
+	if status.DiskBytes < int64(len(body1)) {
+		t.Fatalf("disk bytes=%d want >= %d", status.DiskBytes, len(body1))
+	}
+	if got := upstreamHits.Load(); got != 1 {
+		t.Fatalf("upstream hits=%d want=1", got)
+	}
+}
+
+func TestConfigureResponseCacheRestoresDiskEntries(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	restore := saveResponseCacheRuntimeConfig()
+	defer restore()
+
+	var upstreamHits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := upstreamHits.Add(1)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("persisted-disk-body-" + string(rune('0'+n))))
+	}))
+	defer upstream.Close()
+
+	config.AppURL = upstream.URL
+	config.APIBasePath = "/tukuyomi-api"
+	config.ForwardInternalResponseHeaders = false
+	config.ResponseCacheMode = "disk"
+	config.ResponseCacheDir = t.TempDir()
+	config.ResponseCacheMaxEntries = 16
+	config.ResponseCacheMaxBodyBytes = 4096
+	config.ResponseCacheStaleSeconds = 30
+	config.ResponseCacheRefreshTimeout = time.Second
+	config.ResponseCacheRefreshBackoff = time.Second
+	ConfigureResponseCache()
+	cacheconf.Set(&cacheconf.Ruleset{
+		Rules: []cacheconf.Rule{{
+			Kind:    "ALLOW",
+			Prefix:  "/",
+			Methods: map[string]bool{"GET": true, "HEAD": true},
+			TTL:     60,
+		}},
+	})
+
+	router := gin.New()
+	router.Any("/*path", ProxyHandler)
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	res1 := mustProxyRequest(t, srv.URL+"/restore", "", "")
+	if got := res1.Header.Get(responseCacheStatusHeader); got != responseCacheStatusMiss {
+		t.Fatalf("first response cache status=%q want=%q", got, responseCacheStatusMiss)
+	}
+	body1 := readBody(t, res1)
+
+	ConfigureResponseCache()
+
+	status := GetResponseCacheStatus()
+	if status.EntryCount != 1 {
+		t.Fatalf("restored entry count=%d want=1", status.EntryCount)
+	}
+
+	res2 := mustProxyRequest(t, srv.URL+"/restore", "", "")
+	if got := res2.Header.Get(responseCacheStatusHeader); got != responseCacheStatusHit {
+		t.Fatalf("restored response cache status=%q want=%q", got, responseCacheStatusHit)
+	}
+	if body2 := readBody(t, res2); body2 != body1 {
+		t.Fatalf("restored cached body=%q want=%q", body2, body1)
+	}
+	if got := upstreamHits.Load(); got != 1 {
+		t.Fatalf("upstream hits after restore=%d want=1", got)
+	}
+}
+
 func TestProxyHandlerDoesNotStoreSetCookieResponses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -342,8 +474,8 @@ func TestProxyHandlerServesStaleAndRefreshesInBackground(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 
 	type result struct {
-		res  *http.Response
-		err  error
+		res *http.Response
+		err error
 	}
 	resultCh := make(chan result, 1)
 	go func() {
@@ -525,6 +657,7 @@ func saveResponseCacheRuntimeConfig() func() {
 	oldStaleSeconds := config.ResponseCacheStaleSeconds
 	oldRefreshTimeout := config.ResponseCacheRefreshTimeout
 	oldRefreshBackoff := config.ResponseCacheRefreshBackoff
+	oldResponseCacheDir := config.ResponseCacheDir
 	oldProxy := proxy
 	oldOnce := proxyInitOnce
 	oldWAF := waf.WAF
@@ -547,6 +680,7 @@ func saveResponseCacheRuntimeConfig() func() {
 		config.ResponseCacheStaleSeconds = oldStaleSeconds
 		config.ResponseCacheRefreshTimeout = oldRefreshTimeout
 		config.ResponseCacheRefreshBackoff = oldRefreshBackoff
+		config.ResponseCacheDir = oldResponseCacheDir
 		proxy = oldProxy
 		proxyInitOnce = oldOnce
 		waf.WAF = oldWAF

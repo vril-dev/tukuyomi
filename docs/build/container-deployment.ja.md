@@ -34,6 +34,12 @@ docker build -f docs/build/Dockerfile.example -t tukuyomi:deploy .
 
 `/app/conf` と `/app/rules` を含んだ self-contained image にしたい場合はこちらが向いています。
 
+repo 上で手順どおりの smoke を再実行したい場合は、次を使います。
+
+```bash
+make container-deployment-smoke
+```
+
 ## 実行時 path
 
 最低限必要な path:
@@ -48,10 +54,13 @@ docker build -f docs/build/Dockerfile.example -t tukuyomi:deploy .
 
 - `conf/log-output.json` は無ければ初回起動時に生成されます
 - `conf/crs-disabled.conf` は空で開始できます
+- `Dockerfile.example` には `/app/conf` と `/app/rules` 前提の file path env が設定済みです
 
 ## 最低限見直す環境変数
 
 - `WAF_APP_URL`
+- `WAF_RULES_FILE`
+- `WAF_BYPASS_FILE`
 - `WAF_API_KEY_PRIMARY`
 - `WAF_UI_BASEPATH`
 - `WAF_API_BASEPATH`
@@ -59,6 +68,10 @@ docker build -f docs/build/Dockerfile.example -t tukuyomi:deploy .
 - `WAF_COUNTRY_HEADER_NAMES`
 - `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS`
 - `WAF_LOG_OUTPUT_FILE`
+- `WAF_CRS_ENABLE`
+- `WAF_CRS_SETUP_FILE`
+- `WAF_CRS_RULES_DIR`
+- `WAF_CRS_DISABLED_FILE`
 - `WAF_STORAGE_BACKEND`
 - `WAF_DB_DRIVER`
 - `WAF_DB_DSN` または `WAF_DB_PATH`

@@ -44,7 +44,7 @@ STACK_ENV = $(DOCKER_ENV) NGINX_PORT="$(HOST_NGINX_PORT)" OPENRESTY_PORT="$(HOST
 	preset-list preset-apply preset-check \
 	gotestwaf gotestwaf-file gotestwaf-sqlite \
 	example-smoke example-smoke-all standalone-smoke standalone-smoke-all standalone-regression-fast standalone-regression-extended \
-	binary-deployment-smoke \
+	binary-deployment-smoke container-deployment-smoke \
 	benchmark-scenario benchmark-baseline \
 	check ci-local clean
 
@@ -92,6 +92,8 @@ help:
 	@echo "  make standalone-regression-fast      Run fast standalone regression baseline"
 	@echo "  make standalone-regression-extended  Run heavier standalone regression baseline"
 	@echo "  make binary-deployment-smoke         Validate the docs/build binary deployment flow"
+	@echo "    - optional: EXAMPLE=$(EXAMPLE) (default: api-gateway)"
+	@echo "  make container-deployment-smoke      Validate the docs/build container deployment flow"
 	@echo "    - optional: EXAMPLE=$(EXAMPLE) (default: api-gateway)"
 	@echo "  make benchmark-scenario    Run one benchmark scenario"
 	@echo "    - optional: EXAMPLE=$(EXAMPLE) TOPOLOGY=$(TOPOLOGY) SCENARIO=$(SCENARIO)"
@@ -275,6 +277,9 @@ standalone-regression-extended: check standalone-smoke-all
 
 binary-deployment-smoke:
 	./scripts/run_binary_deployment_smoke.sh "$(EXAMPLE)"
+
+container-deployment-smoke:
+	./scripts/run_container_deployment_smoke.sh "$(EXAMPLE)"
 
 benchmark-scenario:
 	./scripts/run_capacity_baseline.sh "$(EXAMPLE)" "$(TOPOLOGY)" "$(SCENARIO)"

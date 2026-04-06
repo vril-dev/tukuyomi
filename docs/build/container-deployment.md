@@ -34,6 +34,12 @@ docker build -f docs/build/Dockerfile.example -t tukuyomi:deploy .
 
 This is useful when you want a self-contained image with `/app/conf` and `/app/rules` already included.
 
+To rerun the documented flow as a repo smoke check:
+
+```bash
+make container-deployment-smoke
+```
+
 ## Runtime Paths
 
 Minimum runtime paths:
@@ -48,10 +54,13 @@ Notes:
 
 - `conf/log-output.json` is created on first start if missing
 - `conf/crs-disabled.conf` can start empty
+- `Dockerfile.example` already sets the baked-in file path envs for `/app/conf` and `/app/rules`
 
 ## Minimum Environment Review
 
 - `WAF_APP_URL`
+- `WAF_RULES_FILE`
+- `WAF_BYPASS_FILE`
 - `WAF_API_KEY_PRIMARY`
 - `WAF_UI_BASEPATH`
 - `WAF_API_BASEPATH`
@@ -59,6 +68,10 @@ Notes:
 - `WAF_COUNTRY_HEADER_NAMES`
 - `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS`
 - `WAF_LOG_OUTPUT_FILE`
+- `WAF_CRS_ENABLE`
+- `WAF_CRS_SETUP_FILE`
+- `WAF_CRS_RULES_DIR`
+- `WAF_CRS_DISABLED_FILE`
 - `WAF_STORAGE_BACKEND`
 - `WAF_DB_DRIVER`
 - `WAF_DB_DSN` or `WAF_DB_PATH`

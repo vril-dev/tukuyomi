@@ -36,7 +36,21 @@ COPY --from=builder /out/tukuyomi /app/tukuyomi
 COPY data/conf/ /app/conf/
 COPY data/rules/ /app/rules/
 
-RUN mkdir -p /app/logs/coraza /app/logs/nginx
+ENV WAF_RULES_FILE=rules/tukuyomi.conf \
+    WAF_BYPASS_FILE=conf/waf.bypass \
+    WAF_COUNTRY_BLOCK_FILE=conf/country-block.conf \
+    WAF_RATE_LIMIT_FILE=conf/rate-limit.conf \
+    WAF_BOT_DEFENSE_FILE=conf/bot-defense.conf \
+    WAF_SEMANTIC_FILE=conf/semantic.conf \
+    WAF_NOTIFICATION_FILE=conf/notifications.conf \
+    WAF_LOG_OUTPUT_FILE=conf/log-output.json \
+    WAF_CRS_ENABLE=true \
+    WAF_CRS_SETUP_FILE=rules/crs/crs-setup.conf \
+    WAF_CRS_RULES_DIR=rules/crs/rules \
+    WAF_CRS_DISABLED_FILE=conf/crs-disabled.conf
+
+RUN mkdir -p /app/logs/coraza /app/logs/nginx \
+    && touch /app/conf/crs-disabled.conf
 
 EXPOSE 9090
 

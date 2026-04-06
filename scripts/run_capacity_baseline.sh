@@ -485,7 +485,7 @@ report = {
 pathlib.Path(sys.argv[4]).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
 
-python3 - "${REPORT_PATH}" "$EXAMPLE_NAME" "$TOPOLOGY" "$SCENARIO" "$BENCH_ADMIN_SIDE_TRAFFIC" "$PROTECTED_HOST" "$BASE_URL" "$REQUEST_PATH" "$EXPECT_STATUS" "$BENCH_DURATION" "$BENCH_CONCURRENCY" <<'PY'
+python3 - "${REPORT_PATH}" "$EXAMPLE_NAME" "$TOPOLOGY" "$SCENARIO" "$BENCH_ADMIN_SIDE_TRAFFIC" "$PROTECTED_HOST" "$BASE_URL" "$REQUEST_PATH" "$EXPECT_STATUS" "$BENCH_DURATION" "$BENCH_CONCURRENCY" "${BENCH_RESPONSE_CACHE_MODE_VALUE:-off}" <<'PY'
 import json
 import pathlib
 import sys
@@ -504,6 +504,7 @@ payload.update(
         "expected_status": int(sys.argv[9]),
         "requested_duration": sys.argv[10],
         "requested_concurrency": int(sys.argv[11]),
+        "response_cache_mode": sys.argv[12],
     }
 )
 path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")

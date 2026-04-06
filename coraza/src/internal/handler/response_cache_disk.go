@@ -84,7 +84,7 @@ func (c *responseCacheRuntime) deleteDiskEntry(entry *responseCacheEntry) {
 		return
 	}
 	if err := os.Remove(entry.diskPath); err == nil {
-		c.diskBytes.Add(-int64(len(entry.body)))
+		c.diskBytes.Add(-entry.bodyBytes)
 	}
 }
 
@@ -148,7 +148,8 @@ func (c *responseCacheRuntime) restoreDiskEntries() {
 			key:        record.Key,
 			statusCode: record.StatusCode,
 			header:     record.Header.Clone(),
-			body:       append([]byte(nil), record.Body...),
+			body:       nil,
+			bodyBytes:  int64(len(record.Body)),
 			storedAt:   record.StoredAt,
 			expiresAt:  record.ExpiresAt,
 			staleUntil: record.StaleUntil,
@@ -176,9 +177,53 @@ func (c *responseCacheRuntime) restoreDiskEntries() {
 	for _, entry := range restored {
 		elem := c.lru.PushBack(entry)
 		c.entries[entry.key] = elem
-		c.diskBytes.Add(int64(len(entry.body)))
+		c.diskBytes.Add(entry.bodyBytes)
 	}
 	for len(c.entries) > maxEntries {
 		c.removeLocked(c.lru.Back())
 	}
+}
+
+func (c *responseCacheRuntime) hydrateEntry(entry *responseCacheEntry) (*responseCacheEntry, bool) {
+	if entry == nil {
+		return nil, false
+	}
+	if entry.diskPath == "" || entry.body != nil {
+		return entry, true
+	}
+
+	payload, err := os.ReadFile(entry.diskPath)
+	if err != nil {
+		log.Printf("[CACHE][WARN] disk cache hydrate read failed for %s: %v", entry.diskPath, err)
+		return nil, false
+	}
+
+	var record responseCacheDiskRecord
+	if err := json.Unmarshal(payload, &record); err != nil {
+		log.Printf("[CACHE][WARN] disk cache hydrate decode failed for %s: %v", entry.diskPath, err)
+		return nil, false
+	}
+
+	hydrated := cloneResponseCacheEntry(entry)
+	hydrated.body = append([]byte(nil), record.Body...)
+	hydrated.bodyBytes = int64(len(record.Body))
+	if hydrated.header == nil || len(hydrated.header) == 0 {
+		hydrated.header = record.Header.Clone()
+	}
+	return hydrated, true
+}
+
+func (c *responseCacheRuntime) evictKey(key string) {
+	if strings.TrimSpace(key) == "" {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	elem, ok := c.entries[key]
+	if !ok {
+		return
+	}
+	c.removeLocked(elem)
 }

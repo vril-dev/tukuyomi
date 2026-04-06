@@ -830,7 +830,7 @@ DENY regex=^/users/[0-9]+/profile
 
 - Go側でルールに一致したレスポンスに `X-Tukuyomi-Cacheable` と `X-Accel-Expires` を付与
 - `WAF_RESPONSE_CACHE_MODE=memory` を有効にすると、tukuyomi 自身が in-memory response cache を持ちます
-- `WAF_RESPONSE_CACHE_MODE=disk` を有効にすると、同じ cache 動作を維持しつつ `WAF_RESPONSE_CACHE_DIR` 配下に entry を保持し、restart 後に restore できます
+- `WAF_RESPONSE_CACHE_MODE=disk` を有効にすると、同じ cache 動作を維持しつつ `WAF_RESPONSE_CACHE_DIR` 配下に entry を保持し、cached body は必要時だけ disk から読み出す形で restart 後に restore できます
 - `WAF_RESPONSE_CACHE_STALE_SECONDS` で、期限切れ entry を `STALE` として返しつつ background refresh を試みる時間を制御します
 - `WAF_RESPONSE_CACHE_REFRESH_TIMEOUT_SECONDS` で、background refresh の upstream timeout を制御します
 - `WAF_RESPONSE_CACHE_REFRESH_BACKOFF_SECONDS` で、refresh failure 後に次の background refresh を再試行するまでの待ち時間を制御します

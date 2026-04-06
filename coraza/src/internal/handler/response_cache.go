@@ -46,6 +46,7 @@ type responseCacheEntry struct {
 	statusCode int
 	header     http.Header
 	body       []byte
+	bodyBytes  int64
 	storedAt   time.Time
 	expiresAt  time.Time
 	staleUntil time.Time
@@ -363,8 +364,13 @@ func (c *responseCacheRuntime) prepare(plan *responseCachePlan) responseCachePre
 		if entry, ok := c.lookupLocked(plan, now); ok {
 			c.hits.Add(1)
 			c.mu.Unlock()
+			hydrated, ok := c.hydrateEntry(entry)
+			if !ok {
+				c.evictKey(plan.Key)
+				continue
+			}
 			return responseCachePreparation{
-				entry:       entry,
+				entry:       hydrated,
 				cacheStatus: responseCacheStatusHit,
 			}
 		}
@@ -372,16 +378,26 @@ func (c *responseCacheRuntime) prepare(plan *responseCachePlan) responseCachePre
 			c.staleHits.Add(1)
 			if inflight, ok := c.inflight[plan.Key]; ok && inflight != nil {
 				c.mu.Unlock()
+				hydrated, ok := c.hydrateEntry(entry)
+				if !ok {
+					c.evictKey(plan.Key)
+					continue
+				}
 				return responseCachePreparation{
-					entry:       entry,
+					entry:       hydrated,
 					cacheStatus: responseCacheStatusStale,
 				}
 			}
 			if !entry.refreshAt.IsZero() && now.Before(entry.refreshAt) {
 				c.backoffSkips.Add(1)
 				c.mu.Unlock()
+				hydrated, ok := c.hydrateEntry(entry)
+				if !ok {
+					c.evictKey(plan.Key)
+					continue
+				}
 				return responseCachePreparation{
-					entry:       entry,
+					entry:       hydrated,
 					cacheStatus: responseCacheStatusStale,
 				}
 			}
@@ -389,8 +405,23 @@ func (c *responseCacheRuntime) prepare(plan *responseCachePlan) responseCachePre
 			c.inflight[plan.Key] = inflight
 			c.staleRefreshes.Add(1)
 			c.mu.Unlock()
+			hydrated, ok := c.hydrateEntry(entry)
+			if !ok {
+				c.evictKey(plan.Key)
+				release := func() {
+					c.mu.Lock()
+					current, ok := c.inflight[plan.Key]
+					if ok && current == inflight {
+						delete(c.inflight, plan.Key)
+						close(inflight.done)
+					}
+					c.mu.Unlock()
+				}
+				release()
+				continue
+			}
 			return responseCachePreparation{
-				entry:             entry,
+				entry:             hydrated,
 				cacheStatus:       responseCacheStatusStale,
 				backgroundRefresh: true,
 				release: func() {
@@ -443,6 +474,7 @@ func (c *responseCacheRuntime) store(plan *responseCachePlan, res *http.Response
 		statusCode: res.StatusCode,
 		header:     cloneCacheableResponseHeaders(res.Header),
 		body:       append([]byte(nil), body...),
+		bodyBytes:  int64(len(body)),
 		storedAt:   now,
 		expiresAt:  now.Add(ttl),
 		staleUntil: now.Add(ttl),
@@ -455,6 +487,7 @@ func (c *responseCacheRuntime) store(plan *responseCachePlan, res *http.Response
 			log.Printf("[CACHE][WARN] disk cache store failed: %v", err)
 			return false
 		}
+		entry.body = nil
 	}
 
 	c.mu.Lock()
@@ -465,7 +498,7 @@ func (c *responseCacheRuntime) store(plan *responseCachePlan, res *http.Response
 	if elem, ok := c.entries[plan.Key]; ok {
 		existing, _ := elem.Value.(*responseCacheEntry)
 		if existing != nil && existing.diskPath != "" {
-			c.diskBytes.Add(-int64(len(existing.body)))
+			c.diskBytes.Add(-existing.bodyBytes)
 		}
 		elem.Value = entry
 		c.lru.MoveToFront(elem)
@@ -474,7 +507,7 @@ func (c *responseCacheRuntime) store(plan *responseCachePlan, res *http.Response
 		c.entries[plan.Key] = elem
 	}
 	if entry.diskPath != "" {
-		c.diskBytes.Add(int64(len(entry.body)))
+		c.diskBytes.Add(entry.bodyBytes)
 	}
 	for len(c.entries) > c.maxEntries {
 		c.removeLocked(c.lru.Back())
@@ -808,6 +841,7 @@ func cloneResponseCacheEntry(src *responseCacheEntry) *responseCacheEntry {
 		statusCode: src.statusCode,
 		header:     src.header.Clone(),
 		body:       append([]byte(nil), src.body...),
+		bodyBytes:  src.bodyBytes,
 		storedAt:   src.storedAt,
 		expiresAt:  src.expiresAt,
 		staleUntil: src.staleUntil,

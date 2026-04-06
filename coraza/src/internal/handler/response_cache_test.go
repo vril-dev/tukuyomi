@@ -142,6 +142,7 @@ func TestProxyHandlerServesResponseFromDiskBackedCache(t *testing.T) {
 	if status.DiskBytes < int64(len(body1)) {
 		t.Fatalf("disk bytes=%d want >= %d", status.DiskBytes, len(body1))
 	}
+	assertDiskCacheBodiesSpilled(t, int64(len(body1)))
 	if got := upstreamHits.Load(); got != 1 {
 		t.Fatalf("upstream hits=%d want=1", got)
 	}
@@ -198,6 +199,7 @@ func TestConfigureResponseCacheRestoresDiskEntries(t *testing.T) {
 	if status.EntryCount != 1 {
 		t.Fatalf("restored entry count=%d want=1", status.EntryCount)
 	}
+	assertDiskCacheBodiesSpilled(t, int64(len(body1)))
 
 	res2 := mustProxyRequest(t, srv.URL+"/restore", "", "")
 	if got := res2.Header.Get(responseCacheStatusHeader); got != responseCacheStatusHit {
@@ -691,6 +693,32 @@ func saveResponseCacheRuntimeConfig() func() {
 		}
 		ConfigureResponseCache()
 	}
+}
+
+func assertDiskCacheBodiesSpilled(t *testing.T, wantBodyBytes int64) {
+	t.Helper()
+
+	localResponseCache.mu.Lock()
+	defer localResponseCache.mu.Unlock()
+
+	for _, elem := range localResponseCache.entries {
+		entry, _ := elem.Value.(*responseCacheEntry)
+		if entry == nil {
+			continue
+		}
+		if entry.diskPath == "" {
+			continue
+		}
+		if entry.body != nil {
+			t.Fatal("disk-backed cache entry should not retain response body in memory")
+		}
+		if entry.bodyBytes != wantBodyBytes {
+			t.Fatalf("disk-backed cache body bytes=%d want=%d", entry.bodyBytes, wantBodyBytes)
+		}
+		return
+	}
+
+	t.Fatal("no disk-backed cache entry found")
 }
 
 func mustProxyRequest(t *testing.T, url, authHeader, cookieHeader string) *http.Response {

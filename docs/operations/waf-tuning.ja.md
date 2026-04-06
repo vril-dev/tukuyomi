@@ -7,7 +7,7 @@
 ## 1. まず証跡を取る
 
 1. 管理APIでログを取得し、`rule_id` と `path` を確認する。
-2. OpenResty の `interesting.ndjson` で `req_id` を追跡し、クライアント条件（IP/UA/クエリ）を絞る。
+2. tukuyomi の `interesting.ndjson` で `req_id` を追跡し、クライアント条件（IP/UA/クエリ）を絞る。
 3. 再現可能なHTTPリクエスト（curlやE2E）を必ず残す。
 
 ## 2. 影響範囲を切り分ける

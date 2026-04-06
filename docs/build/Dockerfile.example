@@ -1,0 +1,55 @@
+FROM node:22-alpine AS ui-builder
+
+WORKDIR /src/web/tukuyomi-admin
+
+ARG VITE_CORAZA_API_BASE=/tukuyomi-api
+ARG VITE_APP_BASE_PATH=/tukuyomi-admin
+
+ENV VITE_CORAZA_API_BASE=${VITE_CORAZA_API_BASE}
+ENV VITE_APP_BASE_PATH=${VITE_APP_BASE_PATH}
+
+COPY web/tukuyomi-admin/package.json web/tukuyomi-admin/package-lock.json ./
+RUN npm ci
+
+COPY web/tukuyomi-admin/ ./
+RUN npm run build
+
+FROM golang:1.26.0-alpine AS builder
+
+WORKDIR /src/coraza/src
+RUN apk add --no-cache git
+
+COPY coraza/src/go.mod coraza/src/go.sum ./
+RUN go mod download
+
+COPY coraza/src/ ./
+COPY --from=ui-builder /src/web/tukuyomi-admin/dist ./internal/handler/admin_ui_dist
+RUN go build -o /out/tukuyomi ./cmd/server
+
+FROM alpine:3.19
+
+WORKDIR /app
+
+COPY --from=builder /out/tukuyomi /app/tukuyomi
+COPY data/conf/ /app/conf/
+COPY data/rules/ /app/rules/
+
+ENV WAF_RULES_FILE=rules/tukuyomi.conf \
+    WAF_BYPASS_FILE=conf/waf.bypass \
+    WAF_COUNTRY_BLOCK_FILE=conf/country-block.conf \
+    WAF_RATE_LIMIT_FILE=conf/rate-limit.conf \
+    WAF_BOT_DEFENSE_FILE=conf/bot-defense.conf \
+    WAF_SEMANTIC_FILE=conf/semantic.conf \
+    WAF_NOTIFICATION_FILE=conf/notifications.conf \
+    WAF_LOG_OUTPUT_FILE=conf/log-output.json \
+    WAF_CRS_ENABLE=true \
+    WAF_CRS_SETUP_FILE=rules/crs/crs-setup.conf \
+    WAF_CRS_RULES_DIR=rules/crs/rules \
+    WAF_CRS_DISABLED_FILE=conf/crs-disabled.conf
+
+RUN mkdir -p /app/logs/coraza /app/logs/nginx \
+    && touch /app/conf/crs-disabled.conf
+
+EXPOSE 9090
+
+CMD ["/app/tukuyomi"]

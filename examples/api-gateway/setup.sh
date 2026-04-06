@@ -12,3 +12,4 @@ fi
 
 echo "[setup] api-gateway example is ready"
 echo "[setup] run: cd ${ROOT_DIR} && docker compose up -d --build"
+echo "[setup] thin front proxy: cd ${ROOT_DIR} && WAF_TRUSTED_PROXY_CIDRS=\${FRONT_PROXY_FIXTURE_IP:-172.31.83.10}/32 WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=true docker compose --profile front-proxy up -d --build"

@@ -32,6 +32,7 @@ need_cmd docker
 export COMPOSE_PROJECT_NAME="tukuyomi-${example_name//[^a-zA-Z0-9]/}-smoke"
 export PUID="${PUID:-$(id -u)}"
 export GUID="${GUID:-$(id -g)}"
+export FRONT_PROXY_TRUSTED_PROXY_CIDRS="${FRONT_PROXY_TRUSTED_PROXY_CIDRS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
 
 prepare_example_dirs() {
   mkdir -p \
@@ -52,7 +53,7 @@ cleanup() {
   fi
   (
     cd "${example_dir}"
-    docker compose down --remove-orphans >/dev/null 2>&1 || true
+    docker compose --profile front-proxy down --remove-orphans >/dev/null 2>&1 || true
   )
 }
 trap 'cleanup "$?"' EXIT
@@ -61,8 +62,10 @@ trap 'cleanup "$?"' EXIT
   cd "${example_dir}"
   ./setup.sh
   prepare_example_dirs
-  docker compose up -d --build
-  ./smoke.sh
+  WAF_TRUSTED_PROXY_CIDRS="${FRONT_PROXY_TRUSTED_PROXY_CIDRS}" \
+  WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=true \
+  docker compose --profile front-proxy up -d --build
+  EXAMPLE_TOPOLOGY=front ./smoke.sh
 )
 
 echo "[ci-example-smoke][OK] ${example_name} protected-host smoke passed"

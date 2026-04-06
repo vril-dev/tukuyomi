@@ -2,8 +2,27 @@
 set -euo pipefail
 
 PROTECTED_HOST="${PROTECTED_HOST:-protected.example.test}"
-BASE_URL_DEFAULT="http://127.0.0.1:${NGINX_PORT:-18082}"
-BASE_URL="${BASE_URL:-${BASE_URL_DEFAULT}}"
+EXAMPLE_TOPOLOGY="${EXAMPLE_TOPOLOGY:-direct}"
+DIRECT_BASE_URL="http://127.0.0.1:${CORAZA_PORT:-19092}"
+FRONT_BASE_URL="http://127.0.0.1:${NGINX_PORT:-18082}"
+
+if [[ -z "${BASE_URL:-}" ]]; then
+  case "${EXAMPLE_TOPOLOGY}" in
+    front)
+      BASE_URL="${FRONT_BASE_URL}"
+      ;;
+    direct)
+      BASE_URL="${DIRECT_BASE_URL}"
+      ;;
+    *)
+      echo "[example-smoke][ERROR] unsupported EXAMPLE_TOPOLOGY=${EXAMPLE_TOPOLOGY}" >&2
+      exit 1
+      ;;
+  esac
+else
+  BASE_URL="${BASE_URL}"
+fi
+
 WHOAMI_PATH="${WHOAMI_PATH:-/tukuyomi-whoami.php}"
 WORDPRESS_INSTALL_URL="${WORDPRESS_INSTALL_URL:-http://${PROTECTED_HOST}}"
 WORDPRESS_ADMIN_USER="${WORDPRESS_ADMIN_USER:-tukuyomi}"
@@ -27,7 +46,7 @@ need_cmd curl
 need_cmd python3
 
 install_wordpress_if_needed() {
-  if [[ "${BASE_URL}" != "${BASE_URL_DEFAULT}" ]]; then
+  if [[ "${WORDPRESS_SKIP_AUTO_INSTALL:-0}" == "1" ]]; then
     return 0
   fi
 
@@ -48,7 +67,7 @@ install_wordpress_if_needed() {
       -e WORDPRESS_ADMIN_USER="${WORDPRESS_ADMIN_USER}" \
       -e WORDPRESS_ADMIN_PASSWORD="${WORDPRESS_ADMIN_PASSWORD}" \
       -e WORDPRESS_ADMIN_EMAIL="${WORDPRESS_ADMIN_EMAIL}" \
-      wordpress php <<'PHP'
+      wordpress php >/dev/null 2>&1 <<'PHP'
 <?php
 $_SERVER['HTTP_HOST'] = getenv('PROTECTED_HOST') ?: 'protected.example.test';
 $_SERVER['REQUEST_METHOD'] = 'GET';

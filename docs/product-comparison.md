@@ -21,14 +21,14 @@ Notes:
 | Feature | `tukuyomi` | `tukuyomi-proxy` | `tukuyomi-edge` |
 | --- | --- | --- | --- |
 | WAF engine (Coraza / CRS) | ○ | ○ | ○ |
-| Reverse proxy | △ (`nginx` fronting Coraza) | ○ (built-in) | ○ (built-in) |
-| Single binary runtime | × | ○ | ○ |
-| Primary deployment shape | ○ Docker / compose | △ Docker or single binary | ○ host / `systemd` |
+| Reverse proxy | ○ (built-in app proxy; often fronted by `nginx` / LB) | ○ (built-in) | ○ (built-in) |
+| Single binary runtime | △ (local binary supported; front proxy / LB still typical) | ○ | ○ |
+| Primary deployment shape | ○ Docker / compose or local binary | △ Docker or single binary | ○ host / `systemd` |
 | Route / upstream management | × | ○ | ○ |
 | Dynamic runtime policy update | ○ | ○ | ○ |
-| Embedded admin UI | △ (separate frontend path) | ○ | ○ |
+| Embedded admin UI | ○ | ○ | ○ |
 | Log / status UI | ○ | ○ | ○ |
-| Cache control | ○ (`nginx`-backed) | ○ (internal cache + rules) | ○ (internal cache + rules) |
+| Cache control | ○ (internal response cache + optional front cache) | ○ (internal cache + rules) | ○ (internal cache + rules) |
 | Bypass rules | ○ | ○ | ○ |
 | IP reputation | ○ | ○ | ○ |
 | Bot defense | ○ | ○ | ○ |
@@ -38,7 +38,7 @@ Notes:
 | Device authentication | × | × | ○ |
 | Center / device identity flow | × | × | ○ |
 | WebSocket support | △ (proxy pass-through) | △ (upgrade pass-through) | △ (upgrade pass-through) |
-| TLS termination / ACME | △ (`nginx`-managed) | ○ | ○ |
+| TLS termination / ACME | △ (front proxy / LB managed) | ○ | ○ |
 | Notifications | ○ | ○ | ○ |
 | DB / MySQL shared store | ○ | ○ | × |
 | Multi-node operation | ○ | ○ | × |

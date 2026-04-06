@@ -21,14 +21,14 @@
 | 機能 | `tukuyomi` | `tukuyomi-proxy` | `tukuyomi-edge` |
 | --- | --- | --- | --- |
 | WAF エンジン（Coraza / CRS） | ○ | ○ | ○ |
-| リバースプロキシ | △（`nginx` が Coraza の前段） | ○（内蔵） | ○（内蔵） |
-| Single binary 実行 | × | ○ | ○ |
-| 主な運用形態 | ○ Docker / compose | △ Docker または single binary | ○ host / `systemd` |
+| リバースプロキシ | ○（app proxy 内蔵。`nginx` / LB 前段をよく併用） | ○（内蔵） | ○（内蔵） |
+| Single binary 実行 | △（local binary は可能だが、前段 proxy / LB 併用が一般的） | ○ | ○ |
+| 主な運用形態 | ○ Docker / compose または local binary | △ Docker または single binary | ○ host / `systemd` |
 | Route / upstream 管理 | × | ○ | ○ |
 | 実行時ポリシー更新 | ○ | ○ | ○ |
-| 内蔵管理 UI | △（frontend 別配信） | ○ | ○ |
+| 内蔵管理 UI | ○ | ○ | ○ |
 | ログ / status UI | ○ | ○ | ○ |
-| キャッシュ制御 | ○（`nginx` ベース） | ○（内部キャッシュ + rules） | ○（内部キャッシュ + rules） |
+| キャッシュ制御 | ○（内部 response cache + 必要に応じて前段 cache） | ○（内部キャッシュ + rules） | ○（内部キャッシュ + rules） |
 | バイパスルール | ○ | ○ | ○ |
 | IP reputation | ○ | ○ | ○ |
 | Bot defense | ○ | ○ | ○ |
@@ -38,7 +38,7 @@
 | Device 認証 | × | × | ○ |
 | Center / device identity 連携 | × | × | ○ |
 | WebSocket 対応 | △（proxy pass-through） | △（upgrade pass-through） | △（upgrade pass-through） |
-| TLS 終端 / ACME | △（`nginx` 管理） | ○ | ○ |
+| TLS 終端 / ACME | △（前段 proxy / LB 管理） | ○ | ○ |
 | 通知 | ○ | ○ | ○ |
 | DB / MySQL 共有ストア | ○ | ○ | × |
 | マルチノード運用 | ○ | ○ | × |

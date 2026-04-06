@@ -20,6 +20,19 @@ type RulesDTO = {
   rules?: Rule[];
 };
 
+type CacheRuntimeDTO = {
+  response_cache_mode?: string;
+  response_cache_enabled?: boolean;
+  response_cache_max_entries?: number;
+  response_cache_max_body_bytes?: number;
+  response_cache_entry_count?: number;
+  response_cache_hits?: number;
+  response_cache_misses?: number;
+  response_cache_stores?: number;
+  response_cache_bypasses?: number;
+  response_cache_evictions?: number;
+};
+
 type ValidateResp = {
   ok: boolean;
   messages?: string[];
@@ -47,6 +60,7 @@ function splitCSV(v: string): string[] {
 
 export default function CacheRulePanel() {
   const [rules, setRules] = useState<Rule[]>([]);
+  const [runtime, setRuntime] = useState<CacheRuntimeDTO>({});
   const [raw, setRaw] = useState("");
   const [rawMode, setRawMode] = useState(false);
   const [etag, setEtag] = useState<string | null>(null);
@@ -69,10 +83,14 @@ export default function CacheRulePanel() {
     setLoading(true);
     setError(null);
     try {
-      const data = await apiGetJson<RulesDTO>("/cache-rules");
+      const [data, status] = await Promise.all([
+        apiGetJson<RulesDTO>("/cache-rules"),
+        apiGetJson<CacheRuntimeDTO>("/status").catch(() => null),
+      ]);
       const nextRules = Array.isArray(data.rules) ? data.rules : [];
       const nextRaw = data.raw ?? "";
       setRules(nextRules);
+      setRuntime(status ?? {});
       setRaw(nextRaw);
       setEtag(data.etag ?? null);
       setServerRaw(nextRaw);
@@ -168,6 +186,9 @@ export default function CacheRulePanel() {
     <Badge color="red">Invalid</Badge>
   );
 
+  const cacheMode = String(runtime.response_cache_mode ?? "off");
+  const cacheEnabled = runtime.response_cache_enabled === true;
+
   return (
     <div className="w-full p-4 space-y-4">
       <header className="flex items-center justify-between">
@@ -181,6 +202,34 @@ export default function CacheRulePanel() {
       </header>
 
       {error && <Alert kind="error" title="Error" message={error} onClose={() => setError(null)} />}
+
+      <section className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">Cache Runtime</h2>
+            <p className="text-sm text-neutral-500">
+              Runtime counters for the standalone in-memory cache. Mode remains env-driven on [web] for now.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge color={cacheEnabled ? "green" : "gray"}>{cacheEnabled ? "Enabled" : "Disabled"}</Badge>
+            <Badge color={cacheMode === "memory" ? "green" : cacheMode === "off" ? "gray" : "amber"}>{cacheMode}</Badge>
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5 text-sm">
+          <StatChip label="Mode" value={cacheMode} />
+          <StatChip label="Max Entries" value={String(runtime.response_cache_max_entries ?? 0)} />
+          <StatChip label="Max Body Bytes" value={formatBytes(runtime.response_cache_max_body_bytes)} />
+          <StatChip label="Entries" value={String(runtime.response_cache_entry_count ?? 0)} />
+          <StatChip label="Hits" value={String(runtime.response_cache_hits ?? 0)} />
+          <StatChip label="Misses" value={String(runtime.response_cache_misses ?? 0)} />
+          <StatChip label="Stores" value={String(runtime.response_cache_stores ?? 0)} />
+          <StatChip label="Bypasses" value={String(runtime.response_cache_bypasses ?? 0)} />
+          <StatChip label="Evictions" value={String(runtime.response_cache_evictions ?? 0)} />
+          <StatChip label="Future Store Shape" value="disk-backed reserved" />
+        </div>
+      </section>
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm text-neutral-600">
@@ -356,6 +405,29 @@ export default function CacheRulePanel() {
       </div>
     </div>
   );
+}
+
+function StatChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border bg-white px-3 py-2">
+      <div className="text-xs text-neutral-500">{label}</div>
+      <div className="mt-1 font-mono text-xs break-all">{value}</div>
+    </div>
+  );
+}
+
+function formatBytes(v: unknown) {
+  const n = typeof v === "number" ? v : Number(v ?? 0);
+  if (!Number.isFinite(n) || n <= 0) {
+    return "0 B";
+  }
+  if (n < 1024) {
+    return `${n} B`;
+  }
+  if (n < 1024 * 1024) {
+    return `${(n / 1024).toFixed(1)} KiB`;
+  }
+  return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function Badge({

@@ -267,7 +267,7 @@ sudo sysctl --system
 
 ### ライブラリ
 
-* coraza 3.3.3
+* coraza 3.6.0
 * nginx 1.27
 * go 1.26.0
 * React 19

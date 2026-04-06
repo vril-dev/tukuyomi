@@ -166,6 +166,8 @@ func PutCacheRules(c *gin.Context) {
 		}
 	}
 
+	InvalidateResponseCache()
+
 	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": newETag})
 }
 

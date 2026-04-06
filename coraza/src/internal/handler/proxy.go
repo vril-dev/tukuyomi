@@ -83,6 +83,7 @@ func onProxyResponse(res *http.Response) error {
 	sanitizeInternalResponseHeaders(res)
 	annotateWAFHit(res)
 	applyCacheHeaders(res)
+	applyResponseCache(res)
 
 	return nil
 }
@@ -106,32 +107,8 @@ func annotateWAFHit(res *http.Response) {
 		return
 	}
 	ruleIDs, _ := ctx.Value(ctxKeyWafRule).(string)
-	if res.Header != nil {
-		if config.ForwardInternalResponseHeaders {
-			res.Header.Set("X-WAF-Hit", "1")
-			if ruleIDs != "" {
-				res.Header.Set("X-WAF-RuleIDs", ruleIDs)
-			}
-		}
-	}
-
-	reqID, _ := ctx.Value(ctxKeyReqID).(string)
-	ip, _ := ctx.Value(ctxKeyIP).(string)
-	country, _ := ctx.Value(ctxKeyCountry).(string)
-	path := res.Request.URL.Path
-	status := res.StatusCode
-	emitJSONLog(map[string]any{
-		"ts":      time.Now().UTC().Format(time.RFC3339Nano),
-		"service": "coraza",
-		"level":   "INFO",
-		"event":   "waf_hit_allow",
-		"req_id":  reqID,
-		"ip":      ip,
-		"country": country,
-		"path":    path,
-		"rules":   ruleIDs,
-		"status":  status,
-	})
+	addCurrentWAFHitHeaders(res.Header, res.Request, true, ruleIDs)
+	emitWAFHitAllowEvent(res.Request, res.StatusCode)
 }
 
 func applyCacheHeaders(res *http.Response) {
@@ -297,6 +274,11 @@ func ProxyHandler(c *gin.Context) {
 	if wafEngine == nil {
 		log.Printf("[BYPASS][HIT] %s -> skip WAF", reqPath)
 		setWAFContext(c, reqID, clientIP, country, false, "")
+		cachePlan := buildResponseCachePlan(c.Request)
+		if tryServeCachedResponse(c, cachePlan, reqID, clientIP, country, false, "", startedAt) {
+			return
+		}
+		setResponseCacheContext(c, cachePlan)
 		rec := &proxyStatusRecorder{ResponseWriter: c.Writer}
 		c.Writer = rec
 		proxy.ServeHTTP(rec, c.Request)
@@ -375,6 +357,12 @@ func ProxyHandler(c *gin.Context) {
 		c.AbortWithStatus(it.Status)
 		return
 	}
+
+	cachePlan := buildResponseCachePlan(c.Request)
+	if tryServeCachedResponse(c, cachePlan, reqID, clientIP, country, wafHit, strings.Join(unique(ruleIDs), ","), startedAt) {
+		return
+	}
+	setResponseCacheContext(c, cachePlan)
 
 	rec := &proxyStatusRecorder{ResponseWriter: c.Writer}
 	c.Writer = rec
@@ -476,4 +464,39 @@ func recorderEvent(rec *proxyStatusRecorder, wafHit bool) string {
 		return "waf_hit_allow"
 	}
 	return "response"
+}
+
+func addCurrentWAFHitHeaders(h http.Header, req *http.Request, wafHit bool, ruleIDs string) {
+	if !wafHit || h == nil || req == nil || !config.ForwardInternalResponseHeaders {
+		return
+	}
+
+	h.Set("X-WAF-Hit", "1")
+	if ruleIDs != "" {
+		h.Set("X-WAF-RuleIDs", ruleIDs)
+	}
+}
+
+func emitWAFHitAllowEvent(req *http.Request, status int) {
+	if req == nil {
+		return
+	}
+
+	ctx := req.Context()
+	reqID, _ := ctx.Value(ctxKeyReqID).(string)
+	ip, _ := ctx.Value(ctxKeyIP).(string)
+	country, _ := ctx.Value(ctxKeyCountry).(string)
+	ruleIDs, _ := ctx.Value(ctxKeyWafRule).(string)
+	emitJSONLog(map[string]any{
+		"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+		"service": "coraza",
+		"level":   "INFO",
+		"event":   "waf_hit_allow",
+		"req_id":  reqID,
+		"ip":      ip,
+		"country": country,
+		"path":    req.URL.Path,
+		"rules":   ruleIDs,
+		"status":  status,
+	})
 }

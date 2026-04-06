@@ -201,6 +201,7 @@ func main() {
 	}
 
 	handler.RegisterAdminUIRoutes(r)
+	handler.ConfigureResponseCache()
 
 	r.NoRoute(func(c *gin.Context) {
 		p := c.Request.URL.Path
@@ -225,7 +226,12 @@ func main() {
 		log.Printf("[DB][SYNC] periodic sync loop enabled interval=%s", config.DBSyncInterval)
 	}
 	stopWatch, err := cacheconf.Watch(cacheConfPath, func(rs *cacheconf.Ruleset) {
-		//
+		handler.InvalidateResponseCache()
+		if rs != nil {
+			log.Printf("[CACHE][RUNTIME] invalidated in-memory response cache after rules reload (%d rules)", len(rs.Rules))
+		} else {
+			log.Printf("[CACHE][RUNTIME] invalidated in-memory response cache after rules reload")
+		}
 	})
 	if err != nil {
 		log.Printf("[CACHE] watch disabled: %v", err)

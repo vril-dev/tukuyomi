@@ -25,6 +25,7 @@ func StatusHandler(c *gin.Context) {
 	ipReputationStatus := IPReputationStatus()
 	botDefenseCfg := GetBotDefenseConfig()
 	botDefenseLatest, botDefenseLatestOK := latestBotDefenseDecision()
+	responseCache := GetResponseCacheStatus()
 	dbTotalRows := 0
 	dbWAFBlockRows := 0
 	dbSizeBytes := int64(0)
@@ -120,6 +121,16 @@ func StatusHandler(c *gin.Context) {
 		"trusted_proxy_cidrs":                   config.TrustedProxyCIDRs,
 		"trusted_proxy_count":                   len(config.TrustedProxyCIDRs),
 		"forward_internal_response_headers":     config.ForwardInternalResponseHeaders,
+		"response_cache_mode":                   responseCache.Mode,
+		"response_cache_enabled":                responseCache.Enabled,
+		"response_cache_max_entries":            responseCache.MaxEntries,
+		"response_cache_max_body_bytes":         responseCache.MaxBodyBytes,
+		"response_cache_entry_count":            responseCache.EntryCount,
+		"response_cache_hits":                   responseCache.Hits,
+		"response_cache_misses":                 responseCache.Misses,
+		"response_cache_stores":                 responseCache.Stores,
+		"response_cache_bypasses":               responseCache.Bypasses,
+		"response_cache_evictions":              responseCache.Evictions,
 		"crs_enabled":                           config.CRSEnable,
 		"crs_setup_file":                        config.CRSSetupFile,
 		"crs_rules_dir":                         config.CRSRulesDir,

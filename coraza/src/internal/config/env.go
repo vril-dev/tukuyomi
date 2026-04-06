@@ -31,6 +31,9 @@ var (
 	TrustedProxyCIDRs              []string
 	TrustedProxyPrefixes           []netip.Prefix
 	ForwardInternalResponseHeaders bool
+	ResponseCacheMode              string
+	ResponseCacheMaxEntries        int
+	ResponseCacheMaxBodyBytes      int64
 	APIKeyPrimary                  string
 	APIKeySecondary                string
 	APIAuthDisable                 bool
@@ -125,6 +128,9 @@ func LoadEnv() {
 	}
 	TrustedProxyCIDRs, TrustedProxyPrefixes = parseTrustedProxyCIDRs(os.Getenv("WAF_TRUSTED_PROXY_CIDRS"))
 	ForwardInternalResponseHeaders = isTruthy(os.Getenv("WAF_FORWARD_INTERNAL_RESPONSE_HEADERS"))
+	ResponseCacheMode = parseResponseCacheMode(os.Getenv("WAF_RESPONSE_CACHE_MODE"))
+	ResponseCacheMaxEntries = parseResponseCacheMaxEntries(os.Getenv("WAF_RESPONSE_CACHE_MAX_ENTRIES"))
+	ResponseCacheMaxBodyBytes = parseResponseCacheMaxBodyBytes(os.Getenv("WAF_RESPONSE_CACHE_MAX_BODY_BYTES"))
 
 	APIKeyPrimary = strings.TrimSpace(os.Getenv("WAF_API_KEY_PRIMARY"))
 	APIKeySecondary = strings.TrimSpace(os.Getenv("WAF_API_KEY_SECONDARY"))
@@ -344,6 +350,41 @@ func parseTrustedProxyCIDRs(v string) ([]string, []netip.Prefix) {
 	}
 
 	return cidrs, prefixes
+}
+
+func parseResponseCacheMode(v string) string {
+	s := strings.ToLower(strings.TrimSpace(v))
+	switch s {
+	case "", "off":
+		return "off"
+	case "memory":
+		return "memory"
+	default:
+		log.Printf("[CONFIG][WARN] unsupported WAF_RESPONSE_CACHE_MODE=%q, fallback=off", s)
+		return "off"
+	}
+}
+
+func parseResponseCacheMaxEntries(v string) int {
+	n := parseIntDefault(v, 512)
+	if n < 0 {
+		return 0
+	}
+	if n > 10000 {
+		return 10000
+	}
+	return n
+}
+
+func parseResponseCacheMaxBodyBytes(v string) int64 {
+	n := parseIntDefault(v, 1<<20)
+	if n < 0 {
+		return 0
+	}
+	if n > 64<<20 {
+		return 64 << 20
+	}
+	return int64(n)
 }
 
 func parseCountryHeaderNames(v string) []string {

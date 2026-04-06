@@ -81,8 +81,9 @@ artifacts/benchmarks/20260406-160000/api-gateway-front-pass.json
 
 ## Notes
 
-- Cache-focused measurements are only meaningful on the `front` topology in the
-  current product, because response cache still lives in `nginx`.
+- Cache-focused measurements are meaningful on the `front` topology by default.
+  For direct `client -> tukuyomi -> app` measurements, enable
+  `WAF_RESPONSE_CACHE_MODE=memory` in the target stack first.
 - The harness intentionally uses repo-local tooling: `go run ./cmd/httpbench`
   plus Docker Compose stacks from `examples/`.
 - When the runner starts an example stack itself, it disables example

@@ -81,8 +81,9 @@ artifacts/benchmarks/20260406-160000/api-gateway-front-pass.json
 
 ## Notes
 
-- cache 系の測定は、現状では response cache が `nginx` にあるため、
-  `front` topology でのみ意味があります。
+- cache 系の測定は default では `front` topology で使います。
+  direct の `client -> tukuyomi -> app` を測りたい場合は、対象 stack で
+  先に `WAF_RESPONSE_CACHE_MODE=memory` を有効にしてください。
 - harness は repo 内で閉じています。`go run ./cmd/httpbench` と
   `examples/` の Docker Compose を使います。
 - runner が example stack を自分で起動する場合は、baseline を

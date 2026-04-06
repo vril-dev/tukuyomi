@@ -810,7 +810,8 @@ DENY regex=^/users/[0-9]+/profile
 ### 動作概要
 
 - Go側でルールに一致したレスポンスに `X-Tukuyomi-Cacheable` と `X-Accel-Expires` を付与
-- nginx がこれらのヘッダを元にキャッシュを管理
+- `WAF_RESPONSE_CACHE_MODE=memory` を有効にすると、tukuyomi 自身が in-memory response cache を持ちます
+- `WAF_RESPONSE_CACHE_MODE=off` の場合は、従来どおり nginx がこれらのヘッダを元にキャッシュを管理します
 - 認証付きリクエスト、Cookieあり、APIパスはデフォルトでキャッシュされません
 - `Set-Cookie` を含む上流レスポンスは保存されません（共有キャッシュ誤配信防止）
 
@@ -819,6 +820,7 @@ DENY regex=^/users/[0-9]+/profile
 - レスポンスヘッダに以下が含まれているか確認
   - `X-Tukuyomi-Cacheable: 1`
   - `X-Accel-Expires: <秒数>`
+- local in-memory cache を有効にした場合は `X-Tukuyomi-Cache-Status: MISS|HIT|BYPASS` も確認可能
 - nginx の `X-Cache-Status` ヘッダでキャッシュヒット状況を確認可能（MISS/HIT/BYPASS 等）
 
 ---

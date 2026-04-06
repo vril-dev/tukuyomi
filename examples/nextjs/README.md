@@ -31,3 +31,15 @@ PROTECTED_HOST=protected.example.test ./smoke.sh
 ```
 
 This verifies that the app sees the protected host on `/api/whoami` and that a simple XSS probe is blocked with `403`.
+
+## Direct Local Cache Check
+
+To verify the standalone in-memory cache without example `nginx`:
+
+```bash
+WAF_RESPONSE_CACHE_MODE=memory docker compose up -d --build
+curl -i "http://localhost:19091/"
+curl -i "http://localhost:19091/"
+```
+
+The first response should include `X-Tukuyomi-Cache-Status: MISS`, and the second should become `HIT`.

@@ -807,7 +807,8 @@ Field details:
 ### Behavior Summary
 
 - Go side sets `X-Tukuyomi-Cacheable` and `X-Accel-Expires` on responses matching cache rules
-- nginx controls cache based on those headers
+- `WAF_RESPONSE_CACHE_MODE=memory` enables an in-memory response cache inside tukuyomi itself
+- When `WAF_RESPONSE_CACHE_MODE=off`, nginx can still control cache based on the response headers above
 - Requests with auth headers, cookies, or API paths are non-cacheable by default
 - Upstream responses containing `Set-Cookie` are not stored (to prevent shared-cache leakage)
 
@@ -816,6 +817,7 @@ Field details:
 Check response headers:
 - `X-Tukuyomi-Cacheable: 1`
 - `X-Accel-Expires: <seconds>`
+- `X-Tukuyomi-Cache-Status: MISS|HIT|BYPASS` when local in-memory cache is enabled
 
 You can inspect cache hit state using nginx `X-Cache-Status` header (`MISS`/`HIT`/`BYPASS`, etc.).
 

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/corazawaf/coraza/v3"
 	"github.com/gin-gonic/gin"
@@ -163,6 +164,111 @@ func TestBuildResponseCachePlanRejectsUnsafeRequests(t *testing.T) {
 	}
 }
 
+func TestProxyHandlerCoalescesConcurrentCacheMisses(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	restore := saveResponseCacheRuntimeConfig()
+	defer restore()
+
+	var upstreamHits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits.Add(1)
+		time.Sleep(150 * time.Millisecond)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("shared-cache-body"))
+	}))
+	defer upstream.Close()
+
+	config.AppURL = upstream.URL
+	config.APIBasePath = "/tukuyomi-api"
+	config.ForwardInternalResponseHeaders = false
+	config.ResponseCacheMode = "memory"
+	config.ResponseCacheMaxEntries = 16
+	config.ResponseCacheMaxBodyBytes = 4096
+	ConfigureResponseCache()
+	cacheconf.Set(&cacheconf.Ruleset{
+		Rules: []cacheconf.Rule{{
+			Kind:    "ALLOW",
+			Prefix:  "/",
+			Methods: map[string]bool{"GET": true, "HEAD": true},
+			TTL:     60,
+		}},
+	})
+
+	router := gin.New()
+	router.Any("/*path", ProxyHandler)
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	const requestCount = 6
+	start := make(chan struct{})
+	type result struct {
+		status string
+		body   string
+		err    error
+	}
+	results := make(chan result, requestCount)
+
+	var wg sync.WaitGroup
+	for i := 0; i < requestCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			res, err := mustProxyRequestWithClient(http.DefaultClient, srv.URL+"/coalesced", "", "")
+			if err != nil {
+				results <- result{err: err}
+				return
+			}
+			results <- result{
+				status: res.Header.Get(responseCacheStatusHeader),
+				body:   readBody(t, res),
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(results)
+
+	missCount := 0
+	hitCount := 0
+	for r := range results {
+		if r.err != nil {
+			t.Fatalf("proxy request failed: %v", r.err)
+		}
+		if r.body != "shared-cache-body" {
+			t.Fatalf("unexpected cached body %q", r.body)
+		}
+		switch r.status {
+		case responseCacheStatusMiss:
+			missCount++
+		case responseCacheStatusHit:
+			hitCount++
+		default:
+			t.Fatalf("unexpected cache status %q", r.status)
+		}
+	}
+
+	if got := upstreamHits.Load(); got != 1 {
+		t.Fatalf("upstream hits=%d want=1", got)
+	}
+	if missCount != 1 {
+		t.Fatalf("miss count=%d want=1", missCount)
+	}
+	if hitCount != requestCount-1 {
+		t.Fatalf("hit count=%d want=%d", hitCount, requestCount-1)
+	}
+
+	status := GetResponseCacheStatus()
+	if status.CoalescedWaits < requestCount-1 {
+		t.Fatalf("coalesced waits=%d want-at-least=%d", status.CoalescedWaits, requestCount-1)
+	}
+	if status.Misses != 1 {
+		t.Fatalf("miss metric=%d want=1", status.Misses)
+	}
+}
+
 func saveResponseCacheRuntimeConfig() func() {
 	oldAppURL := config.AppURL
 	oldAPIBasePath := config.APIBasePath
@@ -204,9 +310,21 @@ func saveResponseCacheRuntimeConfig() func() {
 func mustProxyRequest(t *testing.T, url, authHeader, cookieHeader string) *http.Response {
 	t.Helper()
 
+	res, err := mustProxyRequestWithClient(http.DefaultClient, url, authHeader, cookieHeader)
+	if err != nil {
+		t.Fatalf("proxy request failed: %v", err)
+	}
+	return res
+}
+
+func mustProxyRequestWithClient(client *http.Client, url, authHeader, cookieHeader string) (*http.Response, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		t.Fatalf("new request: %v", err)
+		return nil, err
 	}
 	req.Host = "protected.example.test"
 	if authHeader != "" {
@@ -216,11 +334,7 @@ func mustProxyRequest(t *testing.T, url, authHeader, cookieHeader string) *http.
 		req.Header.Set("Cookie", cookieHeader)
 	}
 
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("proxy request failed: %v", err)
-	}
-	return res
+	return client.Do(req)
 }
 
 func readBody(t *testing.T, res *http.Response) string {

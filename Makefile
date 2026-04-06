@@ -304,6 +304,7 @@ benchmark-baseline:
 	BENCH_RUN_ID="$$run_id" $(MAKE) benchmark-scenario EXAMPLE=api-gateway TOPOLOGY=front SCENARIO=block; \
 	BENCH_RUN_ID="$$run_id" $(MAKE) benchmark-scenario EXAMPLE=api-gateway TOPOLOGY=direct SCENARIO=block; \
 	BENCH_RUN_ID="$$run_id" $(MAKE) benchmark-scenario EXAMPLE=nextjs TOPOLOGY=front SCENARIO=cache; \
+	BENCH_RUN_ID="$$run_id" $(MAKE) benchmark-scenario EXAMPLE=nextjs TOPOLOGY=direct SCENARIO=cache; \
 	BENCH_RUN_ID="$$run_id" BENCH_ADMIN_SIDE_TRAFFIC=1 $(MAKE) benchmark-scenario EXAMPLE=nextjs TOPOLOGY=front SCENARIO=cache
 
 check: go-test ui-test compose-config compose-config-mysql

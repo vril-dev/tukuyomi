@@ -26,11 +26,13 @@ type CacheRuntimeDTO = {
   response_cache_max_entries?: number;
   response_cache_max_body_bytes?: number;
   response_cache_entry_count?: number;
+  response_cache_inflight_keys?: number;
   response_cache_hits?: number;
   response_cache_misses?: number;
   response_cache_stores?: number;
   response_cache_bypasses?: number;
   response_cache_evictions?: number;
+  response_cache_coalesced_waits?: number;
 };
 
 type ValidateResp = {
@@ -222,11 +224,13 @@ export default function CacheRulePanel() {
           <StatChip label="Max Entries" value={String(runtime.response_cache_max_entries ?? 0)} />
           <StatChip label="Max Body Bytes" value={formatBytes(runtime.response_cache_max_body_bytes)} />
           <StatChip label="Entries" value={String(runtime.response_cache_entry_count ?? 0)} />
+          <StatChip label="Inflight Keys" value={String(runtime.response_cache_inflight_keys ?? 0)} />
           <StatChip label="Hits" value={String(runtime.response_cache_hits ?? 0)} />
           <StatChip label="Misses" value={String(runtime.response_cache_misses ?? 0)} />
           <StatChip label="Stores" value={String(runtime.response_cache_stores ?? 0)} />
           <StatChip label="Bypasses" value={String(runtime.response_cache_bypasses ?? 0)} />
           <StatChip label="Evictions" value={String(runtime.response_cache_evictions ?? 0)} />
+          <StatChip label="Coalesced Waits" value={String(runtime.response_cache_coalesced_waits ?? 0)} />
           <StatChip label="Future Store Shape" value="disk-backed reserved" />
         </div>
       </section>

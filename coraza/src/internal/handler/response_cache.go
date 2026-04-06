@@ -48,40 +48,49 @@ type responseCacheEntry struct {
 	expiresAt  time.Time
 }
 
+type responseCacheInflight struct {
+	done chan struct{}
+}
+
 type responseCacheRuntime struct {
 	mu           sync.Mutex
 	mode         string
 	maxEntries   int
 	maxBodyBytes int64
 	entries      map[string]*list.Element
+	inflight     map[string]*responseCacheInflight
 	lru          list.List
 
-	hits      atomic.Uint64
-	misses    atomic.Uint64
-	stores    atomic.Uint64
-	bypasses  atomic.Uint64
-	evictions atomic.Uint64
+	hits            atomic.Uint64
+	misses          atomic.Uint64
+	stores          atomic.Uint64
+	bypasses        atomic.Uint64
+	evictions       atomic.Uint64
+	coalescedWaits  atomic.Uint64
 }
 
 type responseCacheStatus struct {
-	Mode         string `json:"mode"`
-	Enabled      bool   `json:"enabled"`
-	MaxEntries   int    `json:"max_entries"`
-	MaxBodyBytes int64  `json:"max_body_bytes"`
-	EntryCount   int    `json:"entry_count"`
-	Hits         uint64 `json:"hits"`
-	Misses       uint64 `json:"misses"`
-	Stores       uint64 `json:"stores"`
-	Bypasses     uint64 `json:"bypasses"`
-	Evictions    uint64 `json:"evictions"`
+	Mode           string `json:"mode"`
+	Enabled        bool   `json:"enabled"`
+	MaxEntries     int    `json:"max_entries"`
+	MaxBodyBytes   int64  `json:"max_body_bytes"`
+	EntryCount     int    `json:"entry_count"`
+	InflightKeys   int    `json:"inflight_keys"`
+	Hits           uint64 `json:"hits"`
+	Misses         uint64 `json:"misses"`
+	Stores         uint64 `json:"stores"`
+	Bypasses       uint64 `json:"bypasses"`
+	Evictions      uint64 `json:"evictions"`
+	CoalescedWaits uint64 `json:"coalesced_waits"`
 }
 
 var localResponseCache = newResponseCacheRuntime()
 
 func newResponseCacheRuntime() *responseCacheRuntime {
 	return &responseCacheRuntime{
-		mode:    responseCacheModeOff,
-		entries: map[string]*list.Element{},
+		mode:     responseCacheModeOff,
+		entries:  map[string]*list.Element{},
+		inflight: map[string]*responseCacheInflight{},
 	}
 }
 
@@ -125,6 +134,9 @@ func (c *responseCacheRuntime) configure(mode string, maxEntries int, maxBodyByt
 	c.maxEntries = maxEntries
 	c.maxBodyBytes = maxBodyBytes
 	c.entries = map[string]*list.Element{}
+	if c.inflight == nil {
+		c.inflight = map[string]*responseCacheInflight{}
+	}
 	c.lru.Init()
 	c.mu.Unlock()
 
@@ -133,6 +145,7 @@ func (c *responseCacheRuntime) configure(mode string, maxEntries int, maxBodyByt
 	c.stores.Store(0)
 	c.bypasses.Store(0)
 	c.evictions.Store(0)
+	c.coalescedWaits.Store(0)
 }
 
 func (c *responseCacheRuntime) invalidate() {
@@ -145,22 +158,25 @@ func (c *responseCacheRuntime) invalidate() {
 func (c *responseCacheRuntime) status() responseCacheStatus {
 	c.mu.Lock()
 	entryCount := len(c.entries)
+	inflightKeys := len(c.inflight)
 	mode := c.mode
 	maxEntries := c.maxEntries
 	maxBodyBytes := c.maxBodyBytes
 	c.mu.Unlock()
 
 	return responseCacheStatus{
-		Mode:         mode,
-		Enabled:      mode == responseCacheModeMemory && maxEntries > 0 && maxBodyBytes > 0,
-		MaxEntries:   maxEntries,
-		MaxBodyBytes: maxBodyBytes,
-		EntryCount:   entryCount,
-		Hits:         c.hits.Load(),
-		Misses:       c.misses.Load(),
-		Stores:       c.stores.Load(),
-		Bypasses:     c.bypasses.Load(),
-		Evictions:    c.evictions.Load(),
+		Mode:           mode,
+		Enabled:        mode == responseCacheModeMemory && maxEntries > 0 && maxBodyBytes > 0,
+		MaxEntries:     maxEntries,
+		MaxBodyBytes:   maxBodyBytes,
+		EntryCount:     entryCount,
+		InflightKeys:   inflightKeys,
+		Hits:           c.hits.Load(),
+		Misses:         c.misses.Load(),
+		Stores:         c.stores.Load(),
+		Bypasses:       c.bypasses.Load(),
+		Evictions:      c.evictions.Load(),
+		CoalescedWaits: c.coalescedWaits.Load(),
 	}
 }
 
@@ -176,31 +192,62 @@ func (c *responseCacheRuntime) maxBodyBytesLimit() int64 {
 	return c.maxBodyBytes
 }
 
-func (c *responseCacheRuntime) lookup(plan *responseCachePlan) (*responseCacheEntry, bool) {
+func (c *responseCacheRuntime) lookupLocked(plan *responseCachePlan, now time.Time) (*responseCacheEntry, bool) {
 	if plan == nil {
 		return nil, false
 	}
 
-	now := time.Now().UTC()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	elem, ok := c.entries[plan.Key]
 	if !ok {
-		c.misses.Add(1)
 		return nil, false
 	}
 
 	entry := elem.Value.(*responseCacheEntry)
 	if !entry.expiresAt.After(now) {
 		c.removeLocked(elem)
-		c.misses.Add(1)
 		return nil, false
 	}
 
 	c.lru.MoveToFront(elem)
-	c.hits.Add(1)
 	return cloneResponseCacheEntry(entry), true
+}
+
+func (c *responseCacheRuntime) prepare(plan *responseCachePlan) (*responseCacheEntry, func()) {
+	if plan == nil {
+		return nil, nil
+	}
+
+	for {
+		now := time.Now().UTC()
+		c.mu.Lock()
+		if entry, ok := c.lookupLocked(plan, now); ok {
+			c.hits.Add(1)
+			c.mu.Unlock()
+			return entry, nil
+		}
+		if inflight, ok := c.inflight[plan.Key]; ok {
+			waitCh := inflight.done
+			c.coalescedWaits.Add(1)
+			c.mu.Unlock()
+			<-waitCh
+			continue
+		}
+
+		inflight := &responseCacheInflight{done: make(chan struct{})}
+		c.inflight[plan.Key] = inflight
+		c.misses.Add(1)
+		c.mu.Unlock()
+
+		return nil, func() {
+			c.mu.Lock()
+			current, ok := c.inflight[plan.Key]
+			if ok && current == inflight {
+				delete(c.inflight, plan.Key)
+				close(inflight.done)
+			}
+			c.mu.Unlock()
+		}
+	}
 }
 
 func (c *responseCacheRuntime) store(plan *responseCachePlan, res *http.Response, body []byte, ttl time.Duration) bool {
@@ -475,16 +522,7 @@ func cloneResponseCacheEntry(src *responseCacheEntry) *responseCacheEntry {
 	}
 }
 
-func tryServeCachedResponse(c *gin.Context, plan *responseCachePlan, reqID, clientIP, country string, wafHit bool, ruleIDs string, startedAt time.Time) bool {
-	if c == nil || plan == nil {
-		return false
-	}
-
-	entry, ok := localResponseCache.lookup(plan)
-	if !ok {
-		return false
-	}
-
+func serveCachedResponseEntry(c *gin.Context, entry *responseCacheEntry, reqID, clientIP, country string, wafHit bool, ruleIDs string, startedAt time.Time) {
 	writeCachedResponse(c, entry, wafHit, ruleIDs)
 	emitOperationalAccessLogs(operationalLogEntry{
 		Timestamp:      time.Now().UTC(),
@@ -502,8 +540,6 @@ func tryServeCachedResponse(c *gin.Context, plan *responseCachePlan, reqID, clie
 		WAFRules:       ruleIDs,
 		Event:          "cache_hit",
 	})
-
-	return true
 }
 
 func writeCachedResponse(c *gin.Context, entry *responseCacheEntry, wafHit bool, ruleIDs string) {

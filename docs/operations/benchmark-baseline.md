@@ -25,6 +25,7 @@ Current baseline matrix:
 - `api-gateway front block`
 - `api-gateway direct block`
 - `nextjs front cache`
+- `nextjs direct cache`
 - `nextjs front cache` with low-rate admin side traffic
 
 Those scenarios map to the currently available example stacks:
@@ -56,6 +57,12 @@ BENCH_ADMIN_SIDE_TRAFFIC=1 \
 make benchmark-scenario EXAMPLE=nextjs TOPOLOGY=front SCENARIO=cache
 ```
 
+Run direct in-memory cache measurements:
+
+```bash
+make benchmark-scenario EXAMPLE=nextjs TOPOLOGY=direct SCENARIO=cache
+```
+
 Keep rate-limit enabled while benchmarking:
 
 ```bash
@@ -82,8 +89,9 @@ artifacts/benchmarks/20260406-160000/api-gateway-front-pass.json
 ## Notes
 
 - Cache-focused measurements are meaningful on the `front` topology by default.
-  For direct `client -> tukuyomi -> app` measurements, enable
-  `WAF_RESPONSE_CACHE_MODE=memory` in the target stack first.
+  For direct `client -> tukuyomi -> app` measurements, the harness now enables
+  `WAF_RESPONSE_CACHE_MODE=memory` automatically when
+  `TOPOLOGY=direct SCENARIO=cache`.
 - The harness intentionally uses repo-local tooling: `go run ./cmd/httpbench`
   plus Docker Compose stacks from `examples/`.
 - When the runner starts an example stack itself, it disables example

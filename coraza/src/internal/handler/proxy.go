@@ -273,8 +273,13 @@ func ProxyHandler(c *gin.Context) {
 		log.Printf("[BYPASS][HIT] %s -> skip WAF", reqPath)
 		setWAFContext(c, reqID, clientIP, country, false, "")
 		cachePlan := buildResponseCachePlan(c.Request)
-		if tryServeCachedResponse(c, cachePlan, reqID, clientIP, country, false, "", startedAt) {
+		cacheEntry, releaseCacheFetch := localResponseCache.prepare(cachePlan)
+		if cacheEntry != nil {
+			serveCachedResponseEntry(c, cacheEntry, reqID, clientIP, country, false, "", startedAt)
 			return
+		}
+		if releaseCacheFetch != nil {
+			defer releaseCacheFetch()
 		}
 		setResponseCacheContext(c, cachePlan)
 		rec := &proxyStatusRecorder{ResponseWriter: c.Writer}
@@ -357,8 +362,13 @@ func ProxyHandler(c *gin.Context) {
 	}
 
 	cachePlan := buildResponseCachePlan(c.Request)
-	if tryServeCachedResponse(c, cachePlan, reqID, clientIP, country, wafHit, strings.Join(unique(ruleIDs), ","), startedAt) {
+	cacheEntry, releaseCacheFetch := localResponseCache.prepare(cachePlan)
+	if cacheEntry != nil {
+		serveCachedResponseEntry(c, cacheEntry, reqID, clientIP, country, wafHit, strings.Join(unique(ruleIDs), ","), startedAt)
 		return
+	}
+	if releaseCacheFetch != nil {
+		defer releaseCacheFetch()
 	}
 	setResponseCacheContext(c, cachePlan)
 

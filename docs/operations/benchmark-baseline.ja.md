@@ -25,6 +25,7 @@ benchmark runner は次を記録します。
 - `api-gateway front block`
 - `api-gateway direct block`
 - `nextjs front cache`
+- `nextjs direct cache`
 - 低頻度の admin side traffic を入れた `nextjs front cache`
 
 これらは今ある example stack に対応しています。
@@ -56,6 +57,12 @@ BENCH_ADMIN_SIDE_TRAFFIC=1 \
 make benchmark-scenario EXAMPLE=nextjs TOPOLOGY=front SCENARIO=cache
 ```
 
+direct の in-memory cache を計測したい場合:
+
+```bash
+make benchmark-scenario EXAMPLE=nextjs TOPOLOGY=direct SCENARIO=cache
+```
+
 rate-limit を有効のまま benchmark したい場合:
 
 ```bash
@@ -82,8 +89,9 @@ artifacts/benchmarks/20260406-160000/api-gateway-front-pass.json
 ## Notes
 
 - cache 系の測定は default では `front` topology で使います。
-  direct の `client -> tukuyomi -> app` を測りたい場合は、対象 stack で
-  先に `WAF_RESPONSE_CACHE_MODE=memory` を有効にしてください。
+  direct の `client -> tukuyomi -> app` を測りたい場合は、
+  `TOPOLOGY=direct SCENARIO=cache` で harness が
+  `WAF_RESPONSE_CACHE_MODE=memory` を自動で有効にします。
 - harness は repo 内で閉じています。`go run ./cmd/httpbench` と
   `examples/` の Docker Compose を使います。
 - runner が example stack を自分で起動する場合は、baseline を

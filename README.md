@@ -140,6 +140,7 @@ You can control behavior via `.env`.
 | `WAF_API_BASEPATH` | `/tukuyomi-api` | Base path for admin API routing on Go server. |
 | `WAF_UI_BASEPATH` | `/tukuyomi-admin` | Base path for admin UI routing on Go server. This should match `VITE_APP_BASE_PATH` without the trailing slash. |
 | `WAF_TRUSTED_PROXY_CIDRS` | `10.0.0.0/8,192.168.0.0/16` | Trusted front-proxy IPs/CIDRs for `X-Forwarded-For`, `X-Real-IP`, and forwarded `X-Request-ID`. Leave empty when Coraza is directly internet-facing. For ALB/ECS/Cloudflare-style fronting, set this to the proxy/LB subnets you actually trust. |
+| `WAF_COUNTRY_HEADER_NAMES` | `X-Country-Code,CF-IPCountry` | Ordered trusted country-header chain. Coraza checks these names in order, but only when the direct peer is in `WAF_TRUSTED_PROXY_CIDRS`. |
 | `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` | `false` | Whether to keep internal `X-WAF-Hit` / `X-WAF-RuleIDs` headers on upstream responses. Enable only when a smart front proxy strips them before the client. Leave disabled for direct/ALB-style exposure. |
 | `WAF_API_KEY_PRIMARY` | `...` | Primary admin API key (`X-API-Key`). |
 | `WAF_API_KEY_SECONDARY` | (empty) | Secondary key for rotation/fallback. Leave empty if unused. |
@@ -167,6 +168,7 @@ For local testing only, you can temporarily relax this with `WAF_ALLOW_INSECURE_
 Forwarded-header trust notes:
 
 - Without `WAF_TRUSTED_PROXY_CIDRS`, Coraza ignores client-supplied forwarding headers and derives client IP from the direct peer.
+- Country-based controls use the trusted header chain in `WAF_COUNTRY_HEADER_NAMES` and fall back to `UNKNOWN` when no trusted country header exists.
 - The bundled Docker/compose examples keep `nginx -> coraza` behavior by setting trusted private ranges and enabling internal response headers for nginx-side logging.
 - When you switch to `client -> ALB/Cloudflare/nginx -> tukuyomi -> app`, tighten `WAF_TRUSTED_PROXY_CIDRS` to the actual front-proxy ranges and turn `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` off unless that front layer strips them.
 
@@ -756,7 +758,7 @@ curl -s -H "X-API-Key: <your-api-key>" \
 - `src`: log type (`waf`, `accerr`, `intr`)
 - `tail`: number of lines
 - `country`: country code filter (`JP`, `US`, `UNKNOWN`). Omit or set `ALL` for all records.
-  - Under Cloudflare, `CF-IPCountry` header is used. If unavailable, `UNKNOWN` is used.
+  - Country is derived from trusted headers in this order: `X-Country-Code`, then `CF-IPCountry`. If none are trusted/present, `UNKNOWN` is used.
 
 Use the API key configured in `.env`.
 For production, always enforce access controls and authentication.

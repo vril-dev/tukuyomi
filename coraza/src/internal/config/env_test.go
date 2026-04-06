@@ -136,3 +136,16 @@ func TestParseTrustedProxyCIDRs(t *testing.T) {
 		t.Fatalf("prefixes[1]=%q want=%q", got, "192.0.2.10/32")
 	}
 }
+
+func TestParseCountryHeaderNames(t *testing.T) {
+	got := parseCountryHeaderNames("X-Country-Code, CF-IPCountry, x-country-code")
+	if len(got) != 2 {
+		t.Fatalf("len=%d want=2", len(got))
+	}
+	if got[0] != "X-Country-Code" {
+		t.Fatalf("got[0]=%q want=%q", got[0], "X-Country-Code")
+	}
+	if got[1] != "CF-IPCountry" {
+		t.Fatalf("got[1]=%q want=%q", got[1], "CF-IPCountry")
+	}
+}

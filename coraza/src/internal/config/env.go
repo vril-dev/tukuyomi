@@ -16,6 +16,7 @@ var (
 	RulesFile                      string
 	BypassFile                     string
 	CountryBlockFile               string
+	CountryHeaderNames             []string
 	RateLimitFile                  string
 	IPReputationFile               string
 	BotDefenseFile                 string
@@ -70,6 +71,7 @@ func LoadEnv() {
 	if CountryBlockFile == "" {
 		CountryBlockFile = "conf/country-block.conf"
 	}
+	CountryHeaderNames = parseCountryHeaderNames(os.Getenv("WAF_COUNTRY_HEADER_NAMES"))
 	RateLimitFile = strings.TrimSpace(os.Getenv("WAF_RATE_LIMIT_FILE"))
 	if RateLimitFile == "" {
 		RateLimitFile = "conf/rate-limit.conf"
@@ -342,4 +344,32 @@ func parseTrustedProxyCIDRs(v string) ([]string, []netip.Prefix) {
 	}
 
 	return cidrs, prefixes
+}
+
+func parseCountryHeaderNames(v string) []string {
+	parts := parseCSV(v)
+	if len(parts) == 0 {
+		parts = []string{"X-Country-Code", "CF-IPCountry"}
+	}
+
+	out := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, name)
+	}
+
+	if len(out) == 0 {
+		return []string{"X-Country-Code", "CF-IPCountry"}
+	}
+
+	return out
 }

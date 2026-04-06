@@ -98,14 +98,71 @@ func TestTrustedRequestIDRejectsUnsafeValues(t *testing.T) {
 	}
 }
 
+func TestRequestCountryCodePrefersConfiguredTrustedHeaders(t *testing.T) {
+	restore := saveForwardingConfigForTest()
+	defer restore()
+
+	config.TrustedProxyCIDRs = []string{"10.0.0.0/8"}
+	config.TrustedProxyPrefixes = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	config.CountryHeaderNames = []string{"X-Country-Code", "CF-IPCountry"}
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	ctx.Request.RemoteAddr = "10.1.2.3:12345"
+	ctx.Request.Header.Set("CF-IPCountry", "US")
+	ctx.Request.Header.Set("X-Country-Code", "JP")
+
+	if got := requestCountryCode(ctx); got != "JP" {
+		t.Fatalf("requestCountryCode()=%q want=%q", got, "JP")
+	}
+}
+
+func TestRequestCountryCodeFallsBackToCFIPCountry(t *testing.T) {
+	restore := saveForwardingConfigForTest()
+	defer restore()
+
+	config.TrustedProxyCIDRs = []string{"10.0.0.0/8"}
+	config.TrustedProxyPrefixes = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	config.CountryHeaderNames = []string{"X-Country-Code", "CF-IPCountry"}
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	ctx.Request.RemoteAddr = "10.1.2.3:12345"
+	ctx.Request.Header.Set("CF-IPCountry", "us")
+
+	if got := requestCountryCode(ctx); got != "US" {
+		t.Fatalf("requestCountryCode()=%q want=%q", got, "US")
+	}
+}
+
+func TestRequestCountryCodeIgnoresUntrustedHeaders(t *testing.T) {
+	restore := saveForwardingConfigForTest()
+	defer restore()
+
+	config.TrustedProxyCIDRs = []string{"10.0.0.0/8"}
+	config.TrustedProxyPrefixes = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	config.CountryHeaderNames = []string{"X-Country-Code", "CF-IPCountry"}
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	ctx.Request.RemoteAddr = "203.0.113.9:12345"
+	ctx.Request.Header.Set("X-Country-Code", "JP")
+
+	if got := requestCountryCode(ctx); got != "UNKNOWN" {
+		t.Fatalf("requestCountryCode()=%q want=%q", got, "UNKNOWN")
+	}
+}
+
 func saveForwardingConfigForTest() func() {
 	oldCIDRs := append([]string(nil), config.TrustedProxyCIDRs...)
 	oldPrefixes := append([]netip.Prefix(nil), config.TrustedProxyPrefixes...)
+	oldCountryHeaders := append([]string(nil), config.CountryHeaderNames...)
 	oldForward := config.ForwardInternalResponseHeaders
 
 	return func() {
 		config.TrustedProxyCIDRs = oldCIDRs
 		config.TrustedProxyPrefixes = oldPrefixes
+		config.CountryHeaderNames = oldCountryHeaders
 		config.ForwardInternalResponseHeaders = oldForward
 	}
 }

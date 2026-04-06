@@ -193,7 +193,7 @@ func ProxyHandler(c *gin.Context) {
 
 	reqID := ensureRequestID(c)
 	clientIP := requestClientIP(c)
-	country := normalizeCountryCode(c.GetHeader("X-Country-Code"))
+	country := requestCountryCode(c)
 
 	if IsCountryBlocked(country) {
 		evt := map[string]any{

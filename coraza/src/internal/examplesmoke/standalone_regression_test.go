@@ -107,6 +107,7 @@ func TestStandaloneRegressionScriptRunsExtendedAPIGatewayRateLimitCheck(t *testi
 	exampleName := "api-gateway"
 	exampleDir := filepath.Join(repoRoot, "examples", exampleName)
 	logPath := filepath.Join(repoRoot, "docker.log")
+	policyRunCountPath := filepath.Join(repoRoot, "policy-run-count")
 	if err := os.MkdirAll(exampleDir, 0o755); err != nil {
 		t.Fatalf("mkdir example dir: %v", err)
 	}
@@ -122,7 +123,26 @@ func TestStandaloneRegressionScriptRunsExtendedAPIGatewayRateLimitCheck(t *testi
 
 	writeExecutable(t, filepath.Join(exampleDir, "setup.sh"), "#!/usr/bin/env bash\nset -euo pipefail\n:\n")
 	writeExecutable(t, filepath.Join(exampleDir, "smoke.sh"), "#!/usr/bin/env bash\nset -euo pipefail\n:\n")
-	writeExecutable(t, filepath.Join(repoRoot, "bin", "docker"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'cwd=%s args=%s\\n' \"$PWD\" \"$*\" >> \"$DOCKER_LOG\"\n")
+	writeExecutable(t, filepath.Join(repoRoot, "bin", "docker"), `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "run" ]]; then
+  count_file="${POLICY_RUN_COUNT_FILE:?}"
+  count=0
+  if [[ -f "${count_file}" ]]; then
+    count="$(cat "${count_file}")"
+  fi
+  count="$((count + 1))"
+  printf '%s' "${count}" > "${count_file}"
+  case "${count}" in
+    1) printf '403' ;;
+    2) printf '200' ;;
+    3) printf '403' ;;
+    *) printf '200' ;;
+  esac
+  exit 0
+fi
+printf 'cwd=%s args=%s\n' "$PWD" "$*" >> "$DOCKER_LOG"
+`)
 
 	var loginCount int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -142,6 +162,36 @@ func TestStandaloneRegressionScriptRunsExtendedAPIGatewayRateLimitCheck(t *testi
 			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"lines":[{"event":"waf_block","status":403}]}`))
+		case "/tukuyomi-api/bypass-rules":
+			if got := r.Header.Get("X-API-Key"); got != "test-api-key-123456" {
+				http.Error(w, "bad api key", http.StatusForbidden)
+				return
+			}
+			switch r.Method {
+			case http.MethodGet:
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"raw":"","etag":"demo"}`))
+			case http.MethodPut:
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"ok":true,"etag":"demo"}`))
+			default:
+				http.NotFound(w, r)
+			}
+		case "/tukuyomi-api/country-block-rules":
+			if got := r.Header.Get("X-API-Key"); got != "test-api-key-123456" {
+				http.Error(w, "bad api key", http.StatusForbidden)
+				return
+			}
+			switch r.Method {
+			case http.MethodGet:
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"raw":"","etag":"demo"}`))
+			case http.MethodPut:
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"ok":true,"etag":"demo"}`))
+			default:
+				http.NotFound(w, r)
+			}
 		case "/v1/auth/login":
 			if r.Host != "protected.example.test" {
 				http.Error(w, "bad host", http.StatusBadRequest)
@@ -149,6 +199,20 @@ func TestStandaloneRegressionScriptRunsExtendedAPIGatewayRateLimitCheck(t *testi
 			}
 			if atomic.AddInt32(&loginCount, 1) >= 4 {
 				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		case "/v1/whoami":
+			if r.URL.Query().Get("q") != "" {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"host":"protected.example.test"}`))
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"host":"protected.example.test"}`))
+		case "/v1/products":
+			if r.URL.Query().Get("q") != "" {
+				w.WriteHeader(http.StatusForbidden)
 				return
 			}
 			w.WriteHeader(http.StatusOK)
@@ -162,6 +226,7 @@ func TestStandaloneRegressionScriptRunsExtendedAPIGatewayRateLimitCheck(t *testi
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("PATH=%s%c%s", filepath.Join(repoRoot, "bin"), os.PathListSeparator, os.Getenv("PATH")),
 		fmt.Sprintf("DOCKER_LOG=%s", logPath),
+		fmt.Sprintf("POLICY_RUN_COUNT_FILE=%s", policyRunCountPath),
 		"STANDALONE_SKIP_SETUP=1",
 		fmt.Sprintf("STANDALONE_BASE_URL=%s", server.URL),
 	)
@@ -173,7 +238,7 @@ func TestStandaloneRegressionScriptRunsExtendedAPIGatewayRateLimitCheck(t *testi
 	if got := atomic.LoadInt32(&loginCount); got < 4 {
 		t.Fatalf("expected rate-limit check to hit login multiple times, got %d", got)
 	}
-	assertFileContains(t, logPath, fmt.Sprintf("cwd=%s args=compose down --remove-orphans\n", exampleDir))
+	assertFileContains(t, logPath, fmt.Sprintf("cwd=%s args=compose --profile front-proxy down --remove-orphans\n", exampleDir))
 	if !strings.Contains(string(out), "api-gateway rate-limit check") {
 		t.Fatalf("unexpected output: %s", strings.TrimSpace(string(out)))
 	}

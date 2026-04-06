@@ -832,6 +832,7 @@ DENY regex=^/users/[0-9]+/profile
 - `WAF_RESPONSE_CACHE_MODE=memory` を有効にすると、tukuyomi 自身が in-memory response cache を持ちます
 - `WAF_RESPONSE_CACHE_STALE_SECONDS` で、期限切れ entry を `STALE` として返しつつ background refresh を試みる時間を制御します
 - `WAF_RESPONSE_CACHE_REFRESH_TIMEOUT_SECONDS` で、background refresh の upstream timeout を制御します
+- `WAF_RESPONSE_CACHE_REFRESH_BACKOFF_SECONDS` で、refresh failure 後に次の background refresh を再試行するまでの待ち時間を制御します
 - `WAF_RESPONSE_CACHE_MODE=off` の場合は、従来どおり nginx がこれらのヘッダを元にキャッシュを管理します
 - 認証付きリクエスト、Cookieあり、APIパスはデフォルトでキャッシュされません
 - `Set-Cookie` を含む上流レスポンスは保存されません（共有キャッシュ誤配信防止）

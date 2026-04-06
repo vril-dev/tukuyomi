@@ -40,6 +40,7 @@ func TestProxyHandlerServesResponseFromInMemoryCache(t *testing.T) {
 	config.ResponseCacheMaxBodyBytes = 4096
 	config.ResponseCacheStaleSeconds = 30
 	config.ResponseCacheRefreshTimeout = time.Second
+	config.ResponseCacheRefreshBackoff = time.Second
 	ConfigureResponseCache()
 	cacheconf.Set(&cacheconf.Ruleset{
 		Rules: []cacheconf.Rule{{
@@ -101,6 +102,7 @@ func TestProxyHandlerDoesNotStoreSetCookieResponses(t *testing.T) {
 	config.ResponseCacheMaxBodyBytes = 4096
 	config.ResponseCacheStaleSeconds = 30
 	config.ResponseCacheRefreshTimeout = time.Second
+	config.ResponseCacheRefreshBackoff = time.Second
 	ConfigureResponseCache()
 	cacheconf.Set(&cacheconf.Ruleset{
 		Rules: []cacheconf.Rule{{
@@ -142,6 +144,7 @@ func TestBuildResponseCachePlanRejectsUnsafeRequests(t *testing.T) {
 	config.ResponseCacheMaxBodyBytes = 4096
 	config.ResponseCacheStaleSeconds = 30
 	config.ResponseCacheRefreshTimeout = time.Second
+	config.ResponseCacheRefreshBackoff = time.Second
 	ConfigureResponseCache()
 	cacheconf.Set(&cacheconf.Ruleset{
 		Rules: []cacheconf.Rule{{
@@ -193,6 +196,7 @@ func TestProxyHandlerCoalescesConcurrentCacheMisses(t *testing.T) {
 	config.ResponseCacheMaxBodyBytes = 4096
 	config.ResponseCacheStaleSeconds = 30
 	config.ResponseCacheRefreshTimeout = time.Second
+	config.ResponseCacheRefreshBackoff = time.Second
 	ConfigureResponseCache()
 	cacheconf.Set(&cacheconf.Ruleset{
 		Rules: []cacheconf.Rule{{
@@ -311,6 +315,7 @@ func TestProxyHandlerServesStaleAndRefreshesInBackground(t *testing.T) {
 	config.ResponseCacheMaxBodyBytes = 4096
 	config.ResponseCacheStaleSeconds = 5
 	config.ResponseCacheRefreshTimeout = time.Second
+	config.ResponseCacheRefreshBackoff = 2 * time.Second
 	ConfigureResponseCache()
 	cacheconf.Set(&cacheconf.Ruleset{
 		Rules: []cacheconf.Rule{{
@@ -426,6 +431,7 @@ func TestProxyHandlerKeepsServingStaleAfterRefreshFailure(t *testing.T) {
 	config.ResponseCacheMaxBodyBytes = 4096
 	config.ResponseCacheStaleSeconds = 5
 	config.ResponseCacheRefreshTimeout = time.Second
+	config.ResponseCacheRefreshBackoff = 2 * time.Second
 	ConfigureResponseCache()
 	cacheconf.Set(&cacheconf.Ruleset{
 		Rules: []cacheconf.Rule{{
@@ -460,9 +466,13 @@ func TestProxyHandlerKeepsServingStaleAfterRefreshFailure(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(time.Second)
-	for upstreamHits.Load() < 2 {
+	for {
+		status := GetResponseCacheStatus()
+		if upstreamHits.Load() >= 2 && status.StaleFailures >= 1 && status.InflightKeys == 0 {
+			break
+		}
 		if time.Now().After(deadline) {
-			t.Fatal("refresh failure attempt did not happen in time")
+			t.Fatal("refresh failure attempt did not settle in time")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -475,17 +485,33 @@ func TestProxyHandlerKeepsServingStaleAfterRefreshFailure(t *testing.T) {
 		t.Fatalf("stale body should remain after refresh failure, got=%q", body)
 	}
 
+	status := GetResponseCacheStatus()
+	if got := upstreamHits.Load(); got != 2 {
+		t.Fatalf("upstream hits during backoff=%d want=2", got)
+	}
+	if status.StaleFailures < 1 {
+		t.Fatalf("stale failures=%d want>=1", status.StaleFailures)
+	}
+	if status.BackoffSkips < 1 {
+		t.Fatalf("backoff skips=%d want>=1", status.BackoffSkips)
+	}
+
+	time.Sleep(2100 * time.Millisecond)
+
+	res4 := mustProxyRequest(t, srv.URL+"/stale-fail", "", "")
+	if got := res4.Header.Get(responseCacheStatusHeader); got != responseCacheStatusStale {
+		t.Fatalf("fourth response cache status=%q want=%q", got, responseCacheStatusStale)
+	}
+	if body := readBody(t, res4); body != "body-v1" {
+		t.Fatalf("stale body after backoff expiry should remain old body, got=%q", body)
+	}
+
 	deadline = time.Now().Add(time.Second)
 	for upstreamHits.Load() < 3 || GetResponseCacheStatus().StaleFailures < 2 {
 		if time.Now().After(deadline) {
-			t.Fatal("follow-up stale refresh failure did not complete in time")
+			t.Fatal("refresh retry after backoff did not complete in time")
 		}
 		time.Sleep(10 * time.Millisecond)
-	}
-
-	status := GetResponseCacheStatus()
-	if status.StaleFailures < 2 {
-		t.Fatalf("stale failures=%d want>=2", status.StaleFailures)
 	}
 }
 
@@ -498,6 +524,7 @@ func saveResponseCacheRuntimeConfig() func() {
 	oldMaxBodyBytes := config.ResponseCacheMaxBodyBytes
 	oldStaleSeconds := config.ResponseCacheStaleSeconds
 	oldRefreshTimeout := config.ResponseCacheRefreshTimeout
+	oldRefreshBackoff := config.ResponseCacheRefreshBackoff
 	oldProxy := proxy
 	oldOnce := proxyInitOnce
 	oldWAF := waf.WAF
@@ -519,6 +546,7 @@ func saveResponseCacheRuntimeConfig() func() {
 		config.ResponseCacheMaxBodyBytes = oldMaxBodyBytes
 		config.ResponseCacheStaleSeconds = oldStaleSeconds
 		config.ResponseCacheRefreshTimeout = oldRefreshTimeout
+		config.ResponseCacheRefreshBackoff = oldRefreshBackoff
 		proxy = oldProxy
 		proxyInitOnce = oldOnce
 		waf.WAF = oldWAF

@@ -27,6 +27,7 @@ type CacheRuntimeDTO = {
   response_cache_max_body_bytes?: number;
   response_cache_stale_seconds?: number;
   response_cache_refresh_timeout_sec?: number;
+  response_cache_refresh_backoff_sec?: number;
   response_cache_entry_count?: number;
   response_cache_inflight_keys?: number;
   response_cache_hits?: number;
@@ -38,6 +39,7 @@ type CacheRuntimeDTO = {
   response_cache_stale_hits?: number;
   response_cache_stale_refreshes?: number;
   response_cache_stale_failures?: number;
+  response_cache_backoff_skips?: number;
 };
 
 type ValidateResp = {
@@ -230,6 +232,7 @@ export default function CacheRulePanel() {
           <StatChip label="Max Body Bytes" value={formatBytes(runtime.response_cache_max_body_bytes)} />
           <StatChip label="Stale Window" value={`${runtime.response_cache_stale_seconds ?? 0}s`} />
           <StatChip label="Refresh Timeout" value={`${runtime.response_cache_refresh_timeout_sec ?? 0}s`} />
+          <StatChip label="Refresh Backoff" value={`${runtime.response_cache_refresh_backoff_sec ?? 0}s`} />
           <StatChip label="Entries" value={String(runtime.response_cache_entry_count ?? 0)} />
           <StatChip label="Inflight Keys" value={String(runtime.response_cache_inflight_keys ?? 0)} />
           <StatChip label="Hits" value={String(runtime.response_cache_hits ?? 0)} />
@@ -241,6 +244,7 @@ export default function CacheRulePanel() {
           <StatChip label="Stale Hits" value={String(runtime.response_cache_stale_hits ?? 0)} />
           <StatChip label="Refresh Attempts" value={String(runtime.response_cache_stale_refreshes ?? 0)} />
           <StatChip label="Refresh Failures" value={String(runtime.response_cache_stale_failures ?? 0)} />
+          <StatChip label="Backoff Skips" value={String(runtime.response_cache_backoff_skips ?? 0)} />
           <StatChip label="Future Store Shape" value="disk-backed reserved" />
         </div>
       </section>

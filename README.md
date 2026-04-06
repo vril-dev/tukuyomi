@@ -829,6 +829,7 @@ Field details:
 - `WAF_RESPONSE_CACHE_MODE=memory` enables an in-memory response cache inside tukuyomi itself
 - `WAF_RESPONSE_CACHE_STALE_SECONDS` controls how long expired cache entries may still be served as `STALE` while a background refresh is attempted
 - `WAF_RESPONSE_CACHE_REFRESH_TIMEOUT_SECONDS` controls the timeout used by the background refresh fetch
+- `WAF_RESPONSE_CACHE_REFRESH_BACKOFF_SECONDS` controls how long stale requests wait before retrying another background refresh after a failed refresh
 - When `WAF_RESPONSE_CACHE_MODE=off`, nginx can still control cache based on the response headers above
 - Requests with auth headers, cookies, or API paths are non-cacheable by default
 - Upstream responses containing `Set-Cookie` are not stored (to prevent shared-cache leakage)

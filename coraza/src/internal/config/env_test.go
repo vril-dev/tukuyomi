@@ -117,3 +117,35 @@ func TestParseDBSyncIntervalSec(t *testing.T) {
 		})
 	}
 }
+
+func TestParseTrustedProxyCIDRs(t *testing.T) {
+	cidrs, prefixes := parseTrustedProxyCIDRs("10.0.0.0/8, 192.0.2.10, invalid")
+	if len(cidrs) != 2 {
+		t.Fatalf("cidrs len=%d want=2", len(cidrs))
+	}
+	if cidrs[0] != "10.0.0.0/8" {
+		t.Fatalf("cidrs[0]=%q want=%q", cidrs[0], "10.0.0.0/8")
+	}
+	if cidrs[1] != "192.0.2.10/32" {
+		t.Fatalf("cidrs[1]=%q want=%q", cidrs[1], "192.0.2.10/32")
+	}
+	if len(prefixes) != 2 {
+		t.Fatalf("prefixes len=%d want=2", len(prefixes))
+	}
+	if got := prefixes[1].String(); got != "192.0.2.10/32" {
+		t.Fatalf("prefixes[1]=%q want=%q", got, "192.0.2.10/32")
+	}
+}
+
+func TestParseCountryHeaderNames(t *testing.T) {
+	got := parseCountryHeaderNames("X-Country-Code, CF-IPCountry, x-country-code")
+	if len(got) != 2 {
+		t.Fatalf("len=%d want=2", len(got))
+	}
+	if got[0] != "X-Country-Code" {
+		t.Fatalf("got[0]=%q want=%q", got[0], "X-Country-Code")
+	}
+	if got[1] != "CF-IPCountry" {
+		t.Fatalf("got[1]=%q want=%q", got[1], "CF-IPCountry")
+	}
+}

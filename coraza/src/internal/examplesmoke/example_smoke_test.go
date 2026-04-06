@@ -129,8 +129,8 @@ func TestCIExampleSmokeScriptRunsExampleFlow(t *testing.T) {
 
 	assertFileContains(t, filepath.Join(repoRoot, "example.log"), "setup\n")
 	assertFileContains(t, filepath.Join(repoRoot, "example.log"), "smoke:tukuyomi-fakeapp-smoke\n")
-	assertFileContains(t, logPath, fmt.Sprintf("project=tukuyomi-fakeapp-smoke uid=%d gid=%d args=compose up -d --build\n", os.Getuid(), os.Getgid()))
-	assertFileContains(t, logPath, fmt.Sprintf("project=tukuyomi-fakeapp-smoke uid=%d gid=%d args=compose down --remove-orphans\n", os.Getuid(), os.Getgid()))
+	assertFileContains(t, logPath, fmt.Sprintf("project=tukuyomi-fakeapp-smoke uid=%d gid=%d args=compose --profile front-proxy up -d --build\n", os.Getuid(), os.Getgid()))
+	assertFileContains(t, logPath, fmt.Sprintf("project=tukuyomi-fakeapp-smoke uid=%d gid=%d args=compose --profile front-proxy down --remove-orphans\n", os.Getuid(), os.Getgid()))
 	assertPathExists(t, filepath.Join(exampleDir, "data", "logs", "nginx"))
 	assertPathExists(t, filepath.Join(exampleDir, "data", "logs", "coraza"))
 	assertPathExists(t, filepath.Join(exampleDir, "data", "logs", "openresty"))
@@ -170,10 +170,10 @@ func TestCIExampleSmokeScriptCollectsDockerDiagnosticsOnFailure(t *testing.T) {
 	if !strings.Contains(output, "[ci-example-smoke][ERROR] brokenapp smoke failed; collecting docker diagnostics") {
 		t.Fatalf("unexpected failure output: %s", strings.TrimSpace(output))
 	}
-	assertFileContains(t, logPath, fmt.Sprintf("project=tukuyomi-brokenapp-smoke uid=%d gid=%d args=compose up -d --build\n", os.Getuid(), os.Getgid()))
+	assertFileContains(t, logPath, fmt.Sprintf("project=tukuyomi-brokenapp-smoke uid=%d gid=%d args=compose --profile front-proxy up -d --build\n", os.Getuid(), os.Getgid()))
 	assertFileContains(t, logPath, fmt.Sprintf("project=tukuyomi-brokenapp-smoke uid=%d gid=%d args=compose ps -a\n", os.Getuid(), os.Getgid()))
 	assertFileContains(t, logPath, fmt.Sprintf("project=tukuyomi-brokenapp-smoke uid=%d gid=%d args=compose logs --no-color\n", os.Getuid(), os.Getgid()))
-	assertFileContains(t, logPath, fmt.Sprintf("project=tukuyomi-brokenapp-smoke uid=%d gid=%d args=compose down --remove-orphans\n", os.Getuid(), os.Getgid()))
+	assertFileContains(t, logPath, fmt.Sprintf("project=tukuyomi-brokenapp-smoke uid=%d gid=%d args=compose --profile front-proxy down --remove-orphans\n", os.Getuid(), os.Getgid()))
 	assertPathExists(t, filepath.Join(exampleDir, "data", "logs", "nginx"))
 	assertPathExists(t, filepath.Join(exampleDir, "data", "logs", "coraza"))
 	assertPathExists(t, filepath.Join(exampleDir, "data", "logs", "openresty"))
@@ -254,6 +254,9 @@ func runProtectedHostSmokeScript(t *testing.T, example smokeExample, opts smokeR
 		"PROTECTED_HOST=protected.example.test",
 		fmt.Sprintf("BASE_URL=%s", server.URL),
 	)
+	if example.name == "wordpress" {
+		cmd.Env = append(cmd.Env, "WORDPRESS_SKIP_AUTO_INSTALL=1")
+	}
 	output, err := cmd.CombinedOutput()
 	return string(output), state, err
 }

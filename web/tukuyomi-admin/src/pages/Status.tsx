@@ -229,6 +229,10 @@ export default function Status() {
 
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
                 <Metric label="API Base" value={String(data.api_base ?? "-")} />
+                <Metric label="Log Provider" value={String(data.log_output_provider ?? "-")} />
+                <Metric label="Log Stdout Streams" value={String(data.log_output_stdout_streams ?? "-")} />
+                <Metric label="Log File Streams" value={String(data.log_output_file_streams ?? "-")} />
+                <Metric label="Log Local Reads" value={String(data.log_output_local_read_compatible ?? "-")} />
                 <Metric label="Rules File" value={String(data.rules_file ?? "-")} />
                 <Metric label="CRS Enabled" value={String(data.crs_enabled ?? "-")} />
                 <Metric label="Rate Limit Enabled" value={String(data.rate_limit_enabled ?? "-")} />

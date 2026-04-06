@@ -2,7 +2,25 @@
 set -euo pipefail
 
 PROTECTED_HOST="${PROTECTED_HOST:-protected.example.test}"
-BASE_URL="${BASE_URL:-http://127.0.0.1:${NGINX_PORT:-18083}}"
+EXAMPLE_TOPOLOGY="${EXAMPLE_TOPOLOGY:-direct}"
+
+if [[ -z "${BASE_URL:-}" ]]; then
+  case "${EXAMPLE_TOPOLOGY}" in
+    front)
+      BASE_URL="http://127.0.0.1:${NGINX_PORT:-18083}"
+      ;;
+    direct)
+      BASE_URL="http://127.0.0.1:${CORAZA_PORT:-19093}"
+      ;;
+    *)
+      echo "[example-smoke][ERROR] unsupported EXAMPLE_TOPOLOGY=${EXAMPLE_TOPOLOGY}" >&2
+      exit 1
+      ;;
+  esac
+else
+  BASE_URL="${BASE_URL}"
+fi
+
 tmp_body="$(mktemp)"
 
 cleanup() {

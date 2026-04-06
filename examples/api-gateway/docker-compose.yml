@@ -3,18 +3,31 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile
+    networks:
+      default: {}
     restart: unless-stopped
 
   coraza:
     user: "${PUID}:${GUID}"
     build:
-      context: ../../coraza
-      dockerfile: Dockerfile
+      context: ../..
+      dockerfile: coraza/Dockerfile
+      args:
+        VITE_CORAZA_API_BASE: ${VITE_CORAZA_API_BASE:-/tukuyomi-api}
+        VITE_APP_BASE_PATH: ${VITE_APP_BASE_PATH:-/tukuyomi-admin}
     environment:
       - WAF_APP_URL=${WAF_APP_URL}
       - WAF_LOG_FILE=${WAF_LOG_FILE}
+      - WAF_LOG_OUTPUT_FILE=${WAF_LOG_OUTPUT_FILE:-conf/log-output.json}
       - WAF_STRICT_OVERRIDE=${WAF_STRICT_OVERRIDE}
       - WAF_API_BASEPATH=${WAF_API_BASEPATH}
+      - WAF_UI_BASEPATH=${VITE_APP_BASE_PATH:-/tukuyomi-admin}
+      - WAF_TRUSTED_PROXY_CIDRS=${WAF_TRUSTED_PROXY_CIDRS:-}
+      - WAF_COUNTRY_HEADER_NAMES=${WAF_COUNTRY_HEADER_NAMES:-X-Country-Code,CF-IPCountry}
+      - WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=${WAF_FORWARD_INTERNAL_RESPONSE_HEADERS:-false}
+      - WAF_RESPONSE_CACHE_MODE=${WAF_RESPONSE_CACHE_MODE:-off}
+      - WAF_RESPONSE_CACHE_MAX_ENTRIES=${WAF_RESPONSE_CACHE_MAX_ENTRIES:-512}
+      - WAF_RESPONSE_CACHE_MAX_BODY_BYTES=${WAF_RESPONSE_CACHE_MAX_BODY_BYTES:-1048576}
       - WAF_BYPASS_FILE=${WAF_BYPASS_FILE}
       - WAF_BOT_DEFENSE_FILE=${WAF_BOT_DEFENSE_FILE}
       - WAF_SEMANTIC_FILE=${WAF_SEMANTIC_FILE}
@@ -23,6 +36,8 @@ services:
       - WAF_RULES_FILE=${WAF_RULES_FILE}
       - WAF_API_KEY_PRIMARY=${WAF_API_KEY_PRIMARY}
       - WAF_API_KEY_SECONDARY=${WAF_API_KEY_SECONDARY}
+      - WAF_ADMIN_SESSION_SECRET=${WAF_ADMIN_SESSION_SECRET:-}
+      - WAF_ADMIN_SESSION_TTL_SEC=${WAF_ADMIN_SESSION_TTL_SEC:-28800}
       - WAF_API_AUTH_DISABLE=${WAF_API_AUTH_DISABLE}
       - WAF_API_CORS_ALLOWED_ORIGINS=${WAF_API_CORS_ALLOWED_ORIGINS}
       - WAF_CRS_ENABLE=${WAF_CRS_ENABLE}
@@ -39,7 +54,7 @@ services:
     volumes:
       - ./data/rules:/app/rules
       - ./data/conf:/app/conf
-      - ./data/logs/coraza:/app/logs
+      - ./data/logs:/app/logs
     ports:
       - "${CORAZA_PORT:-19093}:9090"
     extra_hosts:
@@ -52,9 +67,12 @@ services:
       start_period: 5s
     depends_on:
       - api
+    networks:
+      default: {}
     restart: unless-stopped
 
   nginx:
+    profiles: ["front-proxy"]
     cap_add: ["NET_BIND_SERVICE"]
     user: "${PUID}:${GUID}"
     build:
@@ -77,6 +95,9 @@ services:
     depends_on:
       coraza:
         condition: service_healthy
+    networks:
+      default:
+        ipv4_address: ${FRONT_PROXY_FIXTURE_IP:-172.31.83.10}
     healthcheck:
       test: ["CMD-SHELL", "wget -q -T 2 -O /dev/null http://127.0.0.1/healthz"]
       interval: 5s
@@ -84,3 +105,9 @@ services:
       retries: 20
       start_period: 5s
     restart: unless-stopped
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${FRONT_PROXY_FIXTURE_SUBNET:-172.31.83.0/24}

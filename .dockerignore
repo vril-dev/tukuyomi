@@ -1,0 +1,8 @@
+.git
+.codex
+design
+**/node_modules
+**/dist
+data/logs
+examples/**/data/logs
+*.db

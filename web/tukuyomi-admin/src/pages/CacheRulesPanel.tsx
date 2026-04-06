@@ -20,6 +20,31 @@ type RulesDTO = {
   rules?: Rule[];
 };
 
+type CacheRuntimeDTO = {
+  response_cache_mode?: string;
+  response_cache_enabled?: boolean;
+  response_cache_max_entries?: number;
+  response_cache_max_body_bytes?: number;
+  response_cache_stale_seconds?: number;
+  response_cache_refresh_timeout_sec?: number;
+  response_cache_refresh_backoff_sec?: number;
+  response_cache_store_shape?: string;
+  response_cache_store_path?: string;
+  response_cache_disk_bytes?: number;
+  response_cache_entry_count?: number;
+  response_cache_inflight_keys?: number;
+  response_cache_hits?: number;
+  response_cache_misses?: number;
+  response_cache_stores?: number;
+  response_cache_bypasses?: number;
+  response_cache_evictions?: number;
+  response_cache_coalesced_waits?: number;
+  response_cache_stale_hits?: number;
+  response_cache_stale_refreshes?: number;
+  response_cache_stale_failures?: number;
+  response_cache_backoff_skips?: number;
+};
+
 type ValidateResp = {
   ok: boolean;
   messages?: string[];
@@ -47,6 +72,7 @@ function splitCSV(v: string): string[] {
 
 export default function CacheRulePanel() {
   const [rules, setRules] = useState<Rule[]>([]);
+  const [runtime, setRuntime] = useState<CacheRuntimeDTO>({});
   const [raw, setRaw] = useState("");
   const [rawMode, setRawMode] = useState(false);
   const [etag, setEtag] = useState<string | null>(null);
@@ -69,10 +95,14 @@ export default function CacheRulePanel() {
     setLoading(true);
     setError(null);
     try {
-      const data = await apiGetJson<RulesDTO>("/cache-rules");
+      const [data, status] = await Promise.all([
+        apiGetJson<RulesDTO>("/cache-rules"),
+        apiGetJson<CacheRuntimeDTO>("/status").catch(() => null),
+      ]);
       const nextRules = Array.isArray(data.rules) ? data.rules : [];
       const nextRaw = data.raw ?? "";
       setRules(nextRules);
+      setRuntime(status ?? {});
       setRaw(nextRaw);
       setEtag(data.etag ?? null);
       setServerRaw(nextRaw);
@@ -168,6 +198,9 @@ export default function CacheRulePanel() {
     <Badge color="red">Invalid</Badge>
   );
 
+  const cacheMode = String(runtime.response_cache_mode ?? "off");
+  const cacheEnabled = runtime.response_cache_enabled === true;
+
   return (
     <div className="w-full p-4 space-y-4">
       <header className="flex items-center justify-between">
@@ -181,6 +214,45 @@ export default function CacheRulePanel() {
       </header>
 
       {error && <Alert kind="error" title="Error" message={error} onClose={() => setError(null)} />}
+
+      <section className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">Cache Runtime</h2>
+            <p className="text-sm text-neutral-500">
+              Runtime counters for the standalone cache. Mode and store remain env-driven on [web] for now.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge color={cacheEnabled ? "green" : "gray"}>{cacheEnabled ? "Enabled" : "Disabled"}</Badge>
+            <Badge color={cacheMode === "memory" ? "green" : cacheMode === "disk" ? "amber" : "gray"}>{cacheMode}</Badge>
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5 text-sm">
+          <StatChip label="Mode" value={cacheMode} />
+          <StatChip label="Store Shape" value={String(runtime.response_cache_store_shape ?? "disabled")} />
+          <StatChip label="Store Path" value={String(runtime.response_cache_store_path ?? "-")} />
+          <StatChip label="Max Entries" value={String(runtime.response_cache_max_entries ?? 0)} />
+          <StatChip label="Max Body Bytes" value={formatBytes(runtime.response_cache_max_body_bytes)} />
+          <StatChip label="On-Disk Bytes" value={formatBytes(runtime.response_cache_disk_bytes)} />
+          <StatChip label="Stale Window" value={`${runtime.response_cache_stale_seconds ?? 0}s`} />
+          <StatChip label="Refresh Timeout" value={`${runtime.response_cache_refresh_timeout_sec ?? 0}s`} />
+          <StatChip label="Refresh Backoff" value={`${runtime.response_cache_refresh_backoff_sec ?? 0}s`} />
+          <StatChip label="Entries" value={String(runtime.response_cache_entry_count ?? 0)} />
+          <StatChip label="Inflight Keys" value={String(runtime.response_cache_inflight_keys ?? 0)} />
+          <StatChip label="Hits" value={String(runtime.response_cache_hits ?? 0)} />
+          <StatChip label="Misses" value={String(runtime.response_cache_misses ?? 0)} />
+          <StatChip label="Stores" value={String(runtime.response_cache_stores ?? 0)} />
+          <StatChip label="Bypasses" value={String(runtime.response_cache_bypasses ?? 0)} />
+          <StatChip label="Evictions" value={String(runtime.response_cache_evictions ?? 0)} />
+          <StatChip label="Coalesced Waits" value={String(runtime.response_cache_coalesced_waits ?? 0)} />
+          <StatChip label="Stale Hits" value={String(runtime.response_cache_stale_hits ?? 0)} />
+          <StatChip label="Refresh Attempts" value={String(runtime.response_cache_stale_refreshes ?? 0)} />
+          <StatChip label="Refresh Failures" value={String(runtime.response_cache_stale_failures ?? 0)} />
+          <StatChip label="Backoff Skips" value={String(runtime.response_cache_backoff_skips ?? 0)} />
+        </div>
+      </section>
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm text-neutral-600">
@@ -356,6 +428,29 @@ export default function CacheRulePanel() {
       </div>
     </div>
   );
+}
+
+function StatChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border bg-white px-3 py-2">
+      <div className="text-xs text-neutral-500">{label}</div>
+      <div className="mt-1 font-mono text-xs break-all">{value}</div>
+    </div>
+  );
+}
+
+function formatBytes(v: unknown) {
+  const n = typeof v === "number" ? v : Number(v ?? 0);
+  if (!Number.isFinite(n) || n <= 0) {
+    return "0 B";
+  }
+  if (n < 1024) {
+    return `${n} B`;
+  }
+  if (n < 1024 * 1024) {
+    return `${(n / 1024).toFixed(1)} KiB`;
+  }
+  return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function Badge({

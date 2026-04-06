@@ -26,16 +26,16 @@ GitHub auto-generated source archives on those distribution pages belong to the 
 
 ## Product Positioning
 
-`tukuyomi` is the Docker-first WAF stack in the family. It shares core security controls with `tukuyomi-proxy` and `tukuyomi-edge`, but its reverse proxy and TLS entrypoint are primarily delegated to `nginx`.
+`tukuyomi` is the front-proxy-oriented WAF stack in the family. It shares core security controls with `tukuyomi-proxy` and `tukuyomi-edge`, while keeping its own app reverse proxy, embedded admin UI, and optional standalone response cache inside the Go runtime. TLS entry and some edge-facing duties are still typically handled by `nginx`, ALB, HAProxy, or CDN/LB layers.
 
 | Category | `tukuyomi` | `tukuyomi-proxy` | `tukuyomi-edge` |
 | --- | --- | --- | --- |
-| Runtime shape | Docker / compose | single binary or Docker | single binary / `systemd` |
-| Reverse proxy + routes | `nginx` fronted, no built-in route editor | built-in gateway + route editor | built-in gateway + route editor |
+| Runtime shape | Docker / compose or local binary | single binary or Docker | single binary / `systemd` |
+| Reverse proxy + routes | built-in app proxy, no route editor; often fronted by `nginx` / LB | built-in gateway + route editor | built-in gateway + route editor |
 | Core security controls | IP reputation, bot, semantic, rate, country | IP reputation, bot, semantic, rate, country | IP reputation, bot, semantic, rate, country |
 | Device / center features | × | × | device auth + center link |
-| Cache + bypass | `nginx` cache + bypass rules | internal cache + bypass rules | internal cache + bypass rules |
-| TLS + admin UI | `nginx` TLS + separate frontend path | built-in TLS + embedded admin UI | built-in TLS + embedded admin UI |
+| Cache + bypass | internal response cache + bypass rules, optional front cache | internal cache + bypass rules | internal cache + bypass rules |
+| TLS + admin UI | front proxy / LB TLS + embedded admin UI | built-in TLS + embedded admin UI | built-in TLS + embedded admin UI |
 | DB / multi-node | shared DB capable | shared DB capable | local node oriented |
 | Host hardening | × | × | experimental L3/L4 host hardening |
 
@@ -73,7 +73,7 @@ make preset-apply PRESET=minimal
 make preset-check PRESET=minimal
 ```
 
-Edit `WAF_APP_URL`, `WAF_API_KEY_PRIMARY`, and `VITE_API_KEY` before exposing the stack outside local development.
+Edit `WAF_APP_URL`, `WAF_API_KEY_PRIMARY`, and `WAF_ADMIN_SESSION_SECRET` before exposing the stack outside local development.
 
 ---
 
@@ -98,7 +98,7 @@ You can control behavior via `.env`.
 | --- | --- | --- |
 | `NGX_CORAZA_UPSTREAM` | `server coraza:9090;` | Upstream definition for Coraza (Go server). You can list multiple `server host:port;` lines for simple load balancing. |
 | `NGX_BACKEND_RESPONSE_TIMEOUT` | `60s` | Upstream response timeout from Coraza. Applied to `proxy_read_timeout`. |
-| `NGX_CORAZA_ADMIN_URL` | `/tukuyomi-admin/` | Public path for admin UI. Trailing slash required. Requests under this path are proxied to frontend (`web:5173`). |
+| `NGX_CORAZA_ADMIN_URL` | `/tukuyomi-admin/` | Public path for admin UI. Trailing slash required. Requests under this path are proxied to the embedded admin UI served by Coraza. |
 | `NGX_CORAZA_API_BASEPATH` | `/tukuyomi-api/` | Base path for admin API. Trailing slash recommended. This path is always non-cacheable on nginx side. |
 
 ### WAF / Go (Coraza Wrapper)
@@ -108,7 +108,8 @@ You can control behavior via `.env`.
 | `WAF_APP_URL` | `http://host.docker.internal:3000` | Upstream application URL (change appropriately for production such as ALB/ECS). |
 | `WAF_PROXY_ERROR_HTML_FILE` | (empty) | Optional maintenance HTML file served when the upstream application is unavailable. |
 | `WAF_PROXY_ERROR_REDIRECT_URL` | (empty) | Optional redirect target used when the upstream application is unavailable. |
-| `WAF_LOG_FILE` | (empty) | WAF log output destination. If empty, stdout is used. |
+| `WAF_LOG_FILE` | (empty) | Legacy override for the default WAF event file path inside the generated log-output profile. Prefer `conf/log-output.json` via Admin UI. |
+| `WAF_LOG_OUTPUT_FILE` | `conf/log-output.json` | Log-output profile path. The Admin UI `Log Output` panel edits this file and can switch stdout/file/dual modes per stream. |
 | `WAF_BYPASS_FILE` | `conf/waf.bypass` | Path for bypass/special-rule definition file. |
 | `WAF_BOT_DEFENSE_FILE` | `conf/bot-defense.conf` | Bot-defense challenge settings file (JSON), editable from admin UI. |
 | `WAF_SEMANTIC_FILE` | `conf/semantic.conf` | Semantic heuristic scoring settings file (JSON), editable from admin UI. |
@@ -138,8 +139,14 @@ You can control behavior via `.env`.
 | `WAF_DB_SYNC_INTERVAL_SEC` | `0` | Periodic DB→runtime sync interval in seconds. `0` disables background polling; `>=1` enables periodic reconciliation across multiple Coraza nodes. |
 | `WAF_STRICT_OVERRIDE` | `false` | Behavior when a special-rule file fails to load. `true`: fail fast. `false`: warn and continue. |
 | `WAF_API_BASEPATH` | `/tukuyomi-api` | Base path for admin API routing on Go server. |
+| `WAF_UI_BASEPATH` | `/tukuyomi-admin` | Base path for admin UI routing on Go server. This should match `VITE_APP_BASE_PATH` without the trailing slash. |
+| `WAF_TRUSTED_PROXY_CIDRS` | `10.0.0.0/8,192.168.0.0/16` | Trusted front-proxy IPs/CIDRs for `X-Forwarded-For`, `X-Real-IP`, and forwarded `X-Request-ID`. Leave empty when Coraza is directly internet-facing. For ALB/ECS/Cloudflare-style fronting, set this to the proxy/LB subnets you actually trust. |
+| `WAF_COUNTRY_HEADER_NAMES` | `X-Country-Code,CF-IPCountry` | Ordered trusted country-header chain. Coraza checks these names in order, but only when the direct peer is in `WAF_TRUSTED_PROXY_CIDRS`. |
+| `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` | `false` | Whether to keep internal `X-WAF-Hit` / `X-WAF-RuleIDs` headers on upstream responses. Enable only when a smart front proxy strips them before the client. Leave disabled for direct/ALB-style exposure. |
 | `WAF_API_KEY_PRIMARY` | `...` | Primary admin API key (`X-API-Key`). |
 | `WAF_API_KEY_SECONDARY` | (empty) | Secondary key for rotation/fallback. Leave empty if unused. |
+| `WAF_ADMIN_SESSION_SECRET` | `...` | HMAC signing secret for browser admin sessions. Set this separately from the API key in production so session cookies remain independent of key rotation. |
+| `WAF_ADMIN_SESSION_TTL_SEC` | `28800` | Browser admin session lifetime in seconds (`300` to `604800`). |
 | `WAF_API_AUTH_DISABLE` | (empty) | Disable API auth flag. Keep empty (false) in production; use only for test environments. |
 | `WAF_API_CORS_ALLOWED_ORIGINS` | `https://admin.example.com,http://localhost:5173` | Allowed CORS origins (comma-separated). If empty, CORS is disabled (same-origin only). |
 | `WAF_ALLOW_INSECURE_DEFAULTS` | (empty) | Dev-only flag to allow weak API keys or disabled auth. Do not set in production. |
@@ -154,12 +161,34 @@ Upstream failure response behavior:
 
 | Variable | Example | Description |
 | --- | --- | --- |
-| `VITE_CORAZA_API_BASE` | `http://localhost/tukuyomi-api` | Full/relative API base path used by browser-side calls. |
-| `VITE_APP_BASE_PATH` | `/tukuyomi-admin` | Admin UI root path (`react-router` basename). |
-| `VITE_API_KEY` | `...` | API key attached by admin UI (`X-API-Key`). Usually same as `WAF_API_KEY_PRIMARY`. |
+| `VITE_CORAZA_API_BASE` | `/tukuyomi-api` | Full/relative API base path used by browser-side calls. Used when building embedded admin UI assets and when running the optional local Vite dev server. |
+| `VITE_APP_BASE_PATH` | `/tukuyomi-admin` | Admin UI root path (`react-router` basename). Used when building embedded admin UI assets and when running the optional local Vite dev server. |
+
+Manual embedded UI rebuild:
+
+```bash
+make ui-build-sync
+make go-build
+```
+
+If you are using the container path instead of a local Go build, run `make compose-build` after `make ui-build-sync`.
+
+Admin auth model:
+
+- Browser-side Admin UI now calls `POST /tukuyomi-api/auth/login` once and receives same-origin session cookies.
+- Keep `WAF_API_KEY_PRIMARY`, `WAF_API_KEY_SECONDARY`, and `WAF_ADMIN_SESSION_SECRET` server-side only.
+- CLI / automation can continue to call admin endpoints with `X-API-Key`.
 
 At startup, if `WAF_API_KEY_PRIMARY` is too short or known-weak, Coraza fails to start in secure mode.
 For local testing only, you can temporarily relax this with `WAF_ALLOW_INSECURE_DEFAULTS=1`.
+
+Forwarded-header trust notes:
+
+- Without `WAF_TRUSTED_PROXY_CIDRS`, Coraza ignores client-supplied forwarding headers and derives client IP from the direct peer.
+- Country-based controls use the trusted header chain in `WAF_COUNTRY_HEADER_NAMES` and fall back to `UNKNOWN` when no trusted country header exists.
+- The bundled examples now default to direct `client -> tukuyomi -> app` smoke, and expose `nginx` as an optional `front-proxy` profile for balancer-style validation.
+- When you use that profile locally, set trusted private ranges and `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=true` so the bundled `nginx` can normalize forwarded headers and keep its legacy logging behavior.
+- When you switch to `client -> ALB/Cloudflare/nginx -> tukuyomi -> app`, tighten `WAF_TRUSTED_PROXY_CIDRS` to the actual front-proxy ranges and turn `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` off unless that front layer strips them.
 
 ## Host Network Hardening (L3/L4 Basics)
 
@@ -203,7 +232,7 @@ Notes:
 
 ## Admin Dashboard
 
-`web/tukuyomi-admin/` contains the admin UI built with React + Vite.
+`web/tukuyomi-admin/` contains the admin UI built with React + Vite. Production/container builds compile this frontend and embed it into the Coraza binary.
 
 ### Main Screens and Features
 
@@ -211,6 +240,7 @@ Notes:
 | --- | --- |
 | `/status` | WAF runtime status and configuration overview |
 | `/logs` | Fetch and view WAF logs |
+| `/log-output` | View/edit cloud/file log output profile (`conf/log-output.json`) |
 | `/rules` | View/edit active base rule files (`rules/tukuyomi.conf` etc.) |
 | `/rule-sets` | Enable/disable CRS core rule files (`rules/crs/rules/*.conf`) |
 | `/bypass` | View/edit bypass config directly (`waf.bypass`) |
@@ -280,11 +310,16 @@ Notes:
 ```bash
 make setup
 make compose-build
-make web-up
 make compose-up
 ```
 
 You can change the root path by setting `VITE_APP_BASE_PATH` and `VITE_CORAZA_API_BASE` in `.env`.
+For local hot-reload development of the admin UI, start the optional Vite container with `make web-up` and open port `5173` directly.
+
+### Deployment Guides
+
+- Binary deployment (`systemd`, on-prem, VPS, VM, EC2): [docs/build/binary-deployment.md](/home/ky491/git/vril/tukuyomi/docs/build/binary-deployment.md)
+- Container deployment (ECS, AKS, GKE, Container Apps): [docs/build/container-deployment.md](/home/ky491/git/vril/tukuyomi/docs/build/container-deployment.md)
 
 #### Optional: Local MySQL Container (profile: `mysql`)
 
@@ -336,8 +371,13 @@ Practical example stacks are available under:
 - `examples/wordpress` (WordPress + high-paranoia CRS setup)
 - `examples/api-gateway` (REST API + strict rate-limit profile)
 
-See `examples/README.md` for common setup flow. `examples/api-gateway`, `examples/nextjs`, and `examples/wordpress` include `PROTECTED_HOST=protected.example.test ./smoke.sh`, and repo-level Docker smoke runs are available via `./scripts/ci_example_smoke.sh <example>`.
+See `examples/README.md` for common setup flow. The example compose files now default to direct `client -> tukuyomi -> app`, while optional `front-proxy` profile runs cover `client -> nginx-like front -> tukuyomi -> app`.
+`examples/api-gateway`, `examples/nextjs`, and `examples/wordpress` include `PROTECTED_HOST=protected.example.test ./smoke.sh`, and repo-level Docker smoke runs are available via `./scripts/ci_example_smoke.sh <example>` for the thin-front path.
 If you want a single entrypoint from the repo root, use `make example-smoke EXAMPLE=api-gateway` or `make example-smoke-all`.
+
+For direct `client -> tukuyomi -> app` checks, use `make standalone-regression-fast EXAMPLE=api-gateway` or `make standalone-smoke-all`.
+For deployment-guide validation, use `make deployment-smoke`.
+The current standalone regression matrix is documented in `docs/operations/standalone-regression.md`.
 
 ### FP Tuner Mock Flow
 
@@ -445,6 +485,9 @@ Detailed request/response schemas are available in [docs/api/admin-openapi.yaml]
 
 | Method | Path | Description |
 | --- | --- | --- |
+| GET | `/tukuyomi-api/auth/session` | Report current browser admin session state and refresh the CSRF cookie when a session is active |
+| POST | `/tukuyomi-api/auth/login` | Exchange a valid admin API key for same-origin session cookies |
+| POST | `/tukuyomi-api/auth/logout` | Clear browser admin session cookies. Session-authenticated callers must send `X-CSRF-Token` |
 | GET | `/tukuyomi-api/status` | Get current WAF status/config |
 | GET | `/tukuyomi-api/metrics` | Export Prometheus-style runtime counters for rate limit and semantic scoring |
 | GET | `/tukuyomi-api/logs/read` | Read WAF logs (`tail`) with optional country filter via `country` query |
@@ -487,6 +530,11 @@ Detailed request/response schemas are available in [docs/api/admin-openapi.yaml]
 | PUT | `/tukuyomi-api/cache-rules` | Save `cache.conf` (`If-Match` optimistic lock via `ETag`) |
 
 If logs or rules are missing, API returns `500` with `{"error":"..."}`.
+
+Browser session notes:
+
+- Browser sessions use same-origin cookies plus `X-CSRF-Token` on state-changing requests.
+- CLI / automation may continue to use `X-API-Key` directly without creating a browser session.
 
 ---
 
@@ -747,7 +795,7 @@ curl -s -H "X-API-Key: <your-api-key>" \
 - `src`: log type (`waf`, `accerr`, `intr`)
 - `tail`: number of lines
 - `country`: country code filter (`JP`, `US`, `UNKNOWN`). Omit or set `ALL` for all records.
-  - Under Cloudflare, `CF-IPCountry` header is used. If unavailable, `UNKNOWN` is used.
+  - Country is derived from trusted headers in this order: `X-Country-Code`, then `CF-IPCountry`. If none are trusted/present, `UNKNOWN` is used.
 
 Use the API key configured in `.env`.
 For production, always enforce access controls and authentication.
@@ -793,7 +841,13 @@ Field details:
 ### Behavior Summary
 
 - Go side sets `X-Tukuyomi-Cacheable` and `X-Accel-Expires` on responses matching cache rules
-- nginx controls cache based on those headers
+- `WAF_RESPONSE_CACHE_MODE=memory` enables an in-memory response cache inside tukuyomi itself
+- `WAF_RESPONSE_CACHE_MODE=disk` keeps the same cache behavior but persists entries under `WAF_RESPONSE_CACHE_DIR` and serves cached bodies from disk on demand so they can be restored after restart without keeping every body in memory
+- `WAF_RESPONSE_CACHE_STALE_SECONDS` controls how long expired cache entries may still be served as `STALE` while a background refresh is attempted
+- `WAF_RESPONSE_CACHE_REFRESH_TIMEOUT_SECONDS` controls the timeout used by the background refresh fetch
+- `WAF_RESPONSE_CACHE_REFRESH_BACKOFF_SECONDS` controls how long stale requests wait before retrying another background refresh after a failed refresh
+- `WAF_RESPONSE_CACHE_DIR` sets the runtime path used by disk-backed cache mode
+- When `WAF_RESPONSE_CACHE_MODE=off`, nginx can still control cache based on the response headers above
 - Requests with auth headers, cookies, or API paths are non-cacheable by default
 - Upstream responses containing `Set-Cookie` are not stored (to prevent shared-cache leakage)
 
@@ -802,6 +856,7 @@ Field details:
 Check response headers:
 - `X-Tukuyomi-Cacheable: 1`
 - `X-Accel-Expires: <seconds>`
+- `X-Tukuyomi-Cache-Status: MISS|HIT|STALE|BYPASS` when local standalone cache is enabled
 
 You can inspect cache hit state using nginx `X-Cache-Status` header (`MISS`/`HIT`/`BYPASS`, etc.).
 
@@ -839,6 +894,7 @@ See:
 
 - `docs/operations/waf-tuning.md`
 - `docs/operations/fp-tuner-api.md`
+- `docs/operations/standalone-regression.md`
 
 ## DB Operations
 

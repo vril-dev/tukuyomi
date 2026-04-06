@@ -7,7 +7,7 @@ This document describes practical operating steps to safely reduce false positiv
 ## 1. Collect Evidence First
 
 1. Retrieve logs through the admin API and identify the `rule_id` and `path`.
-2. Trace the `req_id` in OpenResty's `interesting.ndjson` and narrow the client conditions (IP/UA/query).
+2. Trace the `req_id` in tukuyomi's `interesting.ndjson` and narrow the client conditions (IP/UA/query).
 3. Always keep a reproducible HTTP request (curl or E2E).
 
 ## 2. Narrow the Impact Scope

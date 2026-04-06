@@ -1,0 +1,19 @@
+[Unit]
+Description=tukuyomi WAF
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tukuyomi
+Group=tukuyomi
+WorkingDirectory=/opt/tukuyomi
+EnvironmentFile=/etc/tukuyomi/tukuyomi.env
+ExecStart=/opt/tukuyomi/bin/tukuyomi
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

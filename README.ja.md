@@ -27,16 +27,16 @@ Coraza + CRS WAFプロジェクト
 
 ## 製品ポジショニング
 
-`tukuyomi` はこのファミリーの Docker 前提 WAF スタックです。`tukuyomi-proxy` と `tukuyomi-edge` と同じ中核セキュリティ機能を持ちますが、リバースプロキシと TLS 入口は主に `nginx` 側に委ねます。
+`tukuyomi` はこのファミリーの front-proxy 指向 WAF スタックです。`tukuyomi-proxy` と `tukuyomi-edge` と同じ中核セキュリティ機能を持ちつつ、Go runtime 自身に app reverse proxy、埋め込み管理UI、任意の standalone response cache を持ちます。TLS 入口や edge 側の一部責務は、引き続き `nginx`、ALB、HAProxy、CDN/LB などの前段で担う想定です。
 
 | 項目 | `tukuyomi` | `tukuyomi-proxy` | `tukuyomi-edge` |
 | --- | --- | --- | --- |
-| 実行形態 | Docker / compose | single binary または Docker | single binary / `systemd` |
-| リバースプロキシ + route | `nginx` 前段、内蔵 route editor なし | 内蔵 gateway + route editor | 内蔵 gateway + route editor |
+| 実行形態 | Docker / compose または local binary | single binary または Docker | single binary / `systemd` |
+| リバースプロキシ + route | app proxy 内蔵、route editor なし。`nginx` / LB 前段をよく併用 | 内蔵 gateway + route editor | 内蔵 gateway + route editor |
 | 中核セキュリティ制御 | IP reputation / bot / semantic / rate / country | IP reputation / bot / semantic / rate / country | IP reputation / bot / semantic / rate / country |
 | Device / center 機能 | × | × | device auth + center link |
-| キャッシュ + bypass | `nginx` キャッシュ + bypass rules | 内部キャッシュ + bypass rules | 内部キャッシュ + bypass rules |
-| TLS + 管理 UI | `nginx` TLS + 別 frontend path | built-in TLS + 内蔵管理 UI | built-in TLS + 内蔵管理 UI |
+| キャッシュ + bypass | 内部 response cache + bypass rules、必要なら前段 cache 併用 | 内部キャッシュ + bypass rules | 内部キャッシュ + bypass rules |
+| TLS + 管理 UI | 前段 proxy / LB の TLS + 埋め込み管理 UI | built-in TLS + 内蔵管理 UI | built-in TLS + 内蔵管理 UI |
 | DB / マルチノード | 共有 DB 対応 | 共有 DB 対応 | ローカルノード指向 |
 | Host hardening | × | × | experimental L3/L4 host hardening |
 
@@ -74,7 +74,7 @@ make preset-apply PRESET=minimal
 make preset-check PRESET=minimal
 ```
 
-ローカル開発の外へ出す前に `WAF_APP_URL`, `WAF_API_KEY_PRIMARY`, `VITE_API_KEY` を差し替えてください。
+ローカル開発の外へ出す前に `WAF_APP_URL`, `WAF_API_KEY_PRIMARY`, `WAF_ADMIN_SESSION_SECRET` を差し替えてください。
 
 ---
 
@@ -99,7 +99,7 @@ make preset-check PRESET=minimal
 | --- | --- | --- |
 | `NGX_CORAZA_UPSTREAM` | `server coraza:9090;` | Coraza（Goサーバ）の upstream 定義。`server host:port;` を複数行で並べれば簡易ロードバランス可。 |
 | `NGX_BACKEND_RESPONSE_TIMEOUT` | `60s` | 上流（Coraza）からの応答タイムアウト。`proxy_read_timeout` に反映。 |
-| `NGX_CORAZA_ADMIN_URL` | `/tukuyomi-admin/` | 管理UIの公開パス。末尾スラッシュ必須。このパスに来たリクエストをフロント（`web:5173`）へプロキシ。 |
+| `NGX_CORAZA_ADMIN_URL` | `/tukuyomi-admin/` | 管理UIの公開パス。末尾スラッシュ必須。このパスに来たリクエストを、Coraza が配信する埋め込み管理UIへプロキシします。 |
 | `NGX_CORAZA_API_BASEPATH` | `/tukuyomi-api/` | 管理APIのベースパス。末尾スラッシュ推奨。このパス配下は nginx 側で常に非キャッシュ扱い。 |
 
 ### WAF / Go（Coraza ラッパー）
@@ -109,7 +109,8 @@ make preset-check PRESET=minimal
 | `WAF_APP_URL` | `http://host.docker.internal:3000` | 透過先アプリの URL（ALB/ECS 等の本番では適宜変更）。 |
 | `WAF_PROXY_ERROR_HTML_FILE` | (空) | 透過先障害時に返す任意の保守 HTML ファイル。 |
 | `WAF_PROXY_ERROR_REDIRECT_URL` | (空) | 透過先障害時に使う任意の redirect 先。 |
-| `WAF_LOG_FILE` | (空) | WAFログの出力先。未設定なら標準出力。 |
+| `WAF_LOG_FILE` | (空) | 生成される log-output profile 内で使う、WAF event の既定ファイルパスを上書きする互換用設定。通常は Admin UI の `Log Output` から `conf/log-output.json` を使う。 |
+| `WAF_LOG_OUTPUT_FILE` | `conf/log-output.json` | ログ出力 profile のパス。Admin UI の `Log Output` 画面から編集でき、stream ごとに stdout/file/dual を切替可能。 |
 | `WAF_BYPASS_FILE` | `conf/waf.bypass` | バイパス/特別ルール定義ファイルのパス。 |
 | `WAF_BOT_DEFENSE_FILE` | `conf/bot-defense.conf` | Bot defense challenge 設定ファイル（JSON）。管理画面から編集可能。 |
 | `WAF_SEMANTIC_FILE` | `conf/semantic.conf` | Semanticヒューリスティック設定ファイル（JSON）。管理画面から編集可能。 |
@@ -139,8 +140,14 @@ make preset-check PRESET=minimal
 | `WAF_DB_SYNC_INTERVAL_SEC` | `0` | DB→実行時設定の定期同期間隔（秒）。`0` で無効、`1` 以上で複数Corazaノード間の定期整合を有効化。 |
 | `WAF_STRICT_OVERRIDE` | `false` | 特別ルール読み込み失敗時の挙動。`true`で即終了、`false`で警告のみ継続。 |
 | `WAF_API_BASEPATH` | `/tukuyomi-api` | 管理APIのベースパス（Go側のルーティング基準）。 |
+| `WAF_UI_BASEPATH` | `/tukuyomi-admin` | 管理UIのベースパス（Go側のルーティング基準）。末尾スラッシュなしで `VITE_APP_BASE_PATH` と揃えてください。 |
+| `WAF_TRUSTED_PROXY_CIDRS` | `10.0.0.0/8,192.168.0.0/16` | `X-Forwarded-For` / `X-Real-IP` / 転送された `X-Request-ID` を信用する前段プロキシの IP/CIDR。Coraza を直接公開する場合は空のままにします。ALB/ECS/Cloudflare 配下では、実際に信頼する前段の subnet だけを設定してください。 |
+| `WAF_COUNTRY_HEADER_NAMES` | `X-Country-Code,CF-IPCountry` | 信頼する country header の参照順。`WAF_TRUSTED_PROXY_CIDRS` に含まれる前段から来た場合だけ、この順に header を見ます。 |
+| `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` | `false` | 内部用の `X-WAF-Hit` / `X-WAF-RuleIDs` をレスポンスに残すか。クライアントへ返る前に前段 smart proxy が必ず除去する構成でだけ有効化してください。 |
 | `WAF_API_KEY_PRIMARY` | `…` | 管理API用の主キー（`X-API-Key`）。 |
 | `WAF_API_KEY_SECONDARY` | (空) | 予備キー（ローテーション時の切替用。未使用なら空でOK）。 |
+| `WAF_ADMIN_SESSION_SECRET` | `…` | ブラウザ管理 session の署名に使う HMAC secret。本番では API key と分離して設定し、session cookie をキー更新から独立させてください。 |
+| `WAF_ADMIN_SESSION_TTL_SEC` | `28800` | ブラウザ管理 session の有効期限（秒）。範囲は `300` から `604800`。 |
 | `WAF_API_AUTH_DISABLE` | (空) | 認証無効化フラグ。運用では空（false相当）推奨。テストで無効化したいときのみ truthy 値。 |
 | `WAF_API_CORS_ALLOWED_ORIGINS` | `https://admin.example.com,http://localhost:5173` | CORSを許可する Origin 一覧（カンマ区切り）。未設定なら CORS 無効（同一オリジンのみ）。 |
 | `WAF_ALLOW_INSECURE_DEFAULTS` | (空) | 弱いAPIキーや認証無効化を許可する開発用フラグ。本番では設定しない。 |
@@ -155,12 +162,34 @@ make preset-check PRESET=minimal
 
 | 変数名 | 例 | 説明 |
 | --- | --- | --- |
-| `VITE_CORAZA_API_BASE` | `http://localhost/tukuyomi-api` | ブラウザから叩く API のフル/相対ベース。リバースプロキシの都合に合わせて指定。 |
-| `VITE_APP_BASE_PATH` | `/tukuyomi-admin` | 管理UIのルートパス（`react-router` の basename）。 |
-| `VITE_API_KEY` | `…` | 管理UIが API へ付与する `X-API-Key`。通常は `WAF_API_KEY_PRIMARY` と同値。 |
+| `VITE_CORAZA_API_BASE` | `/tukuyomi-api` | ブラウザから叩く API のフル/相対ベース。埋め込み管理UIの build 時と、任意のローカル Vite 開発時に使います。 |
+| `VITE_APP_BASE_PATH` | `/tukuyomi-admin` | 管理UIのルートパス（`react-router` の basename）。埋め込み管理UIの build 時と、任意のローカル Vite 開発時に使います。 |
+
+埋め込み管理UIを手動で再生成する場合:
+
+```bash
+make ui-build-sync
+make go-build
+```
+
+ローカル Go build ではなく container build を使う場合は、`make ui-build-sync` の後に `make compose-build` を実行してください。
+
+管理UI の認証モデル:
+
+- ブラウザ側の管理UIは `POST /tukuyomi-api/auth/login` を 1 回呼び、same-origin session cookie を受け取って以後の API を呼びます。
+- `WAF_API_KEY_PRIMARY`, `WAF_API_KEY_SECONDARY`, `WAF_ADMIN_SESSION_SECRET` は server 側だけで保持してください。
+- CLI / 自動化は従来どおり `X-API-Key` で管理 API を呼べます。
 
 起動時に `WAF_API_KEY_PRIMARY` が短すぎる/既知の弱い値の場合、Corazaプロセスは安全側で起動失敗します。  
 ローカル検証だけ一時的に緩和したい場合は `WAF_ALLOW_INSECURE_DEFAULTS=1` を利用してください。
+
+forwarded header の信頼境界メモ:
+
+- `WAF_TRUSTED_PROXY_CIDRS` を設定しない場合、Coraza は client 側が送った forwarding header を信用せず、直結 peer の IP を使います。
+- 国別制御は `WAF_COUNTRY_HEADER_NAMES` の trusted header chain を使い、信頼できる country header が無い場合は `UNKNOWN` に落ちます。
+- 同梱の example は現在、default では direct な `client -> tukuyomi -> app` smoke を起動し、`nginx` は balancer 相当の確認用に optional `front-proxy` profile として切り出しています。
+- local でその profile を使う場合は、trusted private range と `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=true` を付けて、同梱 `nginx` の forwarded header 正規化と従来ログ挙動を有効にしてください。
+- `client -> ALB/Cloudflare/nginx -> tukuyomi -> app` へ寄せる場合は、`WAF_TRUSTED_PROXY_CIDRS` を実際の前段 range に絞り、前段で確実に除去しない限り `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` は無効のままにしてください。
 
 ## Host Network Hardening（L3/L4 対策の基礎）
 
@@ -204,7 +233,7 @@ sudo sysctl --system
 
 ## 管理ダッシュボード
 
-`web/tukuyomi-admin/` 以下には、React + Vite による管理UIが含まれています。
+`web/tukuyomi-admin/` 以下には、React + Vite による管理UIが含まれています。production/container build ではこの frontend を build し、Coraza バイナリへ埋め込みます。
 
 ### 主な画面と機能
 
@@ -212,6 +241,7 @@ sudo sysctl --system
 | --- | --- |
 | `/status` | WAFの動作状況、設定の確認 |
 | `/logs` | WAFログの取得・表示 |
+| `/log-output` | cloud/file 向けログ出力 profile（`conf/log-output.json`）の閲覧・編集 |
 | `/rules` | 使用中のベースルールファイル（`rules/tukuyomi.conf` など）の閲覧・編集 |
 | `/rule-sets` | CRS本体ルール（`rules/crs/rules/*.conf`）の有効/無効切替 |
 | `/bypass` | バイパス設定の閲覧・編集（waf.bypassを直接操作） |
@@ -281,11 +311,16 @@ sudo sysctl --system
 ```bash
 make setup
 make compose-build
-make web-up
 make compose-up
 ```
 
 環境変数 `.env` に `VITE_APP_BASE_PATH` および `VITE_CORAZA_API_BASE` を定義することで、ルートパスを変更できます。
+管理UIを hot reload で開発したい場合だけ、任意で `make web-up` を使って `5173` を直接開いてください。
+
+### デプロイガイド
+
+- Binary deployment（`systemd`, オンプレ, VPS, VM, EC2）: [docs/build/binary-deployment.ja.md](/home/ky491/git/vril/tukuyomi/docs/build/binary-deployment.ja.md)
+- Container deployment（ECS, AKS, GKE, Container Apps）: [docs/build/container-deployment.ja.md](/home/ky491/git/vril/tukuyomi/docs/build/container-deployment.ja.md)
 
 #### 任意: ローカル MySQL コンテナ（profile: `mysql`）
 
@@ -337,8 +372,13 @@ MIN_TRUE_NEGATIVE_PASSED_RATIO=95 MAX_FALSE_POSITIVE_RATIO=5 MAX_BYPASS_RATIO=30
 - `examples/wordpress`（WordPress + 高パラノイア CRS 設定）
 - `examples/api-gateway`（REST API + 厳しめレート制限プロファイル）
 
-共通の起動手順は `examples/README.md` を参照してください。`examples/api-gateway`、`examples/nextjs`、`examples/wordpress` には `PROTECTED_HOST=protected.example.test ./smoke.sh` があり、repo ルートからは `./scripts/ci_example_smoke.sh <example>` で Docker smoke も回せます。
+共通の起動手順は `examples/README.md` を参照してください。example compose は現在、default では direct な `client -> tukuyomi -> app` を起動し、optional `front-proxy` profile で `client -> nginx-like front -> tukuyomi -> app` も確認できます。
+`examples/api-gateway`、`examples/nextjs`、`examples/wordpress` には `PROTECTED_HOST=protected.example.test ./smoke.sh` があり、repo ルートからは thin-front path 向けに `./scripts/ci_example_smoke.sh <example>` で Docker smoke も回せます。
 repo ルートの統一入口として使うなら、`make example-smoke EXAMPLE=api-gateway` または `make example-smoke-all` も利用できます。
+
+direct な `client -> tukuyomi -> app` 確認をしたい場合は、`make standalone-regression-fast EXAMPLE=api-gateway` または `make standalone-smoke-all` を使ってください。
+deployment guide の検証をまとめて回したい場合は、`make deployment-smoke` を使ってください。
+現時点の standalone regression matrix は `docs/operations/standalone-regression.md` にまとめています。
 
 ### FPチューナー（モック）送受信テスト
 
@@ -446,6 +486,9 @@ Claudeコマンドプロバイダのローカルモックテスト:
 
 | メソッド | パス | 説明 |
 | --- | --- | --- |
+| GET | `/tukuyomi-api/auth/session` | 現在のブラウザ管理 session 状態を返し、session 有効時は CSRF cookie を更新 |
+| POST | `/tukuyomi-api/auth/login` | 有効な管理 API key を same-origin session cookie へ交換 |
+| POST | `/tukuyomi-api/auth/logout` | ブラウザ管理 session cookie を削除。session 認証中は `X-CSRF-Token` が必要 |
 | GET | `/tukuyomi-api/status` | 現在のWAF設定状態を取得 |
 | GET | `/tukuyomi-api/metrics` | rate limit / semantic の実行カウンタを Prometheus 形式で出力 |
 | GET | `/tukuyomi-api/logs/read` | WAFログ（tail）を取得（`country` クエリで国別フィルタ可） |
@@ -489,6 +532,11 @@ Claudeコマンドプロバイダのローカルモックテスト:
 
 
 ログやルールが設定されていない場合は `500` で `{"error": "...説明..."}` を返します。
+
+browser session メモ:
+
+- ブラウザ session は same-origin cookie と、状態変更系 request に対する `X-CSRF-Token` を使います。
+- CLI / 自動化は browser session を作らずに `X-API-Key` を直接使えます。
 
 ---
 
@@ -751,7 +799,7 @@ curl -s -H "X-API-Key: <your-api-key>" \
 * src: ログ種別 (waf, accerr, intr)
 * tail: 取得件数
 * country: 国コード（例: `JP`, `US`, `UNKNOWN`。未指定または`ALL`で全件）
-  * Cloudflare配下では `CF-IPCountry` ヘッダを利用します。未取得時は `UNKNOWN` になります。
+  * 国コードは trusted header を `X-Country-Code` → `CF-IPCountry` の順で見ます。信頼できる header が無い場合は `UNKNOWN` になります。
 
 API キーは .env で設定した API_KEY を使用してください。
 実運用環境ではアクセス制限や認証を必ず設定してください。
@@ -796,7 +844,13 @@ DENY regex=^/users/[0-9]+/profile
 ### 動作概要
 
 - Go側でルールに一致したレスポンスに `X-Tukuyomi-Cacheable` と `X-Accel-Expires` を付与
-- nginx がこれらのヘッダを元にキャッシュを管理
+- `WAF_RESPONSE_CACHE_MODE=memory` を有効にすると、tukuyomi 自身が in-memory response cache を持ちます
+- `WAF_RESPONSE_CACHE_MODE=disk` を有効にすると、同じ cache 動作を維持しつつ `WAF_RESPONSE_CACHE_DIR` 配下に entry を保持し、cached body は必要時だけ disk から読み出す形で restart 後に restore できます
+- `WAF_RESPONSE_CACHE_STALE_SECONDS` で、期限切れ entry を `STALE` として返しつつ background refresh を試みる時間を制御します
+- `WAF_RESPONSE_CACHE_REFRESH_TIMEOUT_SECONDS` で、background refresh の upstream timeout を制御します
+- `WAF_RESPONSE_CACHE_REFRESH_BACKOFF_SECONDS` で、refresh failure 後に次の background refresh を再試行するまでの待ち時間を制御します
+- `WAF_RESPONSE_CACHE_DIR` で、disk-backed cache mode が使う runtime path を指定します
+- `WAF_RESPONSE_CACHE_MODE=off` の場合は、従来どおり nginx がこれらのヘッダを元にキャッシュを管理します
 - 認証付きリクエスト、Cookieあり、APIパスはデフォルトでキャッシュされません
 - `Set-Cookie` を含む上流レスポンスは保存されません（共有キャッシュ誤配信防止）
 
@@ -805,6 +859,7 @@ DENY regex=^/users/[0-9]+/profile
 - レスポンスヘッダに以下が含まれているか確認
   - `X-Tukuyomi-Cacheable: 1`
   - `X-Accel-Expires: <秒数>`
+- local standalone cache を有効にした場合は `X-Tukuyomi-Cache-Status: MISS|HIT|STALE|BYPASS` も確認可能
 - nginx の `X-Cache-Status` ヘッダでキャッシュヒット状況を確認可能（MISS/HIT/BYPASS 等）
 
 ---
@@ -841,6 +896,7 @@ GitHub Actions の `ci` ワークフローで以下を検証します。
 
 - `docs/operations/waf-tuning.md`
 - `docs/operations/fp-tuner-api.md`
+- `docs/operations/standalone-regression.md`
 
 ## DB運用
 

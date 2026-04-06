@@ -88,14 +88,34 @@ func main() {
 		}
 		log.Printf("[NOTIFY][INIT] loaded")
 	}
+	if err := handler.InitLogOutput(config.LogOutputFile); err != nil {
+		log.Printf("[LOG_OUTPUT][INIT][ERR] %v (path=%s)", err, config.LogOutputFile)
+	} else {
+		if err := handler.SyncLogOutputStorage(); err != nil {
+			log.Printf("[LOG_OUTPUT][DB][WARN] sync failed (fallback=file): %v", err)
+		}
+		logOutput := handler.GetLogOutputStatus()
+		log.Printf("[LOG_OUTPUT][INIT] loaded provider=%s stdout_streams=%d file_streams=%d", logOutput.Provider, logOutput.StdoutStreams, logOutput.FileStreams)
+	}
 
 	log.Println("[INFO] WAF upstream target:", config.AppURL)
 
 	r := gin.Default()
 
-	// Never trust client-sent forwarding headers unless explicitly configured.
-	if err := r.SetTrustedProxies(nil); err != nil {
-		log.Fatalf("failed to configure trusted proxies: %v", err)
+	if len(config.TrustedProxyCIDRs) == 0 {
+		// Never trust client-sent forwarding headers unless explicitly configured.
+		if err := r.SetTrustedProxies(nil); err != nil {
+			log.Fatalf("failed to configure trusted proxies: %v", err)
+		}
+		log.Println("[SECURITY] trusted proxies disabled; forwarded client IP and request ID headers are ignored")
+	} else {
+		if err := r.SetTrustedProxies(config.TrustedProxyCIDRs); err != nil {
+			log.Fatalf("failed to configure trusted proxies: %v", err)
+		}
+		log.Printf("[SECURITY] trusted proxies enabled: %s", strings.Join(config.TrustedProxyCIDRs, ","))
+	}
+	if config.ForwardInternalResponseHeaders {
+		log.Println("[SECURITY][WARN] forwarding internal WAF response headers is enabled; use only behind a front proxy that strips them")
 	}
 
 	// Lightweight unauthenticated probe for container health checks.
@@ -107,12 +127,15 @@ func main() {
 		r.Use(cors.New(cors.Config{
 			AllowOrigins: config.APICORSOrigins,
 			AllowMethods: []string{"GET", "POST", "PUT", "OPTIONS"},
-			AllowHeaders: []string{"Origin", "Content-Type", "Accept", "X-API-Key"},
+			AllowHeaders: []string{"Origin", "Content-Type", "Accept", "X-API-Key", "X-CSRF-Token"},
+			AllowCredentials: true,
 		}))
 		log.Printf("[SECURITY] CORS enabled for origins: %s", strings.Join(config.APICORSOrigins, ","))
 	} else {
 		log.Println("[SECURITY] CORS disabled (same-origin only)")
 	}
+
+	handler.RegisterAdminAuthRoutes(r)
 
 	api := r.Group(config.APIBasePath, middleware.APIKeyAuth())
 	{
@@ -130,6 +153,7 @@ func main() {
 					config.APIBasePath + "/rate-limit-rules",
 					config.APIBasePath + "/notifications",
 					config.APIBasePath + "/notifications/status",
+					config.APIBasePath + "/log-output",
 					config.APIBasePath + "/ip-reputation",
 					config.APIBasePath + "/ip-reputation:validate",
 					config.APIBasePath + "/bot-defense-rules",
@@ -174,6 +198,9 @@ func main() {
 		api.POST("/notifications/validate", handler.ValidateNotificationRules)
 		api.POST("/notifications/test", handler.TestNotificationRules)
 		api.PUT("/notifications", handler.PutNotificationRules)
+		api.GET("/log-output", handler.GetLogOutputConfigHandler)
+		api.POST("/log-output/validate", handler.ValidateLogOutputConfigHandler)
+		api.PUT("/log-output", handler.PutLogOutputConfigHandler)
 		api.GET("/ip-reputation", handler.GetIPReputation)
 		api.POST("/ip-reputation:validate", handler.ValidateIPReputation)
 		api.PUT("/ip-reputation", handler.PutIPReputation)
@@ -189,9 +216,16 @@ func main() {
 		api.POST("/fp-tuner/apply", handler.ApplyFPTuning)
 	}
 
+	handler.RegisterAdminUIRoutes(r)
+	handler.ConfigureResponseCache()
+
 	r.NoRoute(func(c *gin.Context) {
 		p := c.Request.URL.Path
 		if strings.HasPrefix(p, config.APIBasePath) {
+			c.AbortWithStatus(404)
+			return
+		}
+		if p == config.UIBasePath || strings.HasPrefix(p, config.UIBasePath+"/") {
 			c.AbortWithStatus(404)
 			return
 		}
@@ -208,7 +242,12 @@ func main() {
 		log.Printf("[DB][SYNC] periodic sync loop enabled interval=%s", config.DBSyncInterval)
 	}
 	stopWatch, err := cacheconf.Watch(cacheConfPath, func(rs *cacheconf.Ruleset) {
-		//
+		handler.InvalidateResponseCache()
+		if rs != nil {
+			log.Printf("[CACHE][RUNTIME] invalidated in-memory response cache after rules reload (%d rules)", len(rs.Rules))
+		} else {
+			log.Printf("[CACHE][RUNTIME] invalidated in-memory response cache after rules reload")
+		}
 	})
 	if err != nil {
 		log.Printf("[CACHE] watch disabled: %v", err)

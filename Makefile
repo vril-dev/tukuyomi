@@ -18,9 +18,15 @@ WAF_STORAGE_BACKEND ?= file
 WAF_DB_ENABLED ?= false
 WAF_DB_RETENTION_DAYS ?= 30
 GOTESTWAF_AUTO_DOWN ?= 1
+TOPOLOGY ?= front
+SCENARIO ?= pass
 
 CORAZA_SRC := coraza/src
 UI_DIR := web/tukuyomi-admin
+UI_EMBED_DIR := coraza/src/internal/handler/admin_ui_dist
+BIN_DIR ?= bin
+APP_NAME ?= tukuyomi
+APP_PKG ?= ./cmd/server
 EXAMPLES := api-gateway nextjs wordpress
 EXAMPLE ?= api-gateway
 PRESET ?= minimal
@@ -32,12 +38,14 @@ STACK_ENV = $(DOCKER_ENV) NGINX_PORT="$(HOST_NGINX_PORT)" OPENRESTY_PORT="$(HOST
 
 .PHONY: \
 	help setup env-init crs-install \
-	go-test mysql-logstore-test \
-	ui-install ui-test ui-build \
+	go-test go-build mysql-logstore-test \
+	ui-install ui-test ui-build ui-sync ui-build-sync \
 	compose-config compose-config-mysql compose-build compose-up compose-down web-up web-down mysql-up mysql-down \
 	preset-list preset-apply preset-check \
 	gotestwaf gotestwaf-file gotestwaf-sqlite \
-	example-smoke example-smoke-all \
+	example-smoke example-smoke-all standalone-smoke standalone-smoke-all standalone-policy-fixture standalone-regression-fast standalone-regression-extended \
+	binary-deployment-smoke container-deployment-smoke deployment-smoke \
+	benchmark-scenario benchmark-baseline \
 	check ci-local clean
 
 help:
@@ -47,19 +55,22 @@ help:
 	@echo "  make crs-install            Install OWASP CRS into ./data/rules/crs"
 	@echo ""
 	@echo "  make go-test                Run Go tests (coraza/src)"
+	@echo "  make go-build               Build single binary into ./bin/$(APP_NAME)"
 	@echo "  make mysql-logstore-test    Run MySQL log-store integration test"
 	@echo ""
 	@echo "  make ui-install             Install admin UI dependencies"
 	@echo "  make ui-test                Run admin UI tests"
 	@echo "  make ui-build               Build admin UI assets"
+	@echo "  make ui-sync                Sync web dist -> go:embed assets"
+	@echo "  make ui-build-sync          Build and sync embedded admin UI assets"
 	@echo ""
 	@echo "  make compose-config         Validate docker compose config"
 	@echo "  make compose-config-mysql   Validate compose config with mysql profile"
 	@echo "  make compose-build          Build coraza/nginx images"
 	@echo "  make compose-up             Start coraza/nginx in background"
 	@echo "  make compose-down           Stop coraza/nginx stack"
-	@echo "  make web-up                 Start Vite admin UI container in background"
-	@echo "  make web-down               Stop Vite admin UI container"
+	@echo "  make web-up                 Start optional Vite admin UI dev container"
+	@echo "  make web-down               Stop optional Vite admin UI dev container"
 	@echo "  make mysql-up               Start local mysql profile service"
 	@echo "  make mysql-down             Stop local mysql profile service"
 	@echo ""
@@ -75,6 +86,22 @@ help:
 	@echo "  make example-smoke         Run one protected-host example smoke"
 	@echo "    - optional: EXAMPLE=$(EXAMPLE) (choices: $(EXAMPLES))"
 	@echo "  make example-smoke-all     Run protected-host smoke for all examples"
+	@echo "  make standalone-smoke      Run direct-tukuyomi standalone smoke for one example"
+	@echo "    - optional: EXAMPLE=$(EXAMPLE) (choices: $(EXAMPLES))"
+	@echo "  make standalone-smoke-all  Run direct-tukuyomi standalone smoke for all examples"
+	@echo "  make standalone-policy-fixture       Run extended standalone policy fixtures for one example"
+	@echo "    - optional: EXAMPLE=$(EXAMPLE) (default: api-gateway)"
+	@echo "  make standalone-regression-fast      Run fast standalone regression baseline"
+	@echo "  make standalone-regression-extended  Run heavier standalone regression baseline"
+	@echo "  make binary-deployment-smoke         Validate the docs/build binary deployment flow"
+	@echo "    - optional: EXAMPLE=$(EXAMPLE) (default: api-gateway)"
+	@echo "  make container-deployment-smoke      Validate the docs/build container deployment flow"
+	@echo "    - optional: EXAMPLE=$(EXAMPLE) (default: api-gateway)"
+	@echo "  make deployment-smoke                Run the binary + container deployment smoke bundle"
+	@echo "    - optional: DEPLOYMENT_SMOKE_EXAMPLE=api-gateway"
+	@echo "  make benchmark-scenario    Run one benchmark scenario"
+	@echo "    - optional: EXAMPLE=$(EXAMPLE) TOPOLOGY=$(TOPOLOGY) SCENARIO=$(SCENARIO)"
+	@echo "  make benchmark-baseline    Run the standard benchmark matrix"
 	@echo ""
 	@echo "  make check                 Run go-test + ui-test + compose config checks"
 	@echo "  make ci-local              Run local CI baseline (check + mysql + examples + GoTestWAF)"
@@ -132,6 +159,11 @@ setup: env-init crs-install
 go-test:
 	cd $(CORAZA_SRC) && $(GO) test ./...
 
+go-build:
+	mkdir -p $(abspath $(BIN_DIR))
+	cd $(CORAZA_SRC) && $(GO) build -o "$(abspath $(BIN_DIR))/$(APP_NAME)" $(APP_PKG)
+	@echo "[go-build] built $(abspath $(BIN_DIR))/$(APP_NAME)"
+
 mysql-logstore-test: env-init
 	@set -euo pipefail; \
 	trap '$(DOCKER_ENV) docker compose --profile mysql down -v >/dev/null 2>&1 || true' EXIT; \
@@ -160,6 +192,21 @@ ui-test: ui-install
 ui-build: ui-install
 	cd $(UI_DIR) && $(NPM) run build
 
+ui-sync:
+	@if [[ ! -d "$(UI_DIR)/dist" ]]; then \
+		echo "[ui-sync] missing $(UI_DIR)/dist (run: make ui-build)"; \
+		exit 1; \
+	fi
+	@mkdir -p $(UI_EMBED_DIR)
+	find "$(UI_EMBED_DIR)" -mindepth 1 \
+		! -name '.gitignore' \
+		! -name 'placeholder.html' \
+		-exec rm -rf {} +
+	cp -a $(UI_DIR)/dist/. $(UI_EMBED_DIR)/
+	@echo "[ui-sync] synced $(UI_DIR)/dist -> $(UI_EMBED_DIR)"
+
+ui-build-sync: ui-build ui-sync
+
 compose-config: env-init
 	docker compose config >/dev/null
 	@echo "[compose-config] ok"
@@ -178,10 +225,10 @@ compose-down:
 	$(STACK_ENV) docker compose down --remove-orphans
 
 web-up: env-init
-	$(STACK_ENV) docker compose up -d web
+	$(STACK_ENV) docker compose --profile dev-ui up -d web
 
 web-down:
-	$(STACK_ENV) docker compose stop web
+	$(STACK_ENV) docker compose --profile dev-ui stop web
 
 mysql-up: env-init
 	$(DOCKER_ENV) docker compose --profile mysql up -d mysql
@@ -216,6 +263,50 @@ example-smoke-all:
 		echo "[example-smoke-all] running $$example"; \
 		$(MAKE) example-smoke EXAMPLE="$$example"; \
 	done
+
+standalone-smoke:
+	./scripts/run_standalone_regression.sh "$(EXAMPLE)" fast
+
+standalone-smoke-all:
+	@set -euo pipefail; \
+	for example in $(EXAMPLES); do \
+		echo "[standalone-smoke-all] running $$example"; \
+		$(MAKE) standalone-smoke EXAMPLE="$$example"; \
+	done
+
+standalone-policy-fixture:
+	./scripts/run_standalone_regression.sh "$(EXAMPLE)" extended
+
+standalone-regression-fast: go-test compose-config
+	$(MAKE) standalone-smoke EXAMPLE="$(EXAMPLE)"
+
+standalone-regression-extended: check standalone-smoke-all standalone-policy-fixture deployment-smoke
+
+binary-deployment-smoke:
+	./scripts/run_binary_deployment_smoke.sh "$(EXAMPLE)"
+
+container-deployment-smoke:
+	./scripts/run_container_deployment_smoke.sh "$(EXAMPLE)"
+
+deployment-smoke:
+	$(MAKE) binary-deployment-smoke EXAMPLE="$${DEPLOYMENT_SMOKE_EXAMPLE:-api-gateway}"
+	$(MAKE) container-deployment-smoke EXAMPLE="$${DEPLOYMENT_SMOKE_EXAMPLE:-api-gateway}"
+
+benchmark-scenario:
+	./scripts/run_capacity_baseline.sh "$(EXAMPLE)" "$(TOPOLOGY)" "$(SCENARIO)"
+
+benchmark-baseline:
+	@set -euo pipefail; \
+	run_id="$$(date +%Y%m%d-%H%M%S)"; \
+	echo "[benchmark-baseline] run_id=$$run_id"; \
+	BENCH_RUN_ID="$$run_id" $(MAKE) benchmark-scenario EXAMPLE=api-gateway TOPOLOGY=front SCENARIO=pass; \
+	BENCH_RUN_ID="$$run_id" $(MAKE) benchmark-scenario EXAMPLE=api-gateway TOPOLOGY=direct SCENARIO=pass; \
+	BENCH_RUN_ID="$$run_id" $(MAKE) benchmark-scenario EXAMPLE=api-gateway TOPOLOGY=front SCENARIO=block; \
+	BENCH_RUN_ID="$$run_id" $(MAKE) benchmark-scenario EXAMPLE=api-gateway TOPOLOGY=direct SCENARIO=block; \
+	BENCH_RUN_ID="$$run_id" $(MAKE) benchmark-scenario EXAMPLE=nextjs TOPOLOGY=front SCENARIO=cache; \
+	BENCH_RUN_ID="$$run_id" $(MAKE) benchmark-scenario EXAMPLE=nextjs TOPOLOGY=direct SCENARIO=cache; \
+	BENCH_RUN_ID="$$run_id" BENCH_RESPONSE_CACHE_MODE=disk $(MAKE) benchmark-scenario EXAMPLE=nextjs TOPOLOGY=direct SCENARIO=cache; \
+	BENCH_RUN_ID="$$run_id" BENCH_ADMIN_SIDE_TRAFFIC=1 $(MAKE) benchmark-scenario EXAMPLE=nextjs TOPOLOGY=front SCENARIO=cache
 
 check: go-test ui-test compose-config compose-config-mysql
 

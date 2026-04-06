@@ -7,11 +7,20 @@ info:
 
     The default admin API base path is `/tukuyomi-api`. It can be changed by configuration,
     so treat these paths as the default contract.
+
+    Browser-driven admin traffic can exchange a server-side admin API key for a
+    same-origin session by calling `/tukuyomi-api/auth/login`. After login,
+    read-only admin calls can use the `tukuyomi_admin_session` cookie. State-changing
+    admin calls can use either `X-API-Key` or the same-origin session flow, but
+    session-authenticated writes must also send `X-CSRF-Token` matching the
+    `tukuyomi_admin_csrf` cookie.
 servers:
   - url: /
 security:
   - ApiKeyAuth: []
+  - AdminSessionCookie: []
 tags:
+  - name: auth
   - name: status
   - name: logs
   - name: waf
@@ -27,6 +36,95 @@ tags:
   - name: verify
   - name: fp-tuner
 paths:
+  /tukuyomi-api/auth/session:
+    get:
+      tags: [auth]
+      security: []
+      summary: Get the current browser admin session state
+      description: |
+        This endpoint is intentionally callable without `X-API-Key`.
+
+        When the request carries a valid `tukuyomi_admin_session` cookie, the
+        response reports the active session and may refresh the
+        `tukuyomi_admin_csrf` cookie. Otherwise it returns `authenticated: false`.
+      responses:
+        '200':
+          description: Session status for the current browser context
+          headers:
+            Set-Cookie:
+              description: |
+                May refresh the `tukuyomi_admin_csrf` cookie for an active session.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminSessionResponse'
+
+  /tukuyomi-api/auth/login:
+    post:
+      tags: [auth]
+      security: []
+      summary: Exchange an admin API key for a same-origin admin session
+      description: |
+        Supply `api_key` in the JSON body. On success the server sets both
+        `tukuyomi_admin_session` and `tukuyomi_admin_csrf` cookies.
+
+        This endpoint is intended for browser login flows. Non-browser
+        automation can keep using `X-API-Key` directly on admin endpoints.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminLoginRequest'
+      responses:
+        '200':
+          description: Admin session issued successfully
+          headers:
+            Set-Cookie:
+              description: |
+                Sets the `tukuyomi_admin_session` and `tukuyomi_admin_csrf` cookies.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminLoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tukuyomi-api/auth/logout:
+    post:
+      tags: [auth]
+      security: []
+      summary: Clear the current browser admin session cookies
+      description: |
+        This endpoint always clears admin auth cookies.
+
+        If the request carries a valid `tukuyomi_admin_session` cookie, the
+        caller must also send `X-CSRF-Token` matching the
+        `tukuyomi_admin_csrf` cookie. Otherwise the server returns `403`.
+      responses:
+        '200':
+          description: Admin session cookies cleared
+          headers:
+            Set-Cookie:
+              description: |
+                Clears the `tukuyomi_admin_session` and `tukuyomi_admin_csrf` cookies.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
   /tukuyomi-api/status:
     get:
       tags: [status]
@@ -140,6 +238,11 @@ paths:
     put:
       tags: [waf]
       summary: Save one editable WAF rule file and hot-reload
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -168,6 +271,11 @@ paths:
     post:
       tags: [waf]
       summary: Validate one editable WAF rule file without saving
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       requestBody:
         required: true
         content:
@@ -200,6 +308,11 @@ paths:
     put:
       tags: [crs]
       summary: Save CRS rule-set selection and hot-reload
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -228,6 +341,11 @@ paths:
     post:
       tags: [crs]
       summary: Validate CRS rule-set selection without saving
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       requestBody:
         required: true
         content:
@@ -260,6 +378,11 @@ paths:
     put:
       tags: [bypass]
       summary: Save bypass rules
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -288,6 +411,11 @@ paths:
     post:
       tags: [bypass]
       summary: Validate bypass rules without saving
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       requestBody:
         required: true
         content:
@@ -320,6 +448,11 @@ paths:
     put:
       tags: [cache]
       summary: Save cache rules
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -348,6 +481,11 @@ paths:
     post:
       tags: [cache]
       summary: Validate cache rules without saving
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       requestBody:
         required: true
         content:
@@ -380,6 +518,11 @@ paths:
     put:
       tags: [country-block]
       summary: Save country block rules
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -408,6 +551,11 @@ paths:
     post:
       tags: [country-block]
       summary: Validate country block rules without saving
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       requestBody:
         required: true
         content:
@@ -440,6 +588,11 @@ paths:
     put:
       tags: [rate-limit]
       summary: Save rate-limit rules
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -468,6 +621,11 @@ paths:
     post:
       tags: [rate-limit]
       summary: Validate rate-limit rules without saving
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       requestBody:
         required: true
         content:
@@ -500,6 +658,11 @@ paths:
     put:
       tags: [notifications]
       summary: Save notification configuration
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -540,6 +703,11 @@ paths:
     post:
       tags: [notifications]
       summary: Validate notification configuration without saving
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       requestBody:
         required: true
         content:
@@ -562,6 +730,11 @@ paths:
     post:
       tags: [notifications]
       summary: Send a test notification using the current runtime configuration
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       requestBody:
         required: false
         content:
@@ -592,6 +765,11 @@ paths:
     put:
       tags: [ip-reputation]
       summary: Save IP reputation configuration
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -620,6 +798,11 @@ paths:
     post:
       tags: [ip-reputation]
       summary: Validate IP reputation configuration without saving
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       requestBody:
         required: true
         content:
@@ -652,6 +835,11 @@ paths:
     put:
       tags: [bot-defense]
       summary: Save bot defense configuration
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -680,6 +868,11 @@ paths:
     post:
       tags: [bot-defense]
       summary: Validate bot defense configuration without saving
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       requestBody:
         required: true
         content:
@@ -712,6 +905,11 @@ paths:
     put:
       tags: [semantic]
       summary: Save semantic security configuration
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -740,6 +938,11 @@ paths:
     post:
       tags: [semantic]
       summary: Validate semantic security configuration without saving
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       requestBody:
         required: true
         content:
@@ -762,6 +965,11 @@ paths:
     post:
       tags: [fp-tuner]
       summary: Propose a scoped false-positive tuning rule
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       requestBody:
         required: false
         content:
@@ -784,6 +992,11 @@ paths:
     post:
       tags: [fp-tuner]
       summary: Validate or apply a scoped false-positive tuning rule
+      security:
+        - ApiKeyAuth: []
+        - AdminSessionCookie: []
+          AdminCSRFCookie: []
+          AdminCSRFHeader: []
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -813,6 +1026,30 @@ components:
       type: apiKey
       in: header
       name: X-API-Key
+      description: |
+        Header-based admin credential for CLI, automation, and non-browser
+        callers.
+    AdminSessionCookie:
+      type: apiKey
+      in: cookie
+      name: tukuyomi_admin_session
+      description: |
+        Same-origin browser session cookie issued by `/tukuyomi-api/auth/login`.
+        Read-only admin requests can use this cookie without `X-API-Key`.
+    AdminCSRFCookie:
+      type: apiKey
+      in: cookie
+      name: tukuyomi_admin_csrf
+      description: |
+        CSRF cookie paired with `tukuyomi_admin_session`. State-changing admin
+        requests validate this cookie against `X-CSRF-Token`.
+    AdminCSRFHeader:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: |
+        Required on state-changing admin requests when authenticating with the
+        session-cookie flow.
   parameters:
     IfMatchHeader:
       name: If-Match
@@ -892,6 +1129,18 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Missing or invalid admin credentials
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: CSRF validation failed or the current action is not allowed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     Conflict:
       description: Optimistic concurrency conflict
       content:
@@ -953,6 +1202,48 @@ components:
           type: boolean
       required: [ok]
       additionalProperties: true
+    AdminLoginRequest:
+      type: object
+      properties:
+        api_key:
+          type: string
+      required: [api_key]
+      additionalProperties: false
+    AdminSessionResponse:
+      type: object
+      properties:
+        authenticated:
+          type: boolean
+        ok:
+          type: boolean
+        mode:
+          type: string
+          enum: [none, session, disabled]
+        expires_at:
+          type: string
+          format: date-time
+        csrf_cookie_name:
+          type: string
+        csrf_header_name:
+          type: string
+        session_cookie:
+          type: string
+        session_ttl_secs:
+          type: integer
+        same_origin_only:
+          type: boolean
+        cookie_secure_now:
+          type: boolean
+      required: [authenticated, mode, csrf_header_name]
+      additionalProperties: true
+    AdminLoginResponse:
+      allOf:
+        - $ref: '#/components/schemas/AdminSessionResponse'
+        - type: object
+          properties:
+            ok:
+              type: boolean
+          required: [ok]
     StatusResponse:
       type: object
       additionalProperties: true

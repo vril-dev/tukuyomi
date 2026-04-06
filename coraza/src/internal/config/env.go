@@ -2,6 +2,7 @@ package config
 
 import (
 	"log"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -11,28 +12,43 @@ import (
 )
 
 var (
-	AppURL                string
-	RulesFile             string
-	BypassFile            string
-	CountryBlockFile      string
-	RateLimitFile         string
-	IPReputationFile      string
-	BotDefenseFile        string
-	SemanticFile          string
-	NotificationFile      string
-	LogFile               string
-	ProxyErrorHTMLFile    string
-	ProxyErrorRedirectURL string
-	StrictOverride        bool
-	APIBasePath           string
-	APIKeyPrimary         string
-	APIKeySecondary       string
-	APIAuthDisable        bool
-	APICORSOrigins        []string
-	CRSEnable             bool
-	CRSSetupFile          string
-	CRSRulesDir           string
-	CRSDisabledFile       string
+	AppURL                         string
+	RulesFile                      string
+	BypassFile                     string
+	CountryBlockFile               string
+	CountryHeaderNames             []string
+	RateLimitFile                  string
+	IPReputationFile               string
+	BotDefenseFile                 string
+	SemanticFile                   string
+	NotificationFile               string
+	LogFile                        string
+	LogOutputFile                  string
+	ProxyErrorHTMLFile             string
+	ProxyErrorRedirectURL          string
+	StrictOverride                 bool
+	APIBasePath                    string
+	UIBasePath                     string
+	TrustedProxyCIDRs              []string
+	TrustedProxyPrefixes           []netip.Prefix
+	ForwardInternalResponseHeaders bool
+	ResponseCacheMode              string
+	ResponseCacheMaxEntries        int
+	ResponseCacheMaxBodyBytes      int64
+	ResponseCacheStaleSeconds      int
+	ResponseCacheRefreshTimeout    time.Duration
+	ResponseCacheRefreshBackoff    time.Duration
+	ResponseCacheDir               string
+	APIKeyPrimary                  string
+	APIKeySecondary                string
+	AdminSessionSecret             string
+	AdminSessionTTL                time.Duration
+	APIAuthDisable                 bool
+	APICORSOrigins                 []string
+	CRSEnable                      bool
+	CRSSetupFile                   string
+	CRSRulesDir                    string
+	CRSDisabledFile                string
 
 	AllowInsecureDefaults bool
 
@@ -65,6 +81,7 @@ func LoadEnv() {
 	if CountryBlockFile == "" {
 		CountryBlockFile = "conf/country-block.conf"
 	}
+	CountryHeaderNames = parseCountryHeaderNames(os.Getenv("WAF_COUNTRY_HEADER_NAMES"))
 	RateLimitFile = strings.TrimSpace(os.Getenv("WAF_RATE_LIMIT_FILE"))
 	if RateLimitFile == "" {
 		RateLimitFile = "conf/rate-limit.conf"
@@ -86,6 +103,10 @@ func LoadEnv() {
 		NotificationFile = "conf/notifications.conf"
 	}
 	LogFile = os.Getenv("WAF_LOG_FILE")
+	LogOutputFile = strings.TrimSpace(os.Getenv("WAF_LOG_OUTPUT_FILE"))
+	if LogOutputFile == "" {
+		LogOutputFile = "conf/log-output.json"
+	}
 	ProxyErrorHTMLFile = strings.TrimSpace(os.Getenv("WAF_PROXY_ERROR_HTML_FILE"))
 	ProxyErrorRedirectURL = strings.TrimSpace(os.Getenv("WAF_PROXY_ERROR_REDIRECT_URL"))
 	StrictOverride = os.Getenv("WAF_STRICT_OVERRIDE") == "true"
@@ -100,9 +121,43 @@ func LoadEnv() {
 	if APIBasePath == "/" {
 		log.Fatal("WAF_API_BASEPATH cannot be root path '/'")
 	}
+	UIBasePath = os.Getenv("WAF_UI_BASEPATH")
+	if UIBasePath == "" {
+		UIBasePath = "/tukuyomi-admin"
+	}
+	if !strings.HasPrefix(UIBasePath, "/") {
+		UIBasePath = "/" + UIBasePath
+	}
+	if UIBasePath != "/" {
+		UIBasePath = strings.TrimRight(UIBasePath, "/")
+	}
+	if UIBasePath == "/" {
+		log.Fatal("WAF_UI_BASEPATH cannot be root path '/'")
+	}
+	if UIBasePath == APIBasePath {
+		log.Fatal("WAF_UI_BASEPATH must differ from WAF_API_BASEPATH")
+	}
+	TrustedProxyCIDRs, TrustedProxyPrefixes = parseTrustedProxyCIDRs(os.Getenv("WAF_TRUSTED_PROXY_CIDRS"))
+	ForwardInternalResponseHeaders = isTruthy(os.Getenv("WAF_FORWARD_INTERNAL_RESPONSE_HEADERS"))
+	ResponseCacheMode = parseResponseCacheMode(os.Getenv("WAF_RESPONSE_CACHE_MODE"))
+	ResponseCacheMaxEntries = parseResponseCacheMaxEntries(os.Getenv("WAF_RESPONSE_CACHE_MAX_ENTRIES"))
+	ResponseCacheMaxBodyBytes = parseResponseCacheMaxBodyBytes(os.Getenv("WAF_RESPONSE_CACHE_MAX_BODY_BYTES"))
+	ResponseCacheStaleSeconds = parseResponseCacheStaleSeconds(os.Getenv("WAF_RESPONSE_CACHE_STALE_SECONDS"))
+	ResponseCacheRefreshTimeout = time.Duration(parseResponseCacheRefreshTimeoutSeconds(os.Getenv("WAF_RESPONSE_CACHE_REFRESH_TIMEOUT_SECONDS"))) * time.Second
+	ResponseCacheRefreshBackoff = time.Duration(parseResponseCacheRefreshBackoffSeconds(os.Getenv("WAF_RESPONSE_CACHE_REFRESH_BACKOFF_SECONDS"))) * time.Second
+	ResponseCacheDir = parseResponseCacheDir(os.Getenv("WAF_RESPONSE_CACHE_DIR"))
 
 	APIKeyPrimary = strings.TrimSpace(os.Getenv("WAF_API_KEY_PRIMARY"))
 	APIKeySecondary = strings.TrimSpace(os.Getenv("WAF_API_KEY_SECONDARY"))
+	AdminSessionSecret = strings.TrimSpace(os.Getenv("WAF_ADMIN_SESSION_SECRET"))
+	if AdminSessionSecret == "" {
+		AdminSessionSecret = APIKeyPrimary
+	}
+	adminSessionTTLSec := parseIntDefault(os.Getenv("WAF_ADMIN_SESSION_TTL_SEC"), 28800)
+	if adminSessionTTLSec < 300 || adminSessionTTLSec > 604800 {
+		adminSessionTTLSec = 28800
+	}
+	AdminSessionTTL = time.Duration(adminSessionTTLSec) * time.Second
 	APIAuthDisable = isTruthy(os.Getenv("WAF_API_AUTH_DISABLE"))
 	APICORSOrigins = parseCSV(os.Getenv("WAF_API_CORS_ALLOWED_ORIGINS"))
 
@@ -183,6 +238,9 @@ func enforceSecureDefaults() {
 	}
 	if APIKeySecondary != "" && isWeakAPIKey(APIKeySecondary) {
 		log.Fatal("[SECURITY] WAF_API_KEY_SECONDARY is weak; set a random key with 16+ chars or leave it empty")
+	}
+	if isWeakAPIKey(AdminSessionSecret) {
+		log.Fatal("[SECURITY] WAF_ADMIN_SESSION_SECRET is weak; set a random secret with 16+ chars")
 	}
 }
 
@@ -287,4 +345,142 @@ func parseDBSyncIntervalSec(v string) int {
 		return 3600
 	}
 	return n
+}
+
+func parseTrustedProxyCIDRs(v string) ([]string, []netip.Prefix) {
+	parts := parseCSV(v)
+	if len(parts) == 0 {
+		return nil, nil
+	}
+
+	cidrs := make([]string, 0, len(parts))
+	prefixes := make([]netip.Prefix, 0, len(parts))
+	for _, part := range parts {
+		if prefix, err := netip.ParsePrefix(part); err == nil {
+			prefix = prefix.Masked()
+			cidrs = append(cidrs, prefix.String())
+			prefixes = append(prefixes, prefix)
+			continue
+		}
+		if addr, err := netip.ParseAddr(part); err == nil {
+			addr = addr.Unmap()
+			prefix := netip.PrefixFrom(addr, addr.BitLen())
+			cidrs = append(cidrs, prefix.String())
+			prefixes = append(prefixes, prefix)
+			continue
+		}
+		log.Printf("[CONFIG][WARN] invalid WAF_TRUSTED_PROXY_CIDRS entry ignored: %q", part)
+	}
+
+	if len(cidrs) == 0 {
+		return nil, nil
+	}
+
+	return cidrs, prefixes
+}
+
+func parseResponseCacheMode(v string) string {
+	s := strings.ToLower(strings.TrimSpace(v))
+	switch s {
+	case "", "off":
+		return "off"
+	case "memory":
+		return "memory"
+	case "disk":
+		return "disk"
+	default:
+		log.Printf("[CONFIG][WARN] unsupported WAF_RESPONSE_CACHE_MODE=%q, fallback=off", s)
+		return "off"
+	}
+}
+
+func parseResponseCacheDir(v string) string {
+	s := strings.TrimSpace(v)
+	if s == "" {
+		return "logs/coraza/response-cache"
+	}
+	return s
+}
+
+func parseResponseCacheMaxEntries(v string) int {
+	n := parseIntDefault(v, 512)
+	if n < 0 {
+		return 0
+	}
+	if n > 10000 {
+		return 10000
+	}
+	return n
+}
+
+func parseResponseCacheMaxBodyBytes(v string) int64 {
+	n := parseIntDefault(v, 1<<20)
+	if n < 0 {
+		return 0
+	}
+	if n > 64<<20 {
+		return 64 << 20
+	}
+	return int64(n)
+}
+
+func parseResponseCacheStaleSeconds(v string) int {
+	n := parseIntDefault(v, 30)
+	if n < 0 {
+		return 0
+	}
+	if n > 86400 {
+		return 86400
+	}
+	return n
+}
+
+func parseResponseCacheRefreshTimeoutSeconds(v string) int {
+	n := parseIntDefault(v, 5)
+	if n < 1 {
+		return 1
+	}
+	if n > 300 {
+		return 300
+	}
+	return n
+}
+
+func parseResponseCacheRefreshBackoffSeconds(v string) int {
+	n := parseIntDefault(v, 5)
+	if n < 0 {
+		return 0
+	}
+	if n > 300 {
+		return 300
+	}
+	return n
+}
+
+func parseCountryHeaderNames(v string) []string {
+	parts := parseCSV(v)
+	if len(parts) == 0 {
+		parts = []string{"X-Country-Code", "CF-IPCountry"}
+	}
+
+	out := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, name)
+	}
+
+	if len(out) == 0 {
+		return []string{"X-Country-Code", "CF-IPCountry"}
+	}
+
+	return out
 }

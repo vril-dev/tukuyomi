@@ -169,7 +169,8 @@ Forwarded-header trust notes:
 
 - Without `WAF_TRUSTED_PROXY_CIDRS`, Coraza ignores client-supplied forwarding headers and derives client IP from the direct peer.
 - Country-based controls use the trusted header chain in `WAF_COUNTRY_HEADER_NAMES` and fall back to `UNKNOWN` when no trusted country header exists.
-- The bundled Docker/compose examples keep `nginx -> coraza` behavior by setting trusted private ranges and enabling internal response headers for nginx-side logging.
+- The bundled examples now default to direct `client -> tukuyomi -> app` smoke, and expose `nginx` as an optional `front-proxy` profile for balancer-style validation.
+- When you use that profile locally, set trusted private ranges and `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=true` so the bundled `nginx` can normalize forwarded headers and keep its legacy logging behavior.
 - When you switch to `client -> ALB/Cloudflare/nginx -> tukuyomi -> app`, tighten `WAF_TRUSTED_PROXY_CIDRS` to the actual front-proxy ranges and turn `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` off unless that front layer strips them.
 
 ## Host Network Hardening (L3/L4 Basics)
@@ -347,7 +348,8 @@ Practical example stacks are available under:
 - `examples/wordpress` (WordPress + high-paranoia CRS setup)
 - `examples/api-gateway` (REST API + strict rate-limit profile)
 
-See `examples/README.md` for common setup flow. `examples/api-gateway`, `examples/nextjs`, and `examples/wordpress` include `PROTECTED_HOST=protected.example.test ./smoke.sh`, and repo-level Docker smoke runs are available via `./scripts/ci_example_smoke.sh <example>`.
+See `examples/README.md` for common setup flow. The example compose files now default to direct `client -> tukuyomi -> app`, while optional `front-proxy` profile runs cover `client -> nginx-like front -> tukuyomi -> app`.
+`examples/api-gateway`, `examples/nextjs`, and `examples/wordpress` include `PROTECTED_HOST=protected.example.test ./smoke.sh`, and repo-level Docker smoke runs are available via `./scripts/ci_example_smoke.sh <example>` for the thin-front path.
 If you want a single entrypoint from the repo root, use `make example-smoke EXAMPLE=api-gateway` or `make example-smoke-all`.
 
 For direct `client -> tukuyomi -> app` checks, use `make standalone-regression-fast EXAMPLE=api-gateway` or `make standalone-smoke-all`.

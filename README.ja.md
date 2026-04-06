@@ -170,7 +170,8 @@ forwarded header の信頼境界メモ:
 
 - `WAF_TRUSTED_PROXY_CIDRS` を設定しない場合、Coraza は client 側が送った forwarding header を信用せず、直結 peer の IP を使います。
 - 国別制御は `WAF_COUNTRY_HEADER_NAMES` の trusted header chain を使い、信頼できる country header が無い場合は `UNKNOWN` に落ちます。
-- 同梱の Docker/compose 例では、`nginx -> coraza` の従来挙動を保つために private range を trusted proxy とし、nginx 側ログ用に internal response header を有効化しています。
+- 同梱の example は現在、default では direct な `client -> tukuyomi -> app` smoke を起動し、`nginx` は balancer 相当の確認用に optional `front-proxy` profile として切り出しています。
+- local でその profile を使う場合は、trusted private range と `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=true` を付けて、同梱 `nginx` の forwarded header 正規化と従来ログ挙動を有効にしてください。
 - `client -> ALB/Cloudflare/nginx -> tukuyomi -> app` へ寄せる場合は、`WAF_TRUSTED_PROXY_CIDRS` を実際の前段 range に絞り、前段で確実に除去しない限り `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` は無効のままにしてください。
 
 ## Host Network Hardening（L3/L4 対策の基礎）
@@ -348,7 +349,8 @@ MIN_TRUE_NEGATIVE_PASSED_RATIO=95 MAX_FALSE_POSITIVE_RATIO=5 MAX_BYPASS_RATIO=30
 - `examples/wordpress`（WordPress + 高パラノイア CRS 設定）
 - `examples/api-gateway`（REST API + 厳しめレート制限プロファイル）
 
-共通の起動手順は `examples/README.md` を参照してください。`examples/api-gateway`、`examples/nextjs`、`examples/wordpress` には `PROTECTED_HOST=protected.example.test ./smoke.sh` があり、repo ルートからは `./scripts/ci_example_smoke.sh <example>` で Docker smoke も回せます。
+共通の起動手順は `examples/README.md` を参照してください。example compose は現在、default では direct な `client -> tukuyomi -> app` を起動し、optional `front-proxy` profile で `client -> nginx-like front -> tukuyomi -> app` も確認できます。
+`examples/api-gateway`、`examples/nextjs`、`examples/wordpress` には `PROTECTED_HOST=protected.example.test ./smoke.sh` があり、repo ルートからは thin-front path 向けに `./scripts/ci_example_smoke.sh <example>` で Docker smoke も回せます。
 repo ルートの統一入口として使うなら、`make example-smoke EXAMPLE=api-gateway` または `make example-smoke-all` も利用できます。
 
 direct な `client -> tukuyomi -> app` 確認をしたい場合は、`make standalone-regression-fast EXAMPLE=api-gateway` または `make standalone-smoke-all` を使ってください。

@@ -27,6 +27,7 @@ BENCH_OUTPUT_ROOT="${BENCH_OUTPUT_ROOT:-${ROOT_DIR}/artifacts/benchmarks}"
 BENCH_RUN_ID="${BENCH_RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 BENCH_BASE_URL="${BENCH_BASE_URL:-}"
 BENCH_COMPOSE_PROJECT_NAME="${BENCH_COMPOSE_PROJECT_NAME:-tukuyomi-${EXAMPLE_NAME//[^a-zA-Z0-9]/}-${TOPOLOGY}-bench}"
+FRONT_PROXY_TRUSTED_PROXY_CIDRS="${FRONT_PROXY_TRUSTED_PROXY_CIDRS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
 
 COMPOSE_ENV=()
 PENDING_CONF_CLEANUP=()
@@ -146,11 +147,14 @@ build_request_shape() {
 }
 
 example_services() {
-  case "${EXAMPLE_NAME}" in
-    api-gateway) echo "coraza nginx api" ;;
-    nextjs) echo "coraza nginx nextjs" ;;
-    wordpress) echo "coraza nginx wordpress db" ;;
-    *) echo "coraza nginx" ;;
+  case "${EXAMPLE_NAME}:${TOPOLOGY}" in
+    api-gateway:front) echo "coraza nginx api" ;;
+    api-gateway:direct) echo "coraza api" ;;
+    nextjs:front) echo "coraza nginx nextjs" ;;
+    nextjs:direct) echo "coraza nextjs" ;;
+    wordpress:front) echo "coraza nginx wordpress db" ;;
+    wordpress:direct) echo "coraza wordpress db" ;;
+    *) echo "coraza" ;;
   esac
 }
 
@@ -215,7 +219,11 @@ cleanup() {
   local path
   stop_admin_side_traffic
   if [[ "${BENCH_AUTO_DOWN}" == "1" && "${BENCH_SKIP_STACK_UP}" != "1" ]]; then
-    compose_in_example down --remove-orphans >/dev/null 2>&1 || true
+    if [[ "${TOPOLOGY}" == "front" ]]; then
+      compose_in_example --profile front-proxy down --remove-orphans >/dev/null 2>&1 || true
+    else
+      compose_in_example down --remove-orphans >/dev/null 2>&1 || true
+    fi
   fi
   for path in "${PENDING_CONF_CLEANUP[@]:-}"; do
     rm -f "${path}" >/dev/null 2>&1 || true
@@ -302,13 +310,26 @@ else
   BASE_URL="${BENCH_BASE_URL}"
 fi
 
+if [[ "${TOPOLOGY}" == "front" ]]; then
+  COMPOSE_ENV+=("WAF_TRUSTED_PROXY_CIDRS=${FRONT_PROXY_TRUSTED_PROXY_CIDRS}")
+  COMPOSE_ENV+=("WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=true")
+fi
+
 build_request_shape
 TARGET_URL="${BASE_URL}${REQUEST_PATH}"
 
 if [[ "${BENCH_SKIP_STACK_UP}" != "1" ]]; then
-  compose_in_example down --remove-orphans >/dev/null 2>&1 || true
+  if [[ "${TOPOLOGY}" == "front" ]]; then
+    compose_in_example --profile front-proxy down --remove-orphans >/dev/null 2>&1 || true
+  else
+    compose_in_example down --remove-orphans >/dev/null 2>&1 || true
+  fi
   log "starting ${EXAMPLE_NAME} stack (${TOPOLOGY})"
-  compose_in_example up -d --build
+  if [[ "${TOPOLOGY}" == "front" ]]; then
+    compose_in_example --profile front-proxy up -d --build
+  else
+    compose_in_example up -d --build
+  fi
 fi
 
 log "waiting for health endpoint via ${BASE_URL}/healthz"

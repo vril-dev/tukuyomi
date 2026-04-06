@@ -38,7 +38,7 @@ STACK_ENV = $(DOCKER_ENV) NGINX_PORT="$(HOST_NGINX_PORT)" OPENRESTY_PORT="$(HOST
 	compose-config compose-config-mysql compose-build compose-up compose-down web-up web-down mysql-up mysql-down \
 	preset-list preset-apply preset-check \
 	gotestwaf gotestwaf-file gotestwaf-sqlite \
-	example-smoke example-smoke-all \
+	example-smoke example-smoke-all standalone-smoke standalone-smoke-all standalone-regression-fast standalone-regression-extended \
 	check ci-local clean
 
 help:
@@ -78,6 +78,11 @@ help:
 	@echo "  make example-smoke         Run one protected-host example smoke"
 	@echo "    - optional: EXAMPLE=$(EXAMPLE) (choices: $(EXAMPLES))"
 	@echo "  make example-smoke-all     Run protected-host smoke for all examples"
+	@echo "  make standalone-smoke      Run direct-tukuyomi standalone smoke for one example"
+	@echo "    - optional: EXAMPLE=$(EXAMPLE) (choices: $(EXAMPLES))"
+	@echo "  make standalone-smoke-all  Run direct-tukuyomi standalone smoke for all examples"
+	@echo "  make standalone-regression-fast      Run fast standalone regression baseline"
+	@echo "  make standalone-regression-extended  Run heavier standalone regression baseline"
 	@echo ""
 	@echo "  make check                 Run go-test + ui-test + compose config checks"
 	@echo "  make ci-local              Run local CI baseline (check + mysql + examples + GoTestWAF)"
@@ -234,6 +239,21 @@ example-smoke-all:
 		echo "[example-smoke-all] running $$example"; \
 		$(MAKE) example-smoke EXAMPLE="$$example"; \
 	done
+
+standalone-smoke:
+	./scripts/run_standalone_regression.sh "$(EXAMPLE)" fast
+
+standalone-smoke-all:
+	@set -euo pipefail; \
+	for example in $(EXAMPLES); do \
+		echo "[standalone-smoke-all] running $$example"; \
+		$(MAKE) standalone-smoke EXAMPLE="$$example"; \
+	done
+
+standalone-regression-fast: go-test compose-config
+	$(MAKE) standalone-smoke EXAMPLE="$(EXAMPLE)"
+
+standalone-regression-extended: check standalone-smoke-all
 
 check: go-test ui-test compose-config compose-config-mysql
 

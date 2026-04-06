@@ -33,3 +33,10 @@ repo-level の Docker smoke は次を使います。
 ./scripts/ci_example_smoke.sh nextjs
 ./scripts/ci_example_smoke.sh wordpress
 ```
+
+example 側の `nginx` を client 経路に入れず、direct に `tukuyomi` を確認したい場合は次を使います。
+
+```bash
+./scripts/run_standalone_regression.sh api-gateway
+make standalone-smoke-all
+```

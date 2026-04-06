@@ -350,6 +350,9 @@ Practical example stacks are available under:
 See `examples/README.md` for common setup flow. `examples/api-gateway`, `examples/nextjs`, and `examples/wordpress` include `PROTECTED_HOST=protected.example.test ./smoke.sh`, and repo-level Docker smoke runs are available via `./scripts/ci_example_smoke.sh <example>`.
 If you want a single entrypoint from the repo root, use `make example-smoke EXAMPLE=api-gateway` or `make example-smoke-all`.
 
+For direct `client -> tukuyomi -> app` checks, use `make standalone-regression-fast EXAMPLE=api-gateway` or `make standalone-smoke-all`.
+The current standalone regression matrix is documented in `docs/operations/standalone-regression.md`.
+
 ### FP Tuner Mock Flow
 
 You can test send/receive/apply flow without an external LLM contract:
@@ -850,6 +853,7 @@ See:
 
 - `docs/operations/waf-tuning.md`
 - `docs/operations/fp-tuner-api.md`
+- `docs/operations/standalone-regression.md`
 
 ## DB Operations
 

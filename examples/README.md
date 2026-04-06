@@ -33,3 +33,10 @@ For a repo-level Docker smoke run, use:
 ./scripts/ci_example_smoke.sh nextjs
 ./scripts/ci_example_smoke.sh wordpress
 ```
+
+For direct `tukuyomi` checks without sending client traffic through example `nginx`, use:
+
+```bash
+./scripts/run_standalone_regression.sh api-gateway
+make standalone-smoke-all
+```

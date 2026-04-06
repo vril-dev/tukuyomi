@@ -7,7 +7,7 @@
 最初に実運用で使う前に、次を変更してください。
 - `WAF_APP_URL`
 - `WAF_API_KEY_PRIMARY`
-- `VITE_API_KEY`
+- `WAF_ADMIN_SESSION_SECRET`
 
 適用と検証:
 

@@ -89,8 +89,8 @@ make deployment-smoke
 | Rate limit | Partially automated | `standalone-regression-extended` (`api-gateway`) | repeated login requests eventually return `429` |
 | Bypass rules | Automated | `standalone-policy-fixture` / `standalone-regression-extended` (`api-gateway`) | temporary bypass makes `/v1/whoami` pass while another path still blocks |
 | Country block | Automated | `standalone-policy-fixture` / `standalone-regression-extended` (`api-gateway`) | trusted front-proxy `JP` returns `403`, untrusted headers are ignored or degraded to `UNKNOWN` as configured |
-| Binary deployment guide | Automated | `deployment-smoke` / `standalone-regression-extended` | staged binary build + runtime tree passes `/healthz`, Admin UI, Admin API, and protected-host smoke |
-| Container deployment guide | Automated | `deployment-smoke` / `standalone-regression-extended` | `docs/build/Dockerfile.example` image passes `/healthz`, Admin UI, Admin API, and protected-host smoke |
+| Binary deployment guide | Automated | `deployment-smoke` / `standalone-regression-extended` | staged binary build + runtime tree passes `/healthz`, Admin UI, admin login/session/logout + CSRF checks, and protected-host smoke |
+| Container deployment guide | Automated | `deployment-smoke` / `standalone-regression-extended` | `docs/build/Dockerfile.example` image passes `/healthz`, Admin UI, admin login/session/logout + CSRF checks, and protected-host smoke |
 | Cache advanced semantics | Pending later slice | N/A | stale serve / coalescing / disk-backed behavior still differs from `nginx proxy_cache` |
 
 ## Why Some Checks Are Still Manual

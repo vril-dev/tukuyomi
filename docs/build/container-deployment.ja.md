@@ -62,6 +62,9 @@ make container-deployment-smoke
 - `WAF_RULES_FILE`
 - `WAF_BYPASS_FILE`
 - `WAF_API_KEY_PRIMARY`
+- `WAF_API_KEY_SECONDARY`
+- `WAF_ADMIN_SESSION_SECRET`
+- `WAF_ADMIN_SESSION_TTL_SEC`
 - `WAF_UI_BASEPATH`
 - `WAF_API_BASEPATH`
 - `WAF_TRUSTED_PROXY_CIDRS`
@@ -84,9 +87,16 @@ cloud では通常:
 
 です。前段がある場合は、`WAF_TRUSTED_PROXY_CIDRS` をその前段だけに限定してください。
 
+## Secret Handling
+
+- `WAF_API_KEY_PRIMARY`, `WAF_API_KEY_SECONDARY`, `WAF_ADMIN_SESSION_SECRET`, `WAF_DB_DSN`, `WAF_FP_TUNER_API_KEY` は platform 側の secret store や runtime env 注入で渡してください
+- 埋め込み管理UIに build-time admin secret は不要です
+- browser user は 1 回 sign in すると same-origin session cookie を受け取ります
+- CLI / 自動化は従来どおり `X-API-Key` を使えます
+
 ## Notes
 
 - 埋め込み管理UIは image build 時に生成され、runtime では build しません
-- `VITE_API_KEY` は管理UI向けの build-time 値です
+- `make container-deployment-smoke` は unauthenticated session 状態、login/logout、invalid session 拒否、CSRF 強制まで検証します
 - runtime で policy file を変更したい場合は、`/app/conf` と `/app/rules` を mount してください
 - 複数ノード運用では `db + mysql` を推奨します

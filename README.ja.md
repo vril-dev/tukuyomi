@@ -74,7 +74,7 @@ make preset-apply PRESET=minimal
 make preset-check PRESET=minimal
 ```
 
-ローカル開発の外へ出す前に `WAF_APP_URL`, `WAF_API_KEY_PRIMARY`, `VITE_API_KEY` を差し替えてください。
+ローカル開発の外へ出す前に `WAF_APP_URL`, `WAF_API_KEY_PRIMARY`, `WAF_ADMIN_SESSION_SECRET` を差し替えてください。
 
 ---
 
@@ -146,6 +146,8 @@ make preset-check PRESET=minimal
 | `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` | `false` | 内部用の `X-WAF-Hit` / `X-WAF-RuleIDs` をレスポンスに残すか。クライアントへ返る前に前段 smart proxy が必ず除去する構成でだけ有効化してください。 |
 | `WAF_API_KEY_PRIMARY` | `…` | 管理API用の主キー（`X-API-Key`）。 |
 | `WAF_API_KEY_SECONDARY` | (空) | 予備キー（ローテーション時の切替用。未使用なら空でOK）。 |
+| `WAF_ADMIN_SESSION_SECRET` | `…` | ブラウザ管理 session の署名に使う HMAC secret。本番では API key と分離して設定し、session cookie をキー更新から独立させてください。 |
+| `WAF_ADMIN_SESSION_TTL_SEC` | `28800` | ブラウザ管理 session の有効期限（秒）。範囲は `300` から `604800`。 |
 | `WAF_API_AUTH_DISABLE` | (空) | 認証無効化フラグ。運用では空（false相当）推奨。テストで無効化したいときのみ truthy 値。 |
 | `WAF_API_CORS_ALLOWED_ORIGINS` | `https://admin.example.com,http://localhost:5173` | CORSを許可する Origin 一覧（カンマ区切り）。未設定なら CORS 無効（同一オリジンのみ）。 |
 | `WAF_ALLOW_INSECURE_DEFAULTS` | (空) | 弱いAPIキーや認証無効化を許可する開発用フラグ。本番では設定しない。 |
@@ -162,7 +164,6 @@ make preset-check PRESET=minimal
 | --- | --- | --- |
 | `VITE_CORAZA_API_BASE` | `/tukuyomi-api` | ブラウザから叩く API のフル/相対ベース。埋め込み管理UIの build 時と、任意のローカル Vite 開発時に使います。 |
 | `VITE_APP_BASE_PATH` | `/tukuyomi-admin` | 管理UIのルートパス（`react-router` の basename）。埋め込み管理UIの build 時と、任意のローカル Vite 開発時に使います。 |
-| `VITE_API_KEY` | `…` | 管理UIが API へ付与する `X-API-Key`。通常は `WAF_API_KEY_PRIMARY` と同値。client-side の値なので build 済み UI に含まれます。 |
 
 埋め込み管理UIを手動で再生成する場合:
 
@@ -172,6 +173,12 @@ make go-build
 ```
 
 ローカル Go build ではなく container build を使う場合は、`make ui-build-sync` の後に `make compose-build` を実行してください。
+
+管理UI の認証モデル:
+
+- ブラウザ側の管理UIは `POST /tukuyomi-api/auth/login` を 1 回呼び、same-origin session cookie を受け取って以後の API を呼びます。
+- `WAF_API_KEY_PRIMARY`, `WAF_API_KEY_SECONDARY`, `WAF_ADMIN_SESSION_SECRET` は server 側だけで保持してください。
+- CLI / 自動化は従来どおり `X-API-Key` で管理 API を呼べます。
 
 起動時に `WAF_API_KEY_PRIMARY` が短すぎる/既知の弱い値の場合、Corazaプロセスは安全側で起動失敗します。  
 ローカル検証だけ一時的に緩和したい場合は `WAF_ALLOW_INSECURE_DEFAULTS=1` を利用してください。
@@ -479,6 +486,9 @@ Claudeコマンドプロバイダのローカルモックテスト:
 
 | メソッド | パス | 説明 |
 | --- | --- | --- |
+| GET | `/tukuyomi-api/auth/session` | 現在のブラウザ管理 session 状態を返し、session 有効時は CSRF cookie を更新 |
+| POST | `/tukuyomi-api/auth/login` | 有効な管理 API key を same-origin session cookie へ交換 |
+| POST | `/tukuyomi-api/auth/logout` | ブラウザ管理 session cookie を削除。session 認証中は `X-CSRF-Token` が必要 |
 | GET | `/tukuyomi-api/status` | 現在のWAF設定状態を取得 |
 | GET | `/tukuyomi-api/metrics` | rate limit / semantic の実行カウンタを Prometheus 形式で出力 |
 | GET | `/tukuyomi-api/logs/read` | WAFログ（tail）を取得（`country` クエリで国別フィルタ可） |
@@ -522,6 +532,11 @@ Claudeコマンドプロバイダのローカルモックテスト:
 
 
 ログやルールが設定されていない場合は `500` で `{"error": "...説明..."}` を返します。
+
+browser session メモ:
+
+- ブラウザ session は same-origin cookie と、状態変更系 request に対する `X-CSRF-Token` を使います。
+- CLI / 自動化は browser session を作らずに `X-API-Key` を直接使えます。
 
 ---
 

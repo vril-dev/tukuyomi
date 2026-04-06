@@ -73,7 +73,7 @@ make preset-apply PRESET=minimal
 make preset-check PRESET=minimal
 ```
 
-Edit `WAF_APP_URL`, `WAF_API_KEY_PRIMARY`, and `VITE_API_KEY` before exposing the stack outside local development.
+Edit `WAF_APP_URL`, `WAF_API_KEY_PRIMARY`, and `WAF_ADMIN_SESSION_SECRET` before exposing the stack outside local development.
 
 ---
 
@@ -145,6 +145,8 @@ You can control behavior via `.env`.
 | `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` | `false` | Whether to keep internal `X-WAF-Hit` / `X-WAF-RuleIDs` headers on upstream responses. Enable only when a smart front proxy strips them before the client. Leave disabled for direct/ALB-style exposure. |
 | `WAF_API_KEY_PRIMARY` | `...` | Primary admin API key (`X-API-Key`). |
 | `WAF_API_KEY_SECONDARY` | (empty) | Secondary key for rotation/fallback. Leave empty if unused. |
+| `WAF_ADMIN_SESSION_SECRET` | `...` | HMAC signing secret for browser admin sessions. Set this separately from the API key in production so session cookies remain independent of key rotation. |
+| `WAF_ADMIN_SESSION_TTL_SEC` | `28800` | Browser admin session lifetime in seconds (`300` to `604800`). |
 | `WAF_API_AUTH_DISABLE` | (empty) | Disable API auth flag. Keep empty (false) in production; use only for test environments. |
 | `WAF_API_CORS_ALLOWED_ORIGINS` | `https://admin.example.com,http://localhost:5173` | Allowed CORS origins (comma-separated). If empty, CORS is disabled (same-origin only). |
 | `WAF_ALLOW_INSECURE_DEFAULTS` | (empty) | Dev-only flag to allow weak API keys or disabled auth. Do not set in production. |
@@ -161,7 +163,6 @@ Upstream failure response behavior:
 | --- | --- | --- |
 | `VITE_CORAZA_API_BASE` | `/tukuyomi-api` | Full/relative API base path used by browser-side calls. Used when building embedded admin UI assets and when running the optional local Vite dev server. |
 | `VITE_APP_BASE_PATH` | `/tukuyomi-admin` | Admin UI root path (`react-router` basename). Used when building embedded admin UI assets and when running the optional local Vite dev server. |
-| `VITE_API_KEY` | `...` | API key attached by admin UI (`X-API-Key`). Usually same as `WAF_API_KEY_PRIMARY`. This is a client-side value and is embedded into the built admin UI. |
 
 Manual embedded UI rebuild:
 
@@ -171,6 +172,12 @@ make go-build
 ```
 
 If you are using the container path instead of a local Go build, run `make compose-build` after `make ui-build-sync`.
+
+Admin auth model:
+
+- Browser-side Admin UI now calls `POST /tukuyomi-api/auth/login` once and receives same-origin session cookies.
+- Keep `WAF_API_KEY_PRIMARY`, `WAF_API_KEY_SECONDARY`, and `WAF_ADMIN_SESSION_SECRET` server-side only.
+- CLI / automation can continue to call admin endpoints with `X-API-Key`.
 
 At startup, if `WAF_API_KEY_PRIMARY` is too short or known-weak, Coraza fails to start in secure mode.
 For local testing only, you can temporarily relax this with `WAF_ALLOW_INSECURE_DEFAULTS=1`.
@@ -478,6 +485,9 @@ Detailed request/response schemas are available in [docs/api/admin-openapi.yaml]
 
 | Method | Path | Description |
 | --- | --- | --- |
+| GET | `/tukuyomi-api/auth/session` | Report current browser admin session state and refresh the CSRF cookie when a session is active |
+| POST | `/tukuyomi-api/auth/login` | Exchange a valid admin API key for same-origin session cookies |
+| POST | `/tukuyomi-api/auth/logout` | Clear browser admin session cookies. Session-authenticated callers must send `X-CSRF-Token` |
 | GET | `/tukuyomi-api/status` | Get current WAF status/config |
 | GET | `/tukuyomi-api/metrics` | Export Prometheus-style runtime counters for rate limit and semantic scoring |
 | GET | `/tukuyomi-api/logs/read` | Read WAF logs (`tail`) with optional country filter via `country` query |
@@ -520,6 +530,11 @@ Detailed request/response schemas are available in [docs/api/admin-openapi.yaml]
 | PUT | `/tukuyomi-api/cache-rules` | Save `cache.conf` (`If-Match` optimistic lock via `ETag`) |
 
 If logs or rules are missing, API returns `500` with `{"error":"..."}`.
+
+Browser session notes:
+
+- Browser sessions use same-origin cookies plus `X-CSRF-Token` on state-changing requests.
+- CLI / automation may continue to use `X-API-Key` directly without creating a browser session.
 
 ---
 

@@ -84,8 +84,8 @@ make deployment-smoke
 | Rate limit | 一部自動化 | `standalone-regression-extended`（`api-gateway`） | login 連打で最終的に `429` |
 | Bypass rules | 自動化済み | `standalone-policy-fixture` / `standalone-regression-extended`（`api-gateway`） | 一時 bypass により `/v1/whoami` は通り、別 path は block 維持 |
 | Country block | 自動化済み | `standalone-policy-fixture` / `standalone-regression-extended`（`api-gateway`） | trusted front-proxy の `JP` は `403`、信頼できない header は無視または `UNKNOWN` に落ちる |
-| Binary deployment guide | 自動化済み | `deployment-smoke` / `standalone-regression-extended` | staged binary build + runtime tree が `/healthz`、Admin UI、Admin API、protected-host smoke を通す |
-| Container deployment guide | 自動化済み | `deployment-smoke` / `standalone-regression-extended` | `docs/build/Dockerfile.example` image が `/healthz`、Admin UI、Admin API、protected-host smoke を通す |
+| Binary deployment guide | 自動化済み | `deployment-smoke` / `standalone-regression-extended` | staged binary build + runtime tree が `/healthz`、Admin UI、admin login/session/logout + CSRF 検証、protected-host smoke を通す |
+| Container deployment guide | 自動化済み | `deployment-smoke` / `standalone-regression-extended` | `docs/build/Dockerfile.example` image が `/healthz`、Admin UI、admin login/session/logout + CSRF 検証、protected-host smoke を通す |
 | cache の高度な意味論 | 後続 slice | N/A | stale serve / coalescing / disk-backed はまだ `nginx proxy_cache` と差がある |
 
 ## まだ手動の項目がある理由

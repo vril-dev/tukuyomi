@@ -13,11 +13,14 @@ WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-60}"
 CONTAINER_DEPLOYMENT_APP_PORT="${CONTAINER_DEPLOYMENT_APP_PORT:-18091}"
 CONTAINER_DEPLOYMENT_RUNTIME_PORT="${CONTAINER_DEPLOYMENT_RUNTIME_PORT:-19095}"
 CONTAINER_DEPLOYMENT_API_KEY="${CONTAINER_DEPLOYMENT_API_KEY:-container-deployment-smoke-primary-key}"
+CONTAINER_DEPLOYMENT_SESSION_SECRET="${CONTAINER_DEPLOYMENT_SESSION_SECRET:-container-deployment-smoke-session-secret}"
+CONTAINER_DEPLOYMENT_SESSION_TTL_SEC="${CONTAINER_DEPLOYMENT_SESSION_TTL_SEC:-28800}"
 CONTAINER_DEPLOYMENT_AUTO_DOWN="${CONTAINER_DEPLOYMENT_AUTO_DOWN:-1}"
 RUNTIME_BASE_URL="http://127.0.0.1:${CONTAINER_DEPLOYMENT_RUNTIME_PORT}"
 
 APP_CONTAINER_NAME=""
 RUNTIME_CONTAINER_NAME=""
+AUTH_COOKIE_JAR=""
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -67,6 +70,50 @@ curl_expect_200() {
   rm -f "${tmp_body}"
 }
 
+curl_expect_code() {
+  local expected_code="$1"
+  local url="$2"
+  shift 2
+  local tmp_body
+  local code
+  tmp_body="$(mktemp)"
+  code="$(curl -sS -o "${tmp_body}" -w "%{http_code}" "$@" "${url}" || true)"
+  if [[ "${code}" != "${expected_code}" ]]; then
+    cat "${tmp_body}" >&2 || true
+    rm -f "${tmp_body}"
+    fail "expected ${expected_code} from ${url}, got ${code}"
+  fi
+  rm -f "${tmp_body}"
+}
+
+curl_expect_body_contains() {
+  local expected_code="$1"
+  local expected_fragment="$2"
+  local url="$3"
+  shift 3
+  local tmp_body
+  local code
+  tmp_body="$(mktemp)"
+  code="$(curl -sS -o "${tmp_body}" -w "%{http_code}" "$@" "${url}" || true)"
+  if [[ "${code}" != "${expected_code}" ]]; then
+    cat "${tmp_body}" >&2 || true
+    rm -f "${tmp_body}"
+    fail "expected ${expected_code} from ${url}, got ${code}"
+  fi
+  if ! grep -Fq "${expected_fragment}" "${tmp_body}"; then
+    cat "${tmp_body}" >&2 || true
+    rm -f "${tmp_body}"
+    fail "expected response from ${url} to contain: ${expected_fragment}"
+  fi
+  rm -f "${tmp_body}"
+}
+
+read_cookie_value() {
+  local cookie_jar="$1"
+  local cookie_name="$2"
+  awk -v name="${cookie_name}" '$0 !~ /^#/ && $6 == name { print $7 }' "${cookie_jar}" | tail -n 1
+}
+
 cleanup() {
   local status="$1"
 
@@ -80,6 +127,9 @@ cleanup() {
   fi
   if [[ -n "${APP_CONTAINER_NAME}" ]]; then
     docker rm -f "${APP_CONTAINER_NAME}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${AUTH_COOKIE_JAR}" ]]; then
+    rm -f "${AUTH_COOKIE_JAR}" >/dev/null 2>&1 || true
   fi
 }
 trap 'cleanup "$?"' EXIT
@@ -122,6 +172,8 @@ docker run -d --rm \
   -p "127.0.0.1:${CONTAINER_DEPLOYMENT_RUNTIME_PORT}:9090" \
   -e "WAF_APP_URL=http://host.docker.internal:${CONTAINER_DEPLOYMENT_APP_PORT}" \
   -e "WAF_API_KEY_PRIMARY=${CONTAINER_DEPLOYMENT_API_KEY}" \
+  -e "WAF_ADMIN_SESSION_SECRET=${CONTAINER_DEPLOYMENT_SESSION_SECRET}" \
+  -e "WAF_ADMIN_SESSION_TTL_SEC=${CONTAINER_DEPLOYMENT_SESSION_TTL_SEC}" \
   "${RUNTIME_IMAGE_NAME}" >/dev/null
 
 if ! wait_for_http_code "200" "${RUNTIME_BASE_URL}/healthz"; then
@@ -130,7 +182,39 @@ fi
 
 log "checking admin UI and admin API"
 curl_expect_200 "${RUNTIME_BASE_URL}/tukuyomi-admin/"
-curl_expect_200 "${RUNTIME_BASE_URL}/tukuyomi-api/status" -H "X-API-Key: ${CONTAINER_DEPLOYMENT_API_KEY}"
+AUTH_COOKIE_JAR="$(mktemp)"
+curl_expect_body_contains "200" "\"authenticated\":false" "${RUNTIME_BASE_URL}/tukuyomi-api/auth/session"
+curl_expect_code "401" "${RUNTIME_BASE_URL}/tukuyomi-api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"api_key":"wrong-key"}'
+curl_expect_body_contains "200" "\"authenticated\":true" "${RUNTIME_BASE_URL}/tukuyomi-api/auth/login" \
+  -c "${AUTH_COOKIE_JAR}" \
+  -H "Content-Type: application/json" \
+  -d "{\"api_key\":\"${CONTAINER_DEPLOYMENT_API_KEY}\"}"
+CSRF_TOKEN="$(read_cookie_value "${AUTH_COOKIE_JAR}" "tukuyomi_admin_csrf")"
+if [[ -z "${CSRF_TOKEN}" ]]; then
+  fail "expected CSRF cookie after admin login"
+fi
+curl_expect_body_contains "200" "\"authenticated\":true" "${RUNTIME_BASE_URL}/tukuyomi-api/auth/session" -b "${AUTH_COOKIE_JAR}"
+curl_expect_code "200" "${RUNTIME_BASE_URL}/tukuyomi-api/status" -b "${AUTH_COOKIE_JAR}"
+curl_expect_code "401" "${RUNTIME_BASE_URL}/tukuyomi-api/status" \
+  -H "Cookie: tukuyomi_admin_session=invalid-session"
+curl_expect_code "403" "${RUNTIME_BASE_URL}/tukuyomi-api/auth/logout" \
+  -b "${AUTH_COOKIE_JAR}" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+curl_expect_code "403" "${RUNTIME_BASE_URL}/tukuyomi-api/auth/logout" \
+  -b "${AUTH_COOKIE_JAR}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: wrong-token" \
+  -d '{}'
+curl_expect_body_contains "200" "\"ok\":true" "${RUNTIME_BASE_URL}/tukuyomi-api/auth/logout" \
+  -b "${AUTH_COOKIE_JAR}" \
+  -c "${AUTH_COOKIE_JAR}" \
+  -H "Content-Type: application/json" \
+  -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+  -d '{}'
+curl_expect_body_contains "200" "\"authenticated\":false" "${RUNTIME_BASE_URL}/tukuyomi-api/auth/session" -b "${AUTH_COOKIE_JAR}"
 
 log "checking runtime paths inside the container"
 docker exec "${RUNTIME_CONTAINER_NAME}" test -d /app/conf

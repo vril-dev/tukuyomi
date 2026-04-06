@@ -29,8 +29,8 @@ make binary-deployment-smoke
 
 Important:
 
-- `VITE_API_KEY` is embedded into the built admin UI
-- set `VITE_API_KEY`, `VITE_APP_BASE_PATH`, and `VITE_CORAZA_API_BASE` before `make ui-build-sync` if you do not want the defaults
+- only `VITE_APP_BASE_PATH` and `VITE_CORAZA_API_BASE` are build-time Admin UI values
+- admin secrets stay server-side; the browser uses `/tukuyomi-api/auth/login` to mint same-origin session cookies after startup
 
 ## Runtime Layout
 
@@ -85,6 +85,9 @@ Minimum values to review:
 - `WAF_RULES_FILE`
 - `WAF_BYPASS_FILE`
 - `WAF_API_KEY_PRIMARY`
+- `WAF_API_KEY_SECONDARY`
+- `WAF_ADMIN_SESSION_SECRET`
+- `WAF_ADMIN_SESSION_TTL_SEC`
 - `WAF_UI_BASEPATH`
 - `WAF_API_BASEPATH`
 - `WAF_TRUSTED_PROXY_CIDRS`
@@ -105,6 +108,13 @@ If a front layer exists, run traffic as:
 
 and restrict `WAF_TRUSTED_PROXY_CIDRS` to only that front layer.
 
+## Secret Handling
+
+- Keep `WAF_API_KEY_PRIMARY`, `WAF_API_KEY_SECONDARY`, `WAF_ADMIN_SESSION_SECRET`, `WAF_DB_DSN`, and `WAF_FP_TUNER_API_KEY` in the server-side env file only
+- The embedded Admin UI no longer needs any build-time secret
+- Browser operators sign in once, receive same-origin session cookies, and then use the Admin UI normally
+- CLI / automation can continue to call admin endpoints with `X-API-Key`
+
 ## systemd
 
 Sample unit:
@@ -116,6 +126,8 @@ Install:
 ```bash
 sudo install -d -m 755 /etc/tukuyomi
 sudo install -m 644 docs/build/tukuyomi.env.example /etc/tukuyomi/tukuyomi.env
+sudo chown root:root /etc/tukuyomi/tukuyomi.env
+sudo chmod 600 /etc/tukuyomi/tukuyomi.env
 sudo install -m 644 docs/build/tukuyomi.service.example /etc/systemd/system/tukuyomi.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now tukuyomi
@@ -125,5 +137,6 @@ sudo systemctl status tukuyomi
 ## Notes
 
 - The sample unit uses `WorkingDirectory=/opt/tukuyomi`, so relative `conf/`, `rules/`, and `logs/` paths keep working
+- `make binary-deployment-smoke` now validates unauthenticated session state, valid login, invalid session rejection, CSRF enforcement, and logout
 - If you want mutable runtime config, keep `conf/` and `rules/` outside the binary and update those files in place
 - If you switch to DB-backed multi-node operation, prefer MySQL over SQLite

@@ -62,6 +62,9 @@ Notes:
 - `WAF_RULES_FILE`
 - `WAF_BYPASS_FILE`
 - `WAF_API_KEY_PRIMARY`
+- `WAF_API_KEY_SECONDARY`
+- `WAF_ADMIN_SESSION_SECRET`
+- `WAF_ADMIN_SESSION_TTL_SEC`
 - `WAF_UI_BASEPATH`
 - `WAF_API_BASEPATH`
 - `WAF_TRUSTED_PROXY_CIDRS`
@@ -84,9 +87,16 @@ Typical cloud path:
 
 If a front layer exists, restrict `WAF_TRUSTED_PROXY_CIDRS` to that layer only.
 
+## Secret Handling
+
+- Inject `WAF_API_KEY_PRIMARY`, `WAF_API_KEY_SECONDARY`, `WAF_ADMIN_SESSION_SECRET`, `WAF_DB_DSN`, and `WAF_FP_TUNER_API_KEY` at runtime through your platform secret store or env injection
+- No build-time admin secret is required for the embedded Admin UI
+- Browser users sign in once and receive same-origin session cookies
+- CLI / automation can keep using `X-API-Key`
+
 ## Notes
 
 - The embedded admin UI is produced during image build, not at runtime
-- `VITE_API_KEY` is a build-time value for the admin UI
+- `make container-deployment-smoke` now validates unauthenticated session state, login/logout, invalid session rejection, and CSRF enforcement
 - For mutable runtime policy files, mount `/app/conf` and `/app/rules` instead of baking everything into the image
 - For multi-node operation, prefer `db + mysql`

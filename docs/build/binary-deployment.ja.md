@@ -29,8 +29,8 @@ make binary-deployment-smoke
 
 注意:
 
-- `VITE_API_KEY` は build 済み管理UIへ埋め込まれます
-- default のままにしたくない場合は、`make ui-build-sync` の前に `VITE_API_KEY`、`VITE_APP_BASE_PATH`、`VITE_CORAZA_API_BASE` を設定してください
+- build-time の管理UI値は `VITE_APP_BASE_PATH` と `VITE_CORAZA_API_BASE` だけです
+- 管理 secret は server 側に残し、browser は起動後に `/tukuyomi-api/auth/login` で same-origin session cookie を取得します
 
 ## 実行レイアウト
 
@@ -85,6 +85,9 @@ template:
 - `WAF_RULES_FILE`
 - `WAF_BYPASS_FILE`
 - `WAF_API_KEY_PRIMARY`
+- `WAF_API_KEY_SECONDARY`
+- `WAF_ADMIN_SESSION_SECRET`
+- `WAF_ADMIN_SESSION_TTL_SEC`
 - `WAF_UI_BASEPATH`
 - `WAF_API_BASEPATH`
 - `WAF_TRUSTED_PROXY_CIDRS`
@@ -105,6 +108,13 @@ template:
 
 とし、`WAF_TRUSTED_PROXY_CIDRS` はその前段 range に限定してください。
 
+## Secret Handling
+
+- `WAF_API_KEY_PRIMARY`, `WAF_API_KEY_SECONDARY`, `WAF_ADMIN_SESSION_SECRET`, `WAF_DB_DSN`, `WAF_FP_TUNER_API_KEY` は server 側 env file にだけ置いてください
+- 埋め込み管理UIに build-time secret は不要です
+- browser operator は 1 回 sign in して same-origin session cookie を受け取れば、その後は通常の Admin UI を使えます
+- CLI / 自動化は従来どおり `X-API-Key` を使えます
+
 ## systemd
 
 sample unit:
@@ -116,6 +126,8 @@ sample unit:
 ```bash
 sudo install -d -m 755 /etc/tukuyomi
 sudo install -m 644 docs/build/tukuyomi.env.example /etc/tukuyomi/tukuyomi.env
+sudo chown root:root /etc/tukuyomi/tukuyomi.env
+sudo chmod 600 /etc/tukuyomi/tukuyomi.env
 sudo install -m 644 docs/build/tukuyomi.service.example /etc/systemd/system/tukuyomi.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now tukuyomi
@@ -125,5 +137,6 @@ sudo systemctl status tukuyomi
 ## Notes
 
 - sample unit は `WorkingDirectory=/opt/tukuyomi` を使うので、相対 `conf/`, `rules/`, `logs/` がそのまま機能します
+- `make binary-deployment-smoke` は unauthenticated session 状態、正しい login、invalid session 拒否、CSRF 強制、logout まで検証します
 - 実行中に設定を書き換えたい場合は、`conf/` と `rules/` はバイナリ外で保持してください
 - DB バックエンドの複数ノード運用へ進む場合は、SQLite ではなく MySQL を推奨します

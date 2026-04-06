@@ -24,6 +24,10 @@ POLICY_FIXTURE_ENABLED=0
 POLICY_FIXTURE_NETWORK=""
 POLICY_ORIGINAL_BYPASS_RAW=""
 POLICY_ORIGINAL_COUNTRY_RAW=""
+EXAMPLE_CONF_DIR=""
+EXAMPLE_LOG_OUTPUT_PATH=""
+EXAMPLE_LOG_OUTPUT_PRESENT_BEFORE=0
+EXAMPLE_BAK_BASELINE=()
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -44,6 +48,18 @@ fail() {
 cleanup_tmp_file() {
   local path="$1"
   PENDING_TMP_CLEANUP+=("${path}")
+}
+
+path_in_array() {
+  local needle="$1"
+  shift || true
+  local item
+  for item in "$@"; do
+    if [[ "${item}" == "${needle}" ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 track_optional_conf_cleanup() {
@@ -154,6 +170,39 @@ compose_in_example() {
     cd "${EXAMPLE_DIR}"
     env "${COMPOSE_ENV[@]}" docker compose "${COMPOSE_PROFILES[@]}" "$@"
   )
+}
+
+snapshot_example_conf_artifacts() {
+  local path
+
+  EXAMPLE_CONF_DIR="${EXAMPLE_DIR}/data/conf"
+  EXAMPLE_LOG_OUTPUT_PATH="${EXAMPLE_CONF_DIR}/log-output.json"
+
+  if [[ -f "${EXAMPLE_LOG_OUTPUT_PATH}" ]]; then
+    EXAMPLE_LOG_OUTPUT_PRESENT_BEFORE=1
+  fi
+
+  if [[ -d "${EXAMPLE_CONF_DIR}" ]]; then
+    while IFS= read -r -d '' path; do
+      EXAMPLE_BAK_BASELINE+=("${path}")
+    done < <(find "${EXAMPLE_CONF_DIR}" -maxdepth 1 -type f -name '*.bak' -print0)
+  fi
+}
+
+cleanup_example_conf_artifacts() {
+  local path
+
+  if [[ -n "${EXAMPLE_LOG_OUTPUT_PATH}" && "${EXAMPLE_LOG_OUTPUT_PRESENT_BEFORE}" != "1" ]]; then
+    rm -f "${EXAMPLE_LOG_OUTPUT_PATH}" >/dev/null 2>&1 || true
+  fi
+
+  if [[ -n "${EXAMPLE_CONF_DIR}" && -d "${EXAMPLE_CONF_DIR}" ]]; then
+    while IFS= read -r -d '' path; do
+      if ! path_in_array "${path}" "${EXAMPLE_BAK_BASELINE[@]:-}"; then
+        rm -f "${path}" >/dev/null 2>&1 || true
+      fi
+    done < <(find "${EXAMPLE_CONF_DIR}" -maxdepth 1 -type f -name '*.bak' -print0)
+  fi
 }
 
 api_get_raw_to_file() {
@@ -349,6 +398,7 @@ cleanup() {
   for path in "${PENDING_CONF_CLEANUP[@]:-}"; do
     rm -f "${path}" >/dev/null 2>&1 || true
   done
+  cleanup_example_conf_artifacts
   for path in "${PENDING_TMP_CLEANUP[@]:-}"; do
     rm -f "${path}" >/dev/null 2>&1 || true
   done
@@ -399,8 +449,9 @@ fi
 
 if [[ "${STANDALONE_RESET_OPERATIONAL_LOGS}" == "1" ]]; then
   rm -f "${EXAMPLE_DIR}/data/logs/nginx/access-error.ndjson" \
-        "${EXAMPLE_DIR}/data/logs/nginx/interesting.ndjson"
+    "${EXAMPLE_DIR}/data/logs/nginx/interesting.ndjson"
 fi
+snapshot_example_conf_artifacts
 
 log "starting ${EXAMPLE_NAME} example for direct tukuyomi checks (${MODE})"
 compose_in_example up -d --build

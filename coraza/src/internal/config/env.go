@@ -41,6 +41,8 @@ var (
 	ResponseCacheDir               string
 	APIKeyPrimary                  string
 	APIKeySecondary                string
+	AdminSessionSecret             string
+	AdminSessionTTL                time.Duration
 	APIAuthDisable                 bool
 	APICORSOrigins                 []string
 	CRSEnable                      bool
@@ -147,6 +149,15 @@ func LoadEnv() {
 
 	APIKeyPrimary = strings.TrimSpace(os.Getenv("WAF_API_KEY_PRIMARY"))
 	APIKeySecondary = strings.TrimSpace(os.Getenv("WAF_API_KEY_SECONDARY"))
+	AdminSessionSecret = strings.TrimSpace(os.Getenv("WAF_ADMIN_SESSION_SECRET"))
+	if AdminSessionSecret == "" {
+		AdminSessionSecret = APIKeyPrimary
+	}
+	adminSessionTTLSec := parseIntDefault(os.Getenv("WAF_ADMIN_SESSION_TTL_SEC"), 28800)
+	if adminSessionTTLSec < 300 || adminSessionTTLSec > 604800 {
+		adminSessionTTLSec = 28800
+	}
+	AdminSessionTTL = time.Duration(adminSessionTTLSec) * time.Second
 	APIAuthDisable = isTruthy(os.Getenv("WAF_API_AUTH_DISABLE"))
 	APICORSOrigins = parseCSV(os.Getenv("WAF_API_CORS_ALLOWED_ORIGINS"))
 
@@ -227,6 +238,9 @@ func enforceSecureDefaults() {
 	}
 	if APIKeySecondary != "" && isWeakAPIKey(APIKeySecondary) {
 		log.Fatal("[SECURITY] WAF_API_KEY_SECONDARY is weak; set a random key with 16+ chars or leave it empty")
+	}
+	if isWeakAPIKey(AdminSessionSecret) {
+		log.Fatal("[SECURITY] WAF_ADMIN_SESSION_SECRET is weak; set a random secret with 16+ chars")
 	}
 }
 

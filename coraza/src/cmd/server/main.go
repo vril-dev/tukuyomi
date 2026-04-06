@@ -127,12 +127,15 @@ func main() {
 		r.Use(cors.New(cors.Config{
 			AllowOrigins: config.APICORSOrigins,
 			AllowMethods: []string{"GET", "POST", "PUT", "OPTIONS"},
-			AllowHeaders: []string{"Origin", "Content-Type", "Accept", "X-API-Key"},
+			AllowHeaders: []string{"Origin", "Content-Type", "Accept", "X-API-Key", "X-CSRF-Token"},
+			AllowCredentials: true,
 		}))
 		log.Printf("[SECURITY] CORS enabled for origins: %s", strings.Join(config.APICORSOrigins, ","))
 	} else {
 		log.Println("[SECURITY] CORS disabled (same-origin only)")
 	}
+
+	handler.RegisterAdminAuthRoutes(r)
 
 	api := r.Group(config.APIBasePath, middleware.APIKeyAuth())
 	{

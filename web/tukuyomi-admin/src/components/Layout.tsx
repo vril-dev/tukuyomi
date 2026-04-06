@@ -1,4 +1,5 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
+import { useAuth } from "@/lib/auth";
 
 type NavItem = {
   to: string;
@@ -29,6 +30,7 @@ function isActive(pathname: string, to: string) {
 
 export default function Layout() {
   const { pathname } = useLocation();
+  const { logout, session, loading } = useAuth();
   const current = navItems.find((item) => isActive(pathname, item.to));
 
   return (
@@ -60,8 +62,12 @@ export default function Layout() {
             <h2>{current?.label ?? "Dashboard"}</h2>
           </div>
           <div className="app-top-meta">
-            <span className="app-pill">Admin UI</span>
+            <span className="app-pill">{session.mode === "disabled" ? "Auth Disabled" : "Session"}</span>
+            {session.expires_at ? <span className="app-pill">Expires {new Date(session.expires_at).toLocaleTimeString()}</span> : null}
             <code>{pathname}</code>
+            <button type="button" className="app-pill" disabled={loading} onClick={() => void logout()}>
+              {loading ? "..." : "Logout"}
+            </button>
           </div>
         </header>
 

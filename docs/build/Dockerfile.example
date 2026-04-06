@@ -4,11 +4,9 @@ WORKDIR /src/web/tukuyomi-admin
 
 ARG VITE_CORAZA_API_BASE=/tukuyomi-api
 ARG VITE_APP_BASE_PATH=/tukuyomi-admin
-ARG VITE_API_KEY=
 
 ENV VITE_CORAZA_API_BASE=${VITE_CORAZA_API_BASE}
 ENV VITE_APP_BASE_PATH=${VITE_APP_BASE_PATH}
-ENV VITE_API_KEY=${VITE_API_KEY}
 
 COPY web/tukuyomi-admin/package.json web/tukuyomi-admin/package-lock.json ./
 RUN npm ci

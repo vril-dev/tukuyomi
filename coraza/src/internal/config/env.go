@@ -35,6 +35,8 @@ var (
 	ResponseCacheMode              string
 	ResponseCacheMaxEntries        int
 	ResponseCacheMaxBodyBytes      int64
+	ResponseCacheStaleSeconds      int
+	ResponseCacheRefreshTimeout    time.Duration
 	APIKeyPrimary                  string
 	APIKeySecondary                string
 	APIAuthDisable                 bool
@@ -136,6 +138,8 @@ func LoadEnv() {
 	ResponseCacheMode = parseResponseCacheMode(os.Getenv("WAF_RESPONSE_CACHE_MODE"))
 	ResponseCacheMaxEntries = parseResponseCacheMaxEntries(os.Getenv("WAF_RESPONSE_CACHE_MAX_ENTRIES"))
 	ResponseCacheMaxBodyBytes = parseResponseCacheMaxBodyBytes(os.Getenv("WAF_RESPONSE_CACHE_MAX_BODY_BYTES"))
+	ResponseCacheStaleSeconds = parseResponseCacheStaleSeconds(os.Getenv("WAF_RESPONSE_CACHE_STALE_SECONDS"))
+	ResponseCacheRefreshTimeout = time.Duration(parseResponseCacheRefreshTimeoutSeconds(os.Getenv("WAF_RESPONSE_CACHE_REFRESH_TIMEOUT_SECONDS"))) * time.Second
 
 	APIKeyPrimary = strings.TrimSpace(os.Getenv("WAF_API_KEY_PRIMARY"))
 	APIKeySecondary = strings.TrimSpace(os.Getenv("WAF_API_KEY_SECONDARY"))
@@ -390,6 +394,28 @@ func parseResponseCacheMaxBodyBytes(v string) int64 {
 		return 64 << 20
 	}
 	return int64(n)
+}
+
+func parseResponseCacheStaleSeconds(v string) int {
+	n := parseIntDefault(v, 30)
+	if n < 0 {
+		return 0
+	}
+	if n > 86400 {
+		return 86400
+	}
+	return n
+}
+
+func parseResponseCacheRefreshTimeoutSeconds(v string) int {
+	n := parseIntDefault(v, 5)
+	if n < 1 {
+		return 1
+	}
+	if n > 300 {
+		return 300
+	}
+	return n
 }
 
 func parseCountryHeaderNames(v string) []string {

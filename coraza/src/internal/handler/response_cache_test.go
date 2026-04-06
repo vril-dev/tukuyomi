@@ -38,6 +38,8 @@ func TestProxyHandlerServesResponseFromInMemoryCache(t *testing.T) {
 	config.ResponseCacheMode = "memory"
 	config.ResponseCacheMaxEntries = 16
 	config.ResponseCacheMaxBodyBytes = 4096
+	config.ResponseCacheStaleSeconds = 30
+	config.ResponseCacheRefreshTimeout = time.Second
 	ConfigureResponseCache()
 	cacheconf.Set(&cacheconf.Ruleset{
 		Rules: []cacheconf.Rule{{
@@ -97,6 +99,8 @@ func TestProxyHandlerDoesNotStoreSetCookieResponses(t *testing.T) {
 	config.ResponseCacheMode = "memory"
 	config.ResponseCacheMaxEntries = 16
 	config.ResponseCacheMaxBodyBytes = 4096
+	config.ResponseCacheStaleSeconds = 30
+	config.ResponseCacheRefreshTimeout = time.Second
 	ConfigureResponseCache()
 	cacheconf.Set(&cacheconf.Ruleset{
 		Rules: []cacheconf.Rule{{
@@ -136,6 +140,8 @@ func TestBuildResponseCachePlanRejectsUnsafeRequests(t *testing.T) {
 	config.ResponseCacheMode = "memory"
 	config.ResponseCacheMaxEntries = 16
 	config.ResponseCacheMaxBodyBytes = 4096
+	config.ResponseCacheStaleSeconds = 30
+	config.ResponseCacheRefreshTimeout = time.Second
 	ConfigureResponseCache()
 	cacheconf.Set(&cacheconf.Ruleset{
 		Rules: []cacheconf.Rule{{
@@ -185,6 +191,8 @@ func TestProxyHandlerCoalescesConcurrentCacheMisses(t *testing.T) {
 	config.ResponseCacheMode = "memory"
 	config.ResponseCacheMaxEntries = 16
 	config.ResponseCacheMaxBodyBytes = 4096
+	config.ResponseCacheStaleSeconds = 30
+	config.ResponseCacheRefreshTimeout = time.Second
 	ConfigureResponseCache()
 	cacheconf.Set(&cacheconf.Ruleset{
 		Rules: []cacheconf.Rule{{
@@ -269,6 +277,218 @@ func TestProxyHandlerCoalescesConcurrentCacheMisses(t *testing.T) {
 	}
 }
 
+func TestProxyHandlerServesStaleAndRefreshesInBackground(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	restore := saveResponseCacheRuntimeConfig()
+	defer restore()
+
+	refreshStarted := make(chan struct{}, 1)
+	allowRefresh := make(chan struct{})
+	var upstreamHits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := upstreamHits.Add(1)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		switch n {
+		case 1:
+			_, _ = w.Write([]byte("body-v1"))
+		default:
+			select {
+			case refreshStarted <- struct{}{}:
+			default:
+			}
+			<-allowRefresh
+			_, _ = w.Write([]byte("body-v2"))
+		}
+	}))
+	defer upstream.Close()
+
+	config.AppURL = upstream.URL
+	config.APIBasePath = "/tukuyomi-api"
+	config.ForwardInternalResponseHeaders = false
+	config.ResponseCacheMode = "memory"
+	config.ResponseCacheMaxEntries = 16
+	config.ResponseCacheMaxBodyBytes = 4096
+	config.ResponseCacheStaleSeconds = 5
+	config.ResponseCacheRefreshTimeout = time.Second
+	ConfigureResponseCache()
+	cacheconf.Set(&cacheconf.Ruleset{
+		Rules: []cacheconf.Rule{{
+			Kind:    "ALLOW",
+			Prefix:  "/",
+			Methods: map[string]bool{"GET": true, "HEAD": true},
+			TTL:     1,
+		}},
+	})
+
+	router := gin.New()
+	router.Any("/*path", ProxyHandler)
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	res1 := mustProxyRequest(t, srv.URL+"/stale", "", "")
+	if got := res1.Header.Get(responseCacheStatusHeader); got != responseCacheStatusMiss {
+		t.Fatalf("first response cache status=%q want=%q", got, responseCacheStatusMiss)
+	}
+	if body := readBody(t, res1); body != "body-v1" {
+		t.Fatalf("first body=%q", body)
+	}
+
+	time.Sleep(1100 * time.Millisecond)
+
+	type result struct {
+		res  *http.Response
+		err  error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		res, err := mustProxyRequestWithClient(http.DefaultClient, srv.URL+"/stale", "", "")
+		resultCh <- result{res: res, err: err}
+	}()
+
+	var staleRes *http.Response
+	select {
+	case got := <-resultCh:
+		if got.err != nil {
+			t.Fatalf("stale request failed: %v", got.err)
+		}
+		staleRes = got.res
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("stale serve blocked on background refresh")
+	}
+
+	if got := staleRes.Header.Get(responseCacheStatusHeader); got != responseCacheStatusStale {
+		t.Fatalf("stale response cache status=%q want=%q", got, responseCacheStatusStale)
+	}
+	if body := readBody(t, staleRes); body != "body-v1" {
+		t.Fatalf("stale body=%q want=%q", body, "body-v1")
+	}
+
+	select {
+	case <-refreshStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("background refresh did not start")
+	}
+	close(allowRefresh)
+
+	deadline := time.Now().Add(time.Second)
+	for upstreamHits.Load() < 2 || GetResponseCacheStatus().Stores < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("background refresh did not store the refreshed entry in time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	res3 := mustProxyRequest(t, srv.URL+"/stale", "", "")
+	if got := res3.Header.Get(responseCacheStatusHeader); got != responseCacheStatusHit {
+		t.Fatalf("refreshed response cache status=%q want=%q", got, responseCacheStatusHit)
+	}
+	if body := readBody(t, res3); body != "body-v2" {
+		t.Fatalf("refreshed body=%q want=%q", body, "body-v2")
+	}
+
+	status := GetResponseCacheStatus()
+	if status.StaleHits < 1 {
+		t.Fatalf("stale hits=%d want>=1", status.StaleHits)
+	}
+	if status.StaleRefreshes < 1 {
+		t.Fatalf("stale refreshes=%d want>=1", status.StaleRefreshes)
+	}
+	if status.StaleFailures != 0 {
+		t.Fatalf("stale failures=%d want=0", status.StaleFailures)
+	}
+}
+
+func TestProxyHandlerKeepsServingStaleAfterRefreshFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	restore := saveResponseCacheRuntimeConfig()
+	defer restore()
+
+	var upstreamHits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := upstreamHits.Add(1)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if n == 1 {
+			_, _ = w.Write([]byte("body-v1"))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("upstream-failed"))
+	}))
+	defer upstream.Close()
+
+	config.AppURL = upstream.URL
+	config.APIBasePath = "/tukuyomi-api"
+	config.ForwardInternalResponseHeaders = false
+	config.ResponseCacheMode = "memory"
+	config.ResponseCacheMaxEntries = 16
+	config.ResponseCacheMaxBodyBytes = 4096
+	config.ResponseCacheStaleSeconds = 5
+	config.ResponseCacheRefreshTimeout = time.Second
+	ConfigureResponseCache()
+	cacheconf.Set(&cacheconf.Ruleset{
+		Rules: []cacheconf.Rule{{
+			Kind:    "ALLOW",
+			Prefix:  "/",
+			Methods: map[string]bool{"GET": true, "HEAD": true},
+			TTL:     1,
+		}},
+	})
+
+	router := gin.New()
+	router.Any("/*path", ProxyHandler)
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	res1 := mustProxyRequest(t, srv.URL+"/stale-fail", "", "")
+	if got := res1.Header.Get(responseCacheStatusHeader); got != responseCacheStatusMiss {
+		t.Fatalf("first response cache status=%q want=%q", got, responseCacheStatusMiss)
+	}
+	if body := readBody(t, res1); body != "body-v1" {
+		t.Fatalf("first body=%q", body)
+	}
+
+	time.Sleep(1100 * time.Millisecond)
+
+	res2 := mustProxyRequest(t, srv.URL+"/stale-fail", "", "")
+	if got := res2.Header.Get(responseCacheStatusHeader); got != responseCacheStatusStale {
+		t.Fatalf("second response cache status=%q want=%q", got, responseCacheStatusStale)
+	}
+	if body := readBody(t, res2); body != "body-v1" {
+		t.Fatalf("stale body after refresh failure=%q want=%q", body, "body-v1")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for upstreamHits.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("refresh failure attempt did not happen in time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	res3 := mustProxyRequest(t, srv.URL+"/stale-fail", "", "")
+	if got := res3.Header.Get(responseCacheStatusHeader); got != responseCacheStatusStale {
+		t.Fatalf("third response cache status=%q want=%q", got, responseCacheStatusStale)
+	}
+	if body := readBody(t, res3); body != "body-v1" {
+		t.Fatalf("stale body should remain after refresh failure, got=%q", body)
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for upstreamHits.Load() < 3 || GetResponseCacheStatus().StaleFailures < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("follow-up stale refresh failure did not complete in time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	status := GetResponseCacheStatus()
+	if status.StaleFailures < 2 {
+		t.Fatalf("stale failures=%d want>=2", status.StaleFailures)
+	}
+}
+
 func saveResponseCacheRuntimeConfig() func() {
 	oldAppURL := config.AppURL
 	oldAPIBasePath := config.APIBasePath
@@ -276,6 +496,8 @@ func saveResponseCacheRuntimeConfig() func() {
 	oldMode := config.ResponseCacheMode
 	oldMaxEntries := config.ResponseCacheMaxEntries
 	oldMaxBodyBytes := config.ResponseCacheMaxBodyBytes
+	oldStaleSeconds := config.ResponseCacheStaleSeconds
+	oldRefreshTimeout := config.ResponseCacheRefreshTimeout
 	oldProxy := proxy
 	oldOnce := proxyInitOnce
 	oldWAF := waf.WAF
@@ -295,6 +517,8 @@ func saveResponseCacheRuntimeConfig() func() {
 		config.ResponseCacheMode = oldMode
 		config.ResponseCacheMaxEntries = oldMaxEntries
 		config.ResponseCacheMaxBodyBytes = oldMaxBodyBytes
+		config.ResponseCacheStaleSeconds = oldStaleSeconds
+		config.ResponseCacheRefreshTimeout = oldRefreshTimeout
 		proxy = oldProxy
 		proxyInitOnce = oldOnce
 		waf.WAF = oldWAF

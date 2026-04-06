@@ -273,13 +273,17 @@ func ProxyHandler(c *gin.Context) {
 		log.Printf("[BYPASS][HIT] %s -> skip WAF", reqPath)
 		setWAFContext(c, reqID, clientIP, country, false, "")
 		cachePlan := buildResponseCachePlan(c.Request)
-		cacheEntry, releaseCacheFetch := localResponseCache.prepare(cachePlan)
-		if cacheEntry != nil {
-			serveCachedResponseEntry(c, cacheEntry, reqID, clientIP, country, false, "", startedAt)
+		cachePrep := localResponseCache.prepare(cachePlan)
+		if cachePrep.entry != nil {
+			if cachePrep.backgroundRefresh {
+				localResponseCache.startBackgroundRefresh(c.Request, cachePlan, cachePrep.release)
+				cachePrep.release = nil
+			}
+			serveCachedResponseEntry(c, cachePrep.entry, cachePrep.cacheStatus, reqID, clientIP, country, false, "", startedAt)
 			return
 		}
-		if releaseCacheFetch != nil {
-			defer releaseCacheFetch()
+		if cachePrep.release != nil {
+			defer cachePrep.release()
 		}
 		setResponseCacheContext(c, cachePlan)
 		rec := &proxyStatusRecorder{ResponseWriter: c.Writer}
@@ -362,13 +366,17 @@ func ProxyHandler(c *gin.Context) {
 	}
 
 	cachePlan := buildResponseCachePlan(c.Request)
-	cacheEntry, releaseCacheFetch := localResponseCache.prepare(cachePlan)
-	if cacheEntry != nil {
-		serveCachedResponseEntry(c, cacheEntry, reqID, clientIP, country, wafHit, strings.Join(unique(ruleIDs), ","), startedAt)
+	cachePrep := localResponseCache.prepare(cachePlan)
+	if cachePrep.entry != nil {
+		if cachePrep.backgroundRefresh {
+			localResponseCache.startBackgroundRefresh(c.Request, cachePlan, cachePrep.release)
+			cachePrep.release = nil
+		}
+		serveCachedResponseEntry(c, cachePrep.entry, cachePrep.cacheStatus, reqID, clientIP, country, wafHit, strings.Join(unique(ruleIDs), ","), startedAt)
 		return
 	}
-	if releaseCacheFetch != nil {
-		defer releaseCacheFetch()
+	if cachePrep.release != nil {
+		defer cachePrep.release()
 	}
 	setResponseCacheContext(c, cachePlan)
 

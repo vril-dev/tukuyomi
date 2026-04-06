@@ -27,6 +27,7 @@ const (
 	responseCacheStatusBypass = "BYPASS"
 	responseCacheStatusMiss   = "MISS"
 	responseCacheStatusHit    = "HIT"
+	responseCacheStatusStale  = "STALE"
 )
 
 const ctxKeyCachePlan ctxKey = "response_cache_plan"
@@ -46,6 +47,7 @@ type responseCacheEntry struct {
 	body       []byte
 	storedAt   time.Time
 	expiresAt  time.Time
+	staleUntil time.Time
 }
 
 type responseCacheInflight struct {
@@ -57,6 +59,8 @@ type responseCacheRuntime struct {
 	mode         string
 	maxEntries   int
 	maxBodyBytes int64
+	staleWindow  time.Duration
+	refreshTTL   time.Duration
 	entries      map[string]*list.Element
 	inflight     map[string]*responseCacheInflight
 	lru          list.List
@@ -67,6 +71,9 @@ type responseCacheRuntime struct {
 	bypasses        atomic.Uint64
 	evictions       atomic.Uint64
 	coalescedWaits  atomic.Uint64
+	staleHits       atomic.Uint64
+	staleRefreshes  atomic.Uint64
+	staleFailures   atomic.Uint64
 }
 
 type responseCacheStatus struct {
@@ -74,6 +81,8 @@ type responseCacheStatus struct {
 	Enabled        bool   `json:"enabled"`
 	MaxEntries     int    `json:"max_entries"`
 	MaxBodyBytes   int64  `json:"max_body_bytes"`
+	StaleSeconds   int    `json:"stale_seconds"`
+	RefreshTimeout int    `json:"refresh_timeout_seconds"`
 	EntryCount     int    `json:"entry_count"`
 	InflightKeys   int    `json:"inflight_keys"`
 	Hits           uint64 `json:"hits"`
@@ -82,6 +91,16 @@ type responseCacheStatus struct {
 	Bypasses       uint64 `json:"bypasses"`
 	Evictions      uint64 `json:"evictions"`
 	CoalescedWaits uint64 `json:"coalesced_waits"`
+	StaleHits      uint64 `json:"stale_hits"`
+	StaleRefreshes uint64 `json:"stale_refreshes"`
+	StaleFailures  uint64 `json:"stale_failures"`
+}
+
+type responseCachePreparation struct {
+	entry             *responseCacheEntry
+	cacheStatus       string
+	release           func()
+	backgroundRefresh bool
 }
 
 var localResponseCache = newResponseCacheRuntime()
@@ -99,6 +118,8 @@ func ConfigureResponseCache() {
 		config.ResponseCacheMode,
 		config.ResponseCacheMaxEntries,
 		config.ResponseCacheMaxBodyBytes,
+		config.ResponseCacheStaleSeconds,
+		config.ResponseCacheRefreshTimeout,
 	)
 }
 
@@ -110,7 +131,7 @@ func GetResponseCacheStatus() responseCacheStatus {
 	return localResponseCache.status()
 }
 
-func (c *responseCacheRuntime) configure(mode string, maxEntries int, maxBodyBytes int64) {
+func (c *responseCacheRuntime) configure(mode string, maxEntries int, maxBodyBytes int64, staleSeconds int, refreshTTL time.Duration) {
 	normalizedMode := strings.ToLower(strings.TrimSpace(mode))
 	switch normalizedMode {
 	case "", responseCacheModeOff:
@@ -128,11 +149,19 @@ func (c *responseCacheRuntime) configure(mode string, maxEntries int, maxBodyByt
 	if maxBodyBytes < 0 {
 		maxBodyBytes = 0
 	}
+	if staleSeconds < 0 {
+		staleSeconds = 0
+	}
+	if refreshTTL <= 0 {
+		refreshTTL = 5 * time.Second
+	}
 
 	c.mu.Lock()
 	c.mode = normalizedMode
 	c.maxEntries = maxEntries
 	c.maxBodyBytes = maxBodyBytes
+	c.staleWindow = time.Duration(staleSeconds) * time.Second
+	c.refreshTTL = refreshTTL
 	c.entries = map[string]*list.Element{}
 	if c.inflight == nil {
 		c.inflight = map[string]*responseCacheInflight{}
@@ -146,6 +175,9 @@ func (c *responseCacheRuntime) configure(mode string, maxEntries int, maxBodyByt
 	c.bypasses.Store(0)
 	c.evictions.Store(0)
 	c.coalescedWaits.Store(0)
+	c.staleHits.Store(0)
+	c.staleRefreshes.Store(0)
+	c.staleFailures.Store(0)
 }
 
 func (c *responseCacheRuntime) invalidate() {
@@ -162,6 +194,8 @@ func (c *responseCacheRuntime) status() responseCacheStatus {
 	mode := c.mode
 	maxEntries := c.maxEntries
 	maxBodyBytes := c.maxBodyBytes
+	staleWindow := c.staleWindow
+	refreshTTL := c.refreshTTL
 	c.mu.Unlock()
 
 	return responseCacheStatus{
@@ -169,6 +203,8 @@ func (c *responseCacheRuntime) status() responseCacheStatus {
 		Enabled:        mode == responseCacheModeMemory && maxEntries > 0 && maxBodyBytes > 0,
 		MaxEntries:     maxEntries,
 		MaxBodyBytes:   maxBodyBytes,
+		StaleSeconds:   int(staleWindow / time.Second),
+		RefreshTimeout: int(refreshTTL / time.Second),
 		EntryCount:     entryCount,
 		InflightKeys:   inflightKeys,
 		Hits:           c.hits.Load(),
@@ -177,6 +213,9 @@ func (c *responseCacheRuntime) status() responseCacheStatus {
 		Bypasses:       c.bypasses.Load(),
 		Evictions:      c.evictions.Load(),
 		CoalescedWaits: c.coalescedWaits.Load(),
+		StaleHits:      c.staleHits.Load(),
+		StaleRefreshes: c.staleRefreshes.Load(),
+		StaleFailures:  c.staleFailures.Load(),
 	}
 }
 
@@ -192,6 +231,12 @@ func (c *responseCacheRuntime) maxBodyBytesLimit() int64 {
 	return c.maxBodyBytes
 }
 
+func (c *responseCacheRuntime) refreshTimeout() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.refreshTTL
+}
+
 func (c *responseCacheRuntime) lookupLocked(plan *responseCachePlan, now time.Time) (*responseCacheEntry, bool) {
 	if plan == nil {
 		return nil, false
@@ -204,6 +249,28 @@ func (c *responseCacheRuntime) lookupLocked(plan *responseCachePlan, now time.Ti
 
 	entry := elem.Value.(*responseCacheEntry)
 	if !entry.expiresAt.After(now) {
+		return nil, false
+	}
+
+	c.lru.MoveToFront(elem)
+	return cloneResponseCacheEntry(entry), true
+}
+
+func (c *responseCacheRuntime) staleCandidateLocked(plan *responseCachePlan, now time.Time) (*responseCacheEntry, bool) {
+	if plan == nil {
+		return nil, false
+	}
+
+	elem, ok := c.entries[plan.Key]
+	if !ok {
+		return nil, false
+	}
+
+	entry := elem.Value.(*responseCacheEntry)
+	if entry.expiresAt.After(now) {
+		return nil, false
+	}
+	if !entry.staleUntil.After(now) {
 		c.removeLocked(elem)
 		return nil, false
 	}
@@ -212,9 +279,9 @@ func (c *responseCacheRuntime) lookupLocked(plan *responseCachePlan, now time.Ti
 	return cloneResponseCacheEntry(entry), true
 }
 
-func (c *responseCacheRuntime) prepare(plan *responseCachePlan) (*responseCacheEntry, func()) {
+func (c *responseCacheRuntime) prepare(plan *responseCachePlan) responseCachePreparation {
 	if plan == nil {
-		return nil, nil
+		return responseCachePreparation{}
 	}
 
 	for {
@@ -223,7 +290,38 @@ func (c *responseCacheRuntime) prepare(plan *responseCachePlan) (*responseCacheE
 		if entry, ok := c.lookupLocked(plan, now); ok {
 			c.hits.Add(1)
 			c.mu.Unlock()
-			return entry, nil
+			return responseCachePreparation{
+				entry:       entry,
+				cacheStatus: responseCacheStatusHit,
+			}
+		}
+		if entry, ok := c.staleCandidateLocked(plan, now); ok {
+			c.staleHits.Add(1)
+			if inflight, ok := c.inflight[plan.Key]; ok && inflight != nil {
+				c.mu.Unlock()
+				return responseCachePreparation{
+					entry:       entry,
+					cacheStatus: responseCacheStatusStale,
+				}
+			}
+			inflight := &responseCacheInflight{done: make(chan struct{})}
+			c.inflight[plan.Key] = inflight
+			c.staleRefreshes.Add(1)
+			c.mu.Unlock()
+			return responseCachePreparation{
+				entry:             entry,
+				cacheStatus:       responseCacheStatusStale,
+				backgroundRefresh: true,
+				release: func() {
+					c.mu.Lock()
+					current, ok := c.inflight[plan.Key]
+					if ok && current == inflight {
+						delete(c.inflight, plan.Key)
+						close(inflight.done)
+					}
+					c.mu.Unlock()
+				},
+			}
 		}
 		if inflight, ok := c.inflight[plan.Key]; ok {
 			waitCh := inflight.done
@@ -238,7 +336,9 @@ func (c *responseCacheRuntime) prepare(plan *responseCachePlan) (*responseCacheE
 		c.misses.Add(1)
 		c.mu.Unlock()
 
-		return nil, func() {
+		return responseCachePreparation{
+			cacheStatus: responseCacheStatusMiss,
+			release: func() {
 			c.mu.Lock()
 			current, ok := c.inflight[plan.Key]
 			if ok && current == inflight {
@@ -246,6 +346,7 @@ func (c *responseCacheRuntime) prepare(plan *responseCachePlan) (*responseCacheE
 				close(inflight.done)
 			}
 			c.mu.Unlock()
+			},
 		}
 	}
 }
@@ -263,10 +364,12 @@ func (c *responseCacheRuntime) store(plan *responseCachePlan, res *http.Response
 		body:       append([]byte(nil), body...),
 		storedAt:   now,
 		expiresAt:  now.Add(ttl),
+		staleUntil: now.Add(ttl),
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	entry.staleUntil = entry.expiresAt.Add(c.staleWindow)
 
 	c.cleanupExpiredLocked(now)
 	if elem, ok := c.entries[plan.Key]; ok {
@@ -300,7 +403,7 @@ func (c *responseCacheRuntime) cleanupExpiredLocked(now time.Time) {
 	for elem := c.lru.Back(); elem != nil; {
 		prev := elem.Prev()
 		entry, _ := elem.Value.(*responseCacheEntry)
-		if entry == nil || !entry.expiresAt.After(now) {
+		if entry == nil || !entry.staleUntil.After(now) {
 			c.removeLocked(elem)
 		}
 		elem = prev
@@ -409,6 +512,95 @@ func responseCachePlanFromContext(ctx context.Context) *responseCachePlan {
 	}
 	plan, _ := ctx.Value(ctxKeyCachePlan).(*responseCachePlan)
 	return plan
+}
+
+func (c *responseCacheRuntime) startBackgroundRefresh(req *http.Request, plan *responseCachePlan, release func()) {
+	if release == nil {
+		return
+	}
+	if req == nil || plan == nil {
+		release()
+		return
+	}
+
+	timeout := c.refreshTimeout()
+	go func() {
+		defer release()
+		if err := c.refresh(plan, req, timeout); err != nil {
+			c.staleFailures.Add(1)
+			log.Printf("[CACHE][WARN] stale refresh failed: %v", err)
+		}
+	}()
+}
+
+func (c *responseCacheRuntime) refresh(plan *responseCachePlan, req *http.Request, timeout time.Duration) error {
+	if plan == nil || req == nil {
+		return nil
+	}
+
+	ensureProxy()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	refreshReq := req.Clone(ctx)
+	refreshReq.Header = req.Header.Clone()
+	refreshReq.RequestURI = ""
+	proxy.Director(refreshReq)
+
+	transport := proxy.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+
+	res, err := transport.RoundTrip(refreshReq)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	sanitizeInternalResponseHeaders(res)
+	applyCacheHeaders(res)
+
+	ttl, ok := responseCacheTTLForStatus(plan, res.StatusCode)
+	if !ok {
+		return &responseCacheRefreshError{statusCode: res.StatusCode}
+	}
+	if hasSetCookie(res.Header) {
+		return &responseCacheRefreshError{reason: "set-cookie response"}
+	}
+
+	bodyBytes, storeOK, err := cacheResponseBody(res, c.maxBodyBytesLimit())
+	if err != nil {
+		return err
+	}
+	if !storeOK {
+		return &responseCacheRefreshError{reason: "body exceeded cache limit"}
+	}
+	if !plan.StoreBody {
+		return nil
+	}
+
+	c.store(plan, res, bodyBytes, ttl)
+	return nil
+}
+
+type responseCacheRefreshError struct {
+	statusCode int
+	reason     string
+}
+
+func (e *responseCacheRefreshError) Error() string {
+	if e == nil {
+		return "cache refresh failed"
+	}
+	if e.statusCode > 0 {
+		return "cache refresh upstream status=" + strconv.Itoa(e.statusCode)
+	}
+	if strings.TrimSpace(e.reason) != "" {
+		return "cache refresh " + strings.TrimSpace(e.reason)
+	}
+	return "cache refresh failed"
 }
 
 func applyResponseCache(res *http.Response) {
@@ -522,8 +714,12 @@ func cloneResponseCacheEntry(src *responseCacheEntry) *responseCacheEntry {
 	}
 }
 
-func serveCachedResponseEntry(c *gin.Context, entry *responseCacheEntry, reqID, clientIP, country string, wafHit bool, ruleIDs string, startedAt time.Time) {
-	writeCachedResponse(c, entry, wafHit, ruleIDs)
+func serveCachedResponseEntry(c *gin.Context, entry *responseCacheEntry, cacheStatus string, reqID, clientIP, country string, wafHit bool, ruleIDs string, startedAt time.Time) {
+	writeCachedResponse(c, entry, cacheStatus, wafHit, ruleIDs)
+	event := "cache_hit"
+	if cacheStatus == responseCacheStatusStale {
+		event = "cache_stale"
+	}
 	emitOperationalAccessLogs(operationalLogEntry{
 		Timestamp:      time.Now().UTC(),
 		RequestID:      reqID,
@@ -538,11 +734,11 @@ func serveCachedResponseEntry(c *gin.Context, entry *responseCacheEntry, reqID, 
 		Duration:       time.Since(startedAt),
 		WAFHit:         wafHit,
 		WAFRules:       ruleIDs,
-		Event:          "cache_hit",
+		Event:          event,
 	})
 }
 
-func writeCachedResponse(c *gin.Context, entry *responseCacheEntry, wafHit bool, ruleIDs string) {
+func writeCachedResponse(c *gin.Context, entry *responseCacheEntry, cacheStatus string, wafHit bool, ruleIDs string) {
 	if c == nil || entry == nil {
 		return
 	}
@@ -554,7 +750,10 @@ func writeCachedResponse(c *gin.Context, entry *responseCacheEntry, wafHit bool,
 			header.Add(k, value)
 		}
 	}
-	header.Set(responseCacheStatusHeader, responseCacheStatusHit)
+	if cacheStatus == "" {
+		cacheStatus = responseCacheStatusHit
+	}
+	header.Set(responseCacheStatusHeader, cacheStatus)
 	ageSeconds := int(time.Since(entry.storedAt).Seconds())
 	if ageSeconds < 0 {
 		ageSeconds = 0

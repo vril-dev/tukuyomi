@@ -55,10 +55,19 @@ This currently runs:
 
 - `make check`
 - `make standalone-smoke-all`
+- `make standalone-policy-fixture`
 - `make deployment-smoke`
 
 For `api-gateway`, the standalone wrapper also verifies that repeated login
-requests eventually hit `429`.
+requests eventually hit `429`, and temporary bypass/country policy fixtures are
+applied and restored through the admin API.
+
+If you only want the policy-fixture pass without the broader standalone sweep,
+run:
+
+```bash
+make standalone-policy-fixture EXAMPLE=api-gateway
+```
 
 If you only want the deployment-guide validation bundle without the broader
 standalone sweep, run:
@@ -78,18 +87,17 @@ make deployment-smoke
 | Normal app proxy | Automated | `standalone-regression-fast` / `standalone-smoke` | protected host reaches app |
 | WAF block | Automated | `standalone-regression-fast` / `standalone-smoke` | simple XSS probe returns `403` |
 | Rate limit | Partially automated | `standalone-regression-extended` (`api-gateway`) | repeated login requests eventually return `429` |
+| Bypass rules | Automated | `standalone-policy-fixture` / `standalone-regression-extended` (`api-gateway`) | temporary bypass makes `/v1/whoami` pass while another path still blocks |
+| Country block | Automated | `standalone-policy-fixture` / `standalone-regression-extended` (`api-gateway`) | trusted front-proxy `JP` returns `403`, untrusted headers are ignored or degraded to `UNKNOWN` as configured |
 | Binary deployment guide | Automated | `deployment-smoke` / `standalone-regression-extended` | staged binary build + runtime tree passes `/healthz`, Admin UI, Admin API, and protected-host smoke |
 | Container deployment guide | Automated | `deployment-smoke` / `standalone-regression-extended` | `docs/build/Dockerfile.example` image passes `/healthz`, Admin UI, Admin API, and protected-host smoke |
-| Bypass rules | Manual for now | admin API + reproducer curl | bypass path should pass while non-bypass path still blocks |
-| Country block | Manual for now | trusted front-proxy fixture + reproducer curl | blocked country should return `403`, untrusted headers should degrade to `UNKNOWN` |
 | Cache advanced semantics | Pending later slice | N/A | stale serve / coalescing / disk-backed behavior still differs from `nginx proxy_cache` |
 
 ## Why Some Checks Are Still Manual
 
-Two runtime areas are intentionally left as manual/pending in this phase:
+One runtime area is intentionally left as pending in this phase:
 
-- country-based policy needs a dedicated trusted front-proxy fixture
-- cache and nginx-log parity belong to later replacement slices
+- cache semantics still need a later replacement slice
 
-Those are not regressions in the current standalone smoke harness; they are
-known unfinished standalone-runtime gaps.
+That is not a regression in the current standalone smoke harness; it is a known
+unfinished standalone-runtime gap.

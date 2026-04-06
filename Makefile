@@ -43,7 +43,7 @@ STACK_ENV = $(DOCKER_ENV) NGINX_PORT="$(HOST_NGINX_PORT)" OPENRESTY_PORT="$(HOST
 	compose-config compose-config-mysql compose-build compose-up compose-down web-up web-down mysql-up mysql-down \
 	preset-list preset-apply preset-check \
 	gotestwaf gotestwaf-file gotestwaf-sqlite \
-	example-smoke example-smoke-all standalone-smoke standalone-smoke-all standalone-regression-fast standalone-regression-extended \
+	example-smoke example-smoke-all standalone-smoke standalone-smoke-all standalone-policy-fixture standalone-regression-fast standalone-regression-extended \
 	binary-deployment-smoke container-deployment-smoke deployment-smoke \
 	benchmark-scenario benchmark-baseline \
 	check ci-local clean
@@ -89,6 +89,8 @@ help:
 	@echo "  make standalone-smoke      Run direct-tukuyomi standalone smoke for one example"
 	@echo "    - optional: EXAMPLE=$(EXAMPLE) (choices: $(EXAMPLES))"
 	@echo "  make standalone-smoke-all  Run direct-tukuyomi standalone smoke for all examples"
+	@echo "  make standalone-policy-fixture       Run extended standalone policy fixtures for one example"
+	@echo "    - optional: EXAMPLE=$(EXAMPLE) (default: api-gateway)"
 	@echo "  make standalone-regression-fast      Run fast standalone regression baseline"
 	@echo "  make standalone-regression-extended  Run heavier standalone regression baseline"
 	@echo "  make binary-deployment-smoke         Validate the docs/build binary deployment flow"
@@ -272,10 +274,13 @@ standalone-smoke-all:
 		$(MAKE) standalone-smoke EXAMPLE="$$example"; \
 	done
 
+standalone-policy-fixture:
+	./scripts/run_standalone_regression.sh "$(EXAMPLE)" extended
+
 standalone-regression-fast: go-test compose-config
 	$(MAKE) standalone-smoke EXAMPLE="$(EXAMPLE)"
 
-standalone-regression-extended: check standalone-smoke-all deployment-smoke
+standalone-regression-extended: check standalone-smoke-all standalone-policy-fixture deployment-smoke
 
 binary-deployment-smoke:
 	./scripts/run_binary_deployment_smoke.sh "$(EXAMPLE)"

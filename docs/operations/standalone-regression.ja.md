@@ -54,9 +54,16 @@ make standalone-regression-extended
 
 - `make check`
 - `make standalone-smoke-all`
+- `make standalone-policy-fixture`
 - `make deployment-smoke`
 
-さらに `api-gateway` については、login を連打したとき最終的に `429` が返ることも確認します。
+さらに `api-gateway` については、login を連打したとき最終的に `429` が返ることに加えて、bypass / country block の一時 fixture を admin API 経由で適用し、最後に復元するところまで確認します。
+
+standalone 一式までは不要で、policy fixture だけ回したい場合は次を使います。
+
+```bash
+make standalone-policy-fixture EXAMPLE=api-gateway
+```
 
 standalone 一式までは不要で、deployment guide の検証だけ回したい場合は次を使います。
 
@@ -75,17 +82,16 @@ make deployment-smoke
 | 通常 app proxy | 自動化済み | `standalone-regression-fast` / `standalone-smoke` | protected host で app に到達する |
 | WAF block | 自動化済み | `standalone-regression-fast` / `standalone-smoke` | 簡単な XSS probe が `403` |
 | Rate limit | 一部自動化 | `standalone-regression-extended`（`api-gateway`） | login 連打で最終的に `429` |
+| Bypass rules | 自動化済み | `standalone-policy-fixture` / `standalone-regression-extended`（`api-gateway`） | 一時 bypass により `/v1/whoami` は通り、別 path は block 維持 |
+| Country block | 自動化済み | `standalone-policy-fixture` / `standalone-regression-extended`（`api-gateway`） | trusted front-proxy の `JP` は `403`、信頼できない header は無視または `UNKNOWN` に落ちる |
 | Binary deployment guide | 自動化済み | `deployment-smoke` / `standalone-regression-extended` | staged binary build + runtime tree が `/healthz`、Admin UI、Admin API、protected-host smoke を通す |
 | Container deployment guide | 自動化済み | `deployment-smoke` / `standalone-regression-extended` | `docs/build/Dockerfile.example` image が `/healthz`、Admin UI、Admin API、protected-host smoke を通す |
-| Bypass rules | いったん手動 | admin API + reproducer curl | bypass path は通り、それ以外は block 維持 |
-| Country block | いったん手動 | trusted front-proxy fixture + reproducer curl | block 対象国は `403`、信頼できない header は `UNKNOWN` に落ちる |
 | cache の高度な意味論 | 後続 slice | N/A | stale serve / coalescing / disk-backed はまだ `nginx proxy_cache` と差がある |
 
 ## まだ手動の項目がある理由
 
-この phase では、次の 2 領域はあえて manual / pending のままです。
+この phase では、次の 1 領域を pending のまま残しています。
 
-- country 系は trusted front-proxy fixture を別途用意する必要がある
-- cache と nginx-log parity は後続 slice の置き換え対象
+- cache の意味論は後続 slice の置き換え対象
 
 これは現行 standalone smoke harness の不具合ではなく、standalone runtime 化の未完了ギャップです。

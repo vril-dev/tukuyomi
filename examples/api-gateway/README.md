@@ -22,7 +22,7 @@ Thin front proxy path:
 ```bash
 cd examples/api-gateway
 ./setup.sh
-WAF_TRUSTED_PROXY_CIDRS="127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16" \
+WAF_TRUSTED_PROXY_CIDRS="${FRONT_PROXY_FIXTURE_IP:-172.31.83.10}/32" \
 WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=true \
 docker compose --profile front-proxy up -d --build
 ```

@@ -22,6 +22,7 @@ This default path starts the standalone runtime:
 
 - `client -> tukuyomi -> app`
 - safe direct defaults (`WAF_TRUSTED_PROXY_CIDRS` empty, internal response headers hidden)
+- admin exposure default stays `WAF_ADMIN_EXTERNAL_MODE=api_only_external`, so the embedded admin UI remains limited to trusted/private direct peers while the authenticated admin API stays reachable
 
 To add a thin `nginx` front proxy for local smoke or balancer-style validation:
 

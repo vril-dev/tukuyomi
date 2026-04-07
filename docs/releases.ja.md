@@ -5,6 +5,43 @@
 - tag 前の版は draft として追記・調整します。
 - ここに要約していない詳細は、Git tag と commit 履歴から追えます。
 
+## v0.2.1（2026-04-07）
+
+### 主な変更
+
+- 埋め込み Admin UI / Admin API 向けに、built-in の admin exposure 制御を追加しました。
+  - 既定 posture は `WAF_ADMIN_EXTERNAL_MODE=api_only_external` です。
+  - trusted/private な直結 peer は管理UI/APIの両方へ到達できます。
+  - untrusted external は認証付き管理APIだけへ到達できます。
+- `WAF_ADMIN_TRUSTED_CIDRS` を追加し、埋め込み管理UIへ到達させる
+  直結 peer range を明示指定できるようにしました。
+- 危険な admin exposure posture に対する起動 warning を追加しました。
+  - `WAF_ADMIN_EXTERNAL_MODE=full_external`
+  - catch-all な trusted admin CIDR
+
+### 運用とデプロイ
+
+- 次の文書に admin exposure 設定を追記しました。
+  - [`README.ja.md`](../README.ja.md)
+  - [`docs/build/binary-deployment.ja.md`](./build/binary-deployment.ja.md)
+  - [`docs/build/container-deployment.ja.md`](./build/container-deployment.ja.md)
+  - [`docs/build/tukuyomi.env.example`](./build/tukuyomi.env.example)
+- compose と example stack も、文書どおりの既定 posture を使うように更新しました。
+
+### 運用者向け注意
+
+- `WAF_TRUSTED_PROXY_CIDRS` は forwarded header の信頼境界だけを決めます。埋め込み管理UIの到達可否は広げません。
+- remote admin API 自体が不要なら `WAF_ADMIN_EXTERNAL_MODE=deny_external` を使ってください。
+- front proxy / LB が private ではない source IP で接続しつつ埋め込み管理UIも使う場合は、その直結 peer range を `WAF_ADMIN_TRUSTED_CIDRS` へ設定してください。
+
+### 検証概要
+
+`v0.2.1` 対応中に、主に次を実施しています。
+
+- `go test ./internal/config ./internal/middleware ./internal/handler`
+- `docker compose config`
+- `git diff --check`
+
 ## v0.2.0（2026-04-06）
 
 ### 主な変更

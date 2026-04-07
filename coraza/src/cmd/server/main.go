@@ -117,6 +117,9 @@ func main() {
 	if config.ForwardInternalResponseHeaders {
 		log.Println("[SECURITY][WARN] forwarding internal WAF response headers is enabled; use only behind a front proxy that strips them")
 	}
+	for _, warning := range config.AdminExposureWarnings() {
+		log.Printf("[SECURITY][WARN] %s", warning)
+	}
 
 	// Lightweight unauthenticated probe for container health checks.
 	r.GET("/healthz", func(c *gin.Context) {
@@ -125,9 +128,9 @@ func main() {
 
 	if len(config.APICORSOrigins) > 0 {
 		r.Use(cors.New(cors.Config{
-			AllowOrigins: config.APICORSOrigins,
-			AllowMethods: []string{"GET", "POST", "PUT", "OPTIONS"},
-			AllowHeaders: []string{"Origin", "Content-Type", "Accept", "X-API-Key", "X-CSRF-Token"},
+			AllowOrigins:     config.APICORSOrigins,
+			AllowMethods:     []string{"GET", "POST", "PUT", "OPTIONS"},
+			AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "X-API-Key", "X-CSRF-Token"},
 			AllowCredentials: true,
 		}))
 		log.Printf("[SECURITY] CORS enabled for origins: %s", strings.Join(config.APICORSOrigins, ","))
@@ -137,7 +140,7 @@ func main() {
 
 	handler.RegisterAdminAuthRoutes(r)
 
-	api := r.Group(config.APIBasePath, middleware.APIKeyAuth())
+	api := r.Group(config.APIBasePath, middleware.AdminAccess(middleware.AdminEndpointAPI), middleware.APIKeyAuth())
 	{
 		api.GET("/", func(c *gin.Context) {
 			c.JSON(200, gin.H{

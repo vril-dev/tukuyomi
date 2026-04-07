@@ -141,6 +141,8 @@ make preset-check PRESET=minimal
 | `WAF_STRICT_OVERRIDE` | `false` | 特別ルール読み込み失敗時の挙動。`true`で即終了、`false`で警告のみ継続。 |
 | `WAF_API_BASEPATH` | `/tukuyomi-api` | 管理APIのベースパス（Go側のルーティング基準）。 |
 | `WAF_UI_BASEPATH` | `/tukuyomi-admin` | 管理UIのベースパス（Go側のルーティング基準）。末尾スラッシュなしで `VITE_APP_BASE_PATH` と揃えてください。 |
+| `WAF_ADMIN_EXTERNAL_MODE` | `api_only_external` | 管理系の exposure mode。`deny_external`: trusted/private な直結 peer からだけ管理UI/APIへ到達可能。`api_only_external`: trusted/private な直結 peer は管理UI/APIへ到達可能で、untrusted external は認証付き管理APIだけ到達可能。`full_external`: 管理UI/API が runtime listener に到達できる任意の経路から見える状態。 |
+| `WAF_ADMIN_TRUSTED_CIDRS` | `127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` | 管理 exposure 判定で trusted とみなす直結 peer の IP/CIDR。`WAF_ADMIN_EXTERNAL_MODE` が `full_external` 以外のとき、この範囲が埋め込み管理UI到達可否を決めます。 |
 | `WAF_TRUSTED_PROXY_CIDRS` | `10.0.0.0/8,192.168.0.0/16` | `X-Forwarded-For` / `X-Real-IP` / 転送された `X-Request-ID` を信用する前段プロキシの IP/CIDR。Coraza を直接公開する場合は空のままにします。ALB/ECS/Cloudflare 配下では、実際に信頼する前段の subnet だけを設定してください。 |
 | `WAF_COUNTRY_HEADER_NAMES` | `X-Country-Code,CF-IPCountry` | 信頼する country header の参照順。`WAF_TRUSTED_PROXY_CIDRS` に含まれる前段から来た場合だけ、この順に header を見ます。 |
 | `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` | `false` | 内部用の `X-WAF-Hit` / `X-WAF-RuleIDs` をレスポンスに残すか。クライアントへ返る前に前段 smart proxy が必ず除去する構成でだけ有効化してください。 |
@@ -179,6 +181,11 @@ make go-build
 - ブラウザ側の管理UIは `POST /tukuyomi-api/auth/login` を 1 回呼び、same-origin session cookie を受け取って以後の API を呼びます。
 - `WAF_API_KEY_PRIMARY`, `WAF_API_KEY_SECONDARY`, `WAF_ADMIN_SESSION_SECRET` は server 側だけで保持してください。
 - CLI / 自動化は従来どおり `X-API-Key` で管理 API を呼べます。
+- 認証と exposure は別物です。認証は管理 path 到達後に「誰が操作できるか」を決め、`WAF_ADMIN_EXTERNAL_MODE` はそもそも「どの network から管理 UI/API に到達できるか」を決めます。
+- `[web]` の既定 posture は `WAF_ADMIN_EXTERNAL_MODE=api_only_external` です。trusted/private な直結 peer は管理UI/API の両方に到達でき、untrusted external は認証付き管理APIだけに限定されます。
+- `WAF_ADMIN_TRUSTED_CIDRS` は直結 peer IP だけを見ます。`WAF_TRUSTED_PROXY_CIDRS` は forwarded header 信頼用であり、管理UI の reachability は広げません。
+- remote admin API が不要なら `WAF_ADMIN_EXTERNAL_MODE=deny_external` を設定してください。
+- `WAF_ADMIN_EXTERNAL_MODE=full_external` を使うなら、front 側で IP allowlist / mTLS / upstream auth などを必ず追加してください。起動時にも warning を出します。
 
 起動時に `WAF_API_KEY_PRIMARY` が短すぎる/既知の弱い値の場合、Corazaプロセスは安全側で起動失敗します。  
 ローカル検証だけ一時的に緩和したい場合は `WAF_ALLOW_INSECURE_DEFAULTS=1` を利用してください。
@@ -866,8 +873,10 @@ DENY regex=^/users/[0-9]+/profile
 
 ## 管理画面のアクセス制限について
 
-本プロジェクトにはデフォルトでアクセス制限機能は含まれていません。  
-管理画面（NGX_CORAZA_ADMIN_URL で公開されるパス）を利用する場合は、必ず Basic 認証や IP 制限などのアクセス制御を設定してください。
+管理 auth があることと、安全な exposure posture があることは別です。
+`[web]` の既定 posture では、埋め込み管理UIは trusted/private な直結 peer に限定され、untrusted external は認証付き管理APIだけへ到達できます。
+それでも `NGX_CORAZA_ADMIN_URL` や `WAF_API_BASEPATH` を trusted network の外へ出す場合は、Basic 認証、IP allowlist、mTLS などの front-side 制御を追加してください。
+remote admin API 自体が不要なら `WAF_ADMIN_EXTERNAL_MODE=deny_external` を使ってください。
 
 ---
 

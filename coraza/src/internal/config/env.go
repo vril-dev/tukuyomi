@@ -29,6 +29,9 @@ var (
 	StrictOverride                 bool
 	APIBasePath                    string
 	UIBasePath                     string
+	AdminExternalMode              string
+	AdminTrustedCIDRs              []string
+	AdminTrustedCIDRPrefixes       []netip.Prefix
 	TrustedProxyCIDRs              []string
 	TrustedProxyPrefixes           []netip.Prefix
 	ForwardInternalResponseHeaders bool
@@ -70,6 +73,14 @@ var (
 	DBRetentionDays int
 	DBSyncInterval  time.Duration
 )
+
+var defaultAdminTrustedCIDRs = []string{
+	"127.0.0.1/32",
+	"::1/128",
+	"10.0.0.0/8",
+	"172.16.0.0/12",
+	"192.168.0.0/16",
+}
 
 func LoadEnv() {
 	_ = godotenv.Load()
@@ -137,6 +148,8 @@ func LoadEnv() {
 	if UIBasePath == APIBasePath {
 		log.Fatal("WAF_UI_BASEPATH must differ from WAF_API_BASEPATH")
 	}
+	AdminExternalMode = parseAdminExternalMode(os.Getenv("WAF_ADMIN_EXTERNAL_MODE"))
+	AdminTrustedCIDRs, AdminTrustedCIDRPrefixes = parseAdminTrustedCIDRs(os.Getenv("WAF_ADMIN_TRUSTED_CIDRS"))
 	TrustedProxyCIDRs, TrustedProxyPrefixes = parseTrustedProxyCIDRs(os.Getenv("WAF_TRUSTED_PROXY_CIDRS"))
 	ForwardInternalResponseHeaders = isTruthy(os.Getenv("WAF_FORWARD_INTERNAL_RESPONSE_HEADERS"))
 	ResponseCacheMode = parseResponseCacheMode(os.Getenv("WAF_RESPONSE_CACHE_MODE"))
@@ -348,6 +361,10 @@ func parseDBSyncIntervalSec(v string) int {
 }
 
 func parseTrustedProxyCIDRs(v string) ([]string, []netip.Prefix) {
+	return parseCIDRs(v, "WAF_TRUSTED_PROXY_CIDRS")
+}
+
+func parseCIDRs(v string, envName string) ([]string, []netip.Prefix) {
 	parts := parseCSV(v)
 	if len(parts) == 0 {
 		return nil, nil
@@ -369,7 +386,7 @@ func parseTrustedProxyCIDRs(v string) ([]string, []netip.Prefix) {
 			prefixes = append(prefixes, prefix)
 			continue
 		}
-		log.Printf("[CONFIG][WARN] invalid WAF_TRUSTED_PROXY_CIDRS entry ignored: %q", part)
+		log.Printf("[CONFIG][WARN] invalid %s entry ignored: %q", envName, part)
 	}
 
 	if len(cidrs) == 0 {
@@ -377,6 +394,55 @@ func parseTrustedProxyCIDRs(v string) ([]string, []netip.Prefix) {
 	}
 
 	return cidrs, prefixes
+}
+
+func parseAdminExternalMode(v string) string {
+	mode := strings.ToLower(strings.TrimSpace(v))
+	switch mode {
+	case "", "api_only_external":
+		return "api_only_external"
+	case "deny_external", "full_external":
+		return mode
+	default:
+		log.Printf("[CONFIG][WARN] unsupported WAF_ADMIN_EXTERNAL_MODE=%q, fallback=api_only_external", mode)
+		return "api_only_external"
+	}
+}
+
+func parseAdminTrustedCIDRs(v string) ([]string, []netip.Prefix) {
+	cidrs, prefixes := parseCIDRs(v, "WAF_ADMIN_TRUSTED_CIDRS")
+	if len(cidrs) != 0 {
+		return cidrs, prefixes
+	}
+	defaults, defaultPrefixes := parseCIDRs(strings.Join(defaultAdminTrustedCIDRs, ","), "WAF_ADMIN_TRUSTED_CIDRS")
+	return defaults, defaultPrefixes
+}
+
+func AdminExposureWarnings() []string {
+	warnings := make([]string, 0, 2)
+	switch AdminExternalMode {
+	case "full_external":
+		warnings = append(warnings,
+			"WAF_ADMIN_EXTERNAL_MODE=full_external exposes the embedded admin UI and admin API to any network path that can reach this runtime listener",
+			"prefer WAF_ADMIN_EXTERNAL_MODE=api_only_external (default) or deny_external, and add front-side allowlists/auth if you intentionally expose admin paths",
+		)
+	case "api_only_external":
+		if adminTrustedCIDRsAllowAll(AdminTrustedCIDRPrefixes) {
+			warnings = append(warnings,
+				"WAF_ADMIN_TRUSTED_CIDRS includes a catch-all range, so the default api_only_external posture also makes the embedded admin UI reachable from any client that can reach this runtime listener",
+			)
+		}
+	}
+	return warnings
+}
+
+func adminTrustedCIDRsAllowAll(prefixes []netip.Prefix) bool {
+	for _, prefix := range prefixes {
+		if prefix.Bits() == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func parseResponseCacheMode(v string) string {

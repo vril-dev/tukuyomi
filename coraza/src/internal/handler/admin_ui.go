@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/middleware"
 )
 
 //go:embed admin_ui_dist
@@ -50,17 +51,19 @@ func RegisterAdminUIRoutes(r *gin.Engine) {
 		c.Data(http.StatusOK, ct, raw)
 	}
 
-	r.GET(base, func(c *gin.Context) {
+	uiAccess := middleware.AdminAccess(middleware.AdminEndpointUI)
+
+	r.GET(base, uiAccess, func(c *gin.Context) {
 		serveFile(c, "index.html")
 	})
-	r.HEAD(base, func(c *gin.Context) {
+	r.HEAD(base, uiAccess, func(c *gin.Context) {
 		serveFile(c, "index.html")
 	})
-	r.GET(base+"/*filepath", func(c *gin.Context) {
+	r.GET(base+"/*filepath", uiAccess, func(c *gin.Context) {
 		p := strings.TrimPrefix(c.Param("filepath"), "/")
 		serveFile(c, p)
 	})
-	r.HEAD(base+"/*filepath", func(c *gin.Context) {
+	r.HEAD(base+"/*filepath", uiAccess, func(c *gin.Context) {
 		p := strings.TrimPrefix(c.Param("filepath"), "/")
 		serveFile(c, p)
 	})

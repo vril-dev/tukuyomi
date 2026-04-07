@@ -22,6 +22,7 @@ docker compose up -d --build
 
 - `client -> tukuyomi -> app`
 - safe direct default（`WAF_TRUSTED_PROXY_CIDRS` は空、internal response header は非公開）
+- admin exposure の既定は `WAF_ADMIN_EXTERNAL_MODE=api_only_external` のままで、埋め込み管理UIは trusted/private な直結 peer に限定され、認証付き管理APIは到達可能です
 
 local smoke や balancer 相当の確認で thin `nginx` front proxy を足したい場合:
 

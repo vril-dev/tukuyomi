@@ -21,7 +21,7 @@ func RegisterAdminAuthRoutes(r *gin.Engine) {
 		return
 	}
 
-	api := r.Group(config.APIBasePath)
+	api := r.Group(config.APIBasePath, middleware.AdminAccess(middleware.AdminEndpointAPI))
 	api.GET("/auth/session", GetAdminSessionHandler)
 	api.POST("/auth/login", PostAdminLoginHandler)
 	api.POST("/auth/logout", PostAdminLogoutHandler)

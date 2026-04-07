@@ -67,6 +67,8 @@ Notes:
 - `WAF_ADMIN_SESSION_TTL_SEC`
 - `WAF_UI_BASEPATH`
 - `WAF_API_BASEPATH`
+- `WAF_ADMIN_EXTERNAL_MODE`
+- `WAF_ADMIN_TRUSTED_CIDRS`
 - `WAF_TRUSTED_PROXY_CIDRS`
 - `WAF_COUNTRY_HEADER_NAMES`
 - `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS`
@@ -86,6 +88,13 @@ Typical cloud path:
 `client -> ALB/nginx/ingress -> tukuyomi container -> app container/service`
 
 If a front layer exists, restrict `WAF_TRUSTED_PROXY_CIDRS` to that layer only.
+`WAF_TRUSTED_PROXY_CIDRS` only affects forwarded-header trust. Admin reachability is separate:
+
+- default `[web]` posture is `WAF_ADMIN_EXTERNAL_MODE=api_only_external`
+- trusted/private direct peers in `WAF_ADMIN_TRUSTED_CIDRS` can reach admin UI and API
+- untrusted external clients can reach only the authenticated admin API
+- use `WAF_ADMIN_EXTERNAL_MODE=deny_external` when remote admin API access is unnecessary
+- if your front proxy or LB reaches tukuyomi from non-private source IPs, set `WAF_ADMIN_TRUSTED_CIDRS` to those direct-peer ranges so the embedded admin UI remains reachable through that layer
 
 ## Secret Handling
 

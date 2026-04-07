@@ -6,6 +6,47 @@ This file keeps product-facing release notes for `[web] tukuyomi`.
 - Historical details that are not summarized here can still be traced from the
   Git tags and commit history.
 
+## v0.2.1 (2026-04-07)
+
+### Highlights
+
+- Added built-in admin exposure controls for the embedded Admin UI and admin API.
+  - `WAF_ADMIN_EXTERNAL_MODE=api_only_external` is now the default posture.
+  - trusted/private direct peers can reach both admin UI and admin API.
+  - untrusted external peers can reach only the authenticated admin API.
+- Added `WAF_ADMIN_TRUSTED_CIDRS` so deployments can explicitly define which
+  direct peers are allowed to reach the embedded Admin UI.
+- Added startup warnings for risky admin exposure posture:
+  - `WAF_ADMIN_EXTERNAL_MODE=full_external`
+  - catch-all trusted admin CIDRs
+
+### Operations And Deployment
+
+- Documented the new admin exposure settings in:
+  - [`README.md`](../README.md)
+  - [`docs/build/binary-deployment.md`](./build/binary-deployment.md)
+  - [`docs/build/container-deployment.md`](./build/container-deployment.md)
+  - [`docs/build/tukuyomi.env.example`](./build/tukuyomi.env.example)
+- Updated compose and example stacks so the documented default posture matches
+  the actual runtime configuration.
+
+### Operator Notes
+
+- `WAF_TRUSTED_PROXY_CIDRS` only controls forwarded-header trust. It does not
+  make the embedded Admin UI reachable.
+- If remote admin API access is unnecessary, set
+  `WAF_ADMIN_EXTERNAL_MODE=deny_external`.
+- If a front proxy or LB connects from non-private source IPs and must reach the
+  embedded Admin UI, set those direct-peer ranges in `WAF_ADMIN_TRUSTED_CIDRS`.
+
+### Validation Summary
+
+Validated during the `v0.2.1` work:
+
+- `go test ./internal/config ./internal/middleware ./internal/handler`
+- `docker compose config`
+- `git diff --check`
+
 ## v0.2.0 (2026-04-06)
 
 ### Highlights

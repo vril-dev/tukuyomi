@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"net/netip"
+	"testing"
+)
 
 func TestIsWeakAPIKey(t *testing.T) {
 	cases := []struct {
@@ -134,6 +137,69 @@ func TestParseTrustedProxyCIDRs(t *testing.T) {
 	}
 	if got := prefixes[1].String(); got != "192.0.2.10/32" {
 		t.Fatalf("prefixes[1]=%q want=%q", got, "192.0.2.10/32")
+	}
+}
+
+func TestParseAdminExternalMode(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{in: "", want: "api_only_external"},
+		{in: "deny_external", want: "deny_external"},
+		{in: "api_only_external", want: "api_only_external"},
+		{in: "full_external", want: "full_external"},
+		{in: "invalid", want: "api_only_external"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.in+"->"+tc.want, func(t *testing.T) {
+			if got := parseAdminExternalMode(tc.in); got != tc.want {
+				t.Fatalf("parseAdminExternalMode(%q)=%q want=%q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseAdminTrustedCIDRsDefaults(t *testing.T) {
+	cidrs, prefixes := parseAdminTrustedCIDRs("")
+	if len(cidrs) != len(defaultAdminTrustedCIDRs) {
+		t.Fatalf("len(cidrs)=%d want=%d", len(cidrs), len(defaultAdminTrustedCIDRs))
+	}
+	for i, want := range defaultAdminTrustedCIDRs {
+		if cidrs[i] != want {
+			t.Fatalf("cidrs[%d]=%q want=%q", i, cidrs[i], want)
+		}
+	}
+	if len(prefixes) != len(defaultAdminTrustedCIDRs) {
+		t.Fatalf("len(prefixes)=%d want=%d", len(prefixes), len(defaultAdminTrustedCIDRs))
+	}
+}
+
+func TestAdminExposureWarnings(t *testing.T) {
+	restoreMode := AdminExternalMode
+	restorePrefixes := append([]netip.Prefix(nil), AdminTrustedCIDRPrefixes...)
+	defer func() {
+		AdminExternalMode = restoreMode
+		AdminTrustedCIDRPrefixes = restorePrefixes
+	}()
+
+	AdminExternalMode = "api_only_external"
+	AdminTrustedCIDRPrefixes = nil
+	if got := AdminExposureWarnings(); len(got) != 0 {
+		t.Fatalf("unexpected warnings for default posture: %#v", got)
+	}
+
+	AdminExternalMode = "full_external"
+	AdminTrustedCIDRPrefixes = nil
+	if got := AdminExposureWarnings(); len(got) == 0 {
+		t.Fatal("expected warning for full_external")
+	}
+
+	AdminExternalMode = "api_only_external"
+	AdminTrustedCIDRPrefixes = []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}
+	if got := AdminExposureWarnings(); len(got) == 0 {
+		t.Fatal("expected warning for catch-all admin trusted cidr")
 	}
 }
 

@@ -67,6 +67,8 @@ make container-deployment-smoke
 - `WAF_ADMIN_SESSION_TTL_SEC`
 - `WAF_UI_BASEPATH`
 - `WAF_API_BASEPATH`
+- `WAF_ADMIN_EXTERNAL_MODE`
+- `WAF_ADMIN_TRUSTED_CIDRS`
 - `WAF_TRUSTED_PROXY_CIDRS`
 - `WAF_COUNTRY_HEADER_NAMES`
 - `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS`
@@ -86,6 +88,13 @@ cloud では通常:
 `client -> ALB/nginx/ingress -> tukuyomi container -> app container/service`
 
 です。前段がある場合は、`WAF_TRUSTED_PROXY_CIDRS` をその前段だけに限定してください。
+`WAF_TRUSTED_PROXY_CIDRS` は forwarded header の信頼境界だけを決めます。admin reachability は別です:
+
+- `[web]` の既定 posture は `WAF_ADMIN_EXTERNAL_MODE=api_only_external`
+- `WAF_ADMIN_TRUSTED_CIDRS` に入った trusted/private な直結 peer は管理UI/APIの両方へ到達可能
+- untrusted external は認証付き管理APIだけへ到達可能
+- remote admin API が不要なら `WAF_ADMIN_EXTERNAL_MODE=deny_external` を使う
+- front proxy / LB が private ではない source IP で tukuyomi に接続する場合は、その直結 peer range を `WAF_ADMIN_TRUSTED_CIDRS` へ設定して埋め込み管理UIを通してください
 
 ## Secret Handling
 

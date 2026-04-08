@@ -77,7 +77,7 @@ sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 
 template:
 
-- [tukuyomi.env.example](/home/ky491/git/vril/tukuyomi/docs/build/tukuyomi.env.example)
+- [tukuyomi.env.example](tukuyomi.env.example)
 
 最低限見直す値:
 
@@ -122,7 +122,7 @@ template:
 
 sample unit:
 
-- [tukuyomi.service.example](/home/ky491/git/vril/tukuyomi/docs/build/tukuyomi.service.example)
+- [tukuyomi.service.example](tukuyomi.service.example)
 
 登録例:
 

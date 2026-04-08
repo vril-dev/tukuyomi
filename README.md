@@ -325,8 +325,8 @@ For local hot-reload development of the admin UI, start the optional Vite contai
 
 ### Deployment Guides
 
-- Binary deployment (`systemd`, on-prem, VPS, VM, EC2): [docs/build/binary-deployment.md](/home/ky491/git/vril/tukuyomi/docs/build/binary-deployment.md)
-- Container deployment (ECS, AKS, GKE, Container Apps): [docs/build/container-deployment.md](/home/ky491/git/vril/tukuyomi/docs/build/container-deployment.md)
+- Binary deployment (`systemd`, on-prem, VPS, VM, EC2): [docs/build/binary-deployment.md](docs/build/binary-deployment.md)
+- Container deployment (ECS, AKS, GKE, Container Apps): [docs/build/container-deployment.md](docs/build/container-deployment.md)
 
 #### Optional: Local MySQL Container (profile: `mysql`)
 

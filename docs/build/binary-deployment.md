@@ -77,7 +77,7 @@ Use an env file such as `/etc/tukuyomi/tukuyomi.env`.
 
 Template:
 
-- [tukuyomi.env.example](/home/ky491/git/vril/tukuyomi/docs/build/tukuyomi.env.example)
+- [tukuyomi.env.example](tukuyomi.env.example)
 
 Minimum values to review:
 
@@ -122,7 +122,7 @@ and restrict `WAF_TRUSTED_PROXY_CIDRS` to only that front layer.
 
 Sample unit:
 
-- [tukuyomi.service.example](/home/ky491/git/vril/tukuyomi/docs/build/tukuyomi.service.example)
+- [tukuyomi.service.example](tukuyomi.service.example)
 
 Install:
 

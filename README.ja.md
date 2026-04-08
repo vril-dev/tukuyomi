@@ -326,8 +326,8 @@ make compose-up
 
 ### デプロイガイド
 
-- Binary deployment（`systemd`, オンプレ, VPS, VM, EC2）: [docs/build/binary-deployment.ja.md](/home/ky491/git/vril/tukuyomi/docs/build/binary-deployment.ja.md)
-- Container deployment（ECS, AKS, GKE, Container Apps）: [docs/build/container-deployment.ja.md](/home/ky491/git/vril/tukuyomi/docs/build/container-deployment.ja.md)
+- Binary deployment（`systemd`, オンプレ, VPS, VM, EC2）: [docs/build/binary-deployment.ja.md](docs/build/binary-deployment.ja.md)
+- Container deployment（ECS, AKS, GKE, Container Apps）: [docs/build/container-deployment.ja.md](docs/build/container-deployment.ja.md)
 
 #### 任意: ローカル MySQL コンテナ（profile: `mysql`）
 

@@ -24,7 +24,7 @@ This builds the admin UI, embeds it into the Go binary, and produces a runnable 
 
 Sample:
 
-- [Dockerfile.example](/home/ky491/git/vril/tukuyomi/docs/build/Dockerfile.example)
+- [Dockerfile.example](Dockerfile.example)
 
 Build:
 

@@ -24,7 +24,7 @@ docker build -f coraza/Dockerfile -t tukuyomi:local .
 
 sample:
 
-- [Dockerfile.example](/home/ky491/git/vril/tukuyomi/docs/build/Dockerfile.example)
+- [Dockerfile.example](Dockerfile.example)
 
 build:
 

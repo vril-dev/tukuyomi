@@ -15,7 +15,7 @@
 - Browser and HTTP runner based verification
 - Manifest-driven checks for `tukuyomi`, `tukuyomi-proxy`, and `tukuyomi-edge`
 - HTML, JSON, JUnit, and CI summary outputs
-- External verifier role with no required runtime dependency from `[web]`
+- External verifier role with no required runtime dependency from tukuyomi
 
 ## Public Distribution
 

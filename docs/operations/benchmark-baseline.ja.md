@@ -3,7 +3,7 @@
 # Benchmark Baseline
 
 このドキュメントは、front proxy 依存を段階的に減らしていく中で、
-`[web]` の runtime profile を比較するための軽量 benchmark harness を説明します。
+tukuyomi の runtime profile を比較するための軽量 benchmark harness を説明します。
 
 ## 何を測るか
 

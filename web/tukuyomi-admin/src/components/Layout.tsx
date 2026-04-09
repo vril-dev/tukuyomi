@@ -23,7 +23,7 @@ const navGroups: NavGroup[] = [
     items: [
       { to: "/status", label: "Status", hint: "runtime health" },
       { to: "/logs", label: "Logs", hint: "events and traces" },
-      { to: "/log-output", label: "Log Output", hint: "stdout and file profiles" },
+      { to: "/log-output", label: "Log Settings", hint: "stdout and file profiles" },
       { to: "/notifications", label: "Notifications", hint: "state-based alert delivery" },
     ],
   },

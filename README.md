@@ -109,7 +109,7 @@ You can control behavior via `.env`.
 | `WAF_PROXY_ERROR_HTML_FILE` | (empty) | Optional maintenance HTML file served when the upstream application is unavailable. |
 | `WAF_PROXY_ERROR_REDIRECT_URL` | (empty) | Optional redirect target used when the upstream application is unavailable. |
 | `WAF_LOG_FILE` | (empty) | Legacy override for the default WAF event file path inside the generated log-output profile. Prefer `conf/log-output.json` via Admin UI. |
-| `WAF_LOG_OUTPUT_FILE` | `conf/log-output.json` | Log-output profile path. The Admin UI `Log Output` panel edits this file and can switch stdout/file/dual modes per stream. |
+| `WAF_LOG_OUTPUT_FILE` | `conf/log-output.json` | Log-output profile path. The Admin UI `Log Settings` panel edits this file and can switch stdout/file/dual modes per stream. |
 | `WAF_BYPASS_FILE` | `conf/waf.bypass` | Path for bypass/special-rule definition file. |
 | `WAF_BOT_DEFENSE_FILE` | `conf/bot-defense.conf` | Bot-defense challenge settings file (JSON), editable from admin UI. |
 | `WAF_SEMANTIC_FILE` | `conf/semantic.conf` | Semantic heuristic scoring settings file (JSON), editable from admin UI. |

@@ -109,8 +109,8 @@ make preset-check PRESET=minimal
 | `WAF_APP_URL` | `http://host.docker.internal:3000` | 透過先アプリの URL（ALB/ECS 等の本番では適宜変更）。 |
 | `WAF_PROXY_ERROR_HTML_FILE` | (空) | 透過先障害時に返す任意の保守 HTML ファイル。 |
 | `WAF_PROXY_ERROR_REDIRECT_URL` | (空) | 透過先障害時に使う任意の redirect 先。 |
-| `WAF_LOG_FILE` | (空) | 生成される log-output profile 内で使う、WAF event の既定ファイルパスを上書きする互換用設定。通常は Admin UI の `Log Output` から `conf/log-output.json` を使う。 |
-| `WAF_LOG_OUTPUT_FILE` | `conf/log-output.json` | ログ出力 profile のパス。Admin UI の `Log Output` 画面から編集でき、stream ごとに stdout/file/dual を切替可能。 |
+| `WAF_LOG_FILE` | (空) | 生成される log-output profile 内で使う、WAF event の既定ファイルパスを上書きする互換用設定。通常は Admin UI の `Log Settings` から `conf/log-output.json` を使う。 |
+| `WAF_LOG_OUTPUT_FILE` | `conf/log-output.json` | ログ出力 profile のパス。Admin UI の `Log Settings` 画面から編集でき、stream ごとに stdout/file/dual を切替可能。 |
 | `WAF_BYPASS_FILE` | `conf/waf.bypass` | バイパス/特別ルール定義ファイルのパス。 |
 | `WAF_BOT_DEFENSE_FILE` | `conf/bot-defense.conf` | Bot defense challenge 設定ファイル（JSON）。管理画面から編集可能。 |
 | `WAF_SEMANTIC_FILE` | `conf/semantic.conf` | Semanticヒューリスティック設定ファイル（JSON）。管理画面から編集可能。 |

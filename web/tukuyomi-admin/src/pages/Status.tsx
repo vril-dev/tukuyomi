@@ -246,9 +246,17 @@ export default function Status() {
                 <Metric label="DB Last Sync Scan Lines" value={String(data.db_last_sync_scanned_lines ?? "-")} />
             </div>
 
-            <pre className="text-sm rounded-xl p-4 shadow-sm overflow-x-auto">
-                {JSON.stringify(data, null, 2)}
-            </pre>
+            <section className="rounded-xl border bg-white p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-sm font-semibold">Rendered JSON</h2>
+                    <span className="text-xs text-neutral-500">Latest status payload</span>
+                </div>
+                <div className="app-code-shell">
+                    <pre className="app-code-block">
+                        {JSON.stringify(data, null, 2)}
+                    </pre>
+                </div>
+            </section>
         </div>
     );
 }

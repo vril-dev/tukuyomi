@@ -389,9 +389,11 @@ export default function Logs() {
                             <td className="px-2 py-1">
                                 <details>
                                     <summary className="cursor-pointer underline">JSON</summary>
-                                    <pre className="p-2 bg-gray-50 rounded overflow-x-auto">
-                                        {JSON.stringify(line, null, 2)}
-                                    </pre>
+                                    <div className="mt-2 app-code-shell">
+                                        <pre className="app-code-block">
+                                            {JSON.stringify(line, null, 2)}
+                                        </pre>
+                                    </div>
                                 </details>
                             </td>
                         </tr>

@@ -7,6 +7,8 @@ type CountryBlockDTO = {
     blocked?: string[];
 };
 
+const COUNTRY_BLOCK_SAMPLE_CODES = ["US", "CN", "RU", "KR", "TW", "SG", "IN", "DE", "FR", "GB"] as const;
+
 export default function CountryBlockPanel() {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -143,15 +145,23 @@ export default function CountryBlockPanel() {
             <div className="grid gap-3">
                 <div className="flex items-center justify-between gap-2">
                     <div className="text-sm text-neutral-500">
-                        One country code per line: <code className="px-1 bg-neutral-100 rounded">JP</code>
-                        <code className="ml-1 px-1 bg-neutral-100 rounded">US</code>
+                        One country code per line:
+                        {COUNTRY_BLOCK_SAMPLE_CODES.map((code) => (
+                            <code key={code} className="ml-1 px-1 bg-neutral-100 rounded">{code}</code>
+                        ))}
                         <code className="ml-1 px-1 bg-neutral-100 rounded">UNKNOWN</code>
                     </div>
                     <div className="flex items-center gap-2">
                         <button
                             type="button"
                             className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border"
-                            onClick={() => setRaw((prev) => (prev ? `${prev}\nJP\nUS` : "JP\nUS"))}
+                            onClick={() =>
+                                setRaw((prev) =>
+                                    prev
+                                        ? `${prev}\n${COUNTRY_BLOCK_SAMPLE_CODES.join("\n")}`
+                                        : COUNTRY_BLOCK_SAMPLE_CODES.join("\n")
+                                )
+                            }
                             disabled={loading}
                         >
                             Insert example
@@ -180,7 +190,7 @@ export default function CountryBlockPanel() {
                     className="w-full h-[320px] p-3 border rounded-xl font-mono text-sm leading-5 outline-none focus:ring-2 focus:ring-black/20"
                     value={raw}
                     onChange={(e) => setRaw(e.target.value.toUpperCase())}
-                    placeholder={["# one country code per line", "JP", "US", "UNKNOWN"].join("\n")}
+                    placeholder={["# one country code per line", ...COUNTRY_BLOCK_SAMPLE_CODES, "UNKNOWN"].join("\n")}
                     spellCheck={false}
                 />
 

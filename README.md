@@ -181,7 +181,7 @@ Admin auth model:
 - Keep `WAF_API_KEY_PRIMARY`, `WAF_API_KEY_SECONDARY`, and `WAF_ADMIN_SESSION_SECRET` server-side only.
 - CLI / automation can continue to call admin endpoints with `X-API-Key`.
 - Auth and exposure are separate controls: auth decides who can act after reaching admin paths, while `WAF_ADMIN_EXTERNAL_MODE` decides which networks can reach the embedded admin UI/API at all.
-- The default `[web]` posture is `WAF_ADMIN_EXTERNAL_MODE=api_only_external`: trusted/private direct peers can reach both admin UI and admin API, while untrusted external peers are limited to the authenticated admin API.
+- The default tukuyomi posture is `WAF_ADMIN_EXTERNAL_MODE=api_only_external`: trusted/private direct peers can reach both admin UI and admin API, while untrusted external peers are limited to the authenticated admin API.
 - `WAF_ADMIN_TRUSTED_CIDRS` uses the direct peer IP only. `WAF_TRUSTED_PROXY_CIDRS` is only for forwarded-header trust and does not make the admin UI reachable.
 - If you do not need remote admin API access, set `WAF_ADMIN_EXTERNAL_MODE=deny_external`.
 - If you intentionally set `WAF_ADMIN_EXTERNAL_MODE=full_external`, add front-side controls such as IP allowlists, mTLS, and/or upstream auth. Startup logs warn for this posture.
@@ -872,7 +872,7 @@ You can inspect cache hit state using nginx `X-Cache-Status` header (`MISS`/`HIT
 ## Admin UI Access Restrictions
 
 Built-in admin auth exists, but it is not the same thing as safe exposure.
-The default `[web]` posture keeps the embedded admin UI limited to trusted/private direct peers and allows untrusted external clients to reach only the authenticated admin API.
+The default tukuyomi posture keeps the embedded admin UI limited to trusted/private direct peers and allows untrusted external clients to reach only the authenticated admin API.
 If you expose `NGX_CORAZA_ADMIN_URL` or `WAF_API_BASEPATH` beyond trusted networks, still add front-side controls such as Basic Auth, IP allowlists, and/or mTLS.
 If remote admin API access is unnecessary, set `WAF_ADMIN_EXTERNAL_MODE=deny_external`.
 

@@ -109,7 +109,7 @@ template:
 `client -> ALB/nginx/HAProxy/Cloudflare -> tukuyomi -> app`
 
 とし、`WAF_TRUSTED_PROXY_CIDRS` はその前段 range に限定してください。
-`WAF_TRUSTED_PROXY_CIDRS` は admin exposure を決めません。`[web]` の既定 posture は `WAF_ADMIN_EXTERNAL_MODE=api_only_external` で、埋め込み管理UIは trusted/private な直結 peer に限定しつつ、認証付き管理APIは untrusted external からも到達可能なままです。remote admin API が不要なら `WAF_ADMIN_EXTERNAL_MODE=deny_external` を使い、front layer が private ではない source IP で tukuyomi に接続する場合は `WAF_ADMIN_TRUSTED_CIDRS` にその range を設定してください。
+`WAF_TRUSTED_PROXY_CIDRS` は admin exposure を決めません。tukuyomi の既定 posture は `WAF_ADMIN_EXTERNAL_MODE=api_only_external` で、埋め込み管理UIは trusted/private な直結 peer に限定しつつ、認証付き管理APIは untrusted external からも到達可能なままです。remote admin API が不要なら `WAF_ADMIN_EXTERNAL_MODE=deny_external` を使い、front layer が private ではない source IP で tukuyomi に接続する場合は `WAF_ADMIN_TRUSTED_CIDRS` にその range を設定してください。
 
 ## Secret Handling
 

@@ -1,6 +1,6 @@
 # Release Notes
 
-This file keeps product-facing release notes for `[web] tukuyomi`.
+This file keeps product-facing release notes for tukuyomi.
 
 - Draft entries may be edited before the release tag is pushed.
 - Historical details that are not summarized here can still be traced from the

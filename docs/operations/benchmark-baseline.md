@@ -2,8 +2,8 @@
 
 # Benchmark Baseline
 
-This document describes the lightweight benchmark harness used to compare `[web]`
-runtime profiles while the front-proxy dependency shifts over time.
+This document describes the lightweight benchmark harness used to compare
+tukuyomi runtime profiles while the front-proxy dependency shifts over time.
 
 ## What It Measures
 

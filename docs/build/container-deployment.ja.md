@@ -90,7 +90,7 @@ cloud では通常:
 です。前段がある場合は、`WAF_TRUSTED_PROXY_CIDRS` をその前段だけに限定してください。
 `WAF_TRUSTED_PROXY_CIDRS` は forwarded header の信頼境界だけを決めます。admin reachability は別です:
 
-- `[web]` の既定 posture は `WAF_ADMIN_EXTERNAL_MODE=api_only_external`
+- tukuyomi の既定 posture は `WAF_ADMIN_EXTERNAL_MODE=api_only_external`
 - `WAF_ADMIN_TRUSTED_CIDRS` に入った trusted/private な直結 peer は管理UI/APIの両方へ到達可能
 - untrusted external は認証付き管理APIだけへ到達可能
 - remote admin API が不要なら `WAF_ADMIN_EXTERNAL_MODE=deny_external` を使う

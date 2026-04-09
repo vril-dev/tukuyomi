@@ -2,7 +2,7 @@
 
 # Standalone Runtime 回帰マトリクス
 
-この文書は、`[web]` の standalone 形態に対する繰り返し可能な回帰確認手順を定義します。
+この文書は、tukuyomi の standalone 形態に対する繰り返し可能な回帰確認手順を定義します。
 
 - `client -> tukuyomi -> app`
 - `client -> ALB/nginx/cloudflare -> tukuyomi -> app`

@@ -90,7 +90,7 @@ Typical cloud path:
 If a front layer exists, restrict `WAF_TRUSTED_PROXY_CIDRS` to that layer only.
 `WAF_TRUSTED_PROXY_CIDRS` only affects forwarded-header trust. Admin reachability is separate:
 
-- default `[web]` posture is `WAF_ADMIN_EXTERNAL_MODE=api_only_external`
+- default tukuyomi posture is `WAF_ADMIN_EXTERNAL_MODE=api_only_external`
 - trusted/private direct peers in `WAF_ADMIN_TRUSTED_CIDRS` can reach admin UI and API
 - untrusted external clients can reach only the authenticated admin API
 - use `WAF_ADMIN_EXTERNAL_MODE=deny_external` when remote admin API access is unnecessary

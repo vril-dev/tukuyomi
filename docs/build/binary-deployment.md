@@ -109,7 +109,7 @@ If a front layer exists, run traffic as:
 `client -> ALB/nginx/HAProxy/Cloudflare -> tukuyomi -> app`
 
 and restrict `WAF_TRUSTED_PROXY_CIDRS` to only that front layer.
-`WAF_TRUSTED_PROXY_CIDRS` does not decide admin exposure. The default `[web]` posture is `WAF_ADMIN_EXTERNAL_MODE=api_only_external`, which keeps the embedded admin UI limited to trusted/private direct peers while leaving the authenticated admin API reachable to untrusted external clients. Use `WAF_ADMIN_EXTERNAL_MODE=deny_external` when remote admin API access is unnecessary, and set `WAF_ADMIN_TRUSTED_CIDRS` if your front layer reaches tukuyomi from non-private source IPs.
+`WAF_TRUSTED_PROXY_CIDRS` does not decide admin exposure. The default tukuyomi posture is `WAF_ADMIN_EXTERNAL_MODE=api_only_external`, which keeps the embedded admin UI limited to trusted/private direct peers while leaving the authenticated admin API reachable to untrusted external clients. Use `WAF_ADMIN_EXTERNAL_MODE=deny_external` when remote admin API access is unnecessary, and set `WAF_ADMIN_TRUSTED_CIDRS` if your front layer reaches tukuyomi from non-private source IPs.
 
 ## Secret Handling
 

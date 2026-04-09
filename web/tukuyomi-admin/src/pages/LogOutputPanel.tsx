@@ -149,7 +149,7 @@ export default function LogOutputPanel() {
     return (
         <div className="w-full p-4 space-y-4">
             <header className="flex items-center justify-between">
-                <h1 className="text-xl font-semibold">Log Output</h1>
+                <h1 className="text-xl font-semibold">Log Settings</h1>
                 <div className="flex items-center gap-2">
                     {statusBadge}
                     <Badge color={localReadCompatible ? "green" : "amber"}>

@@ -405,9 +405,9 @@ export default function FPTunerPanel() {
           </button>
 
           {applyResult && (
-            <pre className="text-xs rounded border p-2 overflow-x-auto bg-neutral-50">
-              {JSON.stringify(applyResult, null, 2)}
-            </pre>
+            <div className="app-code-shell">
+              <pre className="app-code-block">{JSON.stringify(applyResult, null, 2)}</pre>
+            </div>
           )}
         </section>
       </div>
@@ -448,9 +448,9 @@ export default function FPTunerPanel() {
       {proposeResult && (
         <section className="rounded-xl border bg-white p-3 space-y-2">
           <h2 className="text-sm font-semibold">Last Propose Response</h2>
-          <pre className="text-xs rounded border p-2 overflow-x-auto bg-neutral-50">
-            {JSON.stringify(proposeResult, null, 2)}
-          </pre>
+          <div className="app-code-shell">
+            <pre className="app-code-block">{JSON.stringify(proposeResult, null, 2)}</pre>
+          </div>
         </section>
       )}
     </div>

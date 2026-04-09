@@ -15,7 +15,7 @@
 - ブラウザ / HTTP ランナーによる検証
 - `tukuyomi`、`tukuyomi-proxy`、`tukuyomi-edge` 向けのマニフェスト駆動チェック
 - HTML / JSON / JUnit / CI サマリー出力
-- `[web]` に必須の実行時依存を持ち込まない外部検証ツールとしての役割
+- tukuyomi に必須の実行時依存を持ち込まない外部検証ツールとしての役割
 
 ## 公開配布
 

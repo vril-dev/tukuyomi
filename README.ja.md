@@ -182,7 +182,7 @@ make go-build
 - `WAF_API_KEY_PRIMARY`, `WAF_API_KEY_SECONDARY`, `WAF_ADMIN_SESSION_SECRET` は server 側だけで保持してください。
 - CLI / 自動化は従来どおり `X-API-Key` で管理 API を呼べます。
 - 認証と exposure は別物です。認証は管理 path 到達後に「誰が操作できるか」を決め、`WAF_ADMIN_EXTERNAL_MODE` はそもそも「どの network から管理 UI/API に到達できるか」を決めます。
-- `[web]` の既定 posture は `WAF_ADMIN_EXTERNAL_MODE=api_only_external` です。trusted/private な直結 peer は管理UI/API の両方に到達でき、untrusted external は認証付き管理APIだけに限定されます。
+- tukuyomi の既定 posture は `WAF_ADMIN_EXTERNAL_MODE=api_only_external` です。trusted/private な直結 peer は管理UI/API の両方に到達でき、untrusted external は認証付き管理APIだけに限定されます。
 - `WAF_ADMIN_TRUSTED_CIDRS` は直結 peer IP だけを見ます。`WAF_TRUSTED_PROXY_CIDRS` は forwarded header 信頼用であり、管理UI の reachability は広げません。
 - remote admin API が不要なら `WAF_ADMIN_EXTERNAL_MODE=deny_external` を設定してください。
 - `WAF_ADMIN_EXTERNAL_MODE=full_external` を使うなら、front 側で IP allowlist / mTLS / upstream auth などを必ず追加してください。起動時にも warning を出します。
@@ -874,7 +874,7 @@ DENY regex=^/users/[0-9]+/profile
 ## 管理画面のアクセス制限について
 
 管理 auth があることと、安全な exposure posture があることは別です。
-`[web]` の既定 posture では、埋め込み管理UIは trusted/private な直結 peer に限定され、untrusted external は認証付き管理APIだけへ到達できます。
+tukuyomi の既定 posture では、埋め込み管理UIは trusted/private な直結 peer に限定され、untrusted external は認証付き管理APIだけへ到達できます。
 それでも `NGX_CORAZA_ADMIN_URL` や `WAF_API_BASEPATH` を trusted network の外へ出す場合は、Basic 認証、IP allowlist、mTLS などの front-side 制御を追加してください。
 remote admin API 自体が不要なら `WAF_ADMIN_EXTERNAL_MODE=deny_external` を使ってください。
 

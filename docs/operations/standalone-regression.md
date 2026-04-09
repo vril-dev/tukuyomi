@@ -3,7 +3,7 @@
 # Standalone Runtime Regression Matrix
 
 This document defines the repeatable regression path for the standalone-shaped
-`[web]` runtime:
+tukuyomi runtime:
 
 - `client -> tukuyomi -> app`
 - `client -> ALB/nginx/cloudflare -> tukuyomi -> app`

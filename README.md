@@ -113,7 +113,7 @@ You can control behavior via `.env`.
 | `WAF_BYPASS_FILE` | `conf/waf.bypass` | Path for bypass/special-rule definition file. |
 | `WAF_BOT_DEFENSE_FILE` | `conf/bot-defense.conf` | Bot-defense challenge settings file (JSON), editable from admin UI. |
 | `WAF_SEMANTIC_FILE` | `conf/semantic.conf` | Semantic heuristic scoring settings file (JSON), editable from admin UI. |
-| `WAF_COUNTRY_BLOCK_FILE` | `conf/country-block.conf` | Country block definition file (one country code per line, e.g. `JP`, `US`, `UNKNOWN`). |
+| `WAF_COUNTRY_BLOCK_FILE` | `conf/country-block.conf` | Country block definition file (one country code per line, e.g. `US`, `CN`, `RU`, `KR`, `TW`, `SG`, `IN`, `DE`, `FR`, `GB`, `UNKNOWN`). |
 | `WAF_RATE_LIMIT_FILE` | `conf/rate-limit.conf` | Rate-limit definition file (JSON), editable from admin UI. |
 | `WAF_IP_REPUTATION_FILE` | `conf/ip-reputation.conf` | IP reputation settings file (JSON), editable from admin UI. |
 | `WAF_RULES_FILE` | `rules/tukuyomi.conf` | Active base rule file(s). Comma-separated multiple files are supported. |
@@ -574,7 +574,7 @@ You can directly edit and save `waf.bypass` from dashboard `/bypass`.
 ### Country Block Settings
 
 You can edit `WAF_COUNTRY_BLOCK_FILE` (default: `conf/country-block.conf`) from `/country-block`.
-Use one country code per line (`JP`, `US`, `UNKNOWN`).
+Use one country code per line (`US`, `CN`, `RU`, `KR`, `TW`, `SG`, `IN`, `DE`, `FR`, `GB`, `UNKNOWN`).
 Matched countries are blocked with `403` before WAF inspection.
 
 ### Rate Limit Settings

@@ -114,7 +114,7 @@ make preset-check PRESET=minimal
 | `WAF_BYPASS_FILE` | `conf/waf.bypass` | バイパス/特別ルール定義ファイルのパス。 |
 | `WAF_BOT_DEFENSE_FILE` | `conf/bot-defense.conf` | Bot defense challenge 設定ファイル（JSON）。管理画面から編集可能。 |
 | `WAF_SEMANTIC_FILE` | `conf/semantic.conf` | Semanticヒューリスティック設定ファイル（JSON）。管理画面から編集可能。 |
-| `WAF_COUNTRY_BLOCK_FILE` | `conf/country-block.conf` | 国別ブロック定義ファイル（1行1国コード、例: `JP`, `US`, `UNKNOWN`）。 |
+| `WAF_COUNTRY_BLOCK_FILE` | `conf/country-block.conf` | 国別ブロック定義ファイル（1行1国コード、例: `US`, `CN`, `RU`, `KR`, `TW`, `SG`, `IN`, `DE`, `FR`, `GB`, `UNKNOWN`）。 |
 | `WAF_RATE_LIMIT_FILE` | `conf/rate-limit.conf` | レート制限定義ファイル（JSON）。管理画面から編集可能。 |
 | `WAF_IP_REPUTATION_FILE` | `conf/ip-reputation.conf` | IP reputation 設定ファイル（JSON）。管理画面から編集可能。 |
 | `WAF_RULES_FILE` | `rules/tukuyomi.conf` | 使用するルールファイル（カンマ区切りで複数指定も可）。 |
@@ -577,7 +577,7 @@ tukuyomiでは、CorazaによるWAF検査を特定のリクエストに対して
 ### 国別ブロック設定
 
 管理ダッシュボード `/country-block` から、`WAF_COUNTRY_BLOCK_FILE`（既定: `conf/country-block.conf`）を編集できます。  
-1行に1つの国コードを記述します（例: `JP`, `US`, `UNKNOWN`）。  
+1行に1つの国コードを記述します（例: `US`, `CN`, `RU`, `KR`, `TW`, `SG`, `IN`, `DE`, `FR`, `GB`, `UNKNOWN`）。
 該当する国コードのアクセスは WAF 前段で `403` になります。
 
 ### レート制限設定

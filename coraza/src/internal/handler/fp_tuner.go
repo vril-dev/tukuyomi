@@ -10,6 +10,7 @@ import (
 	"hash/fnv"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,14 +35,17 @@ const (
 )
 
 var (
-	fpTunerVariableAllowed = regexp.MustCompile(`^[A-Za-z0-9_.:!]+$`)
-	fpTunerRuleLinePattern = regexp.MustCompile(`^SecRule REQUEST_URI "@beginsWith [^"\r\n]+" "id:[0-9]{6,},phase:1,pass,nolog,ctl:ruleRemoveTargetById=[0-9]+;[A-Za-z0-9_.:!]+,msg:'[^'\r\n]*'"$`)
-	fpTunerMaskBearerToken = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`)
-	fpTunerMaskJWT         = regexp.MustCompile(`\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\b`)
-	fpTunerMaskEmail       = regexp.MustCompile(`\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b`)
-	fpTunerMaskIPv4        = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
-	fpTunerMaskSecretKV    = regexp.MustCompile(`(?i)\b(token|access_token|refresh_token|api_key|apikey|password|passwd|secret)=([^&\s]+)`)
-	fpTunerMaskLongToken   = regexp.MustCompile(`\b[A-Za-z0-9._~+/=-]{24,}\b`)
+	fpTunerVariableAllowed     = regexp.MustCompile(`^[A-Za-z0-9_.:!]+$`)
+	fpTunerHostRuleLinePattern = regexp.MustCompile(`^SecRule REQUEST_HEADERS:Host "@(streq|rx) [^"\r\n]+" "id:[0-9]{6,},phase:1,pass,nolog,chain,msg:'[^'\r\n]*'"$`)
+	fpTunerHostRuleLineParts   = regexp.MustCompile(`^SecRule REQUEST_HEADERS:Host "@(streq|rx) ([^"\r\n]+)" "id:([0-9]{6,}),phase:1,pass,nolog,chain,msg:'([^'\r\n]*)'"$`)
+	fpTunerPathRuleLinePattern = regexp.MustCompile(`^SecRule REQUEST_URI "@beginsWith [^"\r\n]+" "ctl:ruleRemoveTargetById=[0-9]+;[A-Za-z0-9_.:!]+"$`)
+	fpTunerPathRuleLineParts   = regexp.MustCompile(`^SecRule REQUEST_URI "@beginsWith ([^"\r\n]+)" "ctl:ruleRemoveTargetById=([0-9]+);([A-Za-z0-9_.:!]+)"$`)
+	fpTunerMaskBearerToken     = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`)
+	fpTunerMaskJWT             = regexp.MustCompile(`\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\b`)
+	fpTunerMaskEmail           = regexp.MustCompile(`\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b`)
+	fpTunerMaskIPv4            = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
+	fpTunerMaskSecretKV        = regexp.MustCompile(`(?i)\b(token|access_token|refresh_token|api_key|apikey|password|passwd|secret)=([^&\s]+)`)
+	fpTunerMaskLongToken       = regexp.MustCompile(`\b[A-Za-z0-9._~+/=-]{24,}\b`)
 )
 
 type fpApprovalEntry struct {
@@ -59,7 +63,10 @@ type fpTunerEventInput struct {
 	EventType       string `json:"event_type,omitempty"`
 	ObservedAt      string `json:"observed_at,omitempty"`
 	Method          string `json:"method,omitempty"`
+	Scheme          string `json:"scheme,omitempty"`
+	Host            string `json:"host,omitempty"`
 	Path            string `json:"path,omitempty"`
+	Query           string `json:"query,omitempty"`
 	Policy          string `json:"policy,omitempty"`
 	RuleID          int    `json:"rule_id,omitempty"`
 	Status          int    `json:"status,omitempty"`
@@ -80,10 +87,17 @@ type fpTunerApproval struct {
 	Token    string `json:"token,omitempty"`
 }
 
+type fpTunerNoProposal struct {
+	Decision   string  `json:"decision"`
+	Reason     string  `json:"reason"`
+	Confidence float64 `json:"confidence,omitempty"`
+}
+
 type fpTunerProposeResult struct {
-	Input    fpTunerEventInput `json:"input"`
-	Proposal fpTunerProposal   `json:"proposal"`
-	Approval fpTunerApproval   `json:"approval"`
+	Input      fpTunerEventInput  `json:"input"`
+	Proposal   *fpTunerProposal   `json:"proposal,omitempty"`
+	NoProposal *fpTunerNoProposal `json:"no_proposal,omitempty"`
+	Approval   fpTunerApproval    `json:"approval"`
 }
 
 type fpTunerProposeError struct {
@@ -131,8 +145,24 @@ type fpTunerProviderRequest struct {
 	Constraints []string          `json:"constraints"`
 }
 
-type fpTunerProviderResponse struct {
-	Proposal fpTunerProposal `json:"proposal"`
+type fpTunerProviderDecision struct {
+	Proposal   *fpTunerProposal
+	NoProposal *fpTunerNoProposal
+}
+
+type fpTunerParsedRuleLine struct {
+	HostOperator string
+	HostOperand  string
+	Host         string
+	Path         string
+	GeneratedID  int
+	TargetRuleID int
+	Variable     string
+	Message      string
+}
+
+type fpTunerRecentWAFBlocksResponse struct {
+	Lines []logLine `json:"lines"`
 }
 
 type fpTunerApplyBody struct {
@@ -190,6 +220,7 @@ func ProposeFPTuning(c *gin.Context) {
 			"approval":         results[0].Approval,
 			"input":            results[0].Input,
 			"proposal":         results[0].Proposal,
+			"no_proposal":      results[0].NoProposal,
 		})
 		return
 	}
@@ -347,21 +378,47 @@ func ApplyFPTuning(c *gin.Context) {
 	})
 }
 
+func GetFPTunerRecentWAFBlocks(c *gin.Context) {
+	path, ok := logFiles["waf"]
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "waf log source is not configured"})
+		return
+	}
+	path = resolveLogPath("waf", path)
+
+	limit := clampInt(mustAtoiDefault(c.Query("limit"), 20), 1, 100)
+	lines, err := readRecentFPTunerWAFBlockLines(path, limit)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			c.JSON(http.StatusOK, fpTunerRecentWAFBlocksResponse{Lines: nil})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, fpTunerRecentWAFBlocksResponse{Lines: lines})
+}
+
 func resolveFPTunerEventInput(in *fpTunerEventInput) (fpTunerEventInput, string, error) {
 	if in != nil {
 		norm := normalizeFPTunerEventInput(*in)
-		if norm.Path == "" {
-			return fpTunerEventInput{}, "", fmt.Errorf("event.path is required")
+		if err := validateFPTunerResolvedEventInput("event", norm); err != nil {
+			return fpTunerEventInput{}, "", err
 		}
 		return norm, "request", nil
 	}
 
-	event, source, err := latestSecurityEvent()
+	event, err := latestWAFBlockEvent()
 	if err != nil {
 		return fpTunerEventInput{}, "", err
 	}
 
-	return normalizeFPTunerEventInput(event), source, nil
+	norm := normalizeFPTunerEventInput(event)
+	if err := validateFPTunerResolvedEventInput("latest_event", norm); err != nil {
+		return fpTunerEventInput{}, "", err
+	}
+	return norm, "waf_log", nil
 }
 
 func resolveFPTunerEventInputs(in fpTunerProposeBody) ([]fpTunerEventInput, string, error) {
@@ -372,8 +429,8 @@ func resolveFPTunerEventInputs(in fpTunerProposeBody) ([]fpTunerEventInput, stri
 		out := make([]fpTunerEventInput, 0, len(in.Events))
 		for i, raw := range in.Events {
 			norm := normalizeFPTunerEventInput(raw)
-			if norm.Path == "" {
-				return nil, "", fmt.Errorf("events[%d].path is required", i)
+			if err := validateFPTunerResolvedEventInput(fmt.Sprintf("events[%d]", i), norm); err != nil {
+				return nil, "", err
 			}
 			out = append(out, norm)
 		}
@@ -406,12 +463,14 @@ func buildFPTunerProposeResult(event fpTunerEventInput, targetPath string) (fpTu
 		Input:      maskFPTunerProviderInput(event),
 		TargetPath: targetPath,
 		Constraints: []string{
-			"Only return one scoped exclusion rule",
-			"Rule must be SecRule REQUEST_URI with ctl:ruleRemoveTargetById",
-			"No global disable operations",
+			"Target engine is Coraza with ModSecurity-compatible exclusion syntax",
+			"Only return one scoped exclusion for the observed existing detection rule_id on the observed host and path",
+			"Rule must be a two-line chain: REQUEST_HEADERS:Host exact match, or a default-port-aware regex for http:80 / https:443 only, then REQUEST_URI @beginsWith with ctl:ruleRemoveTargetById",
+			"Never generate deny/block rules, signatures, or global disable operations",
+			"If this is not a credible false positive or evidence is insufficient, return no_proposal with reason",
 		},
 	}
-	proposal, mode, err := requestFPTunerProposal(providerReq)
+	decision, mode, err := requestFPTunerProposal(providerReq)
 	if err != nil {
 		return fpTunerProposeResult{}, "", &fpTunerProposeError{
 			Status:  http.StatusBadGateway,
@@ -419,8 +478,23 @@ func buildFPTunerProposeResult(event fpTunerEventInput, targetPath string) (fpTu
 			Err:     err,
 		}
 	}
-	proposal = fillFPTunerProposalDefaults(proposal, event, targetPath)
-	if err := validateFPTunerRuleLine(proposal.RuleLine); err != nil {
+	if decision.NoProposal != nil {
+		return fpTunerProposeResult{
+			Input:      event,
+			NoProposal: decision.NoProposal,
+			Approval:   fpTunerApproval{Required: false},
+		}, mode, nil
+	}
+	if decision.Proposal == nil {
+		return fpTunerProposeResult{}, "", &fpTunerProposeError{
+			Status:  http.StatusBadGateway,
+			Message: "provider returned neither proposal nor no_proposal",
+			Err:     fmt.Errorf("provider returned neither proposal nor no_proposal"),
+		}
+	}
+	proposal := fillFPTunerProposalDefaults(*decision.Proposal, event, targetPath)
+	parsed, err := parseFPTunerRuleLine(proposal.RuleLine)
+	if err != nil {
 		return fpTunerProposeResult{}, "", &fpTunerProposeError{
 			Status:  http.StatusUnprocessableEntity,
 			Message: "provider returned unsafe proposal",
@@ -428,9 +502,17 @@ func buildFPTunerProposeResult(event fpTunerEventInput, targetPath string) (fpTu
 			Err:     err,
 		}
 	}
+	if err := validateFPTunerProposalBinding(parsed, event); err != nil {
+		return fpTunerProposeResult{}, "", &fpTunerProposeError{
+			Status:  http.StatusUnprocessableEntity,
+			Message: "provider returned proposal outside the observed Coraza event scope",
+			Details: err.Error(),
+			Err:     err,
+		}
+	}
 	result := fpTunerProposeResult{
 		Input:    event,
-		Proposal: proposal,
+		Proposal: &proposal,
 		Approval: fpTunerApproval{Required: config.FPTunerRequireApproval},
 	}
 	if config.FPTunerRequireApproval {
@@ -470,20 +552,10 @@ func latestWAFBlockEvent() (fpTunerEventInput, error) {
 		return fpTunerEventInput{}, err
 	}
 	for i := len(lines) - 1; i >= 0; i-- {
-		ln := lines[i]
-		if strings.TrimSpace(anyToString(ln["event"])) != "waf_block" {
-			continue
+		if event, ok := fpTunerEventInputFromLogLine(lines[i]); ok && event.EventType == "waf_block" {
+			event.EventType = ""
+			return event, nil
 		}
-		return fpTunerEventInput{
-			EventID:         anyToString(ln["req_id"]),
-			ObservedAt:      anyToString(ln["ts"]),
-			Method:          anyToString(ln["method"]),
-			Path:            anyToString(ln["path"]),
-			RuleID:          anyToInt(ln["rule_id"]),
-			Status:          anyToInt(ln["status"]),
-			MatchedVariable: anyToString(ln["matched_variable"]),
-			MatchedValue:    anyToString(ln["matched_value"]),
-		}, nil
 	}
 
 	return fpTunerEventInput{}, fmt.Errorf("no waf_block event found in %s", path)
@@ -519,18 +591,22 @@ func fpTunerEventInputFromLogLine(ln logLine) (fpTunerEventInput, bool) {
 	eventType := strings.TrimSpace(anyToString(ln["event"]))
 	switch eventType {
 	case "waf_block":
-		return fpTunerEventInput{
+		event := fpTunerEventInput{
 			EventID:         anyToString(ln["req_id"]),
 			EventType:       eventType,
 			ObservedAt:      anyToString(ln["ts"]),
 			Method:          anyToString(ln["method"]),
+			Scheme:          anyToString(ln["original_scheme"]),
+			Host:            firstNonEmptyString(anyToString(ln["original_host"]), anyToString(ln["rewritten_host"])),
 			Path:            anyToString(ln["path"]),
+			Query:           firstNonEmptyString(anyToString(ln["original_query"]), anyToString(ln["rewritten_query"])),
 			Policy:          "waf",
 			RuleID:          anyToInt(ln["rule_id"]),
 			Status:          anyToInt(ln["status"]),
 			MatchedVariable: anyToString(ln["matched_variable"]),
 			MatchedValue:    anyToString(ln["matched_value"]),
-		}, true
+		}
+		return normalizeFPTunerWAFEventInput(event, ln), true
 	case "semantic_anomaly":
 		return fpTunerEventInput{
 			EventID:    anyToString(ln["req_id"]),
@@ -548,6 +624,84 @@ func fpTunerEventInputFromLogLine(ln logLine) (fpTunerEventInput, bool) {
 	}
 }
 
+func normalizeFPTunerWAFEventInput(in fpTunerEventInput, ln logLine) fpTunerEventInput {
+	in.MatchedVariable = strings.TrimSpace(in.MatchedVariable)
+	in.MatchedValue = strings.TrimSpace(in.MatchedValue)
+	if !shouldFallbackToQueryScope(in.MatchedVariable, in.MatchedValue) {
+		return in
+	}
+
+	query := decodeFPTunerQueryPayload(anyToString(ln["original_query"]))
+	if strings.TrimSpace(query) == "" {
+		return in
+	}
+
+	in.MatchedVariable = "QUERY_STRING"
+	in.MatchedValue = clampText(query, fpTunerMaxMatchedValueBytes)
+	return in
+}
+
+func shouldFallbackToQueryScope(variable string, value string) bool {
+	variable = strings.TrimSpace(variable)
+	value = strings.TrimSpace(value)
+	if variable == "" {
+		return value == ""
+	}
+	return strings.HasPrefix(variable, "TX:") ||
+		variable == "REQUEST_FILENAME" ||
+		normalizeFPTunerVariable(variable) == fpTunerDefaultVariable
+}
+
+func decodeFPTunerQueryPayload(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	decoded, err := url.QueryUnescape(trimmed)
+	if err != nil {
+		return trimmed
+	}
+	return decoded
+}
+
+func readRecentFPTunerWAFBlockLines(path string, limit int) ([]logLine, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	if store := getLogsStatsStore(); store != nil {
+		return store.RecentWAFBlockLogLines(path, limit)
+	}
+
+	tail := minInt(maxLinesPerRead, maxInt(limit*10, limit))
+	lines, _, _, _, err := readByLine(path, tail, nil, "")
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]logLine, 0, limit)
+	for i := len(lines) - 1; i >= 0 && len(out) < limit; i-- {
+		if strings.TrimSpace(anyToString(lines[i]["event"])) != "waf_block" {
+			continue
+		}
+		out = append(out, normalizeFPTunerWAFLogLine(lines[i]))
+	}
+	return out, nil
+}
+
+func normalizeFPTunerWAFLogLine(ln logLine) logLine {
+	out := logLine{}
+	for k, v := range ln {
+		out[k] = v
+	}
+	input, ok := fpTunerEventInputFromLogLine(out)
+	if !ok || input.EventType != "waf_block" {
+		return out
+	}
+	out["matched_variable"] = input.MatchedVariable
+	out["matched_value"] = input.MatchedValue
+	return out
+}
+
 func normalizeFPTunerEventInput(in fpTunerEventInput) fpTunerEventInput {
 	in.EventID = strings.TrimSpace(in.EventID)
 	in.EventType = strings.TrimSpace(in.EventType)
@@ -556,7 +710,13 @@ func normalizeFPTunerEventInput(in fpTunerEventInput) fpTunerEventInput {
 	if in.Method == "" {
 		in.Method = http.MethodGet
 	}
+	in.Scheme = normalizeFPTunerScheme(in.Scheme)
+	in.Host = normalizeFPTunerHost(in.Host)
+	if in.Scheme == "" {
+		in.Scheme = inferFPTunerSchemeFromHost(in.Host)
+	}
 	in.Path = normalizeFPTunerPath(in.Path)
+	in.Query = clampText(strings.TrimSpace(in.Query), fpTunerMaxMatchedValueBytes)
 	in.Policy = strings.TrimSpace(in.Policy)
 	if in.RuleID <= 0 {
 		in.RuleID = fpTunerDefaultRuleID
@@ -571,6 +731,22 @@ func normalizeFPTunerEventInput(in fpTunerEventInput) fpTunerEventInput {
 	in.MatchedVariable = normalizeFPTunerVariable(in.MatchedVariable)
 	in.MatchedValue = clampText(strings.TrimSpace(in.MatchedValue), fpTunerMaxMatchedValueBytes)
 	return in
+}
+
+func validateFPTunerResolvedEventInput(field string, in fpTunerEventInput) error {
+	if strings.TrimSpace(in.Host) == "" {
+		return fmt.Errorf("%s.host is required", field)
+	}
+	if strings.TrimSpace(in.Path) == "" {
+		return fmt.Errorf("%s.path is required", field)
+	}
+	if in.RuleID <= 0 {
+		return fmt.Errorf("%s.rule_id is required", field)
+	}
+	if strings.TrimSpace(in.MatchedVariable) == "" {
+		return fmt.Errorf("%s.matched_variable is required", field)
+	}
+	return nil
 }
 
 func firstNonEmptyString(values ...string) string {
@@ -594,6 +770,63 @@ func normalizeFPTunerPath(v string) string {
 	return p
 }
 
+func normalizeFPTunerHost(v string) string {
+	s := strings.TrimSpace(v)
+	if s == "" {
+		return ""
+	}
+	if strings.ContainsAny(s, "\r\n\"") {
+		return ""
+	}
+	return s
+}
+
+func normalizeFPTunerScheme(v string) string {
+	s := strings.ToLower(strings.TrimSpace(v))
+	switch s {
+	case "", "http", "https":
+		return s
+	default:
+		return ""
+	}
+}
+
+func inferFPTunerSchemeFromHost(host string) string {
+	_, port := splitFPTunerHostPort(host)
+	switch port {
+	case "443":
+		return "https"
+	case "80":
+		return "http"
+	default:
+		return ""
+	}
+}
+
+func splitFPTunerHostPort(host string) (string, string) {
+	host = normalizeFPTunerHost(host)
+	if host == "" {
+		return "", ""
+	}
+	if strings.HasPrefix(host, "[") {
+		end := strings.Index(host, "]")
+		if end <= 0 {
+			return host, ""
+		}
+		hostOnly := host[:end+1]
+		rest := host[end+1:]
+		if strings.HasPrefix(rest, ":") && rest != ":" {
+			return hostOnly, rest[1:]
+		}
+		return hostOnly, ""
+	}
+	lastColon := strings.LastIndex(host, ":")
+	if lastColon <= 0 || strings.Count(host, ":") > 1 {
+		return host, ""
+	}
+	return host[:lastColon], host[lastColon+1:]
+}
+
 func normalizeFPTunerVariable(v string) string {
 	s := strings.TrimSpace(v)
 	if s == "" {
@@ -615,55 +848,26 @@ func clampText(v string, max int) string {
 	return v[:max]
 }
 
-func requestFPTunerProposal(req fpTunerProviderRequest) (fpTunerProposal, string, error) {
-	mode := strings.ToLower(strings.TrimSpace(config.FPTunerMode))
-	if mode == "" {
-		mode = "mock"
-	}
-
-	switch mode {
-	case "mock":
-		p, err := requestFPTunerProposalMock(req)
-		return p, mode, err
-	case "http":
-		p, err := requestFPTunerProposalHTTP(req)
-		return p, mode, err
-	default:
-		return fpTunerProposal{}, "", fmt.Errorf("unsupported WAF_FP_TUNER_MODE: %s", mode)
-	}
+func requestFPTunerProposal(req fpTunerProviderRequest) (fpTunerProviderDecision, string, error) {
+	p, err := requestFPTunerProposalHTTP(req)
+	return p, "http", err
 }
 
-func requestFPTunerProposalMock(req fpTunerProviderRequest) (fpTunerProposal, error) {
-	fixture := strings.TrimSpace(config.FPTunerMockResponseFile)
-	if fixture != "" {
-		proposal, err := readFPTunerMockProposal(fixture)
-		if err == nil {
-			return fillFPTunerProposalDefaults(proposal, req.Input, req.TargetPath), nil
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return fpTunerProposal{}, err
-		}
-	}
-
-	proposal := buildMockFPTunerProposal(req.Input, req.TargetPath)
-	return fillFPTunerProposalDefaults(proposal, req.Input, req.TargetPath), nil
-}
-
-func requestFPTunerProposalHTTP(req fpTunerProviderRequest) (fpTunerProposal, error) {
+func requestFPTunerProposalHTTP(req fpTunerProviderRequest) (fpTunerProviderDecision, error) {
 	endpoint := strings.TrimSpace(config.FPTunerEndpoint)
 	if endpoint == "" {
-		return fpTunerProposal{}, fmt.Errorf("WAF_FP_TUNER_ENDPOINT is empty")
+		return fpTunerProviderDecision{}, fmt.Errorf("WAF_FP_TUNER_ENDPOINT is empty")
 	}
 
 	body, err := json.Marshal(req)
 	if err != nil {
-		return fpTunerProposal{}, err
+		return fpTunerProviderDecision{}, err
 	}
 
 	client := &http.Client{Timeout: config.FPTunerTimeout}
 	httpReq, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return fpTunerProposal{}, err
+		return fpTunerProviderDecision{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if key := strings.TrimSpace(config.FPTunerAPIKey); key != "" {
@@ -672,46 +876,71 @@ func requestFPTunerProposalHTTP(req fpTunerProviderRequest) (fpTunerProposal, er
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return fpTunerProposal{}, err
+		return fpTunerProviderDecision{}, err
 	}
 	defer resp.Body.Close()
 
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fpTunerProposal{}, fmt.Errorf("provider returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return fpTunerProviderDecision{}, fmt.Errorf("provider returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 
-	proposal, err := decodeFPTunerProviderResponse(raw)
+	decision, err := decodeFPTunerProviderResponse(raw)
 	if err != nil {
-		return fpTunerProposal{}, err
+		return fpTunerProviderDecision{}, err
 	}
-	return fillFPTunerProposalDefaults(proposal, req.Input, req.TargetPath), nil
+	if decision.Proposal != nil {
+		proposal := fillFPTunerProposalDefaults(*decision.Proposal, req.Input, req.TargetPath)
+		decision.Proposal = &proposal
+	}
+	if decision.NoProposal != nil {
+		noProposal := normalizeFPTunerNoProposal(*decision.NoProposal)
+		decision.NoProposal = &noProposal
+	}
+	return decision, nil
 }
 
-func readFPTunerMockProposal(path string) (fpTunerProposal, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return fpTunerProposal{}, err
+func decodeFPTunerProviderResponse(raw []byte) (fpTunerProviderDecision, error) {
+	type wrapped struct {
+		Decision   string             `json:"decision,omitempty"`
+		Proposal   *fpTunerProposal   `json:"proposal,omitempty"`
+		NoProposal *fpTunerNoProposal `json:"no_proposal,omitempty"`
+		Reason     string             `json:"reason,omitempty"`
+		Confidence float64            `json:"confidence,omitempty"`
 	}
-	return decodeFPTunerProviderResponse(raw)
-}
 
-func decodeFPTunerProviderResponse(raw []byte) (fpTunerProposal, error) {
-	var wrapped fpTunerProviderResponse
-	if err := json.Unmarshal(raw, &wrapped); err == nil {
-		if strings.TrimSpace(wrapped.Proposal.RuleLine) != "" || strings.TrimSpace(wrapped.Proposal.Summary) != "" {
-			return wrapped.Proposal, nil
+	var env wrapped
+	if err := json.Unmarshal(raw, &env); err == nil {
+		if env.Proposal != nil && (strings.TrimSpace(env.Proposal.RuleLine) != "" || strings.TrimSpace(env.Proposal.Summary) != "") {
+			return fpTunerProviderDecision{Proposal: env.Proposal}, nil
+		}
+		if env.NoProposal != nil {
+			return fpTunerProviderDecision{NoProposal: env.NoProposal}, nil
+		}
+		if strings.EqualFold(strings.TrimSpace(env.Decision), "no_proposal") {
+			return fpTunerProviderDecision{NoProposal: &fpTunerNoProposal{
+				Decision:   "no_proposal",
+				Reason:     strings.TrimSpace(env.Reason),
+				Confidence: env.Confidence,
+			}}, nil
+		}
+	}
+
+	var directNoProposal fpTunerNoProposal
+	if err := json.Unmarshal(raw, &directNoProposal); err == nil {
+		if strings.EqualFold(strings.TrimSpace(directNoProposal.Decision), "no_proposal") {
+			return fpTunerProviderDecision{NoProposal: &directNoProposal}, nil
 		}
 	}
 
 	var direct fpTunerProposal
 	if err := json.Unmarshal(raw, &direct); err == nil {
 		if strings.TrimSpace(direct.RuleLine) != "" || strings.TrimSpace(direct.Summary) != "" {
-			return direct, nil
+			return fpTunerProviderDecision{Proposal: &direct}, nil
 		}
 	}
 
-	return fpTunerProposal{}, fmt.Errorf("provider response must be fp_tuner proposal json")
+	return fpTunerProviderDecision{}, fmt.Errorf("provider response must be fp_tuner proposal json or no_proposal json")
 }
 
 func proposalHash(p fpTunerProposal) string {
@@ -895,6 +1124,7 @@ func maskFPTunerProviderInput(in fpTunerEventInput) fpTunerEventInput {
 	out := in
 	out.MatchedValue = maskSensitiveText(out.MatchedValue)
 	out.Path = maskSensitiveText(out.Path)
+	out.Query = maskSensitiveText(out.Query)
 	return out
 }
 
@@ -931,10 +1161,10 @@ func fillFPTunerProposalDefaults(proposal fpTunerProposal, in fpTunerEventInput,
 		proposal.Title = "Scoped false-positive tuning suggestion"
 	}
 	if strings.TrimSpace(proposal.Summary) == "" {
-		proposal.Summary = fmt.Sprintf("Exclude %s from rule %d only under path prefix %s.", in.MatchedVariable, in.RuleID, in.Path)
+		proposal.Summary = fmt.Sprintf("Exclude %s from rule %d only under host %s and path prefix %s.", in.MatchedVariable, in.RuleID, in.Host, in.Path)
 	}
 	if strings.TrimSpace(proposal.Reason) == "" {
-		proposal.Reason = "Generated by tukuyomi fp-tuner mock flow"
+		proposal.Reason = "Generated by tukuyomi fp-tuner provider flow"
 	}
 	if proposal.Confidence <= 0 {
 		proposal.Confidence = fpTunerDefaultConfidence
@@ -951,16 +1181,19 @@ func fillFPTunerProposalDefaults(proposal fpTunerProposal, in fpTunerEventInput,
 	return proposal
 }
 
-func buildMockFPTunerProposal(in fpTunerEventInput, targetPath string) fpTunerProposal {
-	return fpTunerProposal{
-		ID:         fmt.Sprintf("fp-%d", time.Now().UTC().Unix()),
-		Title:      "Scoped false-positive tuning suggestion",
-		Summary:    fmt.Sprintf("Possible false positive on %s (%s).", in.Path, in.MatchedVariable),
-		Reason:     "Mock provider response used for API contract testing",
-		Confidence: fpTunerDefaultConfidence,
-		TargetPath: targetPath,
-		RuleLine:   buildFPTunerRuleLine(in),
+func normalizeFPTunerNoProposal(in fpTunerNoProposal) fpTunerNoProposal {
+	in.Decision = "no_proposal"
+	in.Reason = strings.TrimSpace(in.Reason)
+	if in.Reason == "" {
+		in.Reason = "Provider could not justify a safe Coraza scoped exclusion for this event."
 	}
+	if in.Confidence > 1 && in.Confidence <= 100 {
+		in.Confidence = in.Confidence / 100
+	}
+	if in.Confidence < 0 {
+		in.Confidence = 0
+	}
+	return in
 }
 
 func buildFPTunerRuleLine(in fpTunerEventInput) string {
@@ -968,17 +1201,56 @@ func buildFPTunerRuleLine(in fpTunerEventInput) string {
 	if ruleID <= 0 {
 		ruleID = fpTunerDefaultRuleID
 	}
+	scope := buildFPTunerHostScope(in.Host, in.Scheme)
 	path := normalizeFPTunerPath(in.Path)
 	variable := normalizeFPTunerVariable(in.MatchedVariable)
-	generatedID := generateFPTunerRuleID(ruleID, path, variable)
+	generatedID := generateFPTunerRuleID(ruleID, scope.Operator, scope.Operand, path, variable)
 	msg := "tukuyomi fp_tuner scoped exclusion"
-	return fmt.Sprintf(`SecRule REQUEST_URI "@beginsWith %s" "id:%d,phase:1,pass,nolog,ctl:ruleRemoveTargetById=%d;%s,msg:'%s'"`, path, generatedID, ruleID, variable, msg)
+	return fmt.Sprintf(
+		"SecRule REQUEST_HEADERS:Host \"@%s %s\" \"id:%d,phase:1,pass,nolog,chain,msg:'%s'\"\nSecRule REQUEST_URI \"@beginsWith %s\" \"ctl:ruleRemoveTargetById=%d;%s\"",
+		scope.Operator, scope.Operand, generatedID, msg, path, ruleID, variable,
+	)
 }
 
-func generateFPTunerRuleID(ruleID int, path, variable string) int {
+type fpTunerHostScope struct {
+	Operator string
+	Operand  string
+	Host     string
+}
+
+func buildFPTunerHostScope(host string, scheme string) fpTunerHostScope {
+	normalizedHost := normalizeFPTunerHost(host)
+	normalizedScheme := normalizeFPTunerScheme(scheme)
+	if normalizedScheme == "" {
+		normalizedScheme = inferFPTunerSchemeFromHost(normalizedHost)
+	}
+	hostOnly, port := splitFPTunerHostPort(normalizedHost)
+	switch {
+	case normalizedScheme == "http" && (port == "" || port == "80") && hostOnly != "":
+		return fpTunerHostScope{
+			Operator: "rx",
+			Operand:  "^" + regexp.QuoteMeta(hostOnly) + "(:80)?$",
+			Host:     hostOnly,
+		}
+	case normalizedScheme == "https" && (port == "" || port == "443") && hostOnly != "":
+		return fpTunerHostScope{
+			Operator: "rx",
+			Operand:  "^" + regexp.QuoteMeta(hostOnly) + "(:443)?$",
+			Host:     hostOnly,
+		}
+	default:
+		return fpTunerHostScope{
+			Operator: "streq",
+			Operand:  normalizedHost,
+			Host:     normalizedHost,
+		}
+	}
+}
+
+func generateFPTunerRuleID(ruleID int, hostOperator string, hostOperand string, path, variable string) int {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(strconv.Itoa(ruleID)))
-	_, _ = h.Write([]byte("|" + path + "|" + variable))
+	_, _ = h.Write([]byte("|" + hostOperator + "|" + hostOperand + "|" + path + "|" + variable))
 	return 190000 + int(h.Sum32()%9000)
 }
 
@@ -1003,9 +1275,147 @@ func selectFPTunerTargetPath(requested string) (string, error) {
 }
 
 func validateFPTunerRuleLine(line string) error {
+	_, err := parseFPTunerRuleLine(line)
+	return err
+}
+
+func parseFPTunerRuleLine(line string) (fpTunerParsedRuleLine, error) {
 	s := strings.TrimSpace(line)
-	if !fpTunerRuleLinePattern.MatchString(s) {
-		return fmt.Errorf("proposal.rule_line must be a scoped SecRule REQUEST_URI exclusion")
+	parts := strings.Split(s, "\n")
+	if len(parts) != 2 {
+		return fpTunerParsedRuleLine{}, fmt.Errorf("proposal.rule_line must be a scoped Host + REQUEST_URI chain exclusion")
+	}
+	hostLine := strings.TrimSpace(parts[0])
+	pathLine := strings.TrimSpace(parts[1])
+	if !fpTunerHostRuleLinePattern.MatchString(hostLine) || !fpTunerPathRuleLinePattern.MatchString(pathLine) {
+		return fpTunerParsedRuleLine{}, fmt.Errorf("proposal.rule_line must be a scoped Host + REQUEST_URI chain exclusion")
+	}
+	hostParts := fpTunerHostRuleLineParts.FindStringSubmatch(hostLine)
+	pathParts := fpTunerPathRuleLineParts.FindStringSubmatch(pathLine)
+	if len(hostParts) != 5 || len(pathParts) != 4 {
+		return fpTunerParsedRuleLine{}, fmt.Errorf("proposal.rule_line must be a scoped Host + REQUEST_URI chain exclusion")
+	}
+	hostScope, err := parseFPTunerHostScope(hostParts[1], hostParts[2])
+	if err != nil {
+		return fpTunerParsedRuleLine{}, fmt.Errorf("proposal.rule_line must be a scoped Host + REQUEST_URI chain exclusion")
+	}
+	generatedID, err := strconv.Atoi(hostParts[3])
+	if err != nil {
+		return fpTunerParsedRuleLine{}, fmt.Errorf("proposal.rule_line has invalid generated rule id")
+	}
+	targetRuleID, err := strconv.Atoi(pathParts[2])
+	if err != nil {
+		return fpTunerParsedRuleLine{}, fmt.Errorf("proposal.rule_line has invalid target rule id")
+	}
+	return fpTunerParsedRuleLine{
+		HostOperator: hostScope.Operator,
+		HostOperand:  hostScope.Operand,
+		Host:         hostScope.Host,
+		Path:         normalizeFPTunerPath(pathParts[1]),
+		GeneratedID:  generatedID,
+		TargetRuleID: targetRuleID,
+		Variable:     pathParts[3],
+		Message:      hostParts[4],
+	}, nil
+}
+
+func parseFPTunerHostScope(operator string, operand string) (fpTunerHostScope, error) {
+	switch strings.TrimSpace(operator) {
+	case "streq":
+		host := normalizeFPTunerHost(operand)
+		if host == "" {
+			return fpTunerHostScope{}, fmt.Errorf("invalid host exact match")
+		}
+		return fpTunerHostScope{Operator: "streq", Operand: host, Host: host}, nil
+	case "rx":
+		host, defaultPort, err := parseFPTunerDefaultPortRegexOperand(operand)
+		if err != nil {
+			return fpTunerHostScope{}, err
+		}
+		return fpTunerHostScope{
+			Operator: "rx",
+			Operand:  "^" + regexp.QuoteMeta(host) + "(:%s)?$",
+			Host:     host,
+		}.withDefaultPort(defaultPort), nil
+	default:
+		return fpTunerHostScope{}, fmt.Errorf("unsupported host operator")
+	}
+}
+
+func (s fpTunerHostScope) withDefaultPort(defaultPort string) fpTunerHostScope {
+	if s.Operator == "rx" {
+		s.Operand = fmt.Sprintf(s.Operand, defaultPort)
+	}
+	return s
+}
+
+func parseFPTunerDefaultPortRegexOperand(operand string) (string, string, error) {
+	switch {
+	case strings.HasPrefix(operand, "^") && strings.HasSuffix(operand, "(:80)?$"):
+		host, err := unescapeFPTunerQuotedRegexLiteral(strings.TrimSuffix(strings.TrimPrefix(operand, "^"), "(:80)?$"))
+		return host, "80", err
+	case strings.HasPrefix(operand, "^") && strings.HasSuffix(operand, "(:443)?$"):
+		host, err := unescapeFPTunerQuotedRegexLiteral(strings.TrimSuffix(strings.TrimPrefix(operand, "^"), "(:443)?$"))
+		return host, "443", err
+	default:
+		return "", "", fmt.Errorf("unsupported host regex")
+	}
+}
+
+func unescapeFPTunerQuotedRegexLiteral(escaped string) (string, error) {
+	if strings.TrimSpace(escaped) == "" {
+		return "", fmt.Errorf("empty host literal")
+	}
+	var out strings.Builder
+	escapeNext := false
+	for _, r := range escaped {
+		if escapeNext {
+			out.WriteRune(r)
+			escapeNext = false
+			continue
+		}
+		if r == '\\' {
+			escapeNext = true
+			continue
+		}
+		if strings.ContainsRune(`.^$|?*+()[]{}\`, r) {
+			return "", fmt.Errorf("regex metacharacters must be escaped")
+		}
+		out.WriteRune(r)
+	}
+	if escapeNext {
+		return "", fmt.Errorf("trailing escape")
+	}
+	literal := out.String()
+	host := normalizeFPTunerHost(literal)
+	hostOnly, port := splitFPTunerHostPort(host)
+	if host == "" || hostOnly == "" || port != "" {
+		return "", fmt.Errorf("invalid host literal")
+	}
+	if regexp.QuoteMeta(hostOnly) != escaped {
+		return "", fmt.Errorf("host regex must be a quoted literal")
+	}
+	return hostOnly, nil
+}
+
+func validateFPTunerProposalBinding(parsed fpTunerParsedRuleLine, event fpTunerEventInput) error {
+	expectedHostScope := buildFPTunerHostScope(event.Host, event.Scheme)
+	expectedPath := normalizeFPTunerPath(event.Path)
+	expectedVariable := normalizeFPTunerVariable(event.MatchedVariable)
+	if expectedHostScope.Operand == "" || expectedPath == "" || expectedVariable == "" || event.RuleID <= 0 {
+		return fmt.Errorf("observed fp tuner event is incomplete")
+	}
+	if parsed.HostOperator != expectedHostScope.Operator || parsed.HostOperand != expectedHostScope.Operand {
+		return fmt.Errorf("proposal.rule_line must stay on observed host scope %q", expectedHostScope.Operand)
+	}
+	if parsed.Path != expectedPath {
+		return fmt.Errorf("proposal.rule_line must stay on observed path %q", expectedPath)
+	}
+	if parsed.TargetRuleID != event.RuleID {
+		return fmt.Errorf("proposal.rule_line must target observed rule_id %d", event.RuleID)
+	}
+	if parsed.Variable != expectedVariable {
+		return fmt.Errorf("proposal.rule_line must target observed matched_variable %q", expectedVariable)
 	}
 	return nil
 }

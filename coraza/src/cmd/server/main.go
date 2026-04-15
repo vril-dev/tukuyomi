@@ -163,6 +163,7 @@ func main() {
 					config.APIBasePath + "/bot-defense-decisions",
 					config.APIBasePath + "/semantic-rules",
 					config.APIBasePath + "/verify-manifest",
+					config.APIBasePath + "/fp-tuner/recent-waf-blocks",
 					config.APIBasePath + "/fp-tuner/propose",
 					config.APIBasePath + "/fp-tuner/apply",
 					config.APIBasePath + "/logs/read",
@@ -215,6 +216,7 @@ func main() {
 		api.POST("/semantic-rules:validate", handler.ValidateSemanticRules)
 		api.PUT("/semantic-rules", handler.PutSemanticRules)
 		api.GET("/verify-manifest", handler.GetVerifyManifest)
+		api.GET("/fp-tuner/recent-waf-blocks", handler.GetFPTunerRecentWAFBlocks)
 		api.POST("/fp-tuner/propose", handler.ProposeFPTuning)
 		api.POST("/fp-tuner/apply", handler.ApplyFPTuning)
 	}

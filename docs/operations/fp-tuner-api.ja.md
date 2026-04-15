@@ -2,12 +2,13 @@
 
 # FP Tuner API Contract (v1)
 
-この文書は、FP tuning flow（`mock` mode と `http` mode）の current API contract を定義します。
+この文書は、外部 HTTP プロバイダを使う FP tuning flow の current API contract を定義します。
 
 ## Endpoints
 
 - `POST /tukuyomi-api/fp-tuner/propose`
 - `POST /tukuyomi-api/fp-tuner/apply`
+- `GET /tukuyomi-api/fp-tuner/recent-waf-blocks`
 
 ## 1) Propose
 
@@ -38,7 +39,7 @@
 {
   "ok": true,
   "contract_version": "fp_tuner.v1",
-  "mode": "mock",
+  "mode": "http",
   "source": "request",
   "approval": {
     "required": true,
@@ -47,26 +48,30 @@
   "input": {
     "event_id": "manual-test-001",
     "method": "GET",
+    "scheme": "https",
+    "host": "search.example.com",
     "path": "/search",
+    "query": "q=select+*+from+users",
     "rule_id": 100004,
     "status": 403,
     "matched_variable": "ARGS:q",
     "matched_value": "select * from users"
   },
   "proposal": {
-    "id": "fp-mock-001",
+    "id": "fp-http-001",
     "title": "Scoped false-positive tuning suggestion",
-    "summary": "Mock provider response for fp-tuner contract testing.",
-    "reason": "Fixture-based response to test send/receive/apply flow without external LLM API.",
+    "summary": "Scoped false-positive tuning suggestion.",
+    "reason": "外部 HTTP プロバイダを使う提案フローのレスポンス。",
     "confidence": 0.84,
     "target_path": "rules/tukuyomi.conf",
-    "rule_line": "SecRule REQUEST_URI \"@beginsWith /search\" \"id:190123,phase:1,pass,nolog,ctl:ruleRemoveTargetById=100004;ARGS:q,msg:'tukuyomi fp_tuner scoped exclusion'\""
+    "rule_line": "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\""
   }
 }
 ```
 
 注意:
 - `approval.required=true` の場合、simulate しない apply には `approval_token` が必要です。
+- 安全な scoped exclusion を正当化できない場合、provider は `proposal` の代わりに `no_proposal` を返せます。
 
 ## 2) Apply
 
@@ -75,9 +80,9 @@
 ```json
 {
   "proposal": {
-    "id": "fp-mock-001",
+    "id": "fp-http-001",
     "target_path": "rules/tukuyomi.conf",
-    "rule_line": "SecRule REQUEST_URI \"@beginsWith /search\" \"id:190123,phase:1,pass,nolog,ctl:ruleRemoveTargetById=100004;ARGS:q,msg:'tukuyomi fp_tuner scoped exclusion'\""
+    "rule_line": "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\""
   },
   "simulate": true,
   "approval_token": "6f9d...token..."
@@ -124,6 +129,10 @@
 
 ## Related Env Vars
 
+- `WAF_FP_TUNER_ENDPOINT`
+- `WAF_FP_TUNER_API_KEY`
+- `WAF_FP_TUNER_MODEL`
+- `WAF_FP_TUNER_TIMEOUT_SEC`
 - `WAF_FP_TUNER_REQUIRE_APPROVAL`（default `true`）
 - `WAF_FP_TUNER_APPROVAL_TTL_SEC`（default `600`）
 - `WAF_FP_TUNER_AUDIT_FILE`（default `logs/coraza/fp-tuner-audit.ndjson`）
@@ -132,7 +141,7 @@
 
 `scripts/test_fp_tuner_http.sh` を実行すると次を確認できます。
 
-- `WAF_FP_TUNER_MODE=http` での propose / apply flow
+- HTTP ベースの propose / apply flow
 - provider request masking behavior
 - local stub provider を使った response contract handling
 

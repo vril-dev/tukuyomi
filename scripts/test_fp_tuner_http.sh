@@ -27,7 +27,6 @@ require_cmd() {
 
 compose() {
   PUID="${HOST_PUID}" GUID="${HOST_GUID}" CORAZA_PORT="${HOST_CORAZA_PORT}" \
-  WAF_FP_TUNER_MODE="http" \
   WAF_FP_TUNER_ENDPOINT="http://host.docker.internal:${MOCK_PROVIDER_PORT}/propose" \
   docker compose "${COMPOSE_ARGS[@]}" "$@"
 }
@@ -87,7 +86,7 @@ proposal = {
     "reason": "Local stub response used to verify send/receive/apply flow.",
     "confidence": 0.88,
     "target_path": "rules/tukuyomi.conf",
-    "rule_line": "SecRule REQUEST_URI \"@beginsWith /search\" \"id:190123,phase:1,pass,nolog,ctl:ruleRemoveTargetById=100004;ARGS:q,msg:'tukuyomi fp_tuner scoped exclusion'\"",
+    "rule_line": "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\"",
 }
 
 
@@ -132,6 +131,8 @@ cat >"${REQ_FILE}" <<JSON
   "event": {
     "event_id": "manual-http-test-001",
     "method": "GET",
+    "scheme": "https",
+    "host": "search.example.com",
     "path": "/search",
     "rule_id": 100004,
     "status": 403,

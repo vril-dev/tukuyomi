@@ -122,12 +122,10 @@ make preset-check PRESET=minimal
 | `WAF_CRS_SETUP_FILE` | `rules/crs/crs-setup.conf` | CRSセットアップ設定ファイル。 |
 | `WAF_CRS_RULES_DIR` | `rules/crs/rules` | CRS本体ルール（`*.conf`）のディレクトリ。 |
 | `WAF_CRS_DISABLED_FILE` | `conf/crs-disabled.conf` | CRS本体の無効化ファイル一覧。1行1ファイル名で指定。 |
-| `WAF_FP_TUNER_MODE` | `mock` | FPチューナーのプロバイダモード。`mock` はフィクスチャ/生成提案、`http` は `WAF_FP_TUNER_ENDPOINT` へPOST。 |
-| `WAF_FP_TUNER_ENDPOINT` | (空) | `http` モード時の外部LLMプロキシのHTTPエンドポイント。 |
+| `WAF_FP_TUNER_ENDPOINT` | (空) | 外部 FP チューナープロバイダの HTTP エンドポイント。 |
 | `WAF_FP_TUNER_API_KEY` | (空) | `WAF_FP_TUNER_ENDPOINT` 向け Bearer トークン。 |
 | `WAF_FP_TUNER_MODEL` | (空) | プロバイダへ渡す任意のモデル識別子。 |
 | `WAF_FP_TUNER_TIMEOUT_SEC` | `15` | プロバイダ呼び出し時のHTTPタイムアウト（秒）。 |
-| `WAF_FP_TUNER_MOCK_RESPONSE_FILE` | `conf/fp-tuner-mock-response.json` | `mock` モードで使うレスポンスフィクスチャのパス。 |
 | `WAF_FP_TUNER_REQUIRE_APPROVAL` | `true` | `simulate=false` の適用時に承認トークンを必須化するか。 |
 | `WAF_FP_TUNER_APPROVAL_TTL_SEC` | `600` | 承認トークンの有効期限（秒）。 |
 | `WAF_FP_TUNER_AUDIT_FILE` | `logs/coraza/fp-tuner-audit.ndjson` | propose/apply 操作の監査ログ出力先。 |
@@ -387,20 +385,6 @@ direct な `client -> tukuyomi -> app` 確認をしたい場合は、`make stand
 deployment guide の検証をまとめて回したい場合は、`make deployment-smoke` を使ってください。
 現時点の standalone regression matrix は `docs/operations/standalone-regression.md` にまとめています。
 
-### FPチューナー（モック）送受信テスト
-
-外部LLMの契約を確定していない段階でも、送信→受信→適用までをテストできます:
-
-```bash
-./scripts/test_fp_tuner_mock.sh
-```
-
-既定では `simulate` 適用（`SIMULATE=1`）です。実際に追記してホットリロードする場合:
-
-```bash
-SIMULATE=0 ./scripts/test_fp_tuner_mock.sh
-```
-
 ### FPチューナー（HTTPスタブ）送受信テスト
 
 `http` モードをローカルスタブで検証する場合:
@@ -412,7 +396,7 @@ SIMULATE=0 ./scripts/test_fp_tuner_mock.sh
 このスクリプトは次を自動実行します:
 
 - `127.0.0.1:${MOCK_PROVIDER_PORT:-18091}` に一時的なプロバイダスタブを起動
-- `WAF_FP_TUNER_MODE=http` で `coraza` を起動/再ビルド
+- `WAF_FP_TUNER_ENDPOINT` をローカルスタブに向けて `coraza` を起動/再ビルド
 - `propose` / `apply` の契約を確認
 - 外部送信前にマスキング済みペイロードであることを検証
 
@@ -438,6 +422,10 @@ SIMULATE=0 ./scripts/test_fp_tuner_mock.sh
 ```bash
 BRIDGE_COMMAND="/path/to/your-provider-command.sh" ./scripts/test_fp_tuner_bridge_command.sh
 ```
+
+プロバイダ契約:
+- Coraza 互換の host-scoped exclusion JSON だけを返す
+- 安全な除外を正当化できない場合は `no_proposal` を返す
 
 OpenAIコマンドプロバイダの利用例:
 
@@ -531,6 +519,7 @@ Claudeコマンドプロバイダのローカルモックテスト:
 | POST | `/tukuyomi-api/semantic-rules:validate` | Semantic設定の構文検証のみ（保存なし） |
 | PUT  | `/tukuyomi-api/semantic-rules` | Semantic設定ファイルを保存（`If-Match` に `ETag` を指定して楽観ロック） |
 | GET  | `/tukuyomi-api/verify-manifest` | 外部WAF検証ランナー向けの verification manifest 雛形を出力 |
+| GET  | `/tukuyomi-api/fp-tuner/recent-waf-blocks` | FP Tuner picker 用に最近の `waf_block` 行だけを返す |
 | POST | `/tukuyomi-api/fp-tuner/propose` | リクエスト入力（`event` または `events[]`）または最新 `waf_block` / `semantic_anomaly` ログからFP調整案を生成 |
 | POST | `/tukuyomi-api/fp-tuner/apply` | 調整案の検証/適用（既定は `simulate=true`、実適用は承認トークン必須設定可） |
 | GET  | `/tukuyomi-api/cache-rules` | cache.conf の現在内容（Raw + 構造化）と `ETag` を返す |

@@ -615,56 +615,68 @@ func (s *wafEventStore) LatestWAFBlockEvent(logPath string) (fpTunerEventInput, 
 	}
 
 	row := s.db.QueryRow(`
-		SELECT req_id, ts, method, path, rule_id, status, matched_variable, matched_value
+		SELECT raw_json
 		  FROM waf_events
 		 WHERE event = 'waf_block'
 		 ORDER BY id DESC
 		 LIMIT 1`)
 
-	var (
-		reqID           sql.NullString
-		observedAt      sql.NullString
-		method          sql.NullString
-		path            sql.NullString
-		ruleID          sql.NullString
-		status          sql.NullInt64
-		matchedVariable sql.NullString
-		matchedValue    sql.NullString
-	)
-	if err := row.Scan(
-		&reqID,
-		&observedAt,
-		&method,
-		&path,
-		&ruleID,
-		&status,
-		&matchedVariable,
-		&matchedValue,
-	); err != nil {
+	var raw string
+	if err := row.Scan(&raw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fpTunerEventInput{}, errNoWAFBlockEvent
 		}
 		return fpTunerEventInput{}, err
 	}
 
-	event := fpTunerEventInput{
-		EventID:         nullString(reqID),
-		ObservedAt:      nullString(observedAt),
-		Method:          nullString(method),
-		Path:            nullString(path),
-		RuleID:          anyToInt(nullString(ruleID)),
-		Status:          int(status.Int64),
-		MatchedVariable: nullString(matchedVariable),
-		MatchedValue:    nullString(matchedValue),
+	var ln logLine
+	if err := json.Unmarshal([]byte(raw), &ln); err != nil {
+		return fpTunerEventInput{}, err
 	}
+	event, ok := fpTunerEventInputFromLogLine(ln)
+	if !ok {
+		return fpTunerEventInput{}, errNoWAFBlockEvent
+	}
+	event.EventType = ""
 	return normalizeFPTunerEventInput(event), nil
 }
 
-func nullString(ns sql.NullString) string {
-	if !ns.Valid {
-		return ""
+func (s *wafEventStore) RecentWAFBlockLogLines(logPath string, limit int) ([]logLine, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.syncWAFEvents(logPath); err != nil {
+		return nil, err
 	}
-	return strings.TrimSpace(ns.String)
+
+	rows, err := s.db.Query(`
+		SELECT raw_json
+		  FROM waf_events
+		 WHERE event = 'waf_block'
+		 ORDER BY id DESC
+		 LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]logLine, 0, limit)
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var ln logLine
+		if err := json.Unmarshal([]byte(raw), &ln); err != nil {
+			continue
+		}
+		out = append(out, normalizeFPTunerWAFLogLine(ln))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
 }
 
 func (s *wafEventStore) syncWAFEvents(logPath string) (logSyncResult, error) {

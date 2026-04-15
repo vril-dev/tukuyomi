@@ -55,15 +55,13 @@ var (
 
 	AllowInsecureDefaults bool
 
-	FPTunerMode             string
-	FPTunerEndpoint         string
-	FPTunerAPIKey           string
-	FPTunerModel            string
-	FPTunerTimeout          time.Duration
-	FPTunerMockResponseFile string
-	FPTunerRequireApproval  bool
-	FPTunerApprovalTTL      time.Duration
-	FPTunerAuditFile        string
+	FPTunerEndpoint        string
+	FPTunerAPIKey          string
+	FPTunerModel           string
+	FPTunerTimeout         time.Duration
+	FPTunerRequireApproval bool
+	FPTunerApprovalTTL     time.Duration
+	FPTunerAuditFile       string
 
 	StorageBackend  string
 	DBEnabled       bool
@@ -188,17 +186,9 @@ func LoadEnv() {
 		CRSDisabledFile = "conf/crs-disabled.conf"
 	}
 
-	FPTunerMode = strings.ToLower(strings.TrimSpace(os.Getenv("WAF_FP_TUNER_MODE")))
-	if FPTunerMode == "" {
-		FPTunerMode = "mock"
-	}
 	FPTunerEndpoint = strings.TrimSpace(os.Getenv("WAF_FP_TUNER_ENDPOINT"))
 	FPTunerAPIKey = strings.TrimSpace(os.Getenv("WAF_FP_TUNER_API_KEY"))
 	FPTunerModel = strings.TrimSpace(os.Getenv("WAF_FP_TUNER_MODEL"))
-	FPTunerMockResponseFile = strings.TrimSpace(os.Getenv("WAF_FP_TUNER_MOCK_RESPONSE_FILE"))
-	if FPTunerMockResponseFile == "" {
-		FPTunerMockResponseFile = "conf/fp-tuner-mock-response.json"
-	}
 	timeoutSec := parseIntDefault(os.Getenv("WAF_FP_TUNER_TIMEOUT_SEC"), 15)
 	if timeoutSec < 1 || timeoutSec > 300 {
 		timeoutSec = 15

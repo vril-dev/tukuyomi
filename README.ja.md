@@ -143,7 +143,7 @@ make preset-check PRESET=minimal
 | `WAF_ADMIN_TRUSTED_CIDRS` | `127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` | 管理 exposure 判定で trusted とみなす直結 peer の IP/CIDR。`WAF_ADMIN_EXTERNAL_MODE` が `full_external` 以外のとき、この範囲が埋め込み管理UI到達可否を決めます。 |
 | `WAF_TRUSTED_PROXY_CIDRS` | `10.0.0.0/8,192.168.0.0/16` | `X-Forwarded-For` / `X-Real-IP` / 転送された `X-Request-ID` を信用する前段プロキシの IP/CIDR。Coraza を直接公開する場合は空のままにします。ALB/ECS/Cloudflare 配下では、実際に信頼する前段の subnet だけを設定してください。 |
 | `WAF_COUNTRY_HEADER_NAMES` | `X-Country-Code,CF-IPCountry` | 信頼する country header の参照順。`WAF_TRUSTED_PROXY_CIDRS` に含まれる前段から来た場合だけ、この順に header を見ます。 |
-| `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` | `false` | 内部用の `X-WAF-Hit` / `X-WAF-RuleIDs` をレスポンスに残すか。クライアントへ返る前に前段 smart proxy が必ず除去する構成でだけ有効化してください。 |
+| `WAF_EXPOSE_WAF_DEBUG_HEADERS` | `false` | proxied client response に `X-WAF-Hit` / `X-WAF-RuleIDs` を出すかどうか。クライアントへ返る前に前段 smart proxy が必ず除去する構成でだけ有効化してください。旧エイリアス: `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS`。 |
 | `WAF_API_KEY_PRIMARY` | `…` | 管理API用の主キー（`X-API-Key`）。 |
 | `WAF_API_KEY_SECONDARY` | (空) | 予備キー（ローテーション時の切替用。未使用なら空でOK）。 |
 | `WAF_ADMIN_SESSION_SECRET` | `…` | ブラウザ管理 session の署名に使う HMAC secret。本番では API key と分離して設定し、session cookie をキー更新から独立させてください。 |
@@ -193,8 +193,8 @@ forwarded header の信頼境界メモ:
 - `WAF_TRUSTED_PROXY_CIDRS` を設定しない場合、Coraza は client 側が送った forwarding header を信用せず、直結 peer の IP を使います。
 - 国別制御は `WAF_COUNTRY_HEADER_NAMES` の trusted header chain を使い、信頼できる country header が無い場合は `UNKNOWN` に落ちます。
 - 同梱の example は現在、default では direct な `client -> tukuyomi -> app` smoke を起動し、`nginx` は balancer 相当の確認用に optional `front-proxy` profile として切り出しています。
-- local でその profile を使う場合は、trusted private range と `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=true` を付けて、同梱 `nginx` の forwarded header 正規化と従来ログ挙動を有効にしてください。
-- `client -> ALB/Cloudflare/nginx -> tukuyomi -> app` へ寄せる場合は、`WAF_TRUSTED_PROXY_CIDRS` を実際の前段 range に絞り、前段で確実に除去しない限り `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` は無効のままにしてください。
+- local でその profile を使う場合は、trusted private range と `WAF_EXPOSE_WAF_DEBUG_HEADERS=true` を付けて、同梱 `nginx` の forwarded header 正規化と従来ログ挙動を有効にしてください。
+- `client -> ALB/Cloudflare/nginx -> tukuyomi -> app` へ寄せる場合は、`WAF_TRUSTED_PROXY_CIDRS` を実際の前段 range に絞り、前段で確実に除去しない限り `WAF_EXPOSE_WAF_DEBUG_HEADERS` は無効のままにしてください。
 
 ## Host Network Hardening（L3/L4 対策の基礎）
 

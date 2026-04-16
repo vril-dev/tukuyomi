@@ -142,7 +142,7 @@ You can control behavior via `.env`.
 | `WAF_ADMIN_TRUSTED_CIDRS` | `127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` | Direct-peer IPs/CIDRs treated as trusted for admin exposure decisions. This controls who can reach the embedded admin UI when `WAF_ADMIN_EXTERNAL_MODE` is not `full_external`. |
 | `WAF_TRUSTED_PROXY_CIDRS` | `10.0.0.0/8,192.168.0.0/16` | Trusted front-proxy IPs/CIDRs for `X-Forwarded-For`, `X-Real-IP`, and forwarded `X-Request-ID`. Leave empty when Coraza is directly internet-facing. For ALB/ECS/Cloudflare-style fronting, set this to the proxy/LB subnets you actually trust. |
 | `WAF_COUNTRY_HEADER_NAMES` | `X-Country-Code,CF-IPCountry` | Ordered trusted country-header chain. Coraza checks these names in order, but only when the direct peer is in `WAF_TRUSTED_PROXY_CIDRS`. |
-| `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` | `false` | Whether to keep internal `X-WAF-Hit` / `X-WAF-RuleIDs` headers on upstream responses. Enable only when a smart front proxy strips them before the client. Leave disabled for direct/ALB-style exposure. |
+| `WAF_EXPOSE_WAF_DEBUG_HEADERS` | `false` | Whether to expose `X-WAF-Hit` / `X-WAF-RuleIDs` on proxied client responses. Enable only when a smart front proxy strips them before the client. Leave disabled for direct/ALB-style exposure. Legacy alias: `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS`. |
 | `WAF_API_KEY_PRIMARY` | `...` | Primary admin API key (`X-API-Key`). |
 | `WAF_API_KEY_SECONDARY` | (empty) | Secondary key for rotation/fallback. Leave empty if unused. |
 | `WAF_ADMIN_SESSION_SECRET` | `...` | HMAC signing secret for browser admin sessions. Set this separately from the API key in production so session cookies remain independent of key rotation. |
@@ -192,8 +192,8 @@ Forwarded-header trust notes:
 - Without `WAF_TRUSTED_PROXY_CIDRS`, Coraza ignores client-supplied forwarding headers and derives client IP from the direct peer.
 - Country-based controls use the trusted header chain in `WAF_COUNTRY_HEADER_NAMES` and fall back to `UNKNOWN` when no trusted country header exists.
 - The bundled examples now default to direct `client -> tukuyomi -> app` smoke, and expose `nginx` as an optional `front-proxy` profile for balancer-style validation.
-- When you use that profile locally, set trusted private ranges and `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=true` so the bundled `nginx` can normalize forwarded headers and keep its legacy logging behavior.
-- When you switch to `client -> ALB/Cloudflare/nginx -> tukuyomi -> app`, tighten `WAF_TRUSTED_PROXY_CIDRS` to the actual front-proxy ranges and turn `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` off unless that front layer strips them.
+- When you use that profile locally, set trusted private ranges and `WAF_EXPOSE_WAF_DEBUG_HEADERS=true` so the bundled `nginx` can normalize forwarded headers and keep its legacy logging behavior.
+- When you switch to `client -> ALB/Cloudflare/nginx -> tukuyomi -> app`, tighten `WAF_TRUSTED_PROXY_CIDRS` to the actual front-proxy ranges and turn `WAF_EXPOSE_WAF_DEBUG_HEADERS` off unless that front layer strips them.
 
 ## Host Network Hardening (L3/L4 Basics)
 

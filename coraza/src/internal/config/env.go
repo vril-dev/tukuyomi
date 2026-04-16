@@ -149,7 +149,10 @@ func LoadEnv() {
 	AdminExternalMode = parseAdminExternalMode(os.Getenv("WAF_ADMIN_EXTERNAL_MODE"))
 	AdminTrustedCIDRs, AdminTrustedCIDRPrefixes = parseAdminTrustedCIDRs(os.Getenv("WAF_ADMIN_TRUSTED_CIDRS"))
 	TrustedProxyCIDRs, TrustedProxyPrefixes = parseTrustedProxyCIDRs(os.Getenv("WAF_TRUSTED_PROXY_CIDRS"))
-	ForwardInternalResponseHeaders = isTruthy(os.Getenv("WAF_FORWARD_INTERNAL_RESPONSE_HEADERS"))
+	ForwardInternalResponseHeaders = parseWAFDebugHeaderExposure(
+		os.Getenv("WAF_EXPOSE_WAF_DEBUG_HEADERS"),
+		os.Getenv("WAF_FORWARD_INTERNAL_RESPONSE_HEADERS"),
+	)
 	ResponseCacheMode = parseResponseCacheMode(os.Getenv("WAF_RESPONSE_CACHE_MODE"))
 	ResponseCacheMaxEntries = parseResponseCacheMaxEntries(os.Getenv("WAF_RESPONSE_CACHE_MAX_ENTRIES"))
 	ResponseCacheMaxBodyBytes = parseResponseCacheMaxBodyBytes(os.Getenv("WAF_RESPONSE_CACHE_MAX_BODY_BYTES"))
@@ -539,4 +542,14 @@ func parseCountryHeaderNames(v string) []string {
 	}
 
 	return out
+}
+
+func parseWAFDebugHeaderExposure(primary string, legacy string) bool {
+	if strings.TrimSpace(primary) != "" {
+		return isTruthy(primary)
+	}
+	if strings.TrimSpace(legacy) != "" {
+		return isTruthy(legacy)
+	}
+	return false
 }

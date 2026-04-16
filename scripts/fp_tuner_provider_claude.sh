@@ -89,7 +89,7 @@ if ! [[ "${max_tokens}" =~ ^[0-9]+$ ]] || [[ "${max_tokens}" -le 0 ]]; then
   exit 1
 fi
 
-system_prompt="You are a WAF false-positive tuning assistant. Return exactly one JSON object for a safe scoped exclusion rule. The output JSON must include id, title, summary, reason, confidence (0-1), target_path, rule_line. Do not include markdown or extra text. Follow constraints in the request strictly."
+system_prompt="You are a Coraza WAF false-positive tuning assistant. Return exactly one JSON object. If a safe host-scoped exclusion is justified, return proposal JSON with id, title, summary, reason, confidence (0-1), target_path, rule_line. If evidence is insufficient or the event looks like a real attack, return no_proposal JSON with decision=no_proposal, reason, confidence. Do not include markdown or extra text. Follow constraints in the request strictly."
 user_prompt="fp_tuner_provider_request_json:\n${payload}"
 
 req_json="$(jq -n \

@@ -55,15 +55,13 @@ var (
 
 	AllowInsecureDefaults bool
 
-	FPTunerMode             string
-	FPTunerEndpoint         string
-	FPTunerAPIKey           string
-	FPTunerModel            string
-	FPTunerTimeout          time.Duration
-	FPTunerMockResponseFile string
-	FPTunerRequireApproval  bool
-	FPTunerApprovalTTL      time.Duration
-	FPTunerAuditFile        string
+	FPTunerEndpoint        string
+	FPTunerAPIKey          string
+	FPTunerModel           string
+	FPTunerTimeout         time.Duration
+	FPTunerRequireApproval bool
+	FPTunerApprovalTTL     time.Duration
+	FPTunerAuditFile       string
 
 	StorageBackend  string
 	DBEnabled       bool
@@ -151,7 +149,10 @@ func LoadEnv() {
 	AdminExternalMode = parseAdminExternalMode(os.Getenv("WAF_ADMIN_EXTERNAL_MODE"))
 	AdminTrustedCIDRs, AdminTrustedCIDRPrefixes = parseAdminTrustedCIDRs(os.Getenv("WAF_ADMIN_TRUSTED_CIDRS"))
 	TrustedProxyCIDRs, TrustedProxyPrefixes = parseTrustedProxyCIDRs(os.Getenv("WAF_TRUSTED_PROXY_CIDRS"))
-	ForwardInternalResponseHeaders = isTruthy(os.Getenv("WAF_FORWARD_INTERNAL_RESPONSE_HEADERS"))
+	ForwardInternalResponseHeaders = parseWAFDebugHeaderExposure(
+		os.Getenv("WAF_EXPOSE_WAF_DEBUG_HEADERS"),
+		os.Getenv("WAF_FORWARD_INTERNAL_RESPONSE_HEADERS"),
+	)
 	ResponseCacheMode = parseResponseCacheMode(os.Getenv("WAF_RESPONSE_CACHE_MODE"))
 	ResponseCacheMaxEntries = parseResponseCacheMaxEntries(os.Getenv("WAF_RESPONSE_CACHE_MAX_ENTRIES"))
 	ResponseCacheMaxBodyBytes = parseResponseCacheMaxBodyBytes(os.Getenv("WAF_RESPONSE_CACHE_MAX_BODY_BYTES"))
@@ -188,17 +189,9 @@ func LoadEnv() {
 		CRSDisabledFile = "conf/crs-disabled.conf"
 	}
 
-	FPTunerMode = strings.ToLower(strings.TrimSpace(os.Getenv("WAF_FP_TUNER_MODE")))
-	if FPTunerMode == "" {
-		FPTunerMode = "mock"
-	}
 	FPTunerEndpoint = strings.TrimSpace(os.Getenv("WAF_FP_TUNER_ENDPOINT"))
 	FPTunerAPIKey = strings.TrimSpace(os.Getenv("WAF_FP_TUNER_API_KEY"))
 	FPTunerModel = strings.TrimSpace(os.Getenv("WAF_FP_TUNER_MODEL"))
-	FPTunerMockResponseFile = strings.TrimSpace(os.Getenv("WAF_FP_TUNER_MOCK_RESPONSE_FILE"))
-	if FPTunerMockResponseFile == "" {
-		FPTunerMockResponseFile = "conf/fp-tuner-mock-response.json"
-	}
 	timeoutSec := parseIntDefault(os.Getenv("WAF_FP_TUNER_TIMEOUT_SEC"), 15)
 	if timeoutSec < 1 || timeoutSec > 300 {
 		timeoutSec = 15
@@ -549,4 +542,14 @@ func parseCountryHeaderNames(v string) []string {
 	}
 
 	return out
+}
+
+func parseWAFDebugHeaderExposure(primary string, legacy string) bool {
+	if strings.TrimSpace(primary) != "" {
+		return isTruthy(primary)
+	}
+	if strings.TrimSpace(legacy) != "" {
+		return isTruthy(legacy)
+	}
+	return false
 }

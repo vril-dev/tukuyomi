@@ -350,9 +350,10 @@ export default function Logs() {
                 {loading && <span className="text-sm text-gray-500">loading…</span>}
             </div>
 
-            <div className="border rounded overflow-hidden">
-                <table className="min-w-full text-sm">
-                    <thead className="bg-gray-50">
+            <div className="app-table-shell">
+                <div className="app-table-scroll-shell">
+                <table className="app-table min-w-full">
+                    <thead className="app-table-head">
                         <tr>
                             <th className="px-2 py-1 text-left">ts</th>
                             <th className="px-2 py-1 text-left">status</th>
@@ -407,6 +408,7 @@ export default function Logs() {
                     )}
                     </tbody>
                 </table>
+                </div>
             </div>
 
             {data && (

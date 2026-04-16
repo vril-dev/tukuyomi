@@ -8,6 +8,19 @@ fi
 
 payload="$(cat)"
 
+host="$(jq -r '.input.host // "example.com"' <<<"${payload}")"
+host="${host//$'\n'/}"
+host="${host//$'\r'/}"
+if [[ -z "${host}" ]] || [[ "${host}" == *'"'* ]]; then
+  host="example.com"
+fi
+
+scheme="$(jq -r '.input.scheme // ""' <<<"${payload}")"
+scheme="${scheme,,}"
+if [[ "${scheme}" != "http" && "${scheme}" != "https" ]]; then
+  scheme=""
+fi
+
 path="$(jq -r '.input.path // "/"' <<<"${payload}")"
 path="${path//$'\n'/}"
 path="${path//$'\r'/}"
@@ -28,7 +41,24 @@ fi
 target_path="$(jq -r '.target_path // "rules/tukuyomi.conf"' <<<"${payload}")"
 summary="$(jq -r '.input.matched_value // "" | if length > 0 then "Candidate false positive from input sample." else "Candidate false positive event." end' <<<"${payload}")"
 
+host_scope_operator="streq"
+host_scope_operand="${host}"
+host_only="${host%%:*}"
+port=""
+if [[ "${host}" == *:* ]] && [[ "${host}" != \[* ]]; then
+  port="${host##*:}"
+fi
+if [[ "${scheme}" == "http" && ( -z "${port}" || "${port}" == "80" ) ]]; then
+  host_scope_operator="rx"
+  host_scope_operand="^$(printf '%s' "${host_only}" | sed 's/[.[\\*^$+?(){|]/\\\\&/g')(:80)?$"
+elif [[ "${scheme}" == "https" && ( -z "${port}" || "${port}" == "443" ) ]]; then
+  host_scope_operator="rx"
+  host_scope_operand="^$(printf '%s' "${host_only}" | sed 's/[.[\\*^$+?(){|]/\\\\&/g')(:443)?$"
+fi
+
 jq -n \
+  --arg host_scope_operator "${host_scope_operator}" \
+  --arg host_scope_operand "${host_scope_operand}" \
   --arg path "${path}" \
   --arg target_path "${target_path}" \
   --arg matched_variable "${matched_variable}" \
@@ -43,10 +73,10 @@ jq -n \
       confidence: 0.86,
       target_path: $target_path,
       rule_line: (
+        "SecRule REQUEST_HEADERS:Host \"@" + $host_scope_operator + " " + $host_scope_operand +
+        "\" \"id:190321,phase:1,pass,nolog,chain,msg:\u0027tukuyomi fp_tuner scoped exclusion\u0027\"\n" +
         "SecRule REQUEST_URI \"@beginsWith " + $path +
-        "\" \"id:190321,phase:1,pass,nolog,ctl:ruleRemoveTargetById=" +
-        ($rule_id|tostring) + ";" + $matched_variable +
-        ",msg:\u0027tukuyomi fp_tuner scoped exclusion\u0027\""
+        "\" \"ctl:ruleRemoveTargetById=" + ($rule_id|tostring) + ";" + $matched_variable + "\""
       )
     }
   }'

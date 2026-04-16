@@ -115,7 +115,7 @@ func main() {
 		log.Printf("[SECURITY] trusted proxies enabled: %s", strings.Join(config.TrustedProxyCIDRs, ","))
 	}
 	if config.ForwardInternalResponseHeaders {
-		log.Println("[SECURITY][WARN] forwarding internal WAF response headers is enabled; use only behind a front proxy that strips them")
+		log.Println("[SECURITY][WARN] exposing WAF debug response headers is enabled; use only behind a front proxy that strips them")
 	}
 	for _, warning := range config.AdminExposureWarnings() {
 		log.Printf("[SECURITY][WARN] %s", warning)
@@ -163,6 +163,7 @@ func main() {
 					config.APIBasePath + "/bot-defense-decisions",
 					config.APIBasePath + "/semantic-rules",
 					config.APIBasePath + "/verify-manifest",
+					config.APIBasePath + "/fp-tuner/recent-waf-blocks",
 					config.APIBasePath + "/fp-tuner/propose",
 					config.APIBasePath + "/fp-tuner/apply",
 					config.APIBasePath + "/logs/read",
@@ -215,6 +216,7 @@ func main() {
 		api.POST("/semantic-rules:validate", handler.ValidateSemanticRules)
 		api.PUT("/semantic-rules", handler.PutSemanticRules)
 		api.GET("/verify-manifest", handler.GetVerifyManifest)
+		api.GET("/fp-tuner/recent-waf-blocks", handler.GetFPTunerRecentWAFBlocks)
 		api.POST("/fp-tuner/propose", handler.ProposeFPTuning)
 		api.POST("/fp-tuner/apply", handler.ApplyFPTuning)
 	}

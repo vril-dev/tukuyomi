@@ -121,12 +121,10 @@ You can control behavior via `.env`.
 | `WAF_CRS_SETUP_FILE` | `rules/crs/crs-setup.conf` | CRS setup file path. |
 | `WAF_CRS_RULES_DIR` | `rules/crs/rules` | Directory for CRS core rules (`*.conf`). |
 | `WAF_CRS_DISABLED_FILE` | `conf/crs-disabled.conf` | Disabled CRS core rule list file (one filename per line). |
-| `WAF_FP_TUNER_MODE` | `mock` | FP tuner provider mode. `mock` reads fixture or generated suggestion, `http` posts to `WAF_FP_TUNER_ENDPOINT`. |
-| `WAF_FP_TUNER_ENDPOINT` | (empty) | HTTP endpoint for external LLM proxy in `http` mode. |
+| `WAF_FP_TUNER_ENDPOINT` | (empty) | HTTP endpoint for the external FP tuner provider. |
 | `WAF_FP_TUNER_API_KEY` | (empty) | Bearer token for `WAF_FP_TUNER_ENDPOINT`. |
 | `WAF_FP_TUNER_MODEL` | (empty) | Optional model label passed to provider payload. |
 | `WAF_FP_TUNER_TIMEOUT_SEC` | `15` | HTTP timeout (seconds) for provider calls. |
-| `WAF_FP_TUNER_MOCK_RESPONSE_FILE` | `conf/fp-tuner-mock-response.json` | Mock provider response fixture path used in `mock` mode. |
 | `WAF_FP_TUNER_REQUIRE_APPROVAL` | `true` | Require approval token for non-simulated apply (`/fp-tuner/apply` with `simulate=false`). |
 | `WAF_FP_TUNER_APPROVAL_TTL_SEC` | `600` | Approval token TTL in seconds. |
 | `WAF_FP_TUNER_AUDIT_FILE` | `logs/coraza/fp-tuner-audit.ndjson` | Audit log destination for propose/apply actions. |
@@ -144,7 +142,7 @@ You can control behavior via `.env`.
 | `WAF_ADMIN_TRUSTED_CIDRS` | `127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` | Direct-peer IPs/CIDRs treated as trusted for admin exposure decisions. This controls who can reach the embedded admin UI when `WAF_ADMIN_EXTERNAL_MODE` is not `full_external`. |
 | `WAF_TRUSTED_PROXY_CIDRS` | `10.0.0.0/8,192.168.0.0/16` | Trusted front-proxy IPs/CIDRs for `X-Forwarded-For`, `X-Real-IP`, and forwarded `X-Request-ID`. Leave empty when Coraza is directly internet-facing. For ALB/ECS/Cloudflare-style fronting, set this to the proxy/LB subnets you actually trust. |
 | `WAF_COUNTRY_HEADER_NAMES` | `X-Country-Code,CF-IPCountry` | Ordered trusted country-header chain. Coraza checks these names in order, but only when the direct peer is in `WAF_TRUSTED_PROXY_CIDRS`. |
-| `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` | `false` | Whether to keep internal `X-WAF-Hit` / `X-WAF-RuleIDs` headers on upstream responses. Enable only when a smart front proxy strips them before the client. Leave disabled for direct/ALB-style exposure. |
+| `WAF_EXPOSE_WAF_DEBUG_HEADERS` | `false` | Whether to expose `X-WAF-Hit` / `X-WAF-RuleIDs` on proxied client responses. Enable only when a smart front proxy strips them before the client. Leave disabled for direct/ALB-style exposure. Legacy alias: `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS`. |
 | `WAF_API_KEY_PRIMARY` | `...` | Primary admin API key (`X-API-Key`). |
 | `WAF_API_KEY_SECONDARY` | (empty) | Secondary key for rotation/fallback. Leave empty if unused. |
 | `WAF_ADMIN_SESSION_SECRET` | `...` | HMAC signing secret for browser admin sessions. Set this separately from the API key in production so session cookies remain independent of key rotation. |
@@ -194,8 +192,8 @@ Forwarded-header trust notes:
 - Without `WAF_TRUSTED_PROXY_CIDRS`, Coraza ignores client-supplied forwarding headers and derives client IP from the direct peer.
 - Country-based controls use the trusted header chain in `WAF_COUNTRY_HEADER_NAMES` and fall back to `UNKNOWN` when no trusted country header exists.
 - The bundled examples now default to direct `client -> tukuyomi -> app` smoke, and expose `nginx` as an optional `front-proxy` profile for balancer-style validation.
-- When you use that profile locally, set trusted private ranges and `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=true` so the bundled `nginx` can normalize forwarded headers and keep its legacy logging behavior.
-- When you switch to `client -> ALB/Cloudflare/nginx -> tukuyomi -> app`, tighten `WAF_TRUSTED_PROXY_CIDRS` to the actual front-proxy ranges and turn `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` off unless that front layer strips them.
+- When you use that profile locally, set trusted private ranges and `WAF_EXPOSE_WAF_DEBUG_HEADERS=true` so the bundled `nginx` can normalize forwarded headers and keep its legacy logging behavior.
+- When you switch to `client -> ALB/Cloudflare/nginx -> tukuyomi -> app`, tighten `WAF_TRUSTED_PROXY_CIDRS` to the actual front-proxy ranges and turn `WAF_EXPOSE_WAF_DEBUG_HEADERS` off unless that front layer strips them.
 
 ## Host Network Hardening (L3/L4 Basics)
 
@@ -386,20 +384,6 @@ For direct `client -> tukuyomi -> app` checks, use `make standalone-regression-f
 For deployment-guide validation, use `make deployment-smoke`.
 The current standalone regression matrix is documented in `docs/operations/standalone-regression.md`.
 
-### FP Tuner Mock Flow
-
-You can test send/receive/apply flow without an external LLM contract:
-
-```bash
-./scripts/test_fp_tuner_mock.sh
-```
-
-Default is simulate-only apply (`SIMULATE=1`). To actually append and hot-reload:
-
-```bash
-SIMULATE=0 ./scripts/test_fp_tuner_mock.sh
-```
-
 ### FP Tuner HTTP Stub Flow
 
 You can also run HTTP provider mode with a local stub endpoint:
@@ -411,7 +395,7 @@ You can also run HTTP provider mode with a local stub endpoint:
 What this script does:
 
 - Starts a local temporary provider stub on `127.0.0.1:${MOCK_PROVIDER_PORT:-18091}`
-- Starts/rebuilds `coraza` in `WAF_FP_TUNER_MODE=http`
+- Starts/rebuilds `coraza` with `WAF_FP_TUNER_ENDPOINT` pointed at the local stub provider
 - Sends `propose` / `apply` requests and checks response contract
 - Verifies provider-bound payload is masked before external send
 
@@ -437,6 +421,10 @@ You can replace `BRIDGE_COMMAND` with your own command that outputs proposal JSO
 ```bash
 BRIDGE_COMMAND="/path/to/your-provider-command.sh" ./scripts/test_fp_tuner_bridge_command.sh
 ```
+
+Provider contract:
+- return Coraza-compatible host-scoped exclusion JSON only
+- return `no_proposal` when a safe exclusion is not justified
 
 OpenAI command provider example:
 
@@ -530,6 +518,7 @@ Detailed request/response schemas are available in [docs/api/admin-openapi.yaml]
 | POST | `/tukuyomi-api/semantic-rules:validate` | Validate semantic config (no save) |
 | PUT | `/tukuyomi-api/semantic-rules` | Save semantic config (`If-Match` optimistic lock via `ETag`) |
 | GET | `/tukuyomi-api/verify-manifest` | Export a verification manifest scaffold for external WAF test runners |
+| GET | `/tukuyomi-api/fp-tuner/recent-waf-blocks` | Return only recent `waf_block` rows for FP Tuner picker |
 | POST | `/tukuyomi-api/fp-tuner/propose` | Build FP tuning proposal from request payload (`event` or `events[]`) or latest `waf_block` / `semantic_anomaly` log event |
 | POST | `/tukuyomi-api/fp-tuner/apply` | Validate/apply proposed scoped exclusion rule (`simulate=true` by default, approval token required for real apply when enabled) |
 | GET | `/tukuyomi-api/cache-rules` | Return `cache.conf` raw + structured data with `ETag` |

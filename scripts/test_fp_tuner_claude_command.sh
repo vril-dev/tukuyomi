@@ -31,7 +31,7 @@ proposal = {
         "reason": "Local mock response for fp_tuner_provider_claude.sh",
         "confidence": 0.89,
         "target_path": "rules/tukuyomi.conf",
-        "rule_line": "SecRule REQUEST_URI \"@beginsWith /search\" \"id:190888,phase:1,pass,nolog,ctl:ruleRemoveTargetById=100004;ARGS:q,msg:'tukuyomi fp_tuner scoped exclusion'\"",
+        "rule_line": "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190888,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\"",
     }
 }
 

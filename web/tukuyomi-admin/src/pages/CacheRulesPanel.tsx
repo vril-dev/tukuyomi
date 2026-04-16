@@ -302,24 +302,24 @@ export default function CacheRulePanel() {
       </div>
 
       {!rawMode ? (
-        <div className="border rounded-xl overflow-hidden bg-white">
-          <div className="overflow-auto">
-            <table className="min-w-[980px] w-full text-sm">
-              <thead className="bg-neutral-100">
+        <div className="app-table-shell">
+          <div className="app-table-scroll-shell overflow-auto">
+            <table className="app-table min-w-[980px] w-full">
+              <thead className="app-table-head">
                 <tr>
-                  <th className="p-2 text-left border-b">Kind</th>
-                  <th className="p-2 text-left border-b">Match Type</th>
-                  <th className="p-2 text-left border-b">Value</th>
-                  <th className="p-2 text-left border-b">Methods</th>
-                  <th className="p-2 text-left border-b">TTL(s)</th>
-                  <th className="p-2 text-left border-b">Vary</th>
-                  <th className="p-2 text-center border-b w-28">Action</th>
+                  <th className="p-2 text-left">Kind</th>
+                  <th className="p-2 text-left">Match Type</th>
+                  <th className="p-2 text-left">Value</th>
+                  <th className="p-2 text-left">Methods</th>
+                  <th className="p-2 text-left">TTL(s)</th>
+                  <th className="p-2 text-left">Vary</th>
+                  <th className="p-2 text-center w-28">Action</th>
                 </tr>
               </thead>
               <tbody>
                 {rules.map((r, i) => (
                   <tr key={i}>
-                    <td className="p-1.5 border-b">
+                    <td className="p-1.5">
                       <select
                         value={r.kind}
                         onChange={(e) => updateRule(i, { ...r, kind: e.target.value as Rule["kind"] })}
@@ -329,7 +329,7 @@ export default function CacheRulePanel() {
                         <option value="DENY">DENY</option>
                       </select>
                     </td>
-                    <td className="p-1.5 border-b">
+                    <td className="p-1.5">
                       <select
                         value={r.match.type}
                         onChange={(e) =>
@@ -345,14 +345,14 @@ export default function CacheRulePanel() {
                         <option value="exact">exact</option>
                       </select>
                     </td>
-                    <td className="p-1.5 border-b">
+                    <td className="p-1.5">
                       <input
                         className="w-full"
                         value={r.match.value}
                         onChange={(e) => updateRule(i, { ...r, match: { ...r.match, value: e.target.value } })}
                       />
                     </td>
-                    <td className="p-1.5 border-b">
+                    <td className="p-1.5">
                       <input
                         className="w-full"
                         value={(r.methods ?? []).join(",")}
@@ -360,7 +360,7 @@ export default function CacheRulePanel() {
                         placeholder="GET,HEAD"
                       />
                     </td>
-                    <td className="p-1.5 border-b">
+                    <td className="p-1.5">
                       <input
                         type="number"
                         className="w-full"
@@ -373,7 +373,7 @@ export default function CacheRulePanel() {
                         }
                       />
                     </td>
-                    <td className="p-1.5 border-b">
+                    <td className="p-1.5">
                       <input
                         className="w-full"
                         value={(r.vary ?? []).join(",")}
@@ -381,7 +381,7 @@ export default function CacheRulePanel() {
                         placeholder="Accept-Encoding,Accept-Language"
                       />
                     </td>
-                    <td className="p-1.5 border-b text-center">
+                    <td className="p-1.5 text-center">
                       <button
                         type="button"
                         onClick={() => removeRule(i)}

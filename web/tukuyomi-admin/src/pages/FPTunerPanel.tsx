@@ -350,9 +350,10 @@ export default function FPTunerPanel() {
             )}
 
             {wafBlockLines.length > 0 && (
-              <div className="max-h-44 overflow-auto rounded border bg-white">
-                <table className="min-w-full text-xs">
-                  <thead className="bg-neutral-100 sticky top-0">
+              <div className="app-table-shell">
+                <div className="app-table-scroll-shell max-h-44">
+                <table className="app-table min-w-full">
+                  <thead className="app-table-head sticky top-0">
                     <tr>
                       <th className="px-2 py-1 text-left">use</th>
                       <th className="px-2 py-1 text-left">ts</th>
@@ -395,6 +396,7 @@ export default function FPTunerPanel() {
                     })}
                   </tbody>
                 </table>
+                </div>
               </div>
             )}
           </div>

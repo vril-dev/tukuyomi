@@ -192,30 +192,38 @@ export default function RuleSets() {
                 </button>
             </div>
 
-            <div className="border rounded-xl overflow-hidden bg-white">
-                <div className="grid grid-cols-[100px_1fr_1fr] gap-0 text-xs font-semibold bg-neutral-100 border-b">
-                    <div className="p-2">Enabled</div>
-                    <div className="p-2">File</div>
-                    <div className="p-2">Path</div>
-                </div>
-                <div className="max-h-[520px] overflow-auto">
-                    {rules.map((r) => (
-                        <label key={r.path} className="grid grid-cols-[100px_1fr_1fr] border-b last:border-b-0 text-sm items-center">
-                            <div className="p-2">
-                                <input
-                                    type="checkbox"
-                                    checked={r.enabled}
-                                    onChange={(e) => toggle(r.name, e.target.checked)}
-                                    disabled={saving}
-                                />
-                            </div>
-                            <div className="p-2 font-mono">{r.name}</div>
-                            <div className="p-2 font-mono text-xs text-neutral-600">{r.path}</div>
-                        </label>
-                    ))}
-                    {rules.length === 0 && (
-                        <div className="p-4 text-sm text-neutral-500">No CRS rule files found.</div>
-                    )}
+            <div className="app-table-shell">
+                <div className="app-table-scroll-shell max-h-[520px]">
+                    <table className="app-table">
+                        <thead className="app-table-head">
+                            <tr>
+                                <th className="p-2 text-left">Enabled</th>
+                                <th className="p-2 text-left">File</th>
+                                <th className="p-2 text-left">Path</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rules.map((r) => (
+                                <tr key={r.path}>
+                                    <td className="p-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={r.enabled}
+                                            onChange={(e) => toggle(r.name, e.target.checked)}
+                                            disabled={saving}
+                                        />
+                                    </td>
+                                    <td className="p-2 font-mono">{r.name}</td>
+                                    <td className="p-2 font-mono text-neutral-600">{r.path}</td>
+                                </tr>
+                            ))}
+                            {rules.length === 0 && (
+                                <tr>
+                                    <td colSpan={3} className="p-4 text-neutral-500">No CRS rule files found.</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
                 </div>
             </div>
 

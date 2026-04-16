@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -34,26 +35,43 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<AdminSessionState>(defaultSession);
   const [loading, setLoading] = useState(true);
+  const authOpRef = useRef(0);
+
+  const nextAuthOp = useCallback(() => {
+    authOpRef.current += 1;
+    return authOpRef.current;
+  }, []);
+
+  const isCurrentAuthOp = useCallback((op: number) => authOpRef.current === op, []);
 
   const refresh = useCallback(async () => {
+    const op = nextAuthOp();
     setLoading(true);
     try {
       const next = await apiGetJson<AdminSessionState>("/auth/session");
+      if (!isCurrentAuthOp(op)) {
+        return;
+      }
       setSession({
         authenticated: !!next.authenticated,
         mode: next.mode || "none",
         expires_at: next.expires_at,
       });
     } catch (error) {
+      if (!isCurrentAuthOp(op)) {
+        return;
+      }
       if (!(error instanceof APIUnauthorizedError)) {
         setSession(defaultSession);
         return;
       }
       setSession(defaultSession);
     } finally {
-      setLoading(false);
+      if (isCurrentAuthOp(op)) {
+        setLoading(false);
+      }
     }
-  }, []);
+  }, [isCurrentAuthOp, nextAuthOp]);
 
   useEffect(() => {
     void refresh();
@@ -72,32 +90,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(async (apiKey: string) => {
+    const op = nextAuthOp();
     setLoading(true);
     try {
-      const next = await apiPostJson<AdminSessionState>("/auth/login", { api_key: apiKey });
+      await apiPostJson<AdminSessionState>("/auth/login", { api_key: apiKey });
+      const next = await apiGetJson<AdminSessionState>("/auth/session");
+      if (!isCurrentAuthOp(op)) {
+        return;
+      }
       setSession({
         authenticated: !!next.authenticated,
         mode: next.mode || "session",
         expires_at: next.expires_at,
       });
     } finally {
-      setLoading(false);
+      if (isCurrentAuthOp(op)) {
+        setLoading(false);
+      }
     }
-  }, []);
+  }, [isCurrentAuthOp, nextAuthOp]);
 
   const logout = useCallback(async () => {
+    const op = nextAuthOp();
     setLoading(true);
     try {
       await apiPostJson("/auth/logout", {});
     } catch (error) {
+      if (!isCurrentAuthOp(op)) {
+        return;
+      }
       if (!(error instanceof APIUnauthorizedError)) {
         throw error;
       }
     } finally {
-      setSession(defaultSession);
-      setLoading(false);
+      if (isCurrentAuthOp(op)) {
+        setSession(defaultSession);
+        setLoading(false);
+      }
     }
-  }, []);
+  }, [isCurrentAuthOp, nextAuthOp]);
 
   const value = useMemo<AuthContextValue>(
     () => ({ session, loading, login, logout, refresh }),

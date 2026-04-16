@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/lib/auth";
 
 export default function Login() {
   const { login, loading } = useAuth();
+  const navigate = useNavigate();
   const [apiKey, setAPIKey] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -14,6 +16,7 @@ export default function Login() {
     try {
       await login(apiKey);
       setAPIKey("");
+      navigate("/status", { replace: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message || "Login failed");

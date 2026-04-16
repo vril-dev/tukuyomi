@@ -258,6 +258,7 @@ select {
   border-radius: 999px;
   padding: 4px 10px;
   background: #f8fbff;
+  font-size: 12px;
   max-width: min(34vw, 360px);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -286,12 +287,24 @@ h3 {
 
 button {
   border: 1px solid color-mix(in srgb, var(--edge) 72%, white);
-  border-radius: 12px;
+  border-radius: 6px;
   padding: 0.5rem 0.92rem;
   background: linear-gradient(180deg, #ffffff, #f7fbf9);
   color: var(--ink);
+  font-size: 12px;
+  line-height: 1.25rem;
   font-weight: 600;
   transition: transform 100ms ease-out, box-shadow 120ms ease-out, border-color 120ms ease-out;
+}
+
+button.text-xs,
+button.text-sm {
+  font-size: 12px;
+  line-height: 1.25rem;
+}
+
+button.rounded-xl {
+  border-radius: 6px;
 }
 
 button:hover {
@@ -310,8 +323,10 @@ button:disabled {
 input,
 select,
 textarea {
+  font-size: 12px;
+  padding: 6px;
   border: 1px solid color-mix(in srgb, var(--edge) 75%, white);
-  border-radius: 12px;
+  border-radius: 6px;
   background: #fcfffe;
   color: var(--ink);
 }
@@ -329,6 +344,10 @@ table {
   border-spacing: 0;
 }
 
+:where(.border) {
+  border-color: #e5e7eb;
+}
+
 th {
   font-weight: 700;
 }
@@ -337,9 +356,56 @@ tr:nth-child(even) td {
   background: rgba(13, 118, 102, 0.02);
 }
 
+.app-table-shell {
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+}
+
+.app-table-scroll-shell {
+  overflow: auto;
+  max-height: 16rem;
+}
+
+.app-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.app-table-head {
+  background: linear-gradient(180deg, #fbfcff 0%, #f3f6fb 100%);
+}
+
+.app-table th,
+.app-table td {
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.app-table th {
+  color: #526070;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+}
+
+.app-table td {
+  color: #374151;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.app-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 pre {
   border: 1px solid color-mix(in srgb, var(--edge) 70%, white);
-  border-radius: 10px;
+  border-radius: 6px;
+  padding: 6px;
   background: #f6faf8;
 }
 

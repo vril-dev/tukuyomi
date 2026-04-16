@@ -22,7 +22,12 @@ type ProposeResponse = {
     required?: boolean;
     token?: string;
   };
-  proposal?: FPTunerProposal;
+  proposal?: FPTunerProposal | null;
+  no_proposal?: {
+    decision?: string;
+    reason?: string;
+    confidence?: number;
+  } | null;
 };
 
 type ApplyResponse = {
@@ -39,7 +44,10 @@ type ApplyResponse = {
 type EventInput = {
   event_id: string;
   method: string;
+  scheme: string;
+  host: string;
   path: string;
+  query: string;
   rule_id: string;
   status: string;
   matched_variable: string;
@@ -50,7 +58,12 @@ type WAFLogLine = {
   ts?: string;
   req_id?: string;
   method?: string;
+  original_scheme?: string;
+  original_host?: string;
+  rewritten_host?: string;
   path?: string;
+  original_query?: string;
+  rewritten_query?: string;
   rule_id?: string | number;
   status?: string | number;
   matched_variable?: string;
@@ -63,13 +76,16 @@ type WAFReadResponse = {
 };
 
 const defaultEvent: EventInput = {
-  event_id: "manual-ui-001",
+  event_id: "",
   method: "GET",
-  path: "/search",
-  rule_id: "100004",
+  scheme: "http",
+  host: "",
+  path: "",
+  query: "",
+  rule_id: "",
   status: "403",
-  matched_variable: "ARGS:q",
-  matched_value: "select * from users",
+  matched_variable: "",
+  matched_value: "",
 };
 
 const defaultTargetPath = "rules/tukuyomi.conf";
@@ -79,6 +95,7 @@ export default function FPTunerPanel() {
   const [useLatestEvent, setUseLatestEvent] = useState(false);
   const [eventInput, setEventInput] = useState<EventInput>(defaultEvent);
   const [selectedEventID, setSelectedEventID] = useState("");
+  const [manualEntryEnabled, setManualEntryEnabled] = useState(false);
   const [logTail, setLogTail] = useState(30);
   const [wafBlockLines, setWafBlockLines] = useState<WAFLogLine[]>([]);
   const [logLoading, setLogLoading] = useState(false);
@@ -101,6 +118,8 @@ export default function FPTunerPanel() {
   const [error, setError] = useState<string | null>(null);
 
   const canApply = useMemo(() => proposal && proposal.rule_line.trim() !== "", [proposal]);
+  const showManualEventForm = !useLatestEvent && (manualEntryEnabled || selectedEventID !== "");
+  const canPropose = useLatestEvent || showManualEventForm;
 
   function updateEvent<K extends keyof EventInput>(key: K, value: EventInput[K]) {
     setEventInput((prev) => ({ ...prev, [key]: value }));
@@ -118,12 +137,9 @@ export default function FPTunerPanel() {
     setLogLoading(true);
     try {
       const q = new URLSearchParams();
-      q.set("src", "waf");
-      q.set("tail", String(logTail));
-      const res = await apiGetJson<WAFReadResponse>(`/logs/read?${q.toString()}`);
-      const lines = Array.isArray(res.lines) ? res.lines : [];
-      const blocks = lines.filter((line) => line?.event === "waf_block");
-      setWafBlockLines(blocks);
+      q.set("limit", String(logTail));
+      const res = await apiGetJson<WAFReadResponse>(`/fp-tuner/recent-waf-blocks?${q.toString()}`);
+      setWafBlockLines(Array.isArray(res.lines) ? res.lines : []);
     } catch (e: any) {
       setLogError(e?.message || "Failed to load waf logs");
     } finally {
@@ -149,6 +165,14 @@ export default function FPTunerPanel() {
     return String(Math.trunc(n));
   }
 
+  function toOptionalIntString(v: unknown) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) {
+      return "";
+    }
+    return String(Math.trunc(n));
+  }
+
   function shorten(v: unknown, max = 84) {
     const s = String(v ?? "");
     if (s.length <= max) return s;
@@ -158,14 +182,18 @@ export default function FPTunerPanel() {
   function onSelectWAFBlockLine(line: WAFLogLine) {
     const pickedEventID = toStringField(line.req_id, toStringField(line.ts, "manual-ui-log"));
     setSelectedEventID(pickedEventID);
+    setManualEntryEnabled(true);
     setUseLatestEvent(false);
     setEventInput({
       event_id: pickedEventID,
       method: toStringField(line.method, "GET").toUpperCase(),
-      path: toStringField(line.path, "/"),
-      rule_id: toIntString(line.rule_id, 100004),
+      scheme: toStringField(line.original_scheme, "http"),
+      host: toStringField(line.original_host, toStringField(line.rewritten_host, "")),
+      path: toStringField(line.path, ""),
+      query: toStringField(line.original_query, toStringField(line.rewritten_query, "")),
+      rule_id: toOptionalIntString(line.rule_id),
       status: toIntString(line.status, 403),
-      matched_variable: toStringField(line.matched_variable, "ARGS:q"),
+      matched_variable: toStringField(line.matched_variable, ""),
       matched_value: toStringField(line.matched_value, ""),
     });
   }
@@ -183,10 +211,13 @@ export default function FPTunerPanel() {
         payload.event = {
           event_id: eventInput.event_id.trim(),
           method: eventInput.method.trim() || "GET",
-          path: eventInput.path.trim() || "/",
-          rule_id: parseInt(eventInput.rule_id, 10) || 100004,
+          scheme: eventInput.scheme.trim() || "http",
+          host: eventInput.host.trim(),
+          path: eventInput.path.trim(),
+          query: eventInput.query.trim(),
+          rule_id: parseInt(eventInput.rule_id, 10) || 0,
           status: parseInt(eventInput.status, 10) || 403,
-          matched_variable: eventInput.matched_variable.trim() || "ARGS:q",
+          matched_variable: eventInput.matched_variable.trim(),
           matched_value: eventInput.matched_value,
         };
       }
@@ -194,8 +225,8 @@ export default function FPTunerPanel() {
       const res = await apiPostJson<ProposeResponse>("/fp-tuner/propose", payload);
       setProposeResult(res);
       setProposal(res.proposal ?? null);
-      setApprovalRequired(!!res.approval?.required);
-      setApprovalToken(res.approval?.token ?? "");
+      setApprovalRequired(!!res.proposal && !!res.approval?.required);
+      setApprovalToken(res.proposal ? res.approval?.token ?? "" : "");
       setMode(res.mode || "-");
       setSource(res.source || "-");
       setContractVersion(res.contract_version || "-");
@@ -257,14 +288,32 @@ export default function FPTunerPanel() {
             />
           </label>
 
-          <label className="inline-flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={useLatestEvent}
-              onChange={(e) => setUseLatestEvent(e.target.checked)}
-            />
-            Use latest `waf_block` log event
-          </label>
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={useLatestEvent}
+                onChange={(e) => {
+                  setUseLatestEvent(e.target.checked);
+                  if (e.target.checked) {
+                    setManualEntryEnabled(false);
+                  }
+                }}
+              />
+              Use latest `waf_block` log event
+            </label>
+            <button
+              className="text-xs border rounded px-2 py-0.5 bg-white"
+              onClick={() => {
+                setManualEntryEnabled(true);
+                setUseLatestEvent(false);
+                setSelectedEventID("");
+                setEventInput(defaultEvent);
+              }}
+            >
+              Manual entry
+            </button>
+          </div>
 
           <div className="rounded border bg-neutral-50 p-2 space-y-2">
             <div className="flex items-center justify-between gap-2">
@@ -301,13 +350,16 @@ export default function FPTunerPanel() {
             )}
 
             {wafBlockLines.length > 0 && (
-              <div className="max-h-44 overflow-auto rounded border bg-white">
-                <table className="min-w-full text-xs">
-                  <thead className="bg-neutral-100 sticky top-0">
+              <div className="app-table-shell">
+                <div className="app-table-scroll-shell max-h-44">
+                <table className="app-table min-w-full">
+                  <thead className="app-table-head sticky top-0">
                     <tr>
                       <th className="px-2 py-1 text-left">use</th>
                       <th className="px-2 py-1 text-left">ts</th>
                       <th className="px-2 py-1 text-left">rule_id</th>
+                      <th className="px-2 py-1 text-left">scheme</th>
+                      <th className="px-2 py-1 text-left">host</th>
                       <th className="px-2 py-1 text-left">path</th>
                       <th className="px-2 py-1 text-left">matched_variable</th>
                       <th className="px-2 py-1 text-left">matched_value</th>
@@ -330,6 +382,8 @@ export default function FPTunerPanel() {
                           </td>
                           <td className="px-2 py-1 whitespace-nowrap">{toStringField(line.ts, "-")}</td>
                           <td className="px-2 py-1 whitespace-nowrap">{toStringField(line.rule_id, "-")}</td>
+                          <td className="px-2 py-1 whitespace-nowrap">{toStringField(line.original_scheme, "-")}</td>
+                          <td className="px-2 py-1 whitespace-nowrap">{toStringField(line.original_host, toStringField(line.rewritten_host, "-"))}</td>
                           <td className="px-2 py-1" title={toStringField(line.path, "-")}>
                             {shorten(toStringField(line.path, "-"), 36)}
                           </td>
@@ -342,15 +396,25 @@ export default function FPTunerPanel() {
                     })}
                   </tbody>
                 </table>
+                </div>
               </div>
             )}
           </div>
 
-          {!useLatestEvent && (
+          {!useLatestEvent && !showManualEventForm && (
+            <div className="text-sm text-neutral-500">
+              Pick a recent `waf_block` log with Use, or start Manual entry.
+            </div>
+          )}
+
+          {showManualEventForm && (
             <div className="grid gap-2 sm:grid-cols-2">
               <Field label="event_id" value={eventInput.event_id} onChange={(v) => updateEvent("event_id", v)} />
               <Field label="method" value={eventInput.method} onChange={(v) => updateEvent("method", v)} />
+              <Field label="scheme" value={eventInput.scheme} onChange={(v) => updateEvent("scheme", v)} />
+              <Field label="host" value={eventInput.host} onChange={(v) => updateEvent("host", v)} />
               <Field label="path" value={eventInput.path} onChange={(v) => updateEvent("path", v)} />
+              <Field label="query" value={eventInput.query} onChange={(v) => updateEvent("query", v)} />
               <Field label="rule_id" value={eventInput.rule_id} onChange={(v) => updateEvent("rule_id", v)} />
               <Field label="status" value={eventInput.status} onChange={(v) => updateEvent("status", v)} />
               <Field label="matched_variable" value={eventInput.matched_variable} onChange={(v) => updateEvent("matched_variable", v)} />
@@ -368,7 +432,7 @@ export default function FPTunerPanel() {
           <button
             className="px-3 py-1.5 rounded-xl shadow text-sm bg-black text-white disabled:opacity-50"
             onClick={() => void onPropose()}
-            disabled={proposing}
+            disabled={!canPropose || proposing}
           >
             {proposing ? "Proposing..." : "Propose"}
           </button>
@@ -383,18 +447,26 @@ export default function FPTunerPanel() {
               checked={simulate}
               onChange={(e) => setSimulate(e.target.checked)}
             />
-            Simulate only
+            Dry run only (do not write rule)
           </label>
 
-          <label className="text-xs text-neutral-600 block">
-            approval_token
-            <input
-              className="mt-1 w-full border rounded px-2 py-1 font-mono text-xs"
-              value={approvalToken}
-              onChange={(e) => setApprovalToken(e.target.value)}
-              placeholder="auto-filled from propose response"
-            />
-          </label>
+          {approvalRequired && proposal && (
+            <label className="text-xs text-neutral-600 block">
+              approval_token
+              <input
+                className="mt-1 w-full border rounded px-2 py-1 font-mono text-xs"
+                value={approvalToken}
+                onChange={(e) => setApprovalToken(e.target.value)}
+                placeholder="auto-filled from propose response"
+              />
+            </label>
+          )}
+
+          <p className="text-xs text-neutral-600">
+            {simulate
+              ? "Apply validates the proposal only. The rule file is not written and hot reload does not run."
+              : "Apply writes the proposed rule and hot reloads the active ruleset."}
+          </p>
 
           <button
             className="px-3 py-1.5 rounded-xl shadow text-sm bg-black text-white disabled:opacity-50"
@@ -415,7 +487,17 @@ export default function FPTunerPanel() {
       <section className="rounded-xl border bg-white p-3 space-y-2">
         <h2 className="text-sm font-semibold">Proposal</h2>
 
-        {!proposal && <div className="text-sm text-neutral-500">No proposal yet.</div>}
+        {!proposal && !proposeResult?.no_proposal && <div className="text-sm text-neutral-500">No proposal yet.</div>}
+
+        {proposeResult?.no_proposal && (
+          <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm space-y-1">
+            <div className="font-medium">No proposal returned</div>
+            <div>{proposeResult.no_proposal.reason || "Provider could not justify a safe scoped exclusion."}</div>
+            {typeof proposeResult.no_proposal.confidence === "number" && (
+              <div className="text-xs text-neutral-600">confidence: {proposeResult.no_proposal.confidence}</div>
+            )}
+          </div>
+        )}
 
         {proposal && (
           <div className="grid gap-2">

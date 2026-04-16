@@ -335,13 +335,26 @@ func ProxyHandler(c *gin.Context) {
 	setWAFContext(c, reqID, clientIP, country, wafHit, strings.Join(unique(ruleIDs), ","))
 
 	if it := tx.Interruption(); it != nil {
+		primaryMatch, hasPrimaryMatch := selectPrimaryWAFMatch(tx.MatchedRules(), it.RuleID)
 		evt := map[string]any{
-			"ts":      time.Now().UTC().Format(time.RFC3339Nano),
-			"service": "coraza",
-			"level":   "WARN",
-			"event":   "waf_block",
-			"req_id":  reqID, "ip": clientIP, "country": country, "path": c.Request.URL.Path,
-			"rule_id": it.RuleID, "status": it.Status,
+			"ts":             time.Now().UTC().Format(time.RFC3339Nano),
+			"service":        "coraza",
+			"level":          "WARN",
+			"event":          "waf_block",
+			"req_id":         reqID,
+			"ip":             clientIP,
+			"country":        country,
+			"method":         c.Request.Method,
+			"original_scheme": map[bool]string{true: "https", false: "http"}[requestIsHTTPS(c)],
+			"original_host":  c.Request.Host,
+			"path":           c.Request.URL.Path,
+			"original_query": c.Request.URL.RawQuery,
+			"rule_id":        it.RuleID,
+			"status":         it.Status,
+		}
+		if hasPrimaryMatch {
+			evt["matched_variable"] = primaryMatch.Variable
+			evt["matched_value"] = primaryMatch.Value
 		}
 		emitJSONLog(evt)
 		_ = appendEventToFile(evt)

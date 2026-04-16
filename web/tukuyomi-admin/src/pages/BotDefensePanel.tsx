@@ -248,23 +248,33 @@ export default function BotDefensePanel() {
 
             <div className="grid gap-2">
                 <div className="text-sm font-medium">Recent Decisions</div>
-                <div className="rounded-xl border overflow-hidden">
-                    <div className="grid grid-cols-[150px_100px_90px_1fr] gap-3 px-3 py-2 text-xs font-medium bg-neutral-50 border-b">
-                        <span>Timestamp</span>
-                        <span>Action</span>
-                        <span>Risk</span>
-                        <span>Path / Signals</span>
+                <div className="app-table-shell">
+                    <div className="app-table-scroll-shell">
+                        <table className="app-table">
+                            <thead className="app-table-head">
+                                <tr>
+                                    <th className="px-3 py-2 text-left">Timestamp</th>
+                                    <th className="px-3 py-2 text-left">Action</th>
+                                    <th className="px-3 py-2 text-left">Risk</th>
+                                    <th className="px-3 py-2 text-left">Path / Signals</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {decisions.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={4} className="px-3 py-3 text-neutral-500">No recent decisions.</td>
+                                    </tr>
+                                ) : decisions.map((item, idx) => (
+                                    <tr key={`decision-${idx}`}>
+                                        <td className="px-3 py-2 whitespace-nowrap">{item.timestamp || "-"}</td>
+                                        <td className="px-3 py-2 whitespace-nowrap">{item.dry_run ? `would-${item.action || "allow"}` : (item.action || "allow")}</td>
+                                        <td className="px-3 py-2 whitespace-nowrap">{typeof item.risk_score === "number" ? item.risk_score : "-"}</td>
+                                        <td className="px-3 py-2">{item.path || "-"}{Array.isArray(item.signals) && item.signals.length ? ` | ${item.signals.join(", ")}` : ""}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
                     </div>
-                    {decisions.length === 0 ? (
-                        <div className="px-3 py-3 text-sm text-neutral-500">No recent decisions.</div>
-                    ) : decisions.map((item, idx) => (
-                        <div key={`decision-${idx}`} className="grid grid-cols-[150px_100px_90px_1fr] gap-3 px-3 py-2 text-xs border-b last:border-b-0">
-                            <span className="truncate">{item.timestamp || "-"}</span>
-                            <span>{item.dry_run ? `would-${item.action || "allow"}` : (item.action || "allow")}</span>
-                            <span>{typeof item.risk_score === "number" ? item.risk_score : "-"}</span>
-                            <span className="truncate">{item.path || "-"}{Array.isArray(item.signals) && item.signals.length ? ` | ${item.signals.join(", ")}` : ""}</span>
-                        </div>
-                    ))}
                 </div>
             </div>
         </div>

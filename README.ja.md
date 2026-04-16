@@ -122,12 +122,10 @@ make preset-check PRESET=minimal
 | `WAF_CRS_SETUP_FILE` | `rules/crs/crs-setup.conf` | CRSセットアップ設定ファイル。 |
 | `WAF_CRS_RULES_DIR` | `rules/crs/rules` | CRS本体ルール（`*.conf`）のディレクトリ。 |
 | `WAF_CRS_DISABLED_FILE` | `conf/crs-disabled.conf` | CRS本体の無効化ファイル一覧。1行1ファイル名で指定。 |
-| `WAF_FP_TUNER_MODE` | `mock` | FPチューナーのプロバイダモード。`mock` はフィクスチャ/生成提案、`http` は `WAF_FP_TUNER_ENDPOINT` へPOST。 |
-| `WAF_FP_TUNER_ENDPOINT` | (空) | `http` モード時の外部LLMプロキシのHTTPエンドポイント。 |
+| `WAF_FP_TUNER_ENDPOINT` | (空) | 外部 FP チューナープロバイダの HTTP エンドポイント。 |
 | `WAF_FP_TUNER_API_KEY` | (空) | `WAF_FP_TUNER_ENDPOINT` 向け Bearer トークン。 |
 | `WAF_FP_TUNER_MODEL` | (空) | プロバイダへ渡す任意のモデル識別子。 |
 | `WAF_FP_TUNER_TIMEOUT_SEC` | `15` | プロバイダ呼び出し時のHTTPタイムアウト（秒）。 |
-| `WAF_FP_TUNER_MOCK_RESPONSE_FILE` | `conf/fp-tuner-mock-response.json` | `mock` モードで使うレスポンスフィクスチャのパス。 |
 | `WAF_FP_TUNER_REQUIRE_APPROVAL` | `true` | `simulate=false` の適用時に承認トークンを必須化するか。 |
 | `WAF_FP_TUNER_APPROVAL_TTL_SEC` | `600` | 承認トークンの有効期限（秒）。 |
 | `WAF_FP_TUNER_AUDIT_FILE` | `logs/coraza/fp-tuner-audit.ndjson` | propose/apply 操作の監査ログ出力先。 |
@@ -145,7 +143,7 @@ make preset-check PRESET=minimal
 | `WAF_ADMIN_TRUSTED_CIDRS` | `127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` | 管理 exposure 判定で trusted とみなす直結 peer の IP/CIDR。`WAF_ADMIN_EXTERNAL_MODE` が `full_external` 以外のとき、この範囲が埋め込み管理UI到達可否を決めます。 |
 | `WAF_TRUSTED_PROXY_CIDRS` | `10.0.0.0/8,192.168.0.0/16` | `X-Forwarded-For` / `X-Real-IP` / 転送された `X-Request-ID` を信用する前段プロキシの IP/CIDR。Coraza を直接公開する場合は空のままにします。ALB/ECS/Cloudflare 配下では、実際に信頼する前段の subnet だけを設定してください。 |
 | `WAF_COUNTRY_HEADER_NAMES` | `X-Country-Code,CF-IPCountry` | 信頼する country header の参照順。`WAF_TRUSTED_PROXY_CIDRS` に含まれる前段から来た場合だけ、この順に header を見ます。 |
-| `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` | `false` | 内部用の `X-WAF-Hit` / `X-WAF-RuleIDs` をレスポンスに残すか。クライアントへ返る前に前段 smart proxy が必ず除去する構成でだけ有効化してください。 |
+| `WAF_EXPOSE_WAF_DEBUG_HEADERS` | `false` | proxied client response に `X-WAF-Hit` / `X-WAF-RuleIDs` を出すかどうか。クライアントへ返る前に前段 smart proxy が必ず除去する構成でだけ有効化してください。旧エイリアス: `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS`。 |
 | `WAF_API_KEY_PRIMARY` | `…` | 管理API用の主キー（`X-API-Key`）。 |
 | `WAF_API_KEY_SECONDARY` | (空) | 予備キー（ローテーション時の切替用。未使用なら空でOK）。 |
 | `WAF_ADMIN_SESSION_SECRET` | `…` | ブラウザ管理 session の署名に使う HMAC secret。本番では API key と分離して設定し、session cookie をキー更新から独立させてください。 |
@@ -195,8 +193,8 @@ forwarded header の信頼境界メモ:
 - `WAF_TRUSTED_PROXY_CIDRS` を設定しない場合、Coraza は client 側が送った forwarding header を信用せず、直結 peer の IP を使います。
 - 国別制御は `WAF_COUNTRY_HEADER_NAMES` の trusted header chain を使い、信頼できる country header が無い場合は `UNKNOWN` に落ちます。
 - 同梱の example は現在、default では direct な `client -> tukuyomi -> app` smoke を起動し、`nginx` は balancer 相当の確認用に optional `front-proxy` profile として切り出しています。
-- local でその profile を使う場合は、trusted private range と `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=true` を付けて、同梱 `nginx` の forwarded header 正規化と従来ログ挙動を有効にしてください。
-- `client -> ALB/Cloudflare/nginx -> tukuyomi -> app` へ寄せる場合は、`WAF_TRUSTED_PROXY_CIDRS` を実際の前段 range に絞り、前段で確実に除去しない限り `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS` は無効のままにしてください。
+- local でその profile を使う場合は、trusted private range と `WAF_EXPOSE_WAF_DEBUG_HEADERS=true` を付けて、同梱 `nginx` の forwarded header 正規化と従来ログ挙動を有効にしてください。
+- `client -> ALB/Cloudflare/nginx -> tukuyomi -> app` へ寄せる場合は、`WAF_TRUSTED_PROXY_CIDRS` を実際の前段 range に絞り、前段で確実に除去しない限り `WAF_EXPOSE_WAF_DEBUG_HEADERS` は無効のままにしてください。
 
 ## Host Network Hardening（L3/L4 対策の基礎）
 
@@ -387,20 +385,6 @@ direct な `client -> tukuyomi -> app` 確認をしたい場合は、`make stand
 deployment guide の検証をまとめて回したい場合は、`make deployment-smoke` を使ってください。
 現時点の standalone regression matrix は `docs/operations/standalone-regression.md` にまとめています。
 
-### FPチューナー（モック）送受信テスト
-
-外部LLMの契約を確定していない段階でも、送信→受信→適用までをテストできます:
-
-```bash
-./scripts/test_fp_tuner_mock.sh
-```
-
-既定では `simulate` 適用（`SIMULATE=1`）です。実際に追記してホットリロードする場合:
-
-```bash
-SIMULATE=0 ./scripts/test_fp_tuner_mock.sh
-```
-
 ### FPチューナー（HTTPスタブ）送受信テスト
 
 `http` モードをローカルスタブで検証する場合:
@@ -412,7 +396,7 @@ SIMULATE=0 ./scripts/test_fp_tuner_mock.sh
 このスクリプトは次を自動実行します:
 
 - `127.0.0.1:${MOCK_PROVIDER_PORT:-18091}` に一時的なプロバイダスタブを起動
-- `WAF_FP_TUNER_MODE=http` で `coraza` を起動/再ビルド
+- `WAF_FP_TUNER_ENDPOINT` をローカルスタブに向けて `coraza` を起動/再ビルド
 - `propose` / `apply` の契約を確認
 - 外部送信前にマスキング済みペイロードであることを検証
 
@@ -438,6 +422,10 @@ SIMULATE=0 ./scripts/test_fp_tuner_mock.sh
 ```bash
 BRIDGE_COMMAND="/path/to/your-provider-command.sh" ./scripts/test_fp_tuner_bridge_command.sh
 ```
+
+プロバイダ契約:
+- Coraza 互換の host-scoped exclusion JSON だけを返す
+- 安全な除外を正当化できない場合は `no_proposal` を返す
 
 OpenAIコマンドプロバイダの利用例:
 
@@ -531,6 +519,7 @@ Claudeコマンドプロバイダのローカルモックテスト:
 | POST | `/tukuyomi-api/semantic-rules:validate` | Semantic設定の構文検証のみ（保存なし） |
 | PUT  | `/tukuyomi-api/semantic-rules` | Semantic設定ファイルを保存（`If-Match` に `ETag` を指定して楽観ロック） |
 | GET  | `/tukuyomi-api/verify-manifest` | 外部WAF検証ランナー向けの verification manifest 雛形を出力 |
+| GET  | `/tukuyomi-api/fp-tuner/recent-waf-blocks` | FP Tuner picker 用に最近の `waf_block` 行だけを返す |
 | POST | `/tukuyomi-api/fp-tuner/propose` | リクエスト入力（`event` または `events[]`）または最新 `waf_block` / `semantic_anomaly` ログからFP調整案を生成 |
 | POST | `/tukuyomi-api/fp-tuner/apply` | 調整案の検証/適用（既定は `simulate=true`、実適用は承認トークン必須設定可） |
 | GET  | `/tukuyomi-api/cache-rules` | cache.conf の現在内容（Raw + 構造化）と `ETag` を返す |

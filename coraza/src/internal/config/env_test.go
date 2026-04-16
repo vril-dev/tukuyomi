@@ -215,3 +215,26 @@ func TestParseCountryHeaderNames(t *testing.T) {
 		t.Fatalf("got[1]=%q want=%q", got[1], "CF-IPCountry")
 	}
 }
+
+func TestParseWAFDebugHeaderExposure(t *testing.T) {
+	cases := []struct {
+		name    string
+		primary string
+		legacy  string
+		want    bool
+	}{
+		{name: "default-off", primary: "", legacy: "", want: false},
+		{name: "primary-true", primary: "true", legacy: "", want: true},
+		{name: "primary-false-wins", primary: "false", legacy: "true", want: false},
+		{name: "legacy-true-fallback", primary: "", legacy: "1", want: true},
+		{name: "legacy-false-fallback", primary: "", legacy: "false", want: false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseWAFDebugHeaderExposure(tc.primary, tc.legacy); got != tc.want {
+				t.Fatalf("parseWAFDebugHeaderExposure(%q, %q)=%v want=%v", tc.primary, tc.legacy, got, tc.want)
+			}
+		})
+	}
+}

@@ -29,7 +29,6 @@ require_cmd() {
 
 compose() {
   PUID="${HOST_PUID}" GUID="${HOST_GUID}" CORAZA_PORT="${HOST_CORAZA_PORT}" \
-  WAF_FP_TUNER_MODE="http" \
   WAF_FP_TUNER_ENDPOINT="http://host.docker.internal:${BRIDGE_PORT}/propose" \
   docker compose "${COMPOSE_ARGS[@]}" "$@"
 }
@@ -110,6 +109,8 @@ cat >"${REQ_FILE}" <<JSON
   "event": {
     "event_id": "manual-bridge-test-001",
     "method": "GET",
+    "scheme": "https",
+    "host": "search.example.com",
     "path": "/search",
     "rule_id": 100004,
     "status": 403,

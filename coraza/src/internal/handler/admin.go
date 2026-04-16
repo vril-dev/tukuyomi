@@ -135,6 +135,7 @@ func StatusHandler(c *gin.Context) {
 		"admin_trusted_cidr_count":              len(config.AdminTrustedCIDRs),
 		"trusted_proxy_cidrs":                   config.TrustedProxyCIDRs,
 		"trusted_proxy_count":                   len(config.TrustedProxyCIDRs),
+		"expose_waf_debug_headers":              config.ForwardInternalResponseHeaders,
 		"forward_internal_response_headers":     config.ForwardInternalResponseHeaders,
 		"response_cache_mode":                   responseCache.Mode,
 		"response_cache_enabled":                responseCache.Enabled,

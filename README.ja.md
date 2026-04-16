@@ -20,7 +20,7 @@ Coraza + CRS WAFプロジェクト
 | コンポーネント | 概要 | ライセンス | 配布 | Docs |
 |---|---|---|---|---|
 | tukuyomi | nginx + Coraza WAF（本リポジトリ。今後の開発の主軸は `tukuyomi-proxy` へ移します） | Apache-2.0 | OSS | [`README`](README.ja.md) |
-| tukuyomi-proxy | シングルバイナリWAF/Proxy | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/proxy/README.ja.md) |
+| tukuyomi-proxy | シングルバイナリWAF/Proxy | Proprietary | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/proxy/README.ja.md) |
 | tukuyomi-edge | IoTエッジデバイス向けシングルバイナリ | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/edge/README.ja.md) |
 | tukuyomi-center | IoTセンター管理向けシングルバイナリ | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/center/README.ja.md) |
 | tukuyomi-verify | 検証・テストツール | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/verify/README.ja.md) |

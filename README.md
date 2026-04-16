@@ -19,7 +19,7 @@ GitHub auto-generated source archives on those distribution pages belong to the 
 | Component | Description | License | Distribution | Docs |
 |---|---|---|---|---|
 | tukuyomi | nginx + Coraza WAF (this repository; primary development is moving to `tukuyomi-proxy`) | Apache-2.0 | OSS | [`README`](README.md) |
-| tukuyomi-proxy | Single-binary WAF/Proxy | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/proxy/README.md) |
+| tukuyomi-proxy | Single-binary WAF/Proxy | Proprietary | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/proxy/README.md) |
 | tukuyomi-edge | Single-binary for IoT edge devices | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/edge/README.md) |
 | tukuyomi-center | Single-binary for IoT center management | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/center/README.md) |
 | tukuyomi-verify | Verification and testing tool | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/verify/README.md) |

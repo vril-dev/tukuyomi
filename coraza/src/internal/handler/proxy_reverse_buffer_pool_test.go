@@ -2,7 +2,7 @@ package handler
 
 import "testing"
 
-func TestReverseProxyCopyBufferPoolUsesExpectedBufferSize(t *testing.T) {
+func TestProxyCopyBufferPoolUsesExpectedBufferSize(t *testing.T) {
 	buf := proxyReverseCopyBufferPool.Get()
 	if len(buf) != proxyReverseCopyBufferSize {
 		t.Fatalf("len=%d want=%d", len(buf), proxyReverseCopyBufferSize)

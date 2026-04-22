@@ -13,7 +13,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -236,7 +235,6 @@ type proxyRuntime struct {
 	cfg           ProxyRulesConfig
 	effectiveCfg  ProxyRulesConfig
 	target        *url.URL
-	reverseProxy  *httputil.ReverseProxy
 	proxyEngine   http.Handler
 	transport     *dynamicProxyTransport
 	health        *upstreamHealthMonitor
@@ -272,16 +270,8 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 	if err != nil {
 		return fmt.Errorf("build proxy transport: %w", err)
 	}
-	rp := &httputil.ReverseProxy{
-		Rewrite:      rewriteStandardProxyRequest,
-		Transport:    transport,
-		BufferPool:   proxyReverseCopyBufferPool,
-		ErrorHandler: handleProxyRoundTripError,
-	}
-	rp.ModifyResponse = onProxyResponse
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
-	rp.FlushInterval = flushInterval
-	engine, err := newProxyEngine(rp, transport, config.ProxyEngineMode, flushInterval)
+	engine, err := newProxyEngine(transport, config.ProxyEngineMode, flushInterval)
 	if err != nil {
 		return err
 	}
@@ -293,7 +283,6 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 		cfg:           prepared.cfg,
 		effectiveCfg:  prepared.effectiveCfg,
 		target:        prepared.target,
-		reverseProxy:  rp,
 		proxyEngine:   engine,
 		transport:     transport,
 		errRes:        prepared.errRes,
@@ -312,45 +301,48 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 	return nil
 }
 
-func rewriteStandardProxyRequest(pr *httputil.ProxyRequest) {
+func rewriteTukuyomiProxyRequest(in *http.Request, out *http.Request) *http.Request {
+	if in == nil || out == nil {
+		return out
+	}
 	cfg := currentProxyConfig()
 	target := currentProxyTarget()
-	selection, selectionOK := proxyRouteTransportSelectionFromContext(pr.In.Context())
-	classification, classOK := proxyRouteClassificationFromContext(pr.In.Context())
+	selection, selectionOK := proxyRouteTransportSelectionFromContext(in.Context())
+	classification, classOK := proxyRouteClassificationFromContext(in.Context())
 	if selectionOK && selection.Target != nil {
 		target = selection.Target
 	}
 	if target == nil {
 		target, _ = proxyPrimaryTarget(currentProxyConfig())
 	}
-	rewrittenPath := pr.In.URL.Path
-	rewrittenRawPath := pr.In.URL.RawPath
+	rewrittenPath := in.URL.Path
+	rewrittenRawPath := in.URL.RawPath
 	if classOK {
 		rewrittenPath = classification.RewrittenPath
 		rewrittenRawPath = classification.RewrittenRawPath
 	}
-	rewrittenQuery := pr.In.URL.RawQuery
+	rewrittenQuery := in.URL.RawQuery
 	if classOK {
 		rewrittenQuery = classification.RewrittenQuery
 	}
-	rewriteProxyOutgoingURL(pr.Out, target, rewrittenPath, rewrittenRawPath, rewrittenQuery)
-	pr.SetXForwarded()
-	pr.Out.Header.Del(proxyObservabilityUpstreamNameHeader)
-	outboundHost := pr.In.Host
+	rewriteProxyOutgoingURL(out, target, rewrittenPath, rewrittenRawPath, rewrittenQuery)
+	setTukuyomiProxyXForwarded(out.Header, in)
+	out.Header.Del(proxyObservabilityUpstreamNameHeader)
+	outboundHost := in.Host
 	if selectionOK && strings.TrimSpace(selection.RewrittenHost) != "" {
 		outboundHost = selection.RewrittenHost
 	}
-	pr.Out.Host = outboundHost
+	out.Host = outboundHost
 	if classOK || selectionOK {
 		if classOK {
-			applyProxyRouteHeaders(pr.Out.Header, classification.RequestHeaderOps)
+			applyProxyRouteHeaders(out.Header, classification.RequestHeaderOps)
 		}
 		if cfg.EmitUpstreamNameRequestHeader && selectionOK && selection.HealthKey != "" {
 			if upstreamName := strings.TrimSpace(selection.SelectedUpstream); upstreamName != "" {
-				pr.Out.Header.Set(proxyObservabilityUpstreamNameHeader, upstreamName)
+				out.Header.Set(proxyObservabilityUpstreamNameHeader, upstreamName)
 			}
 		}
-		ctx := pr.Out.Context()
+		ctx := out.Context()
 		if classOK {
 			ctx = withProxyRouteClassification(ctx, classification)
 		}
@@ -360,8 +352,9 @@ func rewriteStandardProxyRequest(pr *httputil.ProxyRequest) {
 		if selectionOK && selection.HealthKey != "" {
 			ctx = context.WithValue(ctx, ctxKeySelectedUpstream, selection.HealthKey)
 		}
-		pr.Out = pr.Out.WithContext(ctx)
+		out = out.WithContext(ctx)
 	}
+	return out
 }
 
 func handleProxyRoundTripError(w http.ResponseWriter, r *http.Request, err error) {
@@ -523,7 +516,7 @@ func currentProxyErrorResponse() proxyErrorResponse {
 
 func ServeProxy(w http.ResponseWriter, r *http.Request) {
 	rt := proxyRuntimeInstance()
-	if rt == nil || (rt.proxyEngine == nil && rt.reverseProxy == nil) {
+	if rt == nil || rt.proxyEngine == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte(`{"error":"proxy runtime is not initialized"}`))
@@ -537,11 +530,7 @@ func ServeProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if rt.proxyEngine != nil {
-		rt.proxyEngine.ServeHTTP(wrapped, r)
-		return
-	}
-	rt.reverseProxy.ServeHTTP(wrapped, r)
+	rt.proxyEngine.ServeHTTP(wrapped, r)
 }
 
 func ProxyRulesSnapshot() (raw string, etag string, cfg ProxyRulesConfig, health upstreamHealthStatus, rollbackDepth int) {
@@ -655,7 +644,6 @@ func ApplyProxyRulesRaw(ifMatch string, raw string) (string, ProxyRulesConfig, e
 	rt.errRes = prepared.errRes
 	setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
-	rt.reverseProxy.FlushInterval = flushInterval
 	if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
 		setter.SetFlushInterval(flushInterval)
 	}
@@ -730,7 +718,6 @@ func RollbackProxyRules() (string, ProxyRulesConfig, proxyRollbackEntry, error) 
 	rt.errRes = prepared.errRes
 	setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
-	rt.reverseProxy.FlushInterval = flushInterval
 	if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
 		setter.SetFlushInterval(flushInterval)
 	}
@@ -804,7 +791,6 @@ func SyncProxyStorage() error {
 		rt.errRes = prepared.errRes
 		setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
 		flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
-		rt.reverseProxy.FlushInterval = flushInterval
 		if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
 			setter.SetFlushInterval(flushInterval)
 		}
@@ -1185,7 +1171,6 @@ func reloadProxyRuntimeWithSitesAndVhosts(sites SiteConfigFile, vhosts VhostConf
 	rt.errRes = prepared.errRes
 	setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
-	rt.reverseProxy.FlushInterval = flushInterval
 	if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
 		setter.SetFlushInterval(flushInterval)
 	}

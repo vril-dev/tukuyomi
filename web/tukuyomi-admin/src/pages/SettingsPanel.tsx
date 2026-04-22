@@ -1447,25 +1447,13 @@ export default function SettingsPanel() {
                       <div className="text-sm font-medium">{tx("Proxy Engine, CRS, Rollback, and FP Tuner")}</div>
                       <div className="grid gap-3 sm:grid-cols-2">
                         <Field label={tx("Proxy Engine")}>
-                          <select
+                          <input
                             value={listenerAdminConfig.proxy.engine.mode || "tukuyomi_proxy"}
-                            onChange={(e) => setListenerAdminConfig((current) => ({
-                              ...current,
-                              proxy: {
-                                ...current.proxy,
-                                engine: {
-                                  ...current.proxy.engine,
-                                  mode: e.target.value,
-                                },
-                              },
-                            }))}
-                            className="w-full rounded border border-neutral-200 bg-white"
-                          >
-                            <option value="net_http">net_http</option>
-                            <option value="tukuyomi_proxy">tukuyomi_proxy</option>
-                          </select>
+                            readOnly
+                            className="w-full rounded border border-neutral-200 bg-neutral-100 text-neutral-700"
+                          />
                           <p className="mt-1 text-[11px] text-neutral-500">
-                            {tx("net_http uses Go's standard reverse proxy. tukuyomi_proxy uses Tukuyomi's response bridge and native Upgrade/WebSocket tunnel. Restart required.")}
+                            {tx("tukuyomi_proxy is the built-in proxy engine. The legacy net_http bridge has been removed. Restart required after config file changes.")}
                           </p>
                         </Field>
                         <NumberField label={tx("Proxy Rollback History Size")} value={listenerAdminConfig.proxy.rollback_history_size} onChange={(value) => setListenerAdminConfig((current) => ({ ...current, proxy: { ...current.proxy, rollback_history_size: value } }))} />

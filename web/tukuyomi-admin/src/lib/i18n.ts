@@ -37,8 +37,8 @@ const JA_STRINGS: Record<string, string> = {
   "Proxy Engine": "Proxy Engine",
   "Proxy Engine, CRS, Rollback, and FP Tuner": "Proxy Engine、CRS、ロールバック、FP Tuner",
   "Current Proxy Engine": "現在のProxy Engine",
-  "net_http uses Go's standard reverse proxy. tukuyomi_proxy uses Tukuyomi's response bridge and native Upgrade/WebSocket tunnel. Restart required.":
-    "net_http は Go 標準の reverse proxy を使います。tukuyomi_proxy は Tukuyomi の response bridge と native Upgrade/WebSocket tunnel を使います。再起動が必要です。",
+  "tukuyomi_proxy is the built-in proxy engine. The legacy net_http bridge has been removed. Restart required after config file changes.":
+    "tukuyomi_proxy は built-in の proxy engine です。legacy net_http bridge は削除済みです。config file 変更後は再起動が必要です。",
   Operations: "Operations",
   "runtime health": "稼働状態",
   "events and traces": "イベントとトレース",

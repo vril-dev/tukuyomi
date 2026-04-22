@@ -66,7 +66,7 @@ test("computeSettingsRuntimeDrift returns labeled mismatches when restart is pen
     tracing_enabled: false,
     tracing_service_name: "tukuyomi",
     tracing_otlp_endpoint: "",
-    proxy_engine_mode: "net_http",
+    proxy_engine_mode: "legacy_bridge",
   };
 
   assert.deepEqual(computeSettingsRuntimeDrift(config, runtime), [

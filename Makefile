@@ -50,7 +50,7 @@ PRESET_OVERWRITE ?= 0
 export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_API_KEY_PRIMARY PROTECTED_HOST
 
 .PHONY: \
-	help setup env-init crs-install \
+	help setup env-init crs-install crs-ensure \
 	go-test go-build build \
 	release-linux-amd64 release-linux-arm64 release-linux-all \
 	ui-install ui-test ui-build ui-sync ui-build-sync \
@@ -67,6 +67,7 @@ help:
 	@echo "  make setup                      Prepare local dev baseline (.env + CRS)"
 	@echo "  make env-init                   Create .env from .env.example if missing"
 	@echo "  make crs-install                Install OWASP CRS into data/rules/crs"
+	@echo "  make crs-ensure                 Install OWASP CRS only when data/rules/crs is missing"
 	@echo ""
 	@echo "  make go-test                    Run Go tests (coraza/src)"
 	@echo "  make go-build                   Build single binary into ./bin/$(APP_NAME)"
@@ -215,6 +216,17 @@ preset-check-minimal:
 crs-install:
 	./scripts/install_crs.sh
 
+crs-ensure:
+	@set -euo pipefail; \
+	crs_setup="data/rules/crs/crs-setup.conf"; \
+	crs_rule="$$(find data/rules/crs/rules -maxdepth 1 -type f -name '*.conf' -print -quit 2>/dev/null || true)"; \
+	if [[ ! -f "$$crs_setup" || -z "$$crs_rule" ]]; then \
+		echo "[crs-ensure] OWASP CRS is missing; running make crs-install"; \
+		$(MAKE) --no-print-directory crs-install; \
+	else \
+		echo "[crs-ensure] OWASP CRS already installed"; \
+	fi
+
 setup: env-init crs-install
 
 go-test:
@@ -293,7 +305,7 @@ ui-sync:
 
 ui-build-sync: ui-build ui-sync
 
-ui-preview-up: ui-build-sync
+ui-preview-up: crs-ensure ui-build-sync
 	bash ./scripts/ui_preview.sh up
 
 ui-preview-down:

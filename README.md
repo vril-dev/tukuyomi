@@ -40,10 +40,10 @@ family comparison.
 This repository intentionally does **not** bundle the full OWASP CRS files.
 It ships a minimal bootstrappable base rule file, `data/rules/tukuyomi.conf`.
 
-Fetch CRS first:
+Fetch CRS first for normal runtime use:
 
 ```bash
-./scripts/install_crs.sh
+make crs-install
 ```
 
 Use a prepared baseline if you want a copy-ready preset for the embedded admin UI and
@@ -68,10 +68,12 @@ Before production use, replace the sample values in:
 A simple local preview flow is:
 
 ```bash
-./scripts/install_crs.sh
 make preset-apply PRESET=minimal
 make ui-preview-up
 ```
+
+`make ui-preview-up` runs `make crs-install` automatically on first launch when
+`data/rules/crs` is not installed yet.
 
 Then open:
 

@@ -20,6 +20,7 @@ BENCH_ACCESS_LOG_MODE="${BENCH_ACCESS_LOG_MODE:-full}"
 BENCH_CLIENT_KEEPALIVE="${BENCH_CLIENT_KEEPALIVE:-1}"
 BENCH_PROXY_MODE="${BENCH_PROXY_MODE:-current}"
 BENCH_PROXY_ENGINE="${BENCH_PROXY_ENGINE:-tukuyomi_proxy}"
+BENCH_RUNNER="${BENCH_RUNNER:-docker}"
 BENCH_PROFILE="${BENCH_PROFILE:-0}"
 BENCH_PROFILE_ADDR="${BENCH_PROFILE_ADDR:-127.0.0.1:6060}"
 BENCH_PROFILE_SECONDS="${BENCH_PROFILE_SECONDS:-10}"
@@ -45,6 +46,8 @@ profile_cpu_file=""
 profile_heap_file=""
 profile_allocs_file=""
 compose_pprof_addr=""
+server_pid=""
+server_log_file=""
 
 need_cmd() {
   local name="$1"
@@ -54,7 +57,18 @@ need_cmd() {
   fi
 }
 
-need_cmd docker
+case "${BENCH_RUNNER}" in
+  docker|local)
+    ;;
+  *)
+    echo "[proxy-bench][ERROR] BENCH_RUNNER must be docker or local" >&2
+    exit 1
+    ;;
+esac
+
+if [[ "${BENCH_RUNNER}" == "docker" ]]; then
+  need_cmd docker
+fi
 need_cmd curl
 need_cmd jq
 need_cmd ab
@@ -136,10 +150,10 @@ case "${BENCH_PROXY_MODE}" in
 esac
 
 case "${BENCH_PROXY_ENGINE}" in
-  net_http|tukuyomi_proxy)
+  tukuyomi_proxy)
     ;;
   *)
-    echo "[proxy-bench][ERROR] BENCH_PROXY_ENGINE must be net_http or tukuyomi_proxy" >&2
+    echo "[proxy-bench][ERROR] BENCH_PROXY_ENGINE must be tukuyomi_proxy" >&2
     exit 1
     ;;
 esac
@@ -209,10 +223,16 @@ cleanup() {
     kill "${upstream_pid}" >/dev/null 2>&1 || true
     wait "${upstream_pid}" >/dev/null 2>&1 || true
   fi
-  (
-    cd "${ROOT_DIR}"
-    CORAZA_PORT="${HOST_CORAZA_PORT}" docker compose down --remove-orphans >/dev/null 2>&1 || true
-  )
+  if [[ -n "${server_pid}" ]]; then
+    kill "${server_pid}" >/dev/null 2>&1 || true
+    wait "${server_pid}" >/dev/null 2>&1 || true
+  fi
+  if [[ "${BENCH_RUNNER}" == "docker" ]]; then
+    (
+      cd "${ROOT_DIR}"
+      CORAZA_PORT="${HOST_CORAZA_PORT}" docker compose down --remove-orphans >/dev/null 2>&1 || true
+    )
+  fi
   restore_config_file_backups || true
   rm -rf "${tmp_dir}" >/dev/null 2>&1 || true
 }
@@ -366,6 +386,21 @@ apply_proxy_engine_for_benchmark() {
   ' "${PROXY_HOST_CONFIG_FILE}" > "${out}"
   mv "${out}" "${PROXY_HOST_CONFIG_FILE}"
   echo "[proxy-bench] proxy engine temporarily set to ${BENCH_PROXY_ENGINE}"
+}
+
+apply_local_listen_addr_for_benchmark() {
+  local out
+
+  if [[ "${BENCH_RUNNER}" != "local" ]]; then
+    return 0
+  fi
+  out="${tmp_dir}/config-local-listen.json"
+  jq --arg listen "127.0.0.1:${HOST_CORAZA_PORT}" '
+    .server = (.server // {})
+    | .server.listen_addr = $listen
+  ' "${PROXY_HOST_CONFIG_FILE}" > "${out}"
+  mv "${out}" "${PROXY_HOST_CONFIG_FILE}"
+  echo "[proxy-bench] local runner listen address temporarily set to 127.0.0.1:${HOST_CORAZA_PORT}"
 }
 
 enable_waf_bypass_for_proxy_only_mode() {
@@ -587,6 +622,32 @@ run_ab() {
   ab "${ab_args[@]}" "${url}" > "${output_file}"
 }
 
+wait_for_benchmark_route_ready() {
+  local preset="$1"
+  local url="${PROXY_BASE_URL}${BENCH_PATH}"
+  local body_file="${tmp_dir}/ready_${preset}.body"
+  local code=""
+  local i
+
+  for i in $(seq 1 50); do
+    code="$(curl -sS -o "${body_file}" -w "%{http_code}" \
+      -H "X-Forwarded-For: 198.18.0.250" \
+      -H "X-Real-IP: 198.18.0.250" \
+      "${url}" || true)"
+    if [[ "${code}" == "200" ]]; then
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  echo "[proxy-bench][ERROR] benchmark route not ready preset=${preset} url=${url} last_status=${code}" >&2
+  if [[ -s "${body_file}" ]]; then
+    head -c 512 "${body_file}" >&2 || true
+    echo >&2
+  fi
+  return 1
+}
+
 profile_url_base() {
   printf "http://%s" "${BENCH_PROFILE_ADDR}"
 }
@@ -615,10 +676,14 @@ wait_for_profile_endpoint() {
 
   url="$(profile_url_base)/debug/pprof/"
   for i in $(seq 1 50); do
-    if (
-      cd "${ROOT_DIR}"
-      docker compose exec -T coraza sh -lc "wget -q -O /dev/null '${url}'"
-    ); then
+    if [[ "${BENCH_RUNNER}" == "docker" ]]; then
+      if (
+        cd "${ROOT_DIR}"
+        docker compose exec -T coraza sh -lc "wget -q -O /dev/null '${url}'"
+      ); then
+        return 0
+      fi
+    elif curl -fsS -o /dev/null "${url}"; then
       return 0
     fi
     sleep 0.2
@@ -652,10 +717,14 @@ start_cpu_profile_capture() {
 
   url="$(profile_url_base)/debug/pprof/profile?seconds=${BENCH_PROFILE_SECONDS}"
   echo "[proxy-bench] capturing CPU profile: ${profile_cpu_file}"
-  (
-    cd "${ROOT_DIR}"
-    docker compose exec -T coraza sh -lc "wget -q -O - '${url}'"
-  ) > "${profile_cpu_file}" &
+  if [[ "${BENCH_RUNNER}" == "docker" ]]; then
+    (
+      cd "${ROOT_DIR}"
+      docker compose exec -T coraza sh -lc "wget -q -O - '${url}'"
+    ) > "${profile_cpu_file}" &
+  else
+    curl -fsS "${url}" > "${profile_cpu_file}" &
+  fi
   profile_cpu_pid="$!"
 }
 
@@ -687,10 +756,14 @@ capture_profile_snapshot() {
 
   url="$(profile_url_base)/debug/pprof/${name}"
   echo "[proxy-bench] capturing ${name} profile: ${output}"
-  (
-    cd "${ROOT_DIR}"
-    docker compose exec -T coraza sh -lc "wget -q -O - '${url}'"
-  ) > "${output}"
+  if [[ "${BENCH_RUNNER}" == "docker" ]]; then
+    (
+      cd "${ROOT_DIR}"
+      docker compose exec -T coraza sh -lc "wget -q -O - '${url}'"
+    ) > "${output}"
+  else
+    curl -fsS "${url}" > "${output}"
+  fi
   if [[ ! -s "${output}" ]]; then
     echo "[proxy-bench][ERROR] ${name} profile artifact is empty: ${output}" >&2
     return 1
@@ -759,6 +832,61 @@ start_benchmark_upstream() {
   wait_for_upstream
 }
 
+benchmark_upstream_url() {
+  if [[ "${BENCH_RUNNER}" == "local" ]]; then
+    printf 'http://127.0.0.1:%s' "${UPSTREAM_PORT}"
+    return 0
+  fi
+  printf 'http://host.docker.internal:%s' "${UPSTREAM_PORT}"
+}
+
+start_proxy_runtime() {
+  local server_bin
+  local pprof_env=""
+
+  case "${BENCH_RUNNER}" in
+    docker)
+      if [[ "${BENCH_PROFILE}" == "1" ]]; then
+        compose_pprof_addr="${BENCH_PROFILE_ADDR}"
+      fi
+      (
+        cd "${ROOT_DIR}"
+        CORAZA_PORT="${HOST_CORAZA_PORT}" WAF_LISTEN_PORT="${WAF_LISTEN_PORT}" TUKUYOMI_PPROF_ADDR="${compose_pprof_addr}" docker compose up -d --build --force-recreate coraza >/dev/null
+      )
+      ;;
+    local)
+      server_bin="${tmp_dir}/tukuyomi-bench-server"
+      server_log_file="${tmp_dir}/tukuyomi-bench-server.log"
+      if [[ "${BENCH_PROFILE}" == "1" ]]; then
+        pprof_env="${BENCH_PROFILE_ADDR}"
+      fi
+      (
+        cd "${ROOT_DIR}/coraza/src"
+        "${GO_BIN}" build -o "${server_bin}" ./cmd/server
+      )
+      (
+        cd "${ROOT_DIR}/data"
+        WAF_CONFIG_FILE="conf/config.json" TUKUYOMI_PPROF_ADDR="${pprof_env}" "${server_bin}"
+      ) >"${server_log_file}" 2>&1 &
+      server_pid="$!"
+      ;;
+  esac
+}
+
+dump_proxy_runtime_log_on_failure() {
+  if [[ -n "${server_log_file}" && -s "${server_log_file}" ]]; then
+    echo "[proxy-bench][ERROR] local proxy runtime log:" >&2
+    sed -n '1,240p' "${server_log_file}" >&2 || true
+  fi
+}
+
+dump_proxy_runtime_log_tail_on_failure() {
+  if [[ -n "${server_log_file}" && -s "${server_log_file}" ]]; then
+    echo "[proxy-bench][ERROR] local proxy runtime log tail:" >&2
+    tail -240 "${server_log_file}" >&2 || true
+  fi
+}
+
 check_bench_thresholds() {
   local preset="$1"
   local concurrency="$2"
@@ -787,7 +915,8 @@ check_bench_thresholds() {
 build_preset_raw() {
   local base_raw="$1"
   local preset="$2"
-  local upstream="http://host.docker.internal:${UPSTREAM_PORT}"
+  local upstream
+  upstream="$(benchmark_upstream_url)"
   case "${preset}" in
     balanced)
       jq --arg upstream "${upstream}" --arg path "${BENCH_PATH}" --arg access_log_mode "${BENCH_ACCESS_LOG_MODE}" '
@@ -879,6 +1008,7 @@ run_preset() {
 
   preset_raw="$(build_preset_raw "${baseline_raw}" "${preset}")"
   apply_proxy_raw "${preset_raw}"
+  wait_for_benchmark_route_ready "${preset}"
 
   IFS=',' read -r -a levels <<<"${BENCH_CONCURRENCY}"
   for lvl in "${levels[@]}"; do
@@ -892,6 +1022,7 @@ validate_concurrency_levels "${BENCH_CONCURRENCY}"
 init_benchmark_config_files
 backup_config_file "${PROXY_HOST_CONFIG_FILE}"
 apply_proxy_engine_for_benchmark
+apply_local_listen_addr_for_benchmark
 backup_config_file "${proxy_rules_host_file}"
 if [[ "${BENCH_DISABLE_RATE_LIMIT}" == "1" ]]; then
   backup_config_file "${rate_limit_host_file}"
@@ -914,15 +1045,11 @@ mkdir -p "$(dirname "${OUTPUT_FILE}")" "$(dirname "${OUTPUT_JSON_FILE}")"
 rm -f "${json_rows_file}"
 
 start_benchmark_upstream
-if [[ "${BENCH_PROFILE}" == "1" ]]; then
-  compose_pprof_addr="${BENCH_PROFILE_ADDR}"
+start_proxy_runtime
+if ! proxy_api_wait_health 90 1; then
+  dump_proxy_runtime_log_on_failure
+  exit 1
 fi
-
-(
-  cd "${ROOT_DIR}"
-  CORAZA_PORT="${HOST_CORAZA_PORT}" WAF_LISTEN_PORT="${WAF_LISTEN_PORT}" TUKUYOMI_PPROF_ADDR="${compose_pprof_addr}" docker compose up -d --build --force-recreate coraza >/dev/null
-)
-proxy_api_wait_health 90 1
 wait_for_profile_endpoint
 assert_public_pprof_not_exposed
 
@@ -950,6 +1077,7 @@ start_cpu_profile_capture
   echo "- benchmark_tool: ab"
   echo "- benchmark_mode: ${BENCH_PROXY_MODE}"
   echo "- proxy_engine: ${BENCH_PROXY_ENGINE}"
+  echo "- benchmark_runner: ${BENCH_RUNNER}"
   echo "- requests_per_case: ${BENCH_REQUESTS}"
   echo "- warmup_requests_per_case: ${WARMUP_REQUESTS}"
   echo "- concurrency_levels: ${BENCH_CONCURRENCY}"
@@ -978,7 +1106,8 @@ start_cpu_profile_capture
   run_preset balanced
   run_preset low-latency
   run_preset buffered-guard
-} | tee "${OUTPUT_FILE}"
+} > "${OUTPUT_FILE}"
+cat "${OUTPUT_FILE}"
 finish_cpu_profile_capture
 capture_memory_profiles
 
@@ -987,6 +1116,7 @@ jq -n \
   --arg benchmark_tool "ab" \
   --arg benchmark_mode "${BENCH_PROXY_MODE}" \
   --arg proxy_engine "${BENCH_PROXY_ENGINE}" \
+  --arg benchmark_runner "${BENCH_RUNNER}" \
   --arg requests_per_case "${BENCH_REQUESTS}" \
   --arg warmup_requests_per_case "${WARMUP_REQUESTS}" \
   --argjson concurrency_levels "${concurrency_levels_json}" \
@@ -1020,6 +1150,7 @@ jq -n \
         benchmark_tool: $benchmark_tool,
         benchmark_mode: $benchmark_mode,
         proxy_engine: $proxy_engine,
+        benchmark_runner: $benchmark_runner,
         requests_per_case: ($requests_per_case | tonumber),
         warmup_requests_per_case: ($warmup_requests_per_case | tonumber),
         concurrency_levels: $concurrency_levels,
@@ -1056,6 +1187,7 @@ jq -n \
 
 if [[ "${benchmark_failed}" -ne 0 ]]; then
   echo "[proxy-bench][ERROR] benchmark thresholds were breached" >&2
+  dump_proxy_runtime_log_tail_on_failure
   exit 1
 fi
 

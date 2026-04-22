@@ -121,7 +121,7 @@ If you want to compare two branches, use the same host, concurrency levels, and 
 | `BENCH_ACCESS_LOG_MODE` | `full` | Proxy rules `access_log_mode`; use `off` or `minimal` for throughput investigations |
 | `BENCH_CLIENT_KEEPALIVE` | `1` | Pass `-k` to ApacheBench when `1`; set `0` for the older connection-churn baseline |
 | `BENCH_PROXY_MODE` | `current` | `current` includes WAF inspection; `proxy-only` temporarily bypasses WAF inspection for `BENCH_PATH` |
-| `BENCH_PROXY_ENGINE` | `tukuyomi_proxy` | Temporarily writes `proxy.engine.mode` in `conf/config.json`; set `net_http` only for compatibility comparisons |
+| `BENCH_PROXY_ENGINE` | `tukuyomi_proxy` | Temporarily writes `proxy.engine.mode` in `conf/config.json`; only `tukuyomi_proxy` is supported |
 | `BENCH_PROFILE` | `0` | Set to `1` to capture pprof CPU, heap, and allocation artifacts |
 | `BENCH_PROFILE_ADDR` | `127.0.0.1:6060` | Loopback-only pprof listener address inside the container |
 | `BENCH_PROFILE_SECONDS` | `10` | CPU profile capture duration |
@@ -251,7 +251,7 @@ When using the benchmark as a release/tuning baseline:
 1. keep `BENCH_REQUESTS`, `WARMUP_REQUESTS`, and `BENCH_CONCURRENCY` identical across runs
 2. keep `BENCH_DISABLE_RATE_LIMIT` identical across runs
 3. keep `BENCH_PROXY_MODE` identical when comparing RPS or latency
-4. keep `BENCH_PROXY_ENGINE` explicit; compare `net_http` and `tukuyomi_proxy` as separate runs
+4. keep `BENCH_PROXY_ENGINE=tukuyomi_proxy` explicit so benchmark output records the native engine
 5. compare the generated Markdown summaries side by side
 6. focus on trend shifts, not single-run noise
 

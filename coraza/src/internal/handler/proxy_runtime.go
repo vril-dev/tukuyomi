@@ -13,7 +13,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -29,7 +28,6 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	oteltrace "go.opentelemetry.io/otel/trace"
-	"golang.org/x/net/http2"
 
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
@@ -118,6 +116,10 @@ type ProxyRulesConfig struct {
 	ErrorRedirectURL             string            `json:"error_redirect_url"`
 
 	responseHeaderSanitizePolicy proxyResponseHeaderSanitizePolicy `json:"-"`
+	routeOrder                   []int                             `json:"-"`
+	defaultTargetCandidatesReady bool                              `json:"-"`
+	defaultTargetCandidates      []proxyRouteTargetCandidate       `json:"-"`
+	defaultTargetSelection       proxyRouteTargetSelectionOptions  `json:"-"`
 }
 
 type ProxyUpstreamTLSConfig struct {
@@ -236,7 +238,6 @@ type proxyRuntime struct {
 	cfg           ProxyRulesConfig
 	effectiveCfg  ProxyRulesConfig
 	target        *url.URL
-	reverseProxy  *httputil.ReverseProxy
 	proxyEngine   http.Handler
 	transport     *dynamicProxyTransport
 	health        *upstreamHealthMonitor
@@ -272,16 +273,8 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 	if err != nil {
 		return fmt.Errorf("build proxy transport: %w", err)
 	}
-	rp := &httputil.ReverseProxy{
-		Rewrite:      rewriteStandardProxyRequest,
-		Transport:    transport,
-		BufferPool:   proxyReverseCopyBufferPool,
-		ErrorHandler: handleProxyRoundTripError,
-	}
-	rp.ModifyResponse = onProxyResponse
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
-	rp.FlushInterval = flushInterval
-	engine, err := newProxyEngine(rp, transport, config.ProxyEngineMode, flushInterval)
+	engine, err := newProxyEngine(transport, config.ProxyEngineMode, flushInterval)
 	if err != nil {
 		return err
 	}
@@ -293,7 +286,6 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 		cfg:           prepared.cfg,
 		effectiveCfg:  prepared.effectiveCfg,
 		target:        prepared.target,
-		reverseProxy:  rp,
 		proxyEngine:   engine,
 		transport:     transport,
 		errRes:        prepared.errRes,
@@ -312,45 +304,49 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 	return nil
 }
 
-func rewriteStandardProxyRequest(pr *httputil.ProxyRequest) {
+func rewriteTukuyomiProxyRequest(in *http.Request, out *http.Request) *http.Request {
+	if in == nil || out == nil {
+		return out
+	}
 	cfg := currentProxyConfig()
 	target := currentProxyTarget()
-	selection, selectionOK := proxyRouteTransportSelectionFromContext(pr.In.Context())
-	classification, classOK := proxyRouteClassificationFromContext(pr.In.Context())
+	selection, selectionOK := proxyRouteTransportSelectionFromContext(in.Context())
+	classification, classOK := proxyRouteClassificationFromContext(in.Context())
 	if selectionOK && selection.Target != nil {
 		target = selection.Target
 	}
 	if target == nil {
 		target, _ = proxyPrimaryTarget(currentProxyConfig())
 	}
-	rewrittenPath := pr.In.URL.Path
-	rewrittenRawPath := pr.In.URL.RawPath
+	rewrittenPath := in.URL.Path
+	rewrittenRawPath := in.URL.RawPath
 	if classOK {
 		rewrittenPath = classification.RewrittenPath
 		rewrittenRawPath = classification.RewrittenRawPath
 	}
-	rewrittenQuery := pr.In.URL.RawQuery
+	rewrittenQuery := in.URL.RawQuery
 	if classOK {
 		rewrittenQuery = classification.RewrittenQuery
 	}
-	rewriteProxyOutgoingURL(pr.Out, target, rewrittenPath, rewrittenRawPath, rewrittenQuery)
-	pr.SetXForwarded()
-	pr.Out.Header.Del(proxyObservabilityUpstreamNameHeader)
-	outboundHost := pr.In.Host
+	rewriteProxyOutgoingURL(out, target, rewrittenPath, rewrittenRawPath, rewrittenQuery)
+	setTukuyomiProxyXForwarded(out.Header, in)
+	out.Header.Del(proxyObservabilityUpstreamNameHeader)
+	outboundHost := in.Host
 	if selectionOK && strings.TrimSpace(selection.RewrittenHost) != "" {
 		outboundHost = selection.RewrittenHost
 	}
-	pr.Out.Host = outboundHost
+	out.Host = outboundHost
 	if classOK || selectionOK {
 		if classOK {
-			applyProxyRouteHeaders(pr.Out.Header, classification.RequestHeaderOps)
+			applyProxyRouteHeaders(out.Header, classification.RequestHeaderOps)
 		}
 		if cfg.EmitUpstreamNameRequestHeader && selectionOK && selection.HealthKey != "" {
 			if upstreamName := strings.TrimSpace(selection.SelectedUpstream); upstreamName != "" {
-				pr.Out.Header.Set(proxyObservabilityUpstreamNameHeader, upstreamName)
+				out.Header.Set(proxyObservabilityUpstreamNameHeader, upstreamName)
 			}
 		}
-		ctx := pr.Out.Context()
+		originalCtx := out.Context()
+		ctx := originalCtx
 		if classOK {
 			ctx = withProxyRouteClassification(ctx, classification)
 		}
@@ -358,10 +354,13 @@ func rewriteStandardProxyRequest(pr *httputil.ProxyRequest) {
 			ctx = withProxyRouteTransportSelection(ctx, selection)
 		}
 		if selectionOK && selection.HealthKey != "" {
-			ctx = context.WithValue(ctx, ctxKeySelectedUpstream, selection.HealthKey)
+			ctx = withProxySelectedUpstream(ctx, selection.HealthKey)
 		}
-		pr.Out = pr.Out.WithContext(ctx)
+		if ctx != originalCtx {
+			out = out.WithContext(ctx)
+		}
 	}
+	return out
 }
 
 func handleProxyRoundTripError(w http.ResponseWriter, r *http.Request, err error) {
@@ -523,7 +522,7 @@ func currentProxyErrorResponse() proxyErrorResponse {
 
 func ServeProxy(w http.ResponseWriter, r *http.Request) {
 	rt := proxyRuntimeInstance()
-	if rt == nil || (rt.proxyEngine == nil && rt.reverseProxy == nil) {
+	if rt == nil || rt.proxyEngine == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte(`{"error":"proxy runtime is not initialized"}`))
@@ -537,11 +536,7 @@ func ServeProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if rt.proxyEngine != nil {
-		rt.proxyEngine.ServeHTTP(wrapped, r)
-		return
-	}
-	rt.reverseProxy.ServeHTTP(wrapped, r)
+	rt.proxyEngine.ServeHTTP(wrapped, r)
 }
 
 func ProxyRulesSnapshot() (raw string, etag string, cfg ProxyRulesConfig, health upstreamHealthStatus, rollbackDepth int) {
@@ -655,7 +650,6 @@ func ApplyProxyRulesRaw(ifMatch string, raw string) (string, ProxyRulesConfig, e
 	rt.errRes = prepared.errRes
 	setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
-	rt.reverseProxy.FlushInterval = flushInterval
 	if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
 		setter.SetFlushInterval(flushInterval)
 	}
@@ -730,7 +724,6 @@ func RollbackProxyRules() (string, ProxyRulesConfig, proxyRollbackEntry, error) 
 	rt.errRes = prepared.errRes
 	setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
-	rt.reverseProxy.FlushInterval = flushInterval
 	if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
 		setter.SetFlushInterval(flushInterval)
 	}
@@ -804,7 +797,6 @@ func SyncProxyStorage() error {
 		rt.errRes = prepared.errRes
 		setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
 		flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
-		rt.reverseProxy.FlushInterval = flushInterval
 		if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
 			setter.SetFlushInterval(flushInterval)
 		}
@@ -934,6 +926,7 @@ func normalizeAndValidateProxyRulesWithOptions(in ProxyRulesConfig, sites SiteCo
 	}
 	effectiveCfg.Upstreams = mergedUpstreams
 	effectiveCfg.Routes = append(append([]ProxyRoute(nil), effectiveCfg.Routes...), siteGeneratedRoutes(sites)...)
+	effectiveCfg.routeOrder = sortedProxyRouteIndexes(effectiveCfg.Routes)
 
 	if effectiveCfg.DialTimeout <= 0 {
 		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("dial_timeout must be > 0")
@@ -1052,6 +1045,9 @@ func normalizeAndValidateProxyRulesWithOptions(in ProxyRulesConfig, sites SiteCo
 	if _, err := proxyTransportProfileCatalog(effectiveCfg); err != nil {
 		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
 	}
+	if err := precomputeProxyStaticFallbackTargets(&effectiveCfg); err != nil {
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+	}
 	errRes, err := newProxyErrorResponse(effectiveCfg)
 	if err != nil {
 		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
@@ -1147,6 +1143,7 @@ func normalizeProxyRulesConfig(in ProxyRulesConfig) ProxyRulesConfig {
 	out.Upstreams = normalizeProxyUpstreams(out.Upstreams)
 	out.BackendPools = normalizeProxyBackendPools(out.BackendPools)
 	out.Routes = normalizeProxyRoutes(out.Routes)
+	out.routeOrder = sortedProxyRouteIndexes(out.Routes)
 	out.DefaultRoute = normalizeProxyDefaultRoute(out.DefaultRoute)
 	out.HealthCheckPath = normalizeProxyHealthCheckPath(out.HealthCheckPath)
 	out.HealthCheckHeaders = normalizeProxyHealthCheckHeaders(out.HealthCheckHeaders)
@@ -1185,7 +1182,6 @@ func reloadProxyRuntimeWithSitesAndVhosts(sites SiteConfigFile, vhosts VhostConf
 	rt.errRes = prepared.errRes
 	setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
-	rt.reverseProxy.FlushInterval = flushInterval
 	if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
 		setter.SetFlushInterval(flushInterval)
 	}
@@ -2735,7 +2731,10 @@ func endProxyTransportSpan(span oteltrace.Span, resp *http.Response, err error) 
 func buildProxyTransport(cfg ProxyRulesConfig) http.RoundTripper {
 	rt, err := buildProxyTransportFromProfile(cfg, proxyGlobalTransportProfile(cfg, proxyGlobalHTTP2Mode(cfg)))
 	if err != nil || rt == nil {
-		return http.DefaultTransport
+		if err == nil {
+			err = fmt.Errorf("nil proxy transport")
+		}
+		return proxyStaticErrorTransport{err: fmt.Errorf("proxy transport initialization failed: %w", err)}
 	}
 	return rt
 }
@@ -2756,11 +2755,11 @@ func buildProxyTransportSet(cfg ProxyRulesConfig, profiles map[string]proxyTrans
 func buildProxyTransportFromProfile(cfg ProxyRulesConfig, profile proxyTransportProfile) (http.RoundTripper, error) {
 	switch normalizeProxyHTTP2Mode(profile.HTTP2Mode) {
 	case proxyHTTP2ModeForceAttempt:
-		return buildProxyHTTPTransport(cfg, profile, true)
+		return buildProxyNativeHTTP2Transport(cfg, profile, proxyHTTP2ModeForceAttempt)
 	case proxyHTTP2ModeH2C:
-		return buildProxyH2CTransport(cfg, profile)
+		return buildProxyNativeHTTP2Transport(cfg, profile, proxyHTTP2ModeH2C)
 	default:
-		return buildProxyHTTPTransport(cfg, profile, false)
+		return buildProxyNativeHTTP1Transport(cfg, profile)
 	}
 }
 
@@ -2790,46 +2789,18 @@ func proxyRoundTripperForCandidate(profiles map[string]proxyTransportProfile, tr
 			return rt
 		}
 	}
-	return http.DefaultTransport
+	return proxyStaticErrorTransport{err: fmt.Errorf("proxy transport is not available for mode %q", mode)}
 }
 
-func buildProxyHTTPTransport(cfg ProxyRulesConfig, profile proxyTransportProfile, forceHTTP2 bool) (*http.Transport, error) {
-	tlsCfg, err := buildProxyTLSClientConfigForProfile(profile.TLS)
-	if err != nil {
-		return nil, err
-	}
-	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   time.Duration(cfg.DialTimeout) * time.Second,
-			KeepAlive: proxyUpstreamKeepAliveDuration(cfg),
-		}).DialContext,
-		MaxIdleConns:          cfg.MaxIdleConns,
-		MaxIdleConnsPerHost:   cfg.MaxIdleConnsPerHost,
-		MaxConnsPerHost:       cfg.MaxConnsPerHost,
-		IdleConnTimeout:       time.Duration(cfg.IdleConnTimeout) * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ExpectContinueTimeout: time.Duration(cfg.ExpectContinueTimeout) * time.Second,
-		ResponseHeaderTimeout: time.Duration(cfg.ResponseHeaderTimeout) * time.Second,
-		ForceAttemptHTTP2:     forceHTTP2,
-		DisableCompression:    cfg.DisableCompression,
-		TLSClientConfig:       tlsCfg,
-	}, nil
+type proxyStaticErrorTransport struct {
+	err error
 }
 
-func buildProxyH2CTransport(cfg ProxyRulesConfig, _ proxyTransportProfile) (*http2.Transport, error) {
-	dialer := &net.Dialer{
-		Timeout:   time.Duration(cfg.DialTimeout) * time.Second,
-		KeepAlive: proxyUpstreamKeepAliveDuration(cfg),
+func (t proxyStaticErrorTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	if t.err != nil {
+		return nil, t.err
 	}
-	return &http2.Transport{
-		AllowHTTP:          true,
-		DisableCompression: cfg.DisableCompression,
-		IdleConnTimeout:    time.Duration(cfg.IdleConnTimeout) * time.Second,
-		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-			return dialer.DialContext(ctx, network, addr)
-		},
-	}, nil
+	return nil, fmt.Errorf("proxy transport is not available")
 }
 
 func proxyUpstreamKeepAliveDuration(cfg ProxyRulesConfig) time.Duration {

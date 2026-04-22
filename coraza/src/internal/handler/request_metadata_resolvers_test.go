@@ -18,18 +18,18 @@ import (
 
 type testRequestMetadataResolver struct {
 	name    string
-	resolve func(*gin.Context, *requestMetadataResolverContext) error
+	resolve func(*http.Request, *requestMetadataResolverContext) error
 }
 
 func (r testRequestMetadataResolver) Name() string {
 	return r.name
 }
 
-func (r testRequestMetadataResolver) Resolve(c *gin.Context, ctx *requestMetadataResolverContext) error {
+func (r testRequestMetadataResolver) Resolve(req *http.Request, ctx *requestMetadataResolverContext) error {
 	if r.resolve == nil {
 		return nil
 	}
-	return r.resolve(c, ctx)
+	return r.resolve(req, ctx)
 }
 
 func TestNewRequestMetadataResolversBuiltins(t *testing.T) {
@@ -61,7 +61,7 @@ func TestRunRequestMetadataResolversResolvesCountryFromHeader(t *testing.T) {
 	c.Request.Header.Set("X-Country-Code", "jp")
 
 	ctx := newRequestMetadataResolverContext("10.0.0.1")
-	if err := runRequestMetadataResolvers(c, newRequestMetadataResolvers(), ctx); err != nil {
+	if err := runRequestMetadataResolvers(c.Request, newRequestMetadataResolvers(), ctx); err != nil {
 		t.Fatalf("runRequestMetadataResolvers() error: %v", err)
 	}
 	if ctx.Country != "JP" {
@@ -106,7 +106,7 @@ func TestRunRequestMetadataResolversResolvesCountryFromMMDBRuntime(t *testing.T)
 	c.Request = httptest.NewRequest(http.MethodGet, "/demo", nil)
 
 	ctx := newRequestMetadataResolverContext("203.0.113.9")
-	if err := runRequestMetadataResolvers(c, newRequestMetadataResolvers(), ctx); err != nil {
+	if err := runRequestMetadataResolvers(c.Request, newRequestMetadataResolvers(), ctx); err != nil {
 		t.Fatalf("runRequestMetadataResolvers() error: %v", err)
 	}
 	if ctx.Country != "JP" {
@@ -128,7 +128,7 @@ func TestRunRequestMetadataResolversBeforeRequestSecurityPluginUse(t *testing.T)
 	resolvers := []requestMetadataResolver{
 		testRequestMetadataResolver{
 			name: "first",
-			resolve: func(_ *gin.Context, ctx *requestMetadataResolverContext) error {
+			resolve: func(_ *http.Request, ctx *requestMetadataResolverContext) error {
 				order = append(order, "metadata")
 				ctx.Country = "JP"
 				ctx.CountrySource = requestMetadataCountrySourceHeader
@@ -136,7 +136,7 @@ func TestRunRequestMetadataResolversBeforeRequestSecurityPluginUse(t *testing.T)
 			},
 		},
 	}
-	if err := runRequestMetadataResolvers(c, resolvers, metadataCtx); err != nil {
+	if err := runRequestMetadataResolvers(c.Request, resolvers, metadataCtx); err != nil {
 		t.Fatalf("runRequestMetadataResolvers() error: %v", err)
 	}
 
@@ -146,7 +146,7 @@ func TestRunRequestMetadataResolversBeforeRequestSecurityPluginUse(t *testing.T)
 			name:    "active",
 			phase:   requestSecurityPluginPhasePreWAF,
 			enabled: true,
-			handle: func(_ *gin.Context, ctx *requestSecurityPluginContext) bool {
+			handle: func(_ *proxyServeContext, ctx *requestSecurityPluginContext) bool {
 				order = append(order, "security")
 				pluginSawCountry = ctx.Country
 				return true
@@ -154,7 +154,7 @@ func TestRunRequestMetadataResolversBeforeRequestSecurityPluginUse(t *testing.T)
 		},
 	}
 	securityCtx := newRequestSecurityPluginContext("req-1", metadataCtx.ClientIP, metadataCtx.Country, time.Unix(1, 0))
-	if ok := runRequestSecurityPlugins(c, requestSecurityPluginPhasePreWAF, plugins, securityCtx); !ok {
+	if ok := runRequestSecurityPlugins(newProxyServeContextFromGin(c), requestSecurityPluginPhasePreWAF, plugins, securityCtx); !ok {
 		t.Fatal("expected request_security plugin chain to continue")
 	}
 	if len(order) != 2 || order[0] != "metadata" || order[1] != "security" {

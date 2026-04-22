@@ -18,49 +18,44 @@ import (
 )
 
 func TestServeProxyWebSocketPassthrough(t *testing.T) {
-	for _, mode := range []string{config.ProxyEngineModeNetHTTP, config.ProxyEngineModeTukuyomiProxy} {
-		mode := mode
-		t.Run(mode, func(t *testing.T) {
-			setProxyEngineModeForTest(t, mode)
+	setProxyEngineModeForTest(t, config.ProxyEngineModeTukuyomiProxy)
 
-			upstream := httptest.NewServer(websocket.Handler(func(conn *websocket.Conn) {
-				defer conn.Close()
+	upstream := httptest.NewServer(websocket.Handler(func(conn *websocket.Conn) {
+		defer conn.Close()
 
-				var in string
-				if err := websocket.Message.Receive(conn, &in); err != nil {
-					t.Errorf("upstream receive failed: %v", err)
-					return
-				}
-				if err := websocket.Message.Send(conn, "echo:"+in); err != nil {
-					t.Errorf("upstream send failed: %v", err)
-				}
-			}))
-			defer upstream.Close()
+		var in string
+		if err := websocket.Message.Receive(conn, &in); err != nil {
+			t.Errorf("upstream receive failed: %v", err)
+			return
+		}
+		if err := websocket.Message.Send(conn, "echo:"+in); err != nil {
+			t.Errorf("upstream send failed: %v", err)
+		}
+	}))
+	defer upstream.Close()
 
-			initWebSocketProxyRuntime(t, upstream.URL)
+	initWebSocketProxyRuntime(t, upstream.URL)
 
-			srv := httptest.NewServer(httpHandlerFunc(ServeProxy))
-			defer srv.Close()
+	srv := httptest.NewServer(httpHandlerFunc(ServeProxy))
+	defer srv.Close()
 
-			wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/echo"
-			conn, err := websocket.Dial(wsURL, "", srv.URL)
-			if err != nil {
-				t.Fatalf("websocket dial failed: %v", err)
-			}
-			defer conn.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/echo"
+	conn, err := websocket.Dial(wsURL, "", srv.URL)
+	if err != nil {
+		t.Fatalf("websocket dial failed: %v", err)
+	}
+	defer conn.Close()
 
-			if err := websocket.Message.Send(conn, "hello"); err != nil {
-				t.Fatalf("websocket send failed: %v", err)
-			}
+	if err := websocket.Message.Send(conn, "hello"); err != nil {
+		t.Fatalf("websocket send failed: %v", err)
+	}
 
-			var out string
-			if err := websocket.Message.Receive(conn, &out); err != nil {
-				t.Fatalf("websocket receive failed: %v", err)
-			}
-			if out != "echo:hello" {
-				t.Fatalf("unexpected websocket response: %q", out)
-			}
-		})
+	var out string
+	if err := websocket.Message.Receive(conn, &out); err != nil {
+		t.Fatalf("websocket receive failed: %v", err)
+	}
+	if out != "echo:hello" {
+		t.Fatalf("unexpected websocket response: %q", out)
 	}
 }
 

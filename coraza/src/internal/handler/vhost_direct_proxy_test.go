@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,51 @@ import (
 	"testing"
 	"time"
 )
+
+func TestWriteDirectProxyResponsePreservesContextRequestID(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://docs.example.com/index.php", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyReqID, "req-direct-context"))
+	rec := httptest.NewRecorder()
+	rec.Header().Set("X-Request-ID", "req-writer")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": []string{"text/plain"},
+			"X-Request-ID": []string{"req-upstream"},
+		},
+		Body:    io.NopCloser(strings.NewReader("ok")),
+		Request: req,
+	}
+
+	if err := writeDirectProxyResponse(rec, req, resp); err != nil {
+		t.Fatalf("writeDirectProxyResponse: %v", err)
+	}
+	if got := rec.Header().Get("X-Request-ID"); got != "req-direct-context" {
+		t.Fatalf("X-Request-ID=%q want req-direct-context", got)
+	}
+	if got := rec.Body.String(); got != "ok" {
+		t.Fatalf("body=%q want ok", got)
+	}
+}
+
+func TestWriteDirectProxyResponseFallsBackToInboundRequestID(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://docs.example.com/index.php", nil)
+	req.Header.Set("X-Request-ID", "req-inbound")
+	rec := httptest.NewRecorder()
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/plain"}},
+		Body:       io.NopCloser(strings.NewReader("ok")),
+		Request:    req,
+	}
+
+	if err := writeDirectProxyResponse(rec, req, resp); err != nil {
+		t.Fatalf("writeDirectProxyResponse: %v", err)
+	}
+	if got := rec.Header().Get("X-Request-ID"); got != "req-inbound" {
+		t.Fatalf("X-Request-ID=%q want req-inbound", got)
+	}
+}
 
 func TestServeProxyServesStaticVhostAssets(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)

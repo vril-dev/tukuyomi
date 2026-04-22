@@ -144,10 +144,11 @@ Proxy engine selection is also a restart-required `conf/config.json` setting:
 }
 ```
 
-- `tukuyomi_proxy` is the default and uses Tukuyomi's own response bridge while preserving the same parser, transport, routing, health, retry, TLS, cache, route response headers, 1xx informational responses, trailers, streaming flush behavior, native Upgrade/WebSocket tunnel, and response-sanitize pipeline
-- `net_http` remains available as an explicit compatibility option using Go's standard reverse-proxy bridge
+- `tukuyomi_proxy` is the built-in engine and uses Tukuyomi's own response bridge while preserving the same parser, transport, routing, health, retry, TLS, cache, route response headers, 1xx informational responses, trailers, streaming flush behavior, native Upgrade/WebSocket tunnel, and response-sanitize pipeline
+- the legacy `net_http` bridge has been removed; config validation rejects any engine value other than `tukuyomi_proxy`
+- HTTP/1.1 and explicit upstream HTTP/2 modes use Tukuyomi native upstream transports; HTTPS `force_attempt` falls back to native HTTP/1.1 only when ALPN does not select `h2`
 - Upgrade/WebSocket handshake requests stay inside `tukuyomi_proxy`; WebSocket frame payloads after `101 Switching Protocols` are tunnel data
-- benchmark your real workload before switching engines in production
+- benchmark your real workload before production rollout
 
 ## Split Public/Admin Listeners
 

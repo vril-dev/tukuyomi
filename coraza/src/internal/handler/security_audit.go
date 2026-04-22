@@ -885,6 +885,14 @@ func (t *securityAuditTrail) setTerminal(policy, event, action string, status in
 }
 
 func (t *securityAuditTrail) Finalize(c *gin.Context) {
+	var w http.ResponseWriter
+	if c != nil {
+		w = c.Writer
+	}
+	t.FinalizeHTTP(w)
+}
+
+func (t *securityAuditTrail) FinalizeHTTP(w http.ResponseWriter) {
 	if t == nil || t.Emitted {
 		return
 	}
@@ -894,8 +902,8 @@ func (t *securityAuditTrail) Finalize(c *gin.Context) {
 	}
 
 	finalStatus := t.FinalStatus
-	if finalStatus == 0 && c != nil && c.Writer != nil {
-		finalStatus = c.Writer.Status()
+	if finalStatus == 0 && w != nil {
+		finalStatus = proxyResponseStatus(w, 0)
 	}
 	finalAction := strings.TrimSpace(t.FinalAction)
 	if finalAction == "" {

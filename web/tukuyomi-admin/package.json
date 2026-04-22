@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "npm run test:ui",
-    "test:ui": "rm -rf .tmp-test && tsc -p tsconfig.test.json && node --test .tmp-test/src/lib/api.test.js"
+    "test:ui": "rm -rf .tmp-test && tsc -p tsconfig.test.json && node --test .tmp-test/src/lib/api.test.js .tmp-test/src/lib/botDefenseEditor.test.js .tmp-test/src/lib/bypassRulesEditor.test.js .tmp-test/src/lib/countryBlockEditor.test.js .tmp-test/src/lib/fPTunerApply.test.js .tmp-test/src/lib/fPTunerAudit.test.js .tmp-test/src/lib/ipReputationEditor.test.js .tmp-test/src/lib/jsonDiff.test.js .tmp-test/src/lib/logRequestDetails.test.js .tmp-test/src/lib/notificationEditor.test.js .tmp-test/src/lib/policyHost.test.js .tmp-test/src/lib/proxyRulesAudit.test.js .tmp-test/src/lib/proxyRulesEditor.test.js .tmp-test/src/lib/rateLimitEditor.test.js .tmp-test/src/lib/securityAudit.test.js .tmp-test/src/lib/semanticEditor.test.js .tmp-test/src/lib/settingsConfig.test.js && rm -rf .tmp-test"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.11",

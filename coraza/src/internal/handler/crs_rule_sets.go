@@ -32,6 +32,7 @@ const crsDisabledConfigBlobKey = "crs_disabled_rules"
 
 func GetCRSRuleSets(c *gin.Context) {
 	raw, _ := os.ReadFile(config.CRSDisabledFile)
+	savedAt := fileSavedAt(config.CRSDisabledFile)
 	if store := getLogsStatsStore(); store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(crsDisabledConfigBlobKey)
 		if err != nil {
@@ -41,6 +42,7 @@ func GetCRSRuleSets(c *gin.Context) {
 			if strings.TrimSpace(dbETag) == "" {
 				dbETag = bypassconf.ComputeETag(dbRaw)
 			}
+			savedAt = configBlobSavedAt(store, crsDisabledConfigBlobKey)
 		} else if len(raw) > 0 {
 			if err := store.UpsertConfigBlob(crsDisabledConfigBlobKey, raw, bypassconf.ComputeETag(raw), time.Now().UTC()); err != nil {
 				log.Printf("[CRS][DB][WARN] seed config blob failed: %v", err)
@@ -58,6 +60,7 @@ func GetCRSRuleSets(c *gin.Context) {
 			"total_rules":    0,
 			"enabled_count":  0,
 			"disabled_count": 0,
+			"saved_at":       savedAt,
 		})
 		return
 	}
@@ -95,12 +98,13 @@ func GetCRSRuleSets(c *gin.Context) {
 		"total_rules":    len(items),
 		"enabled_count":  len(enabled),
 		"disabled_count": len(items) - len(enabled),
+		"saved_at":       savedAt,
 	})
 }
 
 func ValidateCRSRuleSets(c *gin.Context) {
 	if !config.CRSEnable {
-		c.JSON(http.StatusConflict, gin.H{"error": "CRS is disabled (WAF_CRS_ENABLE=false)"})
+		c.JSON(http.StatusConflict, gin.H{"error": "CRS is disabled (crs.enable=false)"})
 		return
 	}
 
@@ -120,7 +124,7 @@ func ValidateCRSRuleSets(c *gin.Context) {
 
 func PutCRSRuleSets(c *gin.Context) {
 	if !config.CRSEnable {
-		c.JSON(http.StatusConflict, gin.H{"error": "CRS is disabled (WAF_CRS_ENABLE=false)"})
+		c.JSON(http.StatusConflict, gin.H{"error": "CRS is disabled (crs.enable=false)"})
 		return
 	}
 
@@ -198,8 +202,9 @@ func PutCRSRuleSets(c *gin.Context) {
 	}
 
 	if store != nil {
+		now := time.Now().UTC()
 		nextETag := bypassconf.ComputeETag(nextRaw)
-		if err := store.UpsertConfigBlob(crsDisabledConfigBlobKey, nextRaw, nextETag, time.Now().UTC()); err != nil {
+		if err := store.UpsertConfigBlob(crsDisabledConfigBlobKey, nextRaw, nextETag, now); err != nil {
 			rollbackErr := rollbackCRSDisabledFile(config.CRSDisabledFile, hadFile, curRaw)
 			_ = waf.ReloadBaseWAF()
 			msg := fmt.Sprintf("db sync failed and rollback applied: %v", err)
@@ -209,6 +214,14 @@ func PutCRSRuleSets(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": msg})
 			return
 		}
+		c.JSON(http.StatusOK, gin.H{
+			"ok":             true,
+			"etag":           bypassconf.ComputeETag(nextRaw),
+			"hot_reloaded":   true,
+			"disabled_count": len(disabledNames),
+			"saved_at":       now.Format(time.RFC3339Nano),
+		})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -216,6 +229,7 @@ func PutCRSRuleSets(c *gin.Context) {
 		"etag":           bypassconf.ComputeETag(nextRaw),
 		"hot_reloaded":   true,
 		"disabled_count": len(disabledNames),
+		"saved_at":       time.Now().UTC().Format(time.RFC3339Nano),
 	})
 }
 

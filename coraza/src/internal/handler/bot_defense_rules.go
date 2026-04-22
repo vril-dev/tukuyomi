@@ -30,6 +30,7 @@ func bindBotDefensePutBody(c *gin.Context) (botDefensePutBody, bool) {
 func GetBotDefenseRules(c *gin.Context) {
 	path := GetBotDefensePath()
 	raw, _ := os.ReadFile(path)
+	savedAt := fileSavedAt(path)
 	if store := getLogsStatsStore(); store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(botDefenseConfigBlobKey)
 		if err != nil {
@@ -42,15 +43,24 @@ func GetBotDefenseRules(c *gin.Context) {
 				if strings.TrimSpace(dbETag) == "" {
 					dbETag = bypassconf.ComputeETag(dbRaw)
 				}
+				savedAt = configBlobSavedAt(store, botDefenseConfigBlobKey)
 				c.JSON(http.StatusOK, gin.H{
-					"etag":               dbETag,
-					"raw":                string(dbRaw),
-					"enabled":            rt.Raw.Enabled,
-					"dry_run":            rt.Raw.DryRun,
-					"mode":               rt.Raw.Mode,
-					"path_prefixes":      rt.Raw.PathPrefixes,
-					"path_policy_count":  len(rt.Raw.PathPolicies),
-					"behavioral_enabled": rt.Raw.BehavioralDetection.Enabled,
+					"etag":                      dbETag,
+					"raw":                       string(dbRaw),
+					"enabled":                   rt.Raw.Enabled,
+					"dry_run":                   rt.Raw.DryRun,
+					"mode":                      rt.Raw.Mode,
+					"path_prefixes":             rt.Raw.PathPrefixes,
+					"path_policy_count":         len(rt.Raw.PathPolicies),
+					"path_policy_dry_run_count": countBotDefensePathPoliciesDryRun(rt.Raw),
+					"behavioral_enabled":        rt.Raw.BehavioralDetection.Enabled,
+					"browser_signals_enabled":   rt.Raw.BrowserSignals.Enabled,
+					"device_signals_enabled":    rt.Raw.DeviceSignals.Enabled,
+					"device_invisible_enabled":  rt.Raw.DeviceSignals.InvisibleHTMLInjection,
+					"header_signals_enabled":    rt.Raw.HeaderSignals.Enabled,
+					"tls_signals_enabled":       rt.Raw.TLSSignals.Enabled,
+					"quarantine_enabled":        rt.Raw.Quarantine.Enabled,
+					"saved_at":                  savedAt,
 				})
 				return
 			}
@@ -63,14 +73,22 @@ func GetBotDefenseRules(c *gin.Context) {
 	cfg := GetBotDefenseConfig()
 
 	c.JSON(http.StatusOK, gin.H{
-		"etag":               bypassconf.ComputeETag(raw),
-		"raw":                string(raw),
-		"enabled":            cfg.Enabled,
-		"dry_run":            cfg.DryRun,
-		"mode":               cfg.Mode,
-		"path_prefixes":      cfg.PathPrefixes,
-		"path_policy_count":  len(cfg.PathPolicies),
-		"behavioral_enabled": cfg.BehavioralDetection.Enabled,
+		"etag":                      bypassconf.ComputeETag(raw),
+		"raw":                       string(raw),
+		"enabled":                   cfg.Enabled,
+		"dry_run":                   cfg.DryRun,
+		"mode":                      cfg.Mode,
+		"path_prefixes":             cfg.PathPrefixes,
+		"path_policy_count":         len(cfg.PathPolicies),
+		"path_policy_dry_run_count": countBotDefensePathPoliciesDryRun(cfg),
+		"behavioral_enabled":        cfg.BehavioralDetection.Enabled,
+		"browser_signals_enabled":   cfg.BrowserSignals.Enabled,
+		"device_signals_enabled":    cfg.DeviceSignals.Enabled,
+		"device_invisible_enabled":  cfg.DeviceSignals.InvisibleHTMLInjection,
+		"header_signals_enabled":    cfg.HeaderSignals.Enabled,
+		"tls_signals_enabled":       cfg.TLSSignals.Enabled,
+		"quarantine_enabled":        cfg.Quarantine.Enabled,
+		"saved_at":                  savedAt,
 	})
 }
 
@@ -87,14 +105,21 @@ func ValidateBotDefenseRules(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"ok":                 true,
-		"messages":           []string{},
-		"enabled":            rt.Raw.Enabled,
-		"dry_run":            rt.Raw.DryRun,
-		"mode":               rt.Raw.Mode,
-		"path_prefixes":      rt.Raw.PathPrefixes,
-		"path_policy_count":  len(rt.Raw.PathPolicies),
-		"behavioral_enabled": rt.Raw.BehavioralDetection.Enabled,
+		"ok":                        true,
+		"messages":                  []string{},
+		"enabled":                   rt.Raw.Enabled,
+		"dry_run":                   rt.Raw.DryRun,
+		"mode":                      rt.Raw.Mode,
+		"path_prefixes":             rt.Raw.PathPrefixes,
+		"path_policy_count":         len(rt.Raw.PathPolicies),
+		"path_policy_dry_run_count": countBotDefensePathPoliciesDryRun(rt.Raw),
+		"behavioral_enabled":        rt.Raw.BehavioralDetection.Enabled,
+		"browser_signals_enabled":   rt.Raw.BrowserSignals.Enabled,
+		"device_signals_enabled":    rt.Raw.DeviceSignals.Enabled,
+		"device_invisible_enabled":  rt.Raw.DeviceSignals.InvisibleHTMLInjection,
+		"header_signals_enabled":    rt.Raw.HeaderSignals.Enabled,
+		"tls_signals_enabled":       rt.Raw.TLSSignals.Enabled,
+		"quarantine_enabled":        rt.Raw.Quarantine.Enabled,
 	})
 }
 
@@ -149,9 +174,10 @@ func PutBotDefenseRules(c *gin.Context) {
 		return
 	}
 
+	now := time.Now().UTC()
 	newETag := bypassconf.ComputeETag([]byte(in.Raw))
 	if store != nil {
-		if err := store.UpsertConfigBlob(botDefenseConfigBlobKey, []byte(in.Raw), newETag, time.Now().UTC()); err != nil {
+		if err := store.UpsertConfigBlob(botDefenseConfigBlobKey, []byte(in.Raw), newETag, now); err != nil {
 			_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
 			_ = ReloadBotDefense()
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -163,14 +189,22 @@ func PutBotDefenseRules(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"ok":                 true,
-		"etag":               newETag,
-		"enabled":            rt.Raw.Enabled,
-		"dry_run":            rt.Raw.DryRun,
-		"mode":               rt.Raw.Mode,
-		"path_prefixes":      rt.Raw.PathPrefixes,
-		"path_policy_count":  len(rt.Raw.PathPolicies),
-		"behavioral_enabled": rt.Raw.BehavioralDetection.Enabled,
+		"ok":                        true,
+		"etag":                      newETag,
+		"enabled":                   rt.Raw.Enabled,
+		"dry_run":                   rt.Raw.DryRun,
+		"mode":                      rt.Raw.Mode,
+		"path_prefixes":             rt.Raw.PathPrefixes,
+		"path_policy_count":         len(rt.Raw.PathPolicies),
+		"path_policy_dry_run_count": countBotDefensePathPoliciesDryRun(rt.Raw),
+		"behavioral_enabled":        rt.Raw.BehavioralDetection.Enabled,
+		"browser_signals_enabled":   rt.Raw.BrowserSignals.Enabled,
+		"device_signals_enabled":    rt.Raw.DeviceSignals.Enabled,
+		"device_invisible_enabled":  rt.Raw.DeviceSignals.InvisibleHTMLInjection,
+		"header_signals_enabled":    rt.Raw.HeaderSignals.Enabled,
+		"tls_signals_enabled":       rt.Raw.TLSSignals.Enabled,
+		"quarantine_enabled":        rt.Raw.Quarantine.Enabled,
+		"saved_at":                  now.Format(time.RFC3339Nano),
 	})
 }
 

@@ -1,0 +1,34 @@
+{
+  "default": {
+    "enabled": false,
+    "feed_urls": [
+      "https://feeds.example.invalid/ip-reputation.txt"
+    ],
+    "allowlist": [
+      "127.0.0.1/32",
+      "::1/128"
+    ],
+    "blocklist": [
+      "203.0.113.0/24",
+      "2001:db8:dead:beef::/64"
+    ],
+    "refresh_interval_sec": 900,
+    "request_timeout_sec": 5,
+    "block_status_code": 403,
+    "fail_open": true
+  },
+  "hosts": {
+    "admin.example.com": {
+      "enabled": true,
+      "feed_urls": [],
+      "allowlist": [],
+      "blocklist": [
+        "198.51.100.0/24"
+      ],
+      "refresh_interval_sec": 900,
+      "request_timeout_sec": 5,
+      "block_status_code": 451,
+      "fail_open": false
+    }
+  }
+}

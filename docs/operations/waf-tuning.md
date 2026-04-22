@@ -7,7 +7,7 @@ This document describes practical operating steps to safely reduce false positiv
 ## 1. Collect Evidence First
 
 1. Retrieve logs through the admin API and identify the `rule_id` and `path`.
-2. Trace the `req_id` in tukuyomi's `interesting.ndjson` and narrow the client conditions (IP/UA/query).
+2. Trace the `req_id` in `interesting.ndjson` under `logs/proxy/` and narrow the client conditions (IP/UA/query).
 3. Always keep a reproducible HTTP request (curl or E2E).
 
 ## 2. Narrow the Impact Scope
@@ -20,21 +20,36 @@ This document describes practical operating steps to safely reduce false positiv
 
 Recommended order:
 
-1. Add a path-specific special rule to `data/conf/waf.bypass`.
+1. Add a path-specific special rule to `data/conf/waf-bypass.json`.
 2. If needed, create a dedicated `*.conf` and disable the target rule narrowly with `ctl:ruleRemoveById`.
 3. Use a broader path bypass only as a last resort (time-boxed, and roll it back later).
 
-`waf.bypass` example:
+`waf-bypass.json` example:
 
-```conf
-/api/orders/preview rules/overrides/orders-preview.conf
+```json
+{
+  "default": {
+    "entries": []
+  },
+  "hosts": {
+    "example.com": {
+      "entries": [
+        { "path": "/search", "extra_rule": "conf/rules/search-endpoint.conf" }
+      ]
+    }
+  }
+}
 ```
 
-`orders-preview.conf` example:
+Host scope precedence is exact `host:port`, then bare `host`, then `default`. A host-specific scope replaces the default scope; it does not merge with it.
+
+`search-endpoint.conf` example:
 
 ```conf
-SecRule REQUEST_URI "@streq /api/orders/preview" \
-  "id:100001,phase:1,pass,nolog,ctl:ruleRemoveById=942100"
+SecRuleEngine On
+
+SecRule ARGS:q "@rx (?i)(<script|union([[:space:]]+all)?[[:space:]]+select|benchmark\s*\(|sleep\s*\()" \
+  "id:100001,phase:2,deny,status:403,log,msg:'suspicious search query'"
 ```
 
 ## 4. Review CRS Settings

@@ -1,0 +1,27 @@
+{
+  "serviceName": "tukuyomi",
+  "cluster": "<ECS_CLUSTER_NAME>",
+  "taskDefinition": "tukuyomi-single-instance",
+  "desiredCount": 1,
+  "launchType": "FARGATE",
+  "deploymentConfiguration": {
+    "minimumHealthyPercent": 0,
+    "maximumPercent": 100
+  },
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": ["subnet-aaaaaaaa", "subnet-bbbbbbbb"],
+      "securityGroups": ["sg-0123456789abcdef0"],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "loadBalancers": [
+    {
+      "targetGroupArn": "arn:aws:elasticloadbalancing:<AWS_REGION>:<ACCOUNT_ID>:targetgroup/<TARGET_GROUP_NAME>/<TARGET_GROUP_ID>",
+      "containerName": "coraza",
+      "containerPort": 9090
+    }
+  ],
+  "enableExecuteCommand": true,
+  "propagateTags": "SERVICE"
+}

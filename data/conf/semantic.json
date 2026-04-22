@@ -1,0 +1,35 @@
+{
+  "default": {
+    "enabled": false,
+    "mode": "challenge",
+    "exempt_path_prefixes": [
+      "/healthz",
+      "/metrics"
+    ],
+    "log_threshold": 4,
+    "challenge_threshold": 7,
+    "block_threshold": 9,
+    "max_inspect_body": 16384,
+    "provider": {
+      "enabled": true,
+      "name": "builtin_attack_family",
+      "timeout_ms": 25
+    }
+  },
+  "hosts": {
+    "admin.example.com": {
+      "enabled": true,
+      "mode": "block",
+      "exempt_path_prefixes": [],
+      "log_threshold": 4,
+      "challenge_threshold": 5,
+      "block_threshold": 7,
+      "max_inspect_body": 16384,
+      "provider": {
+        "enabled": true,
+        "name": "builtin_attack_family",
+        "timeout_ms": 25
+      }
+    }
+  }
+}

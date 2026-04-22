@@ -21,11 +21,15 @@ func resetBotDefenseBehaviorState() {
 }
 
 func observeBotDefenseBehavior(rt *runtimeBotDefenseConfig, clientIP, reqPath, userAgent string, hasValidCookie bool, now time.Time) botDefenseBehaviorSnapshot {
+	return observeBotDefenseBehaviorForScope(botDefenseDefaultScope, rt, clientIP, reqPath, userAgent, hasValidCookie, now)
+}
+
+func observeBotDefenseBehaviorForScope(scopeKey string, rt *runtimeBotDefenseConfig, clientIP, reqPath, userAgent string, hasValidCookie bool, now time.Time) botDefenseBehaviorSnapshot {
 	if rt == nil || !rt.Behavioral.Enabled {
 		return botDefenseBehaviorSnapshot{}
 	}
-	ip := normalizeClientIP(clientIP)
-	if ip == "" {
+	key := botDefenseScopedStateKey(scopeKey, clientIP)
+	if key == "" {
 		return botDefenseBehaviorSnapshot{}
 	}
 	if reqPath == "" {
@@ -38,7 +42,7 @@ func observeBotDefenseBehavior(rt *runtimeBotDefenseConfig, clientIP, reqPath, u
 	defer botDefenseBehaviorMu.Unlock()
 
 	botDefenseBehaviorSweep++
-	state := botDefenseBehaviorStateByIP[ip]
+	state := botDefenseBehaviorStateByIP[key]
 	if state.WindowID != windowID {
 		state = botDefenseBehaviorState{
 			WindowID:   windowID,
@@ -61,7 +65,7 @@ func observeBotDefenseBehavior(rt *runtimeBotDefenseConfig, clientIP, reqPath, u
 		state.MissingCookieCount++
 	}
 	state.Updated = now
-	botDefenseBehaviorStateByIP[ip] = state
+	botDefenseBehaviorStateByIP[key] = state
 
 	if botDefenseBehaviorSweep%1024 == 0 {
 		cutoff := now.Add(-2 * time.Duration(rt.Behavioral.WindowSeconds) * time.Second)

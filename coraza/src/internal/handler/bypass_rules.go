@@ -31,22 +31,33 @@ func bindBypassPutBody(c *gin.Context) (bypassPutBody, bool) {
 }
 
 func GetBypassRules(c *gin.Context) {
-	path := config.BypassFile
+	path := bypassconf.GetActivePath()
+	if strings.TrimSpace(path) == "" {
+		path = config.BypassFile
+	}
 	raw, _ := os.ReadFile(path)
+	displayRaw := string(raw)
+	savedAt := fileSavedAt(path)
 	if store := getLogsStatsStore(); store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(bypassConfigBlobKey)
 		if err != nil {
 			log.Printf("[BYPASS][DB][WARN] get config blob failed: %v", err)
 		} else if found {
-			if _, parseErr := validateRaw(string(dbRaw)); parseErr != nil {
+			file, parseErr := bypassconf.Parse(string(dbRaw))
+			if parseErr != nil {
 				log.Printf("[BYPASS][DB][WARN] cached blob parse failed (fallback=file): %v", parseErr)
 			} else {
+				if normalized, err := bypassconf.MarshalJSON(file); err == nil {
+					displayRaw = string(normalized)
+				}
 				if strings.TrimSpace(dbETag) == "" {
 					dbETag = bypassconf.ComputeETag(dbRaw)
 				}
+				savedAt = configBlobSavedAt(store, bypassConfigBlobKey)
 				c.JSON(http.StatusOK, gin.H{
-					"etag": dbETag,
-					"raw":  string(dbRaw),
+					"etag":     dbETag,
+					"raw":      displayRaw,
+					"saved_at": savedAt,
 				})
 				return
 			}
@@ -56,10 +67,16 @@ func GetBypassRules(c *gin.Context) {
 			}
 		}
 	}
+	if file, err := bypassconf.Parse(displayRaw); err == nil {
+		if normalized, nerr := bypassconf.MarshalJSON(file); nerr == nil {
+			displayRaw = string(normalized)
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"etag": bypassconf.ComputeETag(raw),
-		"raw":  string(raw),
+		"etag":     bypassconf.ComputeETag(raw),
+		"raw":      displayRaw,
+		"saved_at": savedAt,
 	})
 }
 
@@ -79,10 +96,14 @@ func ValidateBypassRules(c *gin.Context) {
 
 func PutBypassRules(c *gin.Context) {
 	path := config.BypassFile
+	currentPath := bypassconf.GetActivePath()
+	if strings.TrimSpace(currentPath) == "" {
+		currentPath = path
+	}
 	store := getLogsStatsStore()
 
 	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(path)
+	curRaw, _ := os.ReadFile(currentPath)
 	curETag := bypassconf.ComputeETag(curRaw)
 	if store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(bypassConfigBlobKey)
@@ -117,7 +138,14 @@ func PutBypassRules(c *gin.Context) {
 		return
 	}
 
-	if err := bypassconf.AtomicWriteWithBackup(path, []byte(in.Raw)); err != nil {
+	file, _ := bypassconf.Parse(in.Raw)
+	normalizedRaw, err := bypassconf.MarshalJSON(file)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := bypassconf.AtomicWriteWithBackup(path, normalizedRaw); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -128,9 +156,10 @@ func PutBypassRules(c *gin.Context) {
 		return
 	}
 
-	newETag := bypassconf.ComputeETag([]byte(in.Raw))
+	now := time.Now().UTC()
+	newETag := bypassconf.ComputeETag(normalizedRaw)
 	if store != nil {
-		if err := store.UpsertConfigBlob(bypassConfigBlobKey, []byte(in.Raw), newETag, time.Now().UTC()); err != nil {
+		if err := store.UpsertConfigBlob(bypassConfigBlobKey, normalizedRaw, newETag, now); err != nil {
 			_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
 			_ = bypassconf.Reload()
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -141,7 +170,7 @@ func PutBypassRules(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": newETag})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": newETag, "raw": string(normalizedRaw), "saved_at": now.Format(time.RFC3339Nano)})
 }
 
 func SyncBypassStorage() error {
@@ -158,11 +187,11 @@ func SyncBypassStorage() error {
 }
 
 func validateRaw(s string) (int, error) {
-	es, err := bypassconf.Parse(s)
+	file, err := bypassconf.Parse(s)
 	if err != nil {
 		return 0, err
 	}
-	for _, e := range es {
+	for _, e := range bypassconf.GetEntries(file) {
 		if e.ExtraRule == "" {
 			continue
 		}
@@ -174,5 +203,5 @@ func validateRaw(s string) (int, error) {
 		}
 	}
 
-	return len(es), nil
+	return len(bypassconf.GetEntries(file)), nil
 }

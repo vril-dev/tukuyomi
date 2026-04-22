@@ -1,0 +1,19 @@
+{
+  "default": {
+    "entries": [
+      {
+        "path": "/assets/"
+      }
+    ]
+  },
+  "hosts": {
+    "example.com": {
+      "entries": [
+        {
+          "path": "/search",
+          "extra_rule": "conf/rules/search-endpoint.conf"
+        }
+      ]
+    }
+  }
+}

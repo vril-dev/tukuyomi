@@ -8,8 +8,8 @@ REPORT_JSON="${REPORT_DIR}/${REPORT_NAME}.json"
 SUMMARY_TXT="${REPORT_DIR}/${REPORT_NAME}-summary.txt"
 SUMMARY_MD="${REPORT_DIR}/${REPORT_NAME}-summary.md"
 WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-60}"
-HOST_NGINX_PORT="${HOST_NGINX_PORT:-${HOST_OPENRESTY_PORT:-18080}}"
 HOST_CORAZA_PORT="${HOST_CORAZA_PORT:-19090}"
+WAF_LISTEN_PORT="${WAF_LISTEN_PORT:-9090}"
 HOST_PUID="${PUID:-$(id -u)}"
 HOST_GUID="${GUID:-$(id -g)}"
 
@@ -31,9 +31,9 @@ require_cmd() {
 compose() {
   PUID="${HOST_PUID}" \
   GUID="${HOST_GUID}" \
-  NGINX_PORT="${HOST_NGINX_PORT}" \
-  OPENRESTY_PORT="${HOST_NGINX_PORT}" \
   CORAZA_PORT="${HOST_CORAZA_PORT}" \
+  WAF_LISTEN_PORT="${WAF_LISTEN_PORT}" \
+  GOTESTWAF_TARGET_URL="http://coraza:${WAF_LISTEN_PORT}" \
   docker compose "${COMPOSE_ARGS[@]}" "$@"
 }
 
@@ -53,11 +53,11 @@ gt() {
   awk -v a="$1" -v b="$2" 'BEGIN { exit !(a > b) }'
 }
 
-wait_for_nginx() {
+wait_for_coraza() {
   local code
   local i
   for i in $(seq 1 "${WAIT_TIMEOUT_SECONDS}"); do
-    code="$(curl -sS -o /dev/null -w "%{http_code}" "http://localhost:${HOST_NGINX_PORT}/healthz" || true)"
+    code="$(curl -sS -o /dev/null -w "%{http_code}" "http://localhost:${HOST_CORAZA_PORT}/healthz" || true)"
     if [[ "${code}" == "200" ]]; then
       return 0
     fi
@@ -92,16 +92,14 @@ if [[ "${AUTO_DOWN}" == "1" ]]; then
   trap cleanup EXIT
 fi
 
-echo "[gotestwaf] starting coraza/nginx"
+echo "[gotestwaf] starting coraza"
 echo "[gotestwaf] using container uid:gid ${HOST_PUID}:${HOST_GUID}"
-compose up -d --build coraza nginx
+compose up -d --build coraza
 
-echo "[gotestwaf] waiting for nginx health endpoint (http://localhost:${HOST_NGINX_PORT}/healthz, max ${WAIT_TIMEOUT_SECONDS}s)"
-if ! wait_for_nginx; then
-  echo "[gotestwaf] nginx did not become healthy in time" >&2
+echo "[gotestwaf] waiting for coraza health endpoint (http://localhost:${HOST_CORAZA_PORT}/healthz, max ${WAIT_TIMEOUT_SECONDS}s)"
+if ! wait_for_coraza; then
+  echo "[gotestwaf] coraza did not become healthy in time" >&2
   compose ps >&2 || true
-  echo "[gotestwaf] recent nginx logs:" >&2
-  compose logs --tail=120 nginx >&2 || true
   echo "[gotestwaf] recent coraza logs:" >&2
   compose logs --tail=120 coraza >&2 || true
   exit 1

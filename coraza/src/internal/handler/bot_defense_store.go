@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/netip"
@@ -12,27 +13,49 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"tukuyomi/internal/policyhost"
 )
 
 const (
-	botDefenseModeSuspicious  = "suspicious"
-	botDefenseModeAlways      = "always"
-	botDefenseActionChallenge = "challenge"
+	botDefenseModeSuspicious            = "suspicious"
+	botDefenseModeAlways                = "always"
+	botDefenseActionChallenge           = "challenge"
+	botDefenseActionQuarantine          = "quarantine"
+	botDefenseChallengeOutcomeIssued    = "issued"
+	botDefenseChallengeOutcomePassed    = "passed"
+	botDefenseChallengeOutcomeFailed    = "failed"
+	botDefenseCookieStateMissing        = "missing"
+	botDefenseCookieStateValid          = "valid"
+	botDefenseCookieStateInvalid        = "invalid"
+	defaultBotDefenseInvisibleBodyBytes = int64(256 * 1024)
+	botDefenseDefaultScope              = "default"
 )
 
 type botDefenseConfig struct {
-	Enabled              bool                         `json:"enabled"`
-	DryRun               bool                         `json:"dry_run"`
-	Mode                 string                       `json:"mode"`
-	PathPrefixes         []string                     `json:"path_prefixes,omitempty"`
-	PathPolicies         []botDefensePathPolicyConfig `json:"path_policies,omitempty"`
-	ExemptCIDRs          []string                     `json:"exempt_cidrs,omitempty"`
-	SuspiciousUserAgents []string                     `json:"suspicious_user_agents,omitempty"`
-	BehavioralDetection  botDefenseBehavioralConfig   `json:"behavioral_detection,omitempty"`
-	ChallengeCookieName  string                       `json:"challenge_cookie_name,omitempty"`
-	ChallengeSecret      string                       `json:"challenge_secret,omitempty"`
-	ChallengeTTLSeconds  int                          `json:"challenge_ttl_seconds"`
-	ChallengeStatusCode  int                          `json:"challenge_status_code"`
+	Enabled                  bool                                     `json:"enabled"`
+	DryRun                   bool                                     `json:"dry_run"`
+	Mode                     string                                   `json:"mode"`
+	PathPrefixes             []string                                 `json:"path_prefixes,omitempty"`
+	PathPolicies             []botDefensePathPolicyConfig             `json:"path_policies,omitempty"`
+	ExemptCIDRs              []string                                 `json:"exempt_cidrs,omitempty"`
+	SuspiciousUserAgents     []string                                 `json:"suspicious_user_agents,omitempty"`
+	BehavioralDetection      botDefenseBehavioralConfig               `json:"behavioral_detection,omitempty"`
+	BrowserSignals           botDefenseBrowserSignalsConfig           `json:"browser_signals,omitempty"`
+	DeviceSignals            botDefenseDeviceSignalsConfig            `json:"device_signals,omitempty"`
+	HeaderSignals            botDefenseHeaderSignalsConfig            `json:"header_signals,omitempty"`
+	TLSSignals               botDefenseTLSSignalsConfig               `json:"tls_signals,omitempty"`
+	Quarantine               botDefenseQuarantineConfig               `json:"quarantine,omitempty"`
+	ChallengeFailureFeedback botDefenseChallengeFailureFeedbackConfig `json:"challenge_failure_feedback,omitempty"`
+	ChallengeCookieName      string                                   `json:"challenge_cookie_name,omitempty"`
+	ChallengeSecret          string                                   `json:"challenge_secret,omitempty"`
+	ChallengeTTLSeconds      int                                      `json:"challenge_ttl_seconds"`
+	ChallengeStatusCode      int                                      `json:"challenge_status_code"`
+}
+
+type botDefenseFile struct {
+	Default botDefenseConfig            `json:"default"`
+	Hosts   map[string]botDefenseConfig `json:"hosts,omitempty"`
 }
 
 type botDefensePathPolicyConfig struct {
@@ -42,6 +65,8 @@ type botDefensePathPolicyConfig struct {
 	DryRun                     *bool    `json:"dry_run,omitempty"`
 	RiskScoreMultiplierPercent int      `json:"risk_score_multiplier_percent,omitempty"`
 	RiskScoreOffset            int      `json:"risk_score_offset,omitempty"`
+	TelemetryCookieRequired    bool     `json:"telemetry_cookie_required,omitempty"`
+	DisableQuarantine          bool     `json:"disable_quarantine,omitempty"`
 }
 
 type botDefenseBehavioralConfig struct {
@@ -55,20 +80,76 @@ type botDefenseBehavioralConfig struct {
 	RiskScorePerSignal     int  `json:"risk_score_per_signal"`
 }
 
+type botDefenseBrowserSignalsConfig struct {
+	Enabled            bool   `json:"enabled"`
+	JSCookieName       string `json:"js_cookie_name,omitempty"`
+	ScoreThreshold     int    `json:"score_threshold"`
+	RiskScorePerSignal int    `json:"risk_score_per_signal"`
+}
+
+type botDefenseDeviceSignalsConfig struct {
+	Enabled                    bool  `json:"enabled"`
+	RequireTimeZone            bool  `json:"require_time_zone"`
+	RequirePlatform            bool  `json:"require_platform"`
+	RequireHardwareConcurrency bool  `json:"require_hardware_concurrency"`
+	CheckMobileTouch           bool  `json:"check_mobile_touch"`
+	InvisibleHTMLInjection     bool  `json:"invisible_html_injection"`
+	InvisibleMaxBodyBytes      int64 `json:"invisible_max_body_bytes,omitempty"`
+	ScoreThreshold             int   `json:"score_threshold"`
+	RiskScorePerSignal         int   `json:"risk_score_per_signal"`
+}
+
+type botDefenseHeaderSignalsConfig struct {
+	Enabled                bool `json:"enabled"`
+	RequireAcceptLanguage  bool `json:"require_accept_language"`
+	RequireFetchMetadata   bool `json:"require_fetch_metadata"`
+	RequireClientHints     bool `json:"require_client_hints"`
+	RequireUpgradeInsecure bool `json:"require_upgrade_insecure_requests"`
+	ScoreThreshold         int  `json:"score_threshold"`
+	RiskScorePerSignal     int  `json:"risk_score_per_signal"`
+}
+
+type botDefenseTLSSignalsConfig struct {
+	Enabled            bool `json:"enabled"`
+	RequireSNI         bool `json:"require_sni"`
+	RequireALPN        bool `json:"require_alpn"`
+	RequireModernTLS   bool `json:"require_modern_tls"`
+	ScoreThreshold     int  `json:"score_threshold"`
+	RiskScorePerSignal int  `json:"risk_score_per_signal"`
+}
+
+type botDefenseQuarantineConfig struct {
+	Enabled                   bool `json:"enabled"`
+	Threshold                 int  `json:"threshold"`
+	StrikesRequired           int  `json:"strikes_required"`
+	StrikeWindowSeconds       int  `json:"strike_window_seconds"`
+	TTLSeconds                int  `json:"ttl_seconds"`
+	StatusCode                int  `json:"status_code"`
+	ReputationFeedbackSeconds int  `json:"reputation_feedback_seconds"`
+}
+
 type runtimeBotDefenseConfig struct {
-	Raw             botDefenseConfig
-	DryRun          bool
-	Mode            string
-	PathPrefixes    []string
-	PathPolicies    []runtimeBotDefensePathPolicy
-	ExemptPrefixes  []netip.Prefix
-	SuspiciousUA    []string
-	Behavioral      runtimeBotDefenseBehavioralConfig
-	CookieName      string
-	Secret          []byte
-	ChallengeTTL    time.Duration
-	ChallengeStatus int
-	EphemeralSecret bool
+	File                     botDefenseFile
+	Raw                      botDefenseConfig
+	DryRun                   bool
+	Mode                     string
+	PathPrefixes             []string
+	PathPolicies             []runtimeBotDefensePathPolicy
+	ExemptPrefixes           []netip.Prefix
+	SuspiciousUA             []string
+	Behavioral               runtimeBotDefenseBehavioralConfig
+	BrowserSignals           runtimeBotDefenseBrowserSignalsConfig
+	DeviceSignals            runtimeBotDefenseDeviceSignalsConfig
+	HeaderSignals            runtimeBotDefenseHeaderSignalsConfig
+	TLSSignals               runtimeBotDefenseTLSSignalsConfig
+	Quarantine               runtimeBotDefenseQuarantineConfig
+	ChallengeFailureFeedback runtimeBotDefenseChallengeFailureFeedbackConfig
+	CookieName               string
+	Secret                   []byte
+	ChallengeTTL             time.Duration
+	ChallengeStatus          int
+	EphemeralSecret          bool
+	Hosts                    map[string]*runtimeBotDefenseConfig
 }
 
 type runtimeBotDefensePathPolicy struct {
@@ -78,6 +159,8 @@ type runtimeBotDefensePathPolicy struct {
 	DryRun                     *bool
 	RiskScoreMultiplierPercent int
 	RiskScoreOffset            int
+	TelemetryCookieRequired    bool
+	DisableQuarantine          bool
 }
 
 type runtimeBotDefenseBehavioralConfig struct {
@@ -91,18 +174,71 @@ type runtimeBotDefenseBehavioralConfig struct {
 	RiskScorePerSignal     int
 }
 
+type runtimeBotDefenseBrowserSignalsConfig struct {
+	Enabled            bool
+	JSCookieName       string
+	ScoreThreshold     int
+	RiskScorePerSignal int
+}
+
+type runtimeBotDefenseDeviceSignalsConfig struct {
+	Enabled                    bool
+	RequireTimeZone            bool
+	RequirePlatform            bool
+	RequireHardwareConcurrency bool
+	CheckMobileTouch           bool
+	InvisibleHTMLInjection     bool
+	InvisibleMaxBodyBytes      int64
+	ScoreThreshold             int
+	RiskScorePerSignal         int
+}
+
+type runtimeBotDefenseHeaderSignalsConfig struct {
+	Enabled                bool
+	RequireAcceptLanguage  bool
+	RequireFetchMetadata   bool
+	RequireClientHints     bool
+	RequireUpgradeInsecure bool
+	ScoreThreshold         int
+	RiskScorePerSignal     int
+}
+
+type runtimeBotDefenseTLSSignalsConfig struct {
+	Enabled            bool
+	RequireSNI         bool
+	RequireALPN        bool
+	RequireModernTLS   bool
+	ScoreThreshold     int
+	RiskScorePerSignal int
+}
+
+type runtimeBotDefenseQuarantineConfig struct {
+	Enabled            bool
+	Threshold          int
+	StrikesRequired    int
+	StrikeWindow       time.Duration
+	TTL                time.Duration
+	StatusCode         int
+	ReputationFeedback time.Duration
+}
+
 type botDefenseDecision struct {
-	Allowed    bool
-	Action     string
-	DryRun     bool
-	Status     int
-	Mode       string
-	FlowPolicy string
-	CookieName string
-	Token      string
-	TTLSeconds int
-	RiskScore  int
-	Signals    []string
+	Allowed                 bool
+	Action                  string
+	DryRun                  bool
+	Status                  int
+	Mode                    string
+	HostScope               string
+	FlowPolicy              string
+	CookieName              string
+	BrowserCookieName       string
+	Token                   string
+	TTLSeconds              int
+	RiskScore               int
+	Signals                 []string
+	ChallengeOutcome        string
+	ChallengeFailureReason  string
+	TelemetryCookieRequired bool
 }
 
 type botDefenseBehaviorState struct {
@@ -119,6 +255,39 @@ type botDefenseBehaviorSnapshot struct {
 	PathFanout         int
 	UAChurn            int
 	MissingCookieCount int
+}
+
+type botDefenseBrowserSignalCookie struct {
+	WebDriver           bool   `json:"wd"`
+	LanguageCount       int    `json:"lc"`
+	ScreenWidth         int    `json:"sw"`
+	ScreenHeight        int    `json:"sh"`
+	TimeZone            string `json:"tz"`
+	Platform            string `json:"pf"`
+	HardwareConcurrency int    `json:"hc"`
+	MaxTouchPoints      int    `json:"mt"`
+}
+
+type botDefenseQuarantineState struct {
+	Strikes      int
+	WindowEnd    time.Time
+	BlockedUntil time.Time
+}
+
+type botDefenseFeatureSummary struct {
+	Enabled                    bool
+	DryRunEnabled              bool
+	PathPolicyCount            int
+	PathPolicyDryRunCount      int
+	BehavioralEnabled          bool
+	BrowserSignalsEnabled      bool
+	DeviceSignalsEnabled       bool
+	DeviceInvisibleEnabled     bool
+	HeaderSignalsEnabled       bool
+	TLSSignalsEnabled          bool
+	QuarantineEnabled          bool
+	ChallengeFailureFeedbackOn bool
+	HostScopeCount             int
 }
 
 var (
@@ -158,6 +327,15 @@ func GetBotDefenseConfig() botDefenseConfig {
 	return botDefenseRuntime.Raw
 }
 
+func GetBotDefenseFile() botDefenseFile {
+	botDefenseMu.RLock()
+	defer botDefenseMu.RUnlock()
+	if botDefenseRuntime == nil {
+		return botDefenseFile{}
+	}
+	return cloneBotDefenseFile(botDefenseRuntime.File)
+}
+
 func ReloadBotDefense() error {
 	path := GetBotDefensePath()
 	if path == "" {
@@ -177,8 +355,10 @@ func ReloadBotDefense() error {
 	botDefenseRuntime = rt
 	botDefenseMu.Unlock()
 	resetBotDefenseBehaviorState()
+	resetBotDefenseQuarantineState()
+	resetBotDefenseChallengeState()
 
-	if rt.EphemeralSecret && rt.Raw.Enabled {
+	if botDefenseHasEnabledEphemeralSecret(rt) {
 		log.Printf("[BOT_DEFENSE][WARN] challenge_secret is empty; generated ephemeral secret for this process")
 	}
 
@@ -191,10 +371,14 @@ func ValidateBotDefenseRaw(raw string) (*runtimeBotDefenseConfig, error) {
 
 func EvaluateBotDefense(r *http.Request, clientIP string, now time.Time) botDefenseDecision {
 	rt := currentBotDefenseRuntime()
-	if rt == nil || !rt.Raw.Enabled {
+	if rt == nil {
 		return botDefenseDecision{Allowed: true}
 	}
 	if r == nil || r.URL == nil {
+		return botDefenseDecision{Allowed: true}
+	}
+	scopeRT, scopeKey := selectBotDefenseRuntime(rt, r)
+	if scopeRT == nil || !scopeRT.Raw.Enabled {
 		return botDefenseDecision{Allowed: true}
 	}
 	if r.Method != http.MethodGet {
@@ -205,59 +389,194 @@ func EvaluateBotDefense(r *http.Request, clientIP string, now time.Time) botDefe
 	if reqPath == "" {
 		reqPath = "/"
 	}
-	if !pathMatchesAnyPrefix(rt.PathPrefixes, reqPath) {
+	if !pathMatchesAnyPrefix(scopeRT.PathPrefixes, reqPath) {
 		return botDefenseDecision{Allowed: true}
 	}
-	policy := matchedBotDefensePathPolicy(rt.PathPolicies, reqPath)
-	effectiveMode := rt.Mode
+	policy := matchedBotDefensePathPolicy(scopeRT.PathPolicies, reqPath)
+	effectiveMode := scopeRT.Mode
 	if policy != nil && policy.Mode != "" {
 		effectiveMode = policy.Mode
 	}
-	effectiveDryRun := rt.DryRun
+	effectiveDryRun := scopeRT.DryRun
 	if policy != nil && policy.DryRun != nil {
 		effectiveDryRun = *policy.DryRun
 	}
 
 	clientIP = normalizeClientIP(clientIP)
-	if isBotDefenseExemptIP(rt, clientIP) {
+	if isBotDefenseExemptIP(scopeRT, clientIP) {
 		return botDefenseDecision{Allowed: true}
+	}
+	if quarantined, status, until := botDefenseQuarantineStatusForScope(scopeKey, scopeRT, clientIP, now.UTC()); quarantined {
+		return botDefenseDecision{
+			Allowed:    effectiveDryRun,
+			Action:     botDefenseActionQuarantine,
+			DryRun:     effectiveDryRun,
+			Status:     status,
+			Mode:       effectiveMode,
+			HostScope:  scopeKey,
+			FlowPolicy: matchedBotDefensePolicyName(policy),
+			Signals:    []string{"quarantine_active_until:" + until.Format(time.RFC3339)},
+		}
 	}
 
 	userAgent := r.UserAgent()
-	validCookie := hasValidBotDefenseCookie(rt, r, clientIP, userAgent, now.UTC())
-	behaviorSnapshot := observeBotDefenseBehavior(rt, clientIP, reqPath, userAgent, validCookie, now.UTC())
-	riskScore, signals := evaluateBotDefenseBehavior(rt, behaviorSnapshot)
-	riskScore = applyBotDefensePathPolicyRisk(riskScore, policy)
-	suspiciousUA := isSuspiciousUserAgent(rt.SuspiciousUA, userAgent)
-
-	if validCookie {
-		return botDefenseDecision{
-			Allowed:    true,
-			FlowPolicy: matchedBotDefensePolicyName(policy),
-			RiskScore:  riskScore,
-			Signals:    signals,
+	challengeState, hasChallengeState := currentBotDefenseChallengeState(scopeKey, clientIP, userAgent, now.UTC())
+	challengeCookieState := botDefenseChallengeCookieState(scopeRT, r, clientIP, userAgent, now.UTC())
+	validCookie := challengeCookieState == botDefenseCookieStateValid
+	behaviorSnapshot := observeBotDefenseBehaviorForScope(scopeKey, scopeRT, clientIP, reqPath, userAgent, validCookie, now.UTC())
+	behavioralRiskScore, behavioralSignals := evaluateBotDefenseBehavior(scopeRT, behaviorSnapshot)
+	browserRiskScore, browserSignals := evaluateBotDefenseBrowserSignals(scopeRT, r, validCookie)
+	deviceRiskScore, deviceSignals := evaluateBotDefenseDeviceSignals(scopeRT, r)
+	headerRiskScore, headerSignals := evaluateBotDefenseHeaderSignals(scopeRT, r)
+	tlsRiskScore, tlsSignals := evaluateBotDefenseTLSSignals(scopeRT, r)
+	riskScore := behavioralRiskScore + browserRiskScore + deviceRiskScore + headerRiskScore + tlsRiskScore
+	signals := append(append(append(append(append([]string(nil), behavioralSignals...), browserSignals...), deviceSignals...), headerSignals...), tlsSignals...)
+	forceChallenge := false
+	flowPolicy := matchedBotDefensePolicyName(policy)
+	telemetryRequired := policy != nil && policy.TelemetryCookieRequired && looksLikeBrowserRequest(r)
+	if hasChallengeState {
+		if challengeState.TelemetryRequired {
+			telemetryRequired = true
+		}
+		if flowPolicy == "" && strings.TrimSpace(challengeState.FlowPolicy) != "" {
+			flowPolicy = challengeState.FlowPolicy
 		}
 	}
-	if effectiveMode == botDefenseModeSuspicious && !suspiciousUA && riskScore == 0 {
+	telemetryCookieState := botDefenseTelemetryCookieState(scopeRT, r)
+	if telemetryRequired && telemetryCookieState != botDefenseCookieStateValid {
+		signals = append(signals, "flow_telemetry_missing")
+		riskScore += maxBotDefenseRiskWeight(scopeRT)
+		forceChallenge = true
+	}
+	riskScore = applyBotDefensePathPolicyRisk(riskScore, policy)
+	suspiciousUA := isSuspiciousUserAgent(scopeRT.SuspiciousUA, userAgent)
+	quarantineTriggered := false
+	if !effectiveDryRun && (policy == nil || !policy.DisableQuarantine) {
+		quarantineTriggered = maybeEscalateBotDefenseQuarantineForScope(scopeKey, scopeRT, clientIP, riskScore, now.UTC())
+	}
+	challengeOutcome := ""
+	challengeFailureReason := ""
+	if hasChallengeState {
+		switch {
+		case validCookie && !forceChallenge:
+			challengeOutcome = botDefenseChallengeOutcomePassed
+			clearBotDefenseChallengeState(scopeKey, clientIP, userAgent)
+		case challengeCookieState == botDefenseCookieStateInvalid:
+			challengeOutcome = botDefenseChallengeOutcomeFailed
+			challengeFailureReason = "challenge_cookie_invalid"
+		case telemetryRequired && telemetryCookieState == botDefenseCookieStateInvalid:
+			challengeOutcome = botDefenseChallengeOutcomeFailed
+			challengeFailureReason = "telemetry_cookie_invalid"
+		case telemetryRequired && telemetryCookieState == botDefenseCookieStateMissing:
+			challengeOutcome = botDefenseChallengeOutcomeFailed
+			challengeFailureReason = "telemetry_cookie_missing_after_challenge"
+		case challengeCookieState == botDefenseCookieStateMissing:
+			challengeOutcome = botDefenseChallengeOutcomeFailed
+			challengeFailureReason = "challenge_cookie_missing_after_issue"
+		}
+		if challengeFailureReason == "" && challengeOutcome == botDefenseChallengeOutcomeFailed && strings.TrimSpace(challengeState.FlowPolicy) != "" && flowPolicy == "" {
+			flowPolicy = challengeState.FlowPolicy
+		}
+	}
+	if validCookie {
+		if quarantineTriggered {
+			if scopeRT.Quarantine.ReputationFeedback > 0 {
+				_ = ApplyIPReputationPenaltyForRequest(r, clientIP, scopeRT.Quarantine.ReputationFeedback, now.UTC())
+			}
+			return botDefenseDecision{
+				Allowed:                 effectiveDryRun,
+				Action:                  botDefenseActionQuarantine,
+				DryRun:                  effectiveDryRun,
+				Status:                  scopeRT.Quarantine.StatusCode,
+				Mode:                    effectiveMode,
+				HostScope:               scopeKey,
+				FlowPolicy:              flowPolicy,
+				RiskScore:               riskScore,
+				Signals:                 append(signals, "quarantine_triggered"),
+				ChallengeOutcome:        challengeOutcome,
+				ChallengeFailureReason:  challengeFailureReason,
+				TelemetryCookieRequired: telemetryRequired,
+			}
+		}
+		if forceChallenge {
+			ttlSeconds := int(scopeRT.ChallengeTTL.Seconds())
+			if ttlSeconds < 1 {
+				ttlSeconds = 1
+			}
+			return botDefenseDecision{
+				Allowed:                 effectiveDryRun,
+				Action:                  botDefenseActionChallenge,
+				DryRun:                  effectiveDryRun,
+				Status:                  scopeRT.ChallengeStatus,
+				Mode:                    effectiveMode,
+				HostScope:               scopeKey,
+				FlowPolicy:              flowPolicy,
+				CookieName:              scopeRT.CookieName,
+				BrowserCookieName:       scopeRT.BrowserSignals.JSCookieName,
+				Token:                   issueBotDefenseToken(scopeRT, clientIP, userAgent, now.UTC()),
+				TTLSeconds:              ttlSeconds,
+				RiskScore:               riskScore,
+				Signals:                 signals,
+				ChallengeOutcome:        challengeOutcome,
+				ChallengeFailureReason:  challengeFailureReason,
+				TelemetryCookieRequired: telemetryRequired,
+			}
+		}
+		return botDefenseDecision{
+			Allowed:                 true,
+			HostScope:               scopeKey,
+			FlowPolicy:              flowPolicy,
+			RiskScore:               riskScore,
+			Signals:                 signals,
+			ChallengeOutcome:        challengeOutcome,
+			ChallengeFailureReason:  challengeFailureReason,
+			TelemetryCookieRequired: telemetryRequired,
+		}
+	}
+	if effectiveMode == botDefenseModeSuspicious && !suspiciousUA && riskScore == 0 && !forceChallenge {
 		return botDefenseDecision{Allowed: true}
 	}
 
-	ttlSeconds := int(rt.ChallengeTTL.Seconds())
+	ttlSeconds := int(scopeRT.ChallengeTTL.Seconds())
 	if ttlSeconds < 1 {
 		ttlSeconds = 1
 	}
+	if quarantineTriggered {
+		if scopeRT.Quarantine.ReputationFeedback > 0 {
+			_ = ApplyIPReputationPenaltyForRequest(r, clientIP, scopeRT.Quarantine.ReputationFeedback, now.UTC())
+		}
+		return botDefenseDecision{
+			Allowed:                 effectiveDryRun,
+			Action:                  botDefenseActionQuarantine,
+			DryRun:                  effectiveDryRun,
+			Status:                  scopeRT.Quarantine.StatusCode,
+			Mode:                    effectiveMode,
+			HostScope:               scopeKey,
+			FlowPolicy:              flowPolicy,
+			RiskScore:               riskScore,
+			Signals:                 append(signals, "quarantine_triggered"),
+			ChallengeOutcome:        challengeOutcome,
+			ChallengeFailureReason:  challengeFailureReason,
+			TelemetryCookieRequired: telemetryRequired,
+		}
+	}
 	return botDefenseDecision{
-		Allowed:    effectiveDryRun,
-		Action:     botDefenseActionChallenge,
-		DryRun:     effectiveDryRun,
-		Status:     rt.ChallengeStatus,
-		Mode:       effectiveMode,
-		FlowPolicy: matchedBotDefensePolicyName(policy),
-		CookieName: rt.CookieName,
-		Token:      issueBotDefenseToken(rt, clientIP, userAgent, now.UTC()),
-		TTLSeconds: ttlSeconds,
-		RiskScore:  riskScore,
-		Signals:    signals,
+		Allowed:                 effectiveDryRun,
+		Action:                  botDefenseActionChallenge,
+		DryRun:                  effectiveDryRun,
+		Status:                  scopeRT.ChallengeStatus,
+		Mode:                    effectiveMode,
+		HostScope:               scopeKey,
+		FlowPolicy:              flowPolicy,
+		CookieName:              scopeRT.CookieName,
+		BrowserCookieName:       scopeRT.BrowserSignals.JSCookieName,
+		Token:                   issueBotDefenseToken(scopeRT, clientIP, userAgent, now.UTC()),
+		TTLSeconds:              ttlSeconds,
+		RiskScore:               riskScore,
+		Signals:                 signals,
+		ChallengeOutcome:        challengeOutcome,
+		ChallengeFailureReason:  challengeFailureReason,
+		TelemetryCookieRequired: telemetryRequired,
 	}
 }
 
@@ -267,14 +586,141 @@ func currentBotDefenseRuntime() *runtimeBotDefenseConfig {
 	return botDefenseRuntime
 }
 
+func selectBotDefenseRuntime(rt *runtimeBotDefenseConfig, req *http.Request) (*runtimeBotDefenseConfig, string) {
+	if rt == nil {
+		return nil, botDefenseDefaultScope
+	}
+	if req != nil {
+		return selectBotDefenseRuntimeForHost(rt, req.Host, req.TLS != nil)
+	}
+	return rt, botDefenseDefaultScope
+}
+
+func selectBotDefenseRuntimeForHost(rt *runtimeBotDefenseConfig, host string, tls bool) (*runtimeBotDefenseConfig, string) {
+	if rt == nil {
+		return nil, botDefenseDefaultScope
+	}
+	for _, candidate := range policyhost.Candidates(host, tls) {
+		if scope, ok := rt.Hosts[candidate]; ok {
+			return scope, candidate
+		}
+	}
+	return rt, botDefenseDefaultScope
+}
+
+func selectBotDefenseRuntimeByScopeKey(rt *runtimeBotDefenseConfig, scopeKey string) *runtimeBotDefenseConfig {
+	if rt == nil {
+		return nil
+	}
+	scope := strings.TrimSpace(scopeKey)
+	if scope == "" || scope == botDefenseDefaultScope {
+		return rt
+	}
+	if candidate, ok := rt.Hosts[scope]; ok {
+		return candidate
+	}
+	return rt
+}
+
+func botDefenseHasEnabledEphemeralSecret(rt *runtimeBotDefenseConfig) bool {
+	if rt == nil {
+		return false
+	}
+	if rt.EphemeralSecret && rt.Raw.Enabled {
+		return true
+	}
+	for _, scope := range rt.Hosts {
+		if scope != nil && scope.EphemeralSecret && scope.Raw.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
+func botDefenseEnabled(file botDefenseFile) bool {
+	if file.Default.Enabled {
+		return true
+	}
+	for _, scope := range file.Hosts {
+		if scope.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
 func buildBotDefenseRuntimeFromRaw(raw []byte) (*runtimeBotDefenseConfig, error) {
-	var cfg botDefenseConfig
-	dec := json.NewDecoder(strings.NewReader(string(raw)))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&cfg); err != nil {
+	top, err := decodeBotDefenseJSONObject(raw)
+	if err != nil {
 		return nil, err
 	}
 
+	if _, hasDefault := top["default"]; !hasDefault {
+		if _, hasHosts := top["hosts"]; !hasHosts {
+			rt, err := buildSingleBotDefenseRuntimeFromRaw(raw)
+			if err != nil {
+				return nil, err
+			}
+			rt.File = botDefenseFile{Default: cloneBotDefenseConfig(rt.Raw)}
+			rt.Hosts = map[string]*runtimeBotDefenseConfig{}
+			return rt, nil
+		}
+	}
+
+	for key := range top {
+		if key != "default" && key != "hosts" {
+			return nil, fmt.Errorf("invalid json")
+		}
+	}
+
+	defaultObject, err := decodeBotDefenseObjectValue(top["default"], "default")
+	if err != nil {
+		return nil, err
+	}
+	rt, err := buildSingleBotDefenseRuntimeFromRaw(mustMarshalBotDefenseObject(defaultObject))
+	if err != nil {
+		return nil, err
+	}
+	rt.File = botDefenseFile{Default: cloneBotDefenseConfig(rt.Raw)}
+	rt.Hosts = map[string]*runtimeBotDefenseConfig{}
+
+	hosts, err := decodeBotDefenseHosts(top["hosts"])
+	if err != nil {
+		return nil, err
+	}
+	if len(hosts) == 0 {
+		return rt, nil
+	}
+	rt.File.Hosts = make(map[string]botDefenseConfig, len(hosts))
+	for rawHost, rawScope := range hosts {
+		hostKey, err := policyhost.NormalizePattern(rawHost)
+		if err != nil {
+			return nil, fmt.Errorf("hosts[%q]: %w", rawHost, err)
+		}
+		hostObject, err := decodeBotDefenseObjectValue(rawScope, fmt.Sprintf("hosts[%q]", rawHost))
+		if err != nil {
+			return nil, err
+		}
+		mergedObject := mergeBotDefenseJSONObject(defaultObject, hostObject)
+		scopeRT, err := buildSingleBotDefenseRuntimeFromRaw(mustMarshalBotDefenseObject(mergedObject))
+		if err != nil {
+			return nil, err
+		}
+		rt.File.Hosts[hostKey] = cloneBotDefenseConfig(scopeRT.Raw)
+		rt.Hosts[hostKey] = scopeRT
+	}
+	return rt, nil
+}
+
+func buildSingleBotDefenseRuntimeFromRaw(raw []byte) (*runtimeBotDefenseConfig, error) {
+	cfg, err := decodeBotDefenseConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	return buildSingleBotDefenseRuntime(cfg)
+}
+
+func buildSingleBotDefenseRuntime(cfg botDefenseConfig) (*runtimeBotDefenseConfig, error) {
 	cfg.Mode = normalizeBotDefenseMode(cfg.Mode)
 	if cfg.Mode == "" {
 		cfg.Mode = botDefenseModeSuspicious
@@ -307,6 +753,12 @@ func buildBotDefenseRuntimeFromRaw(raw []byte) (*runtimeBotDefenseConfig, error)
 		cfg.SuspiciousUserAgents = defaultSuspiciousUserAgents()
 	}
 	cfg.BehavioralDetection = normalizeBotDefenseBehavioralConfig(cfg.BehavioralDetection)
+	cfg.BrowserSignals = normalizeBotDefenseBrowserSignalsConfig(cfg.BrowserSignals)
+	cfg.DeviceSignals = normalizeBotDefenseDeviceSignalsConfig(cfg.DeviceSignals)
+	cfg.HeaderSignals = normalizeBotDefenseHeaderSignalsConfig(cfg.HeaderSignals)
+	cfg.TLSSignals = normalizeBotDefenseTLSSignalsConfig(cfg.TLSSignals)
+	cfg.Quarantine = normalizeBotDefenseQuarantineConfig(cfg.Quarantine)
+	cfg.ChallengeFailureFeedback = normalizeBotDefenseChallengeFailureFeedbackConfig(cfg.ChallengeFailureFeedback)
 
 	cfg.ChallengeCookieName = strings.TrimSpace(cfg.ChallengeCookieName)
 	if cfg.ChallengeCookieName == "" {
@@ -314,6 +766,17 @@ func buildBotDefenseRuntimeFromRaw(raw []byte) (*runtimeBotDefenseConfig, error)
 	}
 	if !isValidCookieName(cfg.ChallengeCookieName) {
 		return nil, fmt.Errorf("challenge_cookie_name is invalid")
+	}
+	if cfg.BrowserSignals.Enabled || cfg.DeviceSignals.Enabled {
+		if strings.TrimSpace(cfg.BrowserSignals.JSCookieName) == "" {
+			cfg.BrowserSignals.JSCookieName = "__tukuyomi_bot_js"
+		}
+		if !isValidCookieName(cfg.BrowserSignals.JSCookieName) {
+			return nil, fmt.Errorf("browser_signals.js_cookie_name is invalid")
+		}
+		if cfg.BrowserSignals.JSCookieName == cfg.ChallengeCookieName {
+			return nil, fmt.Errorf("browser_signals.js_cookie_name must differ from challenge_cookie_name")
+		}
 	}
 
 	if cfg.ChallengeTTLSeconds <= 0 {
@@ -354,12 +817,243 @@ func buildBotDefenseRuntimeFromRaw(raw []byte) (*runtimeBotDefenseConfig, error)
 			ScoreThreshold:         cfg.BehavioralDetection.ScoreThreshold,
 			RiskScorePerSignal:     cfg.BehavioralDetection.RiskScorePerSignal,
 		},
+		BrowserSignals: runtimeBotDefenseBrowserSignalsConfig{
+			Enabled:            cfg.BrowserSignals.Enabled,
+			JSCookieName:       cfg.BrowserSignals.JSCookieName,
+			ScoreThreshold:     cfg.BrowserSignals.ScoreThreshold,
+			RiskScorePerSignal: cfg.BrowserSignals.RiskScorePerSignal,
+		},
+		DeviceSignals: runtimeBotDefenseDeviceSignalsConfig{
+			Enabled:                    cfg.DeviceSignals.Enabled,
+			RequireTimeZone:            cfg.DeviceSignals.RequireTimeZone,
+			RequirePlatform:            cfg.DeviceSignals.RequirePlatform,
+			RequireHardwareConcurrency: cfg.DeviceSignals.RequireHardwareConcurrency,
+			CheckMobileTouch:           cfg.DeviceSignals.CheckMobileTouch,
+			InvisibleHTMLInjection:     cfg.DeviceSignals.InvisibleHTMLInjection,
+			InvisibleMaxBodyBytes:      cfg.DeviceSignals.InvisibleMaxBodyBytes,
+			ScoreThreshold:             cfg.DeviceSignals.ScoreThreshold,
+			RiskScorePerSignal:         cfg.DeviceSignals.RiskScorePerSignal,
+		},
+		HeaderSignals: runtimeBotDefenseHeaderSignalsConfig{
+			Enabled:                cfg.HeaderSignals.Enabled,
+			RequireAcceptLanguage:  cfg.HeaderSignals.RequireAcceptLanguage,
+			RequireFetchMetadata:   cfg.HeaderSignals.RequireFetchMetadata,
+			RequireClientHints:     cfg.HeaderSignals.RequireClientHints,
+			RequireUpgradeInsecure: cfg.HeaderSignals.RequireUpgradeInsecure,
+			ScoreThreshold:         cfg.HeaderSignals.ScoreThreshold,
+			RiskScorePerSignal:     cfg.HeaderSignals.RiskScorePerSignal,
+		},
+		TLSSignals: runtimeBotDefenseTLSSignalsConfig{
+			Enabled:            cfg.TLSSignals.Enabled,
+			RequireSNI:         cfg.TLSSignals.RequireSNI,
+			RequireALPN:        cfg.TLSSignals.RequireALPN,
+			RequireModernTLS:   cfg.TLSSignals.RequireModernTLS,
+			ScoreThreshold:     cfg.TLSSignals.ScoreThreshold,
+			RiskScorePerSignal: cfg.TLSSignals.RiskScorePerSignal,
+		},
+		Quarantine: runtimeBotDefenseQuarantineConfig{
+			Enabled:            cfg.Quarantine.Enabled,
+			Threshold:          cfg.Quarantine.Threshold,
+			StrikesRequired:    cfg.Quarantine.StrikesRequired,
+			StrikeWindow:       time.Duration(cfg.Quarantine.StrikeWindowSeconds) * time.Second,
+			TTL:                time.Duration(cfg.Quarantine.TTLSeconds) * time.Second,
+			StatusCode:         cfg.Quarantine.StatusCode,
+			ReputationFeedback: time.Duration(cfg.Quarantine.ReputationFeedbackSeconds) * time.Second,
+		},
+		ChallengeFailureFeedback: runtimeBotDefenseChallengeFailureFeedbackConfig{
+			Enabled:            cfg.ChallengeFailureFeedback.Enabled,
+			ReputationFeedback: time.Duration(cfg.ChallengeFailureFeedback.ReputationFeedback) * time.Second,
+		},
 		CookieName:      cfg.ChallengeCookieName,
 		Secret:          secret,
 		ChallengeTTL:    time.Duration(cfg.ChallengeTTLSeconds) * time.Second,
 		ChallengeStatus: cfg.ChallengeStatusCode,
 		EphemeralSecret: ephemeral,
+		Hosts:           map[string]*runtimeBotDefenseConfig{},
 	}, nil
+}
+
+func decodeBotDefenseConfig(raw []byte) (botDefenseConfig, error) {
+	var cfg botDefenseConfig
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
+		return botDefenseConfig{}, err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return botDefenseConfig{}, fmt.Errorf("invalid json")
+	}
+	return cfg, nil
+}
+
+func decodeBotDefenseJSONObject(raw []byte) (map[string]json.RawMessage, error) {
+	var obj map[string]json.RawMessage
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	if err := dec.Decode(&obj); err != nil {
+		return nil, err
+	}
+	if obj == nil {
+		return nil, fmt.Errorf("bot defense config must be a JSON object")
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("invalid json")
+	}
+	return obj, nil
+}
+
+func decodeBotDefenseObjectValue(raw json.RawMessage, field string) (map[string]any, error) {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return map[string]any{}, nil
+	}
+	var out map[string]any
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	if err := dec.Decode(&out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		return nil, fmt.Errorf("%s must be a JSON object", field)
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("invalid json")
+	}
+	return out, nil
+}
+
+func decodeBotDefenseHosts(raw json.RawMessage) (map[string]json.RawMessage, error) {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return nil, nil
+	}
+	var out map[string]json.RawMessage
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	if err := dec.Decode(&out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		return nil, fmt.Errorf("hosts must be a JSON object")
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("invalid json")
+	}
+	return out, nil
+}
+
+func mergeBotDefenseJSONObject(base, override map[string]any) map[string]any {
+	out := cloneBotDefenseJSONValue(base).(map[string]any)
+	for key, value := range override {
+		out[key] = mergeBotDefenseJSONValue(out[key], value)
+	}
+	return out
+}
+
+func mergeBotDefenseJSONValue(base, override any) any {
+	baseObject, baseOK := base.(map[string]any)
+	overrideObject, overrideOK := override.(map[string]any)
+	if baseOK && overrideOK {
+		return mergeBotDefenseJSONObject(baseObject, overrideObject)
+	}
+	return cloneBotDefenseJSONValue(override)
+}
+
+func cloneBotDefenseJSONValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			out[key] = cloneBotDefenseJSONValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for index, item := range typed {
+			out[index] = cloneBotDefenseJSONValue(item)
+		}
+		return out
+	default:
+		return typed
+	}
+}
+
+func mustMarshalBotDefenseObject(value map[string]any) []byte {
+	raw, _ := json.Marshal(value)
+	return raw
+}
+
+func cloneBotDefenseFile(in botDefenseFile) botDefenseFile {
+	out := botDefenseFile{
+		Default: cloneBotDefenseConfig(in.Default),
+	}
+	if len(in.Hosts) > 0 {
+		out.Hosts = make(map[string]botDefenseConfig, len(in.Hosts))
+		for host, cfg := range in.Hosts {
+			out.Hosts[host] = cloneBotDefenseConfig(cfg)
+		}
+	}
+	return out
+}
+
+func cloneBotDefenseConfig(in botDefenseConfig) botDefenseConfig {
+	out := in
+	out.PathPrefixes = append([]string(nil), in.PathPrefixes...)
+	if len(in.PathPolicies) > 0 {
+		out.PathPolicies = make([]botDefensePathPolicyConfig, len(in.PathPolicies))
+		for index, policy := range in.PathPolicies {
+			next := policy
+			next.PathPrefixes = append([]string(nil), policy.PathPrefixes...)
+			if policy.DryRun != nil {
+				dryRun := *policy.DryRun
+				next.DryRun = &dryRun
+			}
+			out.PathPolicies[index] = next
+		}
+	}
+	out.ExemptCIDRs = append([]string(nil), in.ExemptCIDRs...)
+	out.SuspiciousUserAgents = append([]string(nil), in.SuspiciousUserAgents...)
+	return out
+}
+
+func summarizeBotDefenseFile(file botDefenseFile) botDefenseFeatureSummary {
+	summary := botDefenseFeatureSummary{
+		HostScopeCount: len(file.Hosts),
+	}
+	visit := func(cfg botDefenseConfig) {
+		if cfg.Enabled {
+			summary.Enabled = true
+		}
+		if cfg.DryRun {
+			summary.DryRunEnabled = true
+		}
+		summary.PathPolicyCount += len(cfg.PathPolicies)
+		summary.PathPolicyDryRunCount += countBotDefensePathPoliciesDryRun(cfg)
+		if cfg.BehavioralDetection.Enabled {
+			summary.BehavioralEnabled = true
+		}
+		if cfg.BrowserSignals.Enabled {
+			summary.BrowserSignalsEnabled = true
+		}
+		if cfg.DeviceSignals.Enabled {
+			summary.DeviceSignalsEnabled = true
+		}
+		if cfg.DeviceSignals.Enabled && cfg.DeviceSignals.InvisibleHTMLInjection {
+			summary.DeviceInvisibleEnabled = true
+		}
+		if cfg.HeaderSignals.Enabled {
+			summary.HeaderSignalsEnabled = true
+		}
+		if cfg.TLSSignals.Enabled {
+			summary.TLSSignalsEnabled = true
+		}
+		if cfg.Quarantine.Enabled {
+			summary.QuarantineEnabled = true
+		}
+		if cfg.ChallengeFailureFeedback.Enabled {
+			summary.ChallengeFailureFeedbackOn = true
+		}
+	}
+	visit(file.Default)
+	for _, scope := range file.Hosts {
+		visit(scope)
+	}
+	return summary
 }
 
 func normalizeBotDefenseBehavioralConfig(cfg botDefenseBehavioralConfig) botDefenseBehavioralConfig {
@@ -386,6 +1080,110 @@ func normalizeBotDefenseBehavioralConfig(cfg botDefenseBehavioralConfig) botDefe
 	}
 	if cfg.RiskScorePerSignal <= 0 {
 		cfg.RiskScorePerSignal = 2
+	}
+	return cfg
+}
+
+func normalizeBotDefenseBrowserSignalsConfig(cfg botDefenseBrowserSignalsConfig) botDefenseBrowserSignalsConfig {
+	if !cfg.Enabled {
+		return botDefenseBrowserSignalsConfig{}
+	}
+	cfg.JSCookieName = strings.TrimSpace(cfg.JSCookieName)
+	if cfg.JSCookieName == "" {
+		cfg.JSCookieName = "__tukuyomi_bot_js"
+	}
+	if cfg.ScoreThreshold <= 0 {
+		cfg.ScoreThreshold = 1
+	}
+	if cfg.RiskScorePerSignal <= 0 {
+		cfg.RiskScorePerSignal = 2
+	}
+	return cfg
+}
+
+func normalizeBotDefenseDeviceSignalsConfig(cfg botDefenseDeviceSignalsConfig) botDefenseDeviceSignalsConfig {
+	if !cfg.Enabled {
+		return botDefenseDeviceSignalsConfig{}
+	}
+	if !cfg.RequireTimeZone && !cfg.RequirePlatform && !cfg.RequireHardwareConcurrency && !cfg.CheckMobileTouch {
+		cfg.RequireTimeZone = true
+		cfg.RequirePlatform = true
+		cfg.RequireHardwareConcurrency = true
+		cfg.CheckMobileTouch = true
+	}
+	if cfg.ScoreThreshold <= 0 {
+		cfg.ScoreThreshold = 2
+	}
+	if cfg.RiskScorePerSignal <= 0 {
+		cfg.RiskScorePerSignal = 2
+	}
+	if cfg.InvisibleMaxBodyBytes <= 0 {
+		cfg.InvisibleMaxBodyBytes = defaultBotDefenseInvisibleBodyBytes
+	}
+	return cfg
+}
+
+func normalizeBotDefenseHeaderSignalsConfig(cfg botDefenseHeaderSignalsConfig) botDefenseHeaderSignalsConfig {
+	if !cfg.Enabled {
+		return botDefenseHeaderSignalsConfig{}
+	}
+	if !cfg.RequireAcceptLanguage && !cfg.RequireFetchMetadata && !cfg.RequireClientHints && !cfg.RequireUpgradeInsecure {
+		cfg.RequireAcceptLanguage = true
+		cfg.RequireFetchMetadata = true
+		cfg.RequireClientHints = true
+		cfg.RequireUpgradeInsecure = true
+	}
+	if cfg.ScoreThreshold <= 0 {
+		cfg.ScoreThreshold = 2
+	}
+	if cfg.RiskScorePerSignal <= 0 {
+		cfg.RiskScorePerSignal = 2
+	}
+	return cfg
+}
+
+func normalizeBotDefenseTLSSignalsConfig(cfg botDefenseTLSSignalsConfig) botDefenseTLSSignalsConfig {
+	if !cfg.Enabled {
+		return botDefenseTLSSignalsConfig{}
+	}
+	if !cfg.RequireSNI && !cfg.RequireALPN && !cfg.RequireModernTLS {
+		cfg.RequireSNI = true
+		cfg.RequireALPN = true
+		cfg.RequireModernTLS = true
+	}
+	if cfg.ScoreThreshold <= 0 {
+		cfg.ScoreThreshold = 2
+	}
+	if cfg.RiskScorePerSignal <= 0 {
+		cfg.RiskScorePerSignal = 2
+	}
+	return cfg
+}
+
+func normalizeBotDefenseQuarantineConfig(cfg botDefenseQuarantineConfig) botDefenseQuarantineConfig {
+	if !cfg.Enabled {
+		return botDefenseQuarantineConfig{}
+	}
+	if cfg.Threshold <= 0 {
+		cfg.Threshold = 8
+	}
+	if cfg.StrikesRequired <= 0 {
+		cfg.StrikesRequired = 2
+	}
+	if cfg.StrikeWindowSeconds <= 0 {
+		cfg.StrikeWindowSeconds = 300
+	}
+	if cfg.TTLSeconds <= 0 {
+		cfg.TTLSeconds = 900
+	}
+	if cfg.ReputationFeedbackSeconds < 0 {
+		cfg.ReputationFeedbackSeconds = 0
+	}
+	if cfg.StatusCode == 0 {
+		cfg.StatusCode = http.StatusForbidden
+	}
+	if cfg.StatusCode < 400 || cfg.StatusCode > 599 {
+		cfg.StatusCode = http.StatusForbidden
 	}
 	return cfg
 }
@@ -447,6 +1245,8 @@ func buildRuntimeBotDefensePathPolicies(in []botDefensePathPolicyConfig) []runti
 			DryRun:                     policy.DryRun,
 			RiskScoreMultiplierPercent: policy.RiskScoreMultiplierPercent,
 			RiskScoreOffset:            policy.RiskScoreOffset,
+			TelemetryCookieRequired:    policy.TelemetryCookieRequired,
+			DisableQuarantine:          policy.DisableQuarantine,
 		})
 	}
 	return out
@@ -598,6 +1398,54 @@ func hasValidBotDefenseCookie(rt *runtimeBotDefenseConfig, r *http.Request, ip, 
 	return verifyBotDefenseToken(rt, c.Value, ip, userAgent, now)
 }
 
+func botDefenseChallengeCookieState(rt *runtimeBotDefenseConfig, r *http.Request, ip, userAgent string, now time.Time) string {
+	if rt == nil || r == nil {
+		return botDefenseCookieStateMissing
+	}
+	c, err := r.Cookie(rt.CookieName)
+	if err != nil {
+		return botDefenseCookieStateMissing
+	}
+	if verifyBotDefenseToken(rt, c.Value, ip, userAgent, now) {
+		return botDefenseCookieStateValid
+	}
+	return botDefenseCookieStateInvalid
+}
+
+func hasBotDefenseTelemetryCookie(rt *runtimeBotDefenseConfig, r *http.Request) bool {
+	if rt == nil || r == nil {
+		return false
+	}
+	cookieName := botDefenseTelemetryCookieName(rt)
+	if cookieName == "" {
+		return false
+	}
+	c, err := r.Cookie(cookieName)
+	if err != nil {
+		return false
+	}
+	_, ok := parseBotDefenseBrowserSignalCookie(c.Value)
+	return ok
+}
+
+func botDefenseTelemetryCookieState(rt *runtimeBotDefenseConfig, r *http.Request) string {
+	if rt == nil || r == nil {
+		return botDefenseCookieStateMissing
+	}
+	cookieName := botDefenseTelemetryCookieName(rt)
+	if cookieName == "" {
+		return botDefenseCookieStateMissing
+	}
+	c, err := r.Cookie(cookieName)
+	if err != nil {
+		return botDefenseCookieStateMissing
+	}
+	if _, ok := parseBotDefenseBrowserSignalCookie(c.Value); ok {
+		return botDefenseCookieStateValid
+	}
+	return botDefenseCookieStateInvalid
+}
+
 func matchedBotDefensePathPolicy(policies []runtimeBotDefensePathPolicy, reqPath string) *runtimeBotDefensePathPolicy {
 	if len(policies) == 0 {
 		return nil
@@ -623,6 +1471,25 @@ func matchedBotDefensePolicyName(policy *runtimeBotDefensePathPolicy) string {
 		return ""
 	}
 	return policy.Name
+}
+
+func maxBotDefenseRiskWeight(rt *runtimeBotDefenseConfig) int {
+	if rt == nil {
+		return 2
+	}
+	maxScore := 2
+	for _, candidate := range []int{
+		rt.Behavioral.RiskScorePerSignal,
+		rt.BrowserSignals.RiskScorePerSignal,
+		rt.DeviceSignals.RiskScorePerSignal,
+		rt.HeaderSignals.RiskScorePerSignal,
+		rt.TLSSignals.RiskScorePerSignal,
+	} {
+		if candidate > maxScore {
+			maxScore = candidate
+		}
+	}
+	return maxScore
 }
 
 func applyBotDefensePathPolicyRisk(riskScore int, policy *runtimeBotDefensePathPolicy) int {
@@ -651,14 +1518,6 @@ func countBotDefensePathPoliciesDryRun(cfg botDefenseConfig) int {
 		}
 	}
 	return count
-}
-
-func acceptsHTML(rawAccept string) bool {
-	v := strings.ToLower(strings.TrimSpace(rawAccept))
-	if v == "" {
-		return false
-	}
-	return strings.Contains(v, "text/html") || strings.Contains(v, "*/*")
 }
 
 func pathMatchesAnyPrefix(prefixes []string, path string) bool {
@@ -703,7 +1562,9 @@ func ensureBotDefenseFile(path string) error {
     "wget",
     "python-requests",
     "python-urllib",
+    "python-httpx",
     "go-http-client",
+    "aiohttp",
     "libwww-perl",
     "scrapy",
     "headless",
@@ -715,6 +1576,10 @@ func ensureBotDefenseFile(path string) error {
     "nmap",
     "masscan"
   ],
+  "challenge_cookie_name": "__tukuyomi_bot_ok",
+  "challenge_secret": "",
+  "challenge_ttl_seconds": 21600,
+  "challenge_status_code": 429,
   "behavioral_detection": {
     "enabled": false,
     "window_seconds": 60,
@@ -725,11 +1590,50 @@ func ensureBotDefenseFile(path string) error {
     "score_threshold": 2,
     "risk_score_per_signal": 2
   },
-  "challenge_cookie_name": "__tukuyomi_bot_ok",
-  "challenge_secret": "",
-  "challenge_ttl_seconds": 21600,
-  "challenge_status_code": 429
+  "browser_signals": {
+    "enabled": false,
+    "js_cookie_name": "__tukuyomi_bot_js",
+    "score_threshold": 1,
+    "risk_score_per_signal": 2
+  },
+  "device_signals": {
+    "enabled": false,
+    "require_time_zone": true,
+    "require_platform": true,
+    "require_hardware_concurrency": true,
+    "check_mobile_touch": true,
+    "invisible_html_injection": false,
+    "invisible_max_body_bytes": 262144,
+    "score_threshold": 2,
+    "risk_score_per_signal": 2
+  },
+  "header_signals": {
+    "enabled": false,
+    "require_accept_language": true,
+    "require_fetch_metadata": true,
+    "require_client_hints": true,
+    "require_upgrade_insecure_requests": true,
+    "score_threshold": 2,
+    "risk_score_per_signal": 2
+  },
+  "tls_signals": {
+    "enabled": false,
+    "require_sni": true,
+    "require_alpn": true,
+    "require_modern_tls": true,
+    "score_threshold": 2,
+    "risk_score_per_signal": 2
+  },
+  "quarantine": {
+    "enabled": false,
+    "threshold": 8,
+    "strikes_required": 2,
+    "strike_window_seconds": 300,
+    "ttl_seconds": 900,
+    "status_code": 403,
+    "reputation_feedback_seconds": 0
+  }
 }
-`
+	`
 	return os.WriteFile(path, []byte(defaultRaw), 0o644)
 }

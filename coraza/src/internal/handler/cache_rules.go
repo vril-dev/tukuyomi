@@ -10,21 +10,25 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"tukuyomi/internal/cacheconf"
+	"tukuyomi/internal/config"
 )
 
 const (
-	cacheConfPath      = "conf/cache.conf"
-	cacheConfigBlobKey = "cache_rules"
+	cacheConfPath       = config.DefaultCacheRulesFilePath
+	legacyCacheConfPath = config.LegacyDefaultCacheRulesPath
+	cacheConfigBlobKey  = "cache_rules"
 )
 
 type crPutBody struct {
 	RawMode bool                `json:"rawMode"`
 	Raw     string              `json:"raw"`
-	Rules   []cacheconf.RuleDTO `json:"rules"`
+	Rules   cacheconf.RulesFile `json:"rules"`
 }
 
 func GetCacheRules(c *gin.Context) {
-	raw, _ := os.ReadFile(cacheConfPath)
+	readPath := config.ResolveReadablePolicyPath(cacheConfPath, legacyCacheConfPath)
+	raw, _ := os.ReadFile(readPath)
+	savedAt := fileSavedAt(readPath)
 	if store := getLogsStatsStore(); store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(cacheConfigBlobKey)
 		if err != nil {
@@ -42,10 +46,13 @@ func GetCacheRules(c *gin.Context) {
 				if strings.TrimSpace(dbETag) == "" {
 					dbETag = cacheconf.ComputeETag(dbRaw)
 				}
+				normalizedRaw, _ := cacheconf.RulesetToJSON(rsDB)
+				savedAt = configBlobSavedAt(store, cacheConfigBlobKey)
 				c.JSON(http.StatusOK, cacheconf.RulesDTO{
-					ETag:  dbETag,
-					Raw:   string(dbRaw),
-					Rules: cacheconf.ToDTO(rsDB),
+					ETag:    dbETag,
+					Raw:     string(normalizedRaw),
+					Rules:   cacheconf.ToDTO(rsDB),
+					SavedAt: savedAt,
 				})
 				return
 			}
@@ -58,9 +65,10 @@ func GetCacheRules(c *gin.Context) {
 
 	rs := cacheconf.Get()
 	dto := cacheconf.RulesDTO{
-		ETag:  cacheconf.ComputeETag(raw),
-		Raw:   string(raw),
-		Rules: cacheconf.ToDTO(rs),
+		ETag:    cacheconf.ComputeETag(raw),
+		Raw:     string(mustCacheRulesJSON(rs)),
+		Rules:   cacheconf.ToDTO(rs),
+		SavedAt: savedAt,
 	}
 
 	c.JSON(http.StatusOK, dto)
@@ -98,7 +106,7 @@ func ValidateCacheRules(c *gin.Context) {
 
 func PutCacheRules(c *gin.Context) {
 	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(cacheConfPath)
+	curRaw, _ := os.ReadFile(config.ResolveReadablePolicyPath(cacheConfPath, legacyCacheConfPath))
 	curETag := cacheconf.ComputeETag(curRaw)
 	if ifMatch != "" && ifMatch != curETag {
 		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
@@ -113,12 +121,17 @@ func PutCacheRules(c *gin.Context) {
 
 	var outBytes []byte
 	if in.RawMode {
-		if _, err := cacheconf.LoadFromBytes([]byte(in.Raw)); err != nil {
+		rs, err := cacheconf.LoadFromBytes([]byte(in.Raw))
+		if err != nil {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 			return
 		}
 
-		outBytes = []byte(in.Raw)
+		outBytes, err = cacheconf.RulesetToJSON(rs)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	} else {
 		rs, errs := cacheconf.FromDTO(in.Rules)
 		if len(errs) > 0 {
@@ -130,15 +143,12 @@ func PutCacheRules(c *gin.Context) {
 			return
 		}
 
-		header := []string{
-			"# cache.conf - Tukuyomi Cache Rules",
-			"# Top-down evaluation; first match wins.",
-			"# Syntax: ALLOW|DENY prefix=...|regex=...|exact=... methods=GET,HEAD ttl=<sec> vary=Header,Header",
-			"",
+		var err error
+		outBytes, err = cacheconf.RulesetToJSON(rs)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
 		}
-		lines := cacheconf.RulesetToLines(rs)
-		out := append(header, lines...)
-		outBytes = []byte(strings.Join(out, "\n") + "\n")
 	}
 
 	if err := cacheconf.AtomicWriteWithBackup(cacheConfPath, outBytes); err != nil {
@@ -146,9 +156,10 @@ func PutCacheRules(c *gin.Context) {
 		return
 	}
 
+	now := time.Now().UTC()
 	newETag := cacheconf.ComputeETag(outBytes)
 	if store := getLogsStatsStore(); store != nil {
-		if err := store.UpsertConfigBlob(cacheConfigBlobKey, outBytes, newETag, time.Now().UTC()); err != nil {
+		if err := store.UpsertConfigBlob(cacheConfigBlobKey, outBytes, newETag, now); err != nil {
 			rollbackErr := cacheconf.AtomicWriteWithBackup(cacheConfPath, curRaw)
 			if rollbackErr != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{
@@ -166,9 +177,15 @@ func PutCacheRules(c *gin.Context) {
 		}
 	}
 
-	InvalidateResponseCache()
+	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": newETag, "saved_at": now.Format(time.RFC3339Nano)})
+}
 
-	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": newETag})
+func mustCacheRulesJSON(rs *cacheconf.Ruleset) []byte {
+	out, err := cacheconf.RulesetToJSON(rs)
+	if err != nil {
+		return []byte("{\n  \"default\": {\n    \"rules\": []\n  }\n}\n")
+	}
+	return out
 }
 
 func SyncCacheRulesStorage() error {

@@ -1,5 +1,5 @@
 [Unit]
-Description=tukuyomi WAF
+Description=tukuyomi
 After=network-online.target
 Wants=network-online.target
 
@@ -10,8 +10,12 @@ Group=tukuyomi
 WorkingDirectory=/opt/tukuyomi
 EnvironmentFile=/etc/tukuyomi/tukuyomi.env
 ExecStart=/opt/tukuyomi/bin/tukuyomi
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 Restart=always
 RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=35
 NoNewPrivileges=true
 LimitNOFILE=65535
 

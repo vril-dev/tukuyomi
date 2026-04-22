@@ -1,0 +1,11 @@
+[Unit]
+Description=tukuyomi public TCP socket
+
+[Socket]
+ListenStream=9090
+FileDescriptorName=public
+NoDelay=true
+Service=tukuyomi.service
+
+[Install]
+WantedBy=sockets.target

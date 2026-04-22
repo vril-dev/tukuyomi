@@ -9,8 +9,17 @@ const (
 )
 
 type Entry struct {
-	Path      string
-	ExtraRule string
+	Path      string `json:"path"`
+	ExtraRule string `json:"extra_rule,omitempty"`
+}
+
+type Scope struct {
+	Entries []Entry `json:"entries"`
+}
+
+type File struct {
+	Default Scope            `json:"default"`
+	Hosts   map[string]Scope `json:"hosts,omitempty"`
 }
 
 type MatchResult struct {

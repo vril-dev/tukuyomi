@@ -1,0 +1,10 @@
+scrape_configs:
+  - job_name: tukuyomi
+    metrics_path: /tukuyomi-api/metrics
+    scheme: https
+    static_configs:
+      - targets:
+          - proxy.example.com
+    authorization:
+      type: Bearer
+      credentials: replace-with-admin-api-key

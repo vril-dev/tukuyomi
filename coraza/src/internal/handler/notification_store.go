@@ -876,7 +876,7 @@ func ensureNotificationFile(path string) error {
     "window_seconds": 300,
     "active_threshold": 20,
     "escalated_threshold": 100,
-    "sources": ["waf_block", "rate_limited", "semantic_anomaly", "bot_challenge", "ip_reputation"]
+    "sources": ["waf_block", "rate_limited", "semantic_anomaly", "bot_challenge"]
   }
 }
 `

@@ -1,0 +1,13 @@
+[Unit]
+Description=tukuyomi scheduled task runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=tukuyomi
+Group=tukuyomi
+WorkingDirectory=/opt/tukuyomi
+EnvironmentFile=/etc/tukuyomi/tukuyomi.env
+ExecStart=/opt/tukuyomi/bin/tukuyomi run-scheduled-tasks
+NoNewPrivileges=true

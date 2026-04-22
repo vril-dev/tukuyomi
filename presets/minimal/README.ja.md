@@ -1,13 +1,13 @@
 [English](README.md) | [日本語](README.ja.md)
 
-# [web] minimal preset
+# [proxy] minimal preset
 
-この preset は、`nginx + coraza` の背後に 1 つの upstream app を置く最小の local WAF stack を使いたい時に使います。
+この preset は、embedded admin UI と 1 つの default upstream を custom route rule なしで使いたい時に使います。
 
 最初に実運用で使う前に、次を変更してください。
-- `WAF_APP_URL`
-- `WAF_API_KEY_PRIMARY`
-- `WAF_ADMIN_SESSION_SECRET`
+- `.env` の API key 値
+- admin API を公開する場合は `config.json` の admin trusted CIDR
+- upstream target と必要な protected host routing は `proxy.json`
 
 適用と検証:
 

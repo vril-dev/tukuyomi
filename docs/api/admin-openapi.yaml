@@ -7,20 +7,19 @@ info:
 
     The default admin API base path is `/tukuyomi-api`. It can be changed by configuration,
     so treat these paths as the default contract.
-
-    Browser-driven admin traffic can exchange a server-side admin API key for a
-    same-origin session by calling `/tukuyomi-api/auth/login`. After login,
-    read-only admin calls can use the `tukuyomi_admin_session` cookie. State-changing
-    admin calls can use either `X-API-Key` or the same-origin session flow, but
-    session-authenticated writes must also send `X-CSRF-Token` matching the
-    `tukuyomi_admin_csrf` cookie.
 servers:
   - url: /
-security:
+security: &AdminReadSecurity
   - ApiKeyAuth: []
   - AdminSessionCookie: []
+x-admin-write-security: &AdminWriteSecurity
+  - ApiKeyAuth: []
+  - AdminSessionCookie: []
+    AdminCSRFCookie: []
+    AdminCSRFHeader: []
 tags:
   - name: auth
+  - name: discovery
   - name: status
   - name: logs
   - name: waf
@@ -33,45 +32,52 @@ tags:
   - name: ip-reputation
   - name: bot-defense
   - name: semantic
+  - name: proxy-routing
+  - name: backends
+  - name: sites
   - name: verify
   - name: fp-tuner
 paths:
-  /tukuyomi-api/auth/session:
+  /tukuyomi-api/:
     get:
-      tags: [auth]
-      security: []
-      summary: Get the current browser admin session state
-      description: |
-        This endpoint is intentionally callable without `X-API-Key`.
-
-        When the request carries a valid `tukuyomi_admin_session` cookie, the
-        response reports the active session and may refresh the
-        `tukuyomi_admin_csrf` cookie. Otherwise it returns `authenticated: false`.
+      tags: [discovery]
+      summary: Get API discovery metadata
       responses:
         '200':
-          description: Session status for the current browser context
-          headers:
-            Set-Cookie:
-              description: |
-                May refresh the `tukuyomi_admin_csrf` cookie for an active session.
-              schema:
-                type: string
+          description: Endpoint listing
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AdminSessionResponse'
+                $ref: '#/components/schemas/RootDiscoveryResponse'
+
+  /tukuyomi-api/auth/session:
+    get:
+      tags: [auth]
+      summary: Inspect current browser admin session state
+      description: |
+        Returns the current browser session state. This endpoint is intentionally callable
+        without prior authentication so the embedded admin UI can detect whether login is
+        required. When a valid session cookie is present, the response includes the current
+        expiry and CSRF header/cookie names.
+      security: []
+      responses:
+        '200':
+          description: Session state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminSessionStateResponse'
 
   /tukuyomi-api/auth/login:
     post:
       tags: [auth]
-      security: []
-      summary: Exchange an admin API key for a same-origin admin session
+      summary: Exchange an admin API key for a signed browser session
       description: |
-        Supply `api_key` in the JSON body. On success the server sets both
-        `tukuyomi_admin_session` and `tukuyomi_admin_csrf` cookies.
-
-        This endpoint is intended for browser login flows. Non-browser
-        automation can keep using `X-API-Key` directly on admin endpoints.
+        This endpoint accepts an admin API key in the JSON body and sets
+        `tukuyomi_admin_session` and `tukuyomi_admin_csrf` cookies for the browser.
+        Use this for interactive UI sign-in. CLI and automation clients may continue to
+        call protected endpoints directly with `X-API-Key`.
+      security: []
       requestBody:
         required: true
         content:
@@ -80,11 +86,10 @@ paths:
               $ref: '#/components/schemas/AdminLoginRequest'
       responses:
         '200':
-          description: Admin session issued successfully
+          description: Admin session issued
           headers:
             Set-Cookie:
-              description: |
-                Sets the `tukuyomi_admin_session` and `tukuyomi_admin_csrf` cookies.
+              description: Sets `tukuyomi_admin_session` and `tukuyomi_admin_csrf` cookies.
               schema:
                 type: string
           content:
@@ -101,21 +106,25 @@ paths:
   /tukuyomi-api/auth/logout:
     post:
       tags: [auth]
-      security: []
-      summary: Clear the current browser admin session cookies
+      summary: Clear the current browser admin session
       description: |
-        This endpoint always clears admin auth cookies.
-
-        If the request carries a valid `tukuyomi_admin_session` cookie, the
-        caller must also send `X-CSRF-Token` matching the
-        `tukuyomi_admin_csrf` cookie. Otherwise the server returns `403`.
+        Browser callers should send the current session cookie plus the matching
+        `X-CSRF-Token` header. API-key callers may also use this endpoint to clear cookies
+        in a deterministic way during smoke tests.
+      security: *AdminWriteSecurity
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
       responses:
         '200':
-          description: Admin session cookies cleared
+          description: Admin session cleared
           headers:
             Set-Cookie:
-              description: |
-                Clears the `tukuyomi_admin_session` and `tukuyomi_admin_csrf` cookies.
+              description: Clears `tukuyomi_admin_session` and `tukuyomi_admin_csrf` cookies.
               schema:
                 type: string
           content:
@@ -166,7 +175,7 @@ paths:
       tags: [logs]
       summary: Read log entries with cursor-based pagination
       parameters:
-        - $ref: '#/components/parameters/WebLogSource'
+        - $ref: '#/components/parameters/LogSource'
         - $ref: '#/components/parameters/TailQuery'
         - $ref: '#/components/parameters/DirQuery'
         - $ref: '#/components/parameters/CursorQuery'
@@ -180,6 +189,68 @@ paths:
                 $ref: '#/components/schemas/LogsReadResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tukuyomi-api/logs/security-audit:
+    get:
+      tags: [logs]
+      summary: Read signed request-level security audit entries by req_id
+      parameters:
+        - name: req_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Security audit entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdditionalPropertiesObject'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tukuyomi-api/logs/security-audit/verify:
+    get:
+      tags: [logs]
+      summary: Verify chained HMAC integrity for the retained security audit stream
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdditionalPropertiesObject'
+
+  /tukuyomi-api/logs/security-audit/evidence/{capture_id}/metadata:
+    get:
+      tags: [logs]
+      summary: Read encrypted evidence metadata without exposing raw request payloads
+      parameters:
+        - name: capture_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Evidence metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdditionalPropertiesObject'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Capture metadata not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdditionalPropertiesObject'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -206,10 +277,8 @@ paths:
     get:
       tags: [logs]
       summary: Download matching log lines as gzipped NDJSON
-      description: |
-        Response body is NDJSON and the implementation sets `Content-Encoding: gzip`.
       parameters:
-        - $ref: '#/components/parameters/WebLogSource'
+        - $ref: '#/components/parameters/LogSource'
         - $ref: '#/components/parameters/FromQuery'
         - $ref: '#/components/parameters/ToQuery'
         - $ref: '#/components/parameters/CountryQuery'
@@ -238,11 +307,7 @@ paths:
     put:
       tags: [waf]
       summary: Save one editable WAF rule file and hot-reload
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -271,11 +336,7 @@ paths:
     post:
       tags: [waf]
       summary: Validate one editable WAF rule file without saving
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       requestBody:
         required: true
         content:
@@ -308,11 +369,7 @@ paths:
     put:
       tags: [crs]
       summary: Save CRS rule-set selection and hot-reload
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -341,11 +398,7 @@ paths:
     post:
       tags: [crs]
       summary: Validate CRS rule-set selection without saving
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       requestBody:
         required: true
         content:
@@ -378,11 +431,7 @@ paths:
     put:
       tags: [bypass]
       summary: Save bypass rules
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -411,11 +460,7 @@ paths:
     post:
       tags: [bypass]
       summary: Validate bypass rules without saving
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       requestBody:
         required: true
         content:
@@ -448,11 +493,7 @@ paths:
     put:
       tags: [cache]
       summary: Save cache rules
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -481,11 +522,7 @@ paths:
     post:
       tags: [cache]
       summary: Validate cache rules without saving
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       requestBody:
         required: true
         content:
@@ -504,6 +541,88 @@ paths:
         '422':
           $ref: '#/components/responses/Unprocessable'
 
+  /tukuyomi-api/cache-store:
+    get:
+      tags: [cache]
+      summary: Get internal response cache store configuration and stats
+      responses:
+        '200':
+          description: Current cache store settings and runtime counters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericConfigResponse'
+    put:
+      tags: [cache]
+      summary: Save internal response cache store configuration
+      security: *AdminWriteSecurity
+      parameters:
+        - $ref: '#/components/parameters/IfMatchHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CacheStoreRequest'
+      responses:
+        '200':
+          description: Updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tukuyomi-api/cache-store/validate:
+    post:
+      tags: [cache]
+      summary: Validate internal response cache store configuration without saving
+      security: *AdminWriteSecurity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RawRequest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /tukuyomi-api/cache-store/clear:
+    post:
+      tags: [cache]
+      summary: Clear all cached bodies and metadata
+      security: *AdminWriteSecurity
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        '200':
+          description: Cache cleared
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdditionalPropertiesObject'
+
   /tukuyomi-api/country-block-rules:
     get:
       tags: [country-block]
@@ -518,11 +637,7 @@ paths:
     put:
       tags: [country-block]
       summary: Save country block rules
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -551,11 +666,7 @@ paths:
     post:
       tags: [country-block]
       summary: Validate country block rules without saving
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       requestBody:
         required: true
         content:
@@ -588,11 +699,7 @@ paths:
     put:
       tags: [rate-limit]
       summary: Save rate-limit rules
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -621,11 +728,7 @@ paths:
     post:
       tags: [rate-limit]
       summary: Validate rate-limit rules without saving
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       requestBody:
         required: true
         content:
@@ -658,11 +761,7 @@ paths:
     put:
       tags: [notifications]
       summary: Save notification configuration
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -703,11 +802,7 @@ paths:
     post:
       tags: [notifications]
       summary: Validate notification configuration without saving
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       requestBody:
         required: true
         content:
@@ -730,11 +825,7 @@ paths:
     post:
       tags: [notifications]
       summary: Send a test notification using the current runtime configuration
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       requestBody:
         required: false
         content:
@@ -765,11 +856,7 @@ paths:
     put:
       tags: [ip-reputation]
       summary: Save IP reputation configuration
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -798,11 +885,7 @@ paths:
     post:
       tags: [ip-reputation]
       summary: Validate IP reputation configuration without saving
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       requestBody:
         required: true
         content:
@@ -835,11 +918,7 @@ paths:
     put:
       tags: [bot-defense]
       summary: Save bot defense configuration
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -868,11 +947,7 @@ paths:
     post:
       tags: [bot-defense]
       summary: Validate bot defense configuration without saving
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       requestBody:
         required: true
         content:
@@ -905,11 +980,7 @@ paths:
     put:
       tags: [semantic]
       summary: Save semantic security configuration
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -938,11 +1009,7 @@ paths:
     post:
       tags: [semantic]
       summary: Validate semantic security configuration without saving
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       requestBody:
         required: true
         content:
@@ -961,15 +1028,345 @@ paths:
         '422':
           $ref: '#/components/responses/Unprocessable'
 
+  /tukuyomi-api/proxy-rules:
+    get:
+      tags: [proxy-routing]
+      summary: Get proxy routing and transport configuration
+      description: Routes normally bind to route-scoped `backend_pools[]` built from named `upstreams[]`. `action.upstream` accepts configured upstream names only.
+      responses:
+        '200':
+          description: Current proxy configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericConfigResponse'
+    put:
+      tags: [proxy-routing]
+      summary: Save proxy routing and transport configuration
+      description: Routes normally bind to route-scoped `backend_pools[]` built from named `upstreams[]`. `action.upstream` accepts configured upstream names only.
+      security: *AdminWriteSecurity
+      parameters:
+        - $ref: '#/components/parameters/IfMatchRequiredHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RawRequest'
+      responses:
+        '200':
+          description: Updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+
+  /tukuyomi-api/proxy-rules/audit:
+    get:
+      tags: [proxy-routing]
+      summary: Read recent proxy configuration audit entries
+      responses:
+        '200':
+          description: Audit entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdditionalPropertiesObject'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /tukuyomi-api/proxy-rules/validate:
+    post:
+      tags: [proxy-routing]
+      summary: Validate proxy routing and transport configuration without saving
+      description: Routes normally bind to route-scoped `backend_pools[]` built from named `upstreams[]`. `action.upstream` accepts configured upstream names only.
+      security: *AdminWriteSecurity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RawRequest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /tukuyomi-api/proxy-rules/probe:
+    post:
+      tags: [proxy-routing]
+      summary: Probe the active upstream target
+      security: *AdminWriteSecurity
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProxyProbeRequest'
+      responses:
+        '200':
+          description: Probe succeeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdditionalPropertiesObject'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '503':
+          description: Probe failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdditionalPropertiesObject'
+
+  /tukuyomi-api/proxy-rules/dry-run:
+    post:
+      tags: [proxy-routing]
+      summary: Resolve host and path to the selected route without sending traffic
+      description: The dry-run result includes the selected backend reference and resolved final URL. `action.backend_pool` selection is scoped to the current pool members, while `action.upstream` still resolves through the named upstream inventory or a direct absolute URL.
+      security: *AdminWriteSecurity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProxyDryRunRequest'
+      responses:
+        '200':
+          description: Dry-run result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdditionalPropertiesObject'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /tukuyomi-api/proxy-rules/rollback-preview:
+    get:
+      tags: [proxy-routing]
+      summary: Preview the snapshot used by proxy rollback
+      responses:
+        '200':
+          description: Rollback preview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdditionalPropertiesObject'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /tukuyomi-api/proxy-rules/rollback:
+    post:
+      tags: [proxy-routing]
+      summary: Restore the previous proxy configuration snapshot
+      security: *AdminWriteSecurity
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        '200':
+          description: Rollback applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdditionalPropertiesObject'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /tukuyomi-api/proxy-backends:
+    get:
+      tags: [backends]
+      summary: Get canonical backend object status and direct-upstream runtime overrides
+      responses:
+        '200':
+          description: Backend runtime snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyBackendsResponse'
+
+  /tukuyomi-api/proxy-backends/{backend_key}/runtime-override:
+    put:
+      tags: [backends]
+      summary: Set runtime admin state and/or weight override for one direct named upstream node
+      security: *AdminWriteSecurity
+      parameters:
+        - $ref: '#/components/parameters/BackendKeyPath'
+        - $ref: '#/components/parameters/IfMatchRequiredHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProxyBackendRuntimeOverrideRequest'
+      responses:
+        '200':
+          description: Updated runtime snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyBackendsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Backend key not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+    delete:
+      tags: [backends]
+      summary: Clear runtime override for one direct named upstream node
+      security: *AdminWriteSecurity
+      parameters:
+        - $ref: '#/components/parameters/BackendKeyPath'
+        - $ref: '#/components/parameters/IfMatchRequiredHeader'
+      responses:
+        '200':
+          description: Updated runtime snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyBackendsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Backend key not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+
+  /tukuyomi-api/sites:
+    get:
+      tags: [sites]
+      summary: Get first-class site configuration and current TLS coverage status
+      responses:
+        '200':
+          description: Current site configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericConfigResponse'
+    put:
+      tags: [sites]
+      summary: Save first-class site configuration
+      security: *AdminWriteSecurity
+      parameters:
+        - $ref: '#/components/parameters/IfMatchRequiredHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RawRequest'
+      responses:
+        '200':
+          description: Updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+
+  /tukuyomi-api/sites/validate:
+    post:
+      tags: [sites]
+      summary: Validate first-class site configuration without saving
+      security: *AdminWriteSecurity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RawRequest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /tukuyomi-api/sites/rollback:
+    post:
+      tags: [sites]
+      summary: Restore the previous site configuration snapshot
+      security: *AdminWriteSecurity
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        '200':
+          description: Rollback applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdditionalPropertiesObject'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
   /tukuyomi-api/fp-tuner/propose:
     post:
       tags: [fp-tuner]
       summary: Propose a scoped false-positive tuning rule
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       requestBody:
         required: false
         content:
@@ -988,45 +1385,11 @@ paths:
         '422':
           $ref: '#/components/responses/Unprocessable'
 
-  /tukuyomi-api/fp-tuner/recent-waf-blocks:
-    get:
-      tags: [fp-tuner]
-      summary: Return recent waf_block rows for the FP tuner picker
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
-      parameters:
-        - in: query
-          name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
-          description: Maximum number of recent waf_block rows to return.
-      responses:
-        '200':
-          description: Recent waf_block rows
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AdditionalPropertiesObject'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '500':
-          $ref: '#/components/responses/InternalError'
-
   /tukuyomi-api/fp-tuner/apply:
     post:
       tags: [fp-tuner]
       summary: Validate or apply a scoped false-positive tuning rule
-      security:
-        - ApiKeyAuth: []
-        - AdminSessionCookie: []
-          AdminCSRFCookie: []
-          AdminCSRFHeader: []
+      security: *AdminWriteSecurity
       parameters:
         - $ref: '#/components/parameters/IfMatchHeader'
       requestBody:
@@ -1056,45 +1419,47 @@ components:
       type: apiKey
       in: header
       name: X-API-Key
-      description: |
-        Header-based admin credential for CLI, automation, and non-browser
-        callers.
     AdminSessionCookie:
       type: apiKey
       in: cookie
       name: tukuyomi_admin_session
-      description: |
-        Same-origin browser session cookie issued by `/tukuyomi-api/auth/login`.
-        Read-only admin requests can use this cookie without `X-API-Key`.
+      description: Signed browser admin session cookie issued by `/tukuyomi-api/auth/login`.
     AdminCSRFCookie:
       type: apiKey
       in: cookie
       name: tukuyomi_admin_csrf
-      description: |
-        CSRF cookie paired with `tukuyomi_admin_session`. State-changing admin
-        requests validate this cookie against `X-CSRF-Token`.
+      description: CSRF cookie paired with `tukuyomi_admin_session`.
     AdminCSRFHeader:
       type: apiKey
       in: header
       name: X-CSRF-Token
-      description: |
-        Required on state-changing admin requests when authenticating with the
-        session-cookie flow.
+      description: CSRF header required for cookie-authenticated non-safe requests.
   parameters:
     IfMatchHeader:
       name: If-Match
       in: header
       required: false
-      description: Optimistic concurrency token returned as `etag` from a prior GET.
       schema:
         type: string
-    WebLogSource:
+    IfMatchRequiredHeader:
+      name: If-Match
+      in: header
+      required: true
+      schema:
+        type: string
+    BackendKeyPath:
+      name: backend_key
+      in: path
+      required: true
+      schema:
+        type: string
+    LogSource:
       name: src
       in: query
       required: true
       schema:
         type: string
-        enum: [waf, accerr, intr]
+        enum: [waf]
     TailQuery:
       name: tail
       in: query
@@ -1140,7 +1505,6 @@ components:
       name: from
       in: query
       required: false
-      description: RFC3339 timestamp.
       schema:
         type: string
         format: date-time
@@ -1148,7 +1512,6 @@ components:
       name: to
       in: query
       required: false
-      description: RFC3339 timestamp.
       schema:
         type: string
         format: date-time
@@ -1160,13 +1523,13 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     Unauthorized:
-      description: Missing or invalid admin credentials
+      description: Authentication required or provided credentials are invalid
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     Forbidden:
-      description: CSRF validation failed or the current action is not allowed
+      description: Request was authenticated but failed CSRF validation or a similar guard
       content:
         application/json:
           schema:
@@ -1177,6 +1540,12 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ConflictResponse'
+    PreconditionRequired:
+      description: Required precondition header is missing
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     Unprocessable:
       description: Validation failed
       content:
@@ -1231,7 +1600,6 @@ components:
         ok:
           type: boolean
       required: [ok]
-      additionalProperties: true
     AdminLoginRequest:
       type: object
       properties:
@@ -1239,12 +1607,28 @@ components:
           type: string
       required: [api_key]
       additionalProperties: false
-    AdminSessionResponse:
+    AdminLoginResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        authenticated:
+          type: boolean
+        mode:
+          type: string
+          enum: [session, disabled]
+        expires_at:
+          type: string
+          format: date-time
+        csrf_cookie_name:
+          type: string
+        csrf_header_name:
+          type: string
+      additionalProperties: true
+    AdminSessionStateResponse:
       type: object
       properties:
         authenticated:
-          type: boolean
-        ok:
           type: boolean
         mode:
           type: string
@@ -1264,23 +1648,25 @@ components:
           type: boolean
         cookie_secure_now:
           type: boolean
-      required: [authenticated, mode, csrf_header_name]
       additionalProperties: true
-    AdminLoginResponse:
-      allOf:
-        - $ref: '#/components/schemas/AdminSessionResponse'
-        - type: object
-          properties:
-            ok:
-              type: boolean
-          required: [ok]
+    RootDiscoveryResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        endpoints:
+          type: array
+          items:
+            type: string
+      additionalProperties: true
     StatusResponse:
       type: object
       additionalProperties: true
       description: |
-        Runtime status object. Includes top-level fields such as `status`, configured file paths,
-        rate-limit state, notification counters, IP reputation state, semantic counters, DB state,
-        and the effective admin API base path.
+        Runtime status object. Includes WAF state, proxy routing and health state, TLS/ACME
+        state, optional client-facing HTTP/3 advertisement state, notification counters,
+        IP reputation state, semantic counters, cache-store stats, client-facing response
+        compression state, and storage backend metadata.
     RulesFilesResponse:
       type: object
       properties:
@@ -1311,6 +1697,102 @@ components:
         raw:
           type: string
       additionalProperties: true
+    ProxyBackendStatus:
+      type: object
+      properties:
+        key:
+          type: string
+        name:
+          type: string
+        url:
+          type: string
+        provider_class:
+          type: string
+          enum: [direct, vhost_managed]
+        managed_by_vhost:
+          type: string
+        runtime_ops_supported:
+          type: boolean
+        http2_mode:
+          type: string
+        admin_state:
+          type: string
+          enum: [enabled, draining, disabled]
+        health_state:
+          type: string
+          enum: [unknown, healthy, unhealthy]
+        configured_weight:
+          type: integer
+        weight_override:
+          type: integer
+        effective_weight:
+          type: integer
+        effective_selectable:
+          type: boolean
+        enabled:
+          type: boolean
+        healthy:
+          type: boolean
+        inflight:
+          type: integer
+        passive_failures:
+          type: integer
+        circuit_state:
+          type: string
+        circuit_opened_at:
+          type: string
+          format: date-time
+        circuit_reopen_at:
+          type: string
+          format: date-time
+        endpoint:
+          type: string
+        checked_at:
+          type: string
+          format: date-time
+        last_success_at:
+          type: string
+          format: date-time
+        last_failure_at:
+          type: string
+          format: date-time
+        consecutive_failures:
+          type: integer
+        last_error:
+          type: string
+        last_status_code:
+          type: integer
+        last_latency_ms:
+          type: integer
+          format: int64
+      additionalProperties: true
+    ProxyBackendsResponse:
+      type: object
+      properties:
+        path:
+          type: string
+        etag:
+          type: string
+        strategy:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+        backends:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProxyBackendStatus'
+      additionalProperties: true
+    ProxyBackendRuntimeOverrideRequest:
+      type: object
+      properties:
+        admin_state:
+          type: string
+          enum: [enabled, draining, disabled]
+        weight_override:
+          type: integer
+          minimum: 1
+      additionalProperties: false
     LogsReadResponse:
       type: object
       properties:
@@ -1338,9 +1820,6 @@ components:
     LogsStatsResponse:
       type: object
       additionalProperties: true
-      description: |
-        Includes `generated_at`, `scanned_lines`, `range_hours`, optional scan window timestamps,
-        and a `waf_block` summary object with counters, top buckets, and hourly series.
     VerifyManifestResponse:
       type: object
       description: |
@@ -1436,18 +1915,22 @@ components:
           type: string
         host:
           type: string
-        route_mode:
-          type: string
         match_type:
           type: string
         match_value:
           type: string
         path_prefix:
           type: string
-        methods:
-          type: array
-          items:
-            type: string
+        upstream:
+          type: string
+        canary_upstream:
+          type: string
+        canary_weight_percent:
+          type: integer
+        hash_policy:
+          type: string
+        hash_key:
+          type: string
         waf_mode:
           type: string
         bypass:
@@ -1589,10 +2072,26 @@ components:
         raw:
           type: string
         rules:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
+          type: object
+          additionalProperties: true
+      additionalProperties: false
+    CacheStoreRequest:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        store_dir:
+          type: string
+        max_bytes:
+          type: integer
+          format: int64
+        memory_enabled:
+          type: boolean
+        memory_max_bytes:
+          type: integer
+          format: int64
+        memory_max_entries:
+          type: integer
       additionalProperties: false
     CRSRuleSetsRequest:
       type: object
@@ -1607,6 +2106,26 @@ components:
       properties:
         note:
           type: string
+    ProxyProbeRequest:
+      type: object
+      properties:
+        raw:
+          type: string
+        timeout_ms:
+          type: integer
+          minimum: 0
+      additionalProperties: false
+    ProxyDryRunRequest:
+      type: object
+      required: [path]
+      properties:
+        raw:
+          type: string
+        host:
+          type: string
+        path:
+          type: string
+      additionalProperties: false
     FPTunerEventInput:
       type: object
       properties:
@@ -1619,13 +2138,7 @@ components:
           format: date-time
         method:
           type: string
-        scheme:
-          type: string
-        host:
-          type: string
         path:
-          type: string
-        query:
           type: string
         policy:
           type: string

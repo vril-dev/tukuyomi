@@ -1,0 +1,60 @@
+name: tukuyomi-scheduler
+type: Microsoft.App/containerApps
+location: <LOCATION>
+properties:
+  managedEnvironmentId: /subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RESOURCE_GROUP_NAME>/providers/Microsoft.App/managedEnvironments/<ENVIRONMENT_NAME>
+  configuration:
+    activeRevisionsMode: Single
+  template:
+    containers:
+      - name: scheduled-task-runner
+        image: <IMAGE_URI>
+        env:
+          - name: WAF_CONFIG_FILE
+            value: /app/conf/config.json
+          - name: PROXY_BIN
+            value: /app/tukuyomi
+        command:
+          - /bin/sh
+          - -lc
+        args:
+          - |
+            set -eu
+            echo "[scheduled-task-runner] starting singleton loop"
+            while :; do
+              if "${PROXY_BIN:-/app/tukuyomi}" run-scheduled-tasks; then
+                :
+              else
+                code="$?"
+                echo "[scheduled-task-runner][fatal] run-scheduled-tasks failed; exiting for restart" >&2
+                exit "$code"
+              fi
+              now="$(date +%s)"
+              sleep_for="$((60 - (now % 60)))"
+              sleep "$sleep_for"
+            done
+        volumeMounts:
+          - volumeName: proxy-conf
+            mountPath: /app/conf
+          - volumeName: proxy-scheduled-tasks
+            mountPath: /app/data/scheduled-tasks
+          - volumeName: proxy-logs
+            mountPath: /app/logs
+          - volumeName: proxy-php-fpm
+            mountPath: /app/data/php-fpm
+    scale:
+      minReplicas: 1
+      maxReplicas: 1
+    volumes:
+      - name: proxy-conf
+        storageType: AzureFile
+        storageName: proxyconf
+      - name: proxy-scheduled-tasks
+        storageType: AzureFile
+        storageName: proxyscheduledtasks
+      - name: proxy-logs
+        storageType: AzureFile
+        storageName: proxylogs
+      - name: proxy-php-fpm
+        storageType: AzureFile
+        storageName: proxyphpfpm

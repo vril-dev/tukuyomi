@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { apiGetJson, apiPostJson } from "@/lib/api";
+import { useAdminRuntime } from "@/lib/adminRuntime";
+import { getErrorMessage } from "@/lib/errors";
+import { useI18n } from "@/lib/i18n";
+import { runFPTunerApply } from "@/lib/fPTunerApply";
+import {
+  buildFPTunerAuditDetails,
+  formatFPTunerAuditAction,
+  formatFPTunerAuditStatus,
+  formatFPTunerProposalSummary,
+  type FPTunerAuditEntry,
+} from "@/lib/fPTunerAudit";
 
 type FPTunerProposal = {
   id: string;
@@ -27,7 +38,7 @@ type ProposeResponse = {
     decision?: string;
     reason?: string;
     confidence?: number;
-  } | null;
+  };
 };
 
 type ApplyResponse = {
@@ -75,6 +86,10 @@ type WAFReadResponse = {
   lines?: WAFLogLine[];
 };
 
+type FPTunerAuditResponse = {
+  entries?: FPTunerAuditEntry[];
+};
+
 const defaultEvent: EventInput = {
   event_id: "",
   method: "GET",
@@ -91,6 +106,8 @@ const defaultEvent: EventInput = {
 const defaultTargetPath = "rules/tukuyomi.conf";
 
 export default function FPTunerPanel() {
+  const { locale, tx } = useI18n();
+  const { readOnly } = useAdminRuntime();
   const [targetPath, setTargetPath] = useState(defaultTargetPath);
   const [useLatestEvent, setUseLatestEvent] = useState(false);
   const [eventInput, setEventInput] = useState<EventInput>(defaultEvent);
@@ -100,6 +117,10 @@ export default function FPTunerPanel() {
   const [wafBlockLines, setWafBlockLines] = useState<WAFLogLine[]>([]);
   const [logLoading, setLogLoading] = useState(false);
   const [logError, setLogError] = useState<string | null>(null);
+  const [auditEntries, setAuditEntries] = useState<FPTunerAuditEntry[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [selectedAudit, setSelectedAudit] = useState<FPTunerAuditEntry | null>(null);
 
   const [proposal, setProposal] = useState<FPTunerProposal | null>(null);
   const [approvalRequired, setApprovalRequired] = useState(false);
@@ -140,16 +161,34 @@ export default function FPTunerPanel() {
       q.set("limit", String(logTail));
       const res = await apiGetJson<WAFReadResponse>(`/fp-tuner/recent-waf-blocks?${q.toString()}`);
       setWafBlockLines(Array.isArray(res.lines) ? res.lines : []);
-    } catch (e: any) {
-      setLogError(e?.message || "Failed to load waf logs");
+    } catch (error: unknown) {
+      setLogError(getErrorMessage(error, tx("Failed to load waf logs")));
     } finally {
       setLogLoading(false);
     }
-  }, [logTail]);
+  }, [logTail, tx]);
+
+  const loadAudit = useCallback(async () => {
+    setAuditLoading(true);
+    setAuditError(null);
+    try {
+      const res = await apiGetJson<FPTunerAuditResponse>("/fp-tuner:audit?limit=20");
+      setAuditEntries(Array.isArray(res.entries) ? res.entries : []);
+    } catch (error: unknown) {
+      setAuditEntries([]);
+      setAuditError(getErrorMessage(error, tx("Failed to load fp tuner audit")));
+    } finally {
+      setAuditLoading(false);
+    }
+  }, [tx]);
 
   useEffect(() => {
     void loadWAFBlockLines();
   }, [loadWAFBlockLines]);
+
+  useEffect(() => {
+    void loadAudit();
+  }, [loadAudit]);
 
   function toStringField(v: unknown, fallback: string) {
     if (v == null) return fallback;
@@ -226,12 +265,13 @@ export default function FPTunerPanel() {
       setProposeResult(res);
       setProposal(res.proposal ?? null);
       setApprovalRequired(!!res.proposal && !!res.approval?.required);
-      setApprovalToken(res.proposal ? res.approval?.token ?? "" : "");
+      setApprovalToken(res.proposal ? (res.approval?.token ?? "") : "");
       setMode(res.mode || "-");
       setSource(res.source || "-");
       setContractVersion(res.contract_version || "-");
-    } catch (e: any) {
-      setError(e?.message || "Propose failed");
+      await loadAudit();
+    } catch (error: unknown) {
+      setError(getErrorMessage(error, tx("Propose failed")));
     } finally {
       setProposing(false);
     }
@@ -247,10 +287,16 @@ export default function FPTunerPanel() {
         simulate,
         approval_token: approvalToken,
       };
-      const res = await apiPostJson<ApplyResponse>("/fp-tuner/apply", payload);
-      setApplyResult(res);
-    } catch (e: any) {
-      setError(e?.message || "Apply failed");
+      await runFPTunerApply({
+        applyRequest: () => apiPostJson<ApplyResponse>("/fp-tuner/apply", payload),
+        onSuccess: async (res) => {
+          setApplyResult(res);
+        },
+        onError: async (message) => {
+          setError(message);
+        },
+        refreshAudit: loadAudit,
+      });
     } finally {
       setApplying(false);
     }
@@ -259,27 +305,30 @@ export default function FPTunerPanel() {
   return (
     <div className="w-full p-4 space-y-4">
       <header className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-xl font-semibold">FP Tuner</h1>
+        <h1 className="text-xl font-semibold">{tx("FP Tuner")}</h1>
         <div className="flex items-center gap-2 text-xs">
-          <Badge color="gray">mode: {mode}</Badge>
-          <Badge color="gray">source: {source}</Badge>
-          <Badge color="gray">contract: {contractVersion}</Badge>
-          {approvalRequired ? <Badge color="amber">approval required</Badge> : <Badge color="green">approval optional</Badge>}
+          <Badge color="gray">{tx("mode")}: {mode}</Badge>
+          <Badge color="gray">{tx("source")}: {source}</Badge>
+          <Badge color="gray">{tx("contract")}: {contractVersion}</Badge>
+          {approvalRequired ? <Badge color="amber">{tx("approval required")}</Badge> : <Badge color="green">{tx("approval optional")}</Badge>}
+          <button className="border rounded px-2 py-0.5 bg-white text-xs" onClick={() => { void Promise.all([loadWAFBlockLines(), loadAudit()]); }}>
+            {tx("Refresh")}
+          </button>
         </div>
       </header>
 
       {error && (
         <div className="border border-red-300 bg-red-50 rounded-xl p-3 text-sm">
-          Error: {error}
+          {tx("Error")}: {error}
         </div>
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="rounded-xl border bg-white p-3 space-y-3">
-          <h2 className="text-sm font-semibold">Propose Input</h2>
+          <h2 className="text-sm font-semibold">{tx("Propose Input")}</h2>
 
           <label className="text-xs text-neutral-600 block">
-            Target Path
+            {tx("Target Path")}
             <input
               className="mt-1 w-full border rounded px-2 py-1"
               value={targetPath}
@@ -288,39 +337,35 @@ export default function FPTunerPanel() {
             />
           </label>
 
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            <label className="inline-flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="inline-flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
                 checked={useLatestEvent}
-                onChange={(e) => {
-                  setUseLatestEvent(e.target.checked);
-                  if (e.target.checked) {
-                    setManualEntryEnabled(false);
-                  }
-                }}
+                onChange={(e) => setUseLatestEvent(e.target.checked)}
               />
-              Use latest `waf_block` log event
+              {tx("Use latest `waf_block` log event")}
             </label>
-            <button
-              className="text-xs border rounded px-2 py-0.5 bg-white"
-              onClick={() => {
-                setManualEntryEnabled(true);
-                setUseLatestEvent(false);
-                setSelectedEventID("");
-                setEventInput(defaultEvent);
-              }}
-            >
-              Manual entry
-            </button>
+            {!useLatestEvent && (
+              <button
+                className="text-xs border rounded px-2 py-0.5 bg-white"
+                onClick={() => {
+                  setManualEntryEnabled(true);
+                  setSelectedEventID("");
+                  setEventInput(defaultEvent);
+                }}
+              >
+                {tx("Manual entry")}
+              </button>
+            )}
           </div>
 
           <div className="rounded border bg-neutral-50 p-2 space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="text-xs font-semibold text-neutral-700">Pick From Recent `waf_block` Logs</h3>
+              <h3 className="text-xs font-semibold text-neutral-700">{tx("Pick From Recent `waf_block` Logs")}</h3>
               <div className="flex items-center gap-2">
                 <label className="text-xs text-neutral-600">
-                  Rows
+                  {tx("Rows")}
                   <select
                     className="ml-1 border rounded px-1 py-0.5 bg-white"
                     value={logTail}
@@ -338,31 +383,29 @@ export default function FPTunerPanel() {
                   onClick={() => void loadWAFBlockLines()}
                   disabled={logLoading}
                 >
-                  {logLoading ? "Loading..." : "Reload"}
+                  {logLoading ? tx("Loading...") : tx("Reload")}
                 </button>
               </div>
             </div>
 
-            {logError && <p className="text-xs text-red-700">Log error: {logError}</p>}
+            {logError && <p className="text-xs text-red-700">{tx("Log error")}: {logError}</p>}
 
             {!logError && wafBlockLines.length === 0 && (
-              <p className="text-xs text-neutral-500">No `waf_block` events found in the selected range.</p>
+              <p className="text-xs text-neutral-500">{tx("No `waf_block` events found in the selected range.")}</p>
             )}
 
             {wafBlockLines.length > 0 && (
-              <div className="app-table-shell">
-                <div className="app-table-scroll-shell max-h-44">
-                <table className="app-table min-w-full">
+              <div className="app-table-shell app-table-scroll-shell">
+                <table className="app-table min-w-full text-xs">
                   <thead className="app-table-head sticky top-0">
                     <tr>
-                      <th className="px-2 py-1 text-left">use</th>
-                      <th className="px-2 py-1 text-left">ts</th>
-                      <th className="px-2 py-1 text-left">rule_id</th>
-                      <th className="px-2 py-1 text-left">scheme</th>
-                      <th className="px-2 py-1 text-left">host</th>
-                      <th className="px-2 py-1 text-left">path</th>
-                      <th className="px-2 py-1 text-left">matched_variable</th>
-                      <th className="px-2 py-1 text-left">matched_value</th>
+                      <th className="px-2 py-1 text-left">{tx("use")}</th>
+                      <th className="px-2 py-1 text-left">{tx("ts")}</th>
+                      <th className="px-2 py-1 text-left">{tx("rule_id")}</th>
+                      <th className="px-2 py-1 text-left">{tx("host")}</th>
+                      <th className="px-2 py-1 text-left">{tx("path")}</th>
+                      <th className="px-2 py-1 text-left">{tx("matched_variable")}</th>
+                      <th className="px-2 py-1 text-left">{tx("matched_value")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -373,17 +416,18 @@ export default function FPTunerPanel() {
                         <tr key={`${id}-${idx}`} className={active ? "bg-blue-50" : ""}>
                           <td className="px-2 py-1">
                             <button
-                              className="border rounded px-2 py-0.5"
+                              className="border border-neutral-200 rounded px-2 py-0.5"
                               onClick={() => onSelectWAFBlockLine(line)}
-                              title="Populate event input from this log line"
+                              title={tx("Populate event input from this log line")}
                             >
-                              Use
+                              {tx("Use")}
                             </button>
                           </td>
                           <td className="px-2 py-1 whitespace-nowrap">{toStringField(line.ts, "-")}</td>
                           <td className="px-2 py-1 whitespace-nowrap">{toStringField(line.rule_id, "-")}</td>
-                          <td className="px-2 py-1 whitespace-nowrap">{toStringField(line.original_scheme, "-")}</td>
-                          <td className="px-2 py-1 whitespace-nowrap">{toStringField(line.original_host, toStringField(line.rewritten_host, "-"))}</td>
+                          <td className="px-2 py-1 whitespace-nowrap" title={toStringField(line.original_host, toStringField(line.rewritten_host, "-"))}>
+                            {shorten(toStringField(line.original_host, toStringField(line.rewritten_host, "-")), 28)}
+                          </td>
                           <td className="px-2 py-1" title={toStringField(line.path, "-")}>
                             {shorten(toStringField(line.path, "-"), 36)}
                           </td>
@@ -396,14 +440,13 @@ export default function FPTunerPanel() {
                     })}
                   </tbody>
                 </table>
-                </div>
               </div>
             )}
           </div>
 
           {!useLatestEvent && !showManualEventForm && (
-            <div className="text-sm text-neutral-500">
-              Pick a recent `waf_block` log with Use, or start Manual entry.
+            <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-700">
+              {tx("Pick a recent `waf_block` log with Use, or start Manual entry.")}
             </div>
           )}
 
@@ -411,7 +454,12 @@ export default function FPTunerPanel() {
             <div className="grid gap-2 sm:grid-cols-2">
               <Field label="event_id" value={eventInput.event_id} onChange={(v) => updateEvent("event_id", v)} />
               <Field label="method" value={eventInput.method} onChange={(v) => updateEvent("method", v)} />
-              <Field label="scheme" value={eventInput.scheme} onChange={(v) => updateEvent("scheme", v)} />
+              <SelectField
+                label="scheme"
+                value={eventInput.scheme}
+                options={["http", "https"]}
+                onChange={(v) => updateEvent("scheme", v)}
+              />
               <Field label="host" value={eventInput.host} onChange={(v) => updateEvent("host", v)} />
               <Field label="path" value={eventInput.path} onChange={(v) => updateEvent("path", v)} />
               <Field label="query" value={eventInput.query} onChange={(v) => updateEvent("query", v)} />
@@ -432,14 +480,14 @@ export default function FPTunerPanel() {
           <button
             className="px-3 py-1.5 rounded-xl shadow text-sm bg-black text-white disabled:opacity-50"
             onClick={() => void onPropose()}
-            disabled={!canPropose || proposing}
+            disabled={proposing || !canPropose}
           >
-            {proposing ? "Proposing..." : "Propose"}
+            {proposing ? tx("Proposing...") : tx("Propose")}
           </button>
         </section>
 
         <section className="rounded-xl border bg-white p-3 space-y-3">
-          <h2 className="text-sm font-semibold">Apply</h2>
+          <h2 className="text-sm font-semibold">{tx("Apply")}</h2>
 
           <label className="inline-flex items-center gap-2 text-sm">
             <input
@@ -447,33 +495,27 @@ export default function FPTunerPanel() {
               checked={simulate}
               onChange={(e) => setSimulate(e.target.checked)}
             />
-            Dry run only (do not write rule)
+            {tx("Dry run only (do not write rule)")}
           </label>
 
-          {approvalRequired && proposal && (
+          {!simulate && approvalRequired && (
             <label className="text-xs text-neutral-600 block">
-              approval_token
+              {tx("Approval token")}
               <input
                 className="mt-1 w-full border rounded px-2 py-1 font-mono text-xs"
                 value={approvalToken}
                 onChange={(e) => setApprovalToken(e.target.value)}
-                placeholder="auto-filled from propose response"
+                placeholder={tx("auto-filled from propose response")}
               />
             </label>
           )}
 
-          <p className="text-xs text-neutral-600">
-            {simulate
-              ? "Apply validates the proposal only. The rule file is not written and hot reload does not run."
-              : "Apply writes the proposed rule and hot reloads the active ruleset."}
-          </p>
-
           <button
             className="px-3 py-1.5 rounded-xl shadow text-sm bg-black text-white disabled:opacity-50"
             onClick={() => void onApply()}
-            disabled={!canApply || applying}
+            disabled={readOnly || !canApply || applying}
           >
-            {applying ? "Applying..." : "Apply"}
+            {applying ? tx("Applying...") : tx("Apply")}
           </button>
 
           {applyResult && (
@@ -485,16 +527,16 @@ export default function FPTunerPanel() {
       </div>
 
       <section className="rounded-xl border bg-white p-3 space-y-2">
-        <h2 className="text-sm font-semibold">Proposal</h2>
+        <h2 className="text-sm font-semibold">{tx("Proposal")}</h2>
 
-        {!proposal && !proposeResult?.no_proposal && <div className="text-sm text-neutral-500">No proposal yet.</div>}
+        {!proposal && !proposeResult?.no_proposal && <div className="text-sm text-neutral-500">{tx("No proposal yet.")}</div>}
 
-        {proposeResult?.no_proposal && (
-          <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm space-y-1">
-            <div className="font-medium">No proposal returned</div>
-            <div>{proposeResult.no_proposal.reason || "Provider could not justify a safe scoped exclusion."}</div>
-            {typeof proposeResult.no_proposal.confidence === "number" && (
-              <div className="text-xs text-neutral-600">confidence: {proposeResult.no_proposal.confidence}</div>
+        {!proposal && proposeResult?.no_proposal && (
+          <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 space-y-1">
+            <div className="font-medium">{tx("No safe exclusion proposed.")}</div>
+            <div>{proposeResult.no_proposal.reason || tx("Provider could not justify a safe scoped exclusion.")}</div>
+            {typeof proposeResult.no_proposal.confidence === "number" && proposeResult.no_proposal.confidence > 0 && (
+              <div className="text-xs">{tx("Confidence")}: {String(proposeResult.no_proposal.confidence)}</div>
             )}
           </div>
         )}
@@ -529,14 +571,90 @@ export default function FPTunerPanel() {
 
       {proposeResult && (
         <section className="rounded-xl border bg-white p-3 space-y-2">
-          <h2 className="text-sm font-semibold">Last Propose Response</h2>
+          <h2 className="text-sm font-semibold">{tx("Last Propose Response")}</h2>
           <div className="app-code-shell">
             <pre className="app-code-block">{JSON.stringify(proposeResult, null, 2)}</pre>
           </div>
         </section>
       )}
+
+      <section className="rounded-xl border bg-white p-3 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold">{tx("Recent actions")}</h2>
+          <button className="border rounded px-2 py-0.5 text-xs bg-white" onClick={() => void loadAudit()} disabled={auditLoading}>
+            {auditLoading ? tx("Loading...") : tx("Reload")}
+          </button>
+        </div>
+
+        {auditError && (
+          <div className="rounded border border-red-300 bg-red-50 p-2 text-xs text-red-900">
+            {auditError}
+          </div>
+        )}
+
+        {!auditError && auditEntries.length === 0 && (
+          <div className="text-sm text-neutral-500">{tx("No FP Tuner audit entries yet.")}</div>
+        )}
+
+        {auditEntries.length > 0 && (
+          <div className="space-y-2">
+            {auditEntries.map((entry, index) => (
+              <button
+                key={`${entry.ts || "audit"}-${index}`}
+                type="button"
+                className="w-full rounded-xl border bg-neutral-50 p-3 text-left hover:bg-white"
+                onClick={() => setSelectedAudit(entry)}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium text-neutral-900">
+                      {formatFPTunerAuditAction(entry.event)}
+                    </span>
+                    <Badge color={statusBadgeColor(formatFPTunerAuditStatus(entry.event))}>
+                      {formatFPTunerAuditStatus(entry.event)}
+                    </Badge>
+                  </div>
+                  <span className="text-xs text-neutral-500">{formatTimestamp(entry.ts, locale)}</span>
+                </div>
+                <div className="mt-2 text-sm text-neutral-900">{entry.actor || tx("unknown")}</div>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-neutral-600">
+                  <span>{entry.target_path || "-"}</span>
+                  <span>{formatFPTunerProposalSummary(entry)}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {selectedAudit ? (
+        <FPTunerAuditDetailModal entry={selectedAudit} onClose={() => setSelectedAudit(null)} />
+      ) : null}
     </div>
   );
+}
+
+function formatTimestamp(ts?: string, locale: "en" | "ja" = "en") {
+  if (!ts) {
+    return "-";
+  }
+  return new Date(ts).toLocaleString(locale === "ja" ? "ja-JP" : "en-US");
+}
+
+function statusBadgeColor(status: string): "gray" | "green" | "amber" | "red" {
+  switch (status) {
+    case "applied":
+      return "green";
+    case "proposed":
+    case "simulated":
+    case "duplicate":
+    case "denied":
+      return "amber";
+    case "error":
+      return "red";
+    default:
+      return "gray";
+  }
 }
 
 function Field({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
@@ -552,12 +670,80 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
   );
 }
 
-function Badge({ color, children }: { color: "gray" | "green" | "amber"; children: ReactNode }) {
+function SelectField({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="text-xs text-neutral-600 block">
+      {label}
+      <select className="mt-1 w-full border rounded px-2 py-1 font-mono text-xs" value={value} onChange={(e) => onChange(e.target.value)}>
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function Badge({ color, children }: { color: "gray" | "green" | "amber" | "red"; children: ReactNode }) {
   const cls =
     color === "green"
       ? "bg-green-100 text-green-800"
       : color === "amber"
       ? "bg-amber-100 text-amber-800"
+      : color === "red"
+      ? "bg-red-100 text-red-800"
       : "bg-neutral-100 text-neutral-700";
   return <span className={`px-2 py-0.5 text-xs rounded ${cls}`}>{children}</span>;
+}
+
+function FPTunerAuditDetailModal({
+  entry,
+  onClose,
+}: {
+  entry: FPTunerAuditEntry;
+  onClose: () => void;
+}) {
+  const { tx } = useI18n();
+  const details = buildFPTunerAuditDetails(entry);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6">
+      <div className="w-full max-w-3xl rounded-2xl border border-neutral-200 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-neutral-200 px-5 py-4">
+          <div>
+            <h2 className="text-lg font-semibold">{tx("FP Tuner audit detail")}</h2>
+            <p className="text-sm text-neutral-500">
+              {formatFPTunerAuditAction(entry.event)} / {formatFPTunerAuditStatus(entry.event)}
+            </p>
+          </div>
+          <button type="button" className="text-sm underline" onClick={onClose}>
+            {tx("close")}
+          </button>
+        </div>
+        <div className="grid gap-3 px-5 py-4 md:grid-cols-2">
+          {details.map((detail) => (
+            <div key={`${detail.label}:${detail.value}`} className="rounded bg-neutral-50 p-3">
+              <div className="text-xs uppercase tracking-wide text-neutral-500">{detail.label}</div>
+              <div className="mt-1 break-all font-mono text-sm text-neutral-900">{detail.value}</div>
+            </div>
+          ))}
+        </div>
+        <div className="flex justify-end border-t border-neutral-200 px-5 py-4">
+          <button type="button" className="border rounded px-3 py-1.5 text-sm" onClick={onClose}>
+            {tx("Close")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

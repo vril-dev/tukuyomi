@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -21,7 +23,11 @@ func RegisterAdminAuthRoutes(r *gin.Engine) {
 		return
 	}
 
-	api := r.Group(config.APIBasePath, middleware.AdminAccess(middleware.AdminEndpointAPI))
+	api := r.Group(
+		config.APIBasePath,
+		AdminAccessMiddleware("api"),
+		AdminRateLimitMiddleware(),
+	)
 	api.GET("/auth/session", GetAdminSessionHandler)
 	api.POST("/auth/login", PostAdminLoginHandler)
 	api.POST("/auth/logout", PostAdminLogoutHandler)
@@ -177,7 +183,7 @@ func requestIsHTTPS(c *gin.Context) bool {
 	if c.Request.TLS != nil {
 		return true
 	}
-	if !trustedForwardedHeaders(c) {
+	if !trustedAdminForwardedHeaders(c.Request) {
 		return false
 	}
 
@@ -188,6 +194,32 @@ func requestIsHTTPS(c *gin.Context) bool {
 		return true
 	}
 	return false
+}
+
+func trustedAdminForwardedHeaders(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		host = h
+	}
+	sourceIP, ok := parseIPLiteral(host)
+	if !ok {
+		return false
+	}
+	return isAdminIPTrusted(snapshotAdminTrustedCIDRs(), sourceIP)
+}
+
+func snapshotAdminTrustedCIDRs() []netip.Prefix {
+	access := currentAdminAccessControl()
+	if access == nil {
+		return nil
+	}
+	access.mu.RLock()
+	defer access.mu.RUnlock()
+	return append([]netip.Prefix(nil), access.trustedCIDRs...)
 }
 
 func normalizeForwardedProto(raw string) string {

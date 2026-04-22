@@ -1,12 +1,11 @@
-# Products
+# Tukuyomi 製品
 
-[English](README.md) | [日本語](README.ja.md)
+公開向けの製品ドキュメントをこの配下にまとめます。
 
-Tukuyomi ファミリーの各バイナリコンポーネント向け公開ページです。
+- [`tukuyomi`](../../README.ja.md): 現行 canonical WAF / reverse proxy / API gateway。
+- [`tukuyomi-proxy archive`](proxy/README.ja.md): 過去のバイナリ配布名。現在は `tukuyomi` へ統合済み。
+- [`tukuyomi-edge`](edge/README.ja.md): edge/device runtime の説明。
+- [`tukuyomi-center`](center/README.ja.md): center 側管理の説明。
+- [`tukuyomi-verify`](verify/README.ja.md): 外部検証プロダクトの説明。
 
-- [`proxy/README.ja.md`](./proxy/README.ja.md)
-- [`edge/README.ja.md`](./edge/README.ja.md)
-- [`center/README.ja.md`](./center/README.ja.md)
-- [`verify/README.ja.md`](./verify/README.ja.md)
-
-バイナリは [`tukuyomi-releases`](https://github.com/vril-dev/tukuyomi-releases/releases) から配布します。
+現行の機能比較は [製品比較](../product-comparison.ja.md) を参照してください。

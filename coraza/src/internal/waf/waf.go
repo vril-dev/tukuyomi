@@ -56,6 +56,16 @@ func setCachedOverrideWAF(rule string, w coraza.WAF) (coraza.WAF, bool) {
 	return w, true
 }
 
+func InvalidateOverrideWAF(rule string) {
+	rule = strings.TrimSpace(rule)
+	if rule == "" {
+		return
+	}
+	overrideMu.Lock()
+	delete(overrideWAFs, rule)
+	overrideMu.Unlock()
+}
+
 func buildWAF(files []string) (coraza.WAF, error) {
 	cfg := coraza.NewWAFConfig().
 		WithDebugLogger(debuglog.Default().WithLevel(debuglog.LevelInfo)).
@@ -77,10 +87,10 @@ func buildWAF(files []string) (coraza.WAF, error) {
 
 func discoverCRSRuleFiles(setupFile, rulesDir string) ([]string, error) {
 	if setupFile == "" {
-		return nil, errors.New("WAF_CRS_SETUP_FILE is empty")
+		return nil, errors.New("paths.crs_setup_file is empty")
 	}
 	if rulesDir == "" {
-		return nil, errors.New("WAF_CRS_RULES_DIR is empty")
+		return nil, errors.New("paths.crs_rules_dir is empty")
 	}
 	if _, err := os.Stat(setupFile); err != nil {
 		return nil, fmt.Errorf("CRS setup file not found: %s: %w", setupFile, err)
@@ -203,10 +213,10 @@ func InitWAF() {
 	}
 	setBaseWAF(base)
 
-	if err := bypassconf.Init(config.BypassFile); err != nil {
+	if err := bypassconf.Init(config.BypassFile, config.LegacyCompatPath(config.BypassFile, config.DefaultBypassFilePath, config.LegacyDefaultBypassFilePath)); err != nil {
 		log.Printf("[BYPASS][INIT][ERR] %v (path=%s)", err, config.BypassFile)
 	} else {
-		log.Printf("[BYPASS][INIT] watching %s", bypassconf.GetPath())
+		log.Printf("[BYPASS][INIT] configured=%s active=%s", bypassconf.GetPath(), bypassconf.GetActivePath())
 	}
 }
 
@@ -345,4 +355,34 @@ func GetWAFForExtraRule(extraRule string) (coraza.WAF, error) {
 	}
 
 	return w, nil
+}
+
+func ValidateStandaloneRule(rulePath string, raw []byte) error {
+	dir := filepath.Dir(strings.TrimSpace(rulePath))
+	tmp, err := os.CreateTemp(dir, ".override-validate.*.conf")
+	if err != nil {
+		tmp, err = os.CreateTemp("", ".override-validate.*.conf")
+		if err != nil {
+			return err
+		}
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(raw); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	defer os.Remove(tmpPath)
+
+	_, err = buildWAF([]string{tmpPath})
+	return err
 }

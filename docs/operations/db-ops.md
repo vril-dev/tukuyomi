@@ -40,12 +40,12 @@ DB copies of admin-editable config files used for startup sync and multi-instanc
 
 Current blob keys:
 
-- `cache_rules` (`cache.conf`)
-- `rate_limit_rules` (`rate-limit.conf`)
-- `country_block_rules` (`country-block.conf`)
-- `bypass_rules` (`waf.bypass`)
-- `bot_defense_rules` (`bot-defense.conf`)
-- `semantic_rules` (`semantic.conf`)
+- `cache_rules` (`cache-rules.json`)
+- `rate_limit_rules` (`rate-limit.json`)
+- `country_block_rules` (`country-block.json`)
+- `bypass_rules` (`waf-bypass.json`)
+- `bot_defense_rules` (`bot-defense.json`)
+- `semantic_rules` (`semantic.json`)
 - `crs_disabled_rules` (`crs-disabled.conf`)
 - `rule_file_sha256:<sha256(path)>` (base rule files listed in `WAF_RULES_FILE`, for example `rules/tukuyomi.conf`)
 
@@ -98,7 +98,7 @@ If DB is missing/corrupted:
 
 1. Stop stack (`docker compose down`).
 2. Move broken DB file aside.
-3. Start stack (`docker compose up -d coraza nginx`).
+3. Start stack (`docker compose up -d coraza`).
 4. Call `/tukuyomi-api/logs/stats` once to trigger `waf_events` re-ingest from `waf-events.ndjson`.
 5. Re-save important config via admin API if needed to re-seed `config_blobs`.
 

@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/netip"
 	"os"
@@ -13,12 +14,15 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"tukuyomi/internal/policyhost"
 )
 
 const (
 	rateLimitKeyByIP        = "ip"
 	rateLimitKeyByCountry   = "country"
 	rateLimitKeyByIPCountry = "ip_country"
+	rateLimitDefaultScope   = "default"
 )
 
 type rateLimitAction struct {
@@ -44,12 +48,18 @@ type rateLimitRule struct {
 }
 
 type rateLimitConfig struct {
-	Enabled            bool            `json:"enabled"`
-	AllowlistIPs       []string        `json:"allowlist_ips,omitempty"`
-	AllowlistCountries []string        `json:"allowlist_countries,omitempty"`
-	DefaultPolicy      rateLimitPolicy `json:"default_policy"`
-	Rules              []rateLimitRule `json:"rules,omitempty"`
+	Enabled            bool                    `json:"enabled"`
+	AllowlistIPs       []string                `json:"allowlist_ips,omitempty"`
+	AllowlistCountries []string                `json:"allowlist_countries,omitempty"`
+	Feedback           rateLimitFeedbackConfig `json:"feedback,omitempty"`
+	DefaultPolicy      rateLimitPolicy         `json:"default_policy"`
+	Rules              []rateLimitRule         `json:"rules,omitempty"`
 	rateLimitIdentityConfig
+}
+
+type rateLimitFile struct {
+	Default rateLimitConfig            `json:"default"`
+	Hosts   map[string]rateLimitConfig `json:"hosts,omitempty"`
 }
 
 type compiledRateLimitRule struct {
@@ -60,12 +70,29 @@ type compiledRateLimitRule struct {
 	PolicyID string
 }
 
-type runtimeRateLimitConfig struct {
+type compiledRateLimitScope struct {
 	Raw               rateLimitConfig
 	AllowlistPrefixes []netip.Prefix
 	AllowCountries    map[string]struct{}
 	Rules             []compiledRateLimitRule
 	DefaultPolicy     rateLimitPolicy
+	Feedback          runtimeRateLimitFeedbackConfig
+}
+
+type runtimeRateLimitConfig struct {
+	Raw     rateLimitFile
+	Default compiledRateLimitScope
+	Hosts   map[string]compiledRateLimitScope
+}
+
+type rateLimitScopeSelection struct {
+	Raw               rateLimitConfig
+	AllowlistPrefixes []netip.Prefix
+	AllowCountries    map[string]struct{}
+	Rules             []compiledRateLimitRule
+	DefaultPolicy     rateLimitPolicy
+	Feedback          runtimeRateLimitFeedbackConfig
+	ScopeKey          string
 }
 
 type rateCounter struct {
@@ -79,6 +106,7 @@ type rateLimitDecision struct {
 	Status            int
 	RetryAfterSeconds int
 	PolicyID          string
+	HostScope         string
 	Key               string
 	Limit             int
 	BaseLimit         int
@@ -132,13 +160,13 @@ func GetRateLimitPath() string {
 	return rateLimitPath
 }
 
-func GetRateLimitConfig() rateLimitConfig {
+func GetRateLimitConfig() rateLimitFile {
 	rateLimitMu.RLock()
 	defer rateLimitMu.RUnlock()
 	if rateLimitRuntime == nil {
-		return rateLimitConfig{}
+		return rateLimitFile{}
 	}
-	return rateLimitRuntime.Raw
+	return cloneRateLimitFile(rateLimitRuntime.Raw)
 }
 
 func ReloadRateLimit() error {
@@ -165,6 +193,7 @@ func ReloadRateLimit() error {
 	rateCounters = map[string]rateCounter{}
 	rateCounterSweep = 0
 	rateCounterMu.Unlock()
+	resetRateLimitFeedbackState()
 
 	return nil
 }
@@ -184,14 +213,18 @@ func GetRateLimitStats() rateLimitStats {
 
 func EvaluateRateLimit(r *http.Request, clientIP, country string, riskScore int, now time.Time) rateLimitDecision {
 	rt := currentRateLimitRuntime()
-	if rt == nil || !rt.Raw.Enabled {
+	if rt == nil {
+		return rateLimitDecision{Allowed: true}
+	}
+	scope := selectRateLimitScope(rt, r)
+	if !scope.Raw.Enabled {
 		return rateLimitDecision{Allowed: true}
 	}
 	rateLimitRequestsTotal.Add(1)
 
 	ip := normalizeClientIP(clientIP)
 	cc := normalizeCountryCode(country)
-	if isAllowlistedIP(rt, ip) || isAllowlistedCountry(rt, cc) {
+	if isAllowlistedIP(scope, ip) || isAllowlistedCountry(scope, cc) {
 		rateLimitAllowedTotal.Add(1)
 		return rateLimitDecision{Allowed: true}
 	}
@@ -203,14 +236,15 @@ func EvaluateRateLimit(r *http.Request, clientIP, country string, riskScore int,
 			path = r.URL.Path
 		}
 	}
-	policy, policyID := pickRateLimitPolicy(rt, method, path)
+	policy, policyID := pickRateLimitPolicy(scope, method, path)
 	if !policy.Enabled {
 		rateLimitAllowedTotal.Add(1)
 		return rateLimitDecision{Allowed: true}
 	}
 
-	identity := extractRateLimitIdentity(r, rt.Raw.rateLimitIdentityConfig)
-	effectivePolicy, adaptive := applyAdaptiveRateLimit(rt.Raw.rateLimitIdentityConfig, policy, riskScore)
+	scopedPolicyID := rateLimitScopedPolicyID(scope.ScopeKey, policyID)
+	identity := extractRateLimitIdentity(r, scope.Raw.rateLimitIdentityConfig)
+	effectivePolicy, adaptive := applyAdaptiveRateLimit(scope.Raw.rateLimitIdentityConfig, policy, riskScore)
 	if adaptive {
 		rateLimitAdaptiveTotal.Add(1)
 	}
@@ -228,7 +262,7 @@ func EvaluateRateLimit(r *http.Request, clientIP, country string, riskScore int,
 	}
 
 	windowID := now.Unix() / int64(effectivePolicy.WindowSeconds)
-	counterKey := policyID + "|" + key
+	counterKey := scopedPolicyID + "|" + key
 
 	rateCounterMu.Lock()
 	rateCounterSweep++
@@ -279,7 +313,8 @@ func EvaluateRateLimit(r *http.Request, clientIP, country string, riskScore int,
 		Allowed:           false,
 		Status:            status,
 		RetryAfterSeconds: retryAfter,
-		PolicyID:          policyID,
+		PolicyID:          scopedPolicyID,
+		HostScope:         scope.ScopeKey,
 		Key:               hashRateLimitKey(key),
 		Limit:             maxHits,
 		BaseLimit:         baseHits,
@@ -296,8 +331,38 @@ func currentRateLimitRuntime() *runtimeRateLimitConfig {
 	return rateLimitRuntime
 }
 
-func pickRateLimitPolicy(rt *runtimeRateLimitConfig, method, path string) (rateLimitPolicy, string) {
-	for _, rule := range rt.Rules {
+func selectRateLimitScope(rt *runtimeRateLimitConfig, req *http.Request) rateLimitScopeSelection {
+	if rt == nil {
+		return rateLimitScopeSelection{ScopeKey: rateLimitDefaultScope}
+	}
+	if req != nil {
+		for _, candidate := range policyhost.Candidates(req.Host, req.TLS != nil) {
+			if scope, ok := rt.Hosts[candidate]; ok {
+				return rateLimitScopeSelection{
+					Raw:               scope.Raw,
+					AllowlistPrefixes: scope.AllowlistPrefixes,
+					AllowCountries:    scope.AllowCountries,
+					Rules:             scope.Rules,
+					DefaultPolicy:     scope.DefaultPolicy,
+					Feedback:          scope.Feedback,
+					ScopeKey:          candidate,
+				}
+			}
+		}
+	}
+	return rateLimitScopeSelection{
+		Raw:               rt.Default.Raw,
+		AllowlistPrefixes: rt.Default.AllowlistPrefixes,
+		AllowCountries:    rt.Default.AllowCountries,
+		Rules:             rt.Default.Rules,
+		DefaultPolicy:     rt.Default.DefaultPolicy,
+		Feedback:          rt.Default.Feedback,
+		ScopeKey:          rateLimitDefaultScope,
+	}
+}
+
+func pickRateLimitPolicy(scope rateLimitScopeSelection, method, path string) (rateLimitPolicy, string) {
+	for _, rule := range scope.Rules {
 		if !rule.Policy.Enabled {
 			continue
 		}
@@ -311,7 +376,7 @@ func pickRateLimitPolicy(rt *runtimeRateLimitConfig, method, path string) (rateL
 		return rule.Policy, rule.PolicyID
 	}
 
-	return rt.DefaultPolicy, "default"
+	return scope.DefaultPolicy, rateLimitDefaultScope
 }
 
 func matchesPathRule(rule compiledRateLimitRule, path string) bool {
@@ -335,12 +400,12 @@ func matchesMethod(methods map[string]struct{}, method string) bool {
 	return ok
 }
 
-func isAllowlistedCountry(rt *runtimeRateLimitConfig, country string) bool {
-	_, ok := rt.AllowCountries[country]
+func isAllowlistedCountry(scope rateLimitScopeSelection, country string) bool {
+	_, ok := scope.AllowCountries[country]
 	return ok
 }
 
-func isAllowlistedIP(rt *runtimeRateLimitConfig, ip string) bool {
+func isAllowlistedIP(scope rateLimitScopeSelection, ip string) bool {
 	if ip == "" {
 		return false
 	}
@@ -349,7 +414,7 @@ func isAllowlistedIP(rt *runtimeRateLimitConfig, ip string) bool {
 	if err != nil {
 		return false
 	}
-	for _, pfx := range rt.AllowlistPrefixes {
+	for _, pfx := range scope.AllowlistPrefixes {
 		if pfx.Contains(addr) {
 			return true
 		}
@@ -366,13 +431,105 @@ func normalizeClientIP(ip string) string {
 }
 
 func buildRateLimitRuntimeFromRaw(raw []byte) (*runtimeRateLimitConfig, error) {
+	top, err := decodeRateLimitJSONObject(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, hasDefault := top["default"]; !hasDefault {
+		if _, hasHosts := top["hosts"]; !hasHosts {
+			scope, err := buildCompiledRateLimitScopeFromRaw(raw)
+			if err != nil {
+				return nil, err
+			}
+			return &runtimeRateLimitConfig{
+				Raw: rateLimitFile{
+					Default: cloneRateLimitConfig(scope.Raw),
+				},
+				Default: scope,
+				Hosts:   map[string]compiledRateLimitScope{},
+			}, nil
+		}
+	}
+
+	for key := range top {
+		if key != "default" && key != "hosts" {
+			return nil, fmt.Errorf("invalid json")
+		}
+	}
+
+	defaultObject, err := decodeRateLimitObjectValue(top["default"], "default")
+	if err != nil {
+		return nil, err
+	}
+	defaultScope, err := buildCompiledRateLimitScopeFromRaw(mustMarshalRateLimitObject(defaultObject))
+	if err != nil {
+		return nil, err
+	}
+
+	file := rateLimitFile{
+		Default: cloneRateLimitConfig(defaultScope.Raw),
+	}
+	runtime := &runtimeRateLimitConfig{
+		Raw:     file,
+		Default: defaultScope,
+		Hosts:   map[string]compiledRateLimitScope{},
+	}
+
+	hosts, err := decodeRateLimitHosts(top["hosts"])
+	if err != nil {
+		return nil, err
+	}
+	if len(hosts) == 0 {
+		return runtime, nil
+	}
+
+	runtime.Raw.Hosts = make(map[string]rateLimitConfig, len(hosts))
+	for rawHost, rawScope := range hosts {
+		hostKey, err := policyhost.NormalizePattern(rawHost)
+		if err != nil {
+			return nil, fmt.Errorf("hosts[%q]: %w", rawHost, err)
+		}
+		hostObject, err := decodeRateLimitObjectValue(rawScope, fmt.Sprintf("hosts[%q]", rawHost))
+		if err != nil {
+			return nil, err
+		}
+		mergedObject := mergeRateLimitJSONObject(defaultObject, hostObject)
+		scope, err := buildCompiledRateLimitScopeFromRaw(mustMarshalRateLimitObject(mergedObject))
+		if err != nil {
+			return nil, err
+		}
+		runtime.Raw.Hosts[hostKey] = cloneRateLimitConfig(scope.Raw)
+		runtime.Hosts[hostKey] = scope
+	}
+
+	return runtime, nil
+}
+
+func buildCompiledRateLimitScopeFromRaw(raw []byte) (compiledRateLimitScope, error) {
+	cfg, err := decodeRateLimitConfig(raw)
+	if err != nil {
+		return compiledRateLimitScope{}, err
+	}
+	return buildCompiledRateLimitScope(cfg)
+}
+
+func decodeRateLimitConfig(raw []byte) (rateLimitConfig, error) {
 	var cfg rateLimitConfig
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
-		return nil, err
+		return rateLimitConfig{}, err
 	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return rateLimitConfig{}, fmt.Errorf("invalid json")
+	}
+	return cfg, nil
+}
+
+func buildCompiledRateLimitScope(cfg rateLimitConfig) (compiledRateLimitScope, error) {
 	normalizeRateLimitIdentityConfig(&cfg.rateLimitIdentityConfig)
+	cfg.Feedback = normalizeRateLimitFeedbackConfig(cfg.Feedback)
 
 	if cfg.DefaultPolicy == (rateLimitPolicy{}) {
 		cfg.DefaultPolicy = rateLimitPolicy{
@@ -390,7 +547,7 @@ func buildRateLimitRuntimeFromRaw(raw []byte) (*runtimeRateLimitConfig, error) {
 
 	defaultPolicy, err := normalizeRateLimitPolicy(cfg.DefaultPolicy, "default_policy")
 	if err != nil {
-		return nil, err
+		return compiledRateLimitScope{}, err
 	}
 
 	allowCountries := map[string]struct{}{}
@@ -414,7 +571,7 @@ func buildRateLimitRuntimeFromRaw(raw []byte) (*runtimeRateLimitConfig, error) {
 		}
 		addr, err := netip.ParseAddr(entry)
 		if err != nil {
-			return nil, fmt.Errorf("invalid allowlist_ips entry: %s", entry)
+			return compiledRateLimitScope{}, fmt.Errorf("invalid allowlist_ips entry: %s", entry)
 		}
 		bits := 32
 		if addr.Is6() {
@@ -428,20 +585,20 @@ func buildRateLimitRuntimeFromRaw(raw []byte) (*runtimeRateLimitConfig, error) {
 		rule.MatchType = strings.ToLower(strings.TrimSpace(rule.MatchType))
 		rule.MatchValue = strings.TrimSpace(rule.MatchValue)
 		if rule.MatchType == "" {
-			return nil, fmt.Errorf("rules[%d]: match_type is required", i)
+			return compiledRateLimitScope{}, fmt.Errorf("rules[%d]: match_type is required", i)
 		}
 		if rule.MatchValue == "" {
-			return nil, fmt.Errorf("rules[%d]: match_value is required", i)
+			return compiledRateLimitScope{}, fmt.Errorf("rules[%d]: match_value is required", i)
 		}
 		switch rule.MatchType {
 		case "exact", "prefix", "regex":
 		default:
-			return nil, fmt.Errorf("rules[%d]: match_type must be exact|prefix|regex", i)
+			return compiledRateLimitScope{}, fmt.Errorf("rules[%d]: match_type must be exact|prefix|regex", i)
 		}
 
 		policy, err := normalizeRateLimitPolicy(rule.Policy, fmt.Sprintf("rules[%d].policy", i))
 		if err != nil {
-			return nil, err
+			return compiledRateLimitScope{}, err
 		}
 		methods := make(map[string]struct{}, len(rule.Methods))
 		for _, m := range rule.Methods {
@@ -461,7 +618,7 @@ func buildRateLimitRuntimeFromRaw(raw []byte) (*runtimeRateLimitConfig, error) {
 		if rule.MatchType == "regex" {
 			re, err := regexp.Compile(rule.MatchValue)
 			if err != nil {
-				return nil, fmt.Errorf("rules[%d]: invalid regex: %v", i, err)
+				return compiledRateLimitScope{}, fmt.Errorf("rules[%d]: invalid regex: %v", i, err)
 			}
 			compiled.Regex = re
 		}
@@ -483,13 +640,167 @@ func buildRateLimitRuntimeFromRaw(raw []byte) (*runtimeRateLimitConfig, error) {
 		cfg.Rules[i].Methods = sortedMethodList(compiledRules[i].Methods)
 	}
 
-	return &runtimeRateLimitConfig{
+	return compiledRateLimitScope{
 		Raw:               cfg,
 		AllowlistPrefixes: allowPrefixes,
 		AllowCountries:    allowCountries,
 		Rules:             compiledRules,
 		DefaultPolicy:     defaultPolicy,
+		Feedback: runtimeRateLimitFeedbackConfig{
+			Enabled:         cfg.Feedback.Enabled,
+			StrikesRequired: cfg.Feedback.StrikesRequired,
+			StrikeWindow:    time.Duration(cfg.Feedback.StrikeWindowSeconds) * time.Second,
+			AdaptiveOnly:    cfg.Feedback.AdaptiveOnly,
+			DryRun:          cfg.Feedback.DryRun,
+		},
 	}, nil
+}
+
+func decodeRateLimitJSONObject(raw []byte) (map[string]json.RawMessage, error) {
+	var obj map[string]json.RawMessage
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	if err := dec.Decode(&obj); err != nil {
+		return nil, err
+	}
+	if obj == nil {
+		return nil, fmt.Errorf("rate limit config must be a JSON object")
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("invalid json")
+	}
+	return obj, nil
+}
+
+func decodeRateLimitObjectValue(raw json.RawMessage, field string) (map[string]any, error) {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return map[string]any{}, nil
+	}
+	var out map[string]any
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	if err := dec.Decode(&out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		return nil, fmt.Errorf("%s must be a JSON object", field)
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("invalid json")
+	}
+	return out, nil
+}
+
+func decodeRateLimitHosts(raw json.RawMessage) (map[string]json.RawMessage, error) {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return nil, nil
+	}
+	var out map[string]json.RawMessage
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	if err := dec.Decode(&out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		return nil, fmt.Errorf("hosts must be a JSON object")
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("invalid json")
+	}
+	return out, nil
+}
+
+func mergeRateLimitJSONObject(base, override map[string]any) map[string]any {
+	out := cloneRateLimitJSONValue(base).(map[string]any)
+	for key, value := range override {
+		out[key] = mergeRateLimitJSONValue(out[key], value)
+	}
+	return out
+}
+
+func mergeRateLimitJSONValue(base, override any) any {
+	baseObject, baseOK := base.(map[string]any)
+	overrideObject, overrideOK := override.(map[string]any)
+	if baseOK && overrideOK {
+		return mergeRateLimitJSONObject(baseObject, overrideObject)
+	}
+	return cloneRateLimitJSONValue(override)
+}
+
+func cloneRateLimitJSONValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			out[key] = cloneRateLimitJSONValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for index, item := range typed {
+			out[index] = cloneRateLimitJSONValue(item)
+		}
+		return out
+	default:
+		return typed
+	}
+}
+
+func mustMarshalRateLimitObject(value map[string]any) []byte {
+	raw, _ := json.Marshal(value)
+	return raw
+}
+
+func cloneRateLimitFile(in rateLimitFile) rateLimitFile {
+	out := rateLimitFile{
+		Default: cloneRateLimitConfig(in.Default),
+	}
+	if len(in.Hosts) > 0 {
+		out.Hosts = make(map[string]rateLimitConfig, len(in.Hosts))
+		for host, cfg := range in.Hosts {
+			out.Hosts[host] = cloneRateLimitConfig(cfg)
+		}
+	}
+	return out
+}
+
+func cloneRateLimitConfig(in rateLimitConfig) rateLimitConfig {
+	out := in
+	out.AllowlistIPs = append([]string(nil), in.AllowlistIPs...)
+	out.AllowlistCountries = append([]string(nil), in.AllowlistCountries...)
+	out.Rules = append([]rateLimitRule(nil), in.Rules...)
+	out.SessionCookieNames = append([]string(nil), in.SessionCookieNames...)
+	out.JWTHeaderNames = append([]string(nil), in.JWTHeaderNames...)
+	out.JWTCookieNames = append([]string(nil), in.JWTCookieNames...)
+	for index := range out.Rules {
+		out.Rules[index].Methods = append([]string(nil), in.Rules[index].Methods...)
+	}
+	return out
+}
+
+func rateLimitScopedPolicyID(scopeKey, policyID string) string {
+	scope := strings.TrimSpace(scopeKey)
+	if scope == "" {
+		scope = rateLimitDefaultScope
+	}
+	return scope + "|" + strings.TrimSpace(policyID)
+}
+
+func rateLimitEnabled(file rateLimitFile) bool {
+	if file.Default.Enabled {
+		return true
+	}
+	for _, scope := range file.Hosts {
+		if scope.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
+func rateLimitRuleCount(file rateLimitFile) int {
+	total := len(file.Default.Rules)
+	for _, scope := range file.Hosts {
+		total += len(scope.Rules)
+	}
+	return total
 }
 
 func normalizeRateLimitPolicy(p rateLimitPolicy, field string) (rateLimitPolicy, error) {
@@ -550,6 +861,13 @@ func ensureRateLimitFile(path string) error {
   "adaptive_score_threshold": 6,
   "adaptive_limit_factor_percent": 50,
   "adaptive_burst_factor_percent": 50,
+  "feedback": {
+    "enabled": false,
+    "strikes_required": 3,
+    "strike_window_seconds": 300,
+    "adaptive_only": true,
+    "dry_run": false
+  },
   "default_policy": {
     "enabled": true,
     "limit": 120,

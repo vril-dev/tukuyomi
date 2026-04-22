@@ -1,12 +1,6 @@
 package handler
 
-import (
-	"strings"
-
-	"github.com/gin-gonic/gin"
-
-	"tukuyomi/internal/config"
-)
+import "strings"
 
 func normalizeCountryFilter(raw string) string {
 	v := strings.TrimSpace(strings.ToUpper(raw))
@@ -38,23 +32,4 @@ func countryMatchesFilter(raw any, filter string) bool {
 	}
 
 	return normalizeCountryFromAny(raw) == filter
-}
-
-func requestCountryCode(c *gin.Context) string {
-	if c == nil || c.Request == nil {
-		return "UNKNOWN"
-	}
-	if !trustedForwardedHeaders(c) {
-		return "UNKNOWN"
-	}
-
-	for _, name := range config.CountryHeaderNames {
-		raw := strings.TrimSpace(c.GetHeader(name))
-		if raw == "" {
-			continue
-		}
-		return normalizeCountryCode(raw)
-	}
-
-	return "UNKNOWN"
 }

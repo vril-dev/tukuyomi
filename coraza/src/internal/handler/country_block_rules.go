@@ -28,24 +28,34 @@ func bindCountryBlockPutBody(c *gin.Context) (countryBlockPutBody, bool) {
 }
 
 func GetCountryBlockRules(c *gin.Context) {
-	path := GetCountryBlockPath()
+	path := GetCountryBlockActivePath()
+	if strings.TrimSpace(path) == "" {
+		path = GetCountryBlockPath()
+	}
 	raw, _ := os.ReadFile(path)
+	displayRaw := string(raw)
+	savedAt := fileSavedAt(path)
 	if store := getLogsStatsStore(); store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(countryBlockConfigBlobKey)
 		if err != nil {
 			log.Printf("[COUNTRY_BLOCK][DB][WARN] get config blob failed: %v", err)
 		} else if found {
-			codes, parseErr := ParseCountryBlockRaw(string(dbRaw))
+			file, parseErr := ParseCountryBlockRaw(string(dbRaw))
 			if parseErr != nil {
 				log.Printf("[COUNTRY_BLOCK][DB][WARN] cached blob parse failed (fallback=file): %v", parseErr)
 			} else {
+				if normalized, err := MarshalCountryBlockJSON(file); err == nil {
+					displayRaw = string(normalized)
+				}
 				if strings.TrimSpace(dbETag) == "" {
 					dbETag = bypassconf.ComputeETag(dbRaw)
 				}
+				savedAt = configBlobSavedAt(store, countryBlockConfigBlobKey)
 				c.JSON(http.StatusOK, gin.H{
-					"etag":    dbETag,
-					"raw":     string(dbRaw),
-					"blocked": codes,
+					"etag":     dbETag,
+					"raw":      displayRaw,
+					"blocked":  flattenCountryBlockCodes(file),
+					"saved_at": savedAt,
 				})
 				return
 			}
@@ -55,11 +65,17 @@ func GetCountryBlockRules(c *gin.Context) {
 			}
 		}
 	}
+	if file, err := ParseCountryBlockRaw(displayRaw); err == nil {
+		if normalized, nerr := MarshalCountryBlockJSON(file); nerr == nil {
+			displayRaw = string(normalized)
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"etag":    bypassconf.ComputeETag(raw),
-		"raw":     string(raw),
-		"blocked": GetBlockedCountries(),
+		"etag":     bypassconf.ComputeETag(raw),
+		"raw":      displayRaw,
+		"blocked":  GetBlockedCountries(),
+		"saved_at": savedAt,
 	})
 }
 
@@ -69,21 +85,25 @@ func ValidateCountryBlockRules(c *gin.Context) {
 		return
 	}
 
-	codes, err := ParseCountryBlockRaw(in.Raw)
+	file, err := ParseCountryBlockRaw(in.Raw)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"ok": true, "messages": []string{}, "blocked": codes})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "messages": []string{}, "blocked": flattenCountryBlockCodes(file)})
 }
 
 func PutCountryBlockRules(c *gin.Context) {
 	path := GetCountryBlockPath()
+	currentPath := GetCountryBlockActivePath()
+	if strings.TrimSpace(currentPath) == "" {
+		currentPath = path
+	}
 	store := getLogsStatsStore()
 
 	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(path)
+	curRaw, _ := os.ReadFile(currentPath)
 	curETag := bypassconf.ComputeETag(curRaw)
 	if store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(countryBlockConfigBlobKey)
@@ -113,13 +133,19 @@ func PutCountryBlockRules(c *gin.Context) {
 		return
 	}
 
-	codes, err := ParseCountryBlockRaw(in.Raw)
+	file, err := ParseCountryBlockRaw(in.Raw)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
 
-	if err := bypassconf.AtomicWriteWithBackup(path, []byte(in.Raw)); err != nil {
+	normalizedRaw, err := MarshalCountryBlockJSON(file)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := bypassconf.AtomicWriteWithBackup(path, normalizedRaw); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -131,9 +157,10 @@ func PutCountryBlockRules(c *gin.Context) {
 		return
 	}
 
-	newETag := bypassconf.ComputeETag([]byte(in.Raw))
+	now := time.Now().UTC()
+	newETag := bypassconf.ComputeETag(normalizedRaw)
 	if store != nil {
-		if err := store.UpsertConfigBlob(countryBlockConfigBlobKey, []byte(in.Raw), newETag, time.Now().UTC()); err != nil {
+		if err := store.UpsertConfigBlob(countryBlockConfigBlobKey, normalizedRaw, newETag, now); err != nil {
 			_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
 			_ = ReloadCountryBlock()
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -144,7 +171,7 @@ func PutCountryBlockRules(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": newETag, "blocked": codes})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": newETag, "blocked": flattenCountryBlockCodes(file), "raw": string(normalizedRaw), "saved_at": now.Format(time.RFC3339Nano)})
 }
 
 func SyncCountryBlockStorage() error {

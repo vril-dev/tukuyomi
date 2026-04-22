@@ -1,0 +1,46 @@
+ARG PHP_VERSION=8.3
+FROM php:${PHP_VERSION}-fpm-bookworm
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      autoconf \
+      g++ \
+      make \
+      pkg-config \
+      libfreetype6-dev \
+      libjpeg62-turbo-dev \
+      libonig-dev \
+      libpng-dev \
+      libpq-dev \
+      libsqlite3-dev \
+      libmagickwand-dev \
+      imagemagick \
+      ca-certificates; \
+    docker-php-source extract; \
+    cp /usr/src/php/ext/sqlite3/config0.m4 /usr/src/php/ext/sqlite3/config.m4; \
+    docker-php-ext-configure gd --with-freetype --with-jpeg; \
+    docker-php-ext-install -j"$(nproc)" \
+      bcmath \
+      gd \
+      mbstring \
+      mysqli \
+      pdo \
+      pdo_mysql \
+      pdo_pgsql \
+      pdo_sqlite \
+      pgsql \
+      sqlite3; \
+    cd /tmp; \
+    pecl channel-update pecl.php.net; \
+    pecl install igbinary; \
+    pecl install redis; \
+    pecl install imagick; \
+    docker-php-ext-enable igbinary redis imagick; \
+    php -m >/tmp/php-modules.txt; \
+    php -r 'echo PHP_VERSION;' >/tmp/php-version.txt; \
+    docker-php-source delete; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*

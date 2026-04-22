@@ -1,0 +1,8 @@
+services:
+  coraza:
+    volumes:
+      - ${SCHEDULED_TASK_APP_ROOT:?set SCHEDULED_TASK_APP_ROOT}:${SCHEDULED_TASK_APP_MOUNT:-/app/workloads/app}
+
+  scheduled-task-runner:
+    volumes:
+      - ${SCHEDULED_TASK_APP_ROOT:?set SCHEDULED_TASK_APP_ROOT}:${SCHEDULED_TASK_APP_MOUNT:-/app/workloads/app}

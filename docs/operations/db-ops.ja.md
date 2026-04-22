@@ -40,12 +40,12 @@ startup sync と multi-instance consistency に使う、admin から編集可能
 
 現在の blob key:
 
-- `cache_rules`（`cache.conf`）
-- `rate_limit_rules`（`rate-limit.conf`）
-- `country_block_rules`（`country-block.conf`）
-- `bypass_rules`（`waf.bypass`）
-- `bot_defense_rules`（`bot-defense.conf`）
-- `semantic_rules`（`semantic.conf`）
+- `cache_rules`（`cache-rules.json`）
+- `rate_limit_rules`（`rate-limit.json`）
+- `country_block_rules`（`country-block.json`）
+- `bypass_rules`（`waf-bypass.json`）
+- `bot_defense_rules`（`bot-defense.json`）
+- `semantic_rules`（`semantic.json`）
 - `crs_disabled_rules`（`crs-disabled.conf`）
 - `rule_file_sha256:<sha256(path)>`（`WAF_RULES_FILE` に列挙した base rule file。例: `rules/tukuyomi.conf`）
 
@@ -98,7 +98,7 @@ DB が missing / corrupted の場合:
 
 1. stack を止める（`docker compose down`）。
 2. 壊れた DB file を退避する。
-3. stack を起動する（`docker compose up -d coraza nginx`）。
+3. stack を起動する（`docker compose up -d coraza`）。
 4. `/tukuyomi-api/logs/stats` を 1 回呼び、`waf-events.ndjson` から `waf_events` を再取り込みさせる。
 5. 必要なら admin API から重要な config を再保存して `config_blobs` を再 seed する。
 

@@ -1,21 +1,75 @@
 package main
 
 import (
+	"context"
 	"log"
+	"net/http"
+	"os"
+	"runtime"
+	"runtime/debug"
 	"strings"
+	"time"
 
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/cacheconf"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/handler"
 	"tukuyomi/internal/middleware"
+	"tukuyomi/internal/observability"
 	"tukuyomi/internal/waf"
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		switch strings.TrimSpace(os.Args[1]) {
+		case "run-scheduled-tasks":
+			runScheduledTasksCommand()
+			return
+		case "update-country-db":
+			runUpdateCountryDBCommand()
+			return
+		}
+	}
+
 	config.LoadEnv()
+	if config.RuntimeGOMAXPROCS > 0 {
+		prev := runtime.GOMAXPROCS(config.RuntimeGOMAXPROCS)
+		log.Printf("[RUNTIME] GOMAXPROCS set to %d (previous=%d)", config.RuntimeGOMAXPROCS, prev)
+	}
+	if config.RuntimeMemoryLimitMB > 0 {
+		limitBytes := int64(config.RuntimeMemoryLimitMB) * 1024 * 1024
+		prev := debug.SetMemoryLimit(limitBytes)
+		log.Printf("[RUNTIME] memory limit set to %d MB (previous=%d MB)", config.RuntimeMemoryLimitMB, prev/(1024*1024))
+	}
+	if err := handler.InitRequestCountryRuntime(); err != nil {
+		log.Fatalf("[FATAL] failed to initialize request country runtime: %v", err)
+	}
+	if err := handler.InitPHPRuntimeInventoryRuntime(config.PHPRuntimeInventoryFile, config.ProxyRollbackMax); err != nil {
+		log.Fatalf("[FATAL] failed to initialize php runtime inventory: %v", err)
+	}
+	if err := handler.InitScheduledTaskRuntime(config.ScheduledTaskConfigFile, config.ProxyRollbackMax); err != nil {
+		log.Fatalf("[FATAL] failed to initialize scheduled task runtime: %v", err)
+	}
+	if err := handler.InitVhostRuntime(config.VhostConfigFile, config.ProxyRollbackMax); err != nil {
+		log.Fatalf("[FATAL] failed to initialize vhost runtime: %v", err)
+	}
+	if err := handler.InitPHPRuntimeSupervisor(); err != nil {
+		log.Fatalf("[FATAL] failed to initialize php runtime supervisor: %v", err)
+	}
+	if err := handler.InitSiteRuntime(config.SiteConfigFile, config.ProxyRollbackMax); err != nil {
+		log.Fatalf("[FATAL] failed to initialize site runtime: %v", err)
+	}
+	if err := handler.InitProxyRuntime(config.ProxyConfigFile, config.ProxyRollbackMax); err != nil {
+		log.Fatalf("[FATAL] failed to initialize proxy runtime: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := handler.ShutdownProxyAccessLogAsync(ctx); err != nil {
+			log.Printf("[PROXY][WARN] shutdown async access log writer: %v", err)
+		}
+	}()
 	if err := handler.InitLogsStatsStoreWithBackend(
 		config.StorageBackend,
 		config.DBDriver,
@@ -29,8 +83,17 @@ func main() {
 	} else {
 		log.Printf("[DB][INIT] storage backend=%s", config.StorageBackend)
 	}
+	if err := handler.InitSecurityAuditRuntime(); err != nil {
+		log.Fatalf("[SECURITY_AUDIT][FATAL] failed to initialize runtime: %v", err)
+	}
+	if err := handler.SyncProxyStorage(); err != nil {
+		log.Printf("[PROXY][DB][WARN] sync failed (fallback=file): %v", err)
+	}
 	if err := handler.SyncRuleFilesStorage(); err != nil {
 		log.Printf("[RULES][DB][WARN] sync failed (fallback=file): %v", err)
+	}
+	if err := handler.SyncManagedOverrideRulesStorage(); err != nil {
+		log.Printf("[OVERRIDE_RULES][DB][WARN] sync failed (fallback=file): %v", err)
 	}
 	waf.InitWAF()
 	if err := handler.SyncCRSDisabledStorage(); err != nil {
@@ -39,13 +102,13 @@ func main() {
 	if err := handler.SyncBypassStorage(); err != nil {
 		log.Printf("[BYPASS][DB][WARN] sync failed (fallback=file): %v", err)
 	}
-	if err := handler.InitCountryBlock(config.CountryBlockFile); err != nil {
+	if err := handler.InitCountryBlock(config.CountryBlockFile, config.LegacyCompatPath(config.CountryBlockFile, config.DefaultCountryBlockFilePath, config.LegacyDefaultCountryBlockPath)); err != nil {
 		log.Printf("[COUNTRY_BLOCK][INIT][ERR] %v (path=%s)", err, config.CountryBlockFile)
 	} else {
 		if err := handler.SyncCountryBlockStorage(); err != nil {
 			log.Printf("[COUNTRY_BLOCK][DB][WARN] sync failed (fallback=file): %v", err)
 		}
-		log.Printf("[COUNTRY_BLOCK][INIT] loaded %d countries", len(handler.GetBlockedCountries()))
+		log.Printf("[COUNTRY_BLOCK][INIT] configured=%s active=%s countries=%d", config.CountryBlockFile, handler.GetCountryBlockActivePath(), len(handler.GetBlockedCountries()))
 	}
 	if err := handler.InitRateLimit(config.RateLimitFile); err != nil {
 		log.Printf("[RATE_LIMIT][INIT][ERR] %v (path=%s)", err, config.RateLimitFile)
@@ -54,14 +117,6 @@ func main() {
 			log.Printf("[RATE_LIMIT][DB][WARN] sync failed (fallback=file): %v", err)
 		}
 		log.Printf("[RATE_LIMIT][INIT] loaded")
-	}
-	if err := handler.InitIPReputation(config.IPReputationFile); err != nil {
-		log.Printf("[IP_REPUTATION][INIT][ERR] %v (path=%s)", err, config.IPReputationFile)
-	} else {
-		if err := handler.SyncIPReputationStorage(); err != nil {
-			log.Printf("[IP_REPUTATION][DB][WARN] sync failed (fallback=file): %v", err)
-		}
-		log.Printf("[IP_REPUTATION][INIT] loaded")
 	}
 	if err := handler.InitBotDefense(config.BotDefenseFile); err != nil {
 		log.Printf("[BOT_DEFENSE][INIT][ERR] %v (path=%s)", err, config.BotDefenseFile)
@@ -79,7 +134,7 @@ func main() {
 		}
 		log.Printf("[SEMANTIC][INIT] loaded")
 	}
-	handler.SetNotificationProductLabel("web")
+	handler.SetNotificationProductLabel("proxy")
 	if err := handler.InitNotifications(config.NotificationFile); err != nil {
 		log.Printf("[NOTIFY][INIT][ERR] %v (path=%s)", err, config.NotificationFile)
 	} else {
@@ -88,157 +143,101 @@ func main() {
 		}
 		log.Printf("[NOTIFY][INIT] loaded")
 	}
-	if err := handler.InitLogOutput(config.LogOutputFile); err != nil {
-		log.Printf("[LOG_OUTPUT][INIT][ERR] %v (path=%s)", err, config.LogOutputFile)
+	if err := handler.InitIPReputation(config.IPReputationFile); err != nil {
+		log.Printf("[IP_REPUTATION][INIT][ERR] %v (path=%s)", err, config.IPReputationFile)
 	} else {
-		if err := handler.SyncLogOutputStorage(); err != nil {
-			log.Printf("[LOG_OUTPUT][DB][WARN] sync failed (fallback=file): %v", err)
+		if err := handler.SyncIPReputationStorage(); err != nil {
+			log.Printf("[IP_REPUTATION][DB][WARN] sync failed (fallback=file): %v", err)
 		}
-		logOutput := handler.GetLogOutputStatus()
-		log.Printf("[LOG_OUTPUT][INIT] loaded provider=%s stdout_streams=%d file_streams=%d", logOutput.Provider, logOutput.StdoutStreams, logOutput.FileStreams)
+		log.Printf("[IP_REPUTATION][INIT] loaded")
 	}
-
-	log.Println("[INFO] WAF upstream target:", config.AppURL)
-
-	r := gin.Default()
-
-	if len(config.TrustedProxyCIDRs) == 0 {
-		// Never trust client-sent forwarding headers unless explicitly configured.
-		if err := r.SetTrustedProxies(nil); err != nil {
-			log.Fatalf("failed to configure trusted proxies: %v", err)
+	if err := handler.InitAdminGuards(); err != nil {
+		log.Fatalf("[ADMIN][FATAL] failed to initialize admin guards: %v", err)
+	}
+	shutdownTracing, err := observability.SetupTracing(context.Background(), observability.TracingConfig{
+		Enabled:      config.TracingEnabled,
+		ServiceName:  config.TracingServiceName,
+		OTLPEndpoint: config.TracingOTLPEndpoint,
+		Insecure:     config.TracingInsecure,
+		SampleRatio:  config.TracingSampleRatio,
+	})
+	if err != nil {
+		log.Fatalf("[TRACING][FATAL] initialize tracing: %v", err)
+	}
+	defer func() {
+		if err := shutdownTracing(context.Background()); err != nil {
+			log.Printf("[TRACING][WARN] shutdown tracing: %v", err)
 		}
-		log.Println("[SECURITY] trusted proxies disabled; forwarded client IP and request ID headers are ignored")
-	} else {
-		if err := r.SetTrustedProxies(config.TrustedProxyCIDRs); err != nil {
-			log.Fatalf("failed to configure trusted proxies: %v", err)
+	}()
+	shutdownPprof, err := startOptionalPprofServerFromEnv()
+	if err != nil {
+		log.Fatalf("[PPROF][FATAL] initialize pprof server: %v", err)
+	}
+	defer func() {
+		if err := shutdownPprof(context.Background()); err != nil {
+			log.Printf("[PPROF][WARN] shutdown pprof server: %v", err)
 		}
-		log.Printf("[SECURITY] trusted proxies enabled: %s", strings.Join(config.TrustedProxyCIDRs, ","))
-	}
-	if config.ForwardInternalResponseHeaders {
-		log.Println("[SECURITY][WARN] exposing WAF debug response headers is enabled; use only behind a front proxy that strips them")
-	}
-	for _, warning := range config.AdminExposureWarnings() {
-		log.Printf("[SECURITY][WARN] %s", warning)
-	}
+	}()
 
-	// Lightweight unauthenticated probe for container health checks.
-	r.GET("/healthz", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
+	_, _, proxyCfg, _, _ := handler.ProxyRulesSnapshot()
+	log.Printf("[INFO] WAF upstreams configured=%d", len(proxyCfg.Upstreams))
+
+	globalConcurrencyGuard := middleware.NewQueuedConcurrencyGuard(
+		config.ServerMaxConcurrentReqs,
+		config.ServerMaxQueuedReqs,
+		config.ServerQueuedRequestTimeout,
+		"global",
+	)
+	if globalConcurrencyGuard != nil {
+		log.Printf(
+			"[SERVER] global concurrency guard enabled max=%d queue=%d timeout=%s",
+			config.ServerMaxConcurrentReqs,
+			config.ServerMaxQueuedReqs,
+			queueTimeoutLogValue(config.ServerQueuedRequestTimeout),
+		)
+	}
+	proxyConcurrencyGuard := middleware.NewQueuedConcurrencyGuard(
+		config.ServerMaxConcurrentProxy,
+		config.ServerMaxQueuedProxy,
+		config.ServerQueuedProxyRequestTimeout,
+		"proxy",
+	)
+	if proxyConcurrencyGuard != nil {
+		log.Printf(
+			"[SERVER] proxy concurrency guard enabled max=%d queue=%d timeout=%s",
+			config.ServerMaxConcurrentProxy,
+			config.ServerMaxQueuedProxy,
+			queueTimeoutLogValue(config.ServerQueuedProxyRequestTimeout),
+		)
+	}
+	handler.SetOverloadSnapshotProvider(func() map[string]middleware.ConcurrencyGuardSnapshot {
+		return map[string]middleware.ConcurrencyGuardSnapshot{
+			"global": middleware.SnapshotOrDisabled(
+				globalConcurrencyGuard,
+				"global",
+				config.ServerMaxConcurrentReqs,
+				config.ServerMaxQueuedReqs,
+				config.ServerQueuedRequestTimeout,
+			),
+			"proxy": middleware.SnapshotOrDisabled(
+				proxyConcurrencyGuard,
+				"proxy",
+				config.ServerMaxConcurrentProxy,
+				config.ServerMaxQueuedProxy,
+				config.ServerQueuedProxyRequestTimeout,
+			),
+		}
 	})
 
-	if len(config.APICORSOrigins) > 0 {
-		r.Use(cors.New(cors.Config{
-			AllowOrigins:     config.APICORSOrigins,
-			AllowMethods:     []string{"GET", "POST", "PUT", "OPTIONS"},
-			AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "X-API-Key", "X-CSRF-Token"},
-			AllowCredentials: true,
-		}))
-		log.Printf("[SECURITY] CORS enabled for origins: %s", strings.Join(config.APICORSOrigins, ","))
-	} else {
-		log.Println("[SECURITY] CORS disabled (same-origin only)")
+	if err := handler.InitResponseCacheRuntime(config.CacheStoreFile); err != nil {
+		log.Fatalf("[CACHE][FATAL] failed to initialize response cache runtime: %v", err)
+	}
+	if err := handler.SyncResponseCacheStoreStorage(); err != nil {
+		log.Printf("[CACHE][DB][WARN] sync failed (fallback=file): %v", err)
 	}
 
-	handler.RegisterAdminAuthRoutes(r)
-
-	api := r.Group(config.APIBasePath, middleware.AdminAccess(middleware.AdminEndpointAPI), middleware.APIKeyAuth())
-	{
-		api.GET("/", func(c *gin.Context) {
-			c.JSON(200, gin.H{
-				"message": "tukuyomi-admin API",
-				"endpoints": []string{
-					config.APIBasePath + "/status",
-					config.APIBasePath + "/logs",
-					config.APIBasePath + "/rules",
-					config.APIBasePath + "/crs-rule-sets",
-					config.APIBasePath + "/bypass-rules",
-					config.APIBasePath + "/cache-rules",
-					config.APIBasePath + "/country-block-rules",
-					config.APIBasePath + "/rate-limit-rules",
-					config.APIBasePath + "/notifications",
-					config.APIBasePath + "/notifications/status",
-					config.APIBasePath + "/log-output",
-					config.APIBasePath + "/ip-reputation",
-					config.APIBasePath + "/ip-reputation:validate",
-					config.APIBasePath + "/bot-defense-rules",
-					config.APIBasePath + "/bot-defense-decisions",
-					config.APIBasePath + "/semantic-rules",
-					config.APIBasePath + "/verify-manifest",
-					config.APIBasePath + "/fp-tuner/recent-waf-blocks",
-					config.APIBasePath + "/fp-tuner/propose",
-					config.APIBasePath + "/fp-tuner/apply",
-					config.APIBasePath + "/logs/read",
-					config.APIBasePath + "/logs/stats",
-					config.APIBasePath + "/logs/download",
-					config.APIBasePath + "/metrics",
-				},
-			})
-		})
-
-		api.GET("/status", handler.StatusHandler)
-		api.GET("/metrics", handler.MetricsHandler)
-		api.GET("/logs/read", handler.LogsRead)
-		api.GET("/logs/stats", handler.LogsStats)
-		api.GET("/logs/download", handler.LogsDownload)
-		api.GET("/rules", handler.RulesHandler)
-		api.POST("/rules:validate", handler.ValidateRules)
-		api.PUT("/rules", handler.PutRules)
-		api.GET("/crs-rule-sets", handler.GetCRSRuleSets)
-		api.POST("/crs-rule-sets:validate", handler.ValidateCRSRuleSets)
-		api.PUT("/crs-rule-sets", handler.PutCRSRuleSets)
-		api.GET("/bypass-rules", handler.GetBypassRules)
-		api.POST("/bypass-rules:validate", handler.ValidateBypassRules)
-		api.PUT("/bypass-rules", handler.PutBypassRules)
-		api.GET("/cache-rules", handler.GetCacheRules)
-		api.POST("/cache-rules:validate", handler.ValidateCacheRules)
-		api.PUT("/cache-rules", handler.PutCacheRules)
-		api.GET("/country-block-rules", handler.GetCountryBlockRules)
-		api.POST("/country-block-rules:validate", handler.ValidateCountryBlockRules)
-		api.PUT("/country-block-rules", handler.PutCountryBlockRules)
-		api.GET("/rate-limit-rules", handler.GetRateLimitRules)
-		api.POST("/rate-limit-rules:validate", handler.ValidateRateLimitRules)
-		api.PUT("/rate-limit-rules", handler.PutRateLimitRules)
-		api.GET("/notifications", handler.GetNotificationRules)
-		api.GET("/notifications/status", handler.GetNotificationStatusHandler)
-		api.POST("/notifications/validate", handler.ValidateNotificationRules)
-		api.POST("/notifications/test", handler.TestNotificationRules)
-		api.PUT("/notifications", handler.PutNotificationRules)
-		api.GET("/log-output", handler.GetLogOutputConfigHandler)
-		api.POST("/log-output/validate", handler.ValidateLogOutputConfigHandler)
-		api.PUT("/log-output", handler.PutLogOutputConfigHandler)
-		api.GET("/ip-reputation", handler.GetIPReputation)
-		api.POST("/ip-reputation:validate", handler.ValidateIPReputation)
-		api.PUT("/ip-reputation", handler.PutIPReputation)
-		api.GET("/bot-defense-rules", handler.GetBotDefenseRules)
-		api.POST("/bot-defense-rules:validate", handler.ValidateBotDefenseRules)
-		api.PUT("/bot-defense-rules", handler.PutBotDefenseRules)
-		api.GET("/bot-defense-decisions", handler.GetBotDefenseDecisions)
-		api.GET("/semantic-rules", handler.GetSemanticRules)
-		api.POST("/semantic-rules:validate", handler.ValidateSemanticRules)
-		api.PUT("/semantic-rules", handler.PutSemanticRules)
-		api.GET("/verify-manifest", handler.GetVerifyManifest)
-		api.GET("/fp-tuner/recent-waf-blocks", handler.GetFPTunerRecentWAFBlocks)
-		api.POST("/fp-tuner/propose", handler.ProposeFPTuning)
-		api.POST("/fp-tuner/apply", handler.ApplyFPTuning)
-	}
-
-	handler.RegisterAdminUIRoutes(r)
-	handler.ConfigureResponseCache()
-
-	r.NoRoute(func(c *gin.Context) {
-		p := c.Request.URL.Path
-		if strings.HasPrefix(p, config.APIBasePath) {
-			c.AbortWithStatus(404)
-			return
-		}
-		if p == config.UIBasePath || strings.HasPrefix(p, config.UIBasePath+"/") {
-			c.AbortWithStatus(404)
-			return
-		}
-
-		handler.ProxyHandler(c)
-	})
-
-	const cacheConfPath = "conf/cache.conf"
+	const cacheConfPath = config.DefaultCacheRulesFilePath
+	const legacyCacheConfPath = config.LegacyDefaultCacheRulesPath
 	if err := handler.SyncCacheRulesStorage(); err != nil {
 		log.Printf("[CACHE][DB][WARN] sync failed (fallback=file): %v", err)
 	}
@@ -246,13 +245,8 @@ func main() {
 		handler.StartStorageSyncLoop(config.DBSyncInterval)
 		log.Printf("[DB][SYNC] periodic sync loop enabled interval=%s", config.DBSyncInterval)
 	}
-	stopWatch, err := cacheconf.Watch(cacheConfPath, func(rs *cacheconf.Ruleset) {
-		handler.InvalidateResponseCache()
-		if rs != nil {
-			log.Printf("[CACHE][RUNTIME] invalidated in-memory response cache after rules reload (%d rules)", len(rs.Rules))
-		} else {
-			log.Printf("[CACHE][RUNTIME] invalidated in-memory response cache after rules reload")
-		}
+	stopWatch, err := cacheconf.Watch(cacheConfPath, legacyCacheConfPath, func(rs *cacheconf.Ruleset) {
+		//
 	})
 	if err != nil {
 		log.Printf("[CACHE] watch disabled: %v", err)
@@ -260,5 +254,193 @@ func main() {
 		defer stopWatch()
 	}
 
-	r.Run(":9090")
+	splitAdminListener := strings.TrimSpace(config.AdminListenAddr) != ""
+	if len(config.APICORSOrigins) > 0 {
+		log.Printf("[SECURITY] CORS enabled for origins: %s", strings.Join(config.APICORSOrigins, ","))
+	} else {
+		log.Println("[SECURITY] CORS disabled (same-origin only)")
+	}
+	publicEngine, err := buildPublicEngine(globalConcurrencyGuard, proxyConcurrencyGuard, splitAdminListener)
+	if err != nil {
+		log.Fatalf("failed to build public engine: %v", err)
+	}
+	var adminEngine *gin.Engine
+	if splitAdminListener {
+		adminEngine, err = buildAdminEngine(globalConcurrencyGuard)
+		if err != nil {
+			log.Fatalf("failed to build admin engine: %v", err)
+		}
+	}
+	publicListenerRuntime := listenerProxyProtocolRuntime{
+		enabled:           config.ServerProxyProtocolEnabled,
+		trustedCIDRs:      config.ServerProxyProtocolTrustedCIDRs,
+		readHeaderTimeout: config.ServerReadHeaderTimeout,
+	}
+	adminListenerRuntime := listenerProxyProtocolRuntime{
+		enabled:           config.AdminProxyProtocolEnabled,
+		trustedCIDRs:      config.AdminProxyProtocolTrustedCIDRs,
+		readHeaderTimeout: config.ServerReadHeaderTimeout,
+	}
+	activation, err := loadSystemdActivationFromEnv()
+	if err != nil {
+		log.Fatalf("[FATAL] load systemd socket activation: %v", err)
+	}
+	if activation.Active() {
+		log.Printf("[SERVER] systemd socket activation enabled fds=%d", len(activation.fds))
+	}
+	lifecycle := newManagedServerLifecycle(config.ServerGracefulShutdownTimeout)
+
+	srv := &http.Server{
+		Addr:              config.ListenAddr,
+		Handler:           publicEngine,
+		ReadTimeout:       config.ServerReadTimeout,
+		ReadHeaderTimeout: config.ServerReadHeaderTimeout,
+		WriteTimeout:      config.ServerWriteTimeout,
+		IdleTimeout:       config.ServerIdleTimeout,
+		MaxHeaderBytes:    config.ServerMaxHeaderBytes,
+	}
+	handler.ResetServerHTTP3RuntimeStatus()
+	if splitAdminListener {
+		adminListener, inherited, err := buildManagedTCPListenerForRole("admin", config.AdminListenAddr, adminListenerRuntime, activation)
+		if err != nil {
+			log.Fatalf("[FATAL] create admin listener: %v", err)
+		}
+		adminListener = lifecycle.TrackListener("admin", adminListener)
+		adminSrv := &http.Server{
+			Addr:              config.AdminListenAddr,
+			Handler:           adminEngine,
+			ReadTimeout:       config.ServerReadTimeout,
+			ReadHeaderTimeout: config.ServerReadHeaderTimeout,
+			WriteTimeout:      config.ServerWriteTimeout,
+			IdleTimeout:       config.ServerIdleTimeout,
+			MaxHeaderBytes:    config.ServerMaxHeaderBytes,
+		}
+		lifecycle.Go("admin", func() error {
+			log.Printf("[INFO] starting admin HTTP server on %s inherited=%t", config.AdminListenAddr, inherited)
+			if config.AdminProxyProtocolEnabled {
+				log.Printf("[SERVER] admin proxy protocol enabled trusted_cidrs=%s", strings.Join(config.AdminProxyProtocolTrustedCIDRs, ","))
+			}
+			return adminSrv.Serve(adminListener)
+		}, adminSrv.Shutdown, adminSrv.Close)
+	}
+
+	publicListener, publicInherited, err := buildManagedTCPListenerForRole("public", config.ListenAddr, publicListenerRuntime, activation)
+	if err != nil {
+		log.Fatalf("[FATAL] create public listener: %v", err)
+	}
+	publicListener = lifecycle.TrackListener("public", publicListener)
+
+	if config.ServerTLSEnabled {
+		tlsConfig, redirectSrv, err := buildManagedServerTLSConfig()
+		if err != nil {
+			log.Fatalf("[FATAL] build server tls config: %v", err)
+		}
+		srv.TLSConfig = tlsConfig
+		http3Srv, altSvc, err := buildManagedServerHTTP3Server(tlsConfig, publicEngine)
+		if err != nil {
+			log.Fatalf("[FATAL] build server http3 config: %v", err)
+		}
+		if altSvc != "" {
+			srv.Handler = wrapHTTP3AltSvcHandler(publicEngine, altSvc)
+		}
+		if redirectSrv != nil {
+			redirectListener, redirectInherited, err := buildManagedTCPListenerForRole("redirect", config.ServerTLSHTTPRedirectAddr, publicListenerRuntime, activation)
+			if err != nil {
+				log.Fatalf("[FATAL] create redirect listener: %v", err)
+			}
+			redirectListener = lifecycle.TrackListener("redirect", redirectListener)
+			lifecycle.Go("redirect", func() error {
+				log.Printf("[INFO] starting HTTP redirect server on %s inherited=%t", config.ServerTLSHTTPRedirectAddr, redirectInherited)
+				if config.ServerProxyProtocolEnabled {
+					log.Printf("[SERVER] public proxy protocol enabled trusted_cidrs=%s", strings.Join(config.ServerProxyProtocolTrustedCIDRs, ","))
+				}
+				return redirectSrv.Serve(redirectListener)
+			}, redirectSrv.Shutdown, redirectSrv.Close)
+		}
+		if err := runHTTP3Server(lifecycle, activation, http3Srv); err != nil {
+			log.Fatalf("[FATAL] start HTTP/3 server: %v", err)
+		}
+		log.Printf("[INFO] starting HTTPS server on %s inherited=%t", config.ListenAddr, publicInherited)
+		log.Printf("[SERVER] tls enabled source=%s cert_file=%s acme_domains=%s min_version=%s redirect_http=%t redirect_addr=%s",
+			handler.ServerTLSRuntimeStatusSnapshot().Source,
+			config.ServerTLSCertFile,
+			strings.Join(config.ServerTLSACMEDomains, ","),
+			config.ServerTLSMinVersion,
+			config.ServerTLSRedirectHTTP,
+			config.ServerTLSHTTPRedirectAddr,
+		)
+		if config.ServerHTTP3Enabled {
+			http3Status := handler.ServerHTTP3RuntimeStatusSnapshot()
+			log.Printf("[SERVER] http3 enabled alt_svc_max_age=%d advertised=%t alt_svc=%q",
+				config.ServerHTTP3AltSvcMaxAgeSec,
+				http3Status.Advertised,
+				http3Status.AltSvc,
+			)
+		}
+		log.Printf("[SERVER] read_timeout=%s read_header_timeout=%s write_timeout=%s idle_timeout=%s max_header_bytes=%d",
+			config.ServerReadTimeout,
+			config.ServerReadHeaderTimeout,
+			config.ServerWriteTimeout,
+			config.ServerIdleTimeout,
+			config.ServerMaxHeaderBytes,
+		)
+		if config.ServerProxyProtocolEnabled {
+			log.Printf("[SERVER] public proxy protocol enabled trusted_cidrs=%s", strings.Join(config.ServerProxyProtocolTrustedCIDRs, ","))
+		}
+		lifecycle.Go("public", func() error {
+			return srv.ServeTLS(publicListener, "", "")
+		}, srv.Shutdown, srv.Close)
+		activation.CloseUnused()
+		if err := lifecycle.Wait(); err != nil {
+			log.Fatalf("[FATAL] server lifecycle stopped: %v", err)
+		}
+		return
+	}
+
+	log.Printf("[INFO] starting server on %s inherited=%t", config.ListenAddr, publicInherited)
+	log.Printf("[SERVER] read_timeout=%s read_header_timeout=%s write_timeout=%s idle_timeout=%s max_header_bytes=%d",
+		config.ServerReadTimeout,
+		config.ServerReadHeaderTimeout,
+		config.ServerWriteTimeout,
+		config.ServerIdleTimeout,
+		config.ServerMaxHeaderBytes,
+	)
+	if config.ServerProxyProtocolEnabled {
+		log.Printf("[SERVER] public proxy protocol enabled trusted_cidrs=%s", strings.Join(config.ServerProxyProtocolTrustedCIDRs, ","))
+	}
+	lifecycle.Go("public", func() error {
+		return srv.Serve(publicListener)
+	}, srv.Shutdown, srv.Close)
+	activation.CloseUnused()
+	if err := lifecycle.Wait(); err != nil {
+		log.Fatalf("[FATAL] server lifecycle stopped: %v", err)
+	}
+}
+
+func runUpdateCountryDBCommand() {
+	config.LoadEnv()
+	if err := handler.RunManagedRequestCountryUpdateNow(context.Background()); err != nil {
+		log.Fatalf("[FATAL] update-country-db failed: %v", err)
+	}
+	log.Printf("[COUNTRY_DB] update completed")
+}
+
+func runScheduledTasksCommand() {
+	config.LoadEnv()
+	if err := handler.InitPHPRuntimeInventoryRuntime(config.PHPRuntimeInventoryFile, config.ProxyRollbackMax); err != nil {
+		log.Fatalf("[SCHEDULE][FATAL] initialize php runtime inventory: %v", err)
+	}
+	if err := handler.InitScheduledTaskRuntime(config.ScheduledTaskConfigFile, config.ProxyRollbackMax); err != nil {
+		log.Fatalf("[SCHEDULE][FATAL] initialize scheduled task runtime: %v", err)
+	}
+	if err := handler.RunDueScheduledTasks(time.Now()); err != nil {
+		log.Fatalf("[SCHEDULE][FATAL] %v", err)
+	}
+}
+
+func queueTimeoutLogValue(timeout time.Duration) string {
+	if timeout <= 0 {
+		return "disabled"
+	}
+	return timeout.String()
 }

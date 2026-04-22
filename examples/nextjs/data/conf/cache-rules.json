@@ -1,0 +1,33 @@
+{
+  "rules": [
+    {
+      "kind": "ALLOW",
+      "match": {
+        "type": "prefix",
+        "value": "/_next/static/"
+      },
+      "methods": ["GET", "HEAD"],
+      "ttl": 600,
+      "vary": ["Accept-Encoding"]
+    },
+    {
+      "kind": "ALLOW",
+      "match": {
+        "type": "prefix",
+        "value": "/"
+      },
+      "methods": ["GET", "HEAD"],
+      "ttl": 60,
+      "vary": ["Accept-Encoding"]
+    },
+    {
+      "kind": "DENY",
+      "match": {
+        "type": "prefix",
+        "value": "/tukuyomi-api/"
+      },
+      "methods": ["GET", "HEAD"],
+      "ttl": 600
+    }
+  ]
+}

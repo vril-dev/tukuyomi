@@ -1,0 +1,38 @@
+{
+  "default": {
+    "enabled": true,
+    "allowlist_ips": [],
+    "allowlist_countries": [],
+    "default_policy": {
+      "enabled": true,
+      "limit": 80,
+      "window_seconds": 60,
+      "burst": 10,
+      "key_by": "ip",
+      "action": {
+        "status": 429,
+        "retry_after_seconds": 60
+      }
+    },
+    "rules": [
+      {
+        "name": "wp-login",
+        "match_type": "exact",
+        "match_value": "/wp-login.php",
+        "methods": ["POST"],
+        "policy": {
+          "enabled": true,
+          "limit": 8,
+          "window_seconds": 60,
+          "burst": 0,
+          "key_by": "ip",
+          "action": {
+            "status": 429,
+            "retry_after_seconds": 60
+          }
+        }
+      }
+    ]
+  },
+  "hosts": {}
+}

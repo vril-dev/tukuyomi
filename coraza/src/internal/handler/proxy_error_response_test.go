@@ -8,16 +8,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
-
-	"github.com/gin-gonic/gin"
-
-	"tukuyomi/internal/config"
 )
 
-func TestProxyHandlerSupportsCustomErrorHTML(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+func TestServeProxySupportsCustomErrorHTML(t *testing.T) {
+	tmp := t.TempDir()
+	proxyPath := filepath.Join(tmp, "proxy.json")
+	htmlPath := filepath.Join(tmp, "proxy-error.html")
+	htmlBody := "<html><body><h1>backend unavailable</h1></body></html>"
+	if err := os.WriteFile(htmlPath, []byte(htmlBody), 0o644); err != nil {
+		t.Fatalf("write html file: %v", err)
+	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -26,41 +27,43 @@ func TestProxyHandlerSupportsCustomErrorHTML(t *testing.T) {
 	addr := ln.Addr().String()
 	_ = ln.Close()
 
-	htmlPath := filepath.Join(t.TempDir(), "proxy-error.html")
-	htmlBody := "<html><body><h1>backend unavailable</h1></body></html>"
-	if err := os.WriteFile(htmlPath, []byte(htmlBody), 0o644); err != nil {
-		t.Fatalf("write html file: %v", err)
+	raw := `{
+  "upstreams": [
+    { "name": "primary", "url": "http://` + addr + `", "weight": 1, "enabled": true }
+  ],
+  "dial_timeout": 1,
+  "response_header_timeout": 1,
+  "idle_conn_timeout": 90,
+  "max_idle_conns": 100,
+  "max_idle_conns_per_host": 100,
+  "max_conns_per_host": 200,
+  "force_http2": false,
+  "disable_compression": false,
+  "expect_continue_timeout": 1,
+  "tls_insecure_skip_verify": false,
+  "tls_client_cert": "",
+  "tls_client_key": "",
+  "buffer_request_body": false,
+  "max_response_buffer_bytes": 0,
+  "flush_interval_ms": 0,
+  "health_check_path": "",
+  "health_check_interval_sec": 15,
+  "health_check_timeout_sec": 2,
+  "error_html_file": "` + htmlPath + `"
+}`
+	if err := os.WriteFile(proxyPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write proxy config: %v", err)
 	}
 
-	oldAppURL := config.AppURL
-	oldHTMLFile := config.ProxyErrorHTMLFile
-	oldRedirectURL := config.ProxyErrorRedirectURL
-	oldProxy := proxy
-	oldOnce := proxyInitOnce
-	config.AppURL = "http://" + addr
-	config.ProxyErrorHTMLFile = htmlPath
-	config.ProxyErrorRedirectURL = ""
-	proxy = nil
-	proxyInitOnce = sync.Once{}
-	t.Cleanup(func() {
-		config.AppURL = oldAppURL
-		config.ProxyErrorHTMLFile = oldHTMLFile
-		config.ProxyErrorRedirectURL = oldRedirectURL
-		proxy = oldProxy
-		proxyInitOnce = oldOnce
-	})
+	if err := InitProxyRuntime(proxyPath, 1); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
 
-	router := gin.New()
-	router.Any("/*path", ProxyHandler)
-	srv := httptest.NewServer(router)
-	defer srv.Close()
-
-	reqHTML, _ := http.NewRequest(http.MethodGet, srv.URL+"/app", nil)
+	reqHTML := httptest.NewRequest(http.MethodGet, "http://example.test/app", nil)
 	reqHTML.Header.Set("Accept", "text/html")
-	resHTML, err := http.DefaultClient.Do(reqHTML)
-	if err != nil {
-		t.Fatalf("html request failed: %v", err)
-	}
+	recHTML := httptest.NewRecorder()
+	ServeProxy(recHTML, reqHTML)
+	resHTML := recHTML.Result()
 	bodyHTML, _ := io.ReadAll(resHTML.Body)
 	resHTML.Body.Close()
 	if resHTML.StatusCode != http.StatusServiceUnavailable {
@@ -73,27 +76,27 @@ func TestProxyHandlerSupportsCustomErrorHTML(t *testing.T) {
 		t.Fatalf("unexpected html body: %q", string(bodyHTML))
 	}
 
-	reqText, _ := http.NewRequest(http.MethodGet, srv.URL+"/app", nil)
-	reqText.Header.Set("Accept", "application/json")
-	resText, err := http.DefaultClient.Do(reqText)
-	if err != nil {
-		t.Fatalf("plain-text request failed: %v", err)
+	reqJSON := httptest.NewRequest(http.MethodGet, "http://example.test/app", nil)
+	reqJSON.Header.Set("Accept", "application/json")
+	recJSON := httptest.NewRecorder()
+	ServeProxy(recJSON, reqJSON)
+	resJSON := recJSON.Result()
+	bodyJSON, _ := io.ReadAll(resJSON.Body)
+	resJSON.Body.Close()
+	if resJSON.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("unexpected json status: %d", resJSON.StatusCode)
 	}
-	bodyText, _ := io.ReadAll(resText.Body)
-	resText.Body.Close()
-	if resText.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("unexpected plain-text status: %d", resText.StatusCode)
-	}
-	if ct := resText.Header.Get("Content-Type"); !strings.Contains(ct, "text/plain") {
+	if ct := resJSON.Header.Get("Content-Type"); !strings.Contains(ct, "text/plain") {
 		t.Fatalf("unexpected plain-text content-type: %q", ct)
 	}
-	if !strings.Contains(string(bodyText), "Service Unavailable") {
-		t.Fatalf("unexpected plain-text body: %q", string(bodyText))
+	if !strings.Contains(string(bodyJSON), "Service Unavailable") {
+		t.Fatalf("unexpected plain-text body: %q", string(bodyJSON))
 	}
 }
 
-func TestProxyHandlerRedirectsGETRequestsToMaintenanceURL(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+func TestServeProxyRedirectsGETRequestsToMaintenanceURL(t *testing.T) {
+	tmp := t.TempDir()
+	proxyPath := filepath.Join(tmp, "proxy.json")
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -102,40 +105,43 @@ func TestProxyHandlerRedirectsGETRequestsToMaintenanceURL(t *testing.T) {
 	addr := ln.Addr().String()
 	_ = ln.Close()
 
-	oldAppURL := config.AppURL
-	oldHTMLFile := config.ProxyErrorHTMLFile
-	oldRedirectURL := config.ProxyErrorRedirectURL
-	oldProxy := proxy
-	oldOnce := proxyInitOnce
-	config.AppURL = "http://" + addr
-	config.ProxyErrorHTMLFile = ""
-	config.ProxyErrorRedirectURL = "/maintenance"
-	proxy = nil
-	proxyInitOnce = sync.Once{}
-	t.Cleanup(func() {
-		config.AppURL = oldAppURL
-		config.ProxyErrorHTMLFile = oldHTMLFile
-		config.ProxyErrorRedirectURL = oldRedirectURL
-		proxy = oldProxy
-		proxyInitOnce = oldOnce
-	})
+	raw := `{
+  "upstreams": [
+    { "name": "primary", "url": "http://` + addr + `", "weight": 1, "enabled": true }
+  ],
+  "dial_timeout": 1,
+  "response_header_timeout": 1,
+  "idle_conn_timeout": 90,
+  "max_idle_conns": 100,
+  "max_idle_conns_per_host": 100,
+  "max_conns_per_host": 200,
+  "force_http2": false,
+  "disable_compression": false,
+  "expect_continue_timeout": 1,
+  "tls_insecure_skip_verify": false,
+  "tls_client_cert": "",
+  "tls_client_key": "",
+  "buffer_request_body": false,
+  "max_response_buffer_bytes": 0,
+  "flush_interval_ms": 0,
+  "health_check_path": "",
+  "health_check_interval_sec": 15,
+  "health_check_timeout_sec": 2,
+  "error_redirect_url": "/maintenance"
+}`
+	if err := os.WriteFile(proxyPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write proxy config: %v", err)
+	}
 
-	router := gin.New()
-	router.Any("/*path", ProxyHandler)
-	srv := httptest.NewServer(router)
-	defer srv.Close()
+	if err := InitProxyRuntime(proxyPath, 1); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
 
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/app", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://example.test/app", nil)
 	req.Header.Set("Accept", "text/html")
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	res, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("redirect request failed: %v", err)
-	}
+	rec := httptest.NewRecorder()
+	ServeProxy(rec, req)
+	res := rec.Result()
 	res.Body.Close()
 	if res.StatusCode != http.StatusFound {
 		t.Fatalf("unexpected redirect status: %d", res.StatusCode)

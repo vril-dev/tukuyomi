@@ -105,7 +105,7 @@ func (s *temporalRiskStore) Observe(ipStr, path, userAgent string, now time.Time
 	}
 }
 
-func inspectSemanticTemporalRisk(rt *runtimeSemanticConfig, cfg semanticConfig, clientIP, path, userAgent string, now time.Time, score *int, signals *[]semanticSignal) {
+func inspectSemanticTemporalRisk(rt *runtimeSemanticScope, cfg semanticConfig, clientIP, path, userAgent string, now time.Time, score *int, signals *[]semanticSignal) {
 	if rt == nil || rt.temporal == nil {
 		return
 	}

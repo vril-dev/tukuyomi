@@ -16,6 +16,12 @@ func TestValidateRateLimitRaw(t *testing.T) {
   "enabled": true,
   "allowlist_ips": ["127.0.0.1/32"],
   "allowlist_countries": ["JP"],
+  "feedback": {
+    "enabled": true,
+    "strikes_required": 2,
+    "strike_window_seconds": 120,
+    "adaptive_only": true
+  },
   "default_policy": {
     "enabled": true,
     "limit": 100,
@@ -46,11 +52,14 @@ func TestValidateRateLimitRaw(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateRateLimitRaw() unexpected error: %v", err)
 	}
-	if rt == nil || !rt.Raw.Enabled {
+	if rt == nil || !rt.Raw.Default.Enabled {
 		t.Fatalf("runtime config should be enabled: %#v", rt)
 	}
-	if got := len(rt.Rules); got != 1 {
+	if got := len(rt.Default.Rules); got != 1 {
 		t.Fatalf("len(rt.Rules)=%d want=1", got)
+	}
+	if !rt.Raw.Default.Feedback.Enabled || !rt.Default.Feedback.AdaptiveOnly || rt.Default.Feedback.StrikeWindow != 120*time.Second {
+		t.Fatalf("feedback was not normalized: %#v %#v", rt.Raw.Default.Feedback, rt.Default.Feedback)
 	}
 }
 
@@ -216,12 +225,166 @@ func TestEvaluateRateLimit_UsesJWTSubjectKey(t *testing.T) {
 	}
 }
 
+func TestEvaluateRateLimit_HostScopePrecedence(t *testing.T) {
+	raw := `{
+  "default": {
+    "enabled": true,
+    "default_policy": {
+      "enabled": true,
+      "limit": 1,
+      "window_seconds": 60,
+      "burst": 0,
+      "key_by": "ip",
+      "action": {"status": 429, "retry_after_seconds": 30}
+    },
+    "rules": []
+  },
+  "hosts": {
+    "example.com": {
+      "default_policy": {
+        "enabled": true,
+        "limit": 2,
+        "window_seconds": 60,
+        "burst": 0,
+        "key_by": "ip",
+        "action": {"status": 429, "retry_after_seconds": 30}
+      }
+    },
+    "example.com:8080": {
+      "default_policy": {
+        "enabled": true,
+        "limit": 3,
+        "window_seconds": 60,
+        "burst": 0,
+        "key_by": "ip",
+        "action": {"status": 429, "retry_after_seconds": 30}
+      }
+    }
+  }
+}`
+	rt, err := ValidateRateLimitRaw(raw)
+	if err != nil {
+		t.Fatalf("ValidateRateLimitRaw() unexpected error: %v", err)
+	}
+
+	restore := saveRateLimitStateForTest()
+	defer restore()
+	rateLimitMu.Lock()
+	rateLimitRuntime = rt
+	rateLimitMu.Unlock()
+	rateCounterMu.Lock()
+	rateCounters = map[string]rateCounter{}
+	rateCounterSweep = 0
+	rateCounterMu.Unlock()
+
+	now := time.Unix(1_700_300_000, 0).UTC()
+	req8080a := httptest.NewRequest("GET", "http://example.com:8080/items", nil)
+	req8080b := httptest.NewRequest("GET", "http://example.com:8080/items", nil)
+	req8080c := httptest.NewRequest("GET", "http://example.com:8080/items", nil)
+	req8080d := httptest.NewRequest("GET", "http://example.com:8080/items", nil)
+	d8080a := EvaluateRateLimit(req8080a, "10.0.0.30", "JP", 0, now)
+	d8080b := EvaluateRateLimit(req8080b, "10.0.0.30", "JP", 0, now.Add(time.Second))
+	d8080c := EvaluateRateLimit(req8080c, "10.0.0.30", "JP", 0, now.Add(2*time.Second))
+	d8080d := EvaluateRateLimit(req8080d, "10.0.0.30", "JP", 0, now.Add(3*time.Second))
+	if !d8080a.Allowed || !d8080b.Allowed || !d8080c.Allowed {
+		t.Fatalf("first three :8080 requests should be allowed: %+v %+v %+v", d8080a, d8080b, d8080c)
+	}
+	if d8080d.Allowed {
+		t.Fatalf("fourth :8080 request should be blocked: %+v", d8080d)
+	}
+	if d8080d.HostScope != "example.com:8080" {
+		t.Fatalf("host scope=%q want example.com:8080", d8080d.HostScope)
+	}
+
+	reqHostA := httptest.NewRequest("GET", "http://example.com/items", nil)
+	reqHostB := httptest.NewRequest("GET", "http://example.com/items", nil)
+	reqHostC := httptest.NewRequest("GET", "http://example.com/items", nil)
+	dHostA := EvaluateRateLimit(reqHostA, "10.0.0.31", "JP", 0, now)
+	dHostB := EvaluateRateLimit(reqHostB, "10.0.0.31", "JP", 0, now.Add(time.Second))
+	dHostC := EvaluateRateLimit(reqHostC, "10.0.0.31", "JP", 0, now.Add(2*time.Second))
+	if !dHostA.Allowed || !dHostB.Allowed {
+		t.Fatalf("first two host-only requests should be allowed: %+v %+v", dHostA, dHostB)
+	}
+	if dHostC.Allowed {
+		t.Fatalf("third host-only request should be blocked: %+v", dHostC)
+	}
+	if dHostC.HostScope != "example.com" {
+		t.Fatalf("host scope=%q want example.com", dHostC.HostScope)
+	}
+
+	reqDefaultA := httptest.NewRequest("GET", "http://www.example.com/items", nil)
+	reqDefaultB := httptest.NewRequest("GET", "http://www.example.com/items", nil)
+	dDefaultA := EvaluateRateLimit(reqDefaultA, "10.0.0.32", "JP", 0, now)
+	dDefaultB := EvaluateRateLimit(reqDefaultB, "10.0.0.32", "JP", 0, now.Add(time.Second))
+	if !dDefaultA.Allowed {
+		t.Fatalf("first default request should be allowed: %+v", dDefaultA)
+	}
+	if dDefaultB.Allowed {
+		t.Fatalf("second default request should be blocked: %+v", dDefaultB)
+	}
+	if dDefaultB.HostScope != rateLimitDefaultScope {
+		t.Fatalf("host scope=%q want default", dDefaultB.HostScope)
+	}
+}
+
+func TestEvaluateRateLimit_IsolatesCountersAcrossHostScopes(t *testing.T) {
+	raw := `{
+  "default": {
+    "enabled": true,
+    "default_policy": {
+      "enabled": true,
+      "limit": 1,
+      "window_seconds": 60,
+      "burst": 0,
+      "key_by": "ip",
+      "action": {"status": 429, "retry_after_seconds": 30}
+    },
+    "rules": []
+  },
+  "hosts": {
+    "one.example.com": {},
+    "two.example.com": {}
+  }
+}`
+	rt, err := ValidateRateLimitRaw(raw)
+	if err != nil {
+		t.Fatalf("ValidateRateLimitRaw() unexpected error: %v", err)
+	}
+
+	restore := saveRateLimitStateForTest()
+	defer restore()
+	rateLimitMu.Lock()
+	rateLimitRuntime = rt
+	rateLimitMu.Unlock()
+	rateCounterMu.Lock()
+	rateCounters = map[string]rateCounter{}
+	rateCounterSweep = 0
+	rateCounterMu.Unlock()
+
+	now := time.Unix(1_700_301_000, 0).UTC()
+	reqOneA := httptest.NewRequest("GET", "http://one.example.com/items", nil)
+	reqTwoA := httptest.NewRequest("GET", "http://two.example.com/items", nil)
+	reqOneB := httptest.NewRequest("GET", "http://one.example.com/items", nil)
+	dOneA := EvaluateRateLimit(reqOneA, "10.0.0.40", "JP", 0, now)
+	dTwoA := EvaluateRateLimit(reqTwoA, "10.0.0.40", "JP", 0, now.Add(time.Second))
+	dOneB := EvaluateRateLimit(reqOneB, "10.0.0.40", "JP", 0, now.Add(2*time.Second))
+	if !dOneA.Allowed || !dTwoA.Allowed {
+		t.Fatalf("first request per host scope should be allowed: %+v %+v", dOneA, dTwoA)
+	}
+	if dOneB.Allowed {
+		t.Fatalf("second request on the first host scope should be blocked: %+v", dOneB)
+	}
+	if dOneB.HostScope != "one.example.com" {
+		t.Fatalf("host scope=%q want one.example.com", dOneB.HostScope)
+	}
+}
+
 func TestSyncRateLimitStorage_SeedsDBFromFileWhenMissingBlob(t *testing.T) {
 	restore := saveRateLimitStateForTest()
 	defer restore()
 
 	tmp := t.TempDir()
-	path := filepath.Join(tmp, "rate-limit.conf")
+	path := filepath.Join(tmp, "rate-limit.json")
 	raw := rateLimitRawForTest(77)
 	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
 		t.Fatalf("write rate-limit file: %v", err)
@@ -263,7 +426,7 @@ func TestSyncRateLimitStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
 	defer restore()
 
 	tmp := t.TempDir()
-	path := filepath.Join(tmp, "rate-limit.conf")
+	path := filepath.Join(tmp, "rate-limit.json")
 	fileRaw := rateLimitRawForTest(120)
 	if err := os.WriteFile(path, []byte(fileRaw), 0o644); err != nil {
 		t.Fatalf("write rate-limit file: %v", err)
@@ -302,8 +465,8 @@ func TestSyncRateLimitStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
 	}
 
 	cfg := GetRateLimitConfig()
-	if cfg.DefaultPolicy.Limit != 9 {
-		t.Fatalf("runtime default_policy.limit=%d want=9", cfg.DefaultPolicy.Limit)
+	if cfg.Default.DefaultPolicy.Limit != 9 {
+		t.Fatalf("runtime default_policy.limit=%d want=9", cfg.Default.DefaultPolicy.Limit)
 	}
 }
 
@@ -320,6 +483,13 @@ func saveRateLimitStateForTest() func() {
 	}
 	oldSweep := rateCounterSweep
 	rateCounterMu.Unlock()
+	rateLimitFeedbackStateMu.Lock()
+	oldFeedbackState := make(map[string]rateLimitFeedbackState, len(rateLimitFeedbackStateByKey))
+	for k, v := range rateLimitFeedbackStateByKey {
+		oldFeedbackState[k] = v
+	}
+	oldFeedbackSweep := rateLimitFeedbackStateSweep
+	rateLimitFeedbackStateMu.Unlock()
 	oldRequests := rateLimitRequestsTotal.Load()
 	oldAllowed := rateLimitAllowedTotal.Load()
 	oldBlocked := rateLimitBlockedTotal.Load()
@@ -335,6 +505,10 @@ func saveRateLimitStateForTest() func() {
 		rateCounters = oldCounters
 		rateCounterSweep = oldSweep
 		rateCounterMu.Unlock()
+		rateLimitFeedbackStateMu.Lock()
+		rateLimitFeedbackStateByKey = oldFeedbackState
+		rateLimitFeedbackStateSweep = oldFeedbackSweep
+		rateLimitFeedbackStateMu.Unlock()
 		rateLimitRequestsTotal.Store(oldRequests)
 		rateLimitAllowedTotal.Store(oldAllowed)
 		rateLimitBlockedTotal.Store(oldBlocked)

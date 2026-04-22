@@ -17,9 +17,6 @@ services:
       - WORDPRESS_DB_NAME=wordpress
       - WORDPRESS_DB_USER=wordpress
       - WORDPRESS_DB_PASSWORD=wordpress
-    volumes:
-      - ./wordpress/tukuyomi-whoami.php:/var/www/html/tukuyomi-whoami.php:ro
-      - ./wordpress/mu-plugins:/var/www/html/wp-content/mu-plugins:ro
     depends_on:
       - db
     restart: unless-stopped
@@ -27,97 +24,26 @@ services:
   coraza:
     user: "${PUID}:${GUID}"
     build:
-      context: ../..
-      dockerfile: coraza/Dockerfile
-      args:
-        VITE_CORAZA_API_BASE: ${VITE_CORAZA_API_BASE:-/tukuyomi-api}
-        VITE_APP_BASE_PATH: ${VITE_APP_BASE_PATH:-/tukuyomi-admin}
+      context: ../../coraza
+      dockerfile: Dockerfile
     environment:
-      - WAF_APP_URL=${WAF_APP_URL}
-      - WAF_LOG_FILE=${WAF_LOG_FILE}
-      - WAF_LOG_OUTPUT_FILE=${WAF_LOG_OUTPUT_FILE:-conf/log-output.json}
-      - WAF_STRICT_OVERRIDE=${WAF_STRICT_OVERRIDE}
-      - WAF_API_BASEPATH=${WAF_API_BASEPATH}
-      - WAF_UI_BASEPATH=${VITE_APP_BASE_PATH:-/tukuyomi-admin}
-      - WAF_ADMIN_EXTERNAL_MODE=${WAF_ADMIN_EXTERNAL_MODE:-api_only_external}
-      - WAF_ADMIN_TRUSTED_CIDRS=${WAF_ADMIN_TRUSTED_CIDRS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
-      - WAF_TRUSTED_PROXY_CIDRS=${WAF_TRUSTED_PROXY_CIDRS:-}
-      - WAF_COUNTRY_HEADER_NAMES=${WAF_COUNTRY_HEADER_NAMES:-X-Country-Code,CF-IPCountry}
-      - WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=${WAF_FORWARD_INTERNAL_RESPONSE_HEADERS:-false}
-      - WAF_RESPONSE_CACHE_MODE=${WAF_RESPONSE_CACHE_MODE:-off}
-      - WAF_RESPONSE_CACHE_MAX_ENTRIES=${WAF_RESPONSE_CACHE_MAX_ENTRIES:-512}
-      - WAF_RESPONSE_CACHE_MAX_BODY_BYTES=${WAF_RESPONSE_CACHE_MAX_BODY_BYTES:-1048576}
-      - WAF_BYPASS_FILE=${WAF_BYPASS_FILE}
-      - WAF_BOT_DEFENSE_FILE=${WAF_BOT_DEFENSE_FILE}
-      - WAF_SEMANTIC_FILE=${WAF_SEMANTIC_FILE}
-      - WAF_COUNTRY_BLOCK_FILE=${WAF_COUNTRY_BLOCK_FILE}
-      - WAF_RATE_LIMIT_FILE=${WAF_RATE_LIMIT_FILE}
-      - WAF_RULES_FILE=${WAF_RULES_FILE}
-      - WAF_API_KEY_PRIMARY=${WAF_API_KEY_PRIMARY}
-      - WAF_API_KEY_SECONDARY=${WAF_API_KEY_SECONDARY}
-      - WAF_ADMIN_SESSION_SECRET=${WAF_ADMIN_SESSION_SECRET:-}
-      - WAF_ADMIN_SESSION_TTL_SEC=${WAF_ADMIN_SESSION_TTL_SEC:-28800}
-      - WAF_API_AUTH_DISABLE=${WAF_API_AUTH_DISABLE}
-      - WAF_API_CORS_ALLOWED_ORIGINS=${WAF_API_CORS_ALLOWED_ORIGINS}
-      - WAF_CRS_ENABLE=${WAF_CRS_ENABLE}
-      - WAF_CRS_SETUP_FILE=${WAF_CRS_SETUP_FILE}
-      - WAF_CRS_RULES_DIR=${WAF_CRS_RULES_DIR}
-      - WAF_CRS_DISABLED_FILE=${WAF_CRS_DISABLED_FILE}
-      - WAF_STORAGE_BACKEND=${WAF_STORAGE_BACKEND:-file}
-      - WAF_DB_DRIVER=${WAF_DB_DRIVER:-sqlite}
-      - WAF_DB_ENABLED=${WAF_DB_ENABLED:-false}
-      - WAF_DB_DSN=${WAF_DB_DSN:-}
-      - WAF_DB_PATH=${WAF_DB_PATH:-logs/coraza/tukuyomi.db}
-      - WAF_DB_RETENTION_DAYS=${WAF_DB_RETENTION_DAYS:-30}
-      - WAF_ALLOW_INSECURE_DEFAULTS=${WAF_ALLOW_INSECURE_DEFAULTS}
+      - WAF_CONFIG_FILE=${WAF_CONFIG_FILE:-conf/config.json}
     volumes:
       - ./data/rules:/app/rules
       - ./data/conf:/app/conf
-      - ./data/logs:/app/logs
+      - ./data/logs/coraza:/app/logs
     ports:
-      - "${CORAZA_PORT:-19092}:9090"
+      - "${CORAZA_PORT:-19092}:${WAF_LISTEN_PORT:-9090}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -T 2 -O /dev/null http://127.0.0.1:9090/healthz"]
+      test: ["CMD-SHELL", "wget -q -T 2 -O /dev/null http://127.0.0.1:${WAF_LISTEN_PORT:-9090}/healthz"]
       interval: 5s
       timeout: 3s
       retries: 20
       start_period: 5s
     depends_on:
       - wordpress
-    restart: unless-stopped
-
-  nginx:
-    profiles: ["front-proxy"]
-    cap_add: ["NET_BIND_SERVICE"]
-    user: "${PUID}:${GUID}"
-    build:
-      context: ../../nginx
-      dockerfile: Dockerfile
-      args:
-        NGX_CORAZA_UPSTREAM: ${NGX_CORAZA_UPSTREAM}
-        NGX_BACKEND_RESPONSE_TIMEOUT: ${NGX_BACKEND_RESPONSE_TIMEOUT}
-        NGX_CORAZA_ADMIN_URL: ${NGX_CORAZA_ADMIN_URL}
-        NGX_CORAZA_API_BASEPATH: ${NGX_CORAZA_API_BASEPATH}
-        PUID: ${PUID}
-        GUID: ${GUID}
-    ports:
-      - "${NGINX_PORT:-${OPENRESTY_PORT:-18082}}:80"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - ../../nginx/waf:/etc/nginx/waf:ro
-      - ./data/logs/nginx:/data/logs/nginx
-    depends_on:
-      coraza:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -T 2 -O /dev/null http://127.0.0.1/healthz"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 5s
     restart: unless-stopped
 
 volumes:

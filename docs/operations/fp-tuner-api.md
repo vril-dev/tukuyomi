@@ -2,13 +2,12 @@
 
 # FP Tuner API Contract (v1)
 
-This document defines the current API contract for the FP tuning flow backed by an external HTTP provider.
+This document defines the current API contract for Coraza false-positive exclusion tuning over the HTTP provider path.
 
 ## Endpoints
 
 - `POST /tukuyomi-api/fp-tuner/propose`
 - `POST /tukuyomi-api/fp-tuner/apply`
-- `GET /tukuyomi-api/fp-tuner/recent-waf-blocks`
 
 ## 1) Propose
 
@@ -20,7 +19,10 @@ This document defines the current API contract for the FP tuning flow backed by 
   "event": {
     "event_id": "manual-test-001",
     "method": "GET",
+    "scheme": "https",
+    "host": "search.example.com",
     "path": "/search",
+    "query": "q=select+*+from+users",
     "rule_id": 100004,
     "status": 403,
     "matched_variable": "ARGS:q",
@@ -32,6 +34,7 @@ This document defines the current API contract for the FP tuning flow backed by 
 Notes:
 - `event` is optional. If omitted, server tries latest `waf_block` event from `waf-events.ndjson`.
 - Unknown fields are rejected.
+- The provider is expected to either return one safe scoped Coraza exclusion proposal or an explicit `no_proposal`.
 
 ### Response
 
@@ -61,7 +64,7 @@ Notes:
     "id": "fp-http-001",
     "title": "Scoped false-positive tuning suggestion",
     "summary": "Scoped false-positive tuning suggestion.",
-    "reason": "Provider response for external HTTP-backed tuning flow.",
+    "reason": "Provider-generated response for HTTP FP tuner flow.",
     "confidence": 0.84,
     "target_path": "rules/tukuyomi.conf",
     "rule_line": "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\""
@@ -71,7 +74,37 @@ Notes:
 
 Notes:
 - `approval.required=true` means non-simulated apply requires `approval_token`.
-- providers may return `no_proposal` instead of `proposal` when a safe scoped exclusion is not justified.
+
+### Response (`no_proposal`)
+
+```json
+{
+  "ok": true,
+  "contract_version": "fp_tuner.v1",
+  "mode": "http",
+  "source": "request",
+  "approval": {
+    "required": false
+  },
+  "input": {
+    "event_id": "manual-test-001",
+    "method": "GET",
+    "scheme": "https",
+    "host": "search.example.com",
+    "path": "/search",
+    "query": "q=select+*+from+users",
+    "rule_id": 100004,
+    "status": 403,
+    "matched_variable": "ARGS:q",
+    "matched_value": "select * from users"
+  },
+  "no_proposal": {
+    "decision": "no_proposal",
+    "reason": "The evidence does not justify a safe Coraza scoped exclusion for this event.",
+    "confidence": 0.12
+  }
+}
+```
 
 ## 2) Apply
 
@@ -122,6 +155,10 @@ Notes:
 ## Security Behavior
 
 - Provider request payload is sanitized before external send.
+- Provider is instructed to reason about Coraza / ModSecurity-compatible host-aware scoped exclusions only.
+- Provider may return `no_proposal` when the event is not a credible false positive or evidence is insufficient.
+- Safe proposal scope is bound to observed `scheme + host[:default-port] + path + rule_id + matched_variable`.
+- For `http:80` and `https:443`, host scope may use a narrow optional-default-port regex such as `^example\.com(:80)?$` or `^example\.com(:443)?$`.
 - Masked categories include bearer/jwt-like tokens, email, IPv4, and common secret query keys.
 - Only scoped exclusion format is accepted for apply.
 - Propose/apply actions are appended to `WAF_FP_TUNER_AUDIT_FILE` (default `logs/coraza/fp-tuner-audit.ndjson`).
@@ -129,10 +166,6 @@ Notes:
 
 ## Related Env Vars
 
-- `WAF_FP_TUNER_ENDPOINT`
-- `WAF_FP_TUNER_API_KEY`
-- `WAF_FP_TUNER_MODEL`
-- `WAF_FP_TUNER_TIMEOUT_SEC`
 - `WAF_FP_TUNER_REQUIRE_APPROVAL` (`true` by default)
 - `WAF_FP_TUNER_APPROVAL_TTL_SEC` (default `600`)
 - `WAF_FP_TUNER_AUDIT_FILE` (default `logs/coraza/fp-tuner-audit.ndjson`)
@@ -141,7 +174,7 @@ Notes:
 
 Run `scripts/test_fp_tuner_http.sh` to verify:
 
-- HTTP-backed propose/apply flow
+- HTTP-provider propose/apply flow
 - provider request masking behavior
 - response contract handling with a local stub provider
 

@@ -7,7 +7,7 @@
 ## 1. まず証跡を取る
 
 1. 管理APIでログを取得し、`rule_id` と `path` を確認する。
-2. tukuyomi の `interesting.ndjson` で `req_id` を追跡し、クライアント条件（IP/UA/クエリ）を絞る。
+2. `interesting.ndjson`（`logs/proxy/`）で `req_id` を追跡し、クライアント条件（IP/UA/クエリ）を絞る。
 3. 再現可能なHTTPリクエスト（curlやE2E）を必ず残す。
 
 ## 2. 影響範囲を切り分ける
@@ -20,21 +20,36 @@
 
 推奨順序:
 
-1. `data/conf/waf.bypass` に対象パスのみの「特別ルール」を設定する。
+1. `data/conf/waf-bypass.json` に対象パスのみの「特別ルール」を設定する。
 2. 必要なら専用 `*.conf` を用意し、対象Ruleを `ctl:ruleRemoveById` で限定無効化する。
 3. 最終手段として広いパスのバイパスを使う（期限付きで実施し、後で戻す）。
 
-`waf.bypass` 例:
+`waf-bypass.json` 例:
 
-```conf
-/api/orders/preview rules/overrides/orders-preview.conf
+```json
+{
+  "default": {
+    "entries": []
+  },
+  "hosts": {
+    "example.com": {
+      "entries": [
+        { "path": "/search", "extra_rule": "conf/rules/search-endpoint.conf" }
+      ]
+    }
+  }
+}
 ```
 
-`orders-preview.conf` 例:
+host scope の優先順は exact `host:port`、次に bare `host`、最後に `default` です。host-specific scope は default を merge せず置き換えます。
+
+`search-endpoint.conf` 例:
 
 ```conf
-SecRule REQUEST_URI "@streq /api/orders/preview" \
-  "id:100001,phase:1,pass,nolog,ctl:ruleRemoveById=942100"
+SecRuleEngine On
+
+SecRule ARGS:q "@rx (?i)(<script|union([[:space:]]+all)?[[:space:]]+select|benchmark\s*\(|sleep\s*\()" \
+  "id:100001,phase:2,deny,status:403,log,msg:'suspicious search query'"
 ```
 
 ## 4. CRS設定の見直し

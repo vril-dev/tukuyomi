@@ -89,7 +89,7 @@ if ! [[ "${max_tokens}" =~ ^[0-9]+$ ]] || [[ "${max_tokens}" -le 0 ]]; then
   exit 1
 fi
 
-system_prompt="You are a Coraza WAF false-positive tuning assistant. Return exactly one JSON object. If a safe host-scoped exclusion is justified, return proposal JSON with id, title, summary, reason, confidence (0-1), target_path, rule_line. If evidence is insufficient or the event looks like a real attack, return no_proposal JSON with decision=no_proposal, reason, confidence. Do not include markdown or extra text. Follow constraints in the request strictly."
+system_prompt="You are a Coraza false-positive tuning assistant for Tukuyomi. Evaluate whether the event justifies a safe scoped exclusion for an existing detection rule. Return exactly one JSON object and no extra text. If a safe exclusion is justified, return {\"decision\":\"proposal\",\"id\",\"title\",\"summary\",\"reason\",\"confidence\",\"target_path\",\"rule_line\"}. The rule_line must be a ModSecurity-compatible Coraza exclusion using a two-line chain. Line 1 must scope REQUEST_HEADERS:Host either with exact @streq for the observed host, or with a narrow default-port-aware regex only for http:80 or https:443 in the form ^host(:80)?$ or ^host(:443)?$. Line 2 must match REQUEST_URI @beginsWith for the observed path and apply ctl:ruleRemoveTargetById for the observed existing rule_id and matched_variable only. Never generate deny/block rules, new signatures, broad regexes, or global disable operations. If the event is not a credible false positive or evidence is insufficient, return {\"decision\":\"no_proposal\",\"reason\",\"confidence\"}. Follow request constraints strictly."
 user_prompt="fp_tuner_provider_request_json:\n${payload}"
 
 req_json="$(jq -n \

@@ -1,0 +1,61 @@
+{
+  "server": {
+    "listen_addr": ":9090",
+    "http3": {
+      "enabled": false,
+      "alt_svc_max_age_sec": 86400
+    }
+  },
+  "admin": {
+    "api_base_path": "/tukuyomi-api",
+    "ui_base_path": "/tukuyomi-ui",
+    "api_key_primary": "release-smoke-admin-key-123456",
+    "api_key_secondary": "",
+    "session_secret": "release-smoke-session-secret-123456",
+    "session_ttl_sec": 28800,
+    "api_auth_disable": false,
+    "cors_allowed_origins": [],
+    "strict_override": false,
+    "allow_insecure_defaults": false,
+    "external_mode": "api_only_external",
+    "trusted_cidrs": [
+      "127.0.0.1/32",
+      "::1/128",
+      "10.0.0.0/8",
+      "172.16.0.0/12",
+      "192.168.0.0/16"
+    ],
+    "trust_forwarded_for": false
+  },
+  "paths": {
+    "proxy_config_file": "testenv/release-binary/runtime/conf/proxy-routes.json",
+    "site_config_file": "testenv/release-binary/runtime/conf/sites.json",
+    "security_audit_file": "testenv/release-binary/runtime/logs/coraza/security-audit.ndjson",
+    "security_audit_blob_dir": "testenv/release-binary/runtime/logs/coraza/security-audit-blobs",
+    "cache_store_file": "testenv/release-binary/runtime/conf/cache-store.json",
+    "rules_file": "testenv/release-binary/runtime/rules/tukuyomi.conf",
+    "override_rules_dir": "testenv/release-binary/runtime/conf/rules",
+    "bypass_file": "testenv/release-binary/runtime/conf/waf-bypass.json",
+    "country_block_file": "testenv/release-binary/runtime/conf/country-block.json",
+    "rate_limit_file": "testenv/release-binary/runtime/conf/rate-limit.json",
+    "bot_defense_file": "testenv/release-binary/runtime/conf/bot-defense.json",
+    "semantic_file": "testenv/release-binary/runtime/conf/semantic.json",
+    "notification_file": "testenv/release-binary/runtime/conf/notifications.json",
+    "ip_reputation_file": "testenv/release-binary/runtime/conf/ip-reputation.json",
+    "crs_setup_file": "testenv/release-binary/runtime/rules/crs/crs-setup.conf",
+    "crs_rules_dir": "testenv/release-binary/runtime/rules/crs/rules",
+    "crs_disabled_file": "testenv/release-binary/runtime/conf/crs-disabled.conf"
+  },
+  "proxy": {
+    "rollback_history_size": 8,
+    "audit_file": "testenv/release-binary/runtime/logs/coraza/proxy-rules-audit.ndjson"
+  },
+  "crs": {
+    "enable": true
+  },
+  "storage": {
+    "backend": "file",
+    "db_driver": "sqlite",
+    "db_path": "testenv/release-binary/runtime/logs/coraza/tukuyomi.db"
+  }
+}

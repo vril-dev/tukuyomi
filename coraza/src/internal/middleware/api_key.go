@@ -24,6 +24,7 @@ func APIKeyAuth() gin.HandlerFunc {
 
 		key := strings.TrimSpace(c.GetHeader("X-API-Key"))
 		if HasValidAPIKey(key) {
+			c.Set("tukuyomi.admin_auth_mode", "api_key")
 			c.Next()
 			return
 		}
@@ -38,6 +39,8 @@ func APIKeyAuth() gin.HandlerFunc {
 				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": err.Error()})
 				return
 			}
+			c.Set("tukuyomi.admin_auth_mode", "session")
+			c.Set("tukuyomi.admin_auth_fallback_actor", "session:browser")
 			c.Next()
 			return
 		}

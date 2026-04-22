@@ -1,11 +1,11 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/lib/auth";
+import { useI18n } from "@/lib/i18n";
 
 export default function Login() {
   const { login, loading } = useAuth();
-  const navigate = useNavigate();
+  const { tx } = useI18n();
   const [apiKey, setAPIKey] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -16,10 +16,9 @@ export default function Login() {
     try {
       await login(apiKey);
       setAPIKey("");
-      navigate("/status", { replace: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      setError(message || "Login failed");
+      setError(message || tx("Login failed"));
     }
   }
 
@@ -28,22 +27,22 @@ export default function Login() {
       <div className="w-full max-w-md rounded-[28px] border border-neutral-200 bg-white shadow-sm p-8 space-y-6">
         <div className="space-y-2">
           <p className="text-xs uppercase tracking-[0.3em] text-neutral-500">TUKUYOMI</p>
-          <h1 className="text-3xl font-semibold">Admin Sign In</h1>
+          <h1 className="text-3xl font-semibold">{tx("Admin Sign In")}</h1>
           <p className="text-sm text-neutral-600">
-            Enter an admin API key once to create a browser session. The key stays server-side after login.
+            {tx("Enter an admin API key once to create a browser session. The key stays server-side after login.")}
           </p>
         </div>
 
         <form className="space-y-4" onSubmit={onSubmit}>
           <label className="block space-y-2">
-            <span className="text-sm font-medium text-neutral-700">Admin API Key</span>
+            <span className="text-sm font-medium text-neutral-700">{tx("Admin API Key")}</span>
             <input
               type="password"
               className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-neutral-900/10"
               value={apiKey}
               onChange={(event) => setAPIKey(event.target.value)}
               autoComplete="current-password"
-              placeholder="paste a primary or secondary admin key"
+              placeholder={tx("paste a primary or secondary admin key")}
             />
           </label>
 
@@ -58,7 +57,7 @@ export default function Login() {
             disabled={loading || apiKey.trim() === ""}
             className="w-full rounded-xl bg-neutral-950 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
           >
-            {loading ? "Signing in..." : "Sign In"}
+            {loading ? tx("Signing in...") : tx("Sign In")}
           </button>
         </form>
       </div>

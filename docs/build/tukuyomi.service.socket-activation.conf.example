@@ -1,0 +1,7 @@
+[Service]
+# Copy this as a service drop-in only when using systemd socket activation.
+# Keep only the socket units that match your conf/config.json.
+Sockets=tukuyomi.socket
+# Sockets=tukuyomi-admin.socket
+# Sockets=tukuyomi-redirect.socket
+# Sockets=tukuyomi-http3.socket

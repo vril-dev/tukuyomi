@@ -2,13 +2,12 @@
 
 # FP Tuner API Contract (v1)
 
-この文書は、外部 HTTP プロバイダを使う FP tuning flow の current API contract を定義します。
+この文書は、HTTP provider 経由の Coraza false-positive exclusion tuning flow の current API contract を定義します。
 
 ## Endpoints
 
 - `POST /tukuyomi-api/fp-tuner/propose`
 - `POST /tukuyomi-api/fp-tuner/apply`
-- `GET /tukuyomi-api/fp-tuner/recent-waf-blocks`
 
 ## 1) Propose
 
@@ -20,7 +19,10 @@
   "event": {
     "event_id": "manual-test-001",
     "method": "GET",
+    "scheme": "https",
+    "host": "search.example.com",
     "path": "/search",
+    "query": "q=select+*+from+users",
     "rule_id": 100004,
     "status": 403,
     "matched_variable": "ARGS:q",
@@ -32,6 +34,7 @@
 注意:
 - `event` は optional です。省略した場合、server は `waf-events.ndjson` から最新の `waf_block` event を探します。
 - unknown field は reject されます。
+- provider は、安全な scoped Coraza exclusion proposal 1件、または明示的な `no_proposal` を返す前提です。
 
 ### Response
 
@@ -61,7 +64,7 @@
     "id": "fp-http-001",
     "title": "Scoped false-positive tuning suggestion",
     "summary": "Scoped false-positive tuning suggestion.",
-    "reason": "外部 HTTP プロバイダを使う提案フローのレスポンス。",
+    "reason": "HTTP FP tuner flow の provider-generated response.",
     "confidence": 0.84,
     "target_path": "rules/tukuyomi.conf",
     "rule_line": "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\""
@@ -71,7 +74,37 @@
 
 注意:
 - `approval.required=true` の場合、simulate しない apply には `approval_token` が必要です。
-- 安全な scoped exclusion を正当化できない場合、provider は `proposal` の代わりに `no_proposal` を返せます。
+
+### Response (`no_proposal`)
+
+```json
+{
+  "ok": true,
+  "contract_version": "fp_tuner.v1",
+  "mode": "http",
+  "source": "request",
+  "approval": {
+    "required": false
+  },
+  "input": {
+    "event_id": "manual-test-001",
+    "method": "GET",
+    "scheme": "https",
+    "host": "search.example.com",
+    "path": "/search",
+    "query": "q=select+*+from+users",
+    "rule_id": 100004,
+    "status": 403,
+    "matched_variable": "ARGS:q",
+    "matched_value": "select * from users"
+  },
+  "no_proposal": {
+    "decision": "no_proposal",
+    "reason": "この event には安全な Coraza scoped exclusion を正当化する根拠が不足しています。",
+    "confidence": 0.12
+  }
+}
+```
 
 ## 2) Apply
 
@@ -122,6 +155,10 @@
 ## Security Behavior
 
 - provider request payload は外部送信前に sanitize されます。
+- provider には Coraza / ModSecurity-compatible な host-aware scoped exclusion だけを考えるよう明示します。
+- event が credible false positive でない、または根拠不足の場合は `no_proposal` を返せる前提です。
+- 安全な proposal scope は observed `scheme + host[:default-port] + path + rule_id + matched_variable` に bind します。
+- `http:80` / `https:443` では、host scope に `^example\.com(:80)?$` や `^example\.com(:443)?$` のような narrow な optional-default-port regex を使うことがあります。
 - masked category には bearer/jwt-like token、email、IPv4、common secret query key が含まれます。
 - apply で受け付けるのは scoped exclusion format だけです。
 - propose / apply action は `WAF_FP_TUNER_AUDIT_FILE`（default `logs/coraza/fp-tuner-audit.ndjson`）へ追記されます。
@@ -129,10 +166,6 @@
 
 ## Related Env Vars
 
-- `WAF_FP_TUNER_ENDPOINT`
-- `WAF_FP_TUNER_API_KEY`
-- `WAF_FP_TUNER_MODEL`
-- `WAF_FP_TUNER_TIMEOUT_SEC`
 - `WAF_FP_TUNER_REQUIRE_APPROVAL`（default `true`）
 - `WAF_FP_TUNER_APPROVAL_TTL_SEC`（default `600`）
 - `WAF_FP_TUNER_AUDIT_FILE`（default `logs/coraza/fp-tuner-audit.ndjson`）
@@ -141,7 +174,7 @@
 
 `scripts/test_fp_tuner_http.sh` を実行すると次を確認できます。
 
-- HTTP ベースの propose / apply flow
+- HTTP provider 経由での propose / apply flow
 - provider request masking behavior
 - local stub provider を使った response contract handling
 

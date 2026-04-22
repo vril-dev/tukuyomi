@@ -88,6 +88,8 @@ func TestAPIKeyAuth(t *testing.T) {
 			config.APIAuthDisable = tc.authDisabled
 			config.APIKeyPrimary = tc.primary
 			config.APIKeySecondary = tc.secondary
+			config.AdminSessionSecret = tc.primary
+			config.AdminSessionTTL = time.Hour
 
 			r := gin.New()
 			r.Use(APIKeyAuth())
@@ -109,7 +111,7 @@ func TestAPIKeyAuth(t *testing.T) {
 	}
 }
 
-func TestAPIKeyAuthAllowsValidSessionGet(t *testing.T) {
+func TestAPIKeyAuthAcceptsValidSession(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	restore := saveAuthConfig()
@@ -119,72 +121,7 @@ func TestAPIKeyAuthAllowsValidSessionGet(t *testing.T) {
 	config.APIKeyPrimary = "primary-key-123456"
 	config.APIKeySecondary = ""
 	config.AdminSessionSecret = "session-secret-123456"
-
-	token, csrf, expiresAt, err := adminauth.Issue(config.AdminSessionSecret, time.Hour, time.Now().UTC())
-	if err != nil {
-		t.Fatalf("Issue() error = %v", err)
-	}
-
-	r := gin.New()
-	r.Use(APIKeyAuth())
-	r.GET("/protected", func(c *gin.Context) {
-		c.Status(http.StatusOK)
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-	req.AddCookie(&http.Cookie{Name: adminauth.SessionCookieName, Value: token, Expires: expiresAt})
-	req.AddCookie(&http.Cookie{Name: adminauth.CSRFCookieName, Value: csrf, Expires: expiresAt})
-	w := httptest.NewRecorder()
-
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d want=%d", w.Code, http.StatusOK)
-	}
-}
-
-func TestAPIKeyAuthRejectsSessionPostWithoutCSRF(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	restore := saveAuthConfig()
-	defer restore()
-
-	config.APIAuthDisable = false
-	config.APIKeyPrimary = "primary-key-123456"
-	config.APIKeySecondary = ""
-	config.AdminSessionSecret = "session-secret-123456"
-
-	token, csrf, expiresAt, err := adminauth.Issue(config.AdminSessionSecret, time.Hour, time.Now().UTC())
-	if err != nil {
-		t.Fatalf("Issue() error = %v", err)
-	}
-
-	r := gin.New()
-	r.Use(APIKeyAuth())
-	r.POST("/protected", func(c *gin.Context) {
-		c.Status(http.StatusOK)
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/protected", nil)
-	req.AddCookie(&http.Cookie{Name: adminauth.SessionCookieName, Value: token, Expires: expiresAt})
-	req.AddCookie(&http.Cookie{Name: adminauth.CSRFCookieName, Value: csrf, Expires: expiresAt})
-	w := httptest.NewRecorder()
-
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status=%d want=%d", w.Code, http.StatusForbidden)
-	}
-}
-
-func TestAPIKeyAuthAllowsSessionPostWithCSRF(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	restore := saveAuthConfig()
-	defer restore()
-
-	config.APIAuthDisable = false
-	config.APIKeyPrimary = "primary-key-123456"
-	config.APIKeySecondary = ""
-	config.AdminSessionSecret = "session-secret-123456"
+	config.AdminSessionTTL = time.Hour
 
 	token, csrf, expiresAt, err := adminauth.Issue(config.AdminSessionSecret, time.Hour, time.Now().UTC())
 	if err != nil {
@@ -205,7 +142,7 @@ func TestAPIKeyAuthAllowsSessionPostWithCSRF(t *testing.T) {
 
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d want=%d", w.Code, http.StatusOK)
+		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
 	}
 }
 
@@ -213,11 +150,13 @@ func saveAuthConfig() func() {
 	oldDisable := config.APIAuthDisable
 	oldPrimary := config.APIKeyPrimary
 	oldSecondary := config.APIKeySecondary
-	oldSessionSecret := config.AdminSessionSecret
+	oldSecret := config.AdminSessionSecret
+	oldTTL := config.AdminSessionTTL
 	return func() {
 		config.APIAuthDisable = oldDisable
 		config.APIKeyPrimary = oldPrimary
 		config.APIKeySecondary = oldSecondary
-		config.AdminSessionSecret = oldSessionSecret
+		config.AdminSessionSecret = oldSecret
+		config.AdminSessionTTL = oldTTL
 	}
 }

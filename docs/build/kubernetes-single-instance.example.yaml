@@ -1,0 +1,120 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tukuyomi
+spec:
+  selector:
+    app: tukuyomi
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tukuyomi-admin
+spec:
+  selector:
+    app: tukuyomi
+  ports:
+    - name: admin
+      port: 9091
+      targetPort: 9091
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tukuyomi
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: tukuyomi
+  template:
+    metadata:
+      labels:
+        app: tukuyomi
+    spec:
+      containers:
+        - name: coraza
+          image: <IMAGE_URI>
+          env:
+            - name: WAF_CONFIG_FILE
+              value: /app/conf/config.json
+          ports:
+            - containerPort: 9090
+              name: http
+            - containerPort: 9091
+              name: admin
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9090
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9090
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: proxy-conf
+              mountPath: /app/conf
+            - name: proxy-scheduled-tasks
+              mountPath: /app/data/scheduled-tasks
+            - name: proxy-logs
+              mountPath: /app/logs
+            - name: proxy-php-fpm
+              mountPath: /app/data/php-fpm
+        - name: scheduled-task-runner
+          image: <IMAGE_URI>
+          env:
+            - name: WAF_CONFIG_FILE
+              value: /app/conf/config.json
+            - name: PROXY_BIN
+              value: /app/tukuyomi
+          command:
+            - /bin/sh
+            - -lc
+          args:
+            - |
+              set -eu
+              echo "[scheduled-task-runner] starting one-shot loop"
+              while :; do
+                if "${PROXY_BIN:-/app/tukuyomi}" run-scheduled-tasks; then
+                  :
+                else
+                  code="$?"
+                  echo "[scheduled-task-runner][fatal] run-scheduled-tasks failed; exiting for restart" >&2
+                  exit "$code"
+                fi
+                now="$(date +%s)"
+                sleep_for="$((60 - (now % 60)))"
+                sleep "$sleep_for"
+              done
+          volumeMounts:
+            - name: proxy-conf
+              mountPath: /app/conf
+            - name: proxy-scheduled-tasks
+              mountPath: /app/data/scheduled-tasks
+            - name: proxy-logs
+              mountPath: /app/logs
+            - name: proxy-php-fpm
+              mountPath: /app/data/php-fpm
+      volumes:
+        - name: proxy-conf
+          persistentVolumeClaim:
+            claimName: tukuyomi-conf
+        - name: proxy-scheduled-tasks
+          persistentVolumeClaim:
+            claimName: tukuyomi-scheduled-tasks
+        - name: proxy-logs
+          persistentVolumeClaim:
+            claimName: tukuyomi-logs
+        - name: proxy-php-fpm
+          persistentVolumeClaim:
+            claimName: tukuyomi-php-fpm

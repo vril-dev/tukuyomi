@@ -1,0 +1,11 @@
+[Unit]
+Description=Run tukuyomi scheduled tasks every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=1s
+Persistent=true
+Unit=tukuyomi-scheduled-tasks.service
+
+[Install]
+WantedBy=timers.target

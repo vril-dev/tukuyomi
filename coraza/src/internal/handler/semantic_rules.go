@@ -30,6 +30,7 @@ func bindSemanticPutBody(c *gin.Context) (semanticPutBody, bool) {
 func GetSemanticRules(c *gin.Context) {
 	path := GetSemanticPath()
 	raw, _ := os.ReadFile(path)
+	savedAt := fileSavedAt(path)
 	if store := getLogsStatsStore(); store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(semanticConfigBlobKey)
 		if err != nil {
@@ -42,6 +43,7 @@ func GetSemanticRules(c *gin.Context) {
 				if strings.TrimSpace(dbETag) == "" {
 					dbETag = bypassconf.ComputeETag(dbRaw)
 				}
+				savedAt = configBlobSavedAt(store, semanticConfigBlobKey)
 				c.JSON(http.StatusOK, gin.H{
 					"etag":                 dbETag,
 					"raw":                  string(dbRaw),
@@ -52,7 +54,11 @@ func GetSemanticRules(c *gin.Context) {
 					"challenge_threshold":  rt.Raw.ChallengeThreshold,
 					"block_threshold":      rt.Raw.BlockThreshold,
 					"max_inspect_body":     rt.Raw.MaxInspectBody,
+					"provider_enabled":     rt.Raw.Provider.Enabled,
+					"provider_name":        rt.Raw.Provider.Name,
+					"provider_timeout_ms":  rt.Raw.Provider.TimeoutMS,
 					"stats":                GetSemanticStats(),
+					"saved_at":             savedAt,
 				})
 				return
 			}
@@ -75,7 +81,11 @@ func GetSemanticRules(c *gin.Context) {
 		"challenge_threshold":  cfg.ChallengeThreshold,
 		"block_threshold":      cfg.BlockThreshold,
 		"max_inspect_body":     cfg.MaxInspectBody,
+		"provider_enabled":     cfg.Provider.Enabled,
+		"provider_name":        cfg.Provider.Name,
+		"provider_timeout_ms":  cfg.Provider.TimeoutMS,
 		"stats":                stats,
+		"saved_at":             savedAt,
 	})
 }
 
@@ -101,6 +111,9 @@ func ValidateSemanticRules(c *gin.Context) {
 		"challenge_threshold":  rt.Raw.ChallengeThreshold,
 		"block_threshold":      rt.Raw.BlockThreshold,
 		"max_inspect_body":     rt.Raw.MaxInspectBody,
+		"provider_enabled":     rt.Raw.Provider.Enabled,
+		"provider_name":        rt.Raw.Provider.Name,
+		"provider_timeout_ms":  rt.Raw.Provider.TimeoutMS,
 	})
 }
 
@@ -155,9 +168,10 @@ func PutSemanticRules(c *gin.Context) {
 		return
 	}
 
+	now := time.Now().UTC()
 	newETag := bypassconf.ComputeETag([]byte(in.Raw))
 	if store != nil {
-		if err := store.UpsertConfigBlob(semanticConfigBlobKey, []byte(in.Raw), newETag, time.Now().UTC()); err != nil {
+		if err := store.UpsertConfigBlob(semanticConfigBlobKey, []byte(in.Raw), newETag, now); err != nil {
 			_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
 			_ = ReloadSemantic()
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -178,6 +192,10 @@ func PutSemanticRules(c *gin.Context) {
 		"challenge_threshold":  rt.Raw.ChallengeThreshold,
 		"block_threshold":      rt.Raw.BlockThreshold,
 		"max_inspect_body":     rt.Raw.MaxInspectBody,
+		"provider_enabled":     rt.Raw.Provider.Enabled,
+		"provider_name":        rt.Raw.Provider.Name,
+		"provider_timeout_ms":  rt.Raw.Provider.TimeoutMS,
+		"saved_at":             now.Format(time.RFC3339Nano),
 	})
 }
 

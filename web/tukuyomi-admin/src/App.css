@@ -1,15 +1,20 @@
-@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=M+PLUS+1p:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap");
 @import "tailwindcss";
 
 :root {
   --bg: #f4f7fb;
   --panel: #ffffff;
+  --panel-strong: #f8fbff;
   --ink: #1f2937;
   --muted: #6b7280;
   --edge: #d6dde8;
+  --edge-strong: #b8c3d3;
   --accent: #2563eb;
+  --accent-strong: #1d4ed8;
   --accent-soft: #e8f0fe;
+  --warm: #e9b074;
   --font-sans: "Outfit", "Segoe UI", sans-serif;
+  --font-jp: "M PLUS 1p", "Hiragino Sans", "Yu Gothic", sans-serif;
 }
 
 * {
@@ -31,6 +36,19 @@ body {
     linear-gradient(180deg, #fafcff 0%, var(--bg) 100%);
 }
 
+html[data-locale="ja"] body {
+  font-family: var(--font-jp);
+  letter-spacing: 0.01em;
+}
+
+html[data-locale="ja"] h1,
+html[data-locale="ja"] h2,
+html[data-locale="ja"] h3,
+html[data-locale="ja"] .app-nav-label,
+html[data-locale="ja"] .app-nav-group-title {
+  letter-spacing: 0.01em;
+}
+
 code,
 pre,
 textarea,
@@ -46,6 +64,8 @@ select {
 }
 
 .app-sidebar {
+  display: flex;
+  flex-direction: column;
   position: sticky;
   top: 0;
   height: 100vh;
@@ -89,11 +109,14 @@ select {
 .app-nav {
   display: grid;
   gap: 8px;
+  flex: 1 1 auto;
+  align-content: start;
 }
 
 .app-nav-group {
   display: grid;
   gap: 4px;
+  padding: 0;
 }
 
 .app-nav-group-meta {
@@ -142,11 +165,18 @@ select {
   font-weight: 600;
 }
 
+.app-sidebar-footer {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #e8edf5;
+}
+
 .app-main {
   display: grid;
   grid-template-rows: auto 1fr;
   min-width: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.46), transparent 28%);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.46), transparent 28%);
 }
 
 .app-topbar {
@@ -170,6 +200,7 @@ select {
 
 .app-topbar-heading {
   display: grid;
+  gap: 0;
 }
 
 .app-topbar-paths {
@@ -239,6 +270,19 @@ select {
   color: #334155;
   font-weight: 600;
   white-space: nowrap;
+  box-shadow: none;
+}
+
+.app-pill-ok {
+  border-color: #d9ead7;
+  background: #edf7eb;
+  color: #2f6b2f;
+}
+
+.app-pill-warn {
+  border-color: #f0d4aa;
+  background: #fff7ea;
+  color: #8a5b1f;
 }
 
 .app-pill-action {
@@ -414,7 +458,8 @@ pre {
   overflow: auto;
   border: 1px solid #d4dde9;
   border-radius: 12px;
-  background: linear-gradient(180deg, #fbfdff, #f4f8fd);
+  background:
+    linear-gradient(180deg, #fbfdff, #f4f8fd);
 }
 
 .app-code-block {
@@ -459,6 +504,11 @@ pre {
 
   .app-nav {
     gap: 7px;
+  }
+
+  .app-nav-group-links {
+    grid-template-columns: 1fr;
+    gap: 1px;
   }
 
   .app-nav-link {
@@ -544,6 +594,6 @@ pre {
 
   .app-topbar-paths code,
   .app-top-meta code {
-    max-width: 100%;
+    max-width: min(44vw, 280px);
   }
 }

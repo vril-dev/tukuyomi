@@ -19,17 +19,18 @@ func SyncAllStorageFromDB() error {
 		run  func() error
 	}
 	tasks := []task{
+		{name: "proxy-rules", run: SyncProxyStorage},
 		{name: "rules", run: SyncRuleFilesStorage},
+		{name: "override-rules", run: SyncManagedOverrideRulesStorage},
 		{name: "crs-disabled", run: SyncCRSDisabledStorage},
 		{name: "bypass", run: SyncBypassStorage},
 		{name: "country-block", run: SyncCountryBlockStorage},
 		{name: "rate-limit", run: SyncRateLimitStorage},
 		{name: "notifications", run: SyncNotificationStorage},
-		{name: "log-output", run: SyncLogOutputStorage},
-		{name: "ip-reputation", run: SyncIPReputationStorage},
 		{name: "bot-defense", run: SyncBotDefenseStorage},
 		{name: "semantic", run: SyncSemanticStorage},
 		{name: "cache-rules", run: SyncCacheRulesStorage},
+		{name: "cache-store", run: SyncResponseCacheStoreStorage},
 	}
 
 	var errs []error

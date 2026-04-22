@@ -20,6 +20,7 @@ type botDefenseDecisionRecord struct {
 	Method     string   `json:"method,omitempty"`
 	Path       string   `json:"path,omitempty"`
 	UserAgent  string   `json:"user_agent,omitempty"`
+	HostScope  string   `json:"host_scope,omitempty"`
 	FlowPolicy string   `json:"flow_policy,omitempty"`
 	Action     string   `json:"action"`
 	DryRun     bool     `json:"dry_run,omitempty"`
@@ -41,6 +42,7 @@ func recordBotDefenseDecision(req *http.Request, ctx *requestSecurityPluginConte
 		DryRun:     decision.DryRun,
 		Status:     decision.Status,
 		Mode:       decision.Mode,
+		HostScope:  decision.HostScope,
 		FlowPolicy: decision.FlowPolicy,
 		RiskScore:  decision.RiskScore,
 		Signals:    append([]string(nil), decision.Signals...),

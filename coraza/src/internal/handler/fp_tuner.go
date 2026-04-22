@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -27,7 +26,6 @@ import (
 
 const (
 	fpTunerDefaultRuleID        = 100004
-	fpTunerDefaultVariable      = "ARGS:q"
 	fpTunerDefaultConfidence    = 0.82
 	fpTunerMaxMatchedValueBytes = 512
 	fpTunerMaxBodyBytes         = int64(1 * 1024 * 1024)
@@ -409,7 +407,7 @@ func resolveFPTunerEventInput(in *fpTunerEventInput) (fpTunerEventInput, string,
 		return norm, "request", nil
 	}
 
-	event, err := latestWAFBlockEvent()
+	event, source, err := latestSecurityEvent()
 	if err != nil {
 		return fpTunerEventInput{}, "", err
 	}
@@ -418,7 +416,7 @@ func resolveFPTunerEventInput(in *fpTunerEventInput) (fpTunerEventInput, string,
 	if err := validateFPTunerResolvedEventInput("latest_event", norm); err != nil {
 		return fpTunerEventInput{}, "", err
 	}
-	return norm, "waf_log", nil
+	return norm, source, nil
 }
 
 func resolveFPTunerEventInputs(in fpTunerProposeBody) ([]fpTunerEventInput, string, error) {
@@ -625,19 +623,24 @@ func fpTunerEventInputFromLogLine(ln logLine) (fpTunerEventInput, bool) {
 }
 
 func normalizeFPTunerWAFEventInput(in fpTunerEventInput, ln logLine) fpTunerEventInput {
+	in.Scheme = normalizeFPTunerScheme(in.Scheme)
+	in.Host = normalizeFPTunerHost(in.Host)
+	in.Query = normalizeFPTunerQuery(in.Query)
 	in.MatchedVariable = strings.TrimSpace(in.MatchedVariable)
 	in.MatchedValue = strings.TrimSpace(in.MatchedValue)
 	if !shouldFallbackToQueryScope(in.MatchedVariable, in.MatchedValue) {
 		return in
 	}
 
-	query := decodeFPTunerQueryPayload(anyToString(ln["original_query"]))
+	query := firstNonEmptyString(anyToString(ln["original_query"]), anyToString(ln["rewritten_query"]))
+	query = decodeFPTunerQueryPayload(query)
 	if strings.TrimSpace(query) == "" {
 		return in
 	}
 
 	in.MatchedVariable = "QUERY_STRING"
 	in.MatchedValue = clampText(query, fpTunerMaxMatchedValueBytes)
+	in.Query = query
 	return in
 }
 
@@ -647,9 +650,7 @@ func shouldFallbackToQueryScope(variable string, value string) bool {
 	if variable == "" {
 		return value == ""
 	}
-	return strings.HasPrefix(variable, "TX:") ||
-		variable == "REQUEST_FILENAME" ||
-		normalizeFPTunerVariable(variable) == fpTunerDefaultVariable
+	return strings.HasPrefix(variable, "TX:") || normalizeFPTunerVariable(variable) == ""
 }
 
 func decodeFPTunerQueryPayload(raw string) string {
@@ -668,6 +669,7 @@ func readRecentFPTunerWAFBlockLines(path string, limit int) ([]logLine, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
+
 	if store := getLogsStatsStore(); store != nil {
 		return store.RecentWAFBlockLogLines(path, limit)
 	}
@@ -716,11 +718,8 @@ func normalizeFPTunerEventInput(in fpTunerEventInput) fpTunerEventInput {
 		in.Scheme = inferFPTunerSchemeFromHost(in.Host)
 	}
 	in.Path = normalizeFPTunerPath(in.Path)
-	in.Query = clampText(strings.TrimSpace(in.Query), fpTunerMaxMatchedValueBytes)
+	in.Query = normalizeFPTunerQuery(in.Query)
 	in.Policy = strings.TrimSpace(in.Policy)
-	if in.RuleID <= 0 {
-		in.RuleID = fpTunerDefaultRuleID
-	}
 	if in.Status <= 0 {
 		in.Status = http.StatusForbidden
 	}
@@ -762,30 +761,35 @@ func firstNonEmptyString(values ...string) string {
 func normalizeFPTunerPath(v string) string {
 	p := strings.TrimSpace(v)
 	if p == "" || !strings.HasPrefix(p, "/") {
-		return "/"
+		return ""
 	}
 	if strings.ContainsAny(p, "\n\r\"") {
-		return "/"
+		return ""
 	}
 	return p
 }
 
 func normalizeFPTunerHost(v string) string {
-	s := strings.TrimSpace(v)
+	s := strings.TrimSpace(strings.ToLower(v))
 	if s == "" {
 		return ""
 	}
-	if strings.ContainsAny(s, "\r\n\"") {
+	if strings.Contains(s, "://") || strings.Contains(s, "/") || strings.ContainsAny(s, " \t\r\n") {
 		return ""
 	}
-	return s
+	parsed, err := url.Parse("http://" + s)
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	return strings.ToLower(parsed.Host)
 }
 
 func normalizeFPTunerScheme(v string) string {
-	s := strings.ToLower(strings.TrimSpace(v))
-	switch s {
-	case "", "http", "https":
-		return s
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "http":
+		return "http"
+	case "https":
+		return "https"
 	default:
 		return ""
 	}
@@ -794,46 +798,42 @@ func normalizeFPTunerScheme(v string) string {
 func inferFPTunerSchemeFromHost(host string) string {
 	_, port := splitFPTunerHostPort(host)
 	switch port {
-	case "443":
-		return "https"
 	case "80":
 		return "http"
+	case "443":
+		return "https"
 	default:
 		return ""
 	}
 }
 
 func splitFPTunerHostPort(host string) (string, string) {
-	host = normalizeFPTunerHost(host)
-	if host == "" {
+	normalized := normalizeFPTunerHost(host)
+	if normalized == "" {
 		return "", ""
 	}
-	if strings.HasPrefix(host, "[") {
-		end := strings.Index(host, "]")
-		if end <= 0 {
-			return host, ""
-		}
-		hostOnly := host[:end+1]
-		rest := host[end+1:]
-		if strings.HasPrefix(rest, ":") && rest != ":" {
-			return hostOnly, rest[1:]
-		}
-		return hostOnly, ""
+	parsed, err := url.Parse("http://" + normalized)
+	if err != nil || parsed.Host == "" {
+		return normalized, ""
 	}
-	lastColon := strings.LastIndex(host, ":")
-	if lastColon <= 0 || strings.Count(host, ":") > 1 {
-		return host, ""
+	port := parsed.Port()
+	if port == "" {
+		return strings.ToLower(parsed.Host), ""
 	}
-	return host[:lastColon], host[lastColon+1:]
+	return strings.ToLower(strings.TrimSuffix(parsed.Host, ":"+port)), port
+}
+
+func normalizeFPTunerQuery(v string) string {
+	return clampText(strings.TrimSpace(strings.TrimPrefix(v, "?")), fpTunerMaxMatchedValueBytes)
 }
 
 func normalizeFPTunerVariable(v string) string {
 	s := strings.TrimSpace(v)
 	if s == "" {
-		return fpTunerDefaultVariable
+		return ""
 	}
 	if !fpTunerVariableAllowed.MatchString(s) {
-		return fpTunerDefaultVariable
+		return ""
 	}
 	return s
 }
@@ -856,7 +856,7 @@ func requestFPTunerProposal(req fpTunerProviderRequest) (fpTunerProviderDecision
 func requestFPTunerProposalHTTP(req fpTunerProviderRequest) (fpTunerProviderDecision, error) {
 	endpoint := strings.TrimSpace(config.FPTunerEndpoint)
 	if endpoint == "" {
-		return fpTunerProviderDecision{}, fmt.Errorf("WAF_FP_TUNER_ENDPOINT is empty")
+		return fpTunerProviderDecision{}, fmt.Errorf("fp_tuner.endpoint is empty")
 	}
 
 	body, err := json.Marshal(req)
@@ -1016,86 +1016,28 @@ func pruneExpiredFPTunerApprovals(now time.Time) {
 func appendFPTunerAudit(c *gin.Context, event string, fields map[string]any) {
 	path := strings.TrimSpace(config.FPTunerAuditFile)
 	if path == "" {
-		path = "/app/logs/coraza/fp-tuner-audit.ndjson"
+		path = defaultFPTunerAuditFile
 	}
 
+	info := newAdminAuditInfo(c, event)
 	entry := map[string]any{
-		"ts":      time.Now().UTC().Format(time.RFC3339Nano),
-		"service": "coraza",
-		"event":   event,
-		"actor":   fpTunerActor(c),
+		"ts":      info.TS,
+		"service": info.Service,
+		"event":   info.Event,
+		"actor":   info.Actor,
 	}
-	if c != nil {
-		entry["ip"] = requestClientIP(c)
+	if info.IP != "" {
+		entry["ip"] = info.IP
 	}
 	for k, v := range fields {
 		entry[k] = v
 	}
 	emitJSONLog(entry)
-
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		emitJSONLog(map[string]any{
-			"ts":      time.Now().UTC().Format(time.RFC3339Nano),
-			"service": "coraza",
-			"level":   "WARN",
-			"event":   "fp_tuner_audit_write_error",
-			"path":    path,
-			"error":   err.Error(),
-		})
-		return
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		emitJSONLog(map[string]any{
-			"ts":      time.Now().UTC().Format(time.RFC3339Nano),
-			"service": "coraza",
-			"level":   "WARN",
-			"event":   "fp_tuner_audit_write_error",
-			"path":    path,
-			"error":   err.Error(),
-		})
-		return
-	}
-	defer f.Close()
-
-	b, err := json.Marshal(entry)
-	if err != nil {
-		emitJSONLog(map[string]any{
-			"ts":      time.Now().UTC().Format(time.RFC3339Nano),
-			"service": "coraza",
-			"level":   "WARN",
-			"event":   "fp_tuner_audit_write_error",
-			"path":    path,
-			"error":   err.Error(),
-		})
-		return
-	}
-	if _, err := f.Write(append(b, '\n')); err != nil {
-		emitJSONLog(map[string]any{
-			"ts":      time.Now().UTC().Format(time.RFC3339Nano),
-			"service": "coraza",
-			"level":   "WARN",
-			"event":   "fp_tuner_audit_write_error",
-			"path":    path,
-			"error":   err.Error(),
-		})
-	}
+	appendAdminAudit(path, "fp_tuner_audit_write_error", entry)
 }
 
 func fpTunerActor(c *gin.Context) string {
-	if c == nil {
-		return "unknown"
-	}
-	if actor := strings.TrimSpace(c.GetHeader("X-Tukuyomi-Actor")); actor != "" {
-		return actor
-	}
-	key := strings.TrimSpace(c.GetHeader("X-API-Key"))
-	if key == "" {
-		return "api-key:none"
-	}
-	sum := sha256.Sum256([]byte(key))
-	return fmt.Sprintf("api-key:sha256:%x", sum[:6])
+	return adminAuditActor(c)
 }
 
 func decodeJSONBodyStrict(c *gin.Context, out any) error {

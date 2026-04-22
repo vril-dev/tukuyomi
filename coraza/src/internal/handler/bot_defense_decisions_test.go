@@ -20,13 +20,13 @@ func TestRecordBotDefenseDecisionKeepsMostRecentFirst(t *testing.T) {
 		Signals:   []string{"burst:12"},
 	})
 	recordBotDefenseDecision(nil, &requestSecurityPluginContext{RequestID: "req-2", ClientIP: "10.0.0.2"}, botDefenseDecision{
-		Allowed:    true,
+		Allowed:    false,
 		Action:     botDefenseActionChallenge,
 		DryRun:     true,
 		Status:     http.StatusTooManyRequests,
 		FlowPolicy: "login",
 		RiskScore:  4,
-		Signals:    []string{"burst:14"},
+		Signals:    []string{"fetch_metadata_missing"},
 	})
 
 	items := recentBotDefenseDecisions(10)
@@ -35,6 +35,9 @@ func TestRecordBotDefenseDecisionKeepsMostRecentFirst(t *testing.T) {
 	}
 	if items[0].RequestID != "req-2" || items[0].Action != botDefenseActionChallenge {
 		t.Fatalf("latest record mismatch: %#v", items[0])
+	}
+	if items[0].FlowPolicy != "login" {
+		t.Fatalf("flow policy=%q want=%q", items[0].FlowPolicy, "login")
 	}
 	if !items[0].DryRun {
 		t.Fatalf("dry_run=%v want=true", items[0].DryRun)
@@ -52,14 +55,14 @@ func TestGetBotDefenseDecisionsReturnsRecentItems(t *testing.T) {
 		httptest.NewRequest(http.MethodGet, "https://example.test/login", nil),
 		&requestSecurityPluginContext{RequestID: "req-3", ClientIP: "10.0.0.3", Country: "JP", Now: time.Now().UTC()},
 		botDefenseDecision{
-			Allowed:    true,
-			Action:     botDefenseActionChallenge,
+			Allowed:    false,
+			Action:     botDefenseActionQuarantine,
 			DryRun:     true,
-			Status:     http.StatusTooManyRequests,
+			Status:     http.StatusForbidden,
 			Mode:       botDefenseModeSuspicious,
 			FlowPolicy: "checkout",
 			RiskScore:  8,
-			Signals:    []string{"path_fanout:5"},
+			Signals:    []string{"quarantine_triggered"},
 		},
 	)
 
@@ -83,7 +86,7 @@ func TestGetBotDefenseDecisionsReturnsRecentItems(t *testing.T) {
 	if payload.Count != 1 || len(payload.Items) != 1 {
 		t.Fatalf("unexpected payload: %#v", payload)
 	}
-	if payload.Items[0].Action != botDefenseActionChallenge || payload.Items[0].Path != "/login" {
+	if payload.Items[0].Action != botDefenseActionQuarantine || payload.Items[0].Path != "/login" {
 		t.Fatalf("unexpected item: %#v", payload.Items[0])
 	}
 	if payload.Items[0].FlowPolicy != "checkout" {

@@ -1,5 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGetJson, apiPostJson, apiPutJson } from "@/lib/api";
+import { useAdminRuntime } from "@/lib/adminRuntime";
+import { ActionResultNotice } from "@/components/EditorChrome";
+import { getErrorMessage } from "@/lib/errors";
+import { useI18n } from "@/lib/i18n";
+import { parseSavedAt } from "@/lib/savedAt";
 
 type RuleItem = {
     name: string;
@@ -12,9 +17,12 @@ type RuleSetsResp = {
     disabled_file?: string;
     etag?: string;
     rules?: RuleItem[];
+    saved_at?: string;
 };
 
 export default function RuleSets() {
+    const { locale, tx } = useI18n();
+    const { readOnly } = useAdminRuntime();
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -45,14 +53,15 @@ export default function RuleSets() {
                 }
             }
             setServerEnabled(enabled);
+            setLastSavedAt(parseSavedAt(data.saved_at));
             setValid(null);
             setMessages([]);
-        } catch (e: any) {
-            setError(e?.message || String(e));
+        } catch (error: unknown) {
+            setError(getErrorMessage(error, tx("Failed to load")));
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [tx]);
 
     useEffect(() => {
         void load();
@@ -91,9 +100,9 @@ export default function RuleSets() {
                 );
                 setValid(!!js.ok);
                 setMessages(Array.isArray(js.messages) ? js.messages : []);
-            } catch (e: any) {
+            } catch (error: unknown) {
                 setValid(false);
-                setMessages([e?.message || "Validate failed"]);
+                setMessages([getErrorMessage(error, tx("Validate failed"))]);
             }
         }, 300);
 
@@ -102,7 +111,7 @@ export default function RuleSets() {
                 window.clearTimeout(debounceRef.current);
             }
         };
-    }, [enabledNames, dirty, loading]);
+    }, [dirty, enabledNames, loading, tx]);
 
     const toggle = useCallback((name: string, on: boolean) => {
         setRules((prev) => prev.map((r) => (r.name === name ? { ...r, enabled: on } : r)));
@@ -116,45 +125,42 @@ export default function RuleSets() {
         setSaving(true);
         setError(null);
         try {
-            const js = await apiPutJson<{ ok: boolean; etag?: string }>(
+            const js = await apiPutJson<{ ok: boolean; etag?: string; saved_at?: string }>(
                 "/crs-rule-sets",
                 { enabled: enabledNames },
                 { headers: etag ? { "If-Match": etag } : {} }
             );
             if (!js.ok) {
-                throw new Error("Failed to save");
+                throw new Error(tx("Failed to save"));
             }
             setEtag(js.etag ?? null);
             setServerEnabled(new Set(enabledNames));
-            setLastSavedAt(Date.now());
-        } catch (e: any) {
-            setError(e?.message || "Save failed");
+            setLastSavedAt(parseSavedAt(js.saved_at));
+        } catch (error: unknown) {
+            setError(getErrorMessage(error, tx("Save failed")));
         } finally {
             setSaving(false);
         }
-    }, [enabledNames, etag]);
+    }, [enabledNames, etag, tx]);
 
     if (loading) {
-        return <div className="text-gray-500">Loading rule sets...</div>;
+        return <div className="text-gray-500">{tx("Loading rule sets...")}</div>;
     }
 
     return (
         <div className="w-full p-4 space-y-4">
             <header className="flex items-center justify-between">
-                <h1 className="text-xl font-semibold">Rule Sets</h1>
+                <h1 className="text-xl font-semibold">{tx("Rule Sets")}</h1>
                 <div className="flex items-center gap-2">
-                    {!crsEnabled && <Badge color="amber">CRS Disabled</Badge>}
-                    {valid === null ? <Badge color="gray">Unvalidated</Badge> : valid ? <Badge color="green">Valid</Badge> : <Badge color="red">Invalid</Badge>}
-                    {dirty && <Badge color="amber">Unsaved</Badge>}
+                    {!crsEnabled && <Badge color="amber">{tx("CRS Disabled")}</Badge>}
+                    {valid === null ? <Badge color="gray">{tx("Unvalidated")}</Badge> : valid ? <Badge color="green">{tx("Valid")}</Badge> : <Badge color="red">{tx("Invalid")}</Badge>}
+                    {dirty && <Badge color="amber">{tx("Unsaved")}</Badge>}
                     {etag && <MonoTag label="ETag" value={etag} />}
                 </div>
             </header>
-
-            {error && <div className="border border-red-300 bg-red-50 rounded-xl p-3 text-sm">Error: {error}</div>}
-
             <div className="text-sm text-neutral-600">
-                Toggle CRS core rules on/off. WAF is hot-reloaded after save.
-                {disabledFile && <span className="ml-2 text-neutral-500">Saved to: <code>{disabledFile}</code></span>}
+                {tx("Toggle CRS core rules on/off. WAF is hot-reloaded after save.")}
+                {disabledFile && <span className="ml-2 text-neutral-500">{tx("Saved to: {path}", { path: disabledFile })}</span>}
             </div>
 
             <div className="flex items-center gap-2">
@@ -162,82 +168,74 @@ export default function RuleSets() {
                     type="button"
                     className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border"
                     onClick={() => setAll(true)}
-                    disabled={saving}
+                    disabled={readOnly || saving}
                 >
-                    Enable all
+                    {tx("Enable all")}
                 </button>
                 <button
                     type="button"
                     className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border"
                     onClick={() => setAll(false)}
-                    disabled={saving}
+                    disabled={readOnly || saving}
                 >
-                    Disable all
+                    {tx("Disable all")}
                 </button>
                 <button
                     type="button"
-                    className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border"
+                    className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border border-neutral-200"
                     onClick={() => void load()}
                     disabled={saving}
                 >
-                    Refresh
+                    {tx("Refresh")}
                 </button>
                 <button
                     type="button"
                     className="px-3 py-1.5 rounded-xl shadow text-sm bg-black text-white disabled:opacity-50"
                     onClick={() => void doSave()}
-                    disabled={saving || !dirty}
+                    disabled={readOnly || saving || !dirty}
                 >
-                    {saving ? "Saving..." : "Save & hot reload"}
+                    {saving ? tx("Saving...") : tx("Save & hot reload")}
                 </button>
             </div>
 
+            <ActionResultNotice
+                tone={error ? "error" : valid === false ? "error" : "success"}
+                messages={error ? [`${tx("Error")}: ${error}`] : messages}
+            />
+
             <div className="app-table-shell">
-                <div className="app-table-scroll-shell max-h-[520px]">
-                    <table className="app-table">
-                        <thead className="app-table-head">
-                            <tr>
-                                <th className="p-2 text-left">Enabled</th>
-                                <th className="p-2 text-left">File</th>
-                                <th className="p-2 text-left">Path</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {rules.map((r) => (
-                                <tr key={r.path}>
-                                    <td className="p-2">
-                                        <input
-                                            type="checkbox"
-                                            checked={r.enabled}
-                                            onChange={(e) => toggle(r.name, e.target.checked)}
-                                            disabled={saving}
-                                        />
-                                    </td>
-                                    <td className="p-2 font-mono">{r.name}</td>
-                                    <td className="p-2 font-mono text-neutral-600">{r.path}</td>
-                                </tr>
-                            ))}
-                            {rules.length === 0 && (
-                                <tr>
-                                    <td colSpan={3} className="p-4 text-neutral-500">No CRS rule files found.</td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
+                <div className="app-table-head grid grid-cols-[100px_1fr_1fr] gap-0 text-xs font-semibold border-b border-neutral-200">
+                    <div className="p-2">{tx("Enabled")}</div>
+                    <div className="p-2">{tx("File")}</div>
+                    <div className="p-2">{tx("Path")}</div>
+                </div>
+                <div className="max-h-[520px] overflow-auto">
+                    {rules.map((r) => (
+                        <label key={r.path} className="grid grid-cols-[100px_1fr_1fr] border-b border-neutral-200 last:border-b-0 text-sm items-center hover:bg-neutral-50/70">
+                            <div className="p-2">
+                                <input
+                                    type="checkbox"
+                                    checked={r.enabled}
+                                    onChange={(e) => toggle(r.name, e.target.checked)}
+                                    disabled={readOnly || saving}
+                                />
+                            </div>
+                            <div className="p-2 font-mono">{r.name}</div>
+                            <div className="p-2 font-mono text-xs text-neutral-600">{r.path}</div>
+                        </label>
+                    ))}
+                    {rules.length === 0 && (
+                        <div className="p-4 text-sm text-neutral-500">{tx("No CRS rule files found.")}</div>
+                    )}
                 </div>
             </div>
 
             <div className="flex items-center justify-between text-xs text-neutral-500">
                 <div className="flex items-center gap-3">
-                    <span>Total: {rules.length}</span>
-                    <span>Enabled: {enabledNames.length}</span>
-                    <span>Disabled: {rules.length - enabledNames.length}</span>
-                    {lastSavedAt && <span>Last saved: {new Date(lastSavedAt).toLocaleString()}</span>}
-                </div>
-                <div className="flex items-center gap-2">
-                    {messages.slice(0, 3).map((m, i) => (
-                        <span key={i} className="px-2 py-0.5 bg-neutral-100 rounded">{m}</span>
-                    ))}
+                    <span>{tx("Total")}: {rules.length}</span>
+                    <span>{tx("Enabled")}: {enabledNames.length}</span>
+                    <span>{tx("Disabled")}: {rules.length - enabledNames.length}</span>
+                    {lastSavedAt && <span>{tx("Last saved: {time}", { time: new Date(lastSavedAt).toLocaleString(locale === "ja" ? "ja-JP" : "en-US") })}</span>}
                 </div>
             </div>
         </div>

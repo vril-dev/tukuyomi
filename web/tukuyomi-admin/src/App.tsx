@@ -2,8 +2,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Status from './pages/Status';
 import Logs from './pages/Logs';
-import LogOutputPanel from './pages/LogOutputPanel';
 import Rules from './pages/Rules';
+import OverrideRulesPanel from './pages/OverrideRulesPanel';
 import RuleSets from './pages/RuleSets';
 import CacheRulePanel from './pages/CacheRulesPanel';
 import BypassRulesPanel from './pages/BypassRulesPanel';
@@ -14,26 +14,42 @@ import NotificationsPanel from './pages/NotificationsPanel';
 import BotDefensePanel from './pages/BotDefensePanel';
 import SemanticPanel from './pages/SemanticPanel';
 import FPTunerPanel from './pages/FPTunerPanel';
+import ProxyRulesPanel from './pages/ProxyRulesPanel';
+import BackendsPanel from './pages/BackendsPanel';
+import SitesPanel from './pages/SitesPanel';
+import SettingsPanel from './pages/SettingsPanel';
+import OptionsPanel from './pages/OptionsPanel';
+import VhostsPanel from './pages/VhostsPanel';
+import ScheduledTasksPanel from './pages/ScheduledTasksPanel';
 import Login from './pages/Login';
-import { AuthProvider, useAuth } from './lib/auth';
+import { useAuth } from './lib/auth';
+import { AuthProvider } from './lib/authProvider';
+import { AdminRuntimeProvider } from './lib/adminRuntimeProvider';
+import { useI18n } from './lib/i18n';
 
 function ProtectedLayout() {
   const { loading, session } = useAuth();
+  const { tx } = useI18n();
 
   if (loading) {
-    return <div className="min-h-screen flex items-center justify-center text-neutral-500">Checking admin session...</div>;
+    return <div className="min-h-screen flex items-center justify-center text-neutral-500">{tx("Checking admin session...")}</div>;
   }
   if (!session.authenticated) {
     return <Navigate to="/login" replace />;
   }
-  return <Layout />;
+  return (
+    <AdminRuntimeProvider>
+      <Layout />
+    </AdminRuntimeProvider>
+  );
 }
 
 function LoginRoute() {
   const { loading, session } = useAuth();
+  const { tx } = useI18n();
 
   if (loading) {
-    return <div className="min-h-screen flex items-center justify-center text-neutral-500">Checking admin session...</div>;
+    return <div className="min-h-screen flex items-center justify-center text-neutral-500">{tx("Checking admin session...")}</div>;
   }
   if (session.authenticated) {
     return <Navigate to="/status" replace />;
@@ -43,7 +59,7 @@ function LoginRoute() {
 
 function App() {
   return (
-    <BrowserRouter basename={import.meta.env.VITE_APP_BASE_PATH}>
+    <BrowserRouter basename="/tukuyomi-ui">
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginRoute />} />
@@ -51,8 +67,8 @@ function App() {
             <Route index element={<Navigate to="/status" />} />
             <Route path="status" element={<Status />} />
             <Route path="logs" element={<Logs />} />
-            <Route path="log-output" element={<LogOutputPanel />} />
             <Route path="rules" element={<Rules />} />
+            <Route path="override-rules" element={<OverrideRulesPanel />} />
             <Route path="rule-sets" element={<RuleSets />} />
             <Route path="bypass" element={<BypassRulesPanel />} />
             <Route path="country-block" element={<CountryBlockPanel />} />
@@ -63,6 +79,13 @@ function App() {
             <Route path="semantic" element={<SemanticPanel />} />
             <Route path="fp-tuner" element={<FPTunerPanel />} />
             <Route path="cache" element={<CacheRulePanel />} />
+            <Route path="proxy-rules" element={<ProxyRulesPanel />} />
+            <Route path="backends" element={<BackendsPanel />} />
+            <Route path="sites" element={<SitesPanel />} />
+            <Route path="vhosts" element={<VhostsPanel />} />
+            <Route path="scheduled-tasks" element={<ScheduledTasksPanel />} />
+            <Route path="settings" element={<SettingsPanel />} />
+            <Route path="options" element={<OptionsPanel />} />
           </Route>
         </Routes>
       </AuthProvider>

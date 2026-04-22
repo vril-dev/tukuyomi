@@ -1,12 +1,11 @@
-# Products
+# Tukuyomi Products
 
-[English](README.md) | [Japanese](README.ja.md)
+Current public product documentation lives here.
 
-Public landing pages for the binary components in the Tukuyomi family:
+- [`tukuyomi`](../../README.md): canonical WAF / reverse proxy / API gateway.
+- [`tukuyomi-proxy archive`](proxy/README.md): historical binary distribution name, now integrated into `tukuyomi`.
+- [`tukuyomi-edge`](edge/README.md): edge/device runtime notes.
+- [`tukuyomi-center`](center/README.md): center-side management notes.
+- [`tukuyomi-verify`](verify/README.md): external verification product notes.
 
-- [`proxy/README.md`](./proxy/README.md)
-- [`edge/README.md`](./edge/README.md)
-- [`center/README.md`](./center/README.md)
-- [`verify/README.md`](./verify/README.md)
-
-Binary downloads are published from [`tukuyomi-releases`](https://github.com/vril-dev/tukuyomi-releases/releases).
+For the current capability matrix, see [Product Comparison](../product-comparison.md).

@@ -3,8 +3,10 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +15,23 @@ import (
 	"github.com/gin-gonic/gin"
 	"tukuyomi/internal/config"
 )
+
+func containsExactString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func testScopedFPTunerRuleLine(host, scheme, path string, ruleID int, variable string) string {
+	scope := buildFPTunerHostScope(host, scheme)
+	return fmt.Sprintf(
+		"SecRule REQUEST_HEADERS:Host \"@%s %s\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith %s\" \"ctl:ruleRemoveTargetById=%d;%s\"",
+		scope.Operator, scope.Operand, path, ruleID, variable,
+	)
+}
 
 func TestDecodeFPTunerProviderResponseWrapped(t *testing.T) {
 	raw := []byte(`{"proposal":{"id":"fp-1","summary":"ok","rule_line":"SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\""}}`)
@@ -41,6 +60,24 @@ func TestDecodeFPTunerProviderResponseDirect(t *testing.T) {
 	}
 	if decision.Proposal.ID != "fp-2" {
 		t.Fatalf("proposal.ID=%q want=fp-2", decision.Proposal.ID)
+	}
+}
+
+func TestDecodeFPTunerProviderResponseNoProposal(t *testing.T) {
+	raw := []byte(`{"decision":"no_proposal","reason":"Looks like a real attack payload, not a credible false positive.","confidence":0.1}`)
+
+	decision, err := decodeFPTunerProviderResponse(raw)
+	if err != nil {
+		t.Fatalf("decodeFPTunerProviderResponse no_proposal error: %v", err)
+	}
+	if decision.NoProposal == nil {
+		t.Fatal("no_proposal is nil")
+	}
+	if decision.NoProposal.Decision != "no_proposal" {
+		t.Fatalf("decision=%q want=no_proposal", decision.NoProposal.Decision)
+	}
+	if !strings.Contains(decision.NoProposal.Reason, "real attack payload") {
+		t.Fatalf("reason=%q", decision.NoProposal.Reason)
 	}
 }
 
@@ -79,8 +116,7 @@ func TestBuildFPTunerRuleLineKeepsExactHostForNonDefaultPort(t *testing.T) {
 }
 
 func TestValidateFPTunerRuleLine(t *testing.T) {
-	good := "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\n" +
-		"SecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\""
+	good := testScopedFPTunerRuleLine("search.example.com", "https", "/search", 100004, "ARGS:q")
 	if err := validateFPTunerRuleLine(good); err != nil {
 		t.Fatalf("validateFPTunerRuleLine good returned err: %v", err)
 	}
@@ -155,6 +191,77 @@ func TestLatestSecurityEventFallsBackToSemanticAnomaly(t *testing.T) {
 	}
 }
 
+func TestLatestSecurityEventUsesWAFBlockMatchedValue(t *testing.T) {
+	if err := InitLogsStatsStore(false, "", 0); err != nil {
+		t.Fatalf("disable sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	now := time.Now().UTC()
+	entries := []map[string]any{
+		{
+			"ts":               now.Add(-1 * time.Minute).Format(time.RFC3339Nano),
+			"event":            "semantic_anomaly",
+			"req_id":           "req-sem-1",
+			"method":           "POST",
+			"path":             "/semantic",
+			"status":           403,
+			"reason":           "temporal:ip_burst",
+			"reasons":          "temporal:ip_burst",
+			"matched_value":    "should-not-win",
+			"matched_variable": "ARGS:mode",
+		},
+		{
+			"ts":               now.Format(time.RFC3339Nano),
+			"event":            "waf_block",
+			"req_id":           "req-waf-1",
+			"method":           "GET",
+			"original_scheme":  "https",
+			"original_host":    "login.example.com:8443",
+			"path":             "/login",
+			"rule_id":          942100,
+			"status":           403,
+			"matched_variable": "ARGS:username",
+			"matched_value":    "admin@example.com",
+		},
+	}
+
+	tmp := t.TempDir()
+	logPath := filepath.Join(tmp, "waf-events.ndjson")
+	writeNDJSONFile(t, logPath, entries)
+
+	restoreLogPath := setWAFLogPathForTest(t, logPath)
+	defer restoreLogPath()
+
+	event, source, err := latestSecurityEvent()
+	if err != nil {
+		t.Fatalf("latestSecurityEvent error: %v", err)
+	}
+	if source != "waf_log" {
+		t.Fatalf("source=%q want=waf_log", source)
+	}
+	if event.EventType != "" {
+		t.Fatalf("event_type=%q want empty for latestWAFBlockEvent path", event.EventType)
+	}
+	if event.RuleID != 942100 {
+		t.Fatalf("rule_id=%d want=942100", event.RuleID)
+	}
+	if event.Host != "login.example.com:8443" {
+		t.Fatalf("host=%q want=login.example.com:8443", event.Host)
+	}
+	if event.Scheme != "https" {
+		t.Fatalf("scheme=%q want=https", event.Scheme)
+	}
+	if event.MatchedVariable != "ARGS:username" {
+		t.Fatalf("matched_variable=%q want=ARGS:username", event.MatchedVariable)
+	}
+	if event.MatchedValue != "admin@example.com" {
+		t.Fatalf("matched_value=%q want=admin@example.com", event.MatchedValue)
+	}
+}
+
 func TestLatestSecurityEventFallsBackToOriginalQueryForLowSignalWAFBlock(t *testing.T) {
 	if err := InitLogsStatsStore(false, "", 0); err != nil {
 		t.Fatalf("disable sqlite store: %v", err)
@@ -170,6 +277,8 @@ func TestLatestSecurityEventFallsBackToOriginalQueryForLowSignalWAFBlock(t *test
 			"event":            "waf_block",
 			"req_id":           "req-waf-low-signal",
 			"method":           "GET",
+			"original_scheme":  "http",
+			"original_host":    "localhost:80",
 			"path":             "/",
 			"rule_id":          949110,
 			"status":           403,
@@ -196,6 +305,15 @@ func TestLatestSecurityEventFallsBackToOriginalQueryForLowSignalWAFBlock(t *test
 	if event.RuleID != 949110 {
 		t.Fatalf("rule_id=%d want=949110", event.RuleID)
 	}
+	if event.Host != "localhost:80" {
+		t.Fatalf("host=%q want=localhost:80", event.Host)
+	}
+	if event.Scheme != "http" {
+		t.Fatalf("scheme=%q want=http", event.Scheme)
+	}
+	if event.Query != "<script>window.alert(document.cookie);</script>" {
+		t.Fatalf("query=%q want decoded query payload", event.Query)
+	}
 	if event.MatchedVariable != "QUERY_STRING" {
 		t.Fatalf("matched_variable=%q want=QUERY_STRING", event.MatchedVariable)
 	}
@@ -219,6 +337,8 @@ func TestLatestSecurityEventFallsBackToOriginalQueryForUnsafeMatchedVariable(t *
 			"event":            "waf_block",
 			"req_id":           "req-waf-unsafe-var",
 			"method":           "GET",
+			"original_scheme":  "http",
+			"original_host":    "localhost:80",
 			"path":             "/",
 			"rule_id":          941100,
 			"status":           403,
@@ -245,54 +365,8 @@ func TestLatestSecurityEventFallsBackToOriginalQueryForUnsafeMatchedVariable(t *
 	if event.MatchedVariable != "QUERY_STRING" {
 		t.Fatalf("matched_variable=%q want=QUERY_STRING", event.MatchedVariable)
 	}
-	if event.MatchedValue != "<script>window.alert(document.cookie);</script>" {
-		t.Fatalf("matched_value=%q want decoded query payload", event.MatchedValue)
-	}
-}
-
-func TestLatestSecurityEventFallsBackToOriginalQueryForRequestFilename(t *testing.T) {
-	if err := InitLogsStatsStore(false, "", 0); err != nil {
-		t.Fatalf("disable sqlite store: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = InitLogsStatsStore(false, "", 0)
-	})
-
-	now := time.Now().UTC()
-	entries := []map[string]any{
-		{
-			"ts":               now.Format(time.RFC3339Nano),
-			"event":            "waf_block",
-			"req_id":           "req-waf-request-filename",
-			"method":           "GET",
-			"path":             "/",
-			"rule_id":          949110,
-			"status":           403,
-			"matched_variable": "REQUEST_FILENAME",
-			"matched_value":    "/",
-			"original_query":   "%3Cscript%3Ewindow.alert(document.cookie);%3C/script%3E",
-		},
-	}
-
-	tmp := t.TempDir()
-	logPath := filepath.Join(tmp, "waf-events.ndjson")
-	writeNDJSONFile(t, logPath, entries)
-
-	restoreLogPath := setWAFLogPathForTest(t, logPath)
-	defer restoreLogPath()
-
-	event, source, err := latestSecurityEvent()
-	if err != nil {
-		t.Fatalf("latestSecurityEvent error: %v", err)
-	}
-	if source != "waf_log" {
-		t.Fatalf("source=%q want=waf_log", source)
-	}
-	if event.MatchedVariable != "QUERY_STRING" {
-		t.Fatalf("matched_variable=%q want=QUERY_STRING", event.MatchedVariable)
-	}
-	if event.MatchedValue != "<script>window.alert(document.cookie);</script>" {
-		t.Fatalf("matched_value=%q want decoded query payload", event.MatchedValue)
+	if event.Query != "<script>window.alert(document.cookie);</script>" {
+		t.Fatalf("query=%q want decoded query payload", event.Query)
 	}
 }
 
@@ -317,7 +391,7 @@ func TestDecodeJSONBodyStrictSingleObject(t *testing.T) {
 	obj := fpTunerApplyBody{
 		Proposal: fpTunerProposal{
 			ID:         "fp-1",
-			RuleLine:   "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\"",
+			RuleLine:   testScopedFPTunerRuleLine("search.example.com", "https", "/search", 100004, "ARGS:q"),
 			TargetPath: "rules/tukuyomi.conf",
 		},
 	}
@@ -341,7 +415,7 @@ func TestProposalHashStable(t *testing.T) {
 	p := fpTunerProposal{
 		ID:         "fp-1",
 		TargetPath: "rules/tukuyomi.conf",
-		RuleLine:   "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\"",
+		RuleLine:   testScopedFPTunerRuleLine("search.example.com", "https", "/search", 100004, "ARGS:q"),
 	}
 	h1 := proposalHash(p)
 	h2 := proposalHash(p)
@@ -362,7 +436,7 @@ func TestApprovalTokenLifecycle(t *testing.T) {
 	proposal := fpTunerProposal{
 		ID:         "fp-1",
 		TargetPath: "rules/tukuyomi.conf",
-		RuleLine:   "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\"",
+		RuleLine:   testScopedFPTunerRuleLine("search.example.com", "https", "/search", 100004, "ARGS:q"),
 	}
 	token, err := issueFPTunerApprovalToken(proposal)
 	if err != nil {
@@ -392,12 +466,12 @@ func TestApprovalTokenProposalMismatch(t *testing.T) {
 	p1 := fpTunerProposal{
 		ID:         "fp-1",
 		TargetPath: "rules/tukuyomi.conf",
-		RuleLine:   "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\"",
+		RuleLine:   testScopedFPTunerRuleLine("search.example.com", "https", "/search", 100004, "ARGS:q"),
 	}
 	p2 := fpTunerProposal{
 		ID:         "fp-2",
 		TargetPath: "rules/tukuyomi.conf",
-		RuleLine:   "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190124,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /users\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\"",
+		RuleLine:   testScopedFPTunerRuleLine("search.example.com", "https", "/users", 100004, "ARGS:q"),
 	}
 
 	token, err := issueFPTunerApprovalToken(p1)
@@ -445,6 +519,7 @@ func TestProposeFPTuningHTTPModeSanitizesProviderPayload(t *testing.T) {
 			"scheme":"https",
 			"host":"search.example.com",
 			"path":"/search",
+			"query":"token=sensitive-value&email=a@example.com&ip=10.1.2.3",
 			"rule_id":100004,
 			"matched_variable":"ARGS:q",
 			"matched_value":"token=sensitive-value&email=a@example.com&ip=10.1.2.3"
@@ -494,6 +569,18 @@ func TestProposeFPTuningHTTPModeSanitizesProviderPayload(t *testing.T) {
 	if captured.Input.Host != "search.example.com" {
 		t.Fatalf("provider input host=%q want=search.example.com", captured.Input.Host)
 	}
+	if captured.Input.Scheme != "https" {
+		t.Fatalf("provider input scheme=%q want=https", captured.Input.Scheme)
+	}
+	if !containsExactString(captured.Constraints, "Target engine is Coraza with ModSecurity-compatible exclusion syntax") {
+		t.Fatalf("constraints missing Coraza guidance: %#v", captured.Constraints)
+	}
+	if !containsExactString(captured.Constraints, "Rule must be a two-line chain: REQUEST_HEADERS:Host exact match, or a default-port-aware regex for http:80 / https:443 only, then REQUEST_URI @beginsWith with ctl:ruleRemoveTargetById") {
+		t.Fatalf("constraints missing host-aware chain guidance: %#v", captured.Constraints)
+	}
+	if !containsExactString(captured.Constraints, "If this is not a credible false positive or evidence is insufficient, return no_proposal with reason") {
+		t.Fatalf("constraints missing no_proposal guidance: %#v", captured.Constraints)
+	}
 	if strings.Contains(captured.Input.MatchedValue, "a@example.com") {
 		t.Fatalf("provider input contains unmasked email: %q", captured.Input.MatchedValue)
 	}
@@ -511,6 +598,141 @@ func TestProposeFPTuningHTTPModeSanitizesProviderPayload(t *testing.T) {
 	}
 	if !strings.Contains(captured.Input.MatchedValue, "[redacted-ip]") {
 		t.Fatalf("provider input missing redacted ip marker: %q", captured.Input.MatchedValue)
+	}
+	if !strings.Contains(captured.Input.Query, "token=[redacted]") || !strings.Contains(captured.Input.Query, "[redacted-email]") || !strings.Contains(captured.Input.Query, "[redacted-ip]") {
+		t.Fatalf("provider input query was not masked: %q", captured.Input.Query)
+	}
+}
+
+func TestProposeFPTuningRejectsMismatchedTargetRuleID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"proposal":{"id":"fp-http-unsafe-001","summary":"ok","rule_line":"SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=999999;ARGS:q\""}}`))
+	}))
+	defer srv.Close()
+
+	restore := saveFPTunerConfigForTest()
+	defer restore()
+	config.RulesFile = "rules/tukuyomi.conf"
+	config.CRSEnable = false
+	config.FPTunerEndpoint = srv.URL
+	config.FPTunerTimeout = 2 * time.Second
+	config.FPTunerRequireApproval = false
+
+	reqBody := `{
+		"target_path":"rules/tukuyomi.conf",
+		"event":{
+			"scheme":"https",
+			"host":"search.example.com",
+			"path":"/search",
+			"rule_id":100004,
+			"matched_variable":"ARGS:q",
+			"matched_value":"select * from users"
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/tukuyomi-api/fp-tuner/propose", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+
+	ProposeFPTuning(c)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "observed rule_id 100004") {
+		t.Fatalf("unexpected body=%s", w.Body.String())
+	}
+}
+
+func TestProposeFPTuningRejectsMismatchedHost(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"proposal":{"id":"fp-http-unsafe-host","summary":"ok","rule_line":"SecRule REQUEST_HEADERS:Host \"@rx ^admin\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\""}}`))
+	}))
+	defer srv.Close()
+
+	restore := saveFPTunerConfigForTest()
+	defer restore()
+	config.RulesFile = "rules/tukuyomi.conf"
+	config.CRSEnable = false
+	config.FPTunerEndpoint = srv.URL
+	config.FPTunerTimeout = 2 * time.Second
+	config.FPTunerRequireApproval = false
+
+	reqBody := `{
+		"target_path":"rules/tukuyomi.conf",
+		"event":{
+			"scheme":"https",
+			"host":"search.example.com",
+			"path":"/search",
+			"rule_id":100004,
+			"matched_variable":"ARGS:q",
+			"matched_value":"select * from users"
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/tukuyomi-api/fp-tuner/propose", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+
+	ProposeFPTuning(c)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "observed host scope") || !strings.Contains(w.Body.String(), "search") {
+		t.Fatalf("unexpected body=%s", w.Body.String())
+	}
+}
+
+func TestProposeFPTuningRejectsMismatchedVariable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"proposal":{"id":"fp-http-unsafe-002","summary":"ok","rule_line":"SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:username\""}}`))
+	}))
+	defer srv.Close()
+
+	restore := saveFPTunerConfigForTest()
+	defer restore()
+	config.RulesFile = "rules/tukuyomi.conf"
+	config.CRSEnable = false
+	config.FPTunerEndpoint = srv.URL
+	config.FPTunerTimeout = 2 * time.Second
+	config.FPTunerRequireApproval = false
+
+	reqBody := `{
+		"target_path":"rules/tukuyomi.conf",
+		"event":{
+			"scheme":"https",
+			"host":"search.example.com",
+			"path":"/search",
+			"rule_id":100004,
+			"matched_variable":"ARGS:q",
+			"matched_value":"select * from users"
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/tukuyomi-api/fp-tuner/propose", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+
+	ProposeFPTuning(c)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "observed matched_variable") || !strings.Contains(w.Body.String(), "ARGS:q") {
+		t.Fatalf("unexpected body=%s", w.Body.String())
 	}
 }
 
@@ -545,9 +767,9 @@ func TestRequestFPTunerProposalHTTPStatusError(t *testing.T) {
 
 func TestResolveFPTunerEventInputsRejectsMixedInput(t *testing.T) {
 	_, _, err := resolveFPTunerEventInputs(fpTunerProposeBody{
-		Event: &fpTunerEventInput{Host: "search.example.com", Path: "/search", RuleID: 100004, MatchedVariable: "ARGS:q"},
+		Event: &fpTunerEventInput{Path: "/search"},
 		Events: []fpTunerEventInput{
-			{Host: "login.example.com", Path: "/login", RuleID: 100005, MatchedVariable: "ARGS:username"},
+			{Path: "/login"},
 		},
 	})
 	if err == nil {
@@ -555,19 +777,130 @@ func TestResolveFPTunerEventInputsRejectsMixedInput(t *testing.T) {
 	}
 }
 
+func TestResolveFPTunerEventInputsRejectsMissingManualFields(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		body    fpTunerProposeBody
+		wantErr string
+	}{
+		{
+			name: "missing host",
+			body: fpTunerProposeBody{
+				Event: &fpTunerEventInput{
+					Path:            "/",
+					RuleID:          941100,
+					MatchedVariable: "QUERY_STRING",
+				},
+			},
+			wantErr: "event.host is required",
+		},
+		{
+			name: "missing path",
+			body: fpTunerProposeBody{
+				Event: &fpTunerEventInput{
+					Host:            "search.example.com",
+					RuleID:          941100,
+					MatchedVariable: "QUERY_STRING",
+				},
+			},
+			wantErr: "event.path is required",
+		},
+		{
+			name: "missing rule_id",
+			body: fpTunerProposeBody{
+				Event: &fpTunerEventInput{
+					Host:            "search.example.com",
+					Path:            "/",
+					MatchedVariable: "QUERY_STRING",
+				},
+			},
+			wantErr: "event.rule_id is required",
+		},
+		{
+			name: "missing matched_variable",
+			body: fpTunerProposeBody{
+				Event: &fpTunerEventInput{
+					Host:   "search.example.com",
+					Path:   "/",
+					RuleID: 941100,
+				},
+			},
+			wantErr: "event.matched_variable is required",
+		},
+		{
+			name: "missing batch matched_variable",
+			body: fpTunerProposeBody{
+				Events: []fpTunerEventInput{
+					{
+						Host:   "search.example.com",
+						Path:   "/",
+						RuleID: 941100,
+					},
+				},
+			},
+			wantErr: "events[0].matched_variable is required",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := resolveFPTunerEventInputs(tc.body)
+			if err == nil {
+				t.Fatal("resolveFPTunerEventInputs should reject incomplete manual input")
+			}
+			if err.Error() != tc.wantErr {
+				t.Fatalf("err=%q want=%q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestResolveFPTunerEventInputsRejectsIncompleteLatestEvent(t *testing.T) {
+	now := time.Now().UTC()
+	entries := []map[string]any{
+		{
+			"ts":     now.Format(time.RFC3339Nano),
+			"event":  "semantic_anomaly",
+			"req_id": "req-sem-1",
+			"method": "GET",
+			"path":   "/login",
+			"status": 403,
+			"reason": "temporal:ip_burst",
+		},
+	}
+
+	tmp := t.TempDir()
+	logPath := filepath.Join(tmp, "waf-events.ndjson")
+	writeNDJSONFile(t, logPath, entries)
+	restoreLogPath := setWAFLogPathForTest(t, logPath)
+	defer restoreLogPath()
+
+	if err := InitLogsStatsStore(false, "", 0); err != nil {
+		t.Fatalf("disable sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	_, _, err := resolveFPTunerEventInputs(fpTunerProposeBody{})
+	if err == nil {
+		t.Fatal("resolveFPTunerEventInputs should reject incomplete latest event")
+	}
+	if err.Error() != "latest_event.host is required" {
+		t.Fatalf("err=%q want latest_event.host is required", err.Error())
+	}
+}
+
 func TestProposeFPTuningBatchHTTPReturnsV2(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	callCount := 0
+	var callCount int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		w.Header().Set("Content-Type", "application/json")
-		switch callCount {
-		case 1:
+		if callCount == 1 {
 			_, _ = w.Write([]byte(`{"proposal":{"id":"fp-http-batch-001","summary":"ok","rule_line":"SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\""}}`))
-		default:
-			_, _ = w.Write([]byte(`{"proposal":{"id":"fp-http-batch-002","summary":"ok","rule_line":"SecRule REQUEST_HEADERS:Host \"@rx ^login\\.example\\.com(:443)?$\" \"id:190124,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /login\" \"ctl:ruleRemoveTargetById=100005;ARGS:username\""}}`))
+			return
 		}
+		_, _ = w.Write([]byte(`{"proposal":{"id":"fp-http-batch-002","summary":"ok","rule_line":"SecRule REQUEST_HEADERS:Host \"@rx ^login\\.example\\.com(:443)?$\" \"id:190124,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /login\" \"ctl:ruleRemoveTargetById=100005;ARGS:username\""}}`))
 	}))
 	defer srv.Close()
 
@@ -604,6 +937,7 @@ func TestProposeFPTuningBatchHTTPReturnsV2(t *testing.T) {
 		ContractVersion string `json:"contract_version"`
 		Proposals       []struct {
 			Input struct {
+				Host string `json:"host"`
 				Path string `json:"path"`
 			} `json:"input"`
 			Proposal struct {
@@ -623,11 +957,14 @@ func TestProposeFPTuningBatchHTTPReturnsV2(t *testing.T) {
 	if out.Count != 2 || len(out.Proposals) != 2 {
 		t.Fatalf("count/proposals mismatch: count=%d proposals=%d body=%s", out.Count, len(out.Proposals), w.Body.String())
 	}
+	if callCount != 2 {
+		t.Fatalf("provider call count=%d want=2", callCount)
+	}
+	if out.Proposals[0].Input.Host != "search.example.com" || out.Proposals[1].Input.Host != "login.example.com" {
+		t.Fatalf("unexpected batch proposal hosts: %s", w.Body.String())
+	}
 	if out.Proposals[0].Input.Path != "/search" || out.Proposals[1].Input.Path != "/login" {
 		t.Fatalf("unexpected batch proposal order: %s", w.Body.String())
-	}
-	if callCount != 2 {
-		t.Fatalf("provider callCount=%d want=2", callCount)
 	}
 }
 
@@ -650,7 +987,7 @@ func TestProposeFPTuningUnsafeProposalReturns422(t *testing.T) {
 
 	reqBody := `{
 		"target_path":"rules/tukuyomi.conf",
-		"event":{"scheme":"https","host":"search.example.com","path":"/search","rule_id":100004,"matched_variable":"ARGS:q","matched_value":"q=test"}
+		"event":{"host":"search.example.com","path":"/search","rule_id":100004,"matched_variable":"ARGS:q","matched_value":"q=test"}
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/tukuyomi-api/fp-tuner/propose", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
@@ -668,44 +1005,7 @@ func TestProposeFPTuningUnsafeProposalReturns422(t *testing.T) {
 	}
 }
 
-func TestProposeFPTuningRejectsDriftedHostScope(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"proposal":{"id":"fp-http-unsafe-host","summary":"bad","rule_line":"SecRule REQUEST_HEADERS:Host \"@rx ^admin\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\""}}`))
-	}))
-	defer srv.Close()
-
-	restore := saveFPTunerConfigForTest()
-	defer restore()
-	config.RulesFile = "rules/tukuyomi.conf"
-	config.CRSEnable = false
-	config.FPTunerEndpoint = srv.URL
-	config.FPTunerTimeout = 2 * time.Second
-	config.FPTunerRequireApproval = false
-
-	reqBody := `{
-		"target_path":"rules/tukuyomi.conf",
-		"event":{"scheme":"https","host":"search.example.com","path":"/search","rule_id":100004,"matched_variable":"ARGS:q","matched_value":"q=test"}
-	}`
-	req := httptest.NewRequest(http.MethodPost, "/tukuyomi-api/fp-tuner/propose", strings.NewReader(reqBody))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = req
-
-	ProposeFPTuning(c)
-
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "outside the observed Coraza event scope") {
-		t.Fatalf("unexpected body: %s", w.Body.String())
-	}
-}
-
-func TestProposeFPTuningReturnsNoProposal(t *testing.T) {
+func TestProposeFPTuningNoProposalReturns200(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -720,11 +1020,11 @@ func TestProposeFPTuningReturnsNoProposal(t *testing.T) {
 	config.CRSEnable = false
 	config.FPTunerEndpoint = srv.URL
 	config.FPTunerTimeout = 2 * time.Second
-	config.FPTunerRequireApproval = false
+	config.FPTunerRequireApproval = true
 
 	reqBody := `{
 		"target_path":"rules/tukuyomi.conf",
-		"event":{"scheme":"http","host":"localhost","path":"/","query":"<script>alert(1)</script>","rule_id":941100,"matched_variable":"QUERY_STRING","matched_value":"<script>alert(1)</script>"}
+		"event":{"host":"localhost:80","path":"/","query":"<script>alert(1)</script>","rule_id":941100,"matched_variable":"QUERY_STRING","matched_value":"<script>alert(1)</script>"}
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/tukuyomi-api/fp-tuner/propose", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
@@ -738,14 +1038,16 @@ func TestProposeFPTuningReturnsNoProposal(t *testing.T) {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 	var out struct {
+		OK         bool               `json:"ok"`
 		Proposal   *fpTunerProposal   `json:"proposal"`
 		NoProposal *fpTunerNoProposal `json:"no_proposal"`
-		Approval   struct {
-			Required bool `json:"required"`
-		} `json:"approval"`
+		Approval   fpTunerApproval    `json:"approval"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
-		t.Fatalf("response decode error: %v", err)
+		t.Fatalf("decode response: %v", err)
+	}
+	if !out.OK {
+		t.Fatalf("response ok=false: %s", w.Body.String())
 	}
 	if out.Proposal != nil {
 		t.Fatalf("proposal should be nil: %s", w.Body.String())
@@ -758,98 +1060,211 @@ func TestProposeFPTuningReturnsNoProposal(t *testing.T) {
 	}
 }
 
-func TestGetFPTunerRecentWAFBlocksReturnsRequestedWAFBlockRows(t *testing.T) {
-	if err := InitLogsStatsStore(false, "", 0); err != nil {
-		t.Fatalf("disable sqlite store: %v", err)
+func TestGetFPTunerAuditReturnsNewestFirstAndClampsLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tmp := t.TempDir()
+	auditPath := filepath.Join(tmp, "fp-tuner-audit.ndjson")
+	restore := setFPTunerAuditFileForTest(t, auditPath)
+	defer restore()
+
+	lines := make([][]byte, 0, 105)
+	for i := 0; i < 105; i += 1 {
+		entry, err := json.Marshal(fpTunerAuditEntry{
+			TS:           "2026-04-01T00:00:00Z",
+			Service:      "coraza",
+			Event:        "fp_tuner_apply_success",
+			Actor:        "alice@example.com",
+			ProposalID:   "fp-1",
+			ProposalHash: "hash-1",
+			TargetPath:   "rules/tukuyomi.conf",
+			Count:        i,
+		})
+		if err != nil {
+			t.Fatalf("marshal audit entry: %v", err)
+		}
+		lines = append(lines, append(entry, '\n'))
 	}
-	t.Cleanup(func() {
-		_ = InitLogsStatsStore(false, "", 0)
-	})
+	if err := os.WriteFile(auditPath, bytes.Join(lines, nil), 0o644); err != nil {
+		t.Fatalf("write audit file: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		query     string
+		wantCount int
+		wantFirst int
+		wantLast  int
+	}{
+		{
+			name:      "default limit",
+			query:     "/fp-tuner:audit",
+			wantCount: 20,
+			wantFirst: 104,
+			wantLast:  85,
+		},
+		{
+			name:      "limit zero clamps to one",
+			query:     "/fp-tuner:audit?limit=0",
+			wantCount: 1,
+			wantFirst: 104,
+			wantLast:  104,
+		},
+		{
+			name:      "limit high clamps to hundred",
+			query:     "/fp-tuner:audit?limit=200",
+			wantCount: 100,
+			wantFirst: 104,
+			wantLast:  5,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodGet, tc.query, nil)
+
+			GetFPTunerAudit(c)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var body struct {
+				Entries []fpTunerAuditEntry `json:"entries"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if len(body.Entries) != tc.wantCount {
+				t.Fatalf("entries=%d want=%d", len(body.Entries), tc.wantCount)
+			}
+			if body.Entries[0].Count != tc.wantFirst {
+				t.Fatalf("first count=%d want=%d", body.Entries[0].Count, tc.wantFirst)
+			}
+			if body.Entries[len(body.Entries)-1].Count != tc.wantLast {
+				t.Fatalf("last count=%d want=%d", body.Entries[len(body.Entries)-1].Count, tc.wantLast)
+			}
+		})
+	}
+}
+
+func TestGetFPTunerRecentWAFBlocksReturnsRequestedWAFBlockRows(t *testing.T) {
+	gin.SetMode(gin.TestMode)
 
 	now := time.Now().UTC()
 	entries := []map[string]any{
 		{
-			"ts":               now.Add(-3 * time.Minute).Format(time.RFC3339Nano),
-			"event":            "waf_block",
-			"req_id":           "req-older",
-			"method":           "GET",
-			"path":             "/login",
-			"rule_id":          942100,
-			"status":           403,
-			"matched_variable": "ARGS:username",
-			"matched_value":    "admin",
+			"ts":     now.Add(-3 * time.Minute).Format(time.RFC3339Nano),
+			"event":  "proxy_route",
+			"req_id": "req-route-1",
+			"path":   "/",
 		},
 		{
 			"ts":               now.Add(-2 * time.Minute).Format(time.RFC3339Nano),
 			"event":            "waf_block",
-			"req_id":           "req-middle",
+			"req_id":           "req-waf-1",
 			"method":           "GET",
+			"original_scheme":  "http",
+			"original_host":    "localhost:80",
 			"path":             "/",
 			"rule_id":          949110,
 			"status":           403,
 			"matched_variable": "TX:blocking_inbound_anomaly_score",
 			"matched_value":    "25",
-			"original_query":   "%3Cscript%3Ewindow.alert(document.cookie);%3C/script%3E",
+			"original_query":   "%3Csvg%20onload%3Dalert(1)%3E",
 		},
 		{
-			"ts":               now.Add(-1 * time.Minute).Format(time.RFC3339Nano),
+			"ts":     now.Add(-1 * time.Minute).Format(time.RFC3339Nano),
+			"event":  "proxy_route",
+			"req_id": "req-route-2",
+			"path":   "/",
+		},
+		{
+			"ts":               now.Format(time.RFC3339Nano),
 			"event":            "waf_block",
-			"req_id":           "req-newest",
+			"req_id":           "req-waf-2",
 			"method":           "GET",
-			"path":             "/search",
+			"original_scheme":  "https",
+			"original_host":    "search.example.com:8443",
+			"path":             "/",
 			"rule_id":          941100,
 			"status":           403,
-			"matched_variable": "ARGS:q",
+			"matched_variable": "QUERY_STRING",
 			"matched_value":    "<script>alert(1)</script>",
-		},
-		{
-			"ts":     now.Format(time.RFC3339Nano),
-			"event":  "semantic_anomaly",
-			"req_id": "req-semantic",
-			"method": "POST",
-			"path":   "/login",
-			"status": 403,
-			"score":  5,
 		},
 	}
 
 	tmp := t.TempDir()
 	logPath := filepath.Join(tmp, "waf-events.ndjson")
 	writeNDJSONFile(t, logPath, entries)
-
 	restoreLogPath := setWAFLogPathForTest(t, logPath)
 	defer restoreLogPath()
 
-	gin.SetMode(gin.TestMode)
-	req := httptest.NewRequest(http.MethodGet, "/tukuyomi-api/fp-tuner/recent-waf-blocks?limit=2", nil)
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStore(true, dbPath, 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = req
+	c.Request = httptest.NewRequest(http.MethodGet, "/fp-tuner/recent-waf-blocks?limit=2", nil)
 
 	GetFPTunerRecentWAFBlocks(c)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-
 	var out fpTunerRecentWAFBlocksResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
-		t.Fatalf("response decode error: %v", err)
+		t.Fatalf("decode response: %v", err)
 	}
 	if len(out.Lines) != 2 {
-		t.Fatalf("len(lines)=%d want=2 body=%s", len(out.Lines), w.Body.String())
+		t.Fatalf("lines=%d want=2 body=%s", len(out.Lines), w.Body.String())
 	}
-	if got := anyToString(out.Lines[0]["req_id"]); got != "req-newest" {
-		t.Fatalf("latest req_id=%q want=req-newest", got)
+	if got := anyToString(out.Lines[0]["req_id"]); got != "req-waf-2" {
+		t.Fatalf("first req_id=%q want=req-waf-2", got)
 	}
-	if got := anyToString(out.Lines[1]["req_id"]); got != "req-middle" {
-		t.Fatalf("second req_id=%q want=req-middle", got)
+	if got := anyToString(out.Lines[0]["original_host"]); got != "search.example.com:8443" {
+		t.Fatalf("first original_host=%q want=search.example.com:8443", got)
+	}
+	if got := anyToString(out.Lines[1]["req_id"]); got != "req-waf-1" {
+		t.Fatalf("second req_id=%q want=req-waf-1", got)
 	}
 	if got := anyToString(out.Lines[1]["matched_variable"]); got != "QUERY_STRING" {
 		t.Fatalf("fallback matched_variable=%q want=QUERY_STRING", got)
 	}
-	if got := anyToString(out.Lines[1]["matched_value"]); got != "<script>window.alert(document.cookie);</script>" {
+	if got := anyToString(out.Lines[1]["matched_value"]); got != "<svg onload=alert(1)>" {
 		t.Fatalf("fallback matched_value=%q want decoded query payload", got)
+	}
+}
+
+func TestGetFPTunerAuditMissingFileReturnsEmpty(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tmp := t.TempDir()
+	auditPath := filepath.Join(tmp, "missing-fp-tuner-audit.ndjson")
+	restore := setFPTunerAuditFileForTest(t, auditPath)
+	defer restore()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/fp-tuner:audit", nil)
+
+	GetFPTunerAudit(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Entries []fpTunerAuditEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(body.Entries) != 0 {
+		t.Fatalf("entries=%d want=0", len(body.Entries))
 	}
 }
 
@@ -860,6 +1275,7 @@ func saveFPTunerConfigForTest() func() {
 	oldAPIKey := config.FPTunerAPIKey
 	oldTimeout := config.FPTunerTimeout
 	oldRequireApproval := config.FPTunerRequireApproval
+	oldAuditFile := config.FPTunerAuditFile
 	return func() {
 		config.RulesFile = oldRulesFile
 		config.CRSEnable = oldCRSEnable
@@ -867,5 +1283,15 @@ func saveFPTunerConfigForTest() func() {
 		config.FPTunerAPIKey = oldAPIKey
 		config.FPTunerTimeout = oldTimeout
 		config.FPTunerRequireApproval = oldRequireApproval
+		config.FPTunerAuditFile = oldAuditFile
+	}
+}
+
+func setFPTunerAuditFileForTest(t *testing.T, path string) func() {
+	t.Helper()
+	prev := config.FPTunerAuditFile
+	config.FPTunerAuditFile = path
+	return func() {
+		config.FPTunerAuditFile = prev
 	}
 }

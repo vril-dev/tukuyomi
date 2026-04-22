@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tukuyomi-scheduler
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: tukuyomi-scheduler
+  template:
+    metadata:
+      labels:
+        app: tukuyomi-scheduler
+    spec:
+      containers:
+        - name: scheduled-task-runner
+          image: <IMAGE_URI>
+          env:
+            - name: WAF_CONFIG_FILE
+              value: /app/conf/config.json
+            - name: PROXY_BIN
+              value: /app/tukuyomi
+          command:
+            - /bin/sh
+            - -lc
+          args:
+            - |
+              set -eu
+              echo "[scheduled-task-runner] starting singleton loop"
+              while :; do
+                if "${PROXY_BIN:-/app/tukuyomi}" run-scheduled-tasks; then
+                  :
+                else
+                  code="$?"
+                  echo "[scheduled-task-runner][fatal] run-scheduled-tasks failed; exiting for restart" >&2
+                  exit "$code"
+                fi
+                now="$(date +%s)"
+                sleep_for="$((60 - (now % 60)))"
+                sleep "$sleep_for"
+              done
+          volumeMounts:
+            - name: proxy-conf
+              mountPath: /app/conf
+            - name: proxy-scheduled-tasks
+              mountPath: /app/data/scheduled-tasks
+            - name: proxy-logs
+              mountPath: /app/logs
+            - name: proxy-php-fpm
+              mountPath: /app/data/php-fpm
+      volumes:
+        - name: proxy-conf
+          persistentVolumeClaim:
+            claimName: tukuyomi-conf
+        - name: proxy-scheduled-tasks
+          persistentVolumeClaim:
+            claimName: tukuyomi-scheduled-tasks
+        - name: proxy-logs
+          persistentVolumeClaim:
+            claimName: tukuyomi-logs
+        - name: proxy-php-fpm
+          persistentVolumeClaim:
+            claimName: tukuyomi-php-fpm

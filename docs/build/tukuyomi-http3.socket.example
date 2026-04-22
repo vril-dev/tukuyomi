@@ -1,0 +1,10 @@
+[Unit]
+Description=tukuyomi HTTP/3 UDP socket
+
+[Socket]
+ListenDatagram=443
+FileDescriptorName=http3
+Service=tukuyomi.service
+
+[Install]
+WantedBy=sockets.target

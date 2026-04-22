@@ -15,25 +15,25 @@ type proxyErrorResponse struct {
 	redirectURL string
 }
 
-func newProxyErrorResponse(htmlFile string, redirectURL string) (proxyErrorResponse, error) {
+func newProxyErrorResponse(cfg ProxyRulesConfig) (proxyErrorResponse, error) {
 	resp := proxyErrorResponse{
-		htmlFile:    strings.TrimSpace(htmlFile),
-		redirectURL: strings.TrimSpace(redirectURL),
+		htmlFile:    strings.TrimSpace(cfg.ErrorHTMLFile),
+		redirectURL: strings.TrimSpace(cfg.ErrorRedirectURL),
 	}
 	if resp.htmlFile != "" && resp.redirectURL != "" {
-		return proxyErrorResponse{}, fmt.Errorf("proxy error html file and redirect URL are mutually exclusive")
+		return proxyErrorResponse{}, fmt.Errorf("error_html_file and error_redirect_url are mutually exclusive")
 	}
 	if resp.htmlFile != "" {
 		body, err := os.ReadFile(resp.htmlFile)
 		if err != nil {
-			return proxyErrorResponse{}, fmt.Errorf("proxy error html file read error: %w", err)
+			return proxyErrorResponse{}, fmt.Errorf("error_html_file read error: %w", err)
 		}
 		resp.htmlBody = body
 		resp.htmlEnabled = true
 	}
 	if resp.redirectURL != "" {
 		if err := validateProxyErrorRedirectURL(resp.redirectURL); err != nil {
-			return proxyErrorResponse{}, fmt.Errorf("proxy error redirect URL %w", err)
+			return proxyErrorResponse{}, fmt.Errorf("error_redirect_url %w", err)
 		}
 	}
 	return resp, nil

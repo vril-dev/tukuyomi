@@ -1,31 +1,13 @@
-# tukuyomi-proxy
+# tukuyomi-proxy Archive
 
-[English](README.md) | [日本語](README.ja.md)
+`tukuyomi-proxy` は、single-binary WAF / reverse proxy 系列の過去の配布名です。
 
-`tukuyomi-proxy` は、Tukuyomi ファミリーの汎用シングルバイナリ WAF / リバースプロキシです。Coraza + CRS の中核的なセキュリティ制御を維持しつつ、内蔵のルート管理と admin UI を備え、前段に `nginx` を置くことを前提としません。
+この系列は現在 [`tukuyomi`](../../../README.ja.md) へ統合済みです。今後の proxy、
+routing、cache、WAF tuning、PHP-FPM、scheduled tasks の開発は `tukuyomi`
+プロダクト名で継続します。
 
-## 想定ユースケース
+旧公開バイナリは `tukuyomi-releases` に archive として残します。同リポジトリでの
+最終 proxy release は `tukuyomi-proxy-v0.13.2` です。
 
-- シングルバイナリまたは軽量コンテナでの配備
-- API gateway / reverse proxy の用途
-- TLS 終端、ルーティング、WAF 制御を 1 つの実行環境にまとめたい運用
-
-## 主な特徴
-
-- Coraza WAF + OWASP CRS
-- 内蔵 admin UI とルートエディタ
-- 中核制御: IP reputation、bot defense、semantic security、rate limiting、country block
-- ファイルバックエンドと DB バックエンドのポリシー / ランタイムデータ経路
-
-## 公開配布
-
-- 最新の公開バイナリ: [`v0.7.6`](https://github.com/vril-dev/tukuyomi-releases/releases/tag/v0.7.6)
-- ファミリー全体のリリース一覧: [`tukuyomi-releases`](https://github.com/vril-dev/tukuyomi-releases/releases)
-- そのリリースページで GitHub が自動生成するソースアーカイブは `tukuyomi-releases` リポジトリに対応するものであり、`tukuyomi-proxy` の非公開ビルドリポジトリのソースではありません
-
-## 関連ドキュメント
-
-- ファミリー概要: [`../../../README.ja.md`](../../../README.ja.md)
-- 製品比較: [`../../product-comparison.ja.md`](../../product-comparison.ja.md)
-
-詳細なランタイム / 設定ドキュメントはバイナリバンドルに同梱されます。
+現行のセットアップと運用ドキュメントは、上位の [`tukuyomi` README](../../../README.ja.md)
+を参照してください。

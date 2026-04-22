@@ -1,0 +1,22 @@
+tukuyomi includes third-party open source software.
+
+Key dependencies and their license families include:
+
+- github.com/corazawaf/coraza/v3          Apache License 2.0
+- github.com/gin-gonic/gin                MIT License
+- github.com/quic-go/quic-go              MIT License
+- go.opentelemetry.io/otel                Apache License 2.0
+- github.com/klauspost/compress           MIT / Apache 2.0
+- github.com/andybalholm/brotli           MIT License
+- github.com/go-sql-driver/mysql          MPL-2.0
+- modernc.org/sqlite                      BSD-style License
+- github.com/fsnotify/fsnotify            BSD-style License
+- golang.org/x/crypto                     BSD-style License
+- golang.org/x/net                        BSD-style License
+- react                                   MIT License
+- react-dom                               MIT License
+- react-router-dom                        MIT License
+
+Dependency license metadata is available through the Go module graph and the
+web package lockfile included in the source tree. Redistribution of binaries
+must continue to comply with the applicable third-party license notices.

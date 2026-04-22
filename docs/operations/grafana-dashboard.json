@@ -1,0 +1,52 @@
+{
+  "title": "tukuyomi Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "title": "Rate Limit Blocked",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(tukuyomi_rate_limit_blocked_total[5m])"
+        }
+      ]
+    },
+    {
+      "title": "Semantic Blocked",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(tukuyomi_semantic_block_actions_total[5m])"
+        }
+      ]
+    },
+    {
+      "title": "IP Reputation Block Count",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "tukuyomi_ip_reputation_effective_block_count"
+        }
+      ]
+    },
+    {
+      "title": "TLS Certificate Expiry (unix)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "tukuyomi_server_tls_cert_not_after_unix"
+        }
+      ]
+    },
+    {
+      "title": "Healthy Upstreams",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "tukuyomi_upstream_healthy_backends"
+        }
+      ]
+    }
+  ]
+}

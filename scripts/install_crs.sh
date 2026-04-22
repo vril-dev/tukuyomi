@@ -3,7 +3,7 @@ set -euo pipefail
 
 VERSION="${1:-v4.23.0}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEST_DIR="${ROOT_DIR}/data/rules/crs"
+DEST_DIR="${DEST_DIR:-${ROOT_DIR}/data/rules/crs}"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
@@ -31,5 +31,5 @@ cp -R "${src_dir}/rules" "${DEST_DIR}/rules"
 cp -R "${src_dir}/plugins" "${DEST_DIR}/plugins"
 
 echo "[CRS] Installed ${VERSION}"
-echo "[CRS] Setup file: data/rules/crs/crs-setup.conf"
-echo "[CRS] Rules dir:   data/rules/crs/rules"
+echo "[CRS] Setup file: ${DEST_DIR}/crs-setup.conf"
+echo "[CRS] Rules dir:   ${DEST_DIR}/rules"

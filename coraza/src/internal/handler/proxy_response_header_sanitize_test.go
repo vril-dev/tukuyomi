@@ -308,3 +308,84 @@ func TestFilterProxyResponseHeadersLogsConfiguredRemovalsWithoutValues(t *testin
 		t.Fatalf("log should not include header values: %s", logOutput)
 	}
 }
+
+func TestFilterProxyResponseHeadersNoopReusesHeaderMap(t *testing.T) {
+	in := http.Header{
+		"Content-Type": {"text/plain"},
+		"X-App":        {"ok"},
+	}
+	filtered := filterProxyResponseHeaders(in, proxyResponseHeaderSanitizePolicy{
+		Mode:      proxyResponseHeaderSanitizeModeAuto,
+		RemoveSet: proxyResponseHeaderNameSet("Server", "X-Powered-By"),
+	}, proxyResponseHeaderFilterOptions{Surface: "live_proxy_response"})
+
+	if filtered.Changed {
+		t.Fatal("canonical header map without removals should use no-op fast path")
+	}
+	filtered.Header.Set("X-Reuse-Probe", "same-map")
+	if got := in.Get("X-Reuse-Probe"); got != "same-map" {
+		t.Fatalf("header map was cloned on no-op path, probe=%q", got)
+	}
+}
+
+func TestFilterProxyResponseHeadersCanonicalizesKeptLowercaseHeaders(t *testing.T) {
+	filtered := filterProxyResponseHeaders(http.Header{
+		"content-type": {"text/plain"},
+	}, proxyResponseHeaderSanitizePolicy{
+		Mode:      proxyResponseHeaderSanitizeModeAuto,
+		RemoveSet: proxyResponseHeaderNameSet("Server"),
+	}, proxyResponseHeaderFilterOptions{Surface: "live_proxy_response"})
+
+	if !filtered.Changed {
+		t.Fatal("lowercase header key should force canonicalization")
+	}
+	if got := filtered.Header.Get("Content-Type"); got != "text/plain" {
+		t.Fatalf("Content-Type=%q", got)
+	}
+	if _, ok := filtered.Header["content-type"]; ok {
+		t.Fatal("lowercase key should not remain after canonicalization")
+	}
+}
+
+func TestSanitizeProxyResponseHeaderMapInPlaceDeletesLowercaseRemovedHeaders(t *testing.T) {
+	cfg := normalizeProxyRulesConfig(ProxyRulesConfig{
+		Upstreams: []ProxyUpstream{{
+			Name:    "primary",
+			URL:     "http://127.0.0.1:8080",
+			Weight:  1,
+			Enabled: true,
+		}},
+		ResponseHeaderSanitize: ProxyResponseHeaderSanitizeConfig{
+			Mode: proxyResponseHeaderSanitizeModeAuto,
+		},
+	})
+	rt := &proxyRuntime{
+		cfg:          cfg,
+		effectiveCfg: cfg,
+	}
+	proxyRuntimeMu.Lock()
+	prev := proxyRt
+	proxyRt = rt
+	proxyRuntimeMu.Unlock()
+	defer func() {
+		proxyRuntimeMu.Lock()
+		proxyRt = prev
+		proxyRuntimeMu.Unlock()
+	}()
+
+	header := http.Header{
+		"server":       {"origin"},
+		"content-type": {"text/plain"},
+	}
+	sanitizeProxyResponseHeaderMapInPlace(header, nil, proxyResponseHeaderPolicySurfaceLive)
+
+	if _, ok := header["server"]; ok {
+		t.Fatal("lowercase removed header key should be deleted from the source map")
+	}
+	if got := header.Get("Server"); got != "" {
+		t.Fatalf("Server=%q", got)
+	}
+	if got := header.Get("Content-Type"); got != "text/plain" {
+		t.Fatalf("Content-Type=%q", got)
+	}
+}

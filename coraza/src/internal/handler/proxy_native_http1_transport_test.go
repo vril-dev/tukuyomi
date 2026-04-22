@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -147,6 +149,354 @@ func TestNativeHTTP1TransportReusesDrainedConnection(t *testing.T) {
 	if got := newConns.Load(); got != 1 {
 		t.Fatalf("new connections=%d want 1", got)
 	}
+}
+
+func TestNativeHTTP1TransportRetriesStaleIdleConnectionForReplayableRequest(t *testing.T) {
+	var hits atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Length", "2")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+
+	rt, err := buildProxyNativeHTTP1Transport(normalizeProxyRulesConfig(ProxyRulesConfig{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 10,
+		MaxConnsPerHost:     10,
+	}), proxyTransportProfile{})
+	if err != nil {
+		t.Fatalf("buildProxyNativeHTTP1Transport: %v", err)
+	}
+	defer rt.CloseIdleConnections()
+	insertClosedNativeHTTP1IdleConn(t, rt, upstream.URL)
+
+	req, err := http.NewRequest(http.MethodGet, upstream.URL+"/retry", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip with stale idle retry: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	_ = resp.Body.Close()
+	if string(body) != "ok" {
+		t.Fatalf("body=%q want ok", string(body))
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("upstream hits=%d want 1", got)
+	}
+}
+
+func TestNativeHTTP1TransportRetriesStaleIdleConnectionForOpaqueEmptyGetBody(t *testing.T) {
+	var hits atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Length", "2")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+
+	rt, err := buildProxyNativeHTTP1Transport(normalizeProxyRulesConfig(ProxyRulesConfig{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 10,
+		MaxConnsPerHost:     10,
+	}), proxyTransportProfile{})
+	if err != nil {
+		t.Fatalf("buildProxyNativeHTTP1Transport: %v", err)
+	}
+	defer rt.CloseIdleConnections()
+	insertClosedNativeHTTP1IdleConn(t, rt, upstream.URL)
+
+	req, err := http.NewRequest(http.MethodGet, upstream.URL+"/retry-empty", io.NopCloser(strings.NewReader("")))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.ContentLength = 0
+	req.GetBody = nil
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip with opaque empty GET stale idle retry: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	_ = resp.Body.Close()
+	if string(body) != "ok" {
+		t.Fatalf("body=%q want ok", string(body))
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("upstream hits=%d want 1", got)
+	}
+}
+
+func TestNativeHTTP1TransportRetriesStaleIdleConnectionForObservedEmptyProxyBodyCounter(t *testing.T) {
+	var hits atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Length", "2")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+
+	rt, err := buildProxyNativeHTTP1Transport(normalizeProxyRulesConfig(ProxyRulesConfig{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 10,
+		MaxConnsPerHost:     10,
+	}), proxyTransportProfile{})
+	if err != nil {
+		t.Fatalf("buildProxyNativeHTTP1Transport: %v", err)
+	}
+	defer rt.CloseIdleConnections()
+	insertClosedNativeHTTP1IdleConn(t, rt, upstream.URL)
+
+	req, err := http.NewRequest(http.MethodGet, upstream.URL+"/retry-counter", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Body = &proxyRequestBodyCounter{rc: io.NopCloser(strings.NewReader(""))}
+	req.ContentLength = -1
+	req.GetBody = nil
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip with empty proxy body counter stale idle retry: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	_ = resp.Body.Close()
+	if string(body) != "ok" {
+		t.Fatalf("body=%q want ok", string(body))
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("upstream hits=%d want 1", got)
+	}
+}
+
+func TestNativeHTTP1TransportRetriesFreshClosedConnectionForReplayableRequest(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	var accepted atomic.Int64
+	errCh := make(chan error, 2)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				if !errors.Is(err, net.ErrClosed) {
+					errCh <- err
+				}
+				return
+			}
+			if accepted.Add(1) == 1 {
+				_ = conn.Close()
+				continue
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				req, err := http.ReadRequest(bufio.NewReader(c))
+				if err != nil {
+					errCh <- err
+					return
+				}
+				_, _ = io.Copy(io.Discard, req.Body)
+				_ = req.Body.Close()
+				_, _ = c.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"))
+			}(conn)
+		}
+	}()
+
+	rt, err := buildProxyNativeHTTP1Transport(normalizeProxyRulesConfig(ProxyRulesConfig{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 10,
+		MaxConnsPerHost:     10,
+	}), proxyTransportProfile{})
+	if err != nil {
+		t.Fatalf("buildProxyNativeHTTP1Transport: %v", err)
+	}
+	defer rt.CloseIdleConnections()
+
+	req, err := http.NewRequest(http.MethodGet, "http://"+ln.Addr().String()+"/fresh-close", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip with fresh closed retry: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	_ = resp.Body.Close()
+	if string(body) != "ok" {
+		t.Fatalf("body=%q want ok", string(body))
+	}
+	if got := accepted.Load(); got != 2 {
+		t.Fatalf("accepted connections=%d want 2", got)
+	}
+	select {
+	case err := <-errCh:
+		t.Fatalf("test listener error: %v", err)
+	default:
+	}
+}
+
+func TestNativeHTTP1TransportDoesNotRetryStaleIdleConnectionForNonReplayableBody(t *testing.T) {
+	var hits atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Length", "2")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+
+	rt, err := buildProxyNativeHTTP1Transport(normalizeProxyRulesConfig(ProxyRulesConfig{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 10,
+		MaxConnsPerHost:     10,
+	}), proxyTransportProfile{})
+	if err != nil {
+		t.Fatalf("buildProxyNativeHTTP1Transport: %v", err)
+	}
+	defer rt.CloseIdleConnections()
+	insertClosedNativeHTTP1IdleConn(t, rt, upstream.URL)
+
+	req, err := http.NewRequest(http.MethodPost, upstream.URL+"/no-retry", io.NopCloser(strings.NewReader("payload")))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.ContentLength = int64(len("payload"))
+	req.GetBody = nil
+	resp, err := rt.RoundTrip(req)
+	if err == nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		t.Fatalf("RoundTrip succeeded; expected stale idle error without retry (upstream hits=%d get_body_nil=%t)", hits.Load(), req.GetBody == nil)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("upstream hits=%d want 0", got)
+	}
+}
+
+func TestNativeHTTP1TransportDoesNotRetryStaleIdleConnectionForUnsafeReplayableBody(t *testing.T) {
+	var hits atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Length", "2")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+
+	rt, err := buildProxyNativeHTTP1Transport(normalizeProxyRulesConfig(ProxyRulesConfig{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 10,
+		MaxConnsPerHost:     10,
+	}), proxyTransportProfile{})
+	if err != nil {
+		t.Fatalf("buildProxyNativeHTTP1Transport: %v", err)
+	}
+	defer rt.CloseIdleConnections()
+	insertClosedNativeHTTP1IdleConn(t, rt, upstream.URL)
+
+	req, err := http.NewRequest(http.MethodPost, upstream.URL+"/unsafe", strings.NewReader("payload"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := rt.RoundTrip(req)
+	if err == nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		t.Fatalf("RoundTrip succeeded; expected stale idle error without unsafe POST retry")
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("upstream hits=%d want 0", got)
+	}
+}
+
+func TestNativeHTTP1TransportRetriesStaleIdleConnectionWithIdempotencyKey(t *testing.T) {
+	var hits atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Length", "2")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+
+	rt, err := buildProxyNativeHTTP1Transport(normalizeProxyRulesConfig(ProxyRulesConfig{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 10,
+		MaxConnsPerHost:     10,
+	}), proxyTransportProfile{})
+	if err != nil {
+		t.Fatalf("buildProxyNativeHTTP1Transport: %v", err)
+	}
+	defer rt.CloseIdleConnections()
+	insertClosedNativeHTTP1IdleConn(t, rt, upstream.URL)
+
+	req, err := http.NewRequest(http.MethodPost, upstream.URL+"/idempotent", strings.NewReader("payload"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Idempotency-Key", "retry-safe")
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip with idempotent stale idle retry: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	_ = resp.Body.Close()
+	if string(body) != "ok" {
+		t.Fatalf("body=%q want ok", string(body))
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("upstream hits=%d want 1", got)
+	}
+}
+
+func insertClosedNativeHTTP1IdleConn(t *testing.T, rt *nativeHTTP1Transport, rawURL string) {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse upstream URL: %v", err)
+	}
+	client, server := net.Pipe()
+	_ = client.Close()
+	_ = server.Close()
+	address, err := proxyDialAddress(u)
+	if err != nil {
+		t.Fatalf("resolve upstream dial address: %v", err)
+	}
+	key := nativeHTTP1ConnKey{
+		scheme:     u.Scheme,
+		address:    address,
+		serverName: nativeHTTP1ServerName(rt.tlsConfig, u.Hostname()),
+	}
+	pc := &nativeHTTP1PooledConn{
+		key:    key,
+		conn:   client,
+		br:     bufio.NewReader(client),
+		bw:     bufio.NewWriter(client),
+		idleAt: time.Now(),
+	}
+	rt.mu.Lock()
+	rt.idle[key] = append(rt.idle[key], pc)
+	rt.totalIdle++
+	rt.active[key]++
+	rt.mu.Unlock()
 }
 
 func TestNativeHTTP1TransportDoesNotReuseUndrainedBody(t *testing.T) {

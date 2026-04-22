@@ -265,6 +265,48 @@ func TestNativeHTTP1ServerScrubsInvalidResponseHeader(t *testing.T) {
 	}
 }
 
+func TestNativeHTTP1ServerReaderReuseDoesNotLeakHeadersAcrossConnections(t *testing.T) {
+	seen := make(chan string, 2)
+	srv, addr := nativeHTTP1StartTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Get("X-Leak")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	nativeHTTP1WriteSingleRequest(t, addr, "GET /first HTTP/1.1\r\nHost: example.com\r\nX-Leak: first\r\nConnection: close\r\n\r\n")
+	nativeHTTP1WriteSingleRequest(t, addr, "GET /second HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
+
+	first := <-seen
+	second := <-seen
+	if first != "first" {
+		t.Fatalf("first X-Leak=%q want first", first)
+	}
+	if second != "" {
+		t.Fatalf("second X-Leak leaked from pooled reader: %q", second)
+	}
+}
+
+func nativeHTTP1WriteSingleRequest(t *testing.T, addr string, raw string) {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+	if _, err := io.WriteString(conn, raw); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("ReadResponse: %v", err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+}
+
 func nativeHTTP1StartTestServer(t *testing.T, handler http.Handler) (*nativeHTTP1Server, string) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

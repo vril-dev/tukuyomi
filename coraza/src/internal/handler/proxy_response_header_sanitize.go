@@ -73,6 +73,7 @@ type proxyResponseHeaderFilterOptions struct {
 type proxyResponseHeaderFilterResult struct {
 	Header        http.Header
 	PolicyRemoved []string
+	Changed       bool
 }
 
 var (
@@ -265,13 +266,14 @@ func sanitizeProxyResponseHeaderMapInPlace(header http.Header, req *http.Request
 		Request:     req,
 		Surface:     string(surface),
 	})
+	if !filtered.Changed {
+		return
+	}
 	for key := range header {
-		header.Del(key)
+		delete(header, key)
 	}
 	for key, vals := range filtered.Header {
-		for _, v := range vals {
-			header.Add(key, v)
-		}
+		header[key] = vals
 	}
 }
 
@@ -310,26 +312,54 @@ func (p proxyResponseHeaderProcessingPlan) NeedsHeaderIteration() bool {
 
 func filterProxyResponseHeaders(in http.Header, policy proxyResponseHeaderSanitizePolicy, opts proxyResponseHeaderFilterOptions) proxyResponseHeaderFilterResult {
 	if in == nil {
-		return proxyResponseHeaderFilterResult{Header: make(http.Header)}
+		return proxyResponseHeaderFilterResult{Header: make(http.Header), Changed: true}
 	}
+
+	changed := false
+	var policyRemoved map[string]struct{}
+	for key := range in {
+		name := http.CanonicalHeaderKey(key)
+		if name != key {
+			changed = true
+		}
+		if _, ok := opts.ExtraRemove[name]; ok {
+			changed = true
+			continue
+		}
+		if _, ok := policy.RemoveSet[name]; ok {
+			changed = true
+			if policyRemoved == nil {
+				policyRemoved = make(map[string]struct{}, 1)
+			}
+			policyRemoved[name] = struct{}{}
+			continue
+		}
+	}
+
+	removed := proxyResponseHeaderSetNames(policyRemoved)
+	emitProxyResponseHeaderSanitizeLog(policy, removed, opts.Request, opts.Surface)
+	if !changed {
+		return proxyResponseHeaderFilterResult{
+			Header:        in,
+			PolicyRemoved: removed,
+		}
+	}
+
 	out := make(http.Header, len(in))
-	policyRemoved := map[string]struct{}{}
 	for key, vals := range in {
 		name := http.CanonicalHeaderKey(key)
 		if _, ok := opts.ExtraRemove[name]; ok {
 			continue
 		}
 		if _, ok := policy.RemoveSet[name]; ok {
-			policyRemoved[name] = struct{}{}
 			continue
 		}
-		out[name] = append([]string(nil), vals...)
+		out[name] = append(out[name], vals...)
 	}
-	removed := proxyResponseHeaderSetNames(policyRemoved)
-	emitProxyResponseHeaderSanitizeLog(policy, removed, opts.Request, opts.Surface)
 	return proxyResponseHeaderFilterResult{
 		Header:        out,
 		PolicyRemoved: removed,
+		Changed:       true,
 	}
 }
 

@@ -42,6 +42,40 @@ func FuzzNativeHTTP1ParseStatusLine(f *testing.F) {
 	})
 }
 
+func TestNativeHTTP1WriteRequestBufferedReuseDoesNotLeakAcrossRequests(t *testing.T) {
+	var first bytes.Buffer
+	bw := bufio.NewWriter(&first)
+	req1, err := http.NewRequest(http.MethodGet, "http://backend.local/one", nil)
+	if err != nil {
+		t.Fatalf("new request 1: %v", err)
+	}
+	req1.Header.Set("X-Secret-First", "do-not-leak")
+	if err := nativeHTTP1WriteRequestBuffered(bw, req1); err != nil {
+		t.Fatalf("write request 1: %v", err)
+	}
+	if !strings.Contains(first.String(), "X-Secret-First: do-not-leak") {
+		t.Fatalf("first write missing expected header:\n%s", first.String())
+	}
+
+	var second bytes.Buffer
+	bw.Reset(&second)
+	req2, err := http.NewRequest(http.MethodGet, "http://backend.local/two", nil)
+	if err != nil {
+		t.Fatalf("new request 2: %v", err)
+	}
+	req2.Header.Set("X-Second", "ok")
+	if err := nativeHTTP1WriteRequestBuffered(bw, req2); err != nil {
+		t.Fatalf("write request 2: %v", err)
+	}
+	got := second.String()
+	if strings.Contains(got, "X-Secret-First") || strings.Contains(got, "do-not-leak") || strings.Contains(got, "/one") {
+		t.Fatalf("second write leaked first request data:\n%s", got)
+	}
+	if !strings.Contains(got, "GET /two HTTP/1.1") || !strings.Contains(got, "X-Second: ok") {
+		t.Fatalf("second write missing expected request data:\n%s", got)
+	}
+}
+
 func FuzzNativeHTTP1ReadHeaderBlock(f *testing.F) {
 	for _, seed := range []string{
 		"X-Test: ok\r\n\r\n",

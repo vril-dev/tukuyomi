@@ -1,10 +1,9 @@
 package handler
 
 import (
+	"net/http"
 	"strings"
 	"sync"
-
-	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/config"
 )
@@ -17,7 +16,7 @@ const (
 
 type requestMetadataResolver interface {
 	Name() string
-	Resolve(c *gin.Context, ctx *requestMetadataResolverContext) error
+	Resolve(req *http.Request, ctx *requestMetadataResolverContext) error
 }
 
 type requestMetadataResolverContext struct {
@@ -74,12 +73,12 @@ func newRequestMetadataResolverContext(clientIP string) *requestMetadataResolver
 	}
 }
 
-func runRequestMetadataResolvers(c *gin.Context, resolvers []requestMetadataResolver, ctx *requestMetadataResolverContext) error {
+func runRequestMetadataResolvers(req *http.Request, resolvers []requestMetadataResolver, ctx *requestMetadataResolverContext) error {
 	for _, resolver := range resolvers {
 		if resolver == nil {
 			continue
 		}
-		if err := resolver.Resolve(c, ctx); err != nil {
+		if err := resolver.Resolve(req, ctx); err != nil {
 			return err
 		}
 	}
@@ -100,14 +99,14 @@ func (r *headerCountryRequestMetadataResolver) Name() string {
 	return "header_country"
 }
 
-func (r *headerCountryRequestMetadataResolver) Resolve(c *gin.Context, ctx *requestMetadataResolverContext) error {
-	if c == nil || ctx == nil {
+func (r *headerCountryRequestMetadataResolver) Resolve(req *http.Request, ctx *requestMetadataResolverContext) error {
+	if req == nil || ctx == nil {
 		return nil
 	}
 	if mode := strings.ToLower(strings.TrimSpace(config.RequestCountryMode)); mode != "" && mode != "header" {
 		return nil
 	}
-	raw := strings.TrimSpace(c.GetHeader("X-Country-Code"))
+	raw := strings.TrimSpace(req.Header.Get("X-Country-Code"))
 	if raw == "" {
 		return nil
 	}
@@ -126,7 +125,7 @@ func (r *mmdbCountryRequestMetadataResolver) Name() string {
 	return "mmdb_country"
 }
 
-func (r *mmdbCountryRequestMetadataResolver) Resolve(_ *gin.Context, ctx *requestMetadataResolverContext) error {
+func (r *mmdbCountryRequestMetadataResolver) Resolve(_ *http.Request, ctx *requestMetadataResolverContext) error {
 	if ctx == nil {
 		return nil
 	}

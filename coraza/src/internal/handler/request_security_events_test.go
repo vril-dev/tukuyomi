@@ -124,7 +124,7 @@ func TestBotChallengeFailurePublishesFeedbackWithoutPenalizingFirstContact(t *te
 	c1.Request = httptest.NewRequest(http.MethodGet, "http://example.test/", nil)
 	c1.Request.Header.Set("User-Agent", userAgent)
 	ctx1 := newRequestSecurityPluginContext("req-bot-1", clientIP, "JP", now)
-	if ok := plugin.Handle(c1, ctx1); ok {
+	if ok := plugin.Handle(newProxyServeContextFromGin(c1), ctx1); ok {
 		t.Fatal("first request should issue a bot challenge")
 	}
 	if ctx1.BotChallengePenaltyApplied {
@@ -140,7 +140,7 @@ func TestBotChallengeFailurePublishesFeedbackWithoutPenalizingFirstContact(t *te
 	c2.Request = httptest.NewRequest(http.MethodGet, "http://example.test/", nil)
 	c2.Request.Header.Set("User-Agent", userAgent)
 	ctx2 := newRequestSecurityPluginContext("req-bot-2", clientIP, "JP", now.Add(5*time.Second))
-	if ok := plugin.Handle(c2, ctx2); ok {
+	if ok := plugin.Handle(newProxyServeContextFromGin(c2), ctx2); ok {
 		t.Fatal("failed follow-up should still stop at challenge/quarantine")
 	}
 	if !ctx2.BotChallengePenaltyApplied {
@@ -224,7 +224,7 @@ func TestBotChallengeFailureUsesStoredTelemetryRequirementAcrossFlowChange(t *te
 	c1.Request.Header.Set("User-Agent", userAgent)
 	c1.Request.Header.Set("Accept", "text/html")
 	ctx1 := newRequestSecurityPluginContext("req-bot-telemetry-1", clientIP, "JP", now)
-	if ok := plugin.Handle(c1, ctx1); ok {
+	if ok := plugin.Handle(newProxyServeContextFromGin(c1), ctx1); ok {
 		t.Fatal("first request should issue a bot challenge")
 	}
 	if ctx1.BotChallengePenaltyApplied {
@@ -241,7 +241,7 @@ func TestBotChallengeFailureUsesStoredTelemetryRequirementAcrossFlowChange(t *te
 		Value: issueBotDefenseToken(botRT, clientIP, userAgent, now),
 	})
 	ctx2 := newRequestSecurityPluginContext("req-bot-telemetry-2", clientIP, "JP", now.Add(5*time.Second))
-	if ok := plugin.Handle(c2, ctx2); ok {
+	if ok := plugin.Handle(newProxyServeContextFromGin(c2), ctx2); ok {
 		t.Fatal("follow-up without telemetry cookie should still fail after flow change")
 	}
 	if !ctx2.BotChallengePenaltyApplied {
@@ -315,7 +315,7 @@ func TestBotChallengeFailureAppliesReputationPenaltyToMatchedHostScope(t *testin
 	ctx1 := newRequestSecurityPluginContext("req-bot-scope-1", clientIP, "JP", now)
 	ctx1.RequestHost = c1.Request.Host
 	ctx1.RequestTLS = true
-	if ok := plugin.Handle(c1, ctx1); ok {
+	if ok := plugin.Handle(newProxyServeContextFromGin(c1), ctx1); ok {
 		t.Fatal("first request should issue a bot challenge")
 	}
 
@@ -326,7 +326,7 @@ func TestBotChallengeFailureAppliesReputationPenaltyToMatchedHostScope(t *testin
 	ctx2 := newRequestSecurityPluginContext("req-bot-scope-2", clientIP, "JP", now.Add(5*time.Second))
 	ctx2.RequestHost = c2.Request.Host
 	ctx2.RequestTLS = true
-	if ok := plugin.Handle(c2, ctx2); ok {
+	if ok := plugin.Handle(newProxyServeContextFromGin(c2), ctx2); ok {
 		t.Fatal("failed follow-up should still stop at challenge/quarantine")
 	}
 	if !ctx2.BotChallengePenaltyApplied {

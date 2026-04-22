@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -47,6 +49,7 @@ type nativeHTTP1PooledConn struct {
 	key    nativeHTTP1ConnKey
 	conn   net.Conn
 	br     *bufio.Reader
+	bw     *bufio.Writer
 	idleAt time.Time
 }
 
@@ -76,6 +79,28 @@ func buildProxyNativeHTTP1Transport(cfg ProxyRulesConfig, profile proxyTransport
 }
 
 func (t *nativeHTTP1Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.roundTripOnce(req, false)
+	if err == nil {
+		return resp, nil
+	}
+	if !nativeHTTP1RetryableConnError(err) {
+		return nil, err
+	}
+	if !nativeHTTP1RequestReplayable(req) {
+		return nil, err
+	}
+	replayReq, replayErr := nativeHTTP1ReplayRequest(req)
+	if replayErr != nil {
+		return nil, err
+	}
+	resp, retryErr := t.roundTripOnce(replayReq, true)
+	if retryErr != nil {
+		return nil, fmt.Errorf("native http1 retry after closed connection failed: first=%v; retry=%w", err, retryErr)
+	}
+	return resp, nil
+}
+
+func (t *nativeHTTP1Transport) roundTripOnce(req *http.Request, skipIdle bool) (*http.Response, error) {
 	if t == nil {
 		return nil, fmt.Errorf("native http1 transport is nil")
 	}
@@ -97,7 +122,7 @@ func (t *nativeHTTP1Transport) RoundTrip(req *http.Request) (*http.Response, err
 	}
 
 	ctx := req.Context()
-	pc, err := t.acquireConn(ctx, key, req.URL.Hostname())
+	pc, err := t.acquireConn(ctx, key, req.URL.Hostname(), skipIdle)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +134,12 @@ func (t *nativeHTTP1Transport) RoundTrip(req *http.Request) (*http.Response, err
 	}()
 
 	stopContextWatch := nativeHTTP1CloseOnContextDone(ctx, pc.conn)
-	if err := nativeHTTP1WriteRequest(pc.conn, req); err != nil {
+	if pc.bw == nil {
+		pc.bw = bufio.NewWriter(pc.conn)
+	} else {
+		pc.bw.Reset(pc.conn)
+	}
+	if err := nativeHTTP1WriteRequestBuffered(pc.bw, req); err != nil {
 		stopContextWatch()
 		return nil, err
 	}
@@ -135,6 +165,87 @@ func (t *nativeHTTP1Transport) RoundTrip(req *http.Request) (*http.Response, err
 	resp.Body = nativeHTTP1ResponseBody(t, resp, pc, stopContextWatch)
 	releaseConn = false
 	return resp, nil
+}
+
+func nativeHTTP1RequestReplayable(req *http.Request) bool {
+	if req == nil {
+		return false
+	}
+	if !nativeHTTP1RequestBodyAbsent(req) && req.GetBody == nil {
+		return false
+	}
+	method := req.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+		return true
+	default:
+		return nativeHTTP1HasIdempotencyKey(req.Header)
+	}
+}
+
+func nativeHTTP1RequestBodyAbsent(req *http.Request) bool {
+	return req == nil ||
+		req.Body == nil ||
+		req.Body == http.NoBody ||
+		nativeHTTP1ObservedEmptyProxyRequestBody(req) ||
+		(req.ContentLength == 0 && len(req.TransferEncoding) == 0)
+}
+
+func nativeHTTP1ObservedEmptyProxyRequestBody(req *http.Request) bool {
+	if req == nil || req.ContentLength > 0 || len(req.TransferEncoding) > 0 {
+		return false
+	}
+	counter, ok := req.Body.(*proxyRequestBodyCounter)
+	return ok && counter.bytes == 0
+}
+
+func nativeHTTP1HasIdempotencyKey(header http.Header) bool {
+	for key := range header {
+		if strings.EqualFold(key, "Idempotency-Key") || strings.EqualFold(key, "X-Idempotency-Key") {
+			return true
+		}
+	}
+	return false
+}
+
+func nativeHTTP1ReplayRequest(req *http.Request) (*http.Request, error) {
+	if req == nil {
+		return nil, fmt.Errorf("request is required")
+	}
+	if nativeHTTP1RequestBodyAbsent(req) {
+		return req, nil
+	}
+	if req.GetBody == nil {
+		return nil, fmt.Errorf("request body is not replayable")
+	}
+	body, err := req.GetBody()
+	if err != nil {
+		return nil, err
+	}
+	out := new(http.Request)
+	*out = *req
+	out.Body = body
+	return out, nil
+}
+
+func nativeHTTP1RetryableConnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrClosedPipe) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "use of closed network connection") ||
+		strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "broken pipe")
 }
 
 func (t *nativeHTTP1Transport) CloseIdleConnections() {
@@ -166,13 +277,20 @@ func nativeHTTP1ServerName(tlsCfg *tls.Config, hostname string) string {
 	return strings.TrimSpace(hostname)
 }
 
-func (t *nativeHTTP1Transport) acquireConn(ctx context.Context, key nativeHTTP1ConnKey, hostname string) (*nativeHTTP1PooledConn, error) {
+func (t *nativeHTTP1Transport) acquireConn(ctx context.Context, key nativeHTTP1ConnKey, hostname string, skipIdle bool) (*nativeHTTP1PooledConn, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	droppedIdle := false
 	for {
-		if pc := t.takeIdleConn(key); pc != nil {
-			return pc, nil
+		if skipIdle && !droppedIdle {
+			t.dropIdleConnsForKey(key)
+			droppedIdle = true
+		}
+		if !skipIdle {
+			if pc := t.takeIdleConn(key); pc != nil {
+				return pc, nil
+			}
 		}
 
 		waiter, canDial, err := t.reserveConnOrWait(ctx, key)
@@ -185,13 +303,36 @@ func (t *nativeHTTP1Transport) acquireConn(ctx context.Context, key nativeHTTP1C
 				t.releaseConnSlot(key)
 				return nil, err
 			}
-			return &nativeHTTP1PooledConn{key: key, conn: conn, br: bufio.NewReader(conn)}, nil
+			return &nativeHTTP1PooledConn{key: key, conn: conn, br: bufio.NewReader(conn), bw: bufio.NewWriter(conn)}, nil
 		}
 		select {
 		case <-ctx.Done():
 			t.removeConnWaiter(key, waiter)
 			return nil, ctx.Err()
 		case <-waiter:
+		}
+	}
+}
+
+func (t *nativeHTTP1Transport) dropIdleConnsForKey(key nativeHTTP1ConnKey) {
+	var closing []*nativeHTTP1PooledConn
+	t.mu.Lock()
+	if conns := t.idle[key]; len(conns) > 0 {
+		closing = append(closing, conns...)
+		t.totalIdle -= len(conns)
+		if t.totalIdle < 0 {
+			t.totalIdle = 0
+		}
+		t.active[key] -= len(conns)
+		if t.active[key] <= 0 {
+			delete(t.active, key)
+		}
+		delete(t.idle, key)
+	}
+	t.mu.Unlock()
+	for _, pc := range closing {
+		if pc != nil && pc.conn != nil {
+			_ = pc.conn.Close()
 		}
 	}
 }
@@ -386,19 +527,37 @@ func nativeHTTP1CloseOnContextDone(ctx context.Context, conn net.Conn) func() {
 }
 
 func nativeHTTP1WriteRequest(w io.Writer, req *http.Request) error {
+	if w == nil {
+		return fmt.Errorf("writer is required")
+	}
+	return nativeHTTP1WriteRequestBuffered(bufio.NewWriter(w), req)
+}
+
+func nativeHTTP1WriteRequestBuffered(bw *bufio.Writer, req *http.Request) error {
+	if bw == nil {
+		return fmt.Errorf("writer is required")
+	}
 	plan, err := nativeHTTP1PrepareRequestWrite(req)
 	if err != nil {
 		return err
 	}
-	bw := bufio.NewWriter(w)
-	if _, err := fmt.Fprintf(bw, "%s %s HTTP/1.1\r\n", plan.method, plan.uri); err != nil {
+	if _, err := bw.WriteString(plan.method); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(bw, "Host: %s\r\n", plan.host); err != nil {
+	if _, err := bw.WriteString(" "); err != nil {
+		return err
+	}
+	if _, err := bw.WriteString(plan.uri); err != nil {
+		return err
+	}
+	if _, err := bw.WriteString(" HTTP/1.1\r\n"); err != nil {
+		return err
+	}
+	if err := nativeHTTP1WriteHeaderField(bw, "Host", plan.host); err != nil {
 		return err
 	}
 	for _, header := range plan.headers {
-		if _, err := fmt.Fprintf(bw, "%s: %s\r\n", header.name, header.value); err != nil {
+		if err := nativeHTTP1WriteHeaderField(bw, header.name, header.value); err != nil {
 			return err
 		}
 	}
@@ -408,7 +567,7 @@ func nativeHTTP1WriteRequest(w io.Writer, req *http.Request) error {
 		}
 	}
 	if plan.contentLength >= 0 {
-		if _, err := fmt.Fprintf(bw, "Content-Length: %d\r\n", plan.contentLength); err != nil {
+		if err := nativeHTTP1WriteInt64HeaderField(bw, "Content-Length", plan.contentLength); err != nil {
 			return err
 		}
 	}
@@ -432,6 +591,35 @@ func nativeHTTP1WriteRequest(w io.Writer, req *http.Request) error {
 		}
 	}
 	return bw.Flush()
+}
+
+func nativeHTTP1WriteHeaderField(bw *bufio.Writer, name string, value string) error {
+	if _, err := bw.WriteString(name); err != nil {
+		return err
+	}
+	if _, err := bw.WriteString(": "); err != nil {
+		return err
+	}
+	if _, err := bw.WriteString(value); err != nil {
+		return err
+	}
+	_, err := bw.WriteString("\r\n")
+	return err
+}
+
+func nativeHTTP1WriteInt64HeaderField(bw *bufio.Writer, name string, value int64) error {
+	if _, err := bw.WriteString(name); err != nil {
+		return err
+	}
+	if _, err := bw.WriteString(": "); err != nil {
+		return err
+	}
+	var buf [20]byte
+	if _, err := bw.Write(strconv.AppendInt(buf[:0], value, 10)); err != nil {
+		return err
+	}
+	_, err := bw.WriteString("\r\n")
+	return err
 }
 
 type nativeHTTP1HeaderLine struct {
@@ -540,7 +728,11 @@ func nativeHTTP1WriteChunkedBody(w *bufio.Writer, body io.Reader, trailer http.H
 	for {
 		n, readErr := body.Read(buf)
 		if n > 0 {
-			if _, err := fmt.Fprintf(w, "%x\r\n", n); err != nil {
+			var chunkSize [32]byte
+			if _, err := w.Write(strconv.AppendInt(chunkSize[:0], int64(n), 16)); err != nil {
+				return err
+			}
+			if _, err := io.WriteString(w, "\r\n"); err != nil {
 				return err
 			}
 			if _, err := w.Write(buf[:n]); err != nil {
@@ -562,7 +754,7 @@ func nativeHTTP1WriteChunkedBody(w *bufio.Writer, body io.Reader, trailer http.H
 	}
 	for name, values := range trailer {
 		for _, value := range values {
-			if _, err := fmt.Fprintf(w, "%s: %s\r\n", name, value); err != nil {
+			if err := nativeHTTP1WriteHeaderField(w, name, value); err != nil {
 				return err
 			}
 		}
@@ -589,11 +781,11 @@ func nativeHTTP1ReadFinalResponse(br *bufio.Reader, req *http.Request) (*http.Re
 }
 
 func nativeHTTP1ReadResponse(br *bufio.Reader, req *http.Request) (*http.Response, error) {
-	line, err := nativeHTTP1ReadLineLimited(br, nativeHTTP1MaxResponseHeaderBytes)
+	line, err := nativeHTTP1ReadLineBytesLimited(br, nativeHTTP1MaxResponseHeaderBytes)
 	if err != nil {
 		return nil, err
 	}
-	major, minor, code, statusText, err := nativeHTTP1ParseStatusLine(line)
+	major, minor, code, statusText, err := nativeHTTP1ParseStatusLineBytes(line)
 	if err != nil {
 		return nil, err
 	}
@@ -712,39 +904,81 @@ func nativeHTTP1ResponseWantsClose(header http.Header, major int, minor int) boo
 }
 
 func nativeHTTP1ParseStatusLine(line string) (int, int, int, string, error) {
-	line = strings.TrimRight(line, "\r\n")
-	if !strings.HasPrefix(line, "HTTP/") {
-		return 0, 0, 0, "", fmt.Errorf("invalid upstream status line %q", line)
-	}
-	parts := strings.SplitN(line, " ", 3)
-	if len(parts) < 2 {
-		return 0, 0, 0, "", fmt.Errorf("invalid upstream status line %q", line)
-	}
-	version := strings.TrimPrefix(parts[0], "HTTP/")
-	vparts := strings.SplitN(version, ".", 2)
-	if len(vparts) != 2 {
-		return 0, 0, 0, "", fmt.Errorf("invalid upstream HTTP version %q", version)
-	}
-	major, err := strconv.Atoi(vparts[0])
+	return nativeHTTP1ParseStatusLineBytes([]byte(line))
+}
+
+func nativeHTTP1ParseStatusLineBytes(line []byte) (int, int, int, string, error) {
+	raw, err := nativeHTTP1TrimCRLFLineBytes(line)
 	if err != nil {
-		return 0, 0, 0, "", fmt.Errorf("invalid upstream HTTP major version %q", vparts[0])
+		return 0, 0, 0, "", err
 	}
-	minor, err := strconv.Atoi(vparts[1])
-	if err != nil {
-		return 0, 0, 0, "", fmt.Errorf("invalid upstream HTTP minor version %q", vparts[1])
+	if !bytes.HasPrefix(raw, []byte("HTTP/")) {
+		return 0, 0, 0, "", fmt.Errorf("invalid upstream status line %q", string(raw))
+	}
+	firstSpace := bytes.IndexByte(raw, ' ')
+	if firstSpace <= len("HTTP/") || firstSpace == len(raw)-1 {
+		return 0, 0, 0, "", fmt.Errorf("invalid upstream status line %q", string(raw))
+	}
+	version := raw[len("HTTP/"):firstSpace]
+	dot := bytes.IndexByte(version, '.')
+	if dot <= 0 || dot == len(version)-1 {
+		return 0, 0, 0, "", fmt.Errorf("invalid upstream HTTP version %q", string(version))
+	}
+	major, ok := nativeHTTP1ParseSmallDecimal(version[:dot])
+	if !ok {
+		return 0, 0, 0, "", fmt.Errorf("invalid upstream HTTP major version %q", string(version[:dot]))
+	}
+	minor, ok := nativeHTTP1ParseSmallDecimal(version[dot+1:])
+	if !ok {
+		return 0, 0, 0, "", fmt.Errorf("invalid upstream HTTP minor version %q", string(version[dot+1:]))
 	}
 	if major != 1 || (minor != 0 && minor != 1) {
 		return 0, 0, 0, "", fmt.Errorf("unsupported upstream HTTP version %d.%d", major, minor)
 	}
-	code, err := strconv.Atoi(parts[1])
-	if err != nil || code < 100 || code > 999 {
-		return 0, 0, 0, "", fmt.Errorf("invalid upstream status code %q", parts[1])
+	codeStart := firstSpace + 1
+	secondSpaceRel := bytes.IndexByte(raw[codeStart:], ' ')
+	codeEnd := len(raw)
+	if secondSpaceRel >= 0 {
+		codeEnd = codeStart + secondSpaceRel
+	}
+	code, ok := nativeHTTP1ParseSmallDecimal(raw[codeStart:codeEnd])
+	if !ok || code < 100 || code > 999 {
+		return 0, 0, 0, "", fmt.Errorf("invalid upstream status code %q", string(raw[codeStart:codeEnd]))
 	}
 	statusText := http.StatusText(code)
-	if len(parts) == 3 {
-		statusText = strings.TrimSpace(parts[2])
+	if codeEnd < len(raw) {
+		reason := bytes.TrimSpace(raw[codeEnd+1:])
+		if statusText == "" || !nativeHTTP1BytesEqualString(reason, statusText) {
+			statusText = string(reason)
+		}
 	}
 	return major, minor, code, statusText, nil
+}
+
+func nativeHTTP1BytesEqualString(raw []byte, s string) bool {
+	if len(raw) != len(s) {
+		return false
+	}
+	for i, c := range raw {
+		if c != s[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func nativeHTTP1ParseSmallDecimal(raw []byte) (int, bool) {
+	if len(raw) == 0 {
+		return 0, false
+	}
+	n := 0
+	for _, c := range raw {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n, true
 }
 
 func nativeHTTP1ResponseBody(t *nativeHTTP1Transport, resp *http.Response, pc *nativeHTTP1PooledConn, stopContextWatch func()) io.ReadCloser {

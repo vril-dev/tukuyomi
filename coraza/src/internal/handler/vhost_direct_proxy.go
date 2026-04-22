@@ -740,7 +740,7 @@ func writeDirectProxyResponse(w http.ResponseWriter, r *http.Request, resp *http
 
 func directProxyResponseRequestID(w http.ResponseWriter, r *http.Request) string {
 	if r != nil {
-		if reqID, _ := r.Context().Value(ctxKeyReqID).(string); strings.TrimSpace(reqID) != "" {
+		if reqID := strings.TrimSpace(proxyContextRequestID(r.Context())); reqID != "" {
 			return strings.TrimSpace(reqID)
 		}
 		if reqID := strings.TrimSpace(r.Header.Get("X-Request-ID")); reqID != "" {

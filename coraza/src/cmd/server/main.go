@@ -260,9 +260,9 @@ func main() {
 	} else {
 		log.Println("[SECURITY] CORS disabled (same-origin only)")
 	}
-	publicEngine, err := buildPublicEngine(globalConcurrencyGuard, proxyConcurrencyGuard, splitAdminListener)
+	publicHandler, err := buildPublicHandler(globalConcurrencyGuard, proxyConcurrencyGuard, splitAdminListener)
 	if err != nil {
-		log.Fatalf("failed to build public engine: %v", err)
+		log.Fatalf("failed to build public handler: %v", err)
 	}
 	var adminEngine *gin.Engine
 	if splitAdminListener {
@@ -291,7 +291,7 @@ func main() {
 	lifecycle := newManagedServerLifecycle(config.ServerGracefulShutdownTimeout)
 
 	publicSrv := &handler.NativeHTTP1Server{
-		Handler:           publicEngine,
+		Handler:           publicHandler,
 		ReadTimeout:       config.ServerReadTimeout,
 		ReadHeaderTimeout: config.ServerReadHeaderTimeout,
 		WriteTimeout:      config.ServerWriteTimeout,
@@ -335,12 +335,12 @@ func main() {
 		if err != nil {
 			log.Fatalf("[FATAL] build server tls config: %v", err)
 		}
-		http3Srv, altSvc, err := buildManagedServerHTTP3Server(tlsConfig, publicEngine)
+		http3Srv, altSvc, err := buildManagedServerHTTP3Server(tlsConfig, publicHandler)
 		if err != nil {
 			log.Fatalf("[FATAL] build server http3 config: %v", err)
 		}
 		if altSvc != "" {
-			publicSrv.Handler = wrapHTTP3AltSvcHandler(publicEngine, altSvc)
+			publicSrv.Handler = wrapHTTP3AltSvcHandler(publicHandler, altSvc)
 		}
 		if redirectSrv != nil {
 			redirectListener, redirectInherited, err := buildManagedTCPListenerForRole("redirect", config.ServerTLSHTTPRedirectAddr, publicListenerRuntime, activation)

@@ -26,6 +26,24 @@ func TestBuildPublicEngineSingleListenerKeepsAdminRoutes(t *testing.T) {
 	}
 }
 
+func TestBuildPublicHandlerSingleListenerKeepsAdminRoutes(t *testing.T) {
+	restore := saveListenerConfigForTest()
+	defer restore()
+
+	publicHandler, err := buildPublicHandler(nil, nil, false)
+	if err != nil {
+		t.Fatalf("buildPublicHandler(single) error = %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, config.APIBasePath+"/auth/session", nil)
+	publicHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
 func TestBuildPublicEngineSplitListenerReturns404ForAdminRoutes(t *testing.T) {
 	restore := saveListenerConfigForTest()
 	defer restore()
@@ -47,6 +65,48 @@ func TestBuildPublicEngineSplitListenerReturns404ForAdminRoutes(t *testing.T) {
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("path=%q status=%d want=%d body=%s", path, rec.Code, http.StatusNotFound, rec.Body.String())
 		}
+	}
+}
+
+func TestBuildPublicHandlerSplitListenerReturns404ForAdminRoutes(t *testing.T) {
+	restore := saveListenerConfigForTest()
+	defer restore()
+
+	publicHandler, err := buildPublicHandler(nil, nil, true)
+	if err != nil {
+		t.Fatalf("buildPublicHandler(split) error = %v", err)
+	}
+
+	for _, path := range []string{
+		config.APIBasePath + "/auth/session",
+		config.UIBasePath,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		publicHandler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("path=%q status=%d want=%d body=%s", path, rec.Code, http.StatusNotFound, rec.Body.String())
+		}
+	}
+}
+
+func TestBuildPublicHandlerKeepsHealthzOnPublicListener(t *testing.T) {
+	restore := saveListenerConfigForTest()
+	defer restore()
+
+	publicHandler, err := buildPublicHandler(nil, nil, true)
+	if err != nil {
+		t.Fatalf("buildPublicHandler(split) error = %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	publicHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 }
 

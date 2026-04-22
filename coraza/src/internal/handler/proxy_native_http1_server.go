@@ -56,6 +56,12 @@ type NativeHTTP1ServerMetrics struct {
 	IdleConnections      int64
 }
 
+var nativeHTTP1ServerReaderPool = sync.Pool{
+	New: func() any {
+		return bufio.NewReaderSize(nil, 4096)
+	},
+}
+
 var nativeHTTP1ServerMetricsSource atomic.Pointer[nativeHTTP1Server]
 
 func RegisterNativeHTTP1ServerMetricsSource(server *NativeHTTP1Server) {
@@ -265,7 +271,12 @@ func (s *nativeHTTP1Server) serveConn(baseCtx context.Context, conn net.Conn, tl
 		release()
 	}()
 
-	br := bufio.NewReader(conn)
+	br := nativeHTTP1AcquireServerReader(conn)
+	defer func() {
+		if !sc.isHijacked() {
+			nativeHTTP1ReleaseServerReader(br)
+		}
+	}()
 	reused := false
 	for {
 		if s.isClosing() {
@@ -314,7 +325,8 @@ func (s *nativeHTTP1Server) serveConn(baseCtx context.Context, conn net.Conn, tl
 			},
 		}
 		req.Body = body
-		req = req.WithContext(ctx)
+		reqCtx, _ := withNewProxyRequestContextState(ctx)
+		req = req.WithContext(reqCtx)
 		rw = newNativeHTTP1ResponseWriter(conn, br, req, &s.scrubbedHeaders, cancel, s.isClosing, func() {
 			sc.setIdle(false, &s.idleConnections)
 			if sc.markHijacked() {
@@ -338,6 +350,23 @@ func (s *nativeHTTP1Server) serveConn(baseCtx context.Context, conn net.Conn, tl
 		}
 		reused = true
 	}
+}
+
+func nativeHTTP1AcquireServerReader(conn net.Conn) *bufio.Reader {
+	br, _ := nativeHTTP1ServerReaderPool.Get().(*bufio.Reader)
+	if br == nil {
+		return bufio.NewReaderSize(conn, 4096)
+	}
+	br.Reset(conn)
+	return br
+}
+
+func nativeHTTP1ReleaseServerReader(br *bufio.Reader) {
+	if br == nil {
+		return
+	}
+	br.Reset(nil)
+	nativeHTTP1ServerReaderPool.Put(br)
 }
 
 func (s *nativeHTTP1Server) addConn(sc *nativeHTTP1ServerConn) {
@@ -501,6 +530,23 @@ func (w *nativeHTTP1ResponseWriter) Header() http.Header {
 	return w.header
 }
 
+func (w *nativeHTTP1ResponseWriter) Status() int {
+	if w == nil {
+		return 0
+	}
+	return w.status
+}
+
+func (w *nativeHTTP1ResponseWriter) Size() int {
+	if w == nil || w.written <= 0 {
+		return 0
+	}
+	if w.written > int64(^uint(0)>>1) {
+		return int(^uint(0) >> 1)
+	}
+	return int(w.written)
+}
+
 func (w *nativeHTTP1ResponseWriter) WriteHeader(status int) {
 	if w.hijacked {
 		w.writeErr = http.ErrHijacked
@@ -566,11 +612,7 @@ func (w *nativeHTTP1ResponseWriter) Write(p []byte) (int, error) {
 		return n, nil
 	}
 	if w.chunked {
-		if _, err := fmt.Fprintf(w.conn, "%x\r\n", len(p)); err != nil {
-			w.writeErr = err
-			return 0, err
-		}
-		n, err := w.conn.Write(p)
+		n, err := nativeHTTP1WriteChunkedResponseBody(w.conn, p)
 		w.written += int64(n)
 		if err != nil {
 			w.writeErr = err
@@ -580,10 +622,6 @@ func (w *nativeHTTP1ResponseWriter) Write(p []byte) (int, error) {
 			w.writeErr = io.ErrShortWrite
 			return n, io.ErrShortWrite
 		}
-		if _, err := io.WriteString(w.conn, "\r\n"); err != nil {
-			w.writeErr = err
-			return n, err
-		}
 		return n, nil
 	}
 	n, err := w.conn.Write(p)
@@ -592,6 +630,28 @@ func (w *nativeHTTP1ResponseWriter) Write(p []byte) (int, error) {
 		w.writeErr = err
 	}
 	return n, err
+}
+
+func nativeHTTP1WriteChunkedResponseBody(conn net.Conn, p []byte) (int, error) {
+	var chunkLine [32]byte
+	line := strconv.AppendInt(chunkLine[:0], int64(len(p)), 16)
+	line = append(line, '\r', '\n')
+	buffers := net.Buffers{line, p, nativeHTTP1CRLFBytes}
+	written, err := buffers.WriteTo(conn)
+	bodyWritten := written - int64(len(line))
+	if bodyWritten < 0 {
+		bodyWritten = 0
+	}
+	if bodyWritten > int64(len(p)) {
+		bodyWritten = int64(len(p))
+	}
+	if err != nil {
+		return int(bodyWritten), err
+	}
+	if bodyWritten != int64(len(p)) {
+		return int(bodyWritten), io.ErrShortWrite
+	}
+	return len(p), nil
 }
 
 func (w *nativeHTTP1ResponseWriter) Flush() {
@@ -761,7 +821,7 @@ func (w *nativeHTTP1ResponseWriter) writeHeader(status int) error {
 	if reason == "" {
 		reason = "status"
 	}
-	fmt.Fprintf(&out, "HTTP/1.1 %d %s\r\n", w.status, reason)
+	nativeHTTP1BufferWriteStatusLine(&out, w.status, reason)
 	for name, values := range header {
 		if !nativeHTTP1SafeHeaderName(name) {
 			continue
@@ -770,7 +830,7 @@ func (w *nativeHTTP1ResponseWriter) writeHeader(status int) error {
 			if !nativeHTTP1SafeHeaderValue(value) {
 				continue
 			}
-			fmt.Fprintf(&out, "%s: %s\r\n", name, value)
+			nativeHTTP1BufferWriteHeaderField(&out, name, value)
 		}
 	}
 	out.WriteString("\r\n")
@@ -797,7 +857,7 @@ func (w *nativeHTTP1ResponseWriter) writeInformationalHeader(status int) error {
 	if reason == "" {
 		reason = "status"
 	}
-	fmt.Fprintf(&out, "HTTP/1.1 %d %s\r\n", status, reason)
+	nativeHTTP1BufferWriteStatusLine(&out, status, reason)
 	for name, values := range header {
 		if !nativeHTTP1SafeHeaderName(name) {
 			continue
@@ -806,7 +866,7 @@ func (w *nativeHTTP1ResponseWriter) writeInformationalHeader(status int) error {
 			if !nativeHTTP1SafeHeaderValue(value) {
 				continue
 			}
-			fmt.Fprintf(&out, "%s: %s\r\n", name, value)
+			nativeHTTP1BufferWriteHeaderField(&out, name, value)
 		}
 	}
 	out.WriteString("\r\n")
@@ -820,6 +880,24 @@ func (w *nativeHTTP1ResponseWriter) writeBareContinue() error {
 	}
 	_, err := io.WriteString(w.conn, "HTTP/1.1 100 Continue\r\n\r\n")
 	return err
+}
+
+var nativeHTTP1CRLFBytes = []byte("\r\n")
+
+func nativeHTTP1BufferWriteStatusLine(out *bytes.Buffer, status int, reason string) {
+	out.WriteString("HTTP/1.1 ")
+	var code [4]byte
+	out.Write(strconv.AppendInt(code[:0], int64(status), 10))
+	out.WriteByte(' ')
+	out.WriteString(reason)
+	out.WriteString("\r\n")
+}
+
+func nativeHTTP1BufferWriteHeaderField(out *bytes.Buffer, name string, value string) {
+	out.WriteString(name)
+	out.WriteString(": ")
+	out.WriteString(value)
+	out.WriteString("\r\n")
 }
 
 func nativeHTTP1InformationalStatus(status int) bool {
@@ -837,6 +915,62 @@ func (w *nativeHTTP1ResponseWriter) planImplicitFraming(header http.Header) {
 }
 
 func (w *nativeHTTP1ResponseWriter) sanitizedHeader() http.Header {
+	if w == nil || w.header == nil {
+		return make(http.Header)
+	}
+	if !w.responseHeaderNeedsCloneForSanitize() {
+		w.sanitizeHeaderInPlace()
+		return w.header
+	}
+	return w.cloneSanitizedHeader()
+}
+
+func (w *nativeHTTP1ResponseWriter) responseHeaderNeedsCloneForSanitize() bool {
+	if len(w.trailers) > 0 {
+		return true
+	}
+	for name, values := range w.header {
+		if strings.HasPrefix(name, http.TrailerPrefix) {
+			return true
+		}
+		canonical := http.CanonicalHeaderKey(strings.TrimSpace(name))
+		if canonical != name {
+			return true
+		}
+		if !nativeHTTP1SafeHeaderName(canonical) {
+			continue
+		}
+		if len(values) == 0 {
+			continue
+		}
+	}
+	return false
+}
+
+func (w *nativeHTTP1ResponseWriter) sanitizeHeaderInPlace() {
+	for name, values := range w.header {
+		if !nativeHTTP1SafeHeaderName(name) {
+			delete(w.header, name)
+			w.countScrubbedHeader()
+			continue
+		}
+		safeValues := values[:0]
+		for _, value := range values {
+			if nativeHTTP1SafeHeaderValue(value) {
+				safeValues = append(safeValues, value)
+			} else {
+				w.countScrubbedHeader()
+			}
+		}
+		if len(safeValues) == 0 {
+			delete(w.header, name)
+			continue
+		}
+		w.header[name] = safeValues
+	}
+}
+
+func (w *nativeHTTP1ResponseWriter) cloneSanitizedHeader() http.Header {
 	out := make(http.Header, len(w.header)+1)
 	for name, values := range w.header {
 		if strings.HasPrefix(name, http.TrailerPrefix) {
@@ -849,7 +983,7 @@ func (w *nativeHTTP1ResponseWriter) sanitizedHeader() http.Header {
 		}
 		for _, value := range values {
 			if nativeHTTP1SafeHeaderValue(value) {
-				out.Add(canonical, value)
+				nativeHTTP1AppendHeaderValue(out, canonical, value)
 			} else {
 				w.countScrubbedHeader()
 			}
@@ -876,6 +1010,7 @@ func nativeHTTP1ResponseAllowsBody(req *http.Request, status int) bool {
 }
 
 func (w *nativeHTTP1ResponseWriter) writeTrailers() error {
+	var out bytes.Buffer
 	for _, name := range w.trailers {
 		values := nativeHTTP1TrailerPrefixValues(w.header, name, w.scrubbedHeaders)
 		if _, sent := w.sentHeaders[name]; !sent {
@@ -888,12 +1023,14 @@ func (w *nativeHTTP1ResponseWriter) writeTrailers() error {
 				w.countScrubbedHeader()
 				continue
 			}
-			if _, err := fmt.Fprintf(w.conn, "%s: %s\r\n", name, value); err != nil {
-				return err
-			}
+			nativeHTTP1BufferWriteHeaderField(&out, name, value)
 		}
 	}
-	return nil
+	if out.Len() == 0 {
+		return nil
+	}
+	_, err := w.conn.Write(out.Bytes())
+	return err
 }
 
 func nativeHTTP1ResponseTrailerNames(header http.Header, scrubbed *atomic.Uint64) []string {

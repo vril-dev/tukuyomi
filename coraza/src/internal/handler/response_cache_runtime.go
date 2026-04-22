@@ -165,8 +165,10 @@ type proxyResponseCacheLoadResult struct {
 	MemoryHit bool
 }
 
-type proxyCacheCaptureWriter struct {
-	gin.ResponseWriter
+type proxyHTTPCacheCaptureWriter struct {
+	http.ResponseWriter
+	status   int
+	size     int64
 	bodySize int64
 	tmpFile  *os.File
 	tmpPath  string
@@ -430,9 +432,19 @@ func ClearResponseCacheStore(c *gin.Context) {
 }
 
 func ServeProxyWithCache(c *gin.Context) {
+	if c == nil || c.Request == nil {
+		return
+	}
+	ServeProxyWithCacheHTTP(c.Writer, c.Request)
+}
+
+func ServeProxyWithCacheHTTP(w http.ResponseWriter, r *http.Request) {
+	if w == nil || r == nil {
+		return
+	}
 	rt := currentResponseCacheRuntime()
-	if rt == nil || c == nil || c.Request == nil {
-		ServeProxy(c.Writer, c.Request)
+	if rt == nil {
+		ServeProxy(w, r)
 		return
 	}
 
@@ -443,23 +455,23 @@ func ServeProxyWithCache(c *gin.Context) {
 
 	rs := cacheconf.Get()
 	if !cfg.Enabled || store == nil || rs == nil {
-		ServeProxy(c.Writer, c.Request)
+		ServeProxy(w, r)
 		return
 	}
-	if shouldBypassProxyResponseCache(c.Request) {
-		ServeProxy(c.Writer, c.Request)
+	if shouldBypassProxyResponseCache(r) {
+		ServeProxy(w, r)
 		return
 	}
 
-	rule, allow := rs.Match(c.Request.Host, c.Request.TLS != nil, c.Request.Method, c.Request.URL.Path)
+	rule, allow := rs.Match(r.Host, r.TLS != nil, r.Method, r.URL.Path)
 	if !allow || rule == nil {
-		ServeProxy(c.Writer, c.Request)
+		ServeProxy(w, r)
 		return
 	}
 
-	key := proxyResponseCacheKey(c.Request, proxyEffectiveResponseCacheVary(rule.Vary))
+	key := proxyResponseCacheKey(r, proxyEffectiveResponseCacheVary(rule.Vary))
 	if cached, ok := store.Load(key); ok {
-		if err := writeProxyCachedResponse(c.Writer, c.Request, cached.Entry, cached.Body); err == nil {
+		if err := writeProxyCachedResponse(w, r, cached.Entry, cached.Body); err == nil {
 			return
 		}
 		store.removeByKey(key)
@@ -467,29 +479,27 @@ func ServeProxyWithCache(c *gin.Context) {
 
 	tmpFile, tmpPath, err := store.NewTempBodyFile()
 	if err != nil {
-		ServeProxy(c.Writer, c.Request)
+		ServeProxy(w, r)
 		return
 	}
-	cw := &proxyCacheCaptureWriter{
-		ResponseWriter: c.Writer,
+	cw := &proxyHTTPCacheCaptureWriter{
+		ResponseWriter: w,
 		tmpFile:        tmpFile,
 		tmpPath:        tmpPath,
 	}
 	cw.Header().Set(proxyResponseCacheHeader, "MISS")
-	c.Writer = cw
-	ServeProxy(c.Writer, c.Request)
+	ServeProxy(cw, r)
 
 	headerSnapshot := cw.Header().Clone()
 	statusCode := cw.Status()
 	bodySize := cw.bodySize
 	_ = cw.closeTemp()
-	c.Writer = cw.ResponseWriter
 
-	if cw.tmpErr != nil || c.Request.Method != http.MethodGet || !shouldStoreProxyResponse(statusCode, headerSnapshot) {
+	if cw.tmpErr != nil || r.Method != http.MethodGet || !shouldStoreProxyResponse(statusCode, headerSnapshot) {
 		store.DiscardTemp(tmpPath)
 		return
 	}
-	headerSnapshot = sanitizeProxyCachedResponseHeader(headerSnapshot, c.Request, proxyResponseHeaderPolicySurfaceCacheStore)
+	headerSnapshot = sanitizeProxyCachedResponseHeader(headerSnapshot, r, proxyResponseHeaderPolicySurfaceCacheStore)
 	ttl := rule.TTL
 	if ttl <= 0 {
 		ttl = 600
@@ -1182,9 +1192,9 @@ func writeProxyCachedResponse(w http.ResponseWriter, r *http.Request, entry prox
 	if reqID != "" {
 		dst.Set(proxyResponseCacheRequestID, reqID)
 	}
-	if hit, _ := r.Context().Value(ctxKeyWafHit).(bool); hit && currentProxyConfig().ExposeWAFDebugHeaders {
+	if hit, rid := proxyContextWAFDebug(r.Context()); hit && currentProxyConfig().ExposeWAFDebugHeaders {
 		dst.Set("X-WAF-Hit", "1")
-		if rid, _ := r.Context().Value(ctxKeyWafRule).(string); rid != "" {
+		if rid != "" {
 			dst.Set("X-WAF-RuleIDs", rid)
 		}
 	}
@@ -1204,41 +1214,6 @@ func writeProxyCachedResponse(w http.ResponseWriter, r *http.Request, entry prox
 	defer body.Close()
 	_, err = copyProxyResponseBody(w, body)
 	return err
-}
-
-func (w *proxyCacheCaptureWriter) Write(data []byte) (int, error) {
-	if w.tmpFile != nil {
-		if _, err := w.tmpFile.Write(data); err != nil && w.tmpErr == nil {
-			w.tmpErr = err
-		}
-	}
-	n, err := w.ResponseWriter.Write(data)
-	w.bodySize += int64(n)
-	return n, err
-}
-
-func (w *proxyCacheCaptureWriter) WriteString(s string) (int, error) {
-	if w.tmpFile != nil {
-		if _, err := w.tmpFile.WriteString(s); err != nil && w.tmpErr == nil {
-			w.tmpErr = err
-		}
-	}
-	n, err := w.ResponseWriter.WriteString(s)
-	w.bodySize += int64(n)
-	return n, err
-}
-
-func (w *proxyCacheCaptureWriter) ReadFrom(r io.Reader) (int64, error) {
-	if rf, ok := w.ResponseWriter.(io.ReaderFrom); ok {
-		src := r
-		if w.tmpFile != nil {
-			src = io.TeeReader(r, w.tmpFile)
-		}
-		n, err := rf.ReadFrom(src)
-		w.bodySize += n
-		return n, err
-	}
-	return copyProxyResponseBody(w, r)
 }
 
 func copyProxyResponseBody(dst io.Writer, src io.Reader) (int64, error) {
@@ -1265,15 +1240,6 @@ func copyProxyResponseBody(dst io.Writer, src io.Reader) (int64, error) {
 	}
 }
 
-func (w *proxyCacheCaptureWriter) closeTemp() error {
-	if w.tmpFile == nil {
-		return nil
-	}
-	err := w.tmpFile.Close()
-	w.tmpFile = nil
-	return err
-}
-
 func moveProxyResponseCacheFile(src, dst string) error {
 	if err := os.Rename(src, dst); err == nil {
 		return nil
@@ -1297,10 +1263,129 @@ func moveProxyResponseCacheFile(src, dst string) error {
 	return os.Remove(src)
 }
 
-func (w *proxyCacheCaptureWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+func (w *proxyHTTPCacheCaptureWriter) WriteHeader(status int) {
+	if w == nil {
+		return
+	}
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *proxyHTTPCacheCaptureWriter) Write(data []byte) (int, error) {
+	if w == nil {
+		return 0, http.ErrHandlerTimeout
+	}
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	if w.tmpFile != nil {
+		if _, err := w.tmpFile.Write(data); err != nil && w.tmpErr == nil {
+			w.tmpErr = err
+		}
+	}
+	n, err := w.ResponseWriter.Write(data)
+	w.size += int64(n)
+	w.bodySize += int64(n)
+	return n, err
+}
+
+func (w *proxyHTTPCacheCaptureWriter) WriteString(s string) (int, error) {
+	if w == nil {
+		return 0, http.ErrHandlerTimeout
+	}
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	if w.tmpFile != nil {
+		if _, err := w.tmpFile.WriteString(s); err != nil && w.tmpErr == nil {
+			w.tmpErr = err
+		}
+	}
+	n, err := io.WriteString(w.ResponseWriter, s)
+	w.size += int64(n)
+	w.bodySize += int64(n)
+	return n, err
+}
+
+func (w *proxyHTTPCacheCaptureWriter) ReadFrom(r io.Reader) (int64, error) {
+	if w == nil || r == nil {
+		return 0, nil
+	}
+	if rf, ok := w.ResponseWriter.(io.ReaderFrom); ok {
+		if w.status == 0 {
+			w.WriteHeader(http.StatusOK)
+		}
+		src := r
+		if w.tmpFile != nil {
+			src = io.TeeReader(r, w.tmpFile)
+		}
+		n, err := rf.ReadFrom(src)
+		w.size += n
+		w.bodySize += n
+		return n, err
+	}
+	return copyProxyResponseBody(w, r)
+}
+
+func (w *proxyHTTPCacheCaptureWriter) Status() int {
+	if w == nil {
+		return 0
+	}
+	if w.status != 0 {
+		return w.status
+	}
+	if statusWriter, ok := w.ResponseWriter.(interface{ Status() int }); ok {
+		return statusWriter.Status()
+	}
+	return 0
+}
+
+func (w *proxyHTTPCacheCaptureWriter) Size() int {
+	if w == nil {
+		return 0
+	}
+	if w.size > 0 {
+		if w.size > int64(^uint(0)>>1) {
+			return int(^uint(0) >> 1)
+		}
+		return int(w.size)
+	}
+	if sizeWriter, ok := w.ResponseWriter.(interface{ Size() int }); ok {
+		return sizeWriter.Size()
+	}
+	return 0
+}
+
+func (w *proxyHTTPCacheCaptureWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *proxyHTTPCacheCaptureWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	hijacker, ok := w.ResponseWriter.(http.Hijacker)
 	if !ok {
 		return nil, nil, errors.New("hijacker not supported")
 	}
 	return hijacker.Hijack()
+}
+
+func (w *proxyHTTPCacheCaptureWriter) Push(target string, opts *http.PushOptions) error {
+	pusher, ok := w.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, opts)
+}
+
+func (w *proxyHTTPCacheCaptureWriter) closeTemp() error {
+	if w.tmpFile == nil {
+		return nil
+	}
+	err := w.tmpFile.Close()
+	w.tmpFile = nil
+	return err
 }

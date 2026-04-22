@@ -116,6 +116,10 @@ type ProxyRulesConfig struct {
 	ErrorRedirectURL             string            `json:"error_redirect_url"`
 
 	responseHeaderSanitizePolicy proxyResponseHeaderSanitizePolicy `json:"-"`
+	routeOrder                   []int                             `json:"-"`
+	defaultTargetCandidatesReady bool                              `json:"-"`
+	defaultTargetCandidates      []proxyRouteTargetCandidate       `json:"-"`
+	defaultTargetSelection       proxyRouteTargetSelectionOptions  `json:"-"`
 }
 
 type ProxyUpstreamTLSConfig struct {
@@ -341,7 +345,8 @@ func rewriteTukuyomiProxyRequest(in *http.Request, out *http.Request) *http.Requ
 				out.Header.Set(proxyObservabilityUpstreamNameHeader, upstreamName)
 			}
 		}
-		ctx := out.Context()
+		originalCtx := out.Context()
+		ctx := originalCtx
 		if classOK {
 			ctx = withProxyRouteClassification(ctx, classification)
 		}
@@ -349,9 +354,11 @@ func rewriteTukuyomiProxyRequest(in *http.Request, out *http.Request) *http.Requ
 			ctx = withProxyRouteTransportSelection(ctx, selection)
 		}
 		if selectionOK && selection.HealthKey != "" {
-			ctx = context.WithValue(ctx, ctxKeySelectedUpstream, selection.HealthKey)
+			ctx = withProxySelectedUpstream(ctx, selection.HealthKey)
 		}
-		out = out.WithContext(ctx)
+		if ctx != originalCtx {
+			out = out.WithContext(ctx)
+		}
 	}
 	return out
 }
@@ -919,6 +926,7 @@ func normalizeAndValidateProxyRulesWithOptions(in ProxyRulesConfig, sites SiteCo
 	}
 	effectiveCfg.Upstreams = mergedUpstreams
 	effectiveCfg.Routes = append(append([]ProxyRoute(nil), effectiveCfg.Routes...), siteGeneratedRoutes(sites)...)
+	effectiveCfg.routeOrder = sortedProxyRouteIndexes(effectiveCfg.Routes)
 
 	if effectiveCfg.DialTimeout <= 0 {
 		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("dial_timeout must be > 0")
@@ -1037,6 +1045,9 @@ func normalizeAndValidateProxyRulesWithOptions(in ProxyRulesConfig, sites SiteCo
 	if _, err := proxyTransportProfileCatalog(effectiveCfg); err != nil {
 		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
 	}
+	if err := precomputeProxyStaticFallbackTargets(&effectiveCfg); err != nil {
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+	}
 	errRes, err := newProxyErrorResponse(effectiveCfg)
 	if err != nil {
 		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
@@ -1132,6 +1143,7 @@ func normalizeProxyRulesConfig(in ProxyRulesConfig) ProxyRulesConfig {
 	out.Upstreams = normalizeProxyUpstreams(out.Upstreams)
 	out.BackendPools = normalizeProxyBackendPools(out.BackendPools)
 	out.Routes = normalizeProxyRoutes(out.Routes)
+	out.routeOrder = sortedProxyRouteIndexes(out.Routes)
 	out.DefaultRoute = normalizeProxyDefaultRoute(out.DefaultRoute)
 	out.HealthCheckPath = normalizeProxyHealthCheckPath(out.HealthCheckPath)
 	out.HealthCheckHeaders = normalizeProxyHealthCheckHeaders(out.HealthCheckHeaders)

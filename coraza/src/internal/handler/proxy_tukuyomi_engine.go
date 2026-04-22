@@ -131,7 +131,7 @@ func prepareTukuyomiProxyRequest(r *http.Request) (*http.Request, string, error)
 		return nil, "", fmt.Errorf("client tried to switch to invalid protocol %q", reqUpType)
 	}
 
-	outReq := r.Clone(r.Context())
+	outReq := cloneTukuyomiProxyOutboundRequest(r)
 	outReq.RequestURI = ""
 	outReq.Close = false
 	if outReq.Body == nil {
@@ -150,6 +150,24 @@ func prepareTukuyomiProxyRequest(r *http.Request) (*http.Request, string, error)
 		outReq.Header.Set("User-Agent", "")
 	}
 	return outReq, reqUpType, nil
+}
+
+func cloneTukuyomiProxyOutboundRequest(r *http.Request) *http.Request {
+	if r == nil {
+		return nil
+	}
+	if r.Form != nil || r.PostForm != nil || r.MultipartForm != nil {
+		return r.Clone(r.Context())
+	}
+	out := new(http.Request)
+	*out = *r
+	out.URL = cloneURL(r.URL)
+	out.Header = cloneProxyHeaderMapForMutation(r.Header, 4)
+	out.Trailer = cloneProxyHeaderMap(r.Trailer)
+	if r.TransferEncoding != nil {
+		out.TransferEncoding = append([]string(nil), r.TransferEncoding...)
+	}
+	return out
 }
 
 func setTukuyomiProxyXForwarded(header http.Header, in *http.Request) {
@@ -437,9 +455,14 @@ func copyProxyHeader(dst http.Header, src http.Header) {
 		return
 	}
 	for key, values := range src {
-		for _, value := range values {
-			dst.Add(key, value)
+		if len(values) == 0 {
+			continue
 		}
+		name := http.CanonicalHeaderKey(strings.TrimSpace(key))
+		if name == "" {
+			continue
+		}
+		dst[name] = append(dst[name], values...)
 	}
 }
 

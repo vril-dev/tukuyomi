@@ -19,7 +19,7 @@ type testRequestSecurityPlugin struct {
 	name    string
 	phase   requestSecurityPluginPhase
 	enabled bool
-	handle  func(*gin.Context, *requestSecurityPluginContext) bool
+	handle  func(*proxyServeContext, *requestSecurityPluginContext) bool
 }
 
 func (p testRequestSecurityPlugin) Name() string {
@@ -34,7 +34,7 @@ func (p testRequestSecurityPlugin) Enabled() bool {
 	return p.enabled
 }
 
-func (p testRequestSecurityPlugin) Handle(c *gin.Context, ctx *requestSecurityPluginContext) bool {
+func (p testRequestSecurityPlugin) Handle(c *proxyServeContext, ctx *requestSecurityPluginContext) bool {
 	if p.handle == nil {
 		return true
 	}
@@ -74,7 +74,7 @@ func TestRunRequestSecurityPluginsStopsOnHandledResponse(t *testing.T) {
 			name:    "first",
 			phase:   requestSecurityPluginPhasePreWAF,
 			enabled: true,
-			handle: func(_ *gin.Context, _ *requestSecurityPluginContext) bool {
+			handle: func(_ *proxyServeContext, _ *requestSecurityPluginContext) bool {
 				order = append(order, "first")
 				return true
 			},
@@ -83,7 +83,7 @@ func TestRunRequestSecurityPluginsStopsOnHandledResponse(t *testing.T) {
 			name:    "second",
 			phase:   requestSecurityPluginPhasePreWAF,
 			enabled: true,
-			handle: func(_ *gin.Context, _ *requestSecurityPluginContext) bool {
+			handle: func(_ *proxyServeContext, _ *requestSecurityPluginContext) bool {
 				order = append(order, "second")
 				return false
 			},
@@ -92,7 +92,7 @@ func TestRunRequestSecurityPluginsStopsOnHandledResponse(t *testing.T) {
 			name:    "third",
 			phase:   requestSecurityPluginPhasePreWAF,
 			enabled: true,
-			handle: func(_ *gin.Context, _ *requestSecurityPluginContext) bool {
+			handle: func(_ *proxyServeContext, _ *requestSecurityPluginContext) bool {
 				order = append(order, "third")
 				return true
 			},
@@ -100,7 +100,7 @@ func TestRunRequestSecurityPluginsStopsOnHandledResponse(t *testing.T) {
 	}
 
 	ctx := newRequestSecurityPluginContext("req-1", "10.0.0.1", "JP", time.Unix(1, 0))
-	if ok := runRequestSecurityPlugins(c, requestSecurityPluginPhasePreWAF, plugins, ctx); ok {
+	if ok := runRequestSecurityPlugins(newProxyServeContextFromGin(c), requestSecurityPluginPhasePreWAF, plugins, ctx); ok {
 		t.Fatal("expected plugin chain to stop")
 	}
 	if len(order) != 2 || order[0] != "first" || order[1] != "second" {
@@ -120,7 +120,7 @@ func TestRunRequestSecurityPluginsSkipsDisabledAndWrongPhase(t *testing.T) {
 			name:    "disabled",
 			phase:   requestSecurityPluginPhasePreWAF,
 			enabled: false,
-			handle: func(_ *gin.Context, _ *requestSecurityPluginContext) bool {
+			handle: func(_ *proxyServeContext, _ *requestSecurityPluginContext) bool {
 				order = append(order, "disabled")
 				return true
 			},
@@ -129,7 +129,7 @@ func TestRunRequestSecurityPluginsSkipsDisabledAndWrongPhase(t *testing.T) {
 			name:    "wrong-phase",
 			phase:   requestSecurityPluginPhasePostWAF,
 			enabled: true,
-			handle: func(_ *gin.Context, _ *requestSecurityPluginContext) bool {
+			handle: func(_ *proxyServeContext, _ *requestSecurityPluginContext) bool {
 				order = append(order, "wrong-phase")
 				return true
 			},
@@ -138,7 +138,7 @@ func TestRunRequestSecurityPluginsSkipsDisabledAndWrongPhase(t *testing.T) {
 			name:    "active",
 			phase:   requestSecurityPluginPhasePreWAF,
 			enabled: true,
-			handle: func(_ *gin.Context, _ *requestSecurityPluginContext) bool {
+			handle: func(_ *proxyServeContext, _ *requestSecurityPluginContext) bool {
 				order = append(order, "active")
 				return true
 			},
@@ -146,7 +146,7 @@ func TestRunRequestSecurityPluginsSkipsDisabledAndWrongPhase(t *testing.T) {
 	}
 
 	ctx := newRequestSecurityPluginContext("req-1", "10.0.0.1", "JP", time.Unix(1, 0))
-	if ok := runRequestSecurityPlugins(c, requestSecurityPluginPhasePreWAF, plugins, ctx); !ok {
+	if ok := runRequestSecurityPlugins(newProxyServeContextFromGin(c), requestSecurityPluginPhasePreWAF, plugins, ctx); !ok {
 		t.Fatal("expected plugin chain to continue")
 	}
 	if len(order) != 1 || order[0] != "active" {
@@ -202,7 +202,7 @@ func TestBotDefenseRequestSecurityPlugin_DryRunDoesNotAbort(t *testing.T) {
 
 	ctx := newRequestSecurityPluginContext("req-1", "10.0.0.30", "JP", time.Unix(1700004300, 0))
 	p := newBotDefenseRequestSecurityPlugin()
-	if ok := p.Handle(c, ctx); !ok {
+	if ok := p.Handle(newProxyServeContextFromGin(c), ctx); !ok {
 		t.Fatal("dry-run plugin should allow request to continue")
 	}
 	if got := rec.Header().Get("X-Tukuyomi-Bot-Dry-Run"); got != botDefenseActionChallenge {
@@ -250,7 +250,7 @@ func TestSemanticRequestSecurityPlugin_ChallengeLogsEnforcingStatus(t *testing.T
 
 	ctx := newRequestSecurityPluginContext("req-sem-challenge", "10.0.0.1", "JP", time.Unix(1700000000, 0))
 	p := newSemanticRequestSecurityPlugin()
-	if ok := p.Handle(c, ctx); ok {
+	if ok := p.Handle(newProxyServeContextFromGin(c), ctx); ok {
 		t.Fatal("semantic challenge should stop the request")
 	}
 	if rec.Code != http.StatusTooManyRequests {
@@ -331,7 +331,7 @@ func TestSemanticRequestSecurityPlugin_BlockLogsEnforcingStatus(t *testing.T) {
 
 	ctx := newRequestSecurityPluginContext("req-sem-block", "10.0.0.2", "JP", time.Unix(1700000001, 0))
 	p := newSemanticRequestSecurityPlugin()
-	if ok := p.Handle(c, ctx); ok {
+	if ok := p.Handle(newProxyServeContextFromGin(c), ctx); ok {
 		t.Fatal("semantic block should stop the request")
 	}
 	if rec.Code != http.StatusForbidden {
@@ -379,7 +379,7 @@ func TestSemanticRequestSecurityPlugin_LogOnlyOmitsStatus(t *testing.T) {
 
 	ctx := newRequestSecurityPluginContext("req-sem-log", "10.0.0.3", "JP", time.Unix(1700000002, 0))
 	p := newSemanticRequestSecurityPlugin()
-	if ok := p.Handle(c, ctx); !ok {
+	if ok := p.Handle(newProxyServeContextFromGin(c), ctx); !ok {
 		t.Fatal("semantic log_only should allow request to continue")
 	}
 
@@ -429,7 +429,7 @@ func TestSemanticRequestSecurityPlugin_LogsProviderContributionSeparately(t *tes
 
 	ctx := newRequestSecurityPluginContext("req-sem-provider", "10.0.0.6", "JP", time.Unix(1700000003, 0))
 	p := newSemanticRequestSecurityPlugin()
-	if ok := p.Handle(c, ctx); ok {
+	if ok := p.Handle(newProxyServeContextFromGin(c), ctx); ok {
 		t.Fatal("semantic provider-backed challenge should stop the request")
 	}
 
@@ -515,7 +515,7 @@ func TestSemanticRequestSecurityPlugin_LogsStatefulContributionSeparately(t *tes
 
 	ctx := newRequestSecurityPluginContext("req-sem-stateful", "10.0.0.5", "JP", now.Add(3*time.Second))
 	p := newSemanticRequestSecurityPlugin()
-	if ok := p.Handle(c, ctx); !ok {
+	if ok := p.Handle(newProxyServeContextFromGin(c), ctx); !ok {
 		t.Fatal("stateful log_only should allow request to continue")
 	}
 

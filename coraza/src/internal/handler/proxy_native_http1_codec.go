@@ -3,7 +3,6 @@ package handler
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -23,32 +22,46 @@ const (
 )
 
 func nativeHTTP1ParseRequestLine(line []byte) (method, target, proto []byte, err error) {
-	raw := strings.TrimRight(string(line), "\r\n")
-	parts := strings.Split(raw, " ")
-	if len(parts) != 3 {
-		return nil, nil, nil, fmt.Errorf("invalid HTTP/1 request line")
-	}
-	if !nativeHTTP1SafeToken(parts[0]) {
-		return nil, nil, nil, fmt.Errorf("invalid HTTP/1 request method")
-	}
-	if parts[2] != "HTTP/1.0" && parts[2] != "HTTP/1.1" {
-		return nil, nil, nil, fmt.Errorf("unsupported HTTP/1 request version %q", parts[2])
-	}
-	if err := nativeHTTP1ValidateRequestTarget(parts[1], parts[0]); err != nil {
+	raw, err := nativeHTTP1TrimCRLFLineBytes(line)
+	if err != nil {
 		return nil, nil, nil, err
 	}
-	return []byte(parts[0]), []byte(parts[1]), []byte(parts[2]), nil
+	firstSpace := bytes.IndexByte(raw, ' ')
+	if firstSpace <= 0 {
+		return nil, nil, nil, fmt.Errorf("invalid HTTP/1 request line")
+	}
+	secondSpaceRel := bytes.IndexByte(raw[firstSpace+1:], ' ')
+	if secondSpaceRel <= 0 {
+		return nil, nil, nil, fmt.Errorf("invalid HTTP/1 request line")
+	}
+	secondSpace := firstSpace + 1 + secondSpaceRel
+	if secondSpace == len(raw)-1 || bytes.IndexByte(raw[secondSpace+1:], ' ') >= 0 {
+		return nil, nil, nil, fmt.Errorf("invalid HTTP/1 request line")
+	}
+	method = raw[:firstSpace]
+	target = raw[firstSpace+1 : secondSpace]
+	proto = raw[secondSpace+1:]
+	if !nativeHTTP1SafeTokenBytes(method) {
+		return nil, nil, nil, fmt.Errorf("invalid HTTP/1 request method")
+	}
+	if !bytes.Equal(proto, []byte("HTTP/1.0")) && !bytes.Equal(proto, []byte("HTTP/1.1")) {
+		return nil, nil, nil, fmt.Errorf("unsupported HTTP/1 request version %q", string(proto))
+	}
+	if err := nativeHTTP1ValidateRequestTarget(string(target), string(method)); err != nil {
+		return nil, nil, nil, err
+	}
+	return method, target, proto, nil
 }
 
 func nativeHTTP1BuildRequest(br *bufio.Reader, maxHeaderBytes int, remoteAddr net.Addr, tlsState *tls.ConnectionState) (*http.Request, error) {
 	if maxHeaderBytes <= 0 {
 		maxHeaderBytes = nativeHTTP1MaxRequestHeaderBytes
 	}
-	line, err := nativeHTTP1ReadLineLimited(br, maxHeaderBytes)
+	line, err := nativeHTTP1ReadLineBytesLimited(br, maxHeaderBytes)
 	if err != nil {
 		return nil, err
 	}
-	methodRaw, targetRaw, protoRaw, err := nativeHTTP1ParseRequestLine([]byte(line))
+	methodRaw, targetRaw, protoRaw, err := nativeHTTP1ParseRequestLine(line)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +120,6 @@ func nativeHTTP1BuildRequest(br *bufio.Reader, maxHeaderBytes int, remoteAddr ne
 	if remoteAddr != nil {
 		req.RemoteAddr = remoteAddr.String()
 	}
-	req = req.WithContext(context.Background())
 	return req, nil
 }
 
@@ -123,53 +135,93 @@ func nativeHTTP1ReadHeaderBlockKind(br *bufio.Reader, maxBytes int, kind string)
 	header := make(http.Header)
 	used := 0
 	for {
-		line, err := nativeHTTP1ReadLineLimited(br, maxBytes-used)
+		line, err := nativeHTTP1ReadLineBytesLimited(br, maxBytes-used)
 		if err != nil {
 			return nil, err
 		}
 		used += len(line)
-		trimmed := strings.TrimRight(line, "\r\n")
-		if trimmed == "" {
+		trimmed, err := nativeHTTP1TrimCRLFLineBytes(line)
+		if err != nil {
+			return nil, err
+		}
+		if len(trimmed) == 0 {
 			return header, nil
 		}
-		if strings.HasPrefix(trimmed, " ") || strings.HasPrefix(trimmed, "\t") {
+		if trimmed[0] == ' ' || trimmed[0] == '\t' {
 			return nil, fmt.Errorf("%s folded headers are not supported", kind)
 		}
-		idx := strings.IndexByte(trimmed, ':')
+		idx := bytes.IndexByte(trimmed, ':')
 		if idx <= 0 {
-			return nil, fmt.Errorf("invalid %s header line %q", kind, trimmed)
+			return nil, fmt.Errorf("invalid %s header line %q", kind, string(trimmed))
 		}
-		name := http.CanonicalHeaderKey(strings.TrimSpace(trimmed[:idx]))
-		value := textproto.TrimString(trimmed[idx+1:])
+		name := http.CanonicalHeaderKey(string(bytes.TrimSpace(trimmed[:idx])))
+		value := string(textproto.TrimBytes(trimmed[idx+1:]))
 		if !nativeHTTP1SafeHeaderName(name) || !nativeHTTP1SafeHeaderValue(value) {
 			return nil, fmt.Errorf("invalid %s header %q", kind, name)
 		}
-		header.Add(name, value)
+		nativeHTTP1AppendHeaderValue(header, name, value)
 	}
 }
 
+func nativeHTTP1AppendHeaderValue(header http.Header, name string, value string) {
+	if values, ok := header[name]; ok {
+		header[name] = append(values, value)
+		return
+	}
+	header[name] = []string{value}
+}
+
 func nativeHTTP1ReadLineLimited(br *bufio.Reader, limit int) (string, error) {
+	line, err := nativeHTTP1ReadLineBytesLimited(br, limit)
+	if err != nil {
+		return "", err
+	}
+	return string(line), nil
+}
+
+func nativeHTTP1ReadLineBytesLimited(br *bufio.Reader, limit int) ([]byte, error) {
 	if limit <= 0 {
-		return "", fmt.Errorf("HTTP/1 headers exceed limit")
+		return nil, fmt.Errorf("HTTP/1 headers exceed limit")
+	}
+	part, err := br.ReadSlice('\n')
+	if len(part) > limit {
+		return nil, fmt.Errorf("HTTP/1 headers exceed limit")
+	}
+	if err == nil {
+		if !bytes.HasSuffix(part, nativeHTTP1CRLFBytes) {
+			return nil, fmt.Errorf("HTTP/1 line missing CRLF terminator")
+		}
+		return part, nil
+	}
+	if err != bufio.ErrBufferFull {
+		return nil, err
 	}
 	var out bytes.Buffer
+	out.Write(part)
 	for {
-		part, err := br.ReadSlice('\n')
+		part, err = br.ReadSlice('\n')
 		out.Write(part)
 		if out.Len() > limit {
-			return "", fmt.Errorf("HTTP/1 headers exceed limit")
+			return nil, fmt.Errorf("HTTP/1 headers exceed limit")
 		}
 		if err == nil {
-			line := out.String()
-			if !strings.HasSuffix(line, "\r\n") {
-				return "", fmt.Errorf("HTTP/1 line missing CRLF terminator")
+			line := out.Bytes()
+			if !bytes.HasSuffix(line, nativeHTTP1CRLFBytes) {
+				return nil, fmt.Errorf("HTTP/1 line missing CRLF terminator")
 			}
 			return line, nil
 		}
 		if err != bufio.ErrBufferFull {
-			return "", err
+			return nil, err
 		}
 	}
+}
+
+func nativeHTTP1TrimCRLFLineBytes(line []byte) ([]byte, error) {
+	if !bytes.HasSuffix(line, nativeHTTP1CRLFBytes) {
+		return nil, fmt.Errorf("HTTP/1 line missing CRLF terminator")
+	}
+	return line[:len(line)-len(nativeHTTP1CRLFBytes)], nil
 }
 
 type nativeHTTP1ChunkedReader struct {
@@ -228,25 +280,28 @@ func (r *nativeHTTP1ChunkedReader) Read(p []byte) (int, error) {
 }
 
 func (r *nativeHTTP1ChunkedReader) readChunkSize() (int64, error) {
-	line, err := nativeHTTP1ReadLineLimited(r.br, nativeHTTP1MaxChunkLineBytes)
+	line, err := nativeHTTP1ReadLineBytesLimited(r.br, nativeHTTP1MaxChunkLineBytes)
 	if err != nil {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		}
 		return 0, err
 	}
-	line = strings.TrimRight(line, "\r\n")
-	if strings.ContainsAny(line, "\r\n\x00") {
+	line, err = nativeHTTP1TrimCRLFLineBytes(line)
+	if err != nil {
+		return 0, err
+	}
+	if bytes.IndexAny(line, "\r\n\x00") >= 0 {
 		return 0, fmt.Errorf("invalid upstream chunk size line")
 	}
-	if idx := strings.IndexByte(line, ';'); idx >= 0 {
+	if idx := bytes.IndexByte(line, ';'); idx >= 0 {
 		line = line[:idx]
 	}
-	line = strings.TrimSpace(line)
-	if line == "" {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
 		return 0, fmt.Errorf("empty upstream chunk size")
 	}
-	size, err := strconv.ParseInt(line, 16, 64)
+	size, err := strconv.ParseInt(string(line), 16, 64)
 	if err != nil || size < 0 {
 		return 0, fmt.Errorf("invalid upstream chunk size %q", line)
 	}
@@ -274,11 +329,32 @@ func nativeHTTP1SafeToken(v string) bool {
 	}
 	for i := 0; i < len(v); i++ {
 		c := v[i]
-		if c <= 0x20 || c >= 0x7f || strings.ContainsRune("()<>@,;:\\\"/[]?={}", rune(c)) {
+		if c <= 0x20 || c >= 0x7f || nativeHTTP1TokenSeparatorByte(c) {
 			return false
 		}
 	}
 	return true
+}
+
+func nativeHTTP1SafeTokenBytes(v []byte) bool {
+	if len(v) == 0 {
+		return false
+	}
+	for _, c := range v {
+		if c <= 0x20 || c >= 0x7f || nativeHTTP1TokenSeparatorByte(c) {
+			return false
+		}
+	}
+	return true
+}
+
+func nativeHTTP1TokenSeparatorByte(c byte) bool {
+	switch c {
+	case '(', ')', '<', '>', '@', ',', ';', ':', '\\', '"', '/', '[', ']', '?', '=', '{', '}':
+		return true
+	default:
+		return false
+	}
 }
 
 func nativeHTTP1SafeHeaderName(name string) bool {

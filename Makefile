@@ -29,6 +29,7 @@ BENCH_ACCESS_LOG_MODE ?= full
 BENCH_CLIENT_KEEPALIVE ?= 1
 BENCH_PROXY_MODE ?= current
 BENCH_PROXY_ENGINE ?= tukuyomi_proxy
+BENCH_RUNNER ?= docker
 BENCH_PROFILE ?= 0
 BENCH_PROFILE_ADDR ?= 127.0.0.1:6060
 BENCH_PROFILE_SECONDS ?= 10
@@ -51,7 +52,7 @@ export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_API_KEY_PRIMAR
 
 .PHONY: \
 	help setup env-init crs-install crs-ensure \
-	go-test go-build build \
+	go-test go-fuzz-short go-build build \
 	release-linux-amd64 release-linux-arm64 release-linux-all \
 	ui-install ui-test ui-build ui-sync ui-build-sync \
 	ui-preview-up ui-preview-down ui-preview-smoke php-fpm-build php-fpm-copy php-fpm-prune php-fpm-remove php-fpm-up php-fpm-down php-fpm-reload php-fpm-test php-fpm-smoke \
@@ -70,6 +71,7 @@ help:
 	@echo "  make crs-ensure                 Install OWASP CRS only when data/rules/crs is missing"
 	@echo ""
 	@echo "  make go-test                    Run Go tests (coraza/src)"
+	@echo "  make go-fuzz-short              Run short native HTTP/1 fuzz passes"
 	@echo "  make go-build                   Build single binary into ./bin/$(APP_NAME)"
 	@echo "  make build                      One-shot build (ui-build-sync + go-build)"
 	@echo "  make release-linux-amd64        Build release tarball for linux/amd64 via docker buildx"
@@ -127,6 +129,7 @@ help:
 	@echo "  make release-binary-smoke       Build/extract a public tarball and run bundle smoke"
 	@echo "  make http3-public-entry-smoke   Validate built-in HTTPS + HTTP/3 public entry"
 	@echo "  make bench                      Run proxy tuning benchmark presets"
+	@echo "    - optional: BENCH_RUNNER=local runs the benchmark without Docker"
 	@echo "  make bench-waf                  Run WAF allow/block performance benchmark"
 	@echo "  make bench-full                 Run proxy and WAF benchmarks"
 	@echo "  make gotestwaf                  Run GoTestWAF regression"
@@ -231,6 +234,20 @@ setup: env-init crs-install
 
 go-test:
 	cd $(CORAZA_SRC) && $(GO) test ./...
+
+go-fuzz-short:
+	cd $(CORAZA_SRC) && set -e; for target in \
+		FuzzNativeHTTP1ParseStatusLine \
+		FuzzNativeHTTP1ReadHeaderBlock \
+		FuzzNativeHTTP1ChunkedRead \
+		FuzzNativeHTTP1ReadResponse \
+		FuzzNativeHTTP1WriteRequest \
+		FuzzNativeHTTP2FrameReader \
+		FuzzNativeHTTP2HPACKDecode \
+		FuzzNativeHTTP2StreamState \
+		FuzzNativeHTTP2FlowControlAccounting; do \
+		$(GO) test ./internal/handler -run '^$$' -fuzz "$$target" -fuzztime=5s; \
+	done
 
 go-build:
 	mkdir -p $(abspath $(BIN_DIR))
@@ -413,7 +430,7 @@ smoke-extended: smoke deployment-smoke
 bench: bench-proxy
 
 bench-proxy:
-	GO="$(GO)" HOST_CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" WAF_API_KEY_PRIMARY="$(WAF_API_KEY_PRIMARY)" BENCH_REQUESTS="$(BENCH_REQUESTS)" WARMUP_REQUESTS="$(WARMUP_REQUESTS)" BENCH_CONCURRENCY="$(BENCH_CONCURRENCY)" BENCH_PATH="$(BENCH_PATH)" BENCH_TIMEOUT_SEC="$(BENCH_TIMEOUT_SEC)" BENCH_MAX_FAIL_RATE_PCT="$(BENCH_MAX_FAIL_RATE_PCT)" BENCH_MIN_RPS="$(BENCH_MIN_RPS)" BENCH_DISABLE_RATE_LIMIT="$(BENCH_DISABLE_RATE_LIMIT)" BENCH_DISABLE_REQUEST_GUARDS="$(BENCH_DISABLE_REQUEST_GUARDS)" BENCH_ACCESS_LOG_MODE="$(BENCH_ACCESS_LOG_MODE)" BENCH_CLIENT_KEEPALIVE="$(BENCH_CLIENT_KEEPALIVE)" BENCH_PROXY_MODE="$(BENCH_PROXY_MODE)" BENCH_PROXY_ENGINE="$(BENCH_PROXY_ENGINE)" BENCH_PROFILE="$(BENCH_PROFILE)" BENCH_PROFILE_ADDR="$(BENCH_PROFILE_ADDR)" BENCH_PROFILE_SECONDS="$(BENCH_PROFILE_SECONDS)" UPSTREAM_PORT="$(UPSTREAM_PORT)" ./scripts/benchmark_proxy_tuning.sh
+	GO="$(GO)" HOST_CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" WAF_API_KEY_PRIMARY="$(WAF_API_KEY_PRIMARY)" BENCH_REQUESTS="$(BENCH_REQUESTS)" WARMUP_REQUESTS="$(WARMUP_REQUESTS)" BENCH_CONCURRENCY="$(BENCH_CONCURRENCY)" BENCH_PATH="$(BENCH_PATH)" BENCH_TIMEOUT_SEC="$(BENCH_TIMEOUT_SEC)" BENCH_MAX_FAIL_RATE_PCT="$(BENCH_MAX_FAIL_RATE_PCT)" BENCH_MIN_RPS="$(BENCH_MIN_RPS)" BENCH_DISABLE_RATE_LIMIT="$(BENCH_DISABLE_RATE_LIMIT)" BENCH_DISABLE_REQUEST_GUARDS="$(BENCH_DISABLE_REQUEST_GUARDS)" BENCH_ACCESS_LOG_MODE="$(BENCH_ACCESS_LOG_MODE)" BENCH_CLIENT_KEEPALIVE="$(BENCH_CLIENT_KEEPALIVE)" BENCH_PROXY_MODE="$(BENCH_PROXY_MODE)" BENCH_PROXY_ENGINE="$(BENCH_PROXY_ENGINE)" BENCH_RUNNER="$(BENCH_RUNNER)" BENCH_PROFILE="$(BENCH_PROFILE)" BENCH_PROFILE_ADDR="$(BENCH_PROFILE_ADDR)" BENCH_PROFILE_SECONDS="$(BENCH_PROFILE_SECONDS)" UPSTREAM_PORT="$(UPSTREAM_PORT)" ./scripts/benchmark_proxy_tuning.sh
 
 bench-waf:
 	GO="$(GO)" HOST_CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" WAF_API_KEY_PRIMARY="$(WAF_API_KEY_PRIMARY)" BENCH_REQUESTS="$(BENCH_REQUESTS)" WARMUP_REQUESTS="$(WARMUP_REQUESTS)" BENCH_CONCURRENCY="$(BENCH_CONCURRENCY)" BENCH_PATH="$(BENCH_PATH)" BENCH_TIMEOUT_SEC="$(BENCH_TIMEOUT_SEC)" BENCH_MAX_FAIL_RATE_PCT="$(BENCH_MAX_FAIL_RATE_PCT)" BENCH_MIN_RPS="$(BENCH_MIN_RPS)" BENCH_DISABLE_RATE_LIMIT="$(BENCH_DISABLE_RATE_LIMIT)" BENCH_DISABLE_REQUEST_GUARDS="$(BENCH_DISABLE_REQUEST_GUARDS)" UPSTREAM_PORT="$(UPSTREAM_PORT)" ./scripts/benchmark_waf.sh

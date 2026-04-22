@@ -34,7 +34,23 @@ const (
 	ctxKeyRouteSelection   ctxKey = "route_transport_selection"
 	ctxKeySelectedUpstream ctxKey = "selected_upstream"
 	ctxKeyRequestBodyCount ctxKey = "request_body_count"
+	ctxKeyProxyState       ctxKey = "proxy_state"
 )
+
+type proxyRequestContextState struct {
+	RequestID              string
+	ClientIP               string
+	Country                string
+	CountrySource          string
+	WAFHit                 bool
+	WAFRuleIDs             string
+	BodyCounter            *proxyRequestBodyCounter
+	RouteClassification    proxyRouteClassification
+	HasRouteClassification bool
+	RouteSelection         proxyRouteTransportSelection
+	HasRouteSelection      bool
+	SelectedUpstream       string
+}
 
 type proxyRequestBodyCounter struct {
 	rc    io.ReadCloser
@@ -66,19 +82,107 @@ func attachProxyRequestBodyCounter(req *http.Request) *http.Request {
 		counter.rc = req.Body
 		req.Body = counter
 	}
-	ctx := context.WithValue(req.Context(), ctxKeyRequestBodyCount, counter)
-	return req.WithContext(ctx)
+	req, state := ensureProxyRequestContextState(req)
+	state.BodyCounter = counter
+	return req
 }
 
 func proxyRequestBodyBytes(req *http.Request) int64 {
 	if req == nil {
 		return 0
 	}
+	if state, ok := proxyRequestContextStateFromContext(req.Context()); ok && state.BodyCounter != nil {
+		return state.BodyCounter.bytes
+	}
 	counter, _ := req.Context().Value(ctxKeyRequestBodyCount).(*proxyRequestBodyCounter)
 	if counter == nil {
 		return 0
 	}
 	return counter.bytes
+}
+
+func ensureProxyRequestContextState(req *http.Request) (*http.Request, *proxyRequestContextState) {
+	if req == nil {
+		return nil, nil
+	}
+	if state, ok := proxyRequestContextStateFromContext(req.Context()); ok {
+		return req, state
+	}
+	state := &proxyRequestContextState{}
+	return req.WithContext(context.WithValue(req.Context(), ctxKeyProxyState, state)), state
+}
+
+func withNewProxyRequestContextState(ctx context.Context) (context.Context, *proxyRequestContextState) {
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok {
+		return ctx, state
+	}
+	state := &proxyRequestContextState{}
+	return context.WithValue(ctx, ctxKeyProxyState, state), state
+}
+
+func proxyRequestContextStateFromContext(ctx context.Context) (*proxyRequestContextState, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	state, ok := ctx.Value(ctxKeyProxyState).(*proxyRequestContextState)
+	return state, ok && state != nil
+}
+
+func proxyContextRequestID(ctx context.Context) string {
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok {
+		if state.RequestID != "" {
+			return state.RequestID
+		}
+	}
+	value, _ := ctx.Value(ctxKeyReqID).(string)
+	return value
+}
+
+func proxyContextClientIP(ctx context.Context) string {
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok {
+		if state.ClientIP != "" {
+			return state.ClientIP
+		}
+	}
+	value, _ := ctx.Value(ctxKeyIP).(string)
+	return value
+}
+
+func proxyContextCountry(ctx context.Context) string {
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok {
+		if state.Country != "" {
+			return state.Country
+		}
+	}
+	value, _ := ctx.Value(ctxKeyCountry).(string)
+	return value
+}
+
+func proxyContextCountrySource(ctx context.Context) string {
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok {
+		if state.CountrySource != "" {
+			return state.CountrySource
+		}
+	}
+	value, _ := ctx.Value(ctxKeyCountrySource).(string)
+	return value
+}
+
+func proxyContextWAFDebug(ctx context.Context) (bool, string) {
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok {
+		return state.WAFHit, state.WAFRuleIDs
+	}
+	wafHit, _ := ctx.Value(ctxKeyWafHit).(bool)
+	ruleIDs, _ := ctx.Value(ctxKeyWafRule).(string)
+	return wafHit, ruleIDs
+}
+
+func withProxySelectedUpstream(ctx context.Context, upstream string) context.Context {
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok {
+		state.SelectedUpstream = upstream
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeySelectedUpstream, upstream)
 }
 
 func proxyResponseBytes(w http.ResponseWriter) int64 {
@@ -118,13 +222,25 @@ func appendProxyRequestContextLogFields(evt map[string]any, req *http.Request) {
 		return
 	}
 	ctx := req.Context()
-	if reqID, _ := ctx.Value(ctxKeyReqID).(string); reqID != "" {
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok {
+		if state.RequestID != "" {
+			evt["req_id"] = state.RequestID
+		}
+		if state.Country != "" {
+			evt["country"] = state.Country
+		}
+		if state.CountrySource != "" {
+			evt["country_source"] = state.CountrySource
+		}
+		return
+	}
+	if reqID := proxyContextRequestID(ctx); reqID != "" {
 		evt["req_id"] = reqID
 	}
-	if country, _ := ctx.Value(ctxKeyCountry).(string); country != "" {
+	if country := proxyContextCountry(ctx); country != "" {
 		evt["country"] = country
 	}
-	if countrySource, _ := ctx.Value(ctxKeyCountrySource).(string); countrySource != "" {
+	if countrySource := proxyContextCountrySource(ctx); countrySource != "" {
 		evt["country_source"] = countrySource
 	}
 }
@@ -194,10 +310,10 @@ func annotateWAFHit(res *http.Response) {
 	}
 
 	ctx := res.Request.Context()
-	if hit, _ := ctx.Value(ctxKeyWafHit).(bool); !hit {
+	wafHit, rid := proxyContextWAFDebug(ctx)
+	if !wafHit {
 		return
 	}
-	rid, _ := ctx.Value(ctxKeyWafRule).(string)
 	if cfg := currentProxyConfig(); cfg.ExposeWAFDebugHeaders && res.Header != nil {
 		res.Header.Set("X-WAF-Hit", "1")
 		if rid != "" {
@@ -205,9 +321,9 @@ func annotateWAFHit(res *http.Response) {
 		}
 	}
 
-	reqID, _ := ctx.Value(ctxKeyReqID).(string)
-	ip, _ := ctx.Value(ctxKeyIP).(string)
-	country, _ := ctx.Value(ctxKeyCountry).(string)
+	reqID := proxyContextRequestID(ctx)
+	ip := proxyContextClientIP(ctx)
+	country := proxyContextCountry(ctx)
 	path := res.Request.URL.Path
 	status := res.StatusCode
 	evt := map[string]any{
@@ -254,13 +370,18 @@ func applyCacheHeaders(res *http.Response) {
 	}
 }
 
-func ensureRequestID(c *gin.Context) string {
+func ensureProxyRequestID(c *proxyServeContext) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
 	reqID := c.Request.Header.Get("X-Request-ID")
 	if reqID == "" {
 		reqID = genReqID()
 		c.Request.Header.Set("X-Request-ID", reqID)
 	}
-	c.Writer.Header().Set("X-Request-ID", reqID)
+	if c.Writer != nil {
+		c.Writer.Header().Set("X-Request-ID", reqID)
+	}
 
 	return reqID
 }
@@ -284,23 +405,30 @@ func selectWAFEngine(reqHost, reqPath string, tls bool) coraza.WAF {
 	}
 }
 
-func setWAFContext(c *gin.Context, reqID, clientIP, country, countrySource string, wafHit bool, ruleIDs string) {
-	ctx := context.WithValue(c.Request.Context(), ctxKeyReqID, reqID)
-	ctx = context.WithValue(ctx, ctxKeyIP, clientIP)
-	ctx = context.WithValue(ctx, ctxKeyCountry, country)
-	ctx = context.WithValue(ctx, ctxKeyCountrySource, countrySource)
-	ctx = context.WithValue(ctx, ctxKeyWafHit, wafHit)
-	ctx = context.WithValue(ctx, ctxKeyWafRule, ruleIDs)
-	c.Request = c.Request.WithContext(ctx)
+func setWAFContext(c *proxyServeContext, reqID, clientIP, country, countrySource string, wafHit bool, ruleIDs string) {
+	if c == nil || c.Request == nil {
+		return
+	}
+	req, state := ensureProxyRequestContextState(c.Request)
+	state.RequestID = reqID
+	state.ClientIP = clientIP
+	state.Country = country
+	state.CountrySource = countrySource
+	state.WAFHit = wafHit
+	state.WAFRuleIDs = ruleIDs
+	c.Request = req
 }
 
-func attachProxyRouteTransportSelection(c *gin.Context, classification proxyRouteClassification, reqID, clientIP, country string) bool {
+func attachProxyRouteTransportSelection(c *proxyServeContext, classification proxyRouteClassification, reqID, clientIP, country string) bool {
 	if c == nil || c.Request == nil {
 		return false
 	}
 	selection, err := resolveProxyRouteTransportSelection(c.Request, classification, proxyRuntimeHealth())
 	if err == nil {
-		c.Request = c.Request.WithContext(withProxyRouteTransportSelection(c.Request.Context(), selection))
+		ctx := withProxyRouteTransportSelection(c.Request.Context(), selection)
+		if ctx != c.Request.Context() {
+			c.Request = c.Request.WithContext(ctx)
+		}
 		return true
 	}
 	currentProxyErrorResponse().Write(c.Writer, c.Request)
@@ -325,11 +453,24 @@ func attachProxyRouteTransportSelection(c *gin.Context, classification proxyRout
 }
 
 func ProxyHandler(c *gin.Context) {
-	reqID := ensureRequestID(c)
-	clientIP := requestClientIP(c)
+	pc := newProxyServeContextFromGin(c)
+	serveProxyRequest(pc)
+	pc.syncGinContext()
+}
+
+func ServeProxyHTTP(w http.ResponseWriter, r *http.Request) {
+	serveProxyRequest(newProxyServeContext(w, r))
+}
+
+func serveProxyRequest(c *proxyServeContext) {
+	if c == nil || c.Writer == nil || c.Request == nil {
+		return
+	}
+	reqID := ensureProxyRequestID(c)
+	clientIP := requestClientIPHTTP(c.Request)
 	requestMetadataCtx := newRequestMetadataResolverContext(clientIP)
-	if err := runRequestMetadataResolvers(c, newRequestMetadataResolvers(), requestMetadataCtx); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	if err := runRequestMetadataResolvers(c.Request, newRequestMetadataResolvers(), requestMetadataCtx); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
 	country := requestMetadataCtx.Country
@@ -359,13 +500,15 @@ func ProxyHandler(c *gin.Context) {
 		c.Abort()
 		return
 	}
-	c.Request = c.Request.WithContext(withProxyRouteClassification(c.Request.Context(), routeClassification))
+	if ctx := withProxyRouteClassification(c.Request.Context(), routeClassification); ctx != c.Request.Context() {
+		c.Request = c.Request.WithContext(ctx)
+	}
 	auditTrail := newSecurityAuditTrail(c.Request, reqID, clientIP, country)
 	if auditTrail != nil {
 		auditTrail.CountrySource = countrySource
 	}
 	if auditTrail != nil {
-		defer auditTrail.Finalize(c)
+		defer auditTrail.FinalizeHTTP(c.Writer)
 	}
 	proxyServed := false
 	defer func() {
@@ -511,16 +654,15 @@ func ProxyHandler(c *gin.Context) {
 	reqPath := c.Request.URL.Path
 	wafEngine := selectWAFEngine(c.Request.Host, reqPath, c.Request.TLS != nil)
 	if wafEngine == nil {
-		log.Printf("[BYPASS][HIT] %s -> skip WAF", reqPath)
 		if err := maybeBufferProxyRequestBody(c.Request); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
 		if !attachProxyRouteTransportSelection(c, routeClassification, reqID, clientIP, country) {
 			return
 		}
 		proxyServed = true
-		ServeProxyWithCache(c)
+		ServeProxyWithCacheHTTP(c.Writer, c.Request)
 		return
 	}
 
@@ -603,14 +745,14 @@ func ProxyHandler(c *gin.Context) {
 	}
 
 	if err := maybeBufferProxyRequestBody(c.Request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 	if !attachProxyRouteTransportSelection(c, routeClassification, reqID, clientIP, country) {
 		return
 	}
 	proxyServed = true
-	ServeProxyWithCache(c)
+	ServeProxyWithCacheHTTP(c.Writer, c.Request)
 }
 
 func genReqID() string {

@@ -7,8 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
-
 	"tukuyomi/internal/observability"
 )
 
@@ -23,7 +21,7 @@ type requestSecurityPlugin interface {
 	Name() string
 	Phase() requestSecurityPluginPhase
 	Enabled() bool
-	Handle(c *gin.Context, ctx *requestSecurityPluginContext) bool
+	Handle(c *proxyServeContext, ctx *requestSecurityPluginContext) bool
 }
 
 type requestSecurityPluginContext struct {
@@ -102,7 +100,7 @@ func newRequestSecurityPluginContext(reqID, clientIP, country string, now time.T
 	return ctx
 }
 
-func runRequestSecurityPlugins(c *gin.Context, phase requestSecurityPluginPhase, plugins []requestSecurityPlugin, ctx *requestSecurityPluginContext) bool {
+func runRequestSecurityPlugins(c *proxyServeContext, phase requestSecurityPluginPhase, plugins []requestSecurityPlugin, ctx *requestSecurityPluginContext) bool {
 	for _, p := range plugins {
 		if p == nil || p.Phase() != phase || !p.Enabled() {
 			continue
@@ -158,7 +156,7 @@ func (p *ipReputationRequestSecurityPlugin) Enabled() bool {
 	return rt != nil && ipReputationEnabled(rt.Raw)
 }
 
-func (p *ipReputationRequestSecurityPlugin) Handle(c *gin.Context, ctx *requestSecurityPluginContext) bool {
+func (p *ipReputationRequestSecurityPlugin) Handle(c *proxyServeContext, ctx *requestSecurityPluginContext) bool {
 	blocked, statusCode, hostScope := EvaluateIPReputationForRequest(c.Request, ctx.ClientIP)
 	if !blocked {
 		return true
@@ -201,7 +199,7 @@ func (p *botDefenseRequestSecurityPlugin) Enabled() bool {
 	return rt != nil && botDefenseEnabled(rt.File)
 }
 
-func (p *botDefenseRequestSecurityPlugin) Handle(c *gin.Context, ctx *requestSecurityPluginContext) bool {
+func (p *botDefenseRequestSecurityPlugin) Handle(c *proxyServeContext, ctx *requestSecurityPluginContext) bool {
 	botDecision := EvaluateBotDefense(c.Request, ctx.ClientIP, ctx.Now)
 	ctx.BotSuspicionScore = botDecision.RiskScore
 	ctx.BotSuspicionSignals = append(ctx.BotSuspicionSignals[:0], botDecision.Signals...)
@@ -413,7 +411,7 @@ func (p *semanticRequestSecurityPlugin) Enabled() bool {
 	return rt != nil && semanticEnabled(rt.File)
 }
 
-func (p *semanticRequestSecurityPlugin) Handle(c *gin.Context, ctx *requestSecurityPluginContext) bool {
+func (p *semanticRequestSecurityPlugin) Handle(c *proxyServeContext, ctx *requestSecurityPluginContext) bool {
 	eval := EvaluateSemanticWithRequestID(c.Request, ctx.ClientIP, ctx.RequestID, ctx.Now)
 	ctx.Semantic = eval
 	if ctx != nil && ctx.AuditTrail != nil && (eval.Score > 0 || eval.Action != semanticActionNone) {

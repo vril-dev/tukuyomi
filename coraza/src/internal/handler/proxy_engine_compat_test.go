@@ -351,6 +351,24 @@ func TestServeProxyTukuyomiEngineForwardsBasicHTTP(t *testing.T) {
 	}
 }
 
+func TestCopyProxyHeaderPreservesDuplicateValues(t *testing.T) {
+	dst := http.Header{}
+	src := http.Header{
+		"x-test": []string{"one", "two"},
+		"X-Add":  []string{"first"},
+	}
+	dst.Set("X-Add", "existing")
+
+	copyProxyHeader(dst, src)
+
+	if got := dst.Values("X-Test"); len(got) != 2 || got[0] != "one" || got[1] != "two" {
+		t.Fatalf("X-Test values=%v want [one two]", got)
+	}
+	if got := dst.Values("X-Add"); len(got) != 2 || got[0] != "existing" || got[1] != "first" {
+		t.Fatalf("X-Add values=%v want [existing first]", got)
+	}
+}
+
 func TestServeProxyTukuyomiEngineClearsInboundCloseForUpstream(t *testing.T) {
 	setProxyEngineModeForTest(t, config.ProxyEngineModeTukuyomiProxy)
 

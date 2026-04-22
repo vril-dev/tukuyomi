@@ -228,6 +228,13 @@ func normalizeProxyRoutes(in []ProxyRoute) []ProxyRoute {
 	return out
 }
 
+func proxyRouteOrder(cfg ProxyRulesConfig) []int {
+	if len(cfg.routeOrder) == len(cfg.Routes) {
+		return cfg.routeOrder
+	}
+	return sortedProxyRouteIndexes(cfg.Routes)
+}
+
 func normalizeProxyDefaultRoute(in *ProxyDefaultRoute) *ProxyDefaultRoute {
 	if in == nil {
 		return nil
@@ -1003,6 +1010,11 @@ func withProxyRouteDecision(ctx context.Context, decision proxyRouteDecision) co
 }
 
 func withProxyRouteClassification(ctx context.Context, classification proxyRouteClassification) context.Context {
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok {
+		state.RouteClassification = classification
+		state.HasRouteClassification = true
+		return ctx
+	}
 	return context.WithValue(ctx, ctxKeyRouteClass, classification)
 }
 
@@ -1010,17 +1022,28 @@ func proxyRouteClassificationFromContext(ctx context.Context) (proxyRouteClassif
 	if ctx == nil {
 		return proxyRouteClassification{}, false
 	}
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok && state.HasRouteClassification {
+		return state.RouteClassification, true
+	}
 	classification, ok := ctx.Value(ctxKeyRouteClass).(proxyRouteClassification)
 	return classification, ok
 }
 
 func withProxyRouteTransportSelection(ctx context.Context, selection proxyRouteTransportSelection) context.Context {
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok {
+		state.RouteSelection = selection
+		state.HasRouteSelection = true
+		return ctx
+	}
 	return context.WithValue(ctx, ctxKeyRouteSelection, selection)
 }
 
 func proxyRouteTransportSelectionFromContext(ctx context.Context) (proxyRouteTransportSelection, bool) {
 	if ctx == nil {
 		return proxyRouteTransportSelection{}, false
+	}
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok && state.HasRouteSelection {
+		return state.RouteSelection, true
 	}
 	selection, ok := ctx.Value(ctxKeyRouteSelection).(proxyRouteTransportSelection)
 	return selection, ok
@@ -1261,7 +1284,7 @@ func resolveProxyRouteClassificationWithHealth(req *http.Request, cfg ProxyRules
 	originalRawPath := proxyRouteRawPath(req)
 	originalHost := strings.TrimSpace(req.Host)
 
-	for _, idx := range sortedProxyRouteIndexes(cfg.Routes) {
+	for _, idx := range proxyRouteOrder(cfg) {
 		route := cfg.Routes[idx]
 		if !proxyRouteEnabled(route.Enabled) {
 			continue

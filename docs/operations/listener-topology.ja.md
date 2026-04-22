@@ -8,6 +8,7 @@
 - 任意の HTTP redirect listener は single-socket のままにする
 - built-in HTTP/3 listener は single UDP socket のままにする
 - 現時点では `SO_REUSEPORT` / multi-listener fan-out は採用しない
+- public HTTP/1.1 data-plane listener は Tukuyomi native HTTP/1.1 server で処理し、admin listener は分離した control-plane server path のままにする
 
 現時点の答えは no です。`tukuyomi` に lower-level な listener fan-out knob は追加しません。
 

@@ -45,10 +45,17 @@ Container startup usually needs only:
 
 ### Inbound Timeout Boundary
 
+- The public HTTP/1.1 data-plane listener is served by Tukuyomi's native
+  HTTP/1.1 server. The admin listener, HTTP redirect listener, and HTTP/3
+  helper remain separate control/edge helpers.
 - `server.read_header_timeout_sec` applies only to the request line and headers.
 - `server.read_timeout_sec` is the total inbound read budget for request line, headers, and body.
+- `server.write_timeout_sec` bounds response writes. A slow client is closed
+  rather than allowed to hold a data-plane goroutine indefinitely.
+- `server.idle_timeout_sec` bounds keep-alive idle time between requests.
 - `server.graceful_shutdown_timeout_sec` bounds deploy/reload drain time before force-closing live connections.
-- There is no body-only timeout or minimum-body-rate control in this slice.
+- TLS public listeners advertise HTTP/1.1 for this native server path. HTTP/3
+  is still handled by the dedicated HTTP/3 listener when enabled.
 
 ### Overload Backpressure
 
@@ -256,6 +263,7 @@ Only Tukuyomi's native proxy engine is supported. Changing this file requires a 
 
 - `tukuyomi_proxy` is the built-in engine and uses Tukuyomi's response bridge after WAF/routing selection while preserving the same HTTP parser, upstream transport, health, retry, TLS, HTTP/2, cache, route response headers, 1xx informational responses, trailers, streaming flush behavior, native Upgrade/WebSocket tunnel, and response-sanitize path.
 - The legacy `net_http` bridge has been removed; setting `proxy.engine.mode` to any value other than `tukuyomi_proxy` is rejected during config validation.
+- HTTP/1.1 and explicit upstream HTTP/2 modes use Tukuyomi native upstream transports; HTTPS `force_attempt` falls back to native HTTP/1.1 only when ALPN does not select `h2`.
 - Upgrade/WebSocket handshake requests stay inside `tukuyomi_proxy`; WebSocket frame payloads after `101 Switching Protocols` are tunnel data and are not HTTP WAF inspection input.
 - Runtime visibility is exposed through `/tukuyomi-api/status` as `proxy_engine_mode` and through `Settings -> Runtime Inventory`.
 

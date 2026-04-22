@@ -238,6 +238,48 @@ func TestProxyRouteResolutionOrderAndDryRun(t *testing.T) {
 	}
 }
 
+func TestProxyUpstreamFallbackUsesPrecomputedStaticCandidates(t *testing.T) {
+	prepared, err := prepareProxyRulesRaw(`{
+  "upstreams": [
+    { "name": "primary", "url": "http://fallback.internal:8080", "weight": 1, "enabled": true }
+  ]
+}`)
+	if err != nil {
+		t.Fatalf("prepareProxyRulesRaw: %v", err)
+	}
+	cfg := prepared.effectiveCfg
+	if !cfg.defaultTargetCandidatesReady {
+		t.Fatal("static upstream fallback candidates should be precomputed")
+	}
+	precomputed, options, err := buildProxyRouteTargetCandidates(cfg, ProxyRouteAction{})
+	if err != nil {
+		t.Fatalf("build precomputed candidates: %v", err)
+	}
+	if len(precomputed) != 1 {
+		t.Fatalf("precomputed candidate count=%d want 1", len(precomputed))
+	}
+
+	dynamicCfg := cfg
+	dynamicCfg.defaultTargetCandidatesReady = false
+	dynamicCfg.defaultTargetCandidates = nil
+	dynamicCfg.defaultTargetSelection = proxyRouteTargetSelectionOptions{}
+	dynamic, dynamicOptions, err := buildProxyRouteTargetCandidates(dynamicCfg, ProxyRouteAction{})
+	if err != nil {
+		t.Fatalf("build dynamic candidates: %v", err)
+	}
+	if len(dynamic) != len(precomputed) {
+		t.Fatalf("dynamic candidate count=%d want %d", len(dynamic), len(precomputed))
+	}
+	if precomputed[0].Target.String() != dynamic[0].Target.String() ||
+		precomputed[0].Key != dynamic[0].Key ||
+		precomputed[0].TransportKey != dynamic[0].TransportKey {
+		t.Fatalf("precomputed candidate differs from dynamic: %#v vs %#v", precomputed[0], dynamic[0])
+	}
+	if options != dynamicOptions {
+		t.Fatalf("precomputed options differ from dynamic: %#v vs %#v", options, dynamicOptions)
+	}
+}
+
 func TestProxyRouteBackendPoolsBindSelectionPerRoute(t *testing.T) {
 	cfg := mustValidateProxyRulesRaw(t, `{
   "upstreams": [
@@ -882,6 +924,46 @@ func TestProxyRouteRegexMatchAndPriority(t *testing.T) {
 				t.Fatalf("dry-run final_url=%s want=%s", got, tt.wantFinal)
 			}
 		})
+	}
+}
+
+func TestProxyRouteOrderUsesPreparedPriorityOrder(t *testing.T) {
+	cfg := mustValidateProxyRulesRaw(t, `{
+  "upstreams": [
+    { "name": "low", "url": "http://low.internal:8080", "weight": 1, "enabled": true },
+    { "name": "high", "url": "http://high.internal:8080", "weight": 1, "enabled": true }
+  ],
+  "routes": [
+    {
+      "name": "low-priority",
+      "priority": 50,
+      "match": { "path": { "type": "prefix", "value": "/app/" } },
+      "action": { "upstream": "low" }
+    },
+    {
+      "name": "high-priority",
+      "priority": 5,
+      "match": { "path": { "type": "prefix", "value": "/app/" } },
+      "action": { "upstream": "high" }
+    }
+  ]
+}`)
+
+	if len(cfg.routeOrder) != len(cfg.Routes) {
+		t.Fatalf("prepared route order length=%d want %d", len(cfg.routeOrder), len(cfg.Routes))
+	}
+	if got := cfg.Routes[proxyRouteOrder(cfg)[0]].Name; got != "high-priority" {
+		t.Fatalf("first prepared route=%q want high-priority", got)
+	}
+	decision := mustResolveProxyRouteDecision(t, cfg, "example.com", "/app/index.html")
+	if got := decision.RouteName; got != "high-priority" {
+		t.Fatalf("route=%q want high-priority", got)
+	}
+
+	cfg.routeOrder = nil
+	fallbackDecision := mustResolveProxyRouteDecision(t, cfg, "example.com", "/app/index.html")
+	if fallbackDecision.RouteName != decision.RouteName || fallbackDecision.SelectedUpstreamURL != decision.SelectedUpstreamURL {
+		t.Fatalf("fallback order changed decision: got route=%q upstream=%q want route=%q upstream=%q", fallbackDecision.RouteName, fallbackDecision.SelectedUpstreamURL, decision.RouteName, decision.SelectedUpstreamURL)
 	}
 }
 

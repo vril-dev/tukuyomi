@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -202,6 +203,16 @@ func (g *ConcurrencyGuard) AnnotateQueuedResponse(c *gin.Context, result Concurr
 	c.Header(overloadHeaderQueueWaitMS, strconv.FormatUint(queueWaitMilliseconds(result.QueueWait), 10))
 }
 
+func (g *ConcurrencyGuard) AnnotateQueuedHTTP(w http.ResponseWriter, result ConcurrencyAcquireResult) {
+	if g == nil || w == nil || !result.Queued || !result.Allowed {
+		return
+	}
+	h := w.Header()
+	h.Set(overloadHeaderScope, g.Name())
+	h.Set(overloadHeaderQueued, "true")
+	h.Set(overloadHeaderQueueWaitMS, strconv.FormatUint(queueWaitMilliseconds(result.QueueWait), 10))
+}
+
 func (g *ConcurrencyGuard) RejectWithResult(c *gin.Context, result ConcurrencyAcquireResult) {
 	scope := "global"
 	if g != nil {
@@ -223,6 +234,41 @@ func (g *ConcurrencyGuard) RejectWithResult(c *gin.Context, result ConcurrencyAc
 		c.Header(overloadHeaderQueueWaitMS, strconv.FormatUint(queueWaitMilliseconds(result.QueueWait), 10))
 	}
 	c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+		"error":         "server busy",
+		"scope":         scope,
+		"queued":        result.Queued,
+		"queue_wait_ms": queueWaitMilliseconds(result.QueueWait),
+		"reason":        reason,
+	})
+}
+
+func (g *ConcurrencyGuard) RejectHTTP(w http.ResponseWriter, result ConcurrencyAcquireResult) {
+	if w == nil {
+		return
+	}
+	scope := "global"
+	if g != nil {
+		scope = g.name
+	}
+	retryAfterSeconds := defaultConcurrencyRetryAfterSeconds
+	if g != nil {
+		retryAfterSeconds = g.retryAfterSeconds
+	}
+	reason := strings.TrimSpace(result.RejectReason)
+	if reason == "" {
+		reason = overloadRejectReasonLimitReached
+	}
+	h := w.Header()
+	h.Set("Retry-After", strconv.Itoa(retryAfterSeconds))
+	h.Set(overloadHeaderScope, scope)
+	h.Set(overloadHeaderQueued, strconv.FormatBool(result.Queued))
+	h.Set(overloadHeaderReason, reason)
+	if result.QueueWait > 0 {
+		h.Set(overloadHeaderQueueWaitMS, strconv.FormatUint(queueWaitMilliseconds(result.QueueWait), 10))
+	}
+	h.Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error":         "server busy",
 		"scope":         scope,
 		"queued":        result.Queued,

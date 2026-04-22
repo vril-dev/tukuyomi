@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -85,5 +86,79 @@ func TestCloneProxyRetryRequestDoesNotMutateSourceRequest(t *testing.T) {
 	}
 	if got := out.Host; got != "backend.host" {
 		t.Fatalf("retry Host=%q want backend.host", got)
+	}
+}
+
+func TestPrepareTukuyomiProxyRequestDoesNotMutateSourceRequest(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "http://proxy.local/original?keep=1", strings.NewReader("body"))
+	req.Host = "proxy.local"
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("X-Custom", "one")
+	req.Header.Set("X-Remove", "drop-me")
+	originalURL := req.URL.String()
+	originalHost := req.Host
+
+	classification := proxyRouteClassification{
+		Source:         proxyRouteResolutionRoute,
+		OriginalHost:   "proxy.local",
+		RewrittenHost:  "backend.host",
+		RewrittenPath:  "/rewritten",
+		RewrittenQuery: "q=1",
+		RequestHeaderOps: ProxyRouteHeaderOperations{
+			Set:    map[string]string{"X-Route": "yes"},
+			Remove: []string{"X-Remove"},
+		},
+	}
+	selection := proxyRouteTransportSelection{
+		SelectedUpstream: "primary",
+		HealthKey:        "primary",
+		Target:           mustURL("http://backend.local/base"),
+		RewrittenHost:    "backend.host",
+	}
+	ctx := withProxyRouteClassification(req.Context(), classification)
+	ctx = withProxyRouteTransportSelection(ctx, selection)
+	req = req.WithContext(ctx)
+
+	out, _, err := prepareTukuyomiProxyRequest(req)
+	if err != nil {
+		t.Fatalf("prepareTukuyomiProxyRequest: %v", err)
+	}
+	if out == req {
+		t.Fatal("outbound request reused inbound request pointer")
+	}
+	if out.URL == req.URL {
+		t.Fatal("outbound request reused inbound URL pointer")
+	}
+
+	out.URL.Path = "/mutated"
+	out.Header.Set("X-Custom", "two")
+	out.Header.Set("Connection", "mutated")
+
+	if got := req.URL.String(); got != originalURL {
+		t.Fatalf("source URL=%q want %q", got, originalURL)
+	}
+	if got := req.Host; got != originalHost {
+		t.Fatalf("source Host=%q want %q", got, originalHost)
+	}
+	if got := req.Header.Get("X-Custom"); got != "one" {
+		t.Fatalf("source X-Custom=%q want one", got)
+	}
+	if got := req.Header.Get("Connection"); got != "keep-alive" {
+		t.Fatalf("source Connection=%q want keep-alive", got)
+	}
+	if got := req.Header.Get("X-Remove"); got != "drop-me" {
+		t.Fatalf("source X-Remove=%q want drop-me", got)
+	}
+	if got := out.URL.Host; got != "backend.local" {
+		t.Fatalf("outbound URL host=%q want backend.local", got)
+	}
+	if got := out.Host; got != "backend.host" {
+		t.Fatalf("outbound Host=%q want backend.host", got)
+	}
+	if got := out.Header.Get("X-Route"); got != "yes" {
+		t.Fatalf("outbound X-Route=%q want yes", got)
+	}
+	if got := out.Header.Get("X-Remove"); got != "" {
+		t.Fatalf("outbound X-Remove=%q want empty", got)
 	}
 }

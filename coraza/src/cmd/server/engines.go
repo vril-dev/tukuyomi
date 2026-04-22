@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"net/http"
 	"strings"
 
@@ -250,6 +251,116 @@ func registerPublicProxySurface(r *gin.Engine, proxyConcurrencyGuard *middleware
 
 		handler.ProxyHandler(c)
 	})
+}
+
+type publicProxyHandler struct {
+	adminHandler           http.Handler
+	proxyHandler           http.Handler
+	tracedProxyHandler     http.Handler
+	splitAdmin             bool
+	globalConcurrencyGuard *middleware.ConcurrencyGuard
+	proxyConcurrencyGuard  *middleware.ConcurrencyGuard
+}
+
+func buildPublicHandler(globalConcurrencyGuard *middleware.ConcurrencyGuard, proxyConcurrencyGuard *middleware.ConcurrencyGuard, splitAdmin bool) (http.Handler, error) {
+	var adminHandler http.Handler
+	if !splitAdmin {
+		adminEngine, err := buildAdminEngine(globalConcurrencyGuard)
+		if err != nil {
+			return nil, err
+		}
+		adminHandler = adminEngine
+	}
+	h := &publicProxyHandler{
+		adminHandler:           adminHandler,
+		splitAdmin:             splitAdmin,
+		globalConcurrencyGuard: globalConcurrencyGuard,
+		proxyConcurrencyGuard:  proxyConcurrencyGuard,
+	}
+	h.proxyHandler = http.HandlerFunc(h.serveProxy)
+	h.tracedProxyHandler = observability.HTTPTracingHandler(h.proxyHandler)
+	return h, nil
+}
+
+func (h *publicProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r == nil {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("[SERVER][RECOVERY] public handler panic: %v", recovered)
+			if !httpResponseStatusWritten(w) {
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+		}
+	}()
+	if r.URL != nil {
+		switch {
+		case r.URL.Path == "/healthz":
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		case pathTargetsAdminSurface(r.URL.Path):
+			if h.splitAdmin || h.adminHandler == nil {
+				http.NotFound(w, r)
+				return
+			}
+			h.adminHandler.ServeHTTP(w, r)
+			return
+		}
+	}
+	if observability.TracingEnabled() {
+		h.tracedProxyHandler.ServeHTTP(w, r)
+		return
+	}
+	h.proxyHandler.ServeHTTP(w, r)
+}
+
+func (h *publicProxyHandler) serveProxy(w http.ResponseWriter, r *http.Request) {
+	var globalResult middleware.ConcurrencyAcquireResult
+	globalQueued := false
+	if guard := h.globalConcurrencyGuard; guard != nil {
+		globalResult = guard.AcquireContext(r.Context())
+		if !globalResult.Allowed {
+			guard.RejectHTTP(w, globalResult)
+			return
+		}
+		globalQueued = globalResult.Queued
+		guard.AnnotateQueuedHTTP(w, globalResult)
+		defer guard.Release()
+	}
+	if guard := h.proxyConcurrencyGuard; guard != nil {
+		var result middleware.ConcurrencyAcquireResult
+		if globalQueued {
+			result = guard.AcquireContextNoQueue(r.Context())
+		} else {
+			result = guard.AcquireContext(r.Context())
+		}
+		if !result.Allowed {
+			if globalQueued {
+				result.Queued = true
+				result.QueueWait += globalResult.QueueWait
+			}
+			guard.RejectHTTP(w, result)
+			return
+		}
+		guard.AnnotateQueuedHTTP(w, result)
+		defer guard.Release()
+	}
+	handler.ServeProxyHTTP(w, r)
+}
+
+func httpResponseStatusWritten(w http.ResponseWriter) bool {
+	if statusWriter, ok := w.(interface{ Status() int }); ok {
+		return statusWriter.Status() > 0
+	}
+	return false
 }
 
 func buildPublicEngine(globalConcurrencyGuard *middleware.ConcurrencyGuard, proxyConcurrencyGuard *middleware.ConcurrencyGuard, splitAdmin bool) (*gin.Engine, error) {

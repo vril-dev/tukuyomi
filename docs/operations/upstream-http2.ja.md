@@ -6,19 +6,19 @@
 
 ### `force_http2=false`
 
-- 標準の Go `http.Transport` を使う
-- HTTPS upstream は、相手と runtime が許せば HTTP/2 で接続されることがある
+- dial、TLS、request write、response parse、connection reuse、trailers、Upgrade tunnel に Tukuyomi native HTTP/1.1 upstream transport を使う
+- HTTPS upstream は、選択された upstream mode が HTTP/2 を明示しない限り HTTP/1.1 のまま
 - HTTP upstream は HTTP/1.1 のまま
 
 ### `force_http2=true`
 
-- 引き続き標準の Go `http.Transport` を使う
-- `ForceAttemptHTTP2=true` を有効化する
+- HTTPS ALPN negotiation に Tukuyomi native HTTP/2 upstream transport を使う
+- `h2` と `http/1.1` を明示的に提示し、upstream が `h2` を選ばない場合は Go の client transport へ暗黙委譲せず、native HTTP/1.1 transport へ明示 fallback する
 - これは HTTPS upstream で HTTP/2 をより強く優先する設定であり、すべての upstream request を必ず HTTP/2 にする保証ではない
 
 ### `h2c_upstream=true`
 
-- upstream transport を prior-knowledge cleartext HTTP/2 に切り替える
+- upstream transport を Tukuyomi native prior-knowledge cleartext HTTP/2 に切り替える
 - 影響対象は runtime 配下の upstream traffic 全体
   - primary upstream
   - named upstream
@@ -47,9 +47,9 @@
 }
 ```
 
-- `default` は runtime-wide mode を継承する
-- `force_attempt` は標準の Go `http.Transport` を維持したまま `ForceAttemptHTTP2` を有効化する
-- `h2c_prior_knowledge` は cleartext HTTP/2 transport を使うため、`http://` upstream が必要
+- `default` は runtime-wide mode を継承する。`force_http2=false` では Tukuyomi native HTTP/1.1 transport を使う
+- `force_attempt` は Tukuyomi native HTTP/2 ALPN transport を使い、ALPN で `h2` が選ばれない場合は native HTTP/1.1 へ明示 fallback する
+- `h2c_prior_knowledge` は Tukuyomi native cleartext HTTP/2 transport を使うため、`http://` upstream が必要
 - active health check、passive health、retry、`/status` の backend 情報は named upstream の mode に追従する
 - `health_check_headers` や `health_check_expected_body` / `health_check_expected_body_regex` を使う active health check も、選ばれた backend と同じ mode に従う
 

@@ -708,6 +708,7 @@ func writeDirectProxyResponse(w http.ResponseWriter, r *http.Request, resp *http
 	if err := onProxyResponse(resp); err != nil {
 		return err
 	}
+	reqID := directProxyResponseRequestID(w, r)
 	defer func() {
 		if resp.Body != nil {
 			_ = resp.Body.Close()
@@ -723,6 +724,9 @@ func writeDirectProxyResponse(w http.ResponseWriter, r *http.Request, resp *http
 		}
 		dst[key] = append([]string(nil), values...)
 	}
+	if reqID != "" {
+		dst.Set("X-Request-ID", reqID)
+	}
 	w.WriteHeader(resp.StatusCode)
 	if r != nil && r.Method == http.MethodHead {
 		return nil
@@ -732,6 +736,21 @@ func writeDirectProxyResponse(w http.ResponseWriter, r *http.Request, resp *http
 	}
 	_, err := io.Copy(w, resp.Body)
 	return err
+}
+
+func directProxyResponseRequestID(w http.ResponseWriter, r *http.Request) string {
+	if r != nil {
+		if reqID := strings.TrimSpace(proxyContextRequestID(r.Context())); reqID != "" {
+			return strings.TrimSpace(reqID)
+		}
+		if reqID := strings.TrimSpace(r.Header.Get("X-Request-ID")); reqID != "" {
+			return reqID
+		}
+	}
+	if w != nil {
+		return strings.TrimSpace(w.Header().Get("X-Request-ID"))
+	}
+	return ""
 }
 
 const (

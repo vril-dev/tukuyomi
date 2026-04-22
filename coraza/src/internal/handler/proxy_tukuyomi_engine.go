@@ -263,7 +263,7 @@ func (e *tukuyomiProxyEngine) serveUpgradeResponse(w http.ResponseWriter, r *htt
 	defer close(backendCloseCh)
 
 	res.Body = nil
-	if err := res.Write(brw); err != nil {
+	if err := writeTukuyomiProxyUpgradeResponse(brw, res, resUpType); err != nil {
 		logTukuyomiProxyTunnelError(r, "write upgrade response", err)
 		return
 	}
@@ -275,6 +275,72 @@ func (e *tukuyomiProxyEngine) serveUpgradeResponse(w http.ResponseWriter, r *htt
 	if err := copyTukuyomiProxyTunnel(r, clientConn, brw, backConn); err != nil {
 		logTukuyomiProxyTunnelError(r, "copy tunnel", err)
 	}
+}
+
+func writeTukuyomiProxyUpgradeResponse(w io.Writer, res *http.Response, upgradeType string) error {
+	plan, err := prepareTukuyomiProxyUpgradeResponseWrite(res, upgradeType)
+	if err != nil {
+		return err
+	}
+	bw := bufio.NewWriter(w)
+	if _, err := fmt.Fprintf(bw, "%s 101 Switching Protocols\r\n", plan.proto); err != nil {
+		return err
+	}
+	for _, header := range plan.headers {
+		if _, err := fmt.Fprintf(bw, "%s: %s\r\n", header.name, header.value); err != nil {
+			return err
+		}
+	}
+	if _, err := io.WriteString(bw, "\r\n"); err != nil {
+		return err
+	}
+	return bw.Flush()
+}
+
+type tukuyomiProxyUpgradeResponseWritePlan struct {
+	proto   string
+	headers []nativeHTTP1HeaderLine
+}
+
+func prepareTukuyomiProxyUpgradeResponseWrite(res *http.Response, upgradeType string) (tukuyomiProxyUpgradeResponseWritePlan, error) {
+	if res == nil {
+		return tukuyomiProxyUpgradeResponseWritePlan{}, fmt.Errorf("upgrade response is required")
+	}
+	if res.StatusCode != http.StatusSwitchingProtocols {
+		return tukuyomiProxyUpgradeResponseWritePlan{}, fmt.Errorf("upgrade response status=%d want 101", res.StatusCode)
+	}
+	if strings.TrimSpace(upgradeType) == "" || !proxyASCIIIsPrint(upgradeType) || strings.ContainsAny(upgradeType, "\r\n") {
+		return tukuyomiProxyUpgradeResponseWritePlan{}, fmt.Errorf("invalid upgrade protocol %q", upgradeType)
+	}
+	if res.Header.Get("Content-Length") != "" || len(res.Header.Values("Transfer-Encoding")) > 0 {
+		return tukuyomiProxyUpgradeResponseWritePlan{}, fmt.Errorf("upgrade response must not carry body framing headers")
+	}
+	proto := strings.TrimSpace(res.Proto)
+	if proto == "" {
+		proto = "HTTP/1.1"
+	}
+	if proto != "HTTP/1.0" && proto != "HTTP/1.1" {
+		return tukuyomiProxyUpgradeResponseWritePlan{}, fmt.Errorf("invalid upgrade response protocol %q", proto)
+	}
+	header := cloneProxyHeader(res.Header)
+	header.Del("Content-Length")
+	header.Del("Transfer-Encoding")
+	header.Set("Connection", "Upgrade")
+	header.Set("Upgrade", upgradeType)
+	plan := tukuyomiProxyUpgradeResponseWritePlan{proto: proto}
+	for name, values := range header {
+		canonical := http.CanonicalHeaderKey(name)
+		if !nativeHTTP1SafeHeaderName(canonical) {
+			return tukuyomiProxyUpgradeResponseWritePlan{}, fmt.Errorf("invalid upstream upgrade response header %q", name)
+		}
+		for _, value := range values {
+			if !nativeHTTP1SafeHeaderValue(value) {
+				return tukuyomiProxyUpgradeResponseWritePlan{}, fmt.Errorf("invalid upstream upgrade response header value for %q", name)
+			}
+			plan.headers = append(plan.headers, nativeHTTP1HeaderLine{name: canonical, value: value})
+		}
+	}
+	return plan, nil
 }
 
 func onProxyUpgradeResponse(res *http.Response) error {

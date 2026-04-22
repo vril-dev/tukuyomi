@@ -1099,8 +1099,8 @@ func TestServeProxyRoutesMixedHTTP2Topologies(t *testing.T) {
 		if _, ok := transports[decision.SelectedTransportKey]; !ok {
 			t.Fatalf("missing tls transport for key %q", decision.SelectedTransportKey)
 		}
-		if _, ok := proxyRoundTripperForCandidate(profiles, transports, decision.SelectedTransportKey, decision.SelectedTransportKey, decision.SelectedHTTP2Mode).(*http.Transport); !ok {
-			t.Fatalf("expected http.Transport for tls route")
+		if _, ok := proxyRoundTripperForCandidate(profiles, transports, decision.SelectedTransportKey, decision.SelectedTransportKey, decision.SelectedHTTP2Mode).(*nativeHTTP2Transport); !ok {
+			t.Fatalf("expected nativeHTTP2Transport for tls route")
 		}
 		req = req.WithContext(withProxyRouteDecision(req.Context(), decision))
 		rec := httptest.NewRecorder()
@@ -1154,11 +1154,11 @@ func TestServeProxyRoutesMixedHTTP2Topologies(t *testing.T) {
 		if _, ok := transports[decision.SelectedTransportKey]; !ok {
 			t.Fatalf("missing h2c transport for key %q", decision.SelectedTransportKey)
 		}
-		if _, ok := transports[decision.SelectedTransportKey].(*http2.Transport); !ok {
-			t.Fatalf("selected h2c transport key %q does not map to http2 transport", decision.SelectedTransportKey)
+		if _, ok := transports[decision.SelectedTransportKey].(*nativeHTTP2Transport); !ok {
+			t.Fatalf("selected h2c transport key %q does not map to native http2 transport", decision.SelectedTransportKey)
 		}
-		if _, ok := proxyRoundTripperForCandidate(profiles, transports, decision.SelectedTransportKey, decision.SelectedTransportKey, decision.SelectedHTTP2Mode).(*http2.Transport); !ok {
-			t.Fatalf("expected http2.Transport for h2c route")
+		if _, ok := proxyRoundTripperForCandidate(profiles, transports, decision.SelectedTransportKey, decision.SelectedTransportKey, decision.SelectedHTTP2Mode).(*nativeHTTP2Transport); !ok {
+			t.Fatalf("expected nativeHTTP2Transport for h2c route")
 		}
 		req = req.WithContext(withProxyRouteDecision(req.Context(), decision))
 		rec := httptest.NewRecorder()
@@ -1180,4 +1180,15 @@ func TestServeProxyRoutesMixedHTTP2Topologies(t *testing.T) {
 			t.Fatal("expected h2c upstream request to be observed")
 		}
 	})
+}
+
+func TestProxyRoundTripperForCandidateDoesNotFallbackToDefaultTransport(t *testing.T) {
+	rt := proxyRoundTripperForCandidate(nil, nil, "missing", "", proxyHTTP2ModeDefault)
+	if _, ok := rt.(proxyStaticErrorTransport); !ok {
+		t.Fatalf("transport=%T want proxyStaticErrorTransport", rt)
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://backend.example/", nil)
+	if _, err := rt.RoundTrip(req); err == nil {
+		t.Fatal("RoundTrip succeeded for missing proxy transport")
+	}
 }

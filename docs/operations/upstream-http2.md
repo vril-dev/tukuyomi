@@ -6,19 +6,19 @@
 
 ### `force_http2=false`
 
-- Uses the standard Go `http.Transport`
-- HTTPS upstreams may still negotiate HTTP/2 when the remote peer and runtime allow it
+- Uses Tukuyomi's native HTTP/1.1 upstream transport for dial, TLS, request write, response parse, connection reuse, trailers, and Upgrade tunnels
+- HTTPS upstreams stay on HTTP/1.1 unless the selected upstream mode explicitly requests HTTP/2
 - HTTP upstreams remain HTTP/1.1
 
 ### `force_http2=true`
 
-- Still uses the standard Go `http.Transport`
-- Sets `ForceAttemptHTTP2=true`
+- Uses Tukuyomi's native HTTP/2 upstream transport for HTTPS ALPN negotiation
+- Offers `h2` and `http/1.1` explicitly; if the upstream does not select `h2`, Tukuyomi falls back to the native HTTP/1.1 transport instead of silently delegating to Go's client transport
 - This is a stronger preference for HTTPS upstreams, not a guarantee that every upstream request becomes HTTP/2
 
 ### `h2c_upstream=true`
 
-- Switches the upstream transport to prior-knowledge cleartext HTTP/2
+- Switches the upstream transport to Tukuyomi's native prior-knowledge cleartext HTTP/2 transport
 - Applies to all configured upstream traffic:
   - primary upstreams
   - named upstreams
@@ -47,9 +47,9 @@ Use `upstreams[].http2_mode`:
 }
 ```
 
-- `default` inherits the runtime-wide mode
-- `force_attempt` keeps the standard Go `http.Transport` and enables `ForceAttemptHTTP2`
-- `h2c_prior_knowledge` uses the cleartext HTTP/2 transport and therefore requires an `http://` upstream
+- `default` inherits the runtime-wide mode; with `force_http2=false`, it uses Tukuyomi's native HTTP/1.1 transport
+- `force_attempt` uses Tukuyomi's native HTTP/2 ALPN transport, with explicit native HTTP/1.1 fallback when ALPN does not select `h2`
+- `h2c_prior_knowledge` uses Tukuyomi's native cleartext HTTP/2 transport and therefore requires an `http://` upstream
 - Active health checks, passive health state, retry attempts, and `/status` backend entries follow the named upstream mode
 - Active health checks may also send `health_check_headers` and require `health_check_expected_body` or `health_check_expected_body_regex`; those checks use the same upstream mode as the selected backend
 

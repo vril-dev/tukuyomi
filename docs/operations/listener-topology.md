@@ -8,6 +8,9 @@ This document records the current listener-topology decision for `tukuyomi`.
 - keep the optional HTTP redirect listener single-socket
 - keep the built-in HTTP/3 listener as a single UDP socket
 - do not ship `SO_REUSEPORT` / multi-listener fan-out in the current runtime
+- serve the public HTTP/1.1 data-plane listener with Tukuyomi's native
+  HTTP/1.1 server; keep the admin listener on the separate control-plane
+  server path
 
 The current answer is no: `tukuyomi` does not expose a lower-level listener fan-out knob.
 

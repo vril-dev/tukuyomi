@@ -28,7 +28,6 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	oteltrace "go.opentelemetry.io/otel/trace"
-	"golang.org/x/net/http2"
 
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
@@ -2720,7 +2719,10 @@ func endProxyTransportSpan(span oteltrace.Span, resp *http.Response, err error) 
 func buildProxyTransport(cfg ProxyRulesConfig) http.RoundTripper {
 	rt, err := buildProxyTransportFromProfile(cfg, proxyGlobalTransportProfile(cfg, proxyGlobalHTTP2Mode(cfg)))
 	if err != nil || rt == nil {
-		return http.DefaultTransport
+		if err == nil {
+			err = fmt.Errorf("nil proxy transport")
+		}
+		return proxyStaticErrorTransport{err: fmt.Errorf("proxy transport initialization failed: %w", err)}
 	}
 	return rt
 }
@@ -2741,11 +2743,11 @@ func buildProxyTransportSet(cfg ProxyRulesConfig, profiles map[string]proxyTrans
 func buildProxyTransportFromProfile(cfg ProxyRulesConfig, profile proxyTransportProfile) (http.RoundTripper, error) {
 	switch normalizeProxyHTTP2Mode(profile.HTTP2Mode) {
 	case proxyHTTP2ModeForceAttempt:
-		return buildProxyHTTPTransport(cfg, profile, true)
+		return buildProxyNativeHTTP2Transport(cfg, profile, proxyHTTP2ModeForceAttempt)
 	case proxyHTTP2ModeH2C:
-		return buildProxyH2CTransport(cfg, profile)
+		return buildProxyNativeHTTP2Transport(cfg, profile, proxyHTTP2ModeH2C)
 	default:
-		return buildProxyHTTPTransport(cfg, profile, false)
+		return buildProxyNativeHTTP1Transport(cfg, profile)
 	}
 }
 
@@ -2775,46 +2777,18 @@ func proxyRoundTripperForCandidate(profiles map[string]proxyTransportProfile, tr
 			return rt
 		}
 	}
-	return http.DefaultTransport
+	return proxyStaticErrorTransport{err: fmt.Errorf("proxy transport is not available for mode %q", mode)}
 }
 
-func buildProxyHTTPTransport(cfg ProxyRulesConfig, profile proxyTransportProfile, forceHTTP2 bool) (*http.Transport, error) {
-	tlsCfg, err := buildProxyTLSClientConfigForProfile(profile.TLS)
-	if err != nil {
-		return nil, err
-	}
-	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   time.Duration(cfg.DialTimeout) * time.Second,
-			KeepAlive: proxyUpstreamKeepAliveDuration(cfg),
-		}).DialContext,
-		MaxIdleConns:          cfg.MaxIdleConns,
-		MaxIdleConnsPerHost:   cfg.MaxIdleConnsPerHost,
-		MaxConnsPerHost:       cfg.MaxConnsPerHost,
-		IdleConnTimeout:       time.Duration(cfg.IdleConnTimeout) * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ExpectContinueTimeout: time.Duration(cfg.ExpectContinueTimeout) * time.Second,
-		ResponseHeaderTimeout: time.Duration(cfg.ResponseHeaderTimeout) * time.Second,
-		ForceAttemptHTTP2:     forceHTTP2,
-		DisableCompression:    cfg.DisableCompression,
-		TLSClientConfig:       tlsCfg,
-	}, nil
+type proxyStaticErrorTransport struct {
+	err error
 }
 
-func buildProxyH2CTransport(cfg ProxyRulesConfig, _ proxyTransportProfile) (*http2.Transport, error) {
-	dialer := &net.Dialer{
-		Timeout:   time.Duration(cfg.DialTimeout) * time.Second,
-		KeepAlive: proxyUpstreamKeepAliveDuration(cfg),
+func (t proxyStaticErrorTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	if t.err != nil {
+		return nil, t.err
 	}
-	return &http2.Transport{
-		AllowHTTP:          true,
-		DisableCompression: cfg.DisableCompression,
-		IdleConnTimeout:    time.Duration(cfg.IdleConnTimeout) * time.Second,
-		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-			return dialer.DialContext(ctx, network, addr)
-		},
-	}, nil
+	return nil, fmt.Errorf("proxy transport is not available")
 }
 
 func proxyUpstreamKeepAliveDuration(cfg ProxyRulesConfig) time.Duration {

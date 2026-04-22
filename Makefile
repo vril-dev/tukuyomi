@@ -51,7 +51,7 @@ export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_API_KEY_PRIMAR
 
 .PHONY: \
 	help setup env-init crs-install crs-ensure \
-	go-test go-build build \
+	go-test go-fuzz-short go-build build \
 	release-linux-amd64 release-linux-arm64 release-linux-all \
 	ui-install ui-test ui-build ui-sync ui-build-sync \
 	ui-preview-up ui-preview-down ui-preview-smoke php-fpm-build php-fpm-copy php-fpm-prune php-fpm-remove php-fpm-up php-fpm-down php-fpm-reload php-fpm-test php-fpm-smoke \
@@ -70,6 +70,7 @@ help:
 	@echo "  make crs-ensure                 Install OWASP CRS only when data/rules/crs is missing"
 	@echo ""
 	@echo "  make go-test                    Run Go tests (coraza/src)"
+	@echo "  make go-fuzz-short              Run short native HTTP/1 fuzz passes"
 	@echo "  make go-build                   Build single binary into ./bin/$(APP_NAME)"
 	@echo "  make build                      One-shot build (ui-build-sync + go-build)"
 	@echo "  make release-linux-amd64        Build release tarball for linux/amd64 via docker buildx"
@@ -231,6 +232,20 @@ setup: env-init crs-install
 
 go-test:
 	cd $(CORAZA_SRC) && $(GO) test ./...
+
+go-fuzz-short:
+	cd $(CORAZA_SRC) && set -e; for target in \
+		FuzzNativeHTTP1ParseStatusLine \
+		FuzzNativeHTTP1ReadHeaderBlock \
+		FuzzNativeHTTP1ChunkedRead \
+		FuzzNativeHTTP1ReadResponse \
+		FuzzNativeHTTP1WriteRequest \
+		FuzzNativeHTTP2FrameReader \
+		FuzzNativeHTTP2HPACKDecode \
+		FuzzNativeHTTP2StreamState \
+		FuzzNativeHTTP2FlowControlAccounting; do \
+		$(GO) test ./internal/handler -run '^$$' -fuzz "$$target" -fuzztime=5s; \
+	done
 
 go-build:
 	mkdir -p $(abspath $(BIN_DIR))

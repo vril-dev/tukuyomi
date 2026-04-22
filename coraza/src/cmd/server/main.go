@@ -290,8 +290,7 @@ func main() {
 	}
 	lifecycle := newManagedServerLifecycle(config.ServerGracefulShutdownTimeout)
 
-	srv := &http.Server{
-		Addr:              config.ListenAddr,
+	publicSrv := &handler.NativeHTTP1Server{
 		Handler:           publicEngine,
 		ReadTimeout:       config.ServerReadTimeout,
 		ReadHeaderTimeout: config.ServerReadHeaderTimeout,
@@ -299,6 +298,7 @@ func main() {
 		IdleTimeout:       config.ServerIdleTimeout,
 		MaxHeaderBytes:    config.ServerMaxHeaderBytes,
 	}
+	handler.RegisterNativeHTTP1ServerMetricsSource(publicSrv)
 	handler.ResetServerHTTP3RuntimeStatus()
 	if splitAdminListener {
 		adminListener, inherited, err := buildManagedTCPListenerForRole("admin", config.AdminListenAddr, adminListenerRuntime, activation)
@@ -335,13 +335,12 @@ func main() {
 		if err != nil {
 			log.Fatalf("[FATAL] build server tls config: %v", err)
 		}
-		srv.TLSConfig = tlsConfig
 		http3Srv, altSvc, err := buildManagedServerHTTP3Server(tlsConfig, publicEngine)
 		if err != nil {
 			log.Fatalf("[FATAL] build server http3 config: %v", err)
 		}
 		if altSvc != "" {
-			srv.Handler = wrapHTTP3AltSvcHandler(publicEngine, altSvc)
+			publicSrv.Handler = wrapHTTP3AltSvcHandler(publicEngine, altSvc)
 		}
 		if redirectSrv != nil {
 			redirectListener, redirectInherited, err := buildManagedTCPListenerForRole("redirect", config.ServerTLSHTTPRedirectAddr, publicListenerRuntime, activation)
@@ -360,7 +359,7 @@ func main() {
 		if err := runHTTP3Server(lifecycle, activation, http3Srv); err != nil {
 			log.Fatalf("[FATAL] start HTTP/3 server: %v", err)
 		}
-		log.Printf("[INFO] starting HTTPS server on %s inherited=%t", config.ListenAddr, publicInherited)
+		log.Printf("[INFO] starting HTTPS server on %s inherited=%t engine=native_http1", config.ListenAddr, publicInherited)
 		log.Printf("[SERVER] tls enabled source=%s cert_file=%s acme_domains=%s min_version=%s redirect_http=%t redirect_addr=%s",
 			handler.ServerTLSRuntimeStatusSnapshot().Source,
 			config.ServerTLSCertFile,
@@ -388,8 +387,8 @@ func main() {
 			log.Printf("[SERVER] public proxy protocol enabled trusted_cidrs=%s", strings.Join(config.ServerProxyProtocolTrustedCIDRs, ","))
 		}
 		lifecycle.Go("public", func() error {
-			return srv.ServeTLS(publicListener, "", "")
-		}, srv.Shutdown, srv.Close)
+			return publicSrv.ServeTLS(publicListener, tlsConfig)
+		}, publicSrv.Shutdown, publicSrv.Close)
 		activation.CloseUnused()
 		if err := lifecycle.Wait(); err != nil {
 			log.Fatalf("[FATAL] server lifecycle stopped: %v", err)
@@ -397,7 +396,7 @@ func main() {
 		return
 	}
 
-	log.Printf("[INFO] starting server on %s inherited=%t", config.ListenAddr, publicInherited)
+	log.Printf("[INFO] starting server on %s inherited=%t engine=native_http1", config.ListenAddr, publicInherited)
 	log.Printf("[SERVER] read_timeout=%s read_header_timeout=%s write_timeout=%s idle_timeout=%s max_header_bytes=%d",
 		config.ServerReadTimeout,
 		config.ServerReadHeaderTimeout,
@@ -409,8 +408,8 @@ func main() {
 		log.Printf("[SERVER] public proxy protocol enabled trusted_cidrs=%s", strings.Join(config.ServerProxyProtocolTrustedCIDRs, ","))
 	}
 	lifecycle.Go("public", func() error {
-		return srv.Serve(publicListener)
-	}, srv.Shutdown, srv.Close)
+		return publicSrv.Serve(publicListener)
+	}, publicSrv.Shutdown, publicSrv.Close)
 	activation.CloseUnused()
 	if err := lifecycle.Wait(); err != nil {
 		log.Fatalf("[FATAL] server lifecycle stopped: %v", err)

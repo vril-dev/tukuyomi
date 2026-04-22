@@ -44,10 +44,13 @@ container 起動で通常必要なのは:
 
 ### Inbound Timeout Boundary
 
+- public HTTP/1.1 data-plane listener は Tukuyomi native HTTP/1.1 server が処理します。admin listener、HTTP redirect listener、HTTP/3 helper は分離した control / edge helper のままです
 - `server.read_header_timeout_sec` は request line と header のみ
 - `server.read_timeout_sec` は request line + header + body 全体の inbound read budget
+- `server.write_timeout_sec` は response write の上限です。slow client は data-plane goroutine を保持し続けず close します
+- `server.idle_timeout_sec` は keep-alive の request 間 idle 時間の上限です
 - `server.graceful_shutdown_timeout_sec` は deploy / reload 時に live connection を drain する上限時間です。超過後は force close します
-- body 専用 timeout や minimum-body-rate 制御はこの slice にはありません
+- TLS public listener はこの native server path では HTTP/1.1 を advertise します。HTTP/3 は有効時も専用 HTTP/3 listener で処理します
 
 ### Overload Backpressure
 
@@ -253,6 +256,7 @@ routing model:
 
 - `tukuyomi_proxy` は built-in engine で、WAF/routing selection 後に Tukuyomi の response bridge を使います。同じ HTTP parser、upstream transport、health、retry、TLS、HTTP/2、cache、route response headers、1xx informational responses、trailers、streaming flush behavior、native Upgrade/WebSocket tunnel、response-sanitize path を維持します。
 - legacy `net_http` bridge は削除済みです。`proxy.engine.mode` に `tukuyomi_proxy` 以外を指定すると config validation で拒否します。
+- HTTP/1.1 と明示的な upstream HTTP/2 mode は Tukuyomi native upstream transport を使います。HTTPS `force_attempt` は ALPN で `h2` が選ばれない場合だけ native HTTP/1.1 へ fallback します。
 - Upgrade/WebSocket handshake request は `tukuyomi_proxy` 内で処理します。`101 Switching Protocols` 後の WebSocket frame payload は tunnel data であり、HTTP WAF inspection の入力ではありません。
 - runtime visibility は `/tukuyomi-api/status` の `proxy_engine_mode` と `Settings -> Runtime Inventory` で確認できます。
 

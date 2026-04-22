@@ -241,8 +241,8 @@ Routing model:
 
 ### Proxy Engine
 
-`conf/config.json` controls the process-wide proxy bridge under `proxy.engine.mode`.
-Changing it requires a process restart.
+`conf/config.json` exposes the process-wide proxy engine under `proxy.engine.mode`.
+Only Tukuyomi's native proxy engine is supported. Changing this file requires a process restart.
 
 ```json
 {
@@ -254,8 +254,8 @@ Changing it requires a process restart.
 }
 ```
 
-- `tukuyomi_proxy` is the default and uses Tukuyomi's response bridge after WAF/routing selection while preserving the same HTTP parser, upstream transport, health, retry, TLS, HTTP/2, cache, route response headers, 1xx informational responses, trailers, streaming flush behavior, native Upgrade/WebSocket tunnel, and response-sanitize path.
-- `net_http` remains available as an explicit compatibility option using Go's standard reverse-proxy bridge.
+- `tukuyomi_proxy` is the built-in engine and uses Tukuyomi's response bridge after WAF/routing selection while preserving the same HTTP parser, upstream transport, health, retry, TLS, HTTP/2, cache, route response headers, 1xx informational responses, trailers, streaming flush behavior, native Upgrade/WebSocket tunnel, and response-sanitize path.
+- The legacy `net_http` bridge has been removed; setting `proxy.engine.mode` to any value other than `tukuyomi_proxy` is rejected during config validation.
 - Upgrade/WebSocket handshake requests stay inside `tukuyomi_proxy`; WebSocket frame payloads after `101 Switching Protocols` are tunnel data and are not HTTP WAF inspection input.
 - Runtime visibility is exposed through `/tukuyomi-api/status` as `proxy_engine_mode` and through `Settings -> Runtime Inventory`.
 

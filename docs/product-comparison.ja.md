@@ -36,4 +36,4 @@ WAF tuning、PHP-FPM、scheduled tasks は `tukuyomi` に統合済みです。
 
 - 現行の WAF/proxy ドキュメント、binary、service example、source repository 参照は `tukuyomi` を使います。
 - `tukuyomi-proxy` は過去 release の archive または migration note の文脈に限定します。
-- runtime engine 値 `tukuyomi_proxy` は互換設定値であり、製品名ではありません。
+- runtime engine 値 `tukuyomi_proxy` は config 値であり、製品名ではありません。

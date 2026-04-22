@@ -3,6 +3,7 @@ package handler
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -25,7 +26,7 @@ import (
 	"tukuyomi/internal/config"
 )
 
-func TestServeProxyStandardEnginePreservesHEAD(t *testing.T) {
+func TestServeProxyTukuyomiEnginePreservesHEAD(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodHead {
 			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
@@ -67,7 +68,7 @@ func TestServeProxyStandardEnginePreservesHEAD(t *testing.T) {
 	}
 }
 
-func TestServeProxyStandardEnginePreservesTrailers(t *testing.T) {
+func TestServeProxyTukuyomiEnginePreservesTrailers(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Trailer", "X-Upstream-Trailer")
 		w.Header().Set("Content-Type", "text/plain")
@@ -98,7 +99,7 @@ func TestServeProxyStandardEnginePreservesTrailers(t *testing.T) {
 	}
 }
 
-func TestServeProxyStandardEngineStreamsBeforeUpstreamCompletes(t *testing.T) {
+func TestServeProxyTukuyomiEngineStreamsBeforeUpstreamCompletes(t *testing.T) {
 	allowSecond := make(chan struct{})
 	var releaseSecondOnce sync.Once
 	releaseSecond := func() {
@@ -171,7 +172,7 @@ func TestServeProxyStandardEngineStreamsBeforeUpstreamCompletes(t *testing.T) {
 	}
 }
 
-func TestServeProxyStandardEngineSupportsTLSUpstream(t *testing.T) {
+func TestServeProxyTukuyomiEngineSupportsTLSUpstream(t *testing.T) {
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Upstream-TLS", "ok")
 		_, _ = w.Write([]byte("secure upstream"))
@@ -199,7 +200,7 @@ func TestServeProxyStandardEngineSupportsTLSUpstream(t *testing.T) {
 	}
 }
 
-func TestServeProxyStandardEngineForwardsLargeBodies(t *testing.T) {
+func TestServeProxyTukuyomiEngineForwardsLargeBodies(t *testing.T) {
 	const bodySize = 2 * 1024 * 1024
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n, err := io.Copy(io.Discard, r.Body)
@@ -233,7 +234,7 @@ func TestServeProxyStandardEngineForwardsLargeBodies(t *testing.T) {
 	}
 }
 
-func TestServeProxyStandardEnginePropagatesClientAbort(t *testing.T) {
+func TestServeProxyTukuyomiEnginePropagatesClientAbort(t *testing.T) {
 	started := make(chan struct{})
 	canceled := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -282,7 +283,7 @@ func TestServeProxyStandardEnginePropagatesClientAbort(t *testing.T) {
 	}
 }
 
-func TestServeProxyStandardEngineReturnsErrorForUnavailableUpstream(t *testing.T) {
+func TestServeProxyTukuyomiEngineReturnsErrorForUnavailableUpstream(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen failed: %v", err)
@@ -382,6 +383,46 @@ func TestServeProxyTukuyomiEngineClearsInboundCloseForUpstream(t *testing.T) {
 	}
 	if connection := <-seenConnection; connection != "" {
 		t.Fatalf("tukuyomi_proxy engine forwarded Connection header %q", connection)
+	}
+}
+
+func TestTukuyomiProxyXForwardedHeaders(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example.test/app", nil)
+	req.Host = "proxy.example.test"
+	req.RemoteAddr = "192.0.2.44:54321"
+	req.TLS = &tls.ConnectionState{}
+	header := http.Header{
+		"X-Forwarded-For": []string{"198.51.100.10", "203.0.113.20"},
+	}
+
+	setTukuyomiProxyXForwarded(header, req)
+
+	if got, want := header.Get("X-Forwarded-For"), "198.51.100.10, 203.0.113.20, 192.0.2.44"; got != want {
+		t.Fatalf("X-Forwarded-For=%q want=%q", got, want)
+	}
+	if got := header.Get("X-Forwarded-Host"); got != "proxy.example.test" {
+		t.Fatalf("X-Forwarded-Host=%q want proxy.example.test", got)
+	}
+	if got := header.Get("X-Forwarded-Proto"); got != "https" {
+		t.Fatalf("X-Forwarded-Proto=%q want https", got)
+	}
+}
+
+func TestTukuyomiProxyXForwardedClearsInvalidRemoteAddr(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://proxy.example.test/app", nil)
+	req.Host = "proxy.example.test"
+	req.RemoteAddr = "not-a-host-port"
+	header := http.Header{
+		"X-Forwarded-For": []string{"198.51.100.10"},
+	}
+
+	setTukuyomiProxyXForwarded(header, req)
+
+	if got := header.Get("X-Forwarded-For"); got != "" {
+		t.Fatalf("X-Forwarded-For=%q want empty for invalid RemoteAddr", got)
+	}
+	if got := header.Get("X-Forwarded-Proto"); got != "http" {
+		t.Fatalf("X-Forwarded-Proto=%q want http", got)
 	}
 }
 
@@ -661,7 +702,7 @@ func TestServeProxyTukuyomiEnginePreservesResponseCache(t *testing.T) {
 }
 
 func TestProxyEngineTukuyomiDoesNotRequireStandardFallback(t *testing.T) {
-	engine, err := newProxyEngine(nil, testRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	engine, err := newProxyEngine(testRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("unused")
 	}), config.ProxyEngineModeTukuyomiProxy, 0)
 	if err != nil {
@@ -673,7 +714,7 @@ func TestProxyEngineTukuyomiDoesNotRequireStandardFallback(t *testing.T) {
 }
 
 func TestProxyEngineDefaultModeIsTukuyomiProxy(t *testing.T) {
-	engine, err := newProxyEngine(nil, testRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	engine, err := newProxyEngine(testRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("unused")
 	}), "", 0)
 	if err != nil {
@@ -839,6 +880,32 @@ func TestProxyEngineRejectsInvalidRuntimeMode(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "proxy.engine.mode") {
 		t.Fatalf("error=%q should mention proxy.engine.mode", err.Error())
+	}
+}
+
+func TestProxyEngineRejectsRemovedNetHTTPMode(t *testing.T) {
+	setProxyEngineModeForTest(t, "net_http")
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("unused"))
+	}))
+	defer upstream.Close()
+
+	proxyPath := filepath.Join(t.TempDir(), "proxy.json")
+	raw := fmt.Sprintf(`{
+  "upstreams": [
+    { "name": "primary", "url": %q, "weight": 1, "enabled": true }
+  ]
+}`, upstream.URL)
+	if err := os.WriteFile(proxyPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write proxy config: %v", err)
+	}
+	err := InitProxyRuntime(proxyPath, 2)
+	if err == nil {
+		t.Fatal("InitProxyRuntime should reject removed net_http proxy engine mode")
+	}
+	if !strings.Contains(err.Error(), "proxy.engine.mode") || !strings.Contains(err.Error(), config.ProxyEngineModeTukuyomiProxy) {
+		t.Fatalf("error=%q should require %s", err.Error(), config.ProxyEngineModeTukuyomiProxy)
 	}
 }
 

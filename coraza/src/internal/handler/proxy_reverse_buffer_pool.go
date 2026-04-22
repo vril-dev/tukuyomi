@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"net/http/httputil"
 	"sync"
 )
 
@@ -13,7 +12,7 @@ var (
 			return make([]byte, proxyReverseCopyBufferSize)
 		},
 	}
-	proxyReverseCopyBufferPool httputil.BufferPool = reverseProxyCopyBufferPool{}
+	proxyReverseCopyBufferPool = reverseProxyCopyBufferPool{}
 )
 
 type reverseProxyCopyBufferPool struct{}

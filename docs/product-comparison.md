@@ -37,4 +37,4 @@ Legend:
 
 - Use `tukuyomi` for current WAF/proxy documentation, binaries, service examples, and source repository references.
 - Use `tukuyomi-proxy` only when referring to archived historical releases or migration notes.
-- The runtime engine value `tukuyomi_proxy` is a compatibility setting and is not a product name.
+- The runtime engine value `tukuyomi_proxy` is a config value and is not a product name.

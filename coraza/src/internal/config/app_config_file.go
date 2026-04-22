@@ -10,7 +10,6 @@ import (
 )
 
 const (
-	ProxyEngineModeNetHTTP       = "net_http"
 	ProxyEngineModeTukuyomiProxy = "tukuyomi_proxy"
 	DefaultProxyEngineMode       = ProxyEngineModeTukuyomiProxy
 )
@@ -565,9 +564,9 @@ func validateAppConfigFile(cfg appConfigFile) error {
 		return fmt.Errorf("proxy.rollback_history_size must be between 1 and 64")
 	}
 	switch cfg.Proxy.Engine.Mode {
-	case ProxyEngineModeNetHTTP, ProxyEngineModeTukuyomiProxy:
+	case ProxyEngineModeTukuyomiProxy:
 	default:
-		return fmt.Errorf("proxy.engine.mode must be one of: %s, %s", ProxyEngineModeNetHTTP, ProxyEngineModeTukuyomiProxy)
+		return fmt.Errorf("proxy.engine.mode must be %s", ProxyEngineModeTukuyomiProxy)
 	}
 	switch cfg.SecurityAudit.CaptureMode {
 	case "", "off", "enforced_only", "security_events", "all_security_findings":

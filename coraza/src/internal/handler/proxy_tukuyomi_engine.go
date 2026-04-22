@@ -8,9 +8,9 @@ import (
 	"io"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"net/http/httptrace"
-	"net/http/httputil"
 	"net/textproto"
 	"strings"
 	"sync"
@@ -29,11 +29,9 @@ type tukuyomiProxyEngine struct {
 	flushIntervalNS atomic.Int64
 }
 
-func newProxyEngine(standard *httputil.ReverseProxy, transport http.RoundTripper, mode string, flushInterval time.Duration) (http.Handler, error) {
+func newProxyEngine(transport http.RoundTripper, mode string, flushInterval time.Duration) (http.Handler, error) {
 	mode = normalizeProxyEngineMode(mode)
 	switch mode {
-	case config.ProxyEngineModeNetHTTP:
-		return standard, nil
 	case config.ProxyEngineModeTukuyomiProxy:
 		if transport == nil {
 			return nil, fmt.Errorf("proxy.engine.mode=%q requires initialized upstream transport", config.ProxyEngineModeTukuyomiProxy)
@@ -42,7 +40,7 @@ func newProxyEngine(standard *httputil.ReverseProxy, transport http.RoundTripper
 		engine.SetFlushInterval(flushInterval)
 		return engine, nil
 	default:
-		return nil, fmt.Errorf("proxy.engine.mode must be %q or %q", config.ProxyEngineModeNetHTTP, config.ProxyEngineModeTukuyomiProxy)
+		return nil, fmt.Errorf("proxy.engine.mode must be %q", config.ProxyEngineModeTukuyomiProxy)
 	}
 }
 
@@ -139,9 +137,7 @@ func prepareTukuyomiProxyRequest(r *http.Request) (*http.Request, string, error)
 	if outReq.Body == nil {
 		outReq.Body = http.NoBody
 	}
-	pr := &httputil.ProxyRequest{In: r, Out: outReq}
-	rewriteStandardProxyRequest(pr)
-	outReq = pr.Out
+	outReq = rewriteTukuyomiProxyRequest(r, outReq)
 	removeProxyHopByHopHeaders(outReq.Header)
 	if proxyHeaderValuesContainToken(r.Header.Values("Te"), "trailers") {
 		outReq.Header.Set("Te", "trailers")
@@ -154,6 +150,27 @@ func prepareTukuyomiProxyRequest(r *http.Request) (*http.Request, string, error)
 		outReq.Header.Set("User-Agent", "")
 	}
 	return outReq, reqUpType, nil
+}
+
+func setTukuyomiProxyXForwarded(header http.Header, in *http.Request) {
+	if header == nil || in == nil {
+		return
+	}
+	clientIP, _, err := net.SplitHostPort(in.RemoteAddr)
+	if err == nil {
+		if prior := header["X-Forwarded-For"]; len(prior) > 0 {
+			clientIP = strings.Join(prior, ", ") + ", " + clientIP
+		}
+		header.Set("X-Forwarded-For", clientIP)
+	} else {
+		header.Del("X-Forwarded-For")
+	}
+	header.Set("X-Forwarded-Host", in.Host)
+	if in.TLS == nil {
+		header.Set("X-Forwarded-Proto", "http")
+	} else {
+		header.Set("X-Forwarded-Proto", "https")
+	}
 }
 
 func closeProxyResponseBody(res *http.Response) {

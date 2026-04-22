@@ -136,10 +136,10 @@ case "${BENCH_PROXY_MODE}" in
 esac
 
 case "${BENCH_PROXY_ENGINE}" in
-  net_http|tukuyomi_proxy)
+  tukuyomi_proxy)
     ;;
   *)
-    echo "[proxy-bench][ERROR] BENCH_PROXY_ENGINE must be net_http or tukuyomi_proxy" >&2
+    echo "[proxy-bench][ERROR] BENCH_PROXY_ENGINE must be tukuyomi_proxy" >&2
     exit 1
     ;;
 esac

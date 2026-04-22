@@ -238,8 +238,8 @@ routing model:
 
 ### Proxy Engine
 
-`conf/config.json` の `proxy.engine.mode` で process-wide proxy bridge を選択します。
-変更には process restart が必要です。
+`conf/config.json` の `proxy.engine.mode` で process-wide proxy engine を表します。
+対応する engine は Tukuyomi native proxy のみです。この file の変更には process restart が必要です。
 
 ```json
 {
@@ -251,8 +251,8 @@ routing model:
 }
 ```
 
-- `tukuyomi_proxy` は既定で、WAF/routing selection 後に Tukuyomi の response bridge を使います。同じ HTTP parser、upstream transport、health、retry、TLS、HTTP/2、cache、route response headers、1xx informational responses、trailers、streaming flush behavior、native Upgrade/WebSocket tunnel、response-sanitize path を維持します。
-- `net_http` は Go 標準の reverse-proxy bridge を使う明示的な互換 option として残ります。
+- `tukuyomi_proxy` は built-in engine で、WAF/routing selection 後に Tukuyomi の response bridge を使います。同じ HTTP parser、upstream transport、health、retry、TLS、HTTP/2、cache、route response headers、1xx informational responses、trailers、streaming flush behavior、native Upgrade/WebSocket tunnel、response-sanitize path を維持します。
+- legacy `net_http` bridge は削除済みです。`proxy.engine.mode` に `tukuyomi_proxy` 以外を指定すると config validation で拒否します。
 - Upgrade/WebSocket handshake request は `tukuyomi_proxy` 内で処理します。`101 Switching Protocols` 後の WebSocket frame payload は tunnel data であり、HTTP WAF inspection の入力ではありません。
 - runtime visibility は `/tukuyomi-api/status` の `proxy_engine_mode` と `Settings -> Runtime Inventory` で確認できます。
 

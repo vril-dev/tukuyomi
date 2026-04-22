@@ -56,7 +56,7 @@ func normalizePrimaryWAFMatch(md corazaTypes.MatchData) (wafPrimaryMatch, bool) 
 		variable += ":" + key
 	}
 
-	value := clampText(strings.TrimSpace(md.Value()), fpTunerMaxMatchedValueBytes)
+	value := clampText(strings.TrimSpace(md.Value()), maxDBMatchedValueBytes)
 	if variable == "" && value == "" {
 		return wafPrimaryMatch{}, false
 	}

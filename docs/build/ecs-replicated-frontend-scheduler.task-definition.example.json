@@ -1,0 +1,95 @@
+{
+  "family": "tukuyomi-scheduler-singleton",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/<ECS_EXECUTION_ROLE>",
+  "taskRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/<ECS_TASK_ROLE>",
+  "containerDefinitions": [
+    {
+      "name": "scheduled-task-runner",
+      "image": "<IMAGE_URI>",
+      "essential": true,
+      "environment": [
+        {
+          "name": "WAF_CONFIG_FILE",
+          "value": "/app/conf/config.json"
+        },
+        {
+          "name": "PROXY_BIN",
+          "value": "/app/tukuyomi"
+        }
+      ],
+      "command": [
+        "/bin/sh",
+        "-lc",
+        "set -eu; echo \"[scheduled-task-runner] starting singleton loop\"; while :; do if \"${PROXY_BIN:-/app/tukuyomi}\" run-scheduled-tasks; then :; else code=\"$?\"; echo \"[scheduled-task-runner][fatal] run-scheduled-tasks failed; exiting for restart\" >&2; exit \"$code\"; fi; now=\"$(date +%s)\"; sleep_for=$((60 - (now % 60))); sleep \"$sleep_for\"; done"
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "proxy-conf",
+          "containerPath": "/app/conf",
+          "readOnly": false
+        },
+        {
+          "sourceVolume": "proxy-scheduled-tasks",
+          "containerPath": "/app/data/scheduled-tasks",
+          "readOnly": false
+        },
+        {
+          "sourceVolume": "proxy-logs",
+          "containerPath": "/app/logs",
+          "readOnly": false
+        },
+        {
+          "sourceVolume": "proxy-php-fpm",
+          "containerPath": "/app/data/php-fpm",
+          "readOnly": false
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/tukuyomi",
+          "awslogs-region": "<AWS_REGION>",
+          "awslogs-stream-prefix": "scheduled-task-runner"
+        }
+      }
+    }
+  ],
+  "volumes": [
+    {
+      "name": "proxy-conf",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-0123456789abcdef0",
+        "rootDirectory": "/tukuyomi/conf",
+        "transitEncryption": "ENABLED"
+      }
+    },
+    {
+      "name": "proxy-scheduled-tasks",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-0123456789abcdef0",
+        "rootDirectory": "/tukuyomi/data/scheduled-tasks",
+        "transitEncryption": "ENABLED"
+      }
+    },
+    {
+      "name": "proxy-logs",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-0123456789abcdef0",
+        "rootDirectory": "/tukuyomi/logs",
+        "transitEncryption": "ENABLED"
+      }
+    },
+    {
+      "name": "proxy-php-fpm",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-0123456789abcdef0",
+        "rootDirectory": "/tukuyomi/data/php-fpm",
+        "transitEncryption": "ENABLED"
+      }
+    }
+  ]
+}

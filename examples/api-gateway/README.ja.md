@@ -6,8 +6,6 @@
 
 ## Start
 
-Direct standalone path:
-
 ```bash
 cd examples/api-gateway
 ./setup.sh
@@ -16,18 +14,6 @@ docker compose up -d --build
 
 - API base URL: `http://localhost:${CORAZA_PORT:-19093}/v1`
 - Coraza API: `http://localhost:${CORAZA_PORT:-19093}/tukuyomi-api/status`
-
-Thin front proxy path:
-
-```bash
-cd examples/api-gateway
-./setup.sh
-WAF_TRUSTED_PROXY_CIDRS="${FRONT_PROXY_FIXTURE_IP:-172.31.83.10}/32" \
-WAF_FORWARD_INTERNAL_RESPONSE_HEADERS=true \
-docker compose --profile front-proxy up -d --build
-```
-
-- Front URL: `http://localhost:${NGINX_PORT:-18083}/v1`
 
 ## Smoke tests
 
@@ -42,21 +28,9 @@ Protected host smoke:
 PROTECTED_HOST=protected.example.test ./smoke.sh
 ```
 
-thin front proxy 経由で確認する場合:
+これは `Host: protected.example.test` を付けて traffic を送り、protected-host route が match することを確認した上で、簡単な XSS probe が `403` で block されることを検証します。
 
-```bash
-PROTECTED_HOST=protected.example.test EXAMPLE_TOPOLOGY=front ./smoke.sh
-```
-
-これは `Host: protected.example.test` を付けて traffic を送り、origin 側でその host が見えていることを確認した上で、簡単な XSS probe が `403` で block されることを検証します。
-
-optional front proxy 経由で Cloudflare-style の country header flow を見たい場合:
-
-```bash
-curl -i -H 'Host: protected.example.test' -H 'CF-IPCountry: JP' "http://localhost:18083/v1/health"
-```
-
-clone 済みの自分のサイトで試したい場合は、smoke script はそのまま残し、tukuyomi の背後にある example app を clone したアプリへ差し替えてください。同じ `PROTECTED_HOST=... ./smoke.sh` の flow を使えます。
+clone 済みの自分のサイトで試したい場合は、smoke script はそのまま残し、`data/conf/proxy.json` の背後にある example upstream を差し替えてください。`PROTECTED_HOST` を変える時は、protected-host route が引き続き match するように `data/conf/proxy.json` の `routes[].match.hosts` も同じ hostname に更新してください。
 
 Rate-limit check（繰り返すと `429` を期待）:
 

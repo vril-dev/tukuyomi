@@ -18,17 +18,15 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"tukuyomi/internal/config"
 )
 
 var (
-	logDirCoraza          = "logs/coraza"
-	logDirNginx           = "logs/nginx"
-	logDirOpenrestyLegacy = "logs/openresty"
+	logDirCoraza = "logs/coraza"
 
 	logFiles = map[string]string{
-		"waf":    filepath.Join(logDirCoraza, "waf-events.ndjson"),
-		"accerr": filepath.Join(logDirNginx, "access-error.ndjson"),
-		"intr":   filepath.Join(logDirNginx, "interesting.ndjson"),
+		"waf": filepath.Join(logDirCoraza, "waf-events.ndjson"),
 	}
 
 	readChunkSize   = int64(64 * 1024)
@@ -105,12 +103,52 @@ func LogsRead(c *gin.Context) {
 
 	tail := clampInt(mustAtoiDefault(c.Query("tail"), 30), 1, maxLinesPerRead)
 	dir := c.DefaultQuery("dir", "")
+	reqIDFilter := strings.TrimSpace(c.Query("req_id"))
 	var cursor *int64
 	if v := c.Query("cursor"); v != "" {
 		off := mustAtoi64Default(v, 0)
 		cursor = &off
 	}
 	countryFilter := normalizeCountryFilter(c.Query("country"))
+
+	if reqIDFilter != "" {
+		var (
+			lines []logLine
+			err   error
+		)
+		if src == "waf" {
+			if store := getLogsStatsStore(); store != nil {
+				lines, err = store.ReadWAFRequestLogs(path, reqIDFilter, countryFilter)
+			} else {
+				lines, err = readByRequestID(path, reqIDFilter, countryFilter)
+			}
+		} else {
+			lines, err = readByRequestID(path, reqIDFilter, countryFilter)
+		}
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				c.JSON(http.StatusOK, readResp{Lines: nil, NextCursor: nil, HasMore: false})
+				return
+			}
+
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		normalizeCountryInLines(lines)
+		pageStart := int64(0)
+		pageEnd := int64(len(lines))
+		c.JSON(http.StatusOK, readResp{
+			Lines:      lines,
+			NextCursor: &pageEnd,
+			PageStart:  &pageStart,
+			PageEnd:    &pageEnd,
+			HasMore:    false,
+			HasPrev:    false,
+			HasNext:    false,
+		})
+		return
+	}
 
 	var (
 		lines            []logLine
@@ -470,15 +508,17 @@ func buildHourlySeries(start, end time.Time, counts map[int64]int) []statsSeries
 }
 
 func resolveLogPath(src, current string) string {
-	if src == "waf" || current == "" {
+	if src == "waf" {
+		if p := strings.TrimSpace(config.LogFile); p != "" {
+			return p
+		}
+		return current
+	}
+	if current == "" {
 		return current
 	}
 	if _, err := os.Stat(current); err == nil {
 		return current
-	}
-	legacy := strings.Replace(current, logDirNginx+"/", logDirOpenrestyLegacy+"/", 1)
-	if _, err := os.Stat(legacy); err == nil {
-		return legacy
 	}
 	return current
 }
@@ -653,6 +693,51 @@ func readByLine(path string, tail int, cursor *int64, dir string) ([]logLine, *i
 	hasPrev := start > 0
 	hasNext := end < totalLines
 	return out, &nextCur, hasPrev, hasNext, nil
+}
+
+func readByRequestID(path string, reqIDFilter string, countryFilter string) ([]logLine, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	br := bufio.NewReaderSize(f, 64*1024)
+	out := make([]logLine, 0, 8)
+	for {
+		b, err := br.ReadBytes('\n')
+		if len(b) > 0 {
+			var m map[string]any
+			if json.Unmarshal(trimLastNewline(b), &m) == nil {
+				if strings.TrimSpace(anyToString(m["req_id"])) == reqIDFilter && countryMatchesFilter(m["country"], countryFilter) {
+					out = append(out, m)
+				}
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, err
+		}
+	}
+
+	sort.SliceStable(out, func(i, j int) bool {
+		ti, okI := parseLogTS(out[i]["ts"])
+		tj, okJ := parseLogTS(out[j]["ts"])
+		switch {
+		case okI && okJ:
+			return ti.Before(tj)
+		case okI:
+			return true
+		case okJ:
+			return false
+		default:
+			return i < j
+		}
+	})
+
+	return out, nil
 }
 
 func maxInt(a, b int) int {

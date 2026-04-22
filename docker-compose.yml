@@ -22,101 +22,65 @@ services:
   coraza:
     user: "${PUID}:${GUID}"
     build:
-      context: .
-      dockerfile: coraza/Dockerfile
-      args:
-        VITE_CORAZA_API_BASE: ${VITE_CORAZA_API_BASE:-/tukuyomi-api}
-        VITE_APP_BASE_PATH: ${VITE_APP_BASE_PATH:-/tukuyomi-admin}
+      context: ./coraza
+      dockerfile: Dockerfile
     environment:
-      - WAF_APP_URL=${WAF_APP_URL}
-      - WAF_LOG_FILE=${WAF_LOG_FILE}
-      - WAF_LOG_OUTPUT_FILE=${WAF_LOG_OUTPUT_FILE:-conf/log-output.json}
-      - WAF_STRICT_OVERRIDE=${WAF_STRICT_OVERRIDE}
-      - WAF_API_BASEPATH=${WAF_API_BASEPATH}
-      - WAF_UI_BASEPATH=${VITE_APP_BASE_PATH:-/tukuyomi-admin}
-      - WAF_ADMIN_EXTERNAL_MODE=${WAF_ADMIN_EXTERNAL_MODE:-api_only_external}
-      - WAF_ADMIN_TRUSTED_CIDRS=${WAF_ADMIN_TRUSTED_CIDRS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
-      - WAF_TRUSTED_PROXY_CIDRS=${WAF_TRUSTED_PROXY_CIDRS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
-      - WAF_COUNTRY_HEADER_NAMES=${WAF_COUNTRY_HEADER_NAMES:-X-Country-Code,CF-IPCountry}
-      - WAF_EXPOSE_WAF_DEBUG_HEADERS=${WAF_EXPOSE_WAF_DEBUG_HEADERS:-${WAF_FORWARD_INTERNAL_RESPONSE_HEADERS:-false}}
-      - WAF_RESPONSE_CACHE_MODE=${WAF_RESPONSE_CACHE_MODE:-off}
-      - WAF_RESPONSE_CACHE_MAX_ENTRIES=${WAF_RESPONSE_CACHE_MAX_ENTRIES:-512}
-      - WAF_RESPONSE_CACHE_MAX_BODY_BYTES=${WAF_RESPONSE_CACHE_MAX_BODY_BYTES:-1048576}
-      - WAF_BYPASS_FILE=${WAF_BYPASS_FILE}
-      - WAF_BOT_DEFENSE_FILE=${WAF_BOT_DEFENSE_FILE}
-      - WAF_SEMANTIC_FILE=${WAF_SEMANTIC_FILE}
-      - WAF_COUNTRY_BLOCK_FILE=${WAF_COUNTRY_BLOCK_FILE}
-      - WAF_RATE_LIMIT_FILE=${WAF_RATE_LIMIT_FILE}
-      - WAF_IP_REPUTATION_FILE=${WAF_IP_REPUTATION_FILE}
-      - WAF_RULES_FILE=${WAF_RULES_FILE}
-      - WAF_API_KEY_PRIMARY=${WAF_API_KEY_PRIMARY}
-      - WAF_API_KEY_SECONDARY=${WAF_API_KEY_SECONDARY}
-      - WAF_ADMIN_SESSION_SECRET=${WAF_ADMIN_SESSION_SECRET:-}
-      - WAF_ADMIN_SESSION_TTL_SEC=${WAF_ADMIN_SESSION_TTL_SEC:-28800}
-      - WAF_API_AUTH_DISABLE=${WAF_API_AUTH_DISABLE}
-      - WAF_API_CORS_ALLOWED_ORIGINS=${WAF_API_CORS_ALLOWED_ORIGINS}
-      - WAF_CRS_ENABLE=${WAF_CRS_ENABLE}
-      - WAF_CRS_SETUP_FILE=${WAF_CRS_SETUP_FILE}
-      - WAF_CRS_RULES_DIR=${WAF_CRS_RULES_DIR}
-      - WAF_CRS_DISABLED_FILE=${WAF_CRS_DISABLED_FILE}
-      - WAF_FP_TUNER_ENDPOINT=${WAF_FP_TUNER_ENDPOINT:-}
-      - WAF_FP_TUNER_API_KEY=${WAF_FP_TUNER_API_KEY:-}
-      - WAF_FP_TUNER_MODEL=${WAF_FP_TUNER_MODEL:-}
-      - WAF_FP_TUNER_TIMEOUT_SEC=${WAF_FP_TUNER_TIMEOUT_SEC:-15}
-      - WAF_FP_TUNER_REQUIRE_APPROVAL=${WAF_FP_TUNER_REQUIRE_APPROVAL:-true}
-      - WAF_FP_TUNER_APPROVAL_TTL_SEC=${WAF_FP_TUNER_APPROVAL_TTL_SEC:-600}
-      - WAF_FP_TUNER_AUDIT_FILE=${WAF_FP_TUNER_AUDIT_FILE:-logs/coraza/fp-tuner-audit.ndjson}
-      - WAF_STORAGE_BACKEND=${WAF_STORAGE_BACKEND:-file}
-      - WAF_DB_DRIVER=${WAF_DB_DRIVER:-sqlite}
-      - WAF_DB_ENABLED=${WAF_DB_ENABLED:-false}
-      - WAF_DB_DSN=${WAF_DB_DSN:-}
-      - WAF_DB_PATH=${WAF_DB_PATH:-logs/coraza/tukuyomi.db}
-      - WAF_DB_RETENTION_DAYS=${WAF_DB_RETENTION_DAYS:-30}
-      - WAF_ALLOW_INSECURE_DEFAULTS=${WAF_ALLOW_INSECURE_DEFAULTS}
+      - WAF_CONFIG_FILE=${WAF_CONFIG_FILE:-conf/config.json}
+      - TUKUYOMI_PPROF_ADDR=${TUKUYOMI_PPROF_ADDR:-}
     volumes:
       - ./data/rules:/app/rules
       - ./data/conf:/app/conf
+      - ./data/geoip:/app/data/geoip
+      - ./data/scheduled-tasks:/app/data/scheduled-tasks
+      - ./data/php-fpm:/app/data/php-fpm
+      - ./data/vhosts:/app/data/vhosts
       - ./data/logs:/app/logs
+      - ./scripts:/app/scripts:ro
     ports:
-      - "${CORAZA_PORT:-9090}:9090"
+      - "${CORAZA_PORT:-9090}:${WAF_LISTEN_PORT:-9090}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -T 2 -O /dev/null http://127.0.0.1:9090/healthz"]
+      test: ["CMD-SHELL", "wget -q -T 2 -O /dev/null http://127.0.0.1:${WAF_HEALTHCHECK_PORT:-9090}/healthz"]
       interval: 5s
       timeout: 3s
       retries: 20
       start_period: 5s
     restart: unless-stopped
-  nginx:
-    cap_add: ["NET_BIND_SERVICE"]
+  scheduled-task-runner:
     user: "${PUID}:${GUID}"
+    profiles: ["scheduled-tasks"]
     build:
-      context: ./nginx
+      context: ./coraza
       dockerfile: Dockerfile
-      args:
-        NGX_CORAZA_UPSTREAM: ${NGX_CORAZA_UPSTREAM}
-        NGX_BACKEND_RESPONSE_TIMEOUT: ${NGX_BACKEND_RESPONSE_TIMEOUT}
-        NGX_CORAZA_ADMIN_URL: ${NGX_CORAZA_ADMIN_URL}
-        NGX_CORAZA_API_BASEPATH: ${NGX_CORAZA_API_BASEPATH}
-        PUID: ${PUID}
-        GUID: ${GUID}
-    ports:
-      - "${NGINX_PORT:-${OPENRESTY_PORT:-80}}:80"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    environment:
+      - WAF_CONFIG_FILE=${WAF_CONFIG_FILE:-conf/config.json}
     volumes:
-      - ./nginx/waf:/etc/nginx/waf:ro
-      - ./data/logs/nginx:/data/logs/nginx
-    depends_on:
-      coraza:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -T 2 -O /dev/null http://127.0.0.1/healthz"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 5s
+      - ./data/rules:/app/rules
+      - ./data/conf:/app/conf
+      - ./data/geoip:/app/data/geoip
+      - ./data/scheduled-tasks:/app/data/scheduled-tasks
+      - ./data/php-fpm:/app/data/php-fpm
+      - ./data/vhosts:/app/data/vhosts
+      - ./data/logs:/app/logs
+    command:
+      - /bin/sh
+      - -lc
+      - |
+        set -eu
+        echo "[scheduled-task-runner] starting one-shot loop"
+        while :; do
+          if /app/server run-scheduled-tasks; then
+            :
+          else
+            code="$$?"
+            echo "[scheduled-task-runner][fatal] run-scheduled-tasks failed; exiting for restart" >&2
+            exit "$$code"
+          fi
+          now="$$(date +%s)"
+          sleep_for=$$((60 - ($$now % 60)))
+          sleep "$$sleep_for"
+        done
     restart: unless-stopped
   gotestwaf:
     image: wallarm/gotestwaf:0.5.8@sha256:ff7184da90029a98c87bfdbadcee544c979b999593175d17b2d38f642ee29977
@@ -125,10 +89,8 @@ services:
     depends_on:
       coraza:
         condition: service_healthy
-      nginx:
-        condition: service_healthy
     command:
-      - --url=http://nginx:80
+      - --url=${GOTESTWAF_TARGET_URL:-http://coraza:${WAF_LISTEN_PORT:-9090}}
       - --wafName=tukuyomi
       - --reportFormat=json
       - --reportPath=/app/reports
@@ -137,21 +99,6 @@ services:
     volumes:
       - ./data/logs/gotestwaf:/app/reports
     restart: "no"
-  web:
-    profiles: ["dev-ui"]
-    image: node:22
-    working_dir: /app
-    command: sh -c "npm install && npm run dev"
-    volumes:
-      - ./web/tukuyomi-admin:/app
-      - web_node_modules:/app/node_modules
-    ports:
-      - "5173:5173"
-    environment:
-      - VITE_CORAZA_API_BASE=${VITE_CORAZA_API_BASE}
-      - VITE_APP_BASE_PATH=${VITE_APP_BASE_PATH}
-    restart: unless-stopped
 
 volumes:
-  web_node_modules:
   mysql_data:

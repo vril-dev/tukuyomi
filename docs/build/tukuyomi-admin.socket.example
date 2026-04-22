@@ -1,0 +1,11 @@
+[Unit]
+Description=tukuyomi admin TCP socket
+
+[Socket]
+ListenStream=127.0.0.1:9091
+FileDescriptorName=admin
+NoDelay=true
+Service=tukuyomi.service
+
+[Install]
+WantedBy=sockets.target

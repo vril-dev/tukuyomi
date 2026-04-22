@@ -1,0 +1,20 @@
+{
+  "serviceName": "tukuyomi-scheduler",
+  "cluster": "<ECS_CLUSTER_NAME>",
+  "taskDefinition": "tukuyomi-scheduler-singleton",
+  "desiredCount": 1,
+  "launchType": "FARGATE",
+  "deploymentConfiguration": {
+    "minimumHealthyPercent": 0,
+    "maximumPercent": 100
+  },
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": ["subnet-aaaaaaaa", "subnet-bbbbbbbb"],
+      "securityGroups": ["sg-0123456789abcdef0"],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "enableExecuteCommand": true,
+  "propagateTags": "SERVICE"
+}

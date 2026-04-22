@@ -22,7 +22,7 @@ func TestSyncBypassStorage_SeedsDBFromFileWhenMissingBlob(t *testing.T) {
 		t.Fatalf("write bypass file: %v", err)
 	}
 	config.BypassFile = bypassPath
-	if err := bypassconf.Init(bypassPath); err != nil {
+	if err := bypassconf.Init(bypassPath, ""); err != nil {
 		t.Fatalf("init bypass loader: %v", err)
 	}
 
@@ -65,7 +65,7 @@ func TestSyncBypassStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
 		t.Fatalf("write bypass file: %v", err)
 	}
 	config.BypassFile = bypassPath
-	if err := bypassconf.Init(bypassPath); err != nil {
+	if err := bypassconf.Init(bypassPath, ""); err != nil {
 		t.Fatalf("init bypass loader: %v", err)
 	}
 
@@ -98,7 +98,7 @@ func TestSyncBypassStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
 		t.Fatalf("file should be restored from db blob:\n got=%s\nwant=%s", string(gotFileRaw), dbRaw)
 	}
 
-	match := bypassconf.Match("/api/test")
+	match := bypassconf.Match("example.com", "/api/test", false)
 	if match.Action != bypassconf.ACTION_BYPASS {
 		t.Fatalf("bypass runtime not reloaded from db blob: action=%v", match.Action)
 	}

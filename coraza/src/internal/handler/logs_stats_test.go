@@ -167,6 +167,63 @@ func TestLogsStatsMissingLogReturnsEmptyPayload(t *testing.T) {
 	}
 }
 
+func TestLogsReadReqIDFilterWithoutDBStore(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	now := time.Now().UTC()
+	entries := []map[string]any{
+		{
+			"ts":      now.Add(-3 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "semantic_anomaly",
+			"req_id":  "req-shared",
+			"path":    "/checkout",
+			"country": "jp",
+			"status":  403,
+			"score":   75,
+		},
+		{
+			"ts":        now.Add(-2 * time.Minute).Format(time.RFC3339Nano),
+			"event":     "rate_limited",
+			"req_id":    "req-shared",
+			"path":      "/checkout",
+			"country":   "JP",
+			"status":    429,
+			"policy_id": "checkout",
+		},
+		{
+			"ts":      now.Add(-1 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "waf_block",
+			"req_id":  "req-other",
+			"path":    "/admin",
+			"country": "US",
+			"status":  403,
+		},
+	}
+
+	path := filepath.Join(t.TempDir(), "waf-events.ndjson")
+	writeNDJSONFile(t, path, entries)
+
+	restore := setWAFLogPathForTest(t, path)
+	defer restore()
+
+	read := callLogsRead(t, "/tukuyomi-api/logs/read?src=waf&req_id=req-shared")
+	if len(read.Lines) != 2 {
+		t.Fatalf("lines=%d want=2", len(read.Lines))
+	}
+	if got := anyToString(read.Lines[0]["event"]); got != "semantic_anomaly" {
+		t.Fatalf("first event=%q want=semantic_anomaly", got)
+	}
+	if got := anyToString(read.Lines[1]["event"]); got != "rate_limited" {
+		t.Fatalf("second event=%q want=rate_limited", got)
+	}
+	if got := anyToString(read.Lines[0]["country"]); got != "JP" {
+		t.Fatalf("country=%q want=JP", got)
+	}
+	if read.HasPrev || read.HasNext || read.HasMore {
+		t.Fatalf("unexpected pagination flags: %+v", read)
+	}
+}
+
 func setWAFLogPathForTest(t *testing.T, path string) func() {
 	t.Helper()
 

@@ -1,0 +1,41 @@
+{
+  "rules": [
+    {
+      "kind": "ALLOW",
+      "match": {
+        "type": "prefix",
+        "value": "/wp-content/uploads/"
+      },
+      "methods": ["GET", "HEAD"],
+      "ttl": 300,
+      "vary": ["Accept-Encoding"]
+    },
+    {
+      "kind": "DENY",
+      "match": {
+        "type": "prefix",
+        "value": "/wp-admin/"
+      },
+      "methods": ["GET", "HEAD"],
+      "ttl": 60
+    },
+    {
+      "kind": "DENY",
+      "match": {
+        "type": "exact",
+        "value": "/wp-login.php"
+      },
+      "methods": ["GET", "HEAD"],
+      "ttl": 60
+    },
+    {
+      "kind": "DENY",
+      "match": {
+        "type": "prefix",
+        "value": "/tukuyomi-api/"
+      },
+      "methods": ["GET", "HEAD"],
+      "ttl": 600
+    }
+  ]
+}

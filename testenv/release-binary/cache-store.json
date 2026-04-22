@@ -1,0 +1,5 @@
+{
+  "enabled": false,
+  "store_dir": "testenv/release-binary/runtime/cache",
+  "max_bytes": 1048576
+}

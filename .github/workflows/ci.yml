@@ -75,29 +75,15 @@ jobs:
         run: npm ci
       - name: Run UI tests
         run: npm test
+      - name: Run UI build
+        run: npm run build
 
   compose-validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate docker compose
-        run: docker compose config >/dev/null
-
-  example-smoke:
-    name: example-smoke (${{ matrix.example }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        example:
-          - api-gateway
-          - nextjs
-          - wordpress
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run protected-host example smoke
-        run: ./scripts/ci_example_smoke.sh ${{ matrix.example }}
+      - name: Validate compose and preset baseline
+        run: make compose-config compose-config-mysql preset-check-minimal
 
   waf-test:
     name: waf-test (${{ matrix.mode }})
@@ -108,11 +94,13 @@ jobs:
       matrix:
         include:
           - mode: file
-            waf_storage_backend: "file"
-            waf_db_enabled: "false"
+            storage_backend: "file"
+            db_driver: "sqlite"
+            expect_sqlite_artifact: "false"
           - mode: sqlite
-            waf_storage_backend: "db"
-            waf_db_enabled: "true"
+            storage_backend: "db"
+            db_driver: "sqlite"
+            expect_sqlite_artifact: "true"
     steps:
       - uses: actions/checkout@v4
 
@@ -122,17 +110,96 @@ jobs:
       - name: Install CRS
         run: ./scripts/install_crs.sh
 
+      - name: Configure app config for matrix
+        env:
+          STORAGE_BACKEND: ${{ matrix.storage_backend }}
+          DB_DRIVER: ${{ matrix.db_driver }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          jq --arg backend "${STORAGE_BACKEND}" --arg driver "${DB_DRIVER}" '
+            .server.listen_addr = ":9090" |
+            .storage.backend = $backend |
+            .storage.db_driver = $driver |
+            .storage.db_retention_days = 30
+          ' data/conf/config.json > "${tmp}"
+          mv "${tmp}" data/conf/config.json
+
+          # Keep the baseline upstream unreachable; route/admin smoke injects its
+          # own reachable upstream later, while GoTestWAF keeps historical scoring.
+          tmp_proxy="$(mktemp)"
+          jq '
+            .upstreams = [
+              {
+                "name": "ci-unreachable",
+                "url": "http://127.0.0.1:9081",
+                "weight": 1,
+                "enabled": true
+              }
+            ]
+          ' data/conf/proxy.json > "${tmp_proxy}"
+          mv "${tmp_proxy}" data/conf/proxy.json
+
+      - name: Coraza smoke check
+        env:
+          WAF_LISTEN_PORT: "9090"
+          WAF_API_KEY_PRIMARY: "dev-only-change-this-key-please"
+        run: |
+          set -euo pipefail
+          cleanup() {
+            if [[ -n "${UPSTREAM_PID:-}" ]] && kill -0 "${UPSTREAM_PID}" >/dev/null 2>&1; then
+              kill "${UPSTREAM_PID}" >/dev/null 2>&1 || true
+              wait "${UPSTREAM_PID}" >/dev/null 2>&1 || true
+            fi
+            PUID="$(id -u)" GUID="$(id -g)" CORAZA_PORT=19090 docker compose down --remove-orphans >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          python3 ./scripts/proxy_echo_server.py 18080 >/tmp/proxy_echo.log 2>&1 &
+          UPSTREAM_PID=$!
+
+          PUID="$(id -u)" \
+          GUID="$(id -g)" \
+          CORAZA_PORT=19090 \
+          docker compose up -d --build coraza
+
+          for i in $(seq 1 60); do
+            code="$(curl -sS -o /dev/null -w "%{http_code}" "http://localhost:19090/healthz" || true)"
+            if [[ "${code}" == "200" ]]; then
+              break
+            fi
+            sleep 1
+          done
+
+          code="$(curl -sS -o /dev/null -w "%{http_code}" "http://localhost:19090/healthz" || true)"
+          if [[ "${code}" != "200" ]]; then
+            echo "coraza health check failed: ${code}" >&2
+            docker compose ps coraza || true
+            docker compose logs --tail=120 coraza || true
+            exit 1
+          fi
+
+          attack_code="$(curl -sS -o /dev/null -w "%{http_code}" "http://localhost:19090/?q=<script>alert(1)</script>" || true)"
+          if [[ "${attack_code}" != "403" ]]; then
+            echo "expected 403 for basic XSS probe, got ${attack_code}" >&2
+            docker compose logs --tail=120 coraza || true
+            exit 1
+          fi
+
+          HOST_CORAZA_PORT=19090 \
+          PROXY_ECHO_PORT=18080 \
+          PROXY_ECHO_URL="http://host.docker.internal:18080" \
+          ./scripts/ci_proxy_admin_smoke.sh
+
       - name: Run GoTestWAF
         env:
           GOTESTWAF_AUTO_DOWN: "1"
           MIN_BLOCKED_RATIO: "70"
-          WAF_STORAGE_BACKEND: ${{ matrix.waf_storage_backend }}
-          WAF_DB_ENABLED: ${{ matrix.waf_db_enabled }}
-          WAF_DB_RETENTION_DAYS: "30"
+          WAF_LISTEN_PORT: "9090"
         run: ./scripts/run_gotestwaf.sh
 
       - name: Validate SQLite DB artifact
-        if: matrix.waf_db_enabled == 'true'
+        if: matrix.expect_sqlite_artifact == 'true'
         run: |
           if [[ ! -s data/logs/coraza/tukuyomi.db ]]; then
             echo "expected sqlite db file was not generated" >&2

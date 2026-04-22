@@ -1,268 +1,619 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import {
+  ActionResultNotice,
+  ActionButton,
+  Alert,
+  Badge,
+  EmptyState,
+  Field,
+  MonoTag,
+  NoticeBar,
+  PrimaryButton,
+  SectionCard,
+  StatBox,
+  inputClass,
+  textareaClass,
+} from "@/components/EditorChrome";
+import { useAdminRuntime } from "@/lib/adminRuntime";
 import { apiGetJson, apiPostJson, apiPutJson } from "@/lib/api";
+import { getErrorMessage } from "@/lib/errors";
+import {
+  SEMANTIC_MODE_OPTIONS,
+  createDefaultSemanticEditorState,
+  createDefaultSemanticScopeState,
+  createEmptySemanticHostScope,
+  parseSemanticEditorDocument,
+  serializeSemanticEditor,
+  type SemanticEditorState,
+  type SemanticScopeState,
+} from "@/lib/semanticEditor";
+import { useI18n } from "@/lib/i18n";
+import { parseSavedAt } from "@/lib/savedAt";
 
 type SemanticStats = {
-    inspected_requests?: number;
-    scored_requests?: number;
-    log_only_actions?: number;
-    challenge_actions?: number;
-    block_actions?: number;
+  inspected_requests?: number;
+  scored_requests?: number;
+  log_only_actions?: number;
+  challenge_actions?: number;
+  block_actions?: number;
 };
 
 type SemanticDTO = {
-    etag?: string;
-    raw?: string;
-    enabled?: boolean;
-    mode?: string;
-    exempt_path_prefixes?: string[];
-    log_threshold?: number;
-    challenge_threshold?: number;
-    block_threshold?: number;
-    max_inspect_body?: number;
-    stats?: SemanticStats;
+  etag?: string;
+  raw?: string;
+  stats?: SemanticStats;
+  saved_at?: string;
 };
 
+const exampleState: SemanticEditorState = {
+  ...createDefaultSemanticEditorState(),
+  enabled: true,
+  mode: "challenge",
+  providerEnabled: true,
+  providerName: "builtin_attack_family",
+  providerTimeoutMS: 25,
+  exemptPathPrefixes: ["/healthz", "/metrics"],
+  logThreshold: 4,
+  challengeThreshold: 7,
+  blockThreshold: 9,
+  maxInspectBody: 16 * 1024,
+  hosts: [
+    {
+      host: "admin.example.com",
+      ...createDefaultSemanticScopeState(),
+      enabled: true,
+      mode: "block",
+      providerEnabled: true,
+      challengeThreshold: 5,
+      blockThreshold: 7,
+    },
+  ],
+};
+
+const exampleRaw = serializeSemanticEditor(exampleState);
+
 export default function SemanticPanel() {
-    const [loading, setLoading] = useState(true);
-    const [saving, setSaving] = useState(false);
-    const [raw, setRaw] = useState("");
-    const [serverRaw, setServerRaw] = useState("");
-    const [etag, setEtag] = useState<string | null>(null);
-    const [valid, setValid] = useState<boolean | null>(null);
-    const [messages, setMessages] = useState<string[]>([]);
-    const [enabled, setEnabled] = useState<boolean>(false);
-    const [mode, setMode] = useState<string>("off");
-    const [stats, setStats] = useState<SemanticStats>({});
-    const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
-    const [error, setError] = useState<string | null>(null);
+  const { locale, tx } = useI18n();
+  const { readOnly } = useAdminRuntime();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [editorState, setEditorState] = useState<SemanticEditorState>(createDefaultSemanticEditorState);
+  const [editorBase, setEditorBase] = useState<Record<string, unknown>>({});
+  const [defaultBase, setDefaultBase] = useState<Record<string, unknown>>({});
+  const [hostBases, setHostBases] = useState<Record<string, unknown>[]>([]);
+  const [stats, setStats] = useState<SemanticStats>({});
+  const [raw, setRaw] = useState("");
+  const [serverRaw, setServerRaw] = useState("");
+  const [etag, setEtag] = useState<string | null>(null);
+  const [valid, setValid] = useState<boolean | null>(null);
+  const [messages, setMessages] = useState<string[]>([]);
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [rawError, setRawError] = useState<string | null>(null);
+  const [structuredError, setStructuredError] = useState<string | null>(null);
 
-    const dirty = useMemo(() => raw !== serverRaw, [raw, serverRaw]);
+  const anyEnabled = useMemo(
+    () => editorState.enabled || editorState.hosts.some((scope) => scope.enabled),
+    [editorState.enabled, editorState.hosts],
+  );
+  const dirty = useMemo(() => raw !== serverRaw || !!structuredError, [raw, serverRaw, structuredError]);
+  const lineCount = useMemo(() => (raw ? raw.split(/\n/).length : 0), [raw]);
 
-    const load = useCallback(async () => {
-        setLoading(true);
-        setError(null);
-        try {
-            const data = await apiGetJson<SemanticDTO>("/semantic-rules");
-            setRaw(data.raw ?? "");
-            setServerRaw(data.raw ?? "");
-            setEtag(data.etag ?? null);
-            setEnabled(!!data.enabled);
-            setMode(data.mode || "off");
-            setStats(data.stats || {});
-            setValid(null);
-            setMessages([]);
-        } catch (e: any) {
-            setError(e?.message || String(e));
-        } finally {
-            setLoading(false);
+  const applyStructuredState = useCallback(
+    (next: SemanticEditorState, nextHostBases = hostBases) => {
+      setEditorState(next);
+      setHostBases(nextHostBases);
+      try {
+        setRaw(serializeSemanticEditor(editorBase, next, defaultBase, nextHostBases));
+        setRawError(null);
+        setStructuredError(null);
+      } catch (e: unknown) {
+        setValid(null);
+        setMessages([]);
+        setStructuredError(getErrorMessage(e, tx("Structured editor has conflicting host scopes.")));
+      }
+    },
+    [defaultBase, editorBase, hostBases, tx],
+  );
+
+  const applyStructuredDocument = useCallback(
+    (
+      base: Record<string, unknown>,
+      next: SemanticEditorState,
+      nextDefaultBase: Record<string, unknown>,
+      nextHostBases: Record<string, unknown>[],
+    ) => {
+      setEditorBase(base);
+      setDefaultBase(nextDefaultBase);
+      setEditorState(next);
+      setHostBases(nextHostBases);
+      setRaw(serializeSemanticEditor(base, next, nextDefaultBase, nextHostBases));
+      setRawError(null);
+      setStructuredError(null);
+    },
+    [],
+  );
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiGetJson<SemanticDTO>("/semantic-rules");
+      const nextRaw = data.raw ?? "";
+      const parsed = parseSemanticEditorDocument(nextRaw);
+      setEditorBase(parsed.base);
+      setDefaultBase(parsed.defaultBase);
+      setHostBases(parsed.hostBases);
+      setEditorState(parsed.state);
+      setStats(data.stats ?? {});
+      setRaw(nextRaw);
+      setServerRaw(nextRaw);
+      setEtag(data.etag ?? null);
+      setValid(null);
+      setMessages([]);
+      setLastSavedAt(parseSavedAt(data.saved_at));
+      setRawError(null);
+      setStructuredError(null);
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, tx("Failed to load")));
+    } finally {
+      setLoading(false);
+    }
+  }, [tx]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const debounceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (debounceRef.current) {
+      window.clearTimeout(debounceRef.current);
+    }
+    if (loading || structuredError) {
+      return;
+    }
+
+    debounceRef.current = window.setTimeout(async () => {
+      try {
+        const js = await apiPostJson<{ ok: boolean; messages?: string[] }>("/semantic-rules:validate", { raw });
+        setValid(!!js.ok);
+        setMessages(Array.isArray(js.messages) ? js.messages : []);
+      } catch (e: unknown) {
+        setValid(false);
+        setMessages([getErrorMessage(e, tx("Validate failed"))]);
+      }
+    }, 300);
+
+    return () => {
+      if (debounceRef.current) {
+        window.clearTimeout(debounceRef.current);
+      }
+    };
+  }, [loading, raw, structuredError, tx]);
+
+  const doSave = useCallback(async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const js = await apiPutJson<{ ok: boolean; etag?: string; saved_at?: string }>(
+        "/semantic-rules",
+        { raw },
+        { headers: etag ? { "If-Match": etag } : {} },
+      );
+      if (!js.ok) {
+        throw new Error(tx("Failed to save"));
+      }
+      const parsed = parseSemanticEditorDocument(raw);
+      setEditorBase(parsed.base);
+      setDefaultBase(parsed.defaultBase);
+      setHostBases(parsed.hostBases);
+      setEditorState(parsed.state);
+      setServerRaw(raw);
+      setEtag(js.etag ?? null);
+      setRawError(null);
+      setStructuredError(null);
+      setLastSavedAt(parseSavedAt(js.saved_at));
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, tx("Save failed")));
+    } finally {
+      setSaving(false);
+    }
+  }, [etag, raw, tx]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const isSave = (e.key === "s" || e.key === "S") && (e.ctrlKey || e.metaKey);
+      if (!isSave) {
+        return;
+      }
+      e.preventDefault();
+      if (!saving && !readOnly && !rawError && !structuredError) {
+        void doSave();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [doSave, rawError, readOnly, saving, structuredError]);
+
+  const statusBadge = useMemo(() => {
+    if (loading) {
+      return <Badge color="gray">{tx("Loading")}</Badge>;
+    }
+    if (valid === null) {
+      return <Badge color="gray">{tx("Unvalidated")}</Badge>;
+    }
+    return valid ? <Badge color="green">{tx("Valid")}</Badge> : <Badge color="red">{tx("Invalid")}</Badge>;
+  }, [loading, tx, valid]);
+
+  const updateHost = useCallback(
+    (
+      index: number,
+      updater: (scope: SemanticEditorState["hosts"][number]) => SemanticEditorState["hosts"][number],
+      nextHostBases = hostBases,
+    ) => {
+      const nextHosts = editorState.hosts.map((scope, currentIndex) => (currentIndex === index ? updater(scope) : scope));
+      applyStructuredState(
+        {
+          ...editorState,
+          hosts: nextHosts,
+        },
+        nextHostBases,
+      );
+    },
+    [applyStructuredState, editorState, hostBases],
+  );
+
+  const handleRawChange = useCallback(
+    (nextRaw: string) => {
+      setRaw(nextRaw);
+      try {
+        const parsed = parseSemanticEditorDocument(nextRaw);
+        setEditorBase(parsed.base);
+        setDefaultBase(parsed.defaultBase);
+        setHostBases(parsed.hostBases);
+        setEditorState(parsed.state);
+        setRawError(null);
+        setStructuredError(null);
+      } catch (e: unknown) {
+        setRawError(getErrorMessage(e, tx("Invalid")));
+        setStructuredError(null);
+      }
+    },
+    [tx],
+  );
+
+  return (
+    <div className="w-full p-4 space-y-4">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">{tx("Semantic Security")}</h1>
+          <p className="text-sm text-neutral-500">
+            {tx("Manage default and per-host semantic anomaly scopes with structured forms while keeping advanced JSON fallback below.")}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          {statusBadge}
+          {anyEnabled ? <Badge color="green">{tx("Enabled")}</Badge> : <Badge color="gray">{tx("Disabled")}</Badge>}
+          <Badge color="gray">{tx("Default mode")}: {editorState.mode}</Badge>
+          <Badge color={rawError || structuredError ? "red" : "green"}>
+            {structuredError ? tx("Structured editor conflict") : rawError ? tx("Raw JSON out of sync") : tx("Structured editor synced")}
+          </Badge>
+          {dirty ? <Badge color="amber">{tx("Unsaved")}</Badge> : null}
+          {etag ? <MonoTag label="ETag" value={etag} /> : null}
+        </div>
+      </header>
+
+      {error ? <Alert kind="error" title={tx("Error")} message={error} onClose={() => setError(null)} closeLabel={tx("Close")} /> : null}
+      {rawError ? (
+        <NoticeBar tone="warn">
+          {tx("Advanced JSON is currently invalid. The structured editor is still showing the last valid semantic snapshot. Any structured edit will regenerate valid JSON from that snapshot.")}
+        </NoticeBar>
+      ) : null}
+      {structuredError ? <NoticeBar tone="warn">{structuredError}</NoticeBar> : null}
+
+      <SectionCard
+        title={tx("Workflow")}
+        subtitle={tx("Host scope precedence stays host:port, then host, then default. Save still uses the existing semantic validate and hot-reload API.")}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <ActionButton
+              onClick={() => {
+                const parsed = parseSemanticEditorDocument(exampleRaw);
+                applyStructuredDocument(parsed.base, parsed.state, parsed.defaultBase, parsed.hostBases);
+              }}
+              disabled={loading}
+            >
+              {tx("Insert example")}
+            </ActionButton>
+            <ActionButton onClick={() => void load()} disabled={loading}>
+              {tx("Refresh")}
+            </ActionButton>
+            <PrimaryButton onClick={() => void doSave()} disabled={readOnly || loading || saving || !dirty || !!rawError || !!structuredError}>
+              {saving ? tx("Saving...") : tx("Save & hot reload")}
+            </PrimaryButton>
+          </div>
         }
-    }, []);
+      >
+        <ActionResultNotice tone={valid === false ? "error" : "success"} messages={messages} />
+        <div className="grid gap-3 md:grid-cols-4">
+          <StatBox label={tx("Exempt paths")} value={String(editorState.exemptPathPrefixes.length)} />
+          <StatBox label={tx("Host scopes")} value={String(editorState.hosts.length)} />
+          <StatBox label={tx("Provider timeout")} value={`${editorState.providerTimeoutMS} ms`} />
+          <StatBox
+            label={tx("Last saved")}
+            value={lastSavedAt ? new Date(lastSavedAt).toLocaleString(locale === "ja" ? "ja-JP" : "en-US") : "-"}
+          />
+        </div>
+      </SectionCard>
 
-    useEffect(() => {
-        void load();
-    }, [load]);
+      <SectionCard title={tx("Default Scope")} subtitle={tx("These semantic anomaly settings apply when no more specific host scope matches the request host.")}>
+        <SemanticScopeEditor
+          tx={tx}
+          scope={editorState}
+          onChange={(nextScope) =>
+            applyStructuredState({
+              ...editorState,
+              ...nextScope,
+            })
+          }
+        />
+      </SectionCard>
 
-    const debounceRef = useRef<number | null>(null);
-    useEffect(() => {
-        if (debounceRef.current) {
-            window.clearTimeout(debounceRef.current);
-        }
-        if (loading) {
-            return;
-        }
-
-        debounceRef.current = window.setTimeout(async () => {
-            try {
-                const js = await apiPostJson<{ ok: boolean; messages?: string[]; enabled?: boolean; mode?: string }>(
-                    "/semantic-rules:validate",
-                    { raw }
-                );
-                setValid(!!js.ok);
-                setMessages(Array.isArray(js.messages) ? js.messages : []);
-                setEnabled(!!js.enabled);
-                setMode(js.mode || "off");
-            } catch (e: any) {
-                setValid(false);
-                setMessages([e?.message || "Validate failed"]);
+      <SectionCard
+        title={tx("Host Scopes")}
+        subtitle={tx("Use exact host or `host:port` patterns for overrides. Empty host cards are ignored until you fill the host field.")}
+        actions={
+          <ActionButton
+            onClick={() =>
+              applyStructuredState(
+                {
+                  ...editorState,
+                  hosts: [...editorState.hosts, createEmptySemanticHostScope(editorState.hosts.length + 1)],
+                },
+                [...hostBases, cloneJSONRecord(defaultBase)],
+              )
             }
-        }, 300);
-
-        return () => {
-            if (debounceRef.current) window.clearTimeout(debounceRef.current);
-        };
-    }, [raw, loading]);
-
-    const doSave = useCallback(async () => {
-        setSaving(true);
-        setError(null);
-        try {
-            const js = await apiPutJson<{ ok: boolean; etag?: string; enabled?: boolean; mode?: string }>(
-                "/semantic-rules",
-                { raw },
-                { headers: etag ? { "If-Match": etag } : {} }
-            );
-            if (!js.ok) {
-                throw new Error("Failed to save");
-            }
-            setEtag(js.etag ?? null);
-            setServerRaw(raw);
-            setEnabled(!!js.enabled);
-            setMode(js.mode || "off");
-            setLastSavedAt(Date.now());
-        } catch (e: any) {
-            setError(e?.message || "Save failed");
-        } finally {
-            setSaving(false);
+            disabled={readOnly}
+          >
+            {tx("Add host scope")}
+          </ActionButton>
         }
-    }, [raw, etag]);
-
-    useEffect(() => {
-        const onKey = (e: KeyboardEvent) => {
-            const isSave = (e.key === "s" || e.key === "S") && (e.ctrlKey || e.metaKey);
-            if (!isSave) return;
-            e.preventDefault();
-            if (!saving) {
-                void doSave();
-            }
-        };
-        window.addEventListener("keydown", onKey);
-        return () => window.removeEventListener("keydown", onKey);
-    }, [doSave, saving]);
-
-    const statusBadge = useMemo(() => {
-        if (loading) return <Badge color="gray">Loading</Badge>;
-        if (valid === null) return <Badge color="gray">Unvalidated</Badge>;
-        return valid ? <Badge color="green">Valid</Badge> : <Badge color="red">Invalid</Badge>;
-    }, [loading, valid]);
-
-    const lineCount = useMemo(() => (raw ? raw.split(/\n/).length : 0), [raw]);
-
-    return (
-        <div className="w-full p-4 space-y-4">
-            <header className="flex items-center justify-between">
-                <h1 className="text-xl font-semibold">Semantic Security</h1>
-                <div className="flex items-center gap-2">
-                    {statusBadge}
-                    {enabled ? <Badge color="green">Enabled</Badge> : <Badge color="gray">Disabled</Badge>}
-                    <Badge color="gray">Mode: {mode}</Badge>
-                    {dirty && <Badge color="amber">Unsaved</Badge>}
-                    {etag && <MonoTag label="ETag" value={etag} />}
-                </div>
-            </header>
-
-            {error && <Alert kind="error" title="Error" message={error} onClose={() => setError(null)} />}
-
-            <div className="grid gap-3">
-                <div className="flex items-center justify-between gap-2">
-                    <div className="text-sm text-neutral-500">
-                        Heuristic semantic anomaly scoring (`off|log_only|challenge|block`) with thresholds and body inspection limit.
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <button
-                            type="button"
-                            className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border"
-                            onClick={() => setRaw((prev) => (prev ? prev : defaultSemanticExample))}
-                            disabled={loading}
-                        >
-                            Insert example
-                        </button>
-                        <button
-                            type="button"
-                            className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border"
-                            onClick={() => void load()}
-                            disabled={loading}
-                        >
-                            Refresh
-                        </button>
-                        <button
-                            type="button"
-                            className="px-3 py-1.5 rounded-xl shadow text-sm bg-black text-white disabled:opacity-50"
-                            onClick={() => void doSave()}
-                            disabled={loading || saving || !dirty}
-                            title="Ctrl/Cmd+S"
-                        >
-                            {saving ? "Saving..." : "Save"}
-                        </button>
-                    </div>
-                </div>
-
-                <textarea
-                    className="w-full h-[420px] p-3 border rounded-xl font-mono text-sm leading-5 outline-none focus:ring-2 focus:ring-black/20"
-                    value={raw}
-                    onChange={(e) => setRaw(e.target.value)}
-                    spellCheck={false}
+      >
+        {editorState.hosts.length === 0 ? <EmptyState>{tx("No host-specific semantic overrides yet.")}</EmptyState> : null}
+        <div className="space-y-4">
+          {editorState.hosts.map((scope, index) => (
+            <div key={`semantic-host-${index}`} className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-sm font-medium">{scope.host || tx("New host scope")}</div>
+                <ActionButton
+                  onClick={() =>
+                    applyStructuredState(
+                      {
+                        ...editorState,
+                        hosts: editorState.hosts.filter((_, currentIndex) => currentIndex !== index),
+                      },
+                      hostBases.filter((_, currentIndex) => currentIndex !== index),
+                    )
+                  }
+                  disabled={readOnly}
+                >
+                  {tx("Remove")}
+                </ActionButton>
+              </div>
+              <Field label={tx("Host pattern")} hint={tx("Examples: `example.com`, `admin.example.com`, `example.com:8443`.")}>
+                <input
+                  className={inputClass}
+                  value={scope.host}
+                  onChange={(event) => updateHost(index, (current) => ({ ...current, host: event.target.value }))}
+                  placeholder="admin.example.com"
                 />
-
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5 text-xs">
-                    <Stat label="Inspected" value={String(stats.inspected_requests ?? 0)} />
-                    <Stat label="Scored" value={String(stats.scored_requests ?? 0)} />
-                    <Stat label="Log Only" value={String(stats.log_only_actions ?? 0)} />
-                    <Stat label="Challenge" value={String(stats.challenge_actions ?? 0)} />
-                    <Stat label="Block" value={String(stats.block_actions ?? 0)} />
-                </div>
-
-                <div className="flex items-center justify-between text-xs text-neutral-500">
-                    <div className="flex items-center gap-3">
-                        <span>Lines: {lineCount}</span>
-                        {lastSavedAt && <span>Last saved: {new Date(lastSavedAt).toLocaleString()}</span>}
-                    </div>
-                    <div className="flex items-center gap-2 max-w-[60%] overflow-hidden">
-                        {messages.slice(0, 3).map((m, i) => (
-                            <span key={`msg-${i}`} className="px-2 py-0.5 bg-neutral-100 rounded">
-                                {m}
-                            </span>
-                        ))}
-                    </div>
-                </div>
+              </Field>
+              <SemanticScopeEditor
+                tx={tx}
+                scope={scope}
+                onChange={(nextScope) =>
+                  updateHost(index, (current) => ({
+                    ...current,
+                    ...nextScope,
+                  }))
+                }
+              />
             </div>
+          ))}
         </div>
-    );
+      </SectionCard>
+
+      <SectionCard title={tx("Runtime Stats")} subtitle={tx("These counters aggregate the live semantic runtime after reload across all configured scopes.")}>
+        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
+          <StatBox label={tx("Inspected")} value={String(stats.inspected_requests ?? 0)} />
+          <StatBox label={tx("Scored")} value={String(stats.scored_requests ?? 0)} />
+          <StatBox label={tx("Log only")} value={String(stats.log_only_actions ?? 0)} />
+          <StatBox label={tx("Challenges")} value={String(stats.challenge_actions ?? 0)} />
+          <StatBox label={tx("Blocks")} value={String(stats.block_actions ?? 0)} />
+        </div>
+      </SectionCard>
+
+      <SectionCard title={tx("Advanced JSON")} subtitle={tx("Keep using raw JSON when needed. Structured edits and valid raw edits stay in sync.")}>
+        <textarea
+          className="w-full h-[380px] p-3 border rounded-xl font-mono text-sm leading-5 outline-none focus:ring-2 focus:ring-black/20"
+          value={raw}
+          onChange={(event) => handleRawChange(event.target.value)}
+          spellCheck={false}
+        />
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-500">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span>{tx("Lines")}: {lineCount}</span>
+            <span>{tx("Host scopes")}: {editorState.hosts.length}</span>
+            <span>{tx("Default mode")}: {editorState.mode}</span>
+            {lastSavedAt ? <span>{tx("Last saved: {time}", { time: new Date(lastSavedAt).toLocaleString(locale === "ja" ? "ja-JP" : "en-US") })}</span> : null}
+          </div>
+        </div>
+      </SectionCard>
+    </div>
+  );
 }
 
-const defaultSemanticExample = `{
-  "enabled": false,
-  "mode": "off",
-  "exempt_path_prefixes": [],
-  "log_threshold": 4,
-  "challenge_threshold": 7,
-  "block_threshold": 9,
-  "max_inspect_body": 16384
-}`;
+function SemanticScopeEditor({
+  tx,
+  scope,
+  onChange,
+}: {
+  tx: (key: string, vars?: Record<string, string | number | boolean | null | undefined>) => string;
+  scope: SemanticScopeState;
+  onChange: (scope: SemanticScopeState) => void;
+}) {
+  const applyScope = useCallback(
+    (nextScope: SemanticScopeState) => {
+      onChange(nextScope);
+    },
+    [onChange],
+  );
 
-function Badge({ color, children }: { color: "gray" | "green" | "red" | "amber"; children: React.ReactNode }) {
-    const cls =
-        color === "green" ? "bg-green-100 text-green-800" :
-        color === "red" ? "bg-red-100 text-red-800" :
-        color === "amber" ? "bg-amber-100 text-amber-800" :
-        "bg-neutral-100 text-neutral-700";
-    return <span className={`px-2 py-0.5 text-xs rounded ${cls}`}>{children}</span>;
+  return (
+    <div className="space-y-6">
+      <div className="space-y-4">
+        <div className="text-sm font-medium">{tx("Policy")}</div>
+        <div className="grid gap-4 lg:grid-cols-4">
+          <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <input
+              type="checkbox"
+              checked={scope.enabled}
+              onChange={(event) => applyScope({ ...scope, enabled: event.target.checked })}
+            />
+            <span>{tx("Enable semantic scoring")}</span>
+          </label>
+          <Field label={tx("Mode")}>
+            <select
+              className={inputClass}
+              value={scope.mode}
+              onChange={(event) =>
+                applyScope({
+                  ...scope,
+                  mode: SEMANTIC_MODE_OPTIONS.includes(event.target.value as SemanticScopeState["mode"])
+                    ? (event.target.value as SemanticScopeState["mode"])
+                    : "off",
+                })
+              }
+            >
+              {SEMANTIC_MODE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={tx("Max inspect body bytes")}>
+            <input
+              type="number"
+              min={1}
+              className={inputClass}
+              value={scope.maxInspectBody}
+              onChange={(event) => applyScope({ ...scope, maxInspectBody: readIntInput(event.target.value, 1) })}
+            />
+          </Field>
+          <Field label={tx("Exempt path prefixes")} hint={tx("One path prefix per line. Matching paths skip semantic scoring entirely.")}>
+            <textarea
+              className={`${textareaClass} min-h-28`}
+              value={listToMultiline(scope.exemptPathPrefixes)}
+              onChange={(event) => applyScope({ ...scope, exemptPathPrefixes: multilineToList(event.target.value) })}
+              placeholder={"/healthz\n/metrics"}
+              spellCheck={false}
+            />
+          </Field>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div className="text-sm font-medium">{tx("Provider")}</div>
+        <div className="grid gap-4 lg:grid-cols-3">
+          <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <input
+              type="checkbox"
+              checked={scope.providerEnabled}
+              onChange={(event) => applyScope({ ...scope, providerEnabled: event.target.checked })}
+            />
+            <span>{tx("Enable provider")}</span>
+          </label>
+          <Field label={tx("Provider name")}>
+            <input
+              className={inputClass}
+              value={scope.providerName}
+              onChange={(event) => applyScope({ ...scope, providerName: event.target.value })}
+              placeholder="builtin_attack_family"
+            />
+          </Field>
+          <Field label={tx("Provider timeout ms")} hint={tx("Backend currently accepts values between 1 and 250 ms.")}>
+            <input
+              type="number"
+              min={1}
+              max={250}
+              className={inputClass}
+              value={scope.providerTimeoutMS}
+              onChange={(event) => applyScope({ ...scope, providerTimeoutMS: clampProviderTimeout(event.target.value) })}
+            />
+          </Field>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div className="text-sm font-medium">{tx("Thresholds")}</div>
+        <div className="grid gap-4 lg:grid-cols-3">
+          <Field label={tx("Log threshold")}>
+            <input
+              type="number"
+              min={1}
+              className={inputClass}
+              value={scope.logThreshold}
+              onChange={(event) => applyScope({ ...scope, logThreshold: readIntInput(event.target.value, 1) })}
+            />
+          </Field>
+          <Field label={tx("Challenge threshold")}>
+            <input
+              type="number"
+              min={1}
+              className={inputClass}
+              value={scope.challengeThreshold}
+              onChange={(event) => applyScope({ ...scope, challengeThreshold: readIntInput(event.target.value, 1) })}
+            />
+          </Field>
+          <Field label={tx("Block threshold")}>
+            <input
+              type="number"
+              min={1}
+              className={inputClass}
+              value={scope.blockThreshold}
+              onChange={(event) => applyScope({ ...scope, blockThreshold: readIntInput(event.target.value, 1) })}
+            />
+          </Field>
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-    return (
-        <div className="rounded border bg-white px-2 py-1">
-            <div className="text-neutral-500">{label}</div>
-            <div className="font-mono">{value}</div>
-        </div>
-    );
+function listToMultiline(values: string[]): string {
+  return values.join("\n");
 }
 
-function MonoTag({ label, value }: { label: string; value: string }) {
-    return (
-        <div className="hidden md:flex items-center gap-1 text-xs">
-            <span className="text-neutral-500">{label}:</span>
-            <code className="px-2 py-0.5 bg-neutral-100 rounded max-w-[420px] truncate">{value}</code>
-        </div>
-    );
+function multilineToList(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
-function Alert({ kind, title, message, onClose }: { kind: "error" | "info"; title: string; message: string; onClose?: () => void }) {
-    const cls = kind === "error" ? "border-red-300 bg-red-50" : "border-blue-300 bg-blue-50";
-    return (
-        <div className={`border ${cls} rounded-xl p-3 text-sm flex items-start gap-3`}>
-            <div className="font-semibold">{title}</div>
-            <div className="flex-1 whitespace-pre-wrap">{message}</div>
-            {onClose && <button className="text-xs text-neutral-500 hover:underline" onClick={onClose}>Close</button>}
-        </div>
-    );
+function readIntInput(value: string, fallback: number): number {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function clampProviderTimeout(value: string): number {
+  const parsed = readIntInput(value, 25);
+  return Math.max(1, Math.min(250, parsed));
+}
+
+function cloneJSONRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }

@@ -1,305 +1,635 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import {
+  ActionResultNotice,
+  ActionButton,
+  Alert,
+  Badge,
+  EmptyState,
+  Field,
+  MonoTag,
+  NoticeBar,
+  PrimaryButton,
+  SectionCard,
+  StatBox,
+  inputClass,
+  textareaClass,
+} from "@/components/EditorChrome";
+import { useAdminRuntime } from "@/lib/adminRuntime";
 import { apiGetJson, apiPostJson, apiPutJson } from "@/lib/api";
+import { getErrorMessage } from "@/lib/errors";
+import {
+  createDefaultIPReputationEditorState,
+  createDefaultIPReputationScopeState,
+  createEmptyIPReputationHostScope,
+  parseIPReputationEditorDocument,
+  serializeIPReputationEditor,
+  type IPReputationEditorState,
+  type IPReputationScopeState,
+} from "@/lib/ipReputationEditor";
+import { useI18n } from "@/lib/i18n";
+import { parseSavedAt } from "@/lib/savedAt";
 
 type IPReputationDTO = {
-    etag?: string;
-    raw?: string;
-    config?: {
-        enabled?: boolean;
-        feed_urls?: string[];
-        fail_open?: boolean;
-        block_status_code?: number;
-    };
-    status?: {
-        enabled?: boolean;
-        feed_urls?: string[];
-        last_refresh_at?: string;
-        last_refresh_error?: string;
-        effective_allow_count?: number;
-        effective_block_count?: number;
-        feed_allow_count?: number;
-        feed_block_count?: number;
-        block_status_code?: number;
-        fail_open?: boolean;
-    };
+  etag?: string;
+  raw?: string;
+  status?: {
+    enabled?: boolean;
+    feed_urls?: string[];
+    last_refresh_at?: string;
+    last_refresh_error?: string;
+    effective_allow_count?: number;
+    effective_block_count?: number;
+    feed_allow_count?: number;
+    feed_block_count?: number;
+    dynamic_penalty_count?: number;
+      block_status_code?: number;
+      fail_open?: boolean;
+  };
+  saved_at?: string;
 };
 
+type IPReputationRuntimeStatus = {
+  effectiveAllowCount: number;
+  effectiveBlockCount: number;
+  feedAllowCount: number;
+  feedBlockCount: number;
+  dynamicPenaltyCount: number;
+  lastRefreshAt: string;
+  lastRefreshError: string;
+};
+
+const exampleState: IPReputationEditorState = {
+  ...createDefaultIPReputationEditorState(),
+  enabled: true,
+  feedURLs: ["https://feeds.example.invalid/ip-reputation.txt"],
+  allowlist: ["127.0.0.1/32", "::1/128"],
+  blocklist: ["203.0.113.0/24", "2001:db8:dead:beef::/64"],
+  refreshIntervalSec: 900,
+  requestTimeoutSec: 5,
+  blockStatusCode: 403,
+  failOpen: true,
+  hosts: [
+    {
+      host: "admin.example.com",
+      ...createDefaultIPReputationScopeState(),
+      enabled: true,
+      blockStatusCode: 451,
+      failOpen: false,
+      blocklist: ["198.51.100.0/24"],
+    },
+  ],
+};
+
+const exampleRaw = serializeIPReputationEditor(exampleState);
+
+function createEmptyRuntimeStatus(): IPReputationRuntimeStatus {
+  return {
+    effectiveAllowCount: 0,
+    effectiveBlockCount: 0,
+    feedAllowCount: 0,
+    feedBlockCount: 0,
+    dynamicPenaltyCount: 0,
+    lastRefreshAt: "",
+    lastRefreshError: "",
+  };
+}
+
 export default function IPReputationPanel() {
-    const [loading, setLoading] = useState(true);
-    const [saving, setSaving] = useState(false);
-    const [raw, setRaw] = useState("");
-    const [serverRaw, setServerRaw] = useState("");
-    const [etag, setEtag] = useState<string | null>(null);
-    const [valid, setValid] = useState<boolean | null>(null);
-    const [messages, setMessages] = useState<string[]>([]);
-    const [enabled, setEnabled] = useState(false);
-    const [feedCount, setFeedCount] = useState(0);
-    const [failOpen, setFailOpen] = useState(true);
-    const [blockStatusCode, setBlockStatusCode] = useState(403);
-    const [effectiveAllowCount, setEffectiveAllowCount] = useState(0);
-    const [effectiveBlockCount, setEffectiveBlockCount] = useState(0);
-    const [feedAllowCount, setFeedAllowCount] = useState(0);
-    const [feedBlockCount, setFeedBlockCount] = useState(0);
-    const [lastRefreshAt, setLastRefreshAt] = useState("");
-    const [lastRefreshError, setLastRefreshError] = useState("");
-    const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
-    const [error, setError] = useState<string | null>(null);
+  const { locale, tx } = useI18n();
+  const { readOnly } = useAdminRuntime();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [editorState, setEditorState] = useState<IPReputationEditorState>(createDefaultIPReputationEditorState);
+  const [editorBase, setEditorBase] = useState<Record<string, unknown>>({});
+  const [defaultBase, setDefaultBase] = useState<Record<string, unknown>>({});
+  const [hostBases, setHostBases] = useState<Record<string, unknown>[]>([]);
+  const [runtimeStatus, setRuntimeStatus] = useState<IPReputationRuntimeStatus>(createEmptyRuntimeStatus);
+  const [raw, setRaw] = useState("");
+  const [serverRaw, setServerRaw] = useState("");
+  const [etag, setEtag] = useState<string | null>(null);
+  const [valid, setValid] = useState<boolean | null>(null);
+  const [messages, setMessages] = useState<string[]>([]);
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [rawError, setRawError] = useState<string | null>(null);
+  const [structuredError, setStructuredError] = useState<string | null>(null);
 
-    const dirty = useMemo(() => raw !== serverRaw, [raw, serverRaw]);
+  const anyEnabled = useMemo(
+    () => editorState.enabled || editorState.hosts.some((scope) => scope.enabled),
+    [editorState.enabled, editorState.hosts],
+  );
+  const dirty = useMemo(() => raw !== serverRaw || !!structuredError, [raw, serverRaw, structuredError]);
+  const lineCount = useMemo(() => (raw ? raw.split(/\n/).length : 0), [raw]);
 
-    const applyStatus = useCallback((data?: IPReputationDTO) => {
-        const cfg = data?.config ?? {};
-        const status = data?.status ?? {};
-        setEnabled(!!(status.enabled ?? cfg.enabled));
-        setFeedCount(Array.isArray(status.feed_urls ?? cfg.feed_urls) ? (status.feed_urls ?? cfg.feed_urls ?? []).length : 0);
-        setFailOpen(!!(status.fail_open ?? cfg.fail_open));
-        setBlockStatusCode(typeof (status.block_status_code ?? cfg.block_status_code) === "number" ? Number(status.block_status_code ?? cfg.block_status_code) : 403);
-        setEffectiveAllowCount(typeof status.effective_allow_count === "number" ? status.effective_allow_count : 0);
-        setEffectiveBlockCount(typeof status.effective_block_count === "number" ? status.effective_block_count : 0);
-        setFeedAllowCount(typeof status.feed_allow_count === "number" ? status.feed_allow_count : 0);
-        setFeedBlockCount(typeof status.feed_block_count === "number" ? status.feed_block_count : 0);
-        setLastRefreshAt(status.last_refresh_at ?? "");
-        setLastRefreshError(status.last_refresh_error ?? "");
-    }, []);
+  const applyStructuredState = useCallback(
+    (next: IPReputationEditorState, nextHostBases = hostBases) => {
+      setEditorState(next);
+      setHostBases(nextHostBases);
+      try {
+        setRaw(serializeIPReputationEditor(editorBase, next, defaultBase, nextHostBases));
+        setRawError(null);
+        setStructuredError(null);
+      } catch (e: unknown) {
+        setValid(null);
+        setMessages([]);
+        setStructuredError(getErrorMessage(e, tx("Structured editor has conflicting host scopes.")));
+      }
+    },
+    [defaultBase, editorBase, hostBases, tx],
+  );
 
-    const load = useCallback(async () => {
-        setLoading(true);
-        setError(null);
-        try {
-            const data = await apiGetJson<IPReputationDTO>("/ip-reputation");
-            setRaw(data.raw ?? "");
-            setServerRaw(data.raw ?? "");
-            setEtag(data.etag ?? null);
-            applyStatus(data);
-            setValid(null);
-            setMessages([]);
-        } catch (e: any) {
-            setError(e?.message || String(e));
-        } finally {
-            setLoading(false);
+  const applyStructuredDocument = useCallback(
+    (
+      base: Record<string, unknown>,
+      next: IPReputationEditorState,
+      nextDefaultBase: Record<string, unknown>,
+      nextHostBases: Record<string, unknown>[],
+    ) => {
+      setEditorBase(base);
+      setDefaultBase(nextDefaultBase);
+      setEditorState(next);
+      setHostBases(nextHostBases);
+      setRaw(serializeIPReputationEditor(base, next, nextDefaultBase, nextHostBases));
+      setRawError(null);
+      setStructuredError(null);
+    },
+    [],
+  );
+
+  const applyRuntimeStatus = useCallback((data?: IPReputationDTO) => {
+    const status = data?.status ?? {};
+    setRuntimeStatus({
+      effectiveAllowCount: typeof status.effective_allow_count === "number" ? status.effective_allow_count : 0,
+      effectiveBlockCount: typeof status.effective_block_count === "number" ? status.effective_block_count : 0,
+      feedAllowCount: typeof status.feed_allow_count === "number" ? status.feed_allow_count : 0,
+      feedBlockCount: typeof status.feed_block_count === "number" ? status.feed_block_count : 0,
+      dynamicPenaltyCount: typeof status.dynamic_penalty_count === "number" ? status.dynamic_penalty_count : 0,
+      lastRefreshAt: status.last_refresh_at ?? "",
+      lastRefreshError: status.last_refresh_error ?? "",
+    });
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiGetJson<IPReputationDTO>("/ip-reputation");
+      const nextRaw = data.raw ?? "";
+      const parsed = parseIPReputationEditorDocument(nextRaw);
+      setEditorBase(parsed.base);
+      setDefaultBase(parsed.defaultBase);
+      setHostBases(parsed.hostBases);
+      setEditorState(parsed.state);
+      setRaw(nextRaw);
+      setServerRaw(nextRaw);
+      setEtag(data.etag ?? null);
+      setValid(null);
+      setMessages([]);
+      setLastSavedAt(parseSavedAt(data.saved_at));
+      setRawError(null);
+      setStructuredError(null);
+      applyRuntimeStatus(data);
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, tx("Failed to load")));
+    } finally {
+      setLoading(false);
+    }
+  }, [applyRuntimeStatus, tx]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const debounceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (debounceRef.current) {
+      window.clearTimeout(debounceRef.current);
+    }
+    if (loading || structuredError) {
+      return;
+    }
+    debounceRef.current = window.setTimeout(async () => {
+      try {
+        const js = await apiPostJson<{ ok: boolean; messages?: string[] }>("/ip-reputation:validate", { raw });
+        setValid(!!js.ok);
+        setMessages(Array.isArray(js.messages) ? js.messages : []);
+      } catch (e: unknown) {
+        setValid(false);
+        setMessages([getErrorMessage(e, tx("Validate failed"))]);
+      }
+    }, 300);
+
+    return () => {
+      if (debounceRef.current) {
+        window.clearTimeout(debounceRef.current);
+      }
+    };
+  }, [loading, raw, structuredError, tx]);
+
+  const doSave = useCallback(async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const js = await apiPutJson<{ ok: boolean; etag?: string; status?: IPReputationDTO["status"]; saved_at?: string }>(
+        "/ip-reputation",
+        { raw },
+        { headers: etag ? { "If-Match": etag } : {} },
+      );
+      if (!js.ok) {
+        throw new Error(tx("Failed to save"));
+      }
+      const parsed = parseIPReputationEditorDocument(raw);
+      setEditorBase(parsed.base);
+      setDefaultBase(parsed.defaultBase);
+      setHostBases(parsed.hostBases);
+      setEditorState(parsed.state);
+      setRaw(raw);
+      setServerRaw(raw);
+      setEtag(js.etag ?? null);
+      setRawError(null);
+      setStructuredError(null);
+      setLastSavedAt(parseSavedAt(js.saved_at));
+      applyRuntimeStatus({ status: js.status, saved_at: js.saved_at });
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, tx("Save failed")));
+    } finally {
+      setSaving(false);
+    }
+  }, [applyRuntimeStatus, etag, raw, tx]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const isSave = (e.key === "s" || e.key === "S") && (e.ctrlKey || e.metaKey);
+      if (!isSave) {
+        return;
+      }
+      e.preventDefault();
+      if (!saving && !readOnly && !rawError && !structuredError) {
+        void doSave();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [doSave, rawError, readOnly, saving, structuredError]);
+
+  const statusBadge = useMemo(() => {
+    if (loading) {
+      return <Badge color="gray">{tx("Loading")}</Badge>;
+    }
+    if (valid === null) {
+      return <Badge color="gray">{tx("Unvalidated")}</Badge>;
+    }
+    return valid ? <Badge color="green">{tx("Valid")}</Badge> : <Badge color="red">{tx("Invalid")}</Badge>;
+  }, [loading, tx, valid]);
+
+  const updateHost = useCallback(
+    (
+      index: number,
+      updater: (scope: IPReputationEditorState["hosts"][number]) => IPReputationEditorState["hosts"][number],
+      nextHostBases = hostBases,
+    ) => {
+      const nextHosts = editorState.hosts.map((scope, currentIndex) => (currentIndex === index ? updater(scope) : scope));
+      applyStructuredState(
+        {
+          ...editorState,
+          hosts: nextHosts,
+        },
+        nextHostBases,
+      );
+    },
+    [applyStructuredState, editorState, hostBases],
+  );
+
+  const handleRawChange = useCallback(
+    (nextRaw: string) => {
+      setRaw(nextRaw);
+      try {
+        const parsed = parseIPReputationEditorDocument(nextRaw);
+        setEditorBase(parsed.base);
+        setDefaultBase(parsed.defaultBase);
+        setHostBases(parsed.hostBases);
+        setEditorState(parsed.state);
+        setRawError(null);
+        setStructuredError(null);
+      } catch (e: unknown) {
+        setRawError(getErrorMessage(e, tx("Invalid")));
+        setStructuredError(null);
+      }
+    },
+    [tx],
+  );
+
+  return (
+    <div className="w-full p-4 space-y-4">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">{tx("IP Reputation")}</h1>
+          <p className="text-sm text-neutral-500">
+            {tx("Manage default and per-host IP reputation scopes with structured forms while keeping advanced JSON fallback below.")}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          {statusBadge}
+          {anyEnabled ? <Badge color="green">{tx("Enabled")}</Badge> : <Badge color="gray">{tx("Disabled")}</Badge>}
+          {editorState.failOpen ? <Badge color="amber">{tx("Default fail open")}</Badge> : <Badge color="red">{tx("Default fail closed")}</Badge>}
+          <Badge color={rawError || structuredError ? "red" : "green"}>
+            {structuredError ? tx("Structured editor conflict") : rawError ? tx("Raw JSON out of sync") : tx("Structured editor synced")}
+          </Badge>
+          {dirty ? <Badge color="amber">{tx("Unsaved")}</Badge> : null}
+          {etag ? <MonoTag label="ETag" value={etag} /> : null}
+        </div>
+      </header>
+
+      {error ? <Alert kind="error" title={tx("Error")} message={error} onClose={() => setError(null)} closeLabel={tx("Close")} /> : null}
+      {rawError ? (
+        <NoticeBar tone="warn">
+          {tx("Advanced JSON is currently invalid. The structured editor is still showing the last valid IP reputation snapshot. Any structured edit will regenerate valid JSON from that snapshot.")}
+        </NoticeBar>
+      ) : null}
+      {structuredError ? <NoticeBar tone="warn">{structuredError}</NoticeBar> : null}
+
+      <SectionCard
+        title={tx("Workflow")}
+        subtitle={tx("Host scope precedence stays host:port, then host, then default. Save still uses the existing IP reputation validate and hot-reload API.")}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <ActionButton
+              onClick={() => {
+                const parsed = parseIPReputationEditorDocument(exampleRaw);
+                applyStructuredDocument(parsed.base, parsed.state, parsed.defaultBase, parsed.hostBases);
+              }}
+              disabled={loading}
+            >
+              {tx("Insert example")}
+            </ActionButton>
+            <ActionButton onClick={() => void load()} disabled={loading}>
+              {tx("Refresh")}
+            </ActionButton>
+            <PrimaryButton onClick={() => void doSave()} disabled={readOnly || loading || saving || !dirty || !!rawError || !!structuredError}>
+              {saving ? tx("Saving...") : tx("Save & hot reload")}
+            </PrimaryButton>
+          </div>
         }
-    }, [applyStatus]);
+      >
+        <ActionResultNotice tone={valid === false ? "error" : "success"} messages={messages} />
+        <div className="grid gap-3 md:grid-cols-4">
+          <StatBox label={tx("Feeds")} value={String(editorState.feedURLs.length)} />
+          <StatBox label={tx("Blocklist")} value={String(editorState.blocklist.length)} />
+          <StatBox label={tx("Host scopes")} value={String(editorState.hosts.length)} />
+          <StatBox
+            label={tx("Last saved")}
+            value={lastSavedAt ? new Date(lastSavedAt).toLocaleString(locale === "ja" ? "ja-JP" : "en-US") : "-"}
+          />
+        </div>
+      </SectionCard>
 
-    useEffect(() => {
-        void load();
-    }, [load]);
+      <SectionCard title={tx("Default Scope")} subtitle={tx("These IP reputation settings apply when no more specific host scope matches the request host.")}>
+        <IPReputationScopeEditor
+          tx={tx}
+          scope={editorState}
+          onChange={(nextScope) =>
+            applyStructuredState({
+              ...editorState,
+              ...nextScope,
+            })
+          }
+        />
+      </SectionCard>
 
-    const debounceRef = useRef<number | null>(null);
-    useEffect(() => {
-        if (debounceRef.current) {
-            window.clearTimeout(debounceRef.current);
-        }
-        if (loading) {
-            return;
-        }
-        debounceRef.current = window.setTimeout(async () => {
-            try {
-                const js = await apiPostJson<{ ok: boolean; messages?: string[]; config?: IPReputationDTO["config"] }>("/ip-reputation:validate", { raw });
-                setValid(!!js.ok);
-                setMessages(Array.isArray(js.messages) ? js.messages : []);
-                applyStatus({ config: js.config });
-            } catch (e: any) {
-                setValid(false);
-                setMessages([e?.message || "Validate failed"]);
+      <SectionCard
+        title={tx("Host Scopes")}
+        subtitle={tx("Use exact host or `host:port` patterns for overrides. Empty host cards are ignored until you fill the host field.")}
+        actions={
+          <ActionButton
+            onClick={() =>
+              applyStructuredState(
+                {
+                  ...editorState,
+                  hosts: [...editorState.hosts, createEmptyIPReputationHostScope(editorState.hosts.length + 1)],
+                },
+                [...hostBases, cloneJSONRecord(defaultBase)],
+              )
             }
-        }, 300);
-
-        return () => {
-            if (debounceRef.current) window.clearTimeout(debounceRef.current);
-        };
-    }, [raw, loading, applyStatus]);
-
-    const doSave = useCallback(async () => {
-        setSaving(true);
-        setError(null);
-        try {
-            const js = await apiPutJson<{ ok: boolean; etag?: string; status?: IPReputationDTO["status"] }>(
-                "/ip-reputation",
-                { raw },
-                { headers: etag ? { "If-Match": etag } : {} }
-            );
-            if (!js.ok) {
-                throw new Error("Failed to save");
-            }
-            setEtag(js.etag ?? null);
-            setServerRaw(raw);
-            applyStatus({ status: js.status });
-            setLastSavedAt(Date.now());
-        } catch (e: any) {
-            setError(e?.message || "Save failed");
-        } finally {
-            setSaving(false);
+            disabled={readOnly}
+          >
+            {tx("Add host scope")}
+          </ActionButton>
         }
-    }, [applyStatus, etag, raw]);
-
-    useEffect(() => {
-        const onKey = (e: KeyboardEvent) => {
-            const isSave = (e.key === "s" || e.key === "S") && (e.ctrlKey || e.metaKey);
-            if (!isSave) {
-                return;
-            }
-            e.preventDefault();
-            if (!saving) {
-                void doSave();
-            }
-        };
-        window.addEventListener("keydown", onKey);
-        return () => window.removeEventListener("keydown", onKey);
-    }, [doSave, saving]);
-
-    const lineCount = useMemo(() => (raw ? raw.split(/\n/).length : 0), [raw]);
-    const statusBadge = useMemo(() => {
-        if (loading) {
-            return <Badge color="gray">Loading</Badge>;
-        }
-        if (valid === null) {
-            return <Badge color="gray">Unvalidated</Badge>;
-        }
-        return valid ? <Badge color="green">Valid</Badge> : <Badge color="red">Invalid</Badge>;
-    }, [loading, valid]);
-
-    return (
-        <div className="w-full p-4 space-y-4">
-            <header className="flex items-center justify-between">
-                <h1 className="text-xl font-semibold">IP Reputation</h1>
-                <div className="flex items-center gap-2">
-                    {statusBadge}
-                    {enabled ? <Badge color="green">Enabled</Badge> : <Badge color="gray">Disabled</Badge>}
-                    {failOpen ? <Badge color="amber">Fail open</Badge> : <Badge color="red">Fail closed</Badge>}
-                    {dirty && <Badge color="amber">Unsaved</Badge>}
-                    {etag && <MonoTag label="ETag" value={etag} />}
-                </div>
-            </header>
-
-            {error && <Alert kind="error" title="Error" message={error} onClose={() => setError(null)} />}
-
-            <div className="grid gap-3">
-                <div className="flex items-center justify-between gap-2">
-                    <div className="text-sm text-neutral-500">
-                        Manage static allow/block CIDRs and optional external feed refresh before bot, semantic, and WAF evaluation.
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <button
-                            type="button"
-                            className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border"
-                            onClick={() => setRaw((prev) => (prev ? prev : defaultIPReputationExample))}
-                            disabled={loading}
-                        >
-                            Insert example
-                        </button>
-                        <button
-                            type="button"
-                            className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border"
-                            onClick={() => void load()}
-                            disabled={loading}
-                        >
-                            Refresh
-                        </button>
-                        <button
-                            type="button"
-                            className="px-3 py-1.5 rounded-xl shadow text-sm bg-black text-white disabled:opacity-50"
-                            onClick={() => void doSave()}
-                            disabled={loading || saving || !dirty}
-                            title="Ctrl/Cmd+S"
-                        >
-                            {saving ? "Saving..." : "Save"}
-                        </button>
-                    </div>
-                </div>
-
-                <textarea
-                    className="w-full h-[440px] p-3 border rounded-xl font-mono text-sm leading-5 outline-none focus:ring-2 focus:ring-black/20"
-                    value={raw}
-                    onChange={(e) => setRaw(e.target.value)}
-                    spellCheck={false}
+      >
+        {editorState.hosts.length === 0 ? <EmptyState>{tx("No host-specific IP reputation overrides yet.")}</EmptyState> : null}
+        <div className="space-y-4">
+          {editorState.hosts.map((scope, index) => (
+            <div key={`ip-reputation-host-${index}`} className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-sm font-medium">{scope.host || tx("New host scope")}</div>
+                <ActionButton
+                  onClick={() =>
+                    applyStructuredState(
+                      {
+                        ...editorState,
+                        hosts: editorState.hosts.filter((_, currentIndex) => currentIndex !== index),
+                      },
+                      hostBases.filter((_, currentIndex) => currentIndex !== index),
+                    )
+                  }
+                  disabled={readOnly}
+                >
+                  {tx("Remove")}
+                </ActionButton>
+              </div>
+              <Field label={tx("Host pattern")} hint={tx("Examples: `example.com`, `admin.example.com`, `example.com:8443`.")}>
+                <input
+                  className={inputClass}
+                  value={scope.host}
+                  onChange={(event) => updateHost(index, (current) => ({ ...current, host: event.target.value }))}
+                  placeholder="admin.example.com"
                 />
-
-                <div className="flex items-center justify-between text-xs text-neutral-500">
-                    <div className="flex items-center gap-3 flex-wrap">
-                        <span>Lines: {lineCount}</span>
-                        <span>Feeds: {feedCount}</span>
-                        <span>Block status: {blockStatusCode}</span>
-                        <span>Effective allow: {effectiveAllowCount}</span>
-                        <span>Effective block: {effectiveBlockCount}</span>
-                        <span>Feed allow: {feedAllowCount}</span>
-                        <span>Feed block: {feedBlockCount}</span>
-                        {lastRefreshAt && <span>Last refresh: {new Date(lastRefreshAt).toLocaleString()}</span>}
-                        {lastSavedAt && <span>Last saved: {new Date(lastSavedAt).toLocaleString()}</span>}
-                    </div>
-                    <div className="flex items-center gap-2 max-w-[40%] overflow-hidden">
-                        {(lastRefreshError ? [lastRefreshError] : messages).slice(0, 2).map((m, i) => (
-                            <span key={`msg-${i}`} className="px-2 py-0.5 bg-neutral-100 rounded truncate">
-                                {m}
-                            </span>
-                        ))}
-                    </div>
-                </div>
+              </Field>
+              <IPReputationScopeEditor
+                tx={tx}
+                scope={scope}
+                onChange={(nextScope) =>
+                  updateHost(index, (current) => ({
+                    ...current,
+                    ...nextScope,
+                  }))
+                }
+              />
             </div>
+          ))}
         </div>
-    );
-}
+      </SectionCard>
 
-const defaultIPReputationExample = `{
-  "enabled": false,
-  "feed_urls": [
-    "https://feeds.example.invalid/ip-reputation.txt"
-  ],
-  "allowlist": [
-    "127.0.0.1/32",
-    "::1/128"
-  ],
-  "blocklist": [
-    "203.0.113.0/24",
-    "2001:db8:dead:beef::/64"
-  ],
-  "refresh_interval_sec": 900,
-  "request_timeout_sec": 5,
-  "block_status_code": 403,
-  "fail_open": true
-}`;
-
-function Badge({ color, children }: { color: "gray" | "green" | "red" | "amber"; children: React.ReactNode }) {
-    const cls =
-        color === "green"
-            ? "bg-green-100 text-green-800"
-            : color === "red"
-              ? "bg-red-100 text-red-800"
-              : color === "amber"
-                ? "bg-amber-100 text-amber-800"
-                : "bg-neutral-100 text-neutral-700";
-    return <span className={`px-2 py-0.5 text-xs rounded ${cls}`}>{children}</span>;
-}
-
-function MonoTag({ label, value }: { label: string; value: string }) {
-    return (
-        <div className="hidden md:flex items-center gap-1 text-xs">
-            <span className="text-neutral-500">{label}:</span>
-            <code className="px-2 py-0.5 bg-neutral-100 rounded max-w-[420px] truncate">{value}</code>
+      <SectionCard
+        title={tx("Runtime Status")}
+        subtitle={tx("These counters currently reflect the live default-scope runtime snapshot after reload. Use them to confirm feed refresh and dynamic penalties are working as expected.")}
+      >
+        {runtimeStatus.lastRefreshError ? <NoticeBar tone="warn">{runtimeStatus.lastRefreshError}</NoticeBar> : null}
+        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <StatBox label={tx("Effective allow")} value={String(runtimeStatus.effectiveAllowCount)} />
+          <StatBox label={tx("Effective block")} value={String(runtimeStatus.effectiveBlockCount)} />
+          <StatBox label={tx("Feed allow")} value={String(runtimeStatus.feedAllowCount)} />
+          <StatBox label={tx("Feed block")} value={String(runtimeStatus.feedBlockCount)} />
+          <StatBox label={tx("Dynamic penalties")} value={String(runtimeStatus.dynamicPenaltyCount)} />
+          <StatBox
+            label={tx("Last refresh")}
+            value={runtimeStatus.lastRefreshAt ? new Date(runtimeStatus.lastRefreshAt).toLocaleString(locale === "ja" ? "ja-JP" : "en-US") : "-"}
+          />
         </div>
-    );
+      </SectionCard>
+
+      <SectionCard title={tx("Advanced JSON")} subtitle={tx("Keep using raw JSON when needed. Structured edits and valid raw edits stay in sync.")}>
+        <textarea
+          className="w-full h-[380px] p-3 border rounded-xl font-mono text-sm leading-5 outline-none focus:ring-2 focus:ring-black/20"
+          value={raw}
+          onChange={(event) => handleRawChange(event.target.value)}
+          spellCheck={false}
+        />
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-500">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span>{tx("Lines")}: {lineCount}</span>
+            <span>{tx("Feeds")}: {editorState.feedURLs.length}</span>
+            <span>{tx("Host scopes")}: {editorState.hosts.length}</span>
+            {lastSavedAt ? <span>{tx("Last saved: {time}", { time: new Date(lastSavedAt).toLocaleString(locale === "ja" ? "ja-JP" : "en-US") })}</span> : null}
+          </div>
+          <div className="flex items-center gap-2">
+            <span>{tx("Mode")}: {anyEnabled ? tx("Enabled") : tx("Disabled")}</span>
+            <span>{tx("Default block status")}: {editorState.blockStatusCode}</span>
+          </div>
+        </div>
+      </SectionCard>
+    </div>
+  );
 }
 
-function Alert({
-    kind,
-    title,
-    message,
-    onClose,
+function IPReputationScopeEditor({
+  tx,
+  scope,
+  onChange,
 }: {
-    kind: "error" | "info";
-    title: string;
-    message: string;
-    onClose?: () => void;
+  tx: (key: string, vars?: Record<string, string | number | boolean | null | undefined>) => string;
+  scope: IPReputationScopeState;
+  onChange: (scope: IPReputationScopeState) => void;
 }) {
-    const tone = kind === "error" ? "border-red-300 bg-red-50" : "border-blue-300 bg-blue-50";
-    return (
-        <div className={`border ${tone} rounded-xl p-3 text-sm flex items-start gap-3`}>
-            <div className="font-semibold">{title}</div>
-            <div className="flex-1 whitespace-pre-wrap">{message}</div>
-            {onClose && (
-                <button className="text-xs text-neutral-500 hover:underline" onClick={onClose}>
-                    Close
-                </button>
-            )}
+  const applyScope = useCallback(
+    (nextScope: IPReputationScopeState) => {
+      onChange(nextScope);
+    },
+    [onChange],
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-4">
+        <div className="text-sm font-medium">{tx("Global Settings")}</div>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
+          <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <input
+              type="checkbox"
+              checked={scope.enabled}
+              onChange={(event) => applyScope({ ...scope, enabled: event.target.checked })}
+            />
+            <span>{tx("Enable IP reputation for this scope")}</span>
+          </label>
+          <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <input
+              type="checkbox"
+              checked={scope.failOpen}
+              onChange={(event) => applyScope({ ...scope, failOpen: event.target.checked })}
+            />
+            <span>{tx("Fail open on feed errors")}</span>
+          </label>
+          <Field label={tx("Block status code")}>
+            <input
+              type="number"
+              min={400}
+              max={599}
+              className={inputClass}
+              value={scope.blockStatusCode}
+              onChange={(event) => applyScope({ ...scope, blockStatusCode: clampStatusCode(event.target.value) })}
+            />
+          </Field>
         </div>
-    );
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <Field label={tx("Refresh interval seconds")}>
+            <input
+              type="number"
+              min={1}
+              className={inputClass}
+              value={scope.refreshIntervalSec}
+              onChange={(event) => applyScope({ ...scope, refreshIntervalSec: readIntInput(event.target.value, 1) })}
+            />
+          </Field>
+          <Field label={tx("Request timeout seconds")}>
+            <input
+              type="number"
+              min={1}
+              className={inputClass}
+              value={scope.requestTimeoutSec}
+              onChange={(event) => applyScope({ ...scope, requestTimeoutSec: readIntInput(event.target.value, 1) })}
+            />
+          </Field>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div className="text-sm font-medium">{tx("Lists")}</div>
+        <div className="grid gap-4 xl:grid-cols-3">
+          <Field label={tx("Feed URLs")} hint={tx("Plain text feeds are fetched in order. Leave empty if you only use static CIDRs.")}>
+            <textarea
+              className={`${textareaClass} min-h-40`}
+              value={listToMultiline(scope.feedURLs)}
+              onChange={(event) => applyScope({ ...scope, feedURLs: multilineToList(event.target.value) })}
+              placeholder="https://feeds.example.invalid/ip-reputation.txt"
+              spellCheck={false}
+            />
+          </Field>
+          <Field label={tx("Allowlist")} hint={tx("One IP or CIDR per line. These entries bypass static, feed, and dynamic block decisions.")}>
+            <textarea
+              className={`${textareaClass} min-h-40`}
+              value={listToMultiline(scope.allowlist)}
+              onChange={(event) => applyScope({ ...scope, allowlist: multilineToList(event.target.value) })}
+              placeholder={"127.0.0.1/32\n::1/128"}
+              spellCheck={false}
+            />
+          </Field>
+          <Field label={tx("Blocklist")} hint={tx("One IP or CIDR per line. These entries apply before feed results are merged.")}>
+            <textarea
+              className={`${textareaClass} min-h-40`}
+              value={listToMultiline(scope.blocklist)}
+              onChange={(event) => applyScope({ ...scope, blocklist: multilineToList(event.target.value) })}
+              placeholder={"203.0.113.0/24\n2001:db8:dead:beef::/64"}
+              spellCheck={false}
+            />
+          </Field>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function listToMultiline(values: string[]): string {
+  return values.join("\n");
+}
+
+function multilineToList(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function readIntInput(value: string, fallback: number): number {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function clampStatusCode(value: string): number {
+  const parsed = readIntInput(value, 403);
+  return Math.max(400, Math.min(599, parsed));
+}
+
+function cloneJSONRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }

@@ -30,6 +30,7 @@ func bindNotificationPutBody(c *gin.Context) (notificationPutBody, bool) {
 func GetNotificationRules(c *gin.Context) {
 	path := GetNotificationsPath()
 	raw, _ := os.ReadFile(path)
+	savedAt := fileSavedAt(path)
 	if store := getLogsStatsStore(); store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(notificationConfigBlobKey)
 		if err != nil {
@@ -42,6 +43,7 @@ func GetNotificationRules(c *gin.Context) {
 				if strings.TrimSpace(dbETag) == "" {
 					dbETag = bypassconf.ComputeETag(dbRaw)
 				}
+				savedAt = configBlobSavedAt(store, notificationConfigBlobKey)
 				c.JSON(http.StatusOK, gin.H{
 					"etag":          dbETag,
 					"raw":           string(dbRaw),
@@ -49,6 +51,7 @@ func GetNotificationRules(c *gin.Context) {
 					"sinks":         len(rt.Raw.Sinks),
 					"enabled_sinks": countEnabledNotificationSinks(rt.Raw.Sinks),
 					"active_alerts": GetNotificationStatus().ActiveAlerts,
+					"saved_at":      savedAt,
 				})
 				return
 			}
@@ -68,6 +71,7 @@ func GetNotificationRules(c *gin.Context) {
 		"sinks":         len(cfg.Sinks),
 		"enabled_sinks": countEnabledNotificationSinks(cfg.Sinks),
 		"active_alerts": status.ActiveAlerts,
+		"saved_at":      savedAt,
 	})
 }
 
@@ -145,9 +149,10 @@ func PutNotificationRules(c *gin.Context) {
 		return
 	}
 
+	now := time.Now().UTC()
 	newETag := bypassconf.ComputeETag([]byte(in.Raw))
 	if store != nil {
-		if err := store.UpsertConfigBlob(notificationConfigBlobKey, []byte(in.Raw), newETag, time.Now().UTC()); err != nil {
+		if err := store.UpsertConfigBlob(notificationConfigBlobKey, []byte(in.Raw), newETag, now); err != nil {
 			_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
 			_ = ReloadNotifications()
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -164,6 +169,7 @@ func PutNotificationRules(c *gin.Context) {
 		"enabled":       rt.Raw.Enabled,
 		"sinks":         len(rt.Raw.Sinks),
 		"enabled_sinks": countEnabledNotificationSinks(rt.Raw.Sinks),
+		"saved_at":      now.Format(time.RFC3339Nano),
 	})
 }
 

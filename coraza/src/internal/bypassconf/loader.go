@@ -2,6 +2,7 @@ package bypassconf
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -10,23 +11,28 @@ import (
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
+	"tukuyomi/internal/policyhost"
 )
 
 var (
-	confPath  string
-	mu        sync.RWMutex
-	entries   []Entry
-	watcher   *fsnotify.Watcher
-	watcherMu sync.Mutex
-	watchStop chan struct{}
-	watchDone chan struct{}
+	confPath   string
+	legacyPath string
+	activePath string
+	mu         sync.RWMutex
+	fileState  File
+	watcher    *fsnotify.Watcher
+	watcherMu  sync.Mutex
+	watchStop  chan struct{}
+	watchDone  chan struct{}
 )
 
-func Init(path string) error {
+func Init(path, legacy string) error {
 	stopWatcher()
 
 	mu.Lock()
 	confPath = path
+	legacyPath = strings.TrimSpace(legacy)
+	activePath = ""
 	mu.Unlock()
 
 	if err := reload(); err != nil {
@@ -42,21 +48,37 @@ func GetPath() string {
 	return confPath
 }
 
+func GetActivePath() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return activePath
+}
+
 func Get() []Entry {
 	mu.RLock()
 	defer mu.RUnlock()
-	out := make([]Entry, len(entries))
-	copy(out, entries)
-
-	return out
+	return flattenFile(fileState)
 }
 
-func Match(reqPath string) MatchResult {
-	p := normalize(reqPath)
+func GetEntries(file File) []Entry {
+	return flattenFile(file)
+}
+
+func GetFile() File {
 	mu.RLock()
 	defer mu.RUnlock()
+	return cloneFile(fileState)
+}
+
+func Match(reqHost, reqPath string, tls bool) MatchResult {
+	p := normalize(reqPath)
+	mu.RLock()
+	cfg := cloneFile(fileState)
+	defer mu.RUnlock()
+
+	matchedEntries := scopedEntries(cfg, reqHost, tls)
 	bypassHit := false
-	for _, e := range entries {
+	for _, e := range matchedEntries {
 		if !pathMatches(p, e.Path) {
 			continue
 		}
@@ -82,27 +104,53 @@ func pathMatches(reqPath, rulePath string) bool {
 }
 
 func reload() error {
-	path := GetPath()
+	path := resolveLoadPath()
 
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 
-	es, err := Parse(string(b))
+	cfg, err := Parse(string(b))
 	if err != nil {
 		return err
 	}
 
 	mu.Lock()
-	entries = es
+	fileState = cfg
+	activePath = path
 	mu.Unlock()
-	log.Printf("[BYPASS][RELOAD] path=%s entries=%d", path, len(es))
+	log.Printf("[BYPASS][RELOAD] path=%s entries=%d hosts=%d", path, len(flattenFile(cfg)), len(cfg.Hosts))
 
 	return nil
 }
 
-func Parse(s string) ([]Entry, error) {
+func resolveLoadPath() string {
+	mu.RLock()
+	path := confPath
+	legacy := legacyPath
+	mu.RUnlock()
+
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	if strings.TrimSpace(legacy) != "" {
+		if _, err := os.Stat(legacy); err == nil {
+			return legacy
+		}
+	}
+	return path
+}
+
+func Parse(s string) (File, error) {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return File{Default: Scope{Entries: []Entry{}}}, nil
+	}
+	if strings.HasPrefix(trimmed, "{") {
+		return parseJSON(trimmed)
+	}
+
 	sc := bufio.NewScanner(strings.NewReader(s))
 	var out []Entry
 	lineNo := 0
@@ -123,25 +171,153 @@ func Parse(s string) ([]Entry, error) {
 			continue
 		}
 		if len(parts) > 2 {
-			return nil, fmt.Errorf("line %d: expected '<path>' or '<path> <rule.conf>'", lineNo)
+			return File{}, fmt.Errorf("line %d: expected '<path>' or '<path> <rule.conf>'", lineNo)
 		}
-		if !strings.HasPrefix(parts[0], "/") {
-			return nil, fmt.Errorf("line %d: path must start with '/'", lineNo)
-		}
-
 		e := Entry{Path: normalize(parts[0])}
 		if len(parts) == 2 {
 			rule := strings.TrimSpace(parts[1])
-			if !strings.HasSuffix(strings.ToLower(rule), ".conf") {
-				return nil, fmt.Errorf("line %d: extra rule must be .conf file", lineNo)
-			}
 			e.ExtraRule = rule
+		}
+		if e.Path != parts[0] {
+			return File{}, fmt.Errorf("line %d: path must start with '/'", lineNo)
+		}
+		if err := validateEntry(e, fmt.Sprintf("line %d", lineNo)); err != nil {
+			return File{}, err
 		}
 
 		out = append(out, e)
 	}
 
-	return out, sc.Err()
+	if err := sc.Err(); err != nil {
+		return File{}, err
+	}
+	return File{Default: Scope{Entries: out}}, nil
+}
+
+func parseJSON(raw string) (File, error) {
+	var file struct {
+		Default *Scope           `json:"default,omitempty"`
+		Hosts   map[string]Scope `json:"hosts,omitempty"`
+		Entries []Entry          `json:"entries,omitempty"`
+	}
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&file); err != nil {
+		return File{}, err
+	}
+
+	if len(file.Entries) > 0 && (file.Default != nil || len(file.Hosts) > 0) {
+		return File{}, fmt.Errorf("entries is legacy-only; use default.entries with hosts")
+	}
+
+	next := File{Default: Scope{Entries: []Entry{}}}
+	if len(file.Entries) > 0 {
+		next.Default.Entries = make([]Entry, 0, len(file.Entries))
+		for i, entry := range file.Entries {
+			entry.Path = normalize(entry.Path)
+			entry.ExtraRule = strings.TrimSpace(entry.ExtraRule)
+			if err := validateEntry(entry, fmt.Sprintf("entries[%d]", i)); err != nil {
+				return File{}, err
+			}
+			next.Default.Entries = append(next.Default.Entries, entry)
+		}
+		return next, nil
+	}
+
+	if file.Default != nil {
+		entries, err := normalizeEntries(file.Default.Entries, "default.entries")
+		if err != nil {
+			return File{}, err
+		}
+		next.Default.Entries = entries
+	}
+	if len(file.Hosts) == 0 {
+		return next, nil
+	}
+	next.Hosts = make(map[string]Scope, len(file.Hosts))
+	for rawHost, scope := range file.Hosts {
+		hostKey, err := policyhost.NormalizePattern(rawHost)
+		if err != nil {
+			return File{}, fmt.Errorf("hosts[%q]: %w", rawHost, err)
+		}
+		entries, err := normalizeEntries(scope.Entries, fmt.Sprintf("hosts[%q].entries", rawHost))
+		if err != nil {
+			return File{}, err
+		}
+		next.Hosts[hostKey] = Scope{Entries: entries}
+	}
+	return next, nil
+}
+
+func validateEntry(e Entry, field string) error {
+	if !strings.HasPrefix(e.Path, "/") {
+		return fmt.Errorf("%s: path must start with '/'", field)
+	}
+	if e.ExtraRule != "" && !strings.HasSuffix(strings.ToLower(e.ExtraRule), ".conf") {
+		return fmt.Errorf("%s: extra rule must be .conf file", field)
+	}
+	return nil
+}
+
+func MarshalJSON(file File) ([]byte, error) {
+	file = cloneFile(file)
+	if file.Default.Entries == nil {
+		file.Default.Entries = []Entry{}
+	}
+	out, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(out, '\n'), nil
+}
+
+func normalizeEntries(entries []Entry, field string) ([]Entry, error) {
+	if entries == nil {
+		return []Entry{}, nil
+	}
+	out := make([]Entry, 0, len(entries))
+	for i, entry := range entries {
+		entry.Path = normalize(entry.Path)
+		entry.ExtraRule = strings.TrimSpace(entry.ExtraRule)
+		if err := validateEntry(entry, fmt.Sprintf("%s[%d]", field, i)); err != nil {
+			return nil, err
+		}
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
+func cloneFile(in File) File {
+	out := File{
+		Default: Scope{Entries: append([]Entry(nil), in.Default.Entries...)},
+	}
+	if len(in.Hosts) > 0 {
+		out.Hosts = make(map[string]Scope, len(in.Hosts))
+		for host, scope := range in.Hosts {
+			out.Hosts[host] = Scope{Entries: append([]Entry(nil), scope.Entries...)}
+		}
+	}
+	return out
+}
+
+func flattenFile(in File) []Entry {
+	out := append([]Entry(nil), in.Default.Entries...)
+	if len(in.Hosts) == 0 {
+		return out
+	}
+	for _, scope := range in.Hosts {
+		out = append(out, scope.Entries...)
+	}
+	return out
+}
+
+func scopedEntries(in File, reqHost string, tls bool) []Entry {
+	for _, candidate := range policyhost.Candidates(reqHost, tls) {
+		if scope, ok := in.Hosts[candidate]; ok {
+			return scope.Entries
+		}
+	}
+	return in.Default.Entries
 }
 
 func startWatch() error {
@@ -158,9 +334,21 @@ func startWatch() error {
 	}
 
 	path := GetPath()
-	dir := filepath.Dir(path)
-	if err := w.Add(dir); err != nil {
-		return err
+	legacy := strings.TrimSpace(legacyPath)
+	primaryBase := filepath.Base(path)
+	legacyBase := ""
+	dirs := []string{filepath.Dir(path)}
+	if legacy != "" {
+		legacyBase = filepath.Base(legacy)
+		legacyDir := filepath.Dir(legacy)
+		if legacyDir != dirs[0] {
+			dirs = append(dirs, legacyDir)
+		}
+	}
+	for _, dir := range dirs {
+		if err := w.Add(dir); err != nil {
+			return err
+		}
 	}
 
 	stop := make(chan struct{})
@@ -180,8 +368,11 @@ func startWatch() error {
 					return
 				}
 
+				base := filepath.Base(ev.Name)
 				if filepath.Clean(ev.Name) == filepath.Clean(path) ||
-					filepath.Base(ev.Name) == filepath.Base(path) {
+					(legacy != "" && filepath.Clean(ev.Name) == filepath.Clean(legacy)) ||
+					base == primaryBase ||
+					(legacyBase != "" && base == legacyBase) {
 					_ = reload()
 				}
 			case err := <-w.Errors:

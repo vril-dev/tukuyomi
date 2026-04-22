@@ -1,0 +1,35 @@
+{
+  "server": {
+    "listen_addr": ":443",
+    "graceful_shutdown_timeout_sec": 30,
+    "proxy_protocol": {
+      "enabled": false,
+      "trusted_cidrs": []
+    },
+    "tls": {
+      "enabled": true,
+      "cert_file": "conf/tls/fullchain.pem",
+      "key_file": "conf/tls/privkey.pem",
+      "min_version": "tls1.2",
+      "redirect_http": true,
+      "http_redirect_addr": ":80"
+    }
+  },
+  "admin": {
+    "listen_addr": ":9091",
+    "api_base_path": "/tukuyomi-api",
+    "ui_base_path": "/tukuyomi-ui",
+    "external_mode": "deny_external",
+    "proxy_protocol": {
+      "enabled": false,
+      "trusted_cidrs": []
+    },
+    "trusted_cidrs": [
+      "127.0.0.1/32",
+      "::1/128",
+      "10.0.0.0/8",
+      "172.16.0.0/12",
+      "192.168.0.0/16"
+    ]
+  }
+}

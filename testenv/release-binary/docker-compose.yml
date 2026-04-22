@@ -1,0 +1,34 @@
+services:
+  protected-api:
+    build:
+      context: ./protected-api
+      dockerfile: Dockerfile
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import urllib.request
+          urllib.request.urlopen("http://127.0.0.1:8080/v1/health", timeout=2).read()
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 1s
+    restart: unless-stopped
+
+  proxy:
+    image: debian:bookworm-slim
+    working_dir: /bundle
+    user: "${PUID:-1000}:${GUID:-1000}"
+    command: ["./tukuyomi"]
+    environment:
+      - WAF_CONFIG_FILE=/bundle/testenv/release-binary/proxy-config.json
+    volumes:
+      - ../..:/bundle
+    ports:
+      - "${PROXY_PORT:-19093}:9090"
+    depends_on:
+      protected-api:
+        condition: service_healthy
+    restart: unless-stopped

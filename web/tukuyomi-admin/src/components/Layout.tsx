@@ -1,6 +1,10 @@
+import { useEffect, useMemo, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
-import { useMemo } from "react";
+import { apiGetJson } from "@/lib/api";
+import { getAPIBasePath } from "@/lib/api";
+import { useAdminRuntime } from "@/lib/adminRuntime";
 import { useAuth } from "@/lib/auth";
+import { useI18n } from "@/lib/i18n";
 
 type NavItem = {
   to: string;
@@ -15,7 +19,15 @@ type NavGroup = {
   items: NavItem[];
 };
 
-const navGroups: NavGroup[] = [
+type PHPRuntimeNavResponse = {
+  runtimes?: {
+    runtimes?: Array<{
+      available?: boolean;
+    }>;
+  };
+};
+
+const baseNavGroups: NavGroup[] = [
   {
     id: "observe",
     label: "Observe",
@@ -23,7 +35,6 @@ const navGroups: NavGroup[] = [
     items: [
       { to: "/status", label: "Status", hint: "runtime health" },
       { to: "/logs", label: "Logs", hint: "events and traces" },
-      { to: "/log-output", label: "Log Settings", hint: "stdout and file profiles" },
       { to: "/notifications", label: "Notifications", hint: "state-based alert delivery" },
     ],
   },
@@ -33,6 +44,7 @@ const navGroups: NavGroup[] = [
     hint: "rules, reputation, anomaly defense",
     items: [
       { to: "/rules", label: "Rules", hint: "base directives" },
+      { to: "/override-rules", label: "Override Rules", hint: "managed extra_rule files" },
       { to: "/rule-sets", label: "Rule Sets", hint: "CRS toggles" },
       { to: "/bypass", label: "Bypass Rules", hint: "path overrides" },
       { to: "/country-block", label: "Country Block", hint: "country deny list" },
@@ -44,45 +56,111 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
+    id: "proxy",
+    label: "Proxy",
+    hint: "routes, cache, traffic ownership",
+    items: [
+      { to: "/cache", label: "Cache Rules", hint: "edge cache behavior" },
+      { to: "/proxy-rules", label: "Proxy Rules", hint: "upstream and transport tuning" },
+      { to: "/backends", label: "Backends", hint: "canonical backend status and direct-upstream runtime ops" },
+      { to: "/sites", label: "Sites", hint: "hostname ownership and tls binding" },
+    ],
+  },
+  {
     id: "operations",
     label: "Operations",
-    hint: "cache and runtime controls",
-    items: [{ to: "/cache", label: "Cache Rules", hint: "edge cache behavior" }],
+    hint: "runtime helpers and access",
+    items: [
+      { to: "/scheduled-tasks", label: "Scheduled Tasks", hint: "php cli jobs managed outside the request path" },
+      { to: "/options", label: "Options", hint: "runtime inventory and lifecycle state" },
+    ],
   },
 ];
+
+const settingsNavItem: NavItem = {
+  to: "/settings",
+  label: "Settings",
+  hint: "admin session, operator identity, verify manifest",
+};
 
 function isActive(pathname: string, to: string) {
   return pathname === to || pathname.startsWith(`${to}/`);
 }
 
 export default function Layout() {
+  const { locale, setLocale, tx } = useI18n();
   const { pathname } = useLocation();
   const { logout, session, loading } = useAuth();
-  const navItems = useMemo(() => navGroups.flatMap((group) => group.items), []);
+  const { readOnly } = useAdminRuntime();
+  const [hasBuiltRuntime, setHasBuiltRuntime] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void apiGetJson<PHPRuntimeNavResponse>("/php-runtimes")
+      .then((data) => {
+        if (!active) {
+          return;
+        }
+        const runtimes = Array.isArray(data.runtimes?.runtimes) ? data.runtimes.runtimes : [];
+        setHasBuiltRuntime(runtimes.some((runtime) => runtime.available === true));
+      })
+      .catch(() => {
+        if (!active) {
+          return;
+        }
+        setHasBuiltRuntime(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const navGroups = useMemo(
+    () =>
+      baseNavGroups.map((group) =>
+        group.id !== "operations"
+          ? group
+          : {
+              ...group,
+              items: hasBuiltRuntime
+                ? [
+                    ...group.items,
+                    { to: "/vhosts", label: "Vhosts", hint: "php-fpm host, port, and docroot bindings" },
+                  ]
+                : group.items,
+            },
+      ),
+    [hasBuiltRuntime],
+  );
+  const navItems = [...navGroups.flatMap((group) => group.items), settingsNavItem];
   const current = navItems.find((item) => isActive(pathname, item.to));
-  const currentGroup = navGroups.find((group) => group.items.some((item) => isActive(pathname, item.to)));
+  const currentGroup = isActive(pathname, settingsNavItem.to)
+    ? { id: "settings", label: "Settings", hint: settingsNavItem.hint, items: [settingsNavItem] }
+    : navGroups.find((group) =>
+        group.items.some((item) => isActive(pathname, item.to)),
+      );
 
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
         <div className="app-brand">
           <p className="app-brand-tag">TUKUYOMI</p>
-          <h1>Control Room</h1>
-          <p className="app-brand-sub">Coraza + CRS Security Gateway</p>
+          <h1>{tx("Control Room")}</h1>
+          <p className="app-brand-sub">{tx("Coraza + CRS Security Gateway")}</p>
         </div>
 
         <nav className="app-nav" aria-label="primary">
           {navGroups.map((group) => (
-            <section key={group.id} className="app-nav-group" aria-label={group.label}>
+            <section key={group.id} className="app-nav-group" aria-label={tx(group.label)}>
               <div className="app-nav-group-meta">
-                <p className="app-nav-group-title">{group.label}</p>
+                <p className="app-nav-group-title">{tx(group.label)}</p>
               </div>
               <div className="app-nav-group-links">
                 {group.items.map((item) => {
                   const active = isActive(pathname, item.to);
                   return (
                     <Link key={item.to} to={item.to} className={active ? "app-nav-link active" : "app-nav-link"}>
-                      <span className="app-nav-label">{item.label}</span>
+                      <span className="app-nav-label">{tx(item.label)}</span>
                     </Link>
                   );
                 })}
@@ -90,35 +168,66 @@ export default function Layout() {
             </section>
           ))}
         </nav>
+
+        <div className="app-sidebar-footer">
+          <Link
+            to={settingsNavItem.to}
+            className={isActive(pathname, settingsNavItem.to) ? "app-nav-link active" : "app-nav-link"}
+          >
+            <span className="app-nav-label">{tx(settingsNavItem.label)}</span>
+          </Link>
+        </div>
       </aside>
 
       <main className="app-main">
         <header className="app-topbar">
           <div className="app-topbar-main">
             <div className="app-topbar-heading">
-              <p className="app-kicker">Current Group</p>
-              {currentGroup ? <p className="app-group-chip">{currentGroup.label}</p> : null}
-              <h2>{current?.label ?? "Dashboard"}</h2>
-              {currentGroup?.hint ? <p className="app-topbar-sub">{currentGroup.hint}</p> : null}
+              <p className="app-kicker">{tx("Current Group")}</p>
+              {currentGroup ? <p className="app-group-chip">{tx(currentGroup.label)}</p> : null}
+              <h2>{tx(current?.label ?? "Dashboard")}</h2>
+              {currentGroup?.hint ? <p className="app-topbar-sub">{tx(currentGroup.hint)}</p> : null}
             </div>
             <div className="app-topbar-paths">
+              <code>{getAPIBasePath()}</code>
               <code>{pathname}</code>
             </div>
           </div>
           <div className="app-top-meta">
             <div className="app-top-meta-cluster">
-              <span className="app-pill">{session.mode === "disabled" ? "Auth Disabled" : "Session"}</span>
+              <label className="app-pill inline-flex items-center gap-2">
+                <span>{tx("Language")}</span>
+                <select
+                  className="bg-transparent outline-none"
+                  value={locale}
+                  onChange={(event) => setLocale(event.target.value === "ja" ? "ja" : "en")}
+                >
+                  <option value="en">{tx("English")}</option>
+                  <option value="ja">{tx("Japanese")}</option>
+                </select>
+              </label>
+              <span className="app-pill">{session.mode === "disabled" ? tx("Auth Disabled") : tx("Session")}</span>
+              {readOnly ? <span className="app-pill bg-amber-100 text-amber-900">{tx("Admin Read-Only")}</span> : null}
               {session.expires_at ? (
-                <span className="app-pill">Expires {new Date(session.expires_at).toLocaleTimeString()}</span>
+                <span className="app-pill">
+                  {tx("Expires {time}", {
+                    time: new Date(session.expires_at).toLocaleTimeString(locale === "ja" ? "ja-JP" : "en-US"),
+                  })}
+                </span>
               ) : null}
             </div>
             <button type="button" className="app-pill app-pill-action" disabled={loading} onClick={() => void logout()}>
-              {loading ? "..." : "Logout"}
+              {loading ? "..." : tx("Logout")}
             </button>
           </div>
         </header>
 
         <section className="app-content">
+          {readOnly ? (
+            <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              {tx("This deployment is admin read-only. Inspect, validate, and dry-run actions remain available, but apply/save/rollback actions are disabled. Roll out config changes from source control or image updates instead.")}
+            </div>
+          ) : null}
           <Outlet />
         </section>
       </main>

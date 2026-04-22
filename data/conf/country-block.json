@@ -1,0 +1,28 @@
+{
+  "default": {
+    "blocked_countries": []
+  },
+  "hosts": {
+    "admin.example.com": {
+      "blocked_countries": [
+        "CN",
+        "KR",
+        "UNKNOWN",
+        "US"
+      ]
+    },
+    "example.com": {
+      "blocked_countries": [
+        "CN",
+        "DE",
+        "FR",
+        "GB",
+        "IN",
+        "KR",
+        "RU",
+        "SG",
+        "US"
+      ]
+    }
+  }
+}

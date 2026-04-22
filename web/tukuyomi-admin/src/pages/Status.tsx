@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { apiGetBinary, apiGetJson } from "@/lib/api";
+import { apiGetJson } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 type StatusResponse = Record<string, unknown>;
 
@@ -31,11 +32,9 @@ type LogsStatsResponse = {
 };
 
 export default function Status() {
+    const { locale, tx } = useI18n();
     const [data, setData] = useState<StatusResponse | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [manifestNotice, setManifestNotice] = useState<string | null>(null);
-    const [manifestError, setManifestError] = useState<string | null>(null);
-    const [manifestDownloading, setManifestDownloading] = useState(false);
     const [stats, setStats] = useState<LogsStatsResponse | null>(null);
     const [statsError, setStatsError] = useState<string | null>(null);
     const [statsLoading, setStatsLoading] = useState(false);
@@ -101,88 +100,51 @@ export default function Status() {
     const dbSizeBytes = toNumber(data?.db_size_bytes);
     const dbRows = toNumber(data?.db_total_rows);
     const dbWAFBlockRows = toNumber(data?.db_waf_block_rows);
-
-    async function downloadVerifyManifest() {
-        setManifestDownloading(true);
-        setManifestNotice(null);
-        setManifestError(null);
-
-        try {
-            const { blob, filename } = await apiGetBinary("/verify-manifest");
-            const objectUrl = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = objectUrl;
-            a.download = filename || "tukuyomi-verify-manifest.json";
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(objectUrl);
-            setManifestNotice("Verify manifest downloaded.");
-        } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
-            setManifestError(`Verify manifest download failed: ${message}`);
-        } finally {
-            setManifestDownloading(false);
-        }
-    }
+    const listenerMode = String(data?.listener_mode ?? "single");
+    const adminListenerEnabled = data?.admin_listener_enabled === true;
 
     if (error) {
         return (
             <div className="w-full p-4">
-                <div className="border border-red-300 bg-red-50 rounded-xl p-3 text-sm">Error: {error}</div>
+                <div className="border border-red-300 bg-red-50 rounded-xl p-3 text-sm">{tx("Error")}: {error}</div>
             </div>
         );
     }
 
     if (!data) {
-        return <div className="w-full p-4 text-gray-500">Loading status...</div>;
+        return <div className="w-full p-4 text-gray-500">{tx("Loading status...")}</div>;
     }
 
     return (
         <div className="w-full p-4 space-y-4">
             <header className="flex items-center justify-between">
-                <h1 className="text-xl font-semibold">Status</h1>
+                <h1 className="text-xl font-semibold">{tx("Status")}</h1>
                 <span
                     className={`px-2 py-0.5 text-xs rounded ${
                         running ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"
                     }`}
                 >
-                    {running ? "Running" : "Degraded"}
+                    {running ? tx("Running") : tx("Degraded")}
                 </span>
             </header>
 
-            <section className="rounded-xl border bg-white p-4 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                        <h2 className="text-sm font-semibold">Verification Manifest</h2>
-                        <p className="text-xs text-neutral-600">
-                            Export the current admin-side verify manifest scaffold for external WAF test runners.
-                        </p>
-                    </div>
-                    <button type="button" onClick={downloadVerifyManifest} disabled={manifestDownloading}>
-                        {manifestDownloading ? "Downloading..." : "Download Verify Manifest"}
-                    </button>
-                </div>
-
-                {manifestNotice ? (
-                    <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900">{manifestNotice}</div>
-                ) : null}
-                {manifestError ? (
-                    <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">{manifestError}</div>
-                ) : null}
-            </section>
+            <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-xs text-neutral-700">
+                {listenerMode === "split"
+                    ? tx("Split listener mode is active. Public proxy traffic stays on the public listener, while admin UI/API move to the admin listener over plain HTTP. Use a trusted network or front-proxy TLS termination for the admin port.")
+                    : tx("Single listener mode is active. Public proxy traffic and admin UI/API share the same listener, and admin reachability is controlled by admin.external_mode and trusted CIDRs.")}
+            </div>
 
             {stats ? (
-                <section className="rounded-xl border bg-white p-4 space-y-3">
+      <section className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                        <h2 className="text-sm font-semibold">WAF Block Overview ({stats.range_hours}h)</h2>
+                        <h2 className="text-sm font-semibold">{tx("WAF Block Overview ({hours}h)", { hours: stats.range_hours })}</h2>
                         <div className="flex items-center gap-3 text-xs text-neutral-500">
                             <label className="inline-flex items-center gap-1">
-                                Range
+                                {tx("Range")}
                                 <select
                                     value={rangeHours}
                                     onChange={(e) => setRangeHours(Number(e.target.value))}
-                                    className="rounded border px-1 py-0.5 text-xs bg-white text-neutral-700"
+                className="rounded border border-neutral-200 px-1 py-0.5 text-xs bg-white text-neutral-700"
                                 >
                                     <option value={24}>24h</option>
                                     <option value={72}>72h</option>
@@ -190,66 +152,80 @@ export default function Status() {
                                 </select>
                             </label>
                             <span>
-                                Scanned {formatCount(stats.scanned_lines)} lines · Updated {formatTime(stats.generated_at)}
+                                {tx("Scanned {lines} lines · Updated {time}", {
+                                    lines: formatCount(stats.scanned_lines),
+                                    time: formatTime(stats.generated_at, locale),
+                                })}
                             </span>
                         </div>
                     </div>
 
                     <div className="grid gap-3 sm:grid-cols-3 text-sm">
-                        <Metric label="Blocked (Last 1h)" value={formatCount(wafBlock?.last_1h)} />
-                        <Metric label="Blocked (Last 24h)" value={formatCount(wafBlock?.last_24h)} />
-                        <Metric label="Blocked (In Scan Window)" value={formatCount(wafBlock?.total_in_scan)} />
+                        <Metric label={tx("Blocked (Last 1h)")} value={formatCount(wafBlock?.last_1h)} />
+                        <Metric label={tx("Blocked (Last 24h)")} value={formatCount(wafBlock?.last_24h)} />
+                        <Metric label={tx("Blocked (In Scan Window)")} value={formatCount(wafBlock?.total_in_scan)} />
                     </div>
 
-                    <HourlyBars points={wafBlock?.series_hourly ?? []} />
+                    <HourlyBars points={wafBlock?.series_hourly ?? []} locale={locale} tx={tx} />
 
                     {stats.oldest_scanned_ts && stats.newest_scanned_ts ? (
                         <div className="text-xs text-neutral-500">
-                            Scan coverage: {formatTime(stats.oldest_scanned_ts)} - {formatTime(stats.newest_scanned_ts)}
+                            {tx("Scan coverage: {start} - {end}", {
+                                start: formatTime(stats.oldest_scanned_ts, locale),
+                                end: formatTime(stats.newest_scanned_ts, locale),
+                            })}
                         </div>
                     ) : null}
 
                     <div className="grid gap-3 lg:grid-cols-3">
-                        <TopBuckets title="Top Rule IDs (24h)" items={wafBlock?.top_rule_ids_24h ?? []} />
-                        <TopBuckets title="Top Paths (24h)" items={wafBlock?.top_paths_24h ?? []} />
-                        <TopBuckets title="Top Countries (24h)" items={wafBlock?.top_countries_24h ?? []} />
+                        <TopBuckets title={tx("Top Rule IDs (24h)")} items={wafBlock?.top_rule_ids_24h ?? []} tx={tx} />
+                        <TopBuckets title={tx("Top Paths (24h)")} items={wafBlock?.top_paths_24h ?? []} tx={tx} />
+                        <TopBuckets title={tx("Top Countries (24h)")} items={wafBlock?.top_countries_24h ?? []} tx={tx} />
                     </div>
                 </section>
             ) : null}
 
             {statsLoading ? (
-                <div className="text-xs text-neutral-500">Updating WAF block stats...</div>
+                <div className="text-xs text-neutral-500">{tx("Updating WAF block stats...")}</div>
             ) : null}
 
             {statsError ? (
                 <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    Failed to load WAF block stats: {statsError}
+                    {tx("Failed to load WAF block stats: {error}", { error: statsError })}
                 </div>
             ) : null}
 
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
-                <Metric label="API Base" value={String(data.api_base ?? "-")} />
-                <Metric label="Log Provider" value={String(data.log_output_provider ?? "-")} />
-                <Metric label="Log Stdout Streams" value={String(data.log_output_stdout_streams ?? "-")} />
-                <Metric label="Log File Streams" value={String(data.log_output_file_streams ?? "-")} />
-                <Metric label="Log Local Reads" value={String(data.log_output_local_read_compatible ?? "-")} />
-                <Metric label="Rules File" value={String(data.rules_file ?? "-")} />
-                <Metric label="CRS Enabled" value={String(data.crs_enabled ?? "-")} />
-                <Metric label="Rate Limit Enabled" value={String(data.rate_limit_enabled ?? "-")} />
-                <Metric label="Bot Defense Enabled" value={String(data.bot_defense_enabled ?? "-")} />
-                <Metric label="Semantic Mode" value={String(data.semantic_mode ?? "-")} />
-                <Metric label="DB Enabled" value={String(data.db_enabled ?? "-")} />
-                <Metric label="DB Retention Days" value={String(data.db_retention_days ?? "-")} />
-                <Metric label="DB Rows (Total)" value={dbRows != null ? formatCount(dbRows) : "-"} />
-                <Metric label="DB Rows (WAF Block)" value={dbWAFBlockRows != null ? formatCount(dbWAFBlockRows) : "-"} />
-                <Metric label="DB Size" value={dbSizeBytes != null ? formatBytes(dbSizeBytes) : "-"} />
-                <Metric label="DB Last Sync Scan Lines" value={String(data.db_last_sync_scanned_lines ?? "-")} />
+                <Metric label={tx("Listener Mode")} value={listenerMode} />
+                <Metric label={tx("Public Listener")} value={String(data.public_listener_addr ?? data.listen_addr ?? "-")} />
+                <Metric label={tx("Admin Listener Enabled")} value={String(adminListenerEnabled)} />
+                <Metric label={tx("Admin Listener")} value={String(data.admin_listener_addr ?? "-")} />
+                <Metric label={tx("Admin Listener Transport")} value={String(data.admin_listener_transport ?? "-")} />
+                <Metric label={tx("Public PROXY Protocol")} value={String(data.public_listener_proxy_protocol_enabled ?? "-")} />
+                <Metric label={tx("Admin PROXY Protocol")} value={String(data.admin_listener_proxy_protocol_enabled ?? "-")} />
+                <Metric label={tx("Public TLS Enabled")} value={String(data.public_listener_tls_enabled ?? data.server_tls_enabled ?? "-")} />
+                <Metric label={tx("API Base")} value={String(data.api_base ?? "-")} />
+                <Metric label={tx("Country Resolution Mode")} value={String(data.request_country_effective_mode ?? "-")} />
+                <Metric label={tx("Country DB Loaded")} value={String(data.request_country_loaded ?? "-")} />
+                <Metric label={tx("Country DB Path")} value={String(data.request_country_managed_path ?? "-")} />
+                <Metric label={tx("Rules File")} value={String(data.rules_file ?? "-")} />
+                <Metric label={tx("Proxy Upstream KeepAlive (sec)")} value={String(data.proxy_upstream_keepalive_sec ?? "-")} />
+                <Metric label={tx("CRS Enabled")} value={String(data.crs_enabled ?? "-")} />
+                <Metric label={tx("Rate Limit Enabled")} value={String(data.rate_limit_enabled ?? "-")} />
+                <Metric label={tx("Bot Defense Enabled")} value={String(data.bot_defense_enabled ?? "-")} />
+                <Metric label={tx("Semantic Mode")} value={String(data.semantic_mode ?? "-")} />
+                <Metric label={tx("DB Enabled")} value={String(data.db_enabled ?? "-")} />
+                <Metric label={tx("DB Retention Days")} value={String(data.db_retention_days ?? "-")} />
+                <Metric label={tx("DB Rows (Total)")} value={dbRows != null ? formatCount(dbRows) : "-"} />
+                <Metric label={tx("DB Rows (WAF Block)")} value={dbWAFBlockRows != null ? formatCount(dbWAFBlockRows) : "-"} />
+                <Metric label={tx("DB Size")} value={dbSizeBytes != null ? formatBytes(dbSizeBytes) : "-"} />
+                <Metric label={tx("DB Last Sync Scan Lines")} value={String(data.db_last_sync_scanned_lines ?? "-")} />
             </div>
 
-            <section className="rounded-xl border bg-white p-4 space-y-3">
+      <section className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
                 <div className="flex items-center justify-between gap-2">
-                    <h2 className="text-sm font-semibold">Rendered JSON</h2>
-                    <span className="text-xs text-neutral-500">Latest status payload</span>
+                    <h2 className="text-sm font-semibold">{tx("Rendered JSON")}</h2>
+                    <span className="text-xs text-neutral-500">{tx("Latest status payload")}</span>
                 </div>
                 <div className="app-code-shell">
                     <pre className="app-code-block">
@@ -261,12 +237,20 @@ export default function Status() {
     );
 }
 
-function TopBuckets({ title, items }: { title: string; items: StatsBucket[] }) {
+function TopBuckets({
+    title,
+    items,
+    tx,
+}: {
+    title: string;
+    items: StatsBucket[];
+    tx: (key: string, vars?: Record<string, string | number | boolean | null | undefined>) => string;
+}) {
     return (
-        <div className="rounded-xl border bg-white px-3 py-2">
+                  <div className="rounded-xl border border-neutral-200 bg-white px-3 py-2">
             <div className="text-xs text-neutral-500">{title}</div>
             {items.length === 0 ? (
-                <div className="mt-2 text-xs text-neutral-500">No data (last 24h)</div>
+                <div className="mt-2 text-xs text-neutral-500">{tx("No data (last 24h)")}</div>
             ) : (
                 <ul className="mt-2 space-y-1 text-xs font-mono">
                     {items.map((item) => (
@@ -281,18 +265,26 @@ function TopBuckets({ title, items }: { title: string; items: StatsBucket[] }) {
     );
 }
 
-function HourlyBars({ points }: { points: StatsSeriesPoint[] }) {
+function HourlyBars({
+    points,
+    locale,
+    tx,
+}: {
+    points: StatsSeriesPoint[];
+    locale: "en" | "ja";
+    tx: (key: string, vars?: Record<string, string | number | boolean | null | undefined>) => string;
+}) {
     const maxCount = points.reduce((max, point) => Math.max(max, point.count), 0);
     const start = points[0]?.bucket_start;
     const end = points[points.length - 1]?.bucket_start;
 
     return (
-        <div className="rounded-xl border bg-white px-3 py-2">
-            <div className="text-xs text-neutral-500">Blocked Requests by Hour</div>
+                        <div className="rounded-xl border border-neutral-200 bg-white px-3 py-2">
+            <div className="text-xs text-neutral-500">{tx("Blocked Requests by Hour")}</div>
             {points.length === 0 ? (
-                <div className="mt-2 text-xs text-neutral-500">No data</div>
+                <div className="mt-2 text-xs text-neutral-500">{tx("No data")}</div>
             ) : maxCount === 0 ? (
-                <div className="mt-2 text-xs text-neutral-500">No blocked requests in selected range</div>
+                <div className="mt-2 text-xs text-neutral-500">{tx("No blocked requests in selected range")}</div>
             ) : (
                 <div className="mt-3">
                     <div className="h-28 flex items-end gap-1">
@@ -303,7 +295,7 @@ function HourlyBars({ points }: { points: StatsSeriesPoint[] }) {
                                     <div
                                         className="w-full rounded-sm bg-red-400 hover:bg-red-500"
                                         style={{ height: `${height}%` }}
-                                        title={`${formatTime(point.bucket_start)}: ${point.count}`}
+                                        title={`${formatTime(point.bucket_start, locale)}: ${point.count}`}
                                     />
                                 </div>
                             );
@@ -322,7 +314,7 @@ function HourlyBars({ points }: { points: StatsSeriesPoint[] }) {
 
 function Metric({ label, value }: { label: string; value: string }) {
     return (
-        <div className="rounded-xl border bg-white px-3 py-2">
+                        <div className="rounded-xl border border-neutral-200 bg-white px-3 py-2">
             <div className="text-xs text-neutral-500">{label}</div>
             <div className="font-mono text-xs mt-1 break-all">{value}</div>
         </div>
@@ -375,7 +367,7 @@ function toNumber(value: unknown): number | null {
     return null;
 }
 
-function formatTime(value: string | undefined) {
+function formatTime(value: string | undefined, locale: "en" | "ja" = "en") {
     if (!value) {
         return "-";
     }
@@ -383,5 +375,5 @@ function formatTime(value: string | undefined) {
     if (Number.isNaN(d.getTime())) {
         return value;
     }
-    return d.toLocaleString();
+    return d.toLocaleString(locale === "ja" ? "ja-JP" : "en-US");
 }

@@ -1,0 +1,11 @@
+[Unit]
+Description=tukuyomi HTTP redirect TCP socket
+
+[Socket]
+ListenStream=80
+FileDescriptorName=redirect
+NoDelay=true
+Service=tukuyomi.service
+
+[Install]
+WantedBy=sockets.target

@@ -1,0 +1,21 @@
+{
+  "default": {
+    "enabled": true,
+    "mode": "log_only",
+    "exempt_path_prefixes": [
+      "/tukuyomi-api",
+      "/tukuyomi-ui",
+      "/health",
+      "/healthz",
+      "/favicon.ico",
+      "/wp-admin/",
+      "/wp-content/",
+      "/wp-includes/"
+    ],
+    "log_threshold": 7,
+    "challenge_threshold": 10,
+    "block_threshold": 13,
+    "max_inspect_body": 8192
+  },
+  "hosts": {}
+}

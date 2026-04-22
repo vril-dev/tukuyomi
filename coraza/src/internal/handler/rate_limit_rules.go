@@ -30,6 +30,7 @@ func bindRateLimitPutBody(c *gin.Context) (rateLimitPutBody, bool) {
 func GetRateLimitRules(c *gin.Context) {
 	path := GetRateLimitPath()
 	raw, _ := os.ReadFile(path)
+	savedAt := fileSavedAt(path)
 	if store := getLogsStatsStore(); store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(rateLimitConfigBlobKey)
 		if err != nil {
@@ -42,11 +43,13 @@ func GetRateLimitRules(c *gin.Context) {
 				if strings.TrimSpace(dbETag) == "" {
 					dbETag = bypassconf.ComputeETag(dbRaw)
 				}
+				savedAt = configBlobSavedAt(store, rateLimitConfigBlobKey)
 				c.JSON(http.StatusOK, gin.H{
-					"etag":    dbETag,
-					"raw":     string(dbRaw),
-					"enabled": rt.Raw.Enabled,
-					"rules":   len(rt.Raw.Rules),
+					"etag":     dbETag,
+					"raw":      string(dbRaw),
+					"enabled":  rateLimitEnabled(rt.Raw),
+					"rules":    rateLimitRuleCount(rt.Raw),
+					"saved_at": savedAt,
 				})
 				return
 			}
@@ -59,10 +62,11 @@ func GetRateLimitRules(c *gin.Context) {
 
 	cfg := GetRateLimitConfig()
 	c.JSON(http.StatusOK, gin.H{
-		"etag":    bypassconf.ComputeETag(raw),
-		"raw":     string(raw),
-		"enabled": cfg.Enabled,
-		"rules":   len(cfg.Rules),
+		"etag":     bypassconf.ComputeETag(raw),
+		"raw":      string(raw),
+		"enabled":  rateLimitEnabled(cfg),
+		"rules":    rateLimitRuleCount(cfg),
+		"saved_at": savedAt,
 	})
 }
 
@@ -81,8 +85,8 @@ func ValidateRateLimitRules(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"ok":       true,
 		"messages": []string{},
-		"enabled":  rt.Raw.Enabled,
-		"rules":    len(rt.Raw.Rules),
+		"enabled":  rateLimitEnabled(rt.Raw),
+		"rules":    rateLimitRuleCount(rt.Raw),
 	})
 }
 
@@ -139,9 +143,10 @@ func PutRateLimitRules(c *gin.Context) {
 		return
 	}
 
+	now := time.Now().UTC()
 	newETag := bypassconf.ComputeETag([]byte(in.Raw))
 	if store != nil {
-		if err := store.UpsertConfigBlob(rateLimitConfigBlobKey, []byte(in.Raw), newETag, time.Now().UTC()); err != nil {
+		if err := store.UpsertConfigBlob(rateLimitConfigBlobKey, []byte(in.Raw), newETag, now); err != nil {
 			_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
 			_ = ReloadRateLimit()
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -153,10 +158,11 @@ func PutRateLimitRules(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"ok":      true,
-		"etag":    newETag,
-		"enabled": rt.Raw.Enabled,
-		"rules":   len(rt.Raw.Rules),
+		"ok":       true,
+		"etag":     newETag,
+		"enabled":  rateLimitEnabled(rt.Raw),
+		"rules":    rateLimitRuleCount(rt.Raw),
+		"saved_at": now.Format(time.RFC3339Nano),
 	})
 }
 

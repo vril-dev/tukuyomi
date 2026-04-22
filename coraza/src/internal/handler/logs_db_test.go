@@ -295,6 +295,87 @@ func TestLogsReadUsesSQLiteStoreCountryFilterPagination(t *testing.T) {
 	}
 }
 
+func TestLogsReadUsesSQLiteStoreReqIDFilterAcrossPolicyEvents(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	now := time.Now().UTC()
+	entries := []map[string]any{
+		{
+			"ts":         now.Add(-3 * time.Minute).Format(time.RFC3339Nano),
+			"event":      "ip_reputation",
+			"req_id":     "req-shared",
+			"path":       "/login",
+			"country":    "JP",
+			"status":     403,
+			"rule_id":    "UNKNOWN",
+			"risk_score": 40,
+		},
+		{
+			"ts":         now.Add(-2 * time.Minute).Format(time.RFC3339Nano),
+			"event":      "bot_challenge",
+			"req_id":     "req-shared",
+			"path":       "/login",
+			"country":    "JP",
+			"status":     403,
+			"rule_id":    "UNKNOWN",
+			"risk_score": 85,
+		},
+		{
+			"ts":      now.Add(-1 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "waf_block",
+			"req_id":  "req-shared",
+			"path":    "/login",
+			"country": "JP",
+			"status":  403,
+			"rule_id": 942100,
+		},
+		{
+			"ts":      now.Add(-30 * time.Second).Format(time.RFC3339Nano),
+			"event":   "rate_limited",
+			"req_id":  "req-other",
+			"path":    "/login",
+			"country": "JP",
+			"status":  429,
+			"rule_id": "UNKNOWN",
+		},
+	}
+
+	tmp := t.TempDir()
+	logPath := filepath.Join(tmp, "waf-events.ndjson")
+	writeNDJSONFile(t, logPath, entries)
+
+	restoreLogPath := setWAFLogPathForTest(t, logPath)
+	defer restoreLogPath()
+
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStore(true, dbPath, 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	read := callLogsRead(t, "/tukuyomi-api/logs/read?src=waf&req_id=req-shared")
+	if len(read.Lines) != 3 {
+		t.Fatalf("lines=%d want=3", len(read.Lines))
+	}
+	if read.HasPrev || read.HasNext || read.HasMore {
+		t.Fatalf("unexpected pagination flags: %+v", read)
+	}
+
+	gotEvents := make([]string, 0, len(read.Lines))
+	for _, line := range read.Lines {
+		if got := anyToString(line["req_id"]); got != "req-shared" {
+			t.Fatalf("req_id=%q want=req-shared", got)
+		}
+		gotEvents = append(gotEvents, anyToString(line["event"]))
+	}
+	wantEvents := []string{"ip_reputation", "bot_challenge", "waf_block"}
+	if strings.Join(gotEvents, ",") != strings.Join(wantEvents, ",") {
+		t.Fatalf("events=%v want=%v", gotEvents, wantEvents)
+	}
+}
+
 func TestLogsDownloadUsesSQLiteStoreForWAF(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -440,6 +521,12 @@ func TestLatestWAFBlockEventUsesSQLiteStoreWhenLogFileMissing(t *testing.T) {
 	if event.RuleID != 920350 {
 		t.Fatalf("rule_id=%d want=920350", event.RuleID)
 	}
+	if event.MatchedVariable != "ARGS:id" {
+		t.Fatalf("matched_variable=%q want=ARGS:id", event.MatchedVariable)
+	}
+	if event.MatchedValue != "bar" {
+		t.Fatalf("matched_value=%q want=bar", event.MatchedValue)
+	}
 }
 
 func TestWAFEventStoreStatusSnapshot(t *testing.T) {
@@ -540,7 +627,7 @@ func TestInitLogsStatsStoreWithBackend_MySQLRequiresDSN(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing mysql dsn")
 	}
-	if !strings.Contains(err.Error(), "requires WAF_DB_DSN") {
+	if !strings.Contains(err.Error(), "requires storage.db_dsn") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

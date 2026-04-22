@@ -6,12 +6,11 @@ import (
 	"mime"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
-
 	"tukuyomi/internal/config"
-	"tukuyomi/internal/middleware"
 )
 
 //go:embed admin_ui_dist
@@ -21,15 +20,13 @@ func RegisterAdminUIRoutes(r *gin.Engine) {
 	if r == nil {
 		return
 	}
-
 	uiFS, err := fs.Sub(adminUIEmbedFS, "admin_ui_dist")
 	if err != nil {
 		return
 	}
-
 	base := strings.TrimSpace(config.UIBasePath)
 	if base == "" {
-		base = "/tukuyomi-admin"
+		base = "/tukuyomi-ui"
 	}
 	if !strings.HasPrefix(base, "/") {
 		base = "/" + base
@@ -51,19 +48,61 @@ func RegisterAdminUIRoutes(r *gin.Engine) {
 		c.Data(http.StatusOK, ct, raw)
 	}
 
-	uiAccess := middleware.AdminAccess(middleware.AdminEndpointUI)
-
-	r.GET(base, uiAccess, func(c *gin.Context) {
+	r.GET(base, func(c *gin.Context) {
+		if !CheckAdminUIAccess(c.Request) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+			return
+		}
+		if decision := EvaluateAdminUIRateLimit(c.Request); !decision.Allowed {
+			if decision.RetryAfterSeconds > 0 {
+				c.Header("Retry-After", strconv.Itoa(decision.RetryAfterSeconds))
+			}
+			c.AbortWithStatusJSON(decision.StatusCode, gin.H{"error": "admin rate limit exceeded"})
+			return
+		}
 		serveFile(c, "index.html")
 	})
-	r.HEAD(base, uiAccess, func(c *gin.Context) {
+	r.HEAD(base, func(c *gin.Context) {
+		if !CheckAdminUIAccess(c.Request) {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+		if decision := EvaluateAdminUIRateLimit(c.Request); !decision.Allowed {
+			if decision.RetryAfterSeconds > 0 {
+				c.Header("Retry-After", strconv.Itoa(decision.RetryAfterSeconds))
+			}
+			c.AbortWithStatus(decision.StatusCode)
+			return
+		}
 		serveFile(c, "index.html")
 	})
-	r.GET(base+"/*filepath", uiAccess, func(c *gin.Context) {
+	r.GET(base+"/*filepath", func(c *gin.Context) {
+		if !CheckAdminUIAccess(c.Request) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+			return
+		}
+		if decision := EvaluateAdminUIRateLimit(c.Request); !decision.Allowed {
+			if decision.RetryAfterSeconds > 0 {
+				c.Header("Retry-After", strconv.Itoa(decision.RetryAfterSeconds))
+			}
+			c.AbortWithStatusJSON(decision.StatusCode, gin.H{"error": "admin rate limit exceeded"})
+			return
+		}
 		p := strings.TrimPrefix(c.Param("filepath"), "/")
 		serveFile(c, p)
 	})
-	r.HEAD(base+"/*filepath", uiAccess, func(c *gin.Context) {
+	r.HEAD(base+"/*filepath", func(c *gin.Context) {
+		if !CheckAdminUIAccess(c.Request) {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+		if decision := EvaluateAdminUIRateLimit(c.Request); !decision.Allowed {
+			if decision.RetryAfterSeconds > 0 {
+				c.Header("Retry-After", strconv.Itoa(decision.RetryAfterSeconds))
+			}
+			c.AbortWithStatus(decision.StatusCode)
+			return
+		}
 		p := strings.TrimPrefix(c.Param("filepath"), "/")
 		serveFile(c, p)
 	})

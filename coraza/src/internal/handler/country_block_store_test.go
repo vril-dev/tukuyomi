@@ -21,26 +21,45 @@ JP
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	want := []string{"JP", "UNKNOWN", "US"}
-	if len(got) != len(want) {
-		t.Fatalf("len(got)=%d want=%d got=%v", len(got), len(want), got)
+	if !reflect.DeepEqual(got.Default.BlockedCountries, []string{"JP", "UNKNOWN", "US"}) {
+		t.Fatalf("default.blocked_countries=%v", got.Default.BlockedCountries)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("got[%d]=%s want=%s (all=%v)", i, got[i], want[i], got)
-		}
+}
+
+func TestParseCountryBlockRaw_JSON(t *testing.T) {
+	got, err := ParseCountryBlockRaw(`{
+  "default": {
+    "blocked_countries": ["jp", "UNKNOWN"]
+  },
+  "hosts": {
+    "admin.example.com": {
+      "blocked_countries": ["US", "JP"]
+    }
+  }
+}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"JP", "UNKNOWN", "US"}
+	if !reflect.DeepEqual(flattenCountryBlockCodes(got), want) {
+		t.Fatalf("flattenCountryBlockCodes()=%v want=%v", flattenCountryBlockCodes(got), want)
+	}
+	if _, ok := got.Hosts["admin.example.com"]; !ok {
+		t.Fatalf("expected host scope, got %v", got.Hosts)
 	}
 }
 
 func TestParseCountryBlockRaw_Invalid(t *testing.T) {
-	if _, err := ParseCountryBlockRaw("JPN\n"); err == nil {
-		t.Fatal("expected error for non alpha-2 code")
+	cases := []string{
+		"JPN\n",
+		"U1\n",
+		"JP US\n",
+		`{"hosts":{"*.example.com":{"blocked_countries":["JP"]}}}`,
 	}
-	if _, err := ParseCountryBlockRaw("U1\n"); err == nil {
-		t.Fatal("expected error for non alphabetic code")
-	}
-	if _, err := ParseCountryBlockRaw("JP US\n"); err == nil {
-		t.Fatal("expected error for multiple tokens per line")
+	for _, raw := range cases {
+		if _, err := ParseCountryBlockRaw(raw); err == nil {
+			t.Fatalf("expected error for %q", raw)
+		}
 	}
 }
 
@@ -54,7 +73,7 @@ func TestSyncCountryBlockStorage_SeedsDBFromFileWhenMissingBlob(t *testing.T) {
 	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
 		t.Fatalf("write country-block file: %v", err)
 	}
-	if err := InitCountryBlock(path); err != nil {
+	if err := InitCountryBlock(path, ""); err != nil {
 		t.Fatalf("init country-block: %v", err)
 	}
 
@@ -96,7 +115,7 @@ func TestSyncCountryBlockStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
 	if err := os.WriteFile(path, []byte(fileRaw), 0o644); err != nil {
 		t.Fatalf("write country-block file: %v", err)
 	}
-	if err := InitCountryBlock(path); err != nil {
+	if err := InitCountryBlock(path, ""); err != nil {
 		t.Fatalf("init country-block: %v", err)
 	}
 
@@ -136,19 +155,110 @@ func TestSyncCountryBlockStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
 	}
 }
 
+func TestInitCountryBlock_PrefersLegacyUntilPrimaryExists(t *testing.T) {
+	restore := saveCountryBlockStateForTest()
+	defer restore()
+
+	tmp := t.TempDir()
+	primary := filepath.Join(tmp, "country-block.json")
+	legacy := filepath.Join(tmp, "country-block.conf")
+	if err := os.WriteFile(legacy, []byte("JP\n"), 0o644); err != nil {
+		t.Fatalf("write legacy country-block file: %v", err)
+	}
+
+	if err := InitCountryBlock(primary, legacy); err != nil {
+		t.Fatalf("InitCountryBlock() error: %v", err)
+	}
+	if got := GetCountryBlockActivePath(); got != legacy {
+		t.Fatalf("active path=%q want=%q", got, legacy)
+	}
+	if !IsCountryBlocked("example.com", false, "JP") {
+		t.Fatal("expected JP to be blocked from legacy file")
+	}
+	if _, err := os.Stat(primary); !os.IsNotExist(err) {
+		t.Fatalf("primary file should not be created implicitly, err=%v", err)
+	}
+
+	primaryRaw, err := MarshalCountryBlockJSON(countryBlockFile{Default: countryBlockScope{BlockedCountries: []string{"US"}}})
+	if err != nil {
+		t.Fatalf("MarshalCountryBlockJSON() error: %v", err)
+	}
+	if err := os.WriteFile(primary, primaryRaw, 0o644); err != nil {
+		t.Fatalf("write primary country-block file: %v", err)
+	}
+	if err := ReloadCountryBlock(); err != nil {
+		t.Fatalf("ReloadCountryBlock() error: %v", err)
+	}
+	if got := GetCountryBlockActivePath(); got != primary {
+		t.Fatalf("active path=%q want=%q", got, primary)
+	}
+	if !IsCountryBlocked("example.com", false, "US") {
+		t.Fatal("expected US to be blocked from primary file")
+	}
+	if IsCountryBlocked("example.com", false, "JP") {
+		t.Fatal("did not expect JP to remain blocked after switching to primary file")
+	}
+}
+
+func TestIsCountryBlocked_PrefersHostPortOverHostAndDefault(t *testing.T) {
+	restore := saveCountryBlockStateForTest()
+	defer restore()
+
+	countryBlockMu.Lock()
+	countryBlockState = compileCountryBlock(countryBlockFile{
+		Default: countryBlockScope{BlockedCountries: []string{"JP"}},
+		Hosts: map[string]countryBlockScope{
+			"example.com":      {BlockedCountries: []string{"US"}},
+			"example.com:8080": {BlockedCountries: []string{"KR"}},
+		},
+	})
+	countryBlockMu.Unlock()
+
+	if !IsCountryBlocked("example.com:8080", false, "KR") {
+		t.Fatal("expected host:port override to block KR")
+	}
+	if IsCountryBlocked("example.com:8080", false, "US") {
+		t.Fatal("did not expect bare host policy to apply when host:port override exists")
+	}
+	if !IsCountryBlocked("example.com", false, "US") {
+		t.Fatal("expected bare host policy to block US")
+	}
+	if !IsCountryBlocked("other.example.com", false, "JP") {
+		t.Fatal("expected default policy to block JP")
+	}
+}
+
+func TestIsCountryBlocked_TreatsHTTPSDefaultPortAsEquivalent(t *testing.T) {
+	restore := saveCountryBlockStateForTest()
+	defer restore()
+
+	countryBlockMu.Lock()
+	countryBlockState = compileCountryBlock(countryBlockFile{
+		Hosts: map[string]countryBlockScope{
+			"example.com:443": {BlockedCountries: []string{"US"}},
+		},
+	})
+	countryBlockMu.Unlock()
+
+	if !IsCountryBlocked("example.com", true, "US") {
+		t.Fatal("expected default HTTPS port to match :443 policy")
+	}
+}
+
 func saveCountryBlockStateForTest() func() {
 	countryBlockMu.RLock()
 	oldPath := countryBlockPath
-	oldBlocked := make(map[string]struct{}, len(blockedCountryCodes))
-	for k, v := range blockedCountryCodes {
-		oldBlocked[k] = v
-	}
+	oldLegacyPath := countryBlockLegacyPath
+	oldActivePath := countryBlockActivePath
+	oldState := cloneCompiledCountryBlock(countryBlockState)
 	countryBlockMu.RUnlock()
 
 	return func() {
 		countryBlockMu.Lock()
 		countryBlockPath = oldPath
-		blockedCountryCodes = oldBlocked
+		countryBlockLegacyPath = oldLegacyPath
+		countryBlockActivePath = oldActivePath
+		countryBlockState = oldState
 		countryBlockMu.Unlock()
 	}
 }

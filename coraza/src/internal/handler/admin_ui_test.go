@@ -28,9 +28,9 @@ func TestReadAdminUIAssetFallsBackToPlaceholder(t *testing.T) {
 
 func TestReadAdminUIAssetReturnsExistingAsset(t *testing.T) {
 	uiFS := fstest.MapFS{
-		"index.html":       {Data: []byte("<html>real</html>")},
-		"assets/app.js":    {Data: []byte("console.log('ok')")},
-		"placeholder.html": {Data: []byte("<html>placeholder</html>")},
+		"index.html":        {Data: []byte("<html>real</html>")},
+		"assets/app.js":     {Data: []byte("console.log('ok')")},
+		"placeholder.html":  {Data: []byte("<html>placeholder</html>")},
 	}
 
 	raw, resolvedPath, placeholder, err := readAdminUIAsset(uiFS, "assets/app.js")

@@ -2,25 +2,7 @@
 set -euo pipefail
 
 PROTECTED_HOST="${PROTECTED_HOST:-protected.example.test}"
-EXAMPLE_TOPOLOGY="${EXAMPLE_TOPOLOGY:-direct}"
-
-if [[ -z "${BASE_URL:-}" ]]; then
-  case "${EXAMPLE_TOPOLOGY}" in
-    front)
-      BASE_URL="http://127.0.0.1:${NGINX_PORT:-18083}"
-      ;;
-    direct)
-      BASE_URL="http://127.0.0.1:${CORAZA_PORT:-19093}"
-      ;;
-    *)
-      echo "[example-smoke][ERROR] unsupported EXAMPLE_TOPOLOGY=${EXAMPLE_TOPOLOGY}" >&2
-      exit 1
-      ;;
-  esac
-else
-  BASE_URL="${BASE_URL}"
-fi
-
+BASE_URL="${BASE_URL:-http://127.0.0.1:${CORAZA_PORT:-19093}}"
 tmp_body="$(mktemp)"
 
 cleanup() {
@@ -67,6 +49,8 @@ payload = json.loads(pathlib.Path(sys.argv[2]).read_text())
 
 if payload.get("host") != expected_host:
     raise SystemExit(f"expected host={expected_host!r}, got {payload.get('host')!r}")
+if payload.get("x_protected_host") != "matched":
+    raise SystemExit(f"expected x_protected_host='matched', got {payload.get('x_protected_host')!r}")
 PY
 
 status="$(curl -sS -o "${tmp_body}" -w "%{http_code}" -H "Host: ${PROTECTED_HOST}" "${BASE_URL}/v1/whoami?q=%3Cscript%3Ealert(1)%3C%2Fscript%3E")"

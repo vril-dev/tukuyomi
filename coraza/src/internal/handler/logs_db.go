@@ -113,7 +113,7 @@ func InitLogsStatsStoreWithBackend(storageBackend, dbDriver, dbPath, dbDSN strin
 		}
 	case logStatsDBDriverMySQL:
 		if strings.TrimSpace(dbDSN) == "" {
-			return fmt.Errorf("mysql driver requires WAF_DB_DSN")
+			return fmt.Errorf("mysql driver requires storage.db_dsn")
 		}
 		store, err = openWAFEventStoreMySQL(dbDSN, retentionDays)
 		if err != nil {
@@ -561,6 +561,48 @@ func (s *wafEventStore) ReadWAFLogs(logPath string, tail int, cursor *int64, dir
 	return out, &nextCur, hasPrev, hasNext, nil
 }
 
+func (s *wafEventStore) ReadWAFRequestLogs(logPath string, reqIDFilter string, countryFilter string) ([]logLine, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.syncWAFEvents(logPath); err != nil {
+		return nil, err
+	}
+
+	query := `SELECT raw_json FROM waf_events WHERE req_id = ?`
+	args := make([]any, 0, 2)
+	args = append(args, reqIDFilter)
+	if countryFilter != "" {
+		query += ` AND country = ?`
+		args = append(args, countryFilter)
+	}
+	query += ` ORDER BY ts_unix ASC, id ASC`
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]logLine, 0, 8)
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			continue
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
 func (s *wafEventStore) DownloadWAFLogs(logPath string, w io.Writer, from, to time.Time, countryFilter string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -639,6 +681,13 @@ func (s *wafEventStore) LatestWAFBlockEvent(logPath string) (fpTunerEventInput, 
 	}
 	event.EventType = ""
 	return normalizeFPTunerEventInput(event), nil
+}
+
+func nullString(ns sql.NullString) string {
+	if !ns.Valid {
+		return ""
+	}
+	return strings.TrimSpace(ns.String)
 }
 
 func (s *wafEventStore) RecentWAFBlockLogLines(logPath string, limit int) ([]logLine, error) {
@@ -926,6 +975,31 @@ func (s *wafEventStore) GetConfigBlob(configKey string) ([]byte, string, bool, e
 	}
 }
 
+func (s *wafEventStore) GetConfigBlobUpdatedAt(configKey string) (string, bool, error) {
+	if s == nil || s.db == nil {
+		return "", false, nil
+	}
+
+	key := strings.TrimSpace(configKey)
+	if key == "" {
+		return "", false, fmt.Errorf("config key is empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var updatedAt string
+	row := s.db.QueryRow(`SELECT updated_at FROM config_blobs WHERE config_key = ?`, key)
+	switch err := row.Scan(&updatedAt); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, err
+	default:
+		return strings.TrimSpace(updatedAt), true, nil
+	}
+}
+
 func (s *wafEventStore) UpsertConfigBlob(configKey string, raw []byte, etag string, now time.Time) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("db store is not initialized")
@@ -958,6 +1032,65 @@ func (s *wafEventStore) UpsertConfigBlob(configKey string, raw []byte, etag stri
 		ts.Unix(),
 		ts.Format(time.RFC3339Nano),
 	)
+	return err
+}
+
+type configBlobRecord struct {
+	ConfigKey string
+	Raw       []byte
+	ETag      string
+	UpdatedAt string
+}
+
+func (s *wafEventStore) ListConfigBlobs(prefix string) ([]configBlobRecord, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return nil, fmt.Errorf("config prefix is empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rows, err := s.db.Query(`SELECT config_key, raw_text, etag, updated_at FROM config_blobs WHERE config_key LIKE ? ORDER BY config_key`, prefix+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []configBlobRecord{}
+	for rows.Next() {
+		var rec configBlobRecord
+		var raw string
+		if err := rows.Scan(&rec.ConfigKey, &raw, &rec.ETag, &rec.UpdatedAt); err != nil {
+			return nil, err
+		}
+		rec.Raw = []byte(raw)
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *wafEventStore) DeleteConfigBlob(configKey string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("db store is not initialized")
+	}
+
+	key := strings.TrimSpace(configKey)
+	if key == "" {
+		return fmt.Errorf("config key is empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`DELETE FROM config_blobs WHERE config_key = ?`, key)
 	return err
 }
 

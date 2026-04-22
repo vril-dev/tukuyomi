@@ -18,6 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"tukuyomi/internal/policyhost"
 )
 
 const (
@@ -34,6 +36,8 @@ const (
 	semanticActionBlock     = "block"
 )
 
+const semanticDefaultScope = "default"
+
 var (
 	semanticPatternUnionSelect = regexp.MustCompile(`\bunion\b[\s\W]{0,48}\bselect\b`)
 	semanticPatternBooleanSQL  = regexp.MustCompile(`\b(or|and)\b[\s\W]{0,24}(1=1|true|false|[\w'"]+\s*=\s*[\w'"]+)`)
@@ -46,21 +50,27 @@ var (
 )
 
 type semanticConfig struct {
-	Enabled                     bool     `json:"enabled"`
-	Mode                        string   `json:"mode"`
-	ExemptPathPrefixes          []string `json:"exempt_path_prefixes,omitempty"`
-	LogThreshold                int      `json:"log_threshold"`
-	ChallengeThreshold          int      `json:"challenge_threshold"`
-	BlockThreshold              int      `json:"block_threshold"`
-	MaxInspectBody              int64    `json:"max_inspect_body"`
-	TemporalWindowSeconds       int      `json:"temporal_window_seconds,omitempty"`
-	TemporalMaxEntriesPerIP     int      `json:"temporal_max_entries_per_ip,omitempty"`
-	TemporalBurstThreshold      int      `json:"temporal_burst_threshold,omitempty"`
-	TemporalBurstScore          int      `json:"temporal_burst_score,omitempty"`
-	TemporalPathFanoutThreshold int      `json:"temporal_path_fanout_threshold,omitempty"`
-	TemporalPathFanoutScore     int      `json:"temporal_path_fanout_score,omitempty"`
-	TemporalUAChurnThreshold    int      `json:"temporal_ua_churn_threshold,omitempty"`
-	TemporalUAChurnScore        int      `json:"temporal_ua_churn_score,omitempty"`
+	Enabled                     bool                   `json:"enabled"`
+	Mode                        string                 `json:"mode"`
+	ExemptPathPrefixes          []string               `json:"exempt_path_prefixes,omitempty"`
+	LogThreshold                int                    `json:"log_threshold"`
+	ChallengeThreshold          int                    `json:"challenge_threshold"`
+	BlockThreshold              int                    `json:"block_threshold"`
+	MaxInspectBody              int64                  `json:"max_inspect_body"`
+	Provider                    semanticProviderConfig `json:"provider,omitempty"`
+	TemporalWindowSeconds       int                    `json:"temporal_window_seconds,omitempty"`
+	TemporalMaxEntriesPerIP     int                    `json:"temporal_max_entries_per_ip,omitempty"`
+	TemporalBurstThreshold      int                    `json:"temporal_burst_threshold,omitempty"`
+	TemporalBurstScore          int                    `json:"temporal_burst_score,omitempty"`
+	TemporalPathFanoutThreshold int                    `json:"temporal_path_fanout_threshold,omitempty"`
+	TemporalPathFanoutScore     int                    `json:"temporal_path_fanout_score,omitempty"`
+	TemporalUAChurnThreshold    int                    `json:"temporal_ua_churn_threshold,omitempty"`
+	TemporalUAChurnScore        int                    `json:"temporal_ua_churn_score,omitempty"`
+}
+
+type semanticFile struct {
+	Default semanticConfig            `json:"default"`
+	Hosts   map[string]semanticConfig `json:"hosts,omitempty"`
 }
 
 type semanticStats struct {
@@ -72,16 +82,31 @@ type semanticStats struct {
 }
 
 type semanticEvaluation struct {
-	Score   int
-	Reasons []string
-	Signals []semanticSignal
-	Action  string
+	Score            int
+	BaseScore        int
+	StatefulScore    int
+	ProviderScore    int
+	HostScope        string
+	Reasons          []string
+	BaseReasons      []string
+	StatefulReasons  []string
+	ProviderReasons  []string
+	Signals          []semanticSignal
+	BaseSignals      []semanticSignal
+	StatefulSignals  []semanticSignal
+	ProviderSignals  []semanticSignal
+	Action           string
+	Telemetry        *semanticTelemetry
+	StatefulSnapshot *semanticHistorySnapshot
+	ProviderResult   *semanticProviderOutput
 }
 
-type runtimeSemanticConfig struct {
+type runtimeSemanticScope struct {
 	Raw semanticConfig
 
 	temporal *temporalRiskStore
+	history  *semanticHistoryStore
+	provider *semanticProviderRuntime
 
 	challengeCookieName string
 	challengeSecret     []byte
@@ -93,6 +118,19 @@ type runtimeSemanticConfig struct {
 	logOnlyActions    atomic.Uint64
 	challengeActions  atomic.Uint64
 	blockActions      atomic.Uint64
+}
+
+type runtimeSemanticConfig struct {
+	File    semanticFile
+	Raw     semanticConfig
+	Default *runtimeSemanticScope
+	Hosts   map[string]*runtimeSemanticScope
+}
+
+type semanticScopeSelection struct {
+	Raw      semanticConfig
+	Runtime  *runtimeSemanticScope
+	ScopeKey string
 }
 
 var (
@@ -132,18 +170,25 @@ func GetSemanticConfig() semanticConfig {
 	return semanticRuntime.Raw
 }
 
+func GetSemanticFile() semanticFile {
+	semanticMu.RLock()
+	defer semanticMu.RUnlock()
+	if semanticRuntime == nil {
+		return semanticFile{}
+	}
+	return cloneSemanticFile(semanticRuntime.File)
+}
+
 func GetSemanticStats() semanticStats {
 	rt := currentSemanticRuntime()
 	if rt == nil {
 		return semanticStats{}
 	}
-	return semanticStats{
-		InspectedRequests: rt.inspectedRequests.Load(),
-		ScoredRequests:    rt.scoredRequests.Load(),
-		LogOnlyActions:    rt.logOnlyActions.Load(),
-		ChallengeActions:  rt.challengeActions.Load(),
-		BlockActions:      rt.blockActions.Load(),
+	stats := semanticScopeStats(rt.Default)
+	for _, scope := range rt.Hosts {
+		addSemanticStats(&stats, semanticScopeStats(scope))
 	}
+	return stats
 }
 
 func ReloadSemantic() error {
@@ -173,16 +218,28 @@ func ValidateSemanticRaw(raw string) (*runtimeSemanticConfig, error) {
 }
 
 func EvaluateSemantic(r *http.Request) semanticEvaluation {
-	return EvaluateSemanticWithContext(r, "", time.Now().UTC())
+	return evaluateSemanticRequest(r, "", "", time.Now().UTC())
 }
 
 func EvaluateSemanticWithContext(r *http.Request, clientIP string, now time.Time) semanticEvaluation {
+	return evaluateSemanticRequest(r, clientIP, "", now)
+}
+
+func EvaluateSemanticWithRequestID(r *http.Request, clientIP, requestID string, now time.Time) semanticEvaluation {
+	return evaluateSemanticRequest(r, clientIP, requestID, now)
+}
+
+func evaluateSemanticRequest(r *http.Request, clientIP, requestID string, now time.Time) semanticEvaluation {
 	rt := currentSemanticRuntime()
 	if rt == nil || r == nil || r.URL == nil {
 		return semanticEvaluation{Action: semanticActionNone}
 	}
 
-	cfg := rt.Raw
+	scope := selectSemanticScope(rt, r)
+	if scope.Runtime == nil {
+		return semanticEvaluation{Action: semanticActionNone}
+	}
+	cfg := scope.Raw
 	if !cfg.Enabled || cfg.Mode == semanticModeOff {
 		return semanticEvaluation{Action: semanticActionNone}
 	}
@@ -190,18 +247,19 @@ func EvaluateSemanticWithContext(r *http.Request, clientIP string, now time.Time
 	path := sanitizeSemanticText(r.URL.Path)
 	for _, pfx := range cfg.ExemptPathPrefixes {
 		if pfx == "/" || strings.HasPrefix(path, pfx) {
-			eval := semanticEvaluation{Action: semanticActionNone}
-			rt.observe(eval)
+			eval := semanticEvaluation{Action: semanticActionNone, HostScope: scope.ScopeKey}
+			scope.Runtime.observe(eval)
 			return eval
 		}
 	}
 
-	score := 0
-	signals := make([]semanticSignal, 0, 12)
-	inspectSemanticText("path", r.URL.Path, &score, &signals)
-	inspectSemanticText("query", r.URL.RawQuery, &score, &signals)
-	inspectSemanticText("user_agent", r.UserAgent(), &score, &signals)
-	inspectSemanticText("referer", r.Referer(), &score, &signals)
+	baseScore := 0
+	baseSignals := make([]semanticSignal, 0, 12)
+	var bodyChunk []byte
+	inspectSemanticText("path", r.URL.Path, &baseScore, &baseSignals)
+	inspectSemanticText("query", r.URL.RawQuery, &baseScore, &baseSignals)
+	inspectSemanticText("user_agent", r.UserAgent(), &baseScore, &baseSignals)
+	inspectSemanticText("referer", r.Referer(), &baseScore, &baseSignals)
 
 	if cfg.MaxInspectBody > 0 && r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
 		n := cfg.MaxInspectBody + 1
@@ -210,11 +268,33 @@ func EvaluateSemanticWithContext(r *http.Request, clientIP string, now time.Time
 		if int64(len(chunk)) > cfg.MaxInspectBody {
 			chunk = chunk[:cfg.MaxInspectBody]
 		}
+		bodyChunk = append(bodyChunk[:0], chunk...)
 		if len(chunk) > 0 {
-			inspectSemanticText("body", string(chunk), &score, &signals)
+			inspectSemanticText("body", string(chunk), &baseScore, &baseSignals)
 		}
 	}
-	inspectSemanticTemporalRisk(rt, cfg, clientIP, r.URL.Path, r.UserAgent(), now, &score, &signals)
+	telemetry := buildSemanticTelemetry(r, clientIP, requestID, bodyChunk)
+	statefulScore := 0
+	statefulSignals := make([]semanticSignal, 0, 8)
+	inspectSemanticTemporalRisk(scope.Runtime, cfg, clientIP, r.URL.Path, r.UserAgent(), now, &statefulScore, &statefulSignals)
+	statefulSnapshot := inspectSemanticStatefulRisk(scope.Runtime, telemetry, baseScore, now, &statefulScore, &statefulSignals)
+	providerResult := evaluateSemanticProvider(
+		scope.Runtime.provider,
+		newSemanticProviderInput(r, requestID, telemetry, bodyChunk, baseScore, statefulScore, baseSignals, statefulSignals),
+	)
+	providerScore := 0
+	providerSignals := make([]semanticSignal, 0, 4)
+	providerReasons := make([]string, 0, 4)
+	if providerResult != nil && providerResult.ScoreDelta > 0 {
+		providerScore = providerResult.ScoreDelta
+		providerSignals = semanticProviderOutputSignals(*providerResult)
+		providerReasons = append(providerReasons, providerResult.ReasonCodes...)
+	}
+	if len(providerReasons) == 0 {
+		providerReasons = semanticReasons(providerSignals)
+	}
+	score := baseScore + statefulScore + providerScore
+	signals := append(append(append([]semanticSignal(nil), baseSignals...), statefulSignals...), providerSignals...)
 
 	action := semanticActionNone
 	if score >= cfg.LogThreshold {
@@ -232,12 +312,25 @@ func EvaluateSemanticWithContext(r *http.Request, clientIP string, now time.Time
 	}
 
 	eval := semanticEvaluation{
-		Score:   score,
-		Reasons: semanticReasons(signals),
-		Signals: signals,
-		Action:  action,
+		Score:            score,
+		BaseScore:        baseScore,
+		StatefulScore:    statefulScore,
+		ProviderScore:    providerScore,
+		HostScope:        scope.ScopeKey,
+		Reasons:          semanticReasons(signals),
+		BaseReasons:      semanticReasons(baseSignals),
+		StatefulReasons:  semanticReasons(statefulSignals),
+		ProviderReasons:  unique(providerReasons),
+		Signals:          signals,
+		BaseSignals:      baseSignals,
+		StatefulSignals:  statefulSignals,
+		ProviderSignals:  providerSignals,
+		Action:           action,
+		Telemetry:        telemetry,
+		StatefulSnapshot: statefulSnapshot,
+		ProviderResult:   providerResult,
 	}
-	rt.observe(eval)
+	scope.Runtime.observe(eval)
 	return eval
 }
 
@@ -246,16 +339,20 @@ func HasValidSemanticChallengeCookie(r *http.Request, clientIP string, now time.
 	if rt == nil {
 		return true
 	}
-	cfg := rt.Raw
+	scope := selectSemanticScope(rt, r)
+	if scope.Runtime == nil {
+		return true
+	}
+	cfg := scope.Raw
 	if !cfg.Enabled || cfg.Mode != semanticModeChallenge {
 		return true
 	}
 
-	c, err := r.Cookie(rt.challengeCookieName)
+	c, err := r.Cookie(scope.Runtime.challengeCookieName)
 	if err != nil {
 		return false
 	}
-	return verifySemanticChallengeToken(rt, c.Value, clientIP, r.UserAgent(), now.UTC())
+	return verifySemanticChallengeToken(scope.Runtime, c.Value, clientIP, r.UserAgent(), now.UTC())
 }
 
 func WriteSemanticChallenge(w http.ResponseWriter, r *http.Request, clientIP string) {
@@ -265,18 +362,24 @@ func WriteSemanticChallenge(w http.ResponseWriter, r *http.Request, clientIP str
 		return
 	}
 
-	token := issueSemanticChallengeToken(rt, clientIP, r.UserAgent(), time.Now().UTC())
+	scope := selectSemanticScope(rt, r)
+	if scope.Runtime == nil {
+		w.WriteHeader(http.StatusTooManyRequests)
+		return
+	}
+
+	token := issueSemanticChallengeToken(scope.Runtime, clientIP, r.UserAgent(), time.Now().UTC())
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Tukuyomi-Semantic-Challenge", "required")
 
 	if !acceptsHTML(r.Header.Get("Accept")) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(rt.challengeStatusCode)
+		w.WriteHeader(scope.Runtime.challengeStatusCode)
 		_, _ = w.Write([]byte(`{"error":"semantic challenge required"}`))
 		return
 	}
 
-	maxAge := int(rt.challengeTTL.Seconds())
+	maxAge := int(scope.Runtime.challengeTTL.Seconds())
 	if maxAge < 1 {
 		maxAge = 1
 	}
@@ -294,9 +397,9 @@ func WriteSemanticChallenge(w http.ResponseWriter, r *http.Request, clientIP str
 })();
 </script>
 <noscript>JavaScript is required to continue.</noscript>
-</body></html>`, token, rt.challengeCookieName, maxAge)
+</body></html>`, token, scope.Runtime.challengeCookieName, maxAge)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(rt.challengeStatusCode)
+	w.WriteHeader(scope.Runtime.challengeStatusCode)
 	_, _ = w.Write([]byte(body))
 }
 
@@ -306,7 +409,29 @@ func currentSemanticRuntime() *runtimeSemanticConfig {
 	return semanticRuntime
 }
 
-func (rt *runtimeSemanticConfig) observe(eval semanticEvaluation) {
+func selectSemanticScope(rt *runtimeSemanticConfig, req *http.Request) semanticScopeSelection {
+	if rt == nil {
+		return semanticScopeSelection{ScopeKey: semanticDefaultScope}
+	}
+	if req != nil {
+		for _, candidate := range policyhost.Candidates(req.Host, req.TLS != nil) {
+			if scope, ok := rt.Hosts[candidate]; ok {
+				return semanticScopeSelection{
+					Raw:      scope.Raw,
+					Runtime:  scope,
+					ScopeKey: candidate,
+				}
+			}
+		}
+	}
+	return semanticScopeSelection{
+		Raw:      rt.Raw,
+		Runtime:  rt.Default,
+		ScopeKey: semanticDefaultScope,
+	}
+}
+
+func (rt *runtimeSemanticScope) observe(eval semanticEvaluation) {
 	if rt == nil {
 		return
 	}
@@ -325,13 +450,91 @@ func (rt *runtimeSemanticConfig) observe(eval semanticEvaluation) {
 }
 
 func buildSemanticRuntimeFromRaw(raw []byte) (*runtimeSemanticConfig, error) {
-	var cfg semanticConfig
-	dec := json.NewDecoder(strings.NewReader(string(raw)))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&cfg); err != nil {
+	top, err := decodeSemanticJSONObject(raw)
+	if err != nil {
 		return nil, err
 	}
 
+	if _, hasDefault := top["default"]; !hasDefault {
+		if _, hasHosts := top["hosts"]; !hasHosts {
+			scope, err := buildRuntimeSemanticScopeFromRaw(raw)
+			if err != nil {
+				return nil, err
+			}
+			return &runtimeSemanticConfig{
+				File: semanticFile{
+					Default: cloneSemanticConfig(scope.Raw),
+				},
+				Raw:     cloneSemanticConfig(scope.Raw),
+				Default: scope,
+				Hosts:   map[string]*runtimeSemanticScope{},
+			}, nil
+		}
+	}
+
+	for key := range top {
+		if key != "default" && key != "hosts" {
+			return nil, fmt.Errorf("invalid json")
+		}
+	}
+
+	defaultObject, err := decodeSemanticObjectValue(top["default"], "default")
+	if err != nil {
+		return nil, err
+	}
+	defaultScope, err := buildRuntimeSemanticScopeFromRaw(mustMarshalSemanticObject(defaultObject))
+	if err != nil {
+		return nil, err
+	}
+
+	runtime := &runtimeSemanticConfig{
+		File: semanticFile{
+			Default: cloneSemanticConfig(defaultScope.Raw),
+		},
+		Raw:     cloneSemanticConfig(defaultScope.Raw),
+		Default: defaultScope,
+		Hosts:   map[string]*runtimeSemanticScope{},
+	}
+
+	hosts, err := decodeSemanticHosts(top["hosts"])
+	if err != nil {
+		return nil, err
+	}
+	if len(hosts) == 0 {
+		return runtime, nil
+	}
+
+	runtime.File.Hosts = make(map[string]semanticConfig, len(hosts))
+	for rawHost, rawScope := range hosts {
+		hostKey, err := policyhost.NormalizePattern(rawHost)
+		if err != nil {
+			return nil, fmt.Errorf("hosts[%q]: %w", rawHost, err)
+		}
+		hostObject, err := decodeSemanticObjectValue(rawScope, fmt.Sprintf("hosts[%q]", rawHost))
+		if err != nil {
+			return nil, err
+		}
+		mergedObject := mergeSemanticJSONObject(defaultObject, hostObject)
+		scope, err := buildRuntimeSemanticScopeFromRaw(mustMarshalSemanticObject(mergedObject))
+		if err != nil {
+			return nil, err
+		}
+		runtime.File.Hosts[hostKey] = cloneSemanticConfig(scope.Raw)
+		runtime.Hosts[hostKey] = scope
+	}
+
+	return runtime, nil
+}
+
+func buildRuntimeSemanticScopeFromRaw(raw []byte) (*runtimeSemanticScope, error) {
+	cfg, err := decodeSemanticConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	return buildRuntimeSemanticScope(cfg)
+}
+
+func buildRuntimeSemanticScope(cfg semanticConfig) (*runtimeSemanticScope, error) {
 	norm, err := normalizeSemanticConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -342,14 +545,173 @@ func buildSemanticRuntimeFromRaw(raw []byte) (*runtimeSemanticConfig, error) {
 		secret = []byte("tukuyomi-semantic-ephemeral")
 	}
 
-	return &runtimeSemanticConfig{
+	return &runtimeSemanticScope{
 		Raw:                 norm,
 		temporal:            newTemporalRiskStore(norm),
+		history:             newSemanticHistoryStore(norm),
+		provider:            buildSemanticProviderRuntime(norm.Provider),
 		challengeCookieName: "__tukuyomi_semantic_ok",
 		challengeSecret:     secret,
 		challengeTTL:        12 * time.Hour,
 		challengeStatusCode: http.StatusTooManyRequests,
 	}, nil
+}
+
+func decodeSemanticConfig(raw []byte) (semanticConfig, error) {
+	var cfg semanticConfig
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
+		return semanticConfig{}, err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return semanticConfig{}, fmt.Errorf("invalid json")
+	}
+	return cfg, nil
+}
+
+func decodeSemanticJSONObject(raw []byte) (map[string]json.RawMessage, error) {
+	var obj map[string]json.RawMessage
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	if err := dec.Decode(&obj); err != nil {
+		return nil, err
+	}
+	if obj == nil {
+		return nil, fmt.Errorf("semantic config must be a JSON object")
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("invalid json")
+	}
+	return obj, nil
+}
+
+func decodeSemanticObjectValue(raw json.RawMessage, field string) (map[string]any, error) {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return map[string]any{}, nil
+	}
+	var out map[string]any
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	if err := dec.Decode(&out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		return nil, fmt.Errorf("%s must be a JSON object", field)
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("invalid json")
+	}
+	return out, nil
+}
+
+func decodeSemanticHosts(raw json.RawMessage) (map[string]json.RawMessage, error) {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return nil, nil
+	}
+	var out map[string]json.RawMessage
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	if err := dec.Decode(&out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		return nil, fmt.Errorf("hosts must be a JSON object")
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("invalid json")
+	}
+	return out, nil
+}
+
+func mergeSemanticJSONObject(base, override map[string]any) map[string]any {
+	out := cloneSemanticJSONValue(base).(map[string]any)
+	for key, value := range override {
+		out[key] = mergeSemanticJSONValue(out[key], value)
+	}
+	return out
+}
+
+func mergeSemanticJSONValue(base, override any) any {
+	baseObject, baseOK := base.(map[string]any)
+	overrideObject, overrideOK := override.(map[string]any)
+	if baseOK && overrideOK {
+		return mergeSemanticJSONObject(baseObject, overrideObject)
+	}
+	return cloneSemanticJSONValue(override)
+}
+
+func cloneSemanticJSONValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			out[key] = cloneSemanticJSONValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for index, item := range typed {
+			out[index] = cloneSemanticJSONValue(item)
+		}
+		return out
+	default:
+		return typed
+	}
+}
+
+func mustMarshalSemanticObject(value map[string]any) []byte {
+	raw, _ := json.Marshal(value)
+	return raw
+}
+
+func cloneSemanticFile(in semanticFile) semanticFile {
+	out := semanticFile{
+		Default: cloneSemanticConfig(in.Default),
+	}
+	if len(in.Hosts) > 0 {
+		out.Hosts = make(map[string]semanticConfig, len(in.Hosts))
+		for host, cfg := range in.Hosts {
+			out.Hosts[host] = cloneSemanticConfig(cfg)
+		}
+	}
+	return out
+}
+
+func cloneSemanticConfig(in semanticConfig) semanticConfig {
+	out := in
+	out.ExemptPathPrefixes = append([]string(nil), in.ExemptPathPrefixes...)
+	return out
+}
+
+func semanticEnabled(file semanticFile) bool {
+	if file.Default.Enabled && file.Default.Mode != semanticModeOff {
+		return true
+	}
+	for _, scope := range file.Hosts {
+		if scope.Enabled && scope.Mode != semanticModeOff {
+			return true
+		}
+	}
+	return false
+}
+
+func semanticScopeStats(scope *runtimeSemanticScope) semanticStats {
+	if scope == nil {
+		return semanticStats{}
+	}
+	return semanticStats{
+		InspectedRequests: scope.inspectedRequests.Load(),
+		ScoredRequests:    scope.scoredRequests.Load(),
+		LogOnlyActions:    scope.logOnlyActions.Load(),
+		ChallengeActions:  scope.challengeActions.Load(),
+		BlockActions:      scope.blockActions.Load(),
+	}
+}
+
+func addSemanticStats(dst *semanticStats, src semanticStats) {
+	dst.InspectedRequests += src.InspectedRequests
+	dst.ScoredRequests += src.ScoredRequests
+	dst.LogOnlyActions += src.LogOnlyActions
+	dst.ChallengeActions += src.ChallengeActions
+	dst.BlockActions += src.BlockActions
 }
 
 func normalizeSemanticConfig(cfg semanticConfig) (semanticConfig, error) {
@@ -370,6 +732,11 @@ func normalizeSemanticConfig(cfg semanticConfig) (semanticConfig, error) {
 	if cfg.MaxInspectBody <= 0 {
 		cfg.MaxInspectBody = 16 * 1024
 	}
+	normProvider, err := normalizeSemanticProviderConfig(cfg.Provider)
+	if err != nil {
+		return semanticConfig{}, err
+	}
+	cfg.Provider = normProvider
 	if cfg.TemporalWindowSeconds <= 0 {
 		cfg.TemporalWindowSeconds = defaultTemporalWindowSeconds
 	}
@@ -556,13 +923,13 @@ func semanticSignalLogObjects(signals []semanticSignal) []map[string]any {
 	return out
 }
 
-func issueSemanticChallengeToken(rt *runtimeSemanticConfig, ipStr, userAgent string, now time.Time) string {
+func issueSemanticChallengeToken(rt *runtimeSemanticScope, ipStr, userAgent string, now time.Time) string {
 	exp := now.UTC().Add(rt.challengeTTL).Unix()
 	payload := strconv.FormatInt(exp, 10)
 	return payload + "." + signSemanticChallenge(rt, ipStr, userAgent, payload)
 }
 
-func verifySemanticChallengeToken(rt *runtimeSemanticConfig, token, ipStr, userAgent string, now time.Time) bool {
+func verifySemanticChallengeToken(rt *runtimeSemanticScope, token, ipStr, userAgent string, now time.Time) bool {
 	parts := strings.Split(strings.TrimSpace(token), ".")
 	if len(parts) != 2 {
 		return false
@@ -579,7 +946,7 @@ func verifySemanticChallengeToken(rt *runtimeSemanticConfig, token, ipStr, userA
 	return subtleConstantTimeHexEqual(parts[1], signSemanticChallenge(rt, ipStr, userAgent, parts[0]))
 }
 
-func signSemanticChallenge(rt *runtimeSemanticConfig, ipStr, userAgent, payload string) string {
+func signSemanticChallenge(rt *runtimeSemanticScope, ipStr, userAgent, payload string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(ipStr) + "\n" + strings.ToLower(strings.TrimSpace(userAgent)) + "\n" + payload + "\n" + string(rt.challengeSecret)))
 	return hex.EncodeToString(sum[:])
 }
@@ -598,9 +965,14 @@ func ensureSemanticFile(path string) error {
 	const defaultRaw = `{
   "enabled": true,
   "mode": "log_only",
+  "provider": {
+    "enabled": false,
+    "name": "builtin_attack_family",
+    "timeout_ms": 25
+  },
   "exempt_path_prefixes": [
     "/tukuyomi-api",
-    "/tukuyomi-admin",
+    "/tukuyomi-ui",
     "/health",
     "/healthz",
     "/metrics",

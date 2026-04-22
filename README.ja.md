@@ -1,884 +1,253 @@
 # tukuyomi
 
-Coraza + CRS WAFプロジェクト
+Coraza + CRS WAF reverse proxy / API gateway
 
 [English](README.md) | [日本語](README.ja.md)
 
+![管理画面トップ](docs/images/ui-samples/01-status.png)
+
 ## 概要
 
-このプロジェクトは、Coraza WAF と OWASP Core Rule Set (CRS) を組み合わせた
-軽量かつ強力なアプリケーション防御システム「tukuyomi」です。
+`tukuyomi` は Tukuyomi ファミリーの汎用 reverse proxy / API gateway 製品です。
+Coraza WAF + OWASP CRS に、built-in の route 管理、埋め込み管理 UI/API、
+optional な static / PHP-FPM hosting、cache、app-edge policy control を統合しています。
 
-## tukuyomi エコシステム
+主な用途は次のとおりです。
 
-`tukuyomi` は tukuyomi セキュリティスイートの OSS 基盤です。  
-各コンポーネントのビルド済みバイナリは公開配布用 [`tukuyomi-releases`](https://github.com/vril-dev/tukuyomi-releases) リポジトリから配布します。  
-最新バージョンとダウンロードリンクは [`tukuyomi-releases`](https://github.com/vril-dev/tukuyomi-releases) の README を参照してください。  
-各バイナリコンポーネントの公開向けランディングページは [`docs/products/`](./docs/products/) 以下にまとめています。  
-その Downloads ページに GitHub が自動生成する source archive は `tukuyomi-releases` リポジトリ自身のものです。
-
-| コンポーネント | 概要 | ライセンス | 配布 | Docs |
-|---|---|---|---|---|
-| tukuyomi | nginx + Coraza WAF（本リポジトリ。今後の開発の主軸は `tukuyomi-proxy` へ移します） | Apache-2.0 | OSS | [`README`](README.ja.md) |
-| tukuyomi-proxy | シングルバイナリWAF/Proxy | Proprietary | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/proxy/README.ja.md) |
-| tukuyomi-edge | IoTエッジデバイス向けシングルバイナリ | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/edge/README.ja.md) |
-| tukuyomi-center | IoTセンター管理向けシングルバイナリ | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/center/README.ja.md) |
-| tukuyomi-verify | 検証・テストツール | MIT | [`Downloads`](https://github.com/vril-dev/tukuyomi-releases) | [`README`](./docs/products/verify/README.ja.md) |
+- reverse proxy と route 管理
+- WAF と誤検知チューニング
+- rate / country / bot / semantic / IP reputation 制御
+- built-in の管理 UI/API
+- optional な static hosting / PHP-FPM / scheduled jobs
+- single binary または Docker 配備
 
 ## 製品ポジショニング
 
-`tukuyomi` はこのファミリーの front-proxy 指向 WAF スタックです。`tukuyomi-proxy` と `tukuyomi-edge` と同じ中核セキュリティ機能を持ちつつ、Go runtime 自身に app reverse proxy、埋め込み管理UI、任意の standalone response cache を持ちます。TLS 入口や edge 側の一部責務は、引き続き `nginx`、ALB、HAProxy、CDN/LB などの前段で担う想定です。
+`tukuyomi` は、アプリケーション境界を担当する WAF / reverse proxy 製品の canonical repository です。
+旧 `tukuyomi-proxy` 系列はこのリポジトリへ統合し、今後は `tukuyomi` プロダクト名で継続します。
 
-| 項目 | `tukuyomi` | `tukuyomi-proxy` | `tukuyomi-edge` |
-| --- | --- | --- | --- |
-| 実行形態 | Docker / compose または local binary | single binary または Docker | single binary / `systemd` |
-| リバースプロキシ + route | app proxy 内蔵、route editor なし。`nginx` / LB 前段をよく併用 | 内蔵 gateway + route editor | 内蔵 gateway + route editor |
-| 中核セキュリティ制御 | IP reputation / bot / semantic / rate / country | IP reputation / bot / semantic / rate / country | IP reputation / bot / semantic / rate / country |
-| Device / center 機能 | × | × | device auth + center link |
-| キャッシュ + bypass | 内部 response cache + bypass rules、必要なら前段 cache 併用 | 内部キャッシュ + bypass rules | 内部キャッシュ + bypass rules |
-| TLS + 管理 UI | 前段 proxy / LB の TLS + 埋め込み管理 UI | built-in TLS + 内蔵管理 UI | built-in TLS + 内蔵管理 UI |
-| DB / マルチノード | 共有 DB 対応 | 共有 DB 対応 | ローカルノード指向 |
-| Host hardening | × | × | experimental L3/L4 host hardening |
+`tukuyomi-releases` にある旧 `tukuyomi-proxy` バイナリは archive として残しますが、
+同リポジトリは今後の proxy/WAF 更新チャネルではありません。proxy、routing、cache、
+WAF tuning、PHP-FPM、scheduled tasks の開発は `tukuyomi` に集約します。
 
-凡例と詳細な比較表は [docs/product-comparison.ja.md](docs/product-comparison.ja.md) を参照してください。
+詳細な比較は [docs/product-comparison.ja.md](docs/product-comparison.ja.md) を参照してください。
 
----
+## ルールファイルと初期セットアップ
 
-## ルールファイルについて
+本リポジトリには、ライセンス順守のため OWASP CRS 本体は同梱していません。
+代わりに、最小の起動用ベースルール `data/rules/tukuyomi.conf` を同梱しています。
 
-本リポジトリには、ライセンス順守のため OWASP CRS 本体は同梱していません。  
-代わりに、初期状態で動作可能な最小ベースルール `data/rules/tukuyomi.conf` を同梱しています。
-
-### セットアップ手順
-
-以下のコマンドで CRS を取得・配置してください（デフォルト: `v4.23.0`）。
+通常 runtime 用には、まず CRS を取得してください。
 
 ```bash
-./scripts/install_crs.sh
+make crs-install
 ```
 
-バージョン指定例:
-
-```bash
-./scripts/install_crs.sh v4.23.0
-```
-
-`data/rules/crs/crs-setup.conf` は必要に応じて編集してください（`Paranoia Level` や `anomaly` スコアなど）。
-
-### Preset クイックスタート
-
-ゼロから設定を起こさず、最小の事前設定をそのまま使い始める場合は次を実行します。
+埋め込み管理 UI と既定 upstream を含む最小構成で始める場合は、preset を適用します。
 
 ```bash
 make preset-apply PRESET=minimal
 make preset-check PRESET=minimal
 ```
 
-ローカル開発の外へ出す前に `WAF_APP_URL`, `WAF_API_KEY_PRIMARY`, `WAF_ADMIN_SESSION_SECRET` を差し替えてください。
+本番前には次を実値へ差し替えてください。
 
----
+- `data/conf/config.json`
+- `data/conf/proxy.json`
+- `data/conf/sites.json`（site ownership / TLS を使う場合）
+- `conf/scheduled-tasks.json`（scheduled tasks を使う場合）
 
-## 環境変数
+## クイックスタート
 
-`.env` ファイルで挙動を制御可能です。
+### ローカル preview
 
-### Docker / ローカル MySQL（任意）
-
-| 変数名 | 例 | 説明 |
-| --- | --- | --- |
-| `MYSQL_PORT` | `13306` | MySQL コンテナ `3306` に割り当てるホスト側ポート（`mysql` profile 有効時）。 |
-| `MYSQL_DATABASE` | `tukuyomi` | ローカル MySQL コンテナで初期作成するDB名。 |
-| `MYSQL_USER` | `tukuyomi` | ローカル MySQL コンテナで作成するアプリ用ユーザー。 |
-| `MYSQL_PASSWORD` | `tukuyomi` | `MYSQL_USER` のパスワード。 |
-| `MYSQL_ROOT_PASSWORD` | `tukuyomi-root` | ローカル MySQL コンテナの root パスワード。 |
-| `MYSQL_TZ` | `UTC` | コンテナのタイムゾーン。 |
-
-### Nginx
-
-| 変数名 | 例 | 説明 |
-| --- | --- | --- |
-| `NGX_CORAZA_UPSTREAM` | `server coraza:9090;` | Coraza（Goサーバ）の upstream 定義。`server host:port;` を複数行で並べれば簡易ロードバランス可。 |
-| `NGX_BACKEND_RESPONSE_TIMEOUT` | `60s` | 上流（Coraza）からの応答タイムアウト。`proxy_read_timeout` に反映。 |
-| `NGX_CORAZA_ADMIN_URL` | `/tukuyomi-admin/` | 管理UIの公開パス。末尾スラッシュ必須。このパスに来たリクエストを、Coraza が配信する埋め込み管理UIへプロキシします。 |
-| `NGX_CORAZA_API_BASEPATH` | `/tukuyomi-api/` | 管理APIのベースパス。末尾スラッシュ推奨。このパス配下は nginx 側で常に非キャッシュ扱い。 |
-
-### WAF / Go（Coraza ラッパー）
-
-| 変数名 | 例 | 説明 |
-| --- | --- | --- |
-| `WAF_APP_URL` | `http://host.docker.internal:3000` | 透過先アプリの URL（ALB/ECS 等の本番では適宜変更）。 |
-| `WAF_PROXY_ERROR_HTML_FILE` | (空) | 透過先障害時に返す任意の保守 HTML ファイル。 |
-| `WAF_PROXY_ERROR_REDIRECT_URL` | (空) | 透過先障害時に使う任意の redirect 先。 |
-| `WAF_LOG_FILE` | (空) | 生成される log-output profile 内で使う、WAF event の既定ファイルパスを上書きする互換用設定。通常は Admin UI の `Log Settings` から `conf/log-output.json` を使う。 |
-| `WAF_LOG_OUTPUT_FILE` | `conf/log-output.json` | ログ出力 profile のパス。Admin UI の `Log Settings` 画面から編集でき、stream ごとに stdout/file/dual を切替可能。 |
-| `WAF_BYPASS_FILE` | `conf/waf.bypass` | バイパス/特別ルール定義ファイルのパス。 |
-| `WAF_BOT_DEFENSE_FILE` | `conf/bot-defense.conf` | Bot defense challenge 設定ファイル（JSON）。管理画面から編集可能。 |
-| `WAF_SEMANTIC_FILE` | `conf/semantic.conf` | Semanticヒューリスティック設定ファイル（JSON）。管理画面から編集可能。 |
-| `WAF_COUNTRY_BLOCK_FILE` | `conf/country-block.conf` | 国別ブロック定義ファイル（1行1国コード、例: `US`, `CN`, `RU`, `KR`, `TW`, `SG`, `IN`, `DE`, `FR`, `GB`, `UNKNOWN`）。 |
-| `WAF_RATE_LIMIT_FILE` | `conf/rate-limit.conf` | レート制限定義ファイル（JSON）。管理画面から編集可能。 |
-| `WAF_IP_REPUTATION_FILE` | `conf/ip-reputation.conf` | IP reputation 設定ファイル（JSON）。管理画面から編集可能。 |
-| `WAF_RULES_FILE` | `rules/tukuyomi.conf` | 使用するルールファイル（カンマ区切りで複数指定も可）。 |
-| `WAF_CRS_ENABLE` | `true` | CRSを読み込むかどうか。`false` ならベースルールのみ。 |
-| `WAF_CRS_SETUP_FILE` | `rules/crs/crs-setup.conf` | CRSセットアップ設定ファイル。 |
-| `WAF_CRS_RULES_DIR` | `rules/crs/rules` | CRS本体ルール（`*.conf`）のディレクトリ。 |
-| `WAF_CRS_DISABLED_FILE` | `conf/crs-disabled.conf` | CRS本体の無効化ファイル一覧。1行1ファイル名で指定。 |
-| `WAF_FP_TUNER_ENDPOINT` | (空) | 外部 FP チューナープロバイダの HTTP エンドポイント。 |
-| `WAF_FP_TUNER_API_KEY` | (空) | `WAF_FP_TUNER_ENDPOINT` 向け Bearer トークン。 |
-| `WAF_FP_TUNER_MODEL` | (空) | プロバイダへ渡す任意のモデル識別子。 |
-| `WAF_FP_TUNER_TIMEOUT_SEC` | `15` | プロバイダ呼び出し時のHTTPタイムアウト（秒）。 |
-| `WAF_FP_TUNER_REQUIRE_APPROVAL` | `true` | `simulate=false` の適用時に承認トークンを必須化するか。 |
-| `WAF_FP_TUNER_APPROVAL_TTL_SEC` | `600` | 承認トークンの有効期限（秒）。 |
-| `WAF_FP_TUNER_AUDIT_FILE` | `logs/coraza/fp-tuner-audit.ndjson` | propose/apply 操作の監査ログ出力先。 |
-| `WAF_STORAGE_BACKEND` | `file` | ストレージバックエンド選択。`file` は従来のファイル運用、`db` はDBログストア + 設定/ルールBlob同期を有効化。 |
-| `WAF_DB_DRIVER` | `sqlite` | `WAF_STORAGE_BACKEND=db` 時のDBドライバ。対応値: `sqlite` / `mysql`（ログストア・設定/ルールBlob用途で実装済み）。 |
-| `WAF_DB_ENABLED` | `false` | 互換用フラグ。`WAF_STORAGE_BACKEND` 未指定時のみ参照され、`true` で `db`、`false` で `file` にマップ。 |
-| `WAF_DB_DSN` | (空) | ネットワークDB向けDSN（例: MySQL）。`WAF_DB_DRIVER=mysql` 時は必須。sqliteは `WAF_DB_PATH` を利用。 |
-| `WAF_DB_PATH` | `logs/coraza/tukuyomi.db` | `WAF_STORAGE_BACKEND=db` かつ `WAF_DB_DRIVER=sqlite` 時に利用するSQLiteファイルパス。 |
-| `WAF_DB_RETENTION_DAYS` | `30` | DBストア `waf_events` の保持日数。これより古い行は同期時に削除。`0` で削除無効（設定Blobは削除対象外）。 |
-| `WAF_DB_SYNC_INTERVAL_SEC` | `0` | DB→実行時設定の定期同期間隔（秒）。`0` で無効、`1` 以上で複数Corazaノード間の定期整合を有効化。 |
-| `WAF_STRICT_OVERRIDE` | `false` | 特別ルール読み込み失敗時の挙動。`true`で即終了、`false`で警告のみ継続。 |
-| `WAF_API_BASEPATH` | `/tukuyomi-api` | 管理APIのベースパス（Go側のルーティング基準）。 |
-| `WAF_UI_BASEPATH` | `/tukuyomi-admin` | 管理UIのベースパス（Go側のルーティング基準）。末尾スラッシュなしで `VITE_APP_BASE_PATH` と揃えてください。 |
-| `WAF_ADMIN_EXTERNAL_MODE` | `api_only_external` | 管理系の exposure mode。`deny_external`: trusted/private な直結 peer からだけ管理UI/APIへ到達可能。`api_only_external`: trusted/private な直結 peer は管理UI/APIへ到達可能で、untrusted external は認証付き管理APIだけ到達可能。`full_external`: 管理UI/API が runtime listener に到達できる任意の経路から見える状態。 |
-| `WAF_ADMIN_TRUSTED_CIDRS` | `127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` | 管理 exposure 判定で trusted とみなす直結 peer の IP/CIDR。`WAF_ADMIN_EXTERNAL_MODE` が `full_external` 以外のとき、この範囲が埋め込み管理UI到達可否を決めます。 |
-| `WAF_TRUSTED_PROXY_CIDRS` | `10.0.0.0/8,192.168.0.0/16` | `X-Forwarded-For` / `X-Real-IP` / 転送された `X-Request-ID` を信用する前段プロキシの IP/CIDR。Coraza を直接公開する場合は空のままにします。ALB/ECS/Cloudflare 配下では、実際に信頼する前段の subnet だけを設定してください。 |
-| `WAF_COUNTRY_HEADER_NAMES` | `X-Country-Code,CF-IPCountry` | 信頼する country header の参照順。`WAF_TRUSTED_PROXY_CIDRS` に含まれる前段から来た場合だけ、この順に header を見ます。 |
-| `WAF_EXPOSE_WAF_DEBUG_HEADERS` | `false` | proxied client response に `X-WAF-Hit` / `X-WAF-RuleIDs` を出すかどうか。クライアントへ返る前に前段 smart proxy が必ず除去する構成でだけ有効化してください。旧エイリアス: `WAF_FORWARD_INTERNAL_RESPONSE_HEADERS`。 |
-| `WAF_API_KEY_PRIMARY` | `…` | 管理API用の主キー（`X-API-Key`）。 |
-| `WAF_API_KEY_SECONDARY` | (空) | 予備キー（ローテーション時の切替用。未使用なら空でOK）。 |
-| `WAF_ADMIN_SESSION_SECRET` | `…` | ブラウザ管理 session の署名に使う HMAC secret。本番では API key と分離して設定し、session cookie をキー更新から独立させてください。 |
-| `WAF_ADMIN_SESSION_TTL_SEC` | `28800` | ブラウザ管理 session の有効期限（秒）。範囲は `300` から `604800`。 |
-| `WAF_API_AUTH_DISABLE` | (空) | 認証無効化フラグ。運用では空（false相当）推奨。テストで無効化したいときのみ truthy 値。 |
-| `WAF_API_CORS_ALLOWED_ORIGINS` | `https://admin.example.com,http://localhost:5173` | CORSを許可する Origin 一覧（カンマ区切り）。未設定なら CORS 無効（同一オリジンのみ）。 |
-| `WAF_ALLOW_INSECURE_DEFAULTS` | (空) | 弱いAPIキーや認証無効化を許可する開発用フラグ。本番では設定しない。 |
-
-透過先障害時レスポンスの挙動:
-- `WAF_PROXY_ERROR_HTML_FILE` と `WAF_PROXY_ERROR_REDIRECT_URL` の両方が未設定なら、ラッパーは既定の `502 Bad Gateway` を返し、ブラウザでは簡素な標準エラーページが表示されます。
-- `WAF_PROXY_ERROR_HTML_FILE` を設定すると、HTML を受け取るクライアントにはその保守ページを返し、それ以外には plain text の `503 Service Unavailable` を返します。
-- `WAF_PROXY_ERROR_REDIRECT_URL` を設定すると、`GET` / `HEAD` はその URL へ redirect し、それ以外のメソッドには plain text の `503 Service Unavailable` を返します。
-- `WAF_PROXY_ERROR_HTML_FILE` と `WAF_PROXY_ERROR_REDIRECT_URL` は排他的です。アプリごとにどちらか一方を選んでください。
-
-### 管理UI（React / Vite）
-
-| 変数名 | 例 | 説明 |
-| --- | --- | --- |
-| `VITE_CORAZA_API_BASE` | `/tukuyomi-api` | ブラウザから叩く API のフル/相対ベース。埋め込み管理UIの build 時と、任意のローカル Vite 開発時に使います。 |
-| `VITE_APP_BASE_PATH` | `/tukuyomi-admin` | 管理UIのルートパス（`react-router` の basename）。埋め込み管理UIの build 時と、任意のローカル Vite 開発時に使います。 |
-
-埋め込み管理UIを手動で再生成する場合:
+単純なローカル preview 手順は次です。
 
 ```bash
-make ui-build-sync
-make go-build
+make preset-apply PRESET=minimal
+make ui-preview-up
 ```
 
-ローカル Go build ではなく container build を使う場合は、`make ui-build-sync` の後に `make compose-build` を実行してください。
+`make ui-preview-up` は、`data/rules/crs` が未導入の場合だけ初回に
+`make crs-install` を自動実行します。
 
-管理UI の認証モデル:
+その後、既定では以下へアクセスします。
 
-- ブラウザ側の管理UIは `POST /tukuyomi-api/auth/login` を 1 回呼び、same-origin session cookie を受け取って以後の API を呼びます。
-- `WAF_API_KEY_PRIMARY`, `WAF_API_KEY_SECONDARY`, `WAF_ADMIN_SESSION_SECRET` は server 側だけで保持してください。
-- CLI / 自動化は従来どおり `X-API-Key` で管理 API を呼べます。
-- 認証と exposure は別物です。認証は管理 path 到達後に「誰が操作できるか」を決め、`WAF_ADMIN_EXTERNAL_MODE` はそもそも「どの network から管理 UI/API に到達できるか」を決めます。
-- tukuyomi の既定 posture は `WAF_ADMIN_EXTERNAL_MODE=api_only_external` です。trusted/private な直結 peer は管理UI/API の両方に到達でき、untrusted external は認証付き管理APIだけに限定されます。
-- `WAF_ADMIN_TRUSTED_CIDRS` は直結 peer IP だけを見ます。`WAF_TRUSTED_PROXY_CIDRS` は forwarded header 信頼用であり、管理UI の reachability は広げません。
-- remote admin API が不要なら `WAF_ADMIN_EXTERNAL_MODE=deny_external` を設定してください。
-- `WAF_ADMIN_EXTERNAL_MODE=full_external` を使うなら、front 側で IP allowlist / mTLS / upstream auth などを必ず追加してください。起動時にも warning を出します。
+- 管理 UI: `http://localhost:9090/tukuyomi-ui`
+- 管理 API: `http://localhost:9090/tukuyomi-api`
 
-起動時に `WAF_API_KEY_PRIMARY` が短すぎる/既知の弱い値の場合、Corazaプロセスは安全側で起動失敗します。  
-ローカル検証だけ一時的に緩和したい場合は `WAF_ALLOW_INSECURE_DEFAULTS=1` を利用してください。
+`UI_PREVIEW_PERSIST=1` を付けると、preview 専用設定を `ui-preview-down` / `ui-preview-up` の間で保持できます。
 
-forwarded header の信頼境界メモ:
+### Runtime 設定モデル
 
-- `WAF_TRUSTED_PROXY_CIDRS` を設定しない場合、Coraza は client 側が送った forwarding header を信用せず、直結 peer の IP を使います。
-- 国別制御は `WAF_COUNTRY_HEADER_NAMES` の trusted header chain を使い、信頼できる country header が無い場合は `UNKNOWN` に落ちます。
-- 同梱の example は現在、default では direct な `client -> tukuyomi -> app` smoke を起動し、`nginx` は balancer 相当の確認用に optional `front-proxy` profile として切り出しています。
-- local でその profile を使う場合は、trusted private range と `WAF_EXPOSE_WAF_DEBUG_HEADERS=true` を付けて、同梱 `nginx` の forwarded header 正規化と従来ログ挙動を有効にしてください。
-- `client -> ALB/Cloudflare/nginx -> tukuyomi -> app` へ寄せる場合は、`WAF_TRUSTED_PROXY_CIDRS` を実際の前段 range に絞り、前段で確実に除去しない限り `WAF_EXPOSE_WAF_DEBUG_HEADERS` は無効のままにしてください。
+`tukuyomi` は責務ごとに設定を分けています。
 
-## Host Network Hardening（L3/L4 対策の基礎）
+- `.env`: Docker 実行差分のみ
+- `data/conf/config.json`: global runtime / listener / admin / storage / path 設定
+- `data/conf/proxy.json`: live の proxy transport / routing 設定
+- `data/conf/proxy.json.backend_pools[]`: named upstream member から作る route 単位の balancing group
+- `data/conf/upstream-runtime.json`: `Proxy Rules > Upstreams` で定義した direct named upstream の opt-in runtime override
+- `data/conf/sites.json`: site ownership と TLS binding
+- `data/conf/rules/*.conf`: managed bypass `extra_rule` file
+- `data/php-fpm/vhosts.json`: PHP-FPM vhost 定義、内部用 `generated_target`、canonical な `linked_upstream_name`
+- `conf/scheduled-tasks.json`: scheduled task 定義
 
-tukuyomi はアプリケーション層（L7）の保護に特化しています。  
-回線帯域を埋めるような大規模な L3/L4 volumetric 攻撃は、tukuyomi 単体では防げません。  
-インターネット公開環境では、ISP / CDN / Load Balancer / scrubbing service などの upstream 側対策を併用してください。
+`data/conf/rules/*.conf` 配下の managed bypass override rule は
+`Override Rules` から編集します。これは通常起動時の base WAF
+rule set には混ぜず、`waf-bypass.json` から `extra_rule` で参照された時だけ
+load されます。
 
-以下の Linux カーネル設定は、SYN flood や spoofed source への耐性を高めるためのホスト側 hardening 例です。  
-upstream 側の DDoS 対策の代替ではありません。
+運用面の詳細は以下を参照してください。
 
-`/etc/sysctl.d/99-tukuyomi-network-hardening.conf`
+- [docs/reference/operator-reference.ja.md](docs/reference/operator-reference.ja.md)
+- [docs/operations/listener-topology.ja.md](docs/operations/listener-topology.ja.md)
 
-```conf
-net.ipv4.tcp_syncookies = 1
-net.ipv4.tcp_max_syn_backlog = 4096
-net.core.somaxconn = 4096
+`Proxy Rules > Upstreams` は direct backend node catalog、`Proxy Rules >
+Backend Pools` は route から参照できる upstream 名をまとめる route 単位の
+balancing group です。route は通常 `action.backend_pool` に bind し、
+`Backends` は routing で使われる canonical backend object を一覧化しつつ、
+runtime 操作は direct named upstream node 自体に対して行います。
 
-net.ipv4.conf.all.accept_redirects = 0
-net.ipv4.conf.default.accept_redirects = 0
-net.ipv4.conf.all.send_redirects = 0
-net.ipv4.conf.default.send_redirects = 0
+structured な `Proxy Rules` editor では、運用フローを次の順で表示します。
 
-# 対称ルーティング前提。非対称ルーティングや複数 NIC / トンネル環境では 2 を検討
-net.ipv4.conf.all.rp_filter = 1
-net.ipv4.conf.default.rp_filter = 1
-```
+1. `Upstreams`
+2. `Backend Pools`
+3. `Routes` / `Default route`
 
-適用:
+`Upstreams` の各行には専用の `Probe` があり、panel 全体の曖昧な target ではなく、
+指定した configured upstream に対して疎通確認を行います。
 
-```bash
-sudo sysctl --system
-```
+`Proxy Rules > Upstreams` で定義した direct named upstream は
+`Backends` から drain / disable / runtime weight override ができ、
+`proxy.json` を編集せずに運用変更できます。runtime 専用 override は
+`data/conf/upstream-runtime.json` に保存されます。
 
-注意:
+route 単位の web balancing を使う時は、`upstreams[]` で backend node を定義し、
+`backend_pools[]` で group を作り、route を `action.backend_pool` に bind します。
 
-- `rp_filter=1` は非対称ルーティング環境では通信断の原因になります
-- `tcp_syncookies` は SYN flood 時の fallback であり、帯域枯渇そのものは防げません
-- firewall / nftables / iptables の rate limit は実トラフィックに合わせて個別設計してください
+Vhost を同じ routing namespace に載せたい時は、Vhost に
+`linked_upstream_name` が必須で、`Proxy Rules > Upstreams` に既に存在している
+upstream 名でなければなりません。Vhost はその configured upstream に bind し、
+effective runtime ではその upstream 自体が vhost-backed target として解決されます。
+従来の `generated_target` は vhost materialization の内部互換 field として残ります。
+Vhost に bind されている configured upstream は、Vhost 側を relink するまで
+`Proxy Rules > Upstreams`
+から削除できません。
 
----
+通常の `http://` / `https://` upstream proxy では自動的に:
 
-## 管理ダッシュボード
+- `X-Forwarded-For`
+- `X-Forwarded-Host`
+- `X-Forwarded-Proto`
 
-`web/tukuyomi-admin/` 以下には、React + Vite による管理UIが含まれています。production/container build ではこの frontend を build し、Coraza バイナリへ埋め込みます。
+を付与します。
 
-### 主な画面と機能
+さらに `emit_upstream_name_request_header=true` を有効にすると、次も付与できます。
 
-| パス | 説明 |
-| --- | --- |
-| `/status` | WAFの動作状況、設定の確認 |
-| `/logs` | WAFログの取得・表示 |
-| `/log-output` | cloud/file 向けログ出力 profile（`conf/log-output.json`）の閲覧・編集 |
-| `/rules` | 使用中のベースルールファイル（`rules/tukuyomi.conf` など）の閲覧・編集 |
-| `/rule-sets` | CRS本体ルール（`rules/crs/rules/*.conf`）の有効/無効切替 |
-| `/bypass` | バイパス設定の閲覧・編集（waf.bypassを直接操作） |
-| `/country-block` | 国別ブロック設定の閲覧・編集（country-block.conf を直接操作） |
-| `/rate-limit` | レート制限設定の閲覧・編集（rate-limit.conf を直接操作） |
-| `/ip-reputation` | IP reputation feed と CIDR override の閲覧・編集（`conf/ip-reputation.conf` を直接操作） |
-| `/notifications` | 集計通知設定の閲覧・編集（`conf/notifications.conf` を直接操作） |
-| `/bot-defense` | Bot defense設定の閲覧・編集（bot-defense.conf を直接操作） |
-| `/semantic` | Semantic Security設定の閲覧・編集（semantic.conf を直接操作） |
-| `/fp-tuner` | 直近の `waf_block` event から false positive 調整案を提案・適用 |
-| `/cache` | Cache Rules の可視化・編集（cache.conf の表編集／Raw編集、Validate/Save対応） |
+- `X-Tukuyomi-Upstream-Name`
 
-### 画面キャプチャ
+この内部 observability header は、最終 target が `Proxy Rules > Upstreams`
+の configured named upstream だった時だけ付与されます。direct route URL と
+generated vhost target には付きません。また、route-level の
+`request_headers` から override することもできません。
 
-#### Dashboard
-![Dashboard](docs/images/admin-dashboard-overview.png)
-
-#### Rules Editor
-![Rules Editor](docs/images/admin-rules-editor.png)
-
-#### Rule Sets
-![Rule Sets](docs/images/admin-rule-sets.png)
-
-#### Bypass Rules
-![Bypass Rules](docs/images/admin-bypass-rules.png)
-
-#### Country Block
-![Country Block](docs/images/admin-country-block.png)
-
-#### Rate Limit
-![Rate Limit](docs/images/admin-rate-limit.png)
-
-#### IP Reputation
-![IP Reputation](docs/images/admin-ip-reputation.png)
-
-#### Notifications
-![Notifications](docs/images/admin-notifications.png)
-
-#### Bot Defense
-![Bot Defense](docs/images/admin-bot-defense.png)
-
-#### Semantic Security
-![Semantic Security](docs/images/admin-semantic-security.png)
-
-#### FP Tuner
-![FP Tuner](docs/images/admin-fp-tuner.png)
-
-#### Cache Rules
-![Cache Rules](docs/images/admin-cache-rules.png)
-
-#### Logs
-![Logs](docs/images/admin-logs.png)
-
-### ライブラリ
-
-* coraza 3.6.0
-* nginx 1.27
-* go 1.26.0
-* React 19
-* Vite 7
-* Tailwind CSS
-* react-router-dom
-* ShadCN UI（TailwindベースUI）
-
-### 起動方法
-
-```bash
-make setup
-make compose-build
-make compose-up
-```
-
-環境変数 `.env` に `VITE_APP_BASE_PATH` および `VITE_CORAZA_API_BASE` を定義することで、ルートパスを変更できます。
-管理UIを hot reload で開発したい場合だけ、任意で `make web-up` を使って `5173` を直接開いてください。
-
-### デプロイガイド
-
-- Binary deployment（`systemd`, オンプレ, VPS, VM, EC2）: [docs/build/binary-deployment.ja.md](docs/build/binary-deployment.ja.md)
-- Container deployment（ECS, AKS, GKE, Container Apps）: [docs/build/container-deployment.ja.md](docs/build/container-deployment.ja.md)
-
-#### 任意: ローカル MySQL コンテナ（profile: `mysql`）
-
-将来の DB ドライバ検証用に、ローカル MySQL コンテナを起動できます:
-
-```bash
-make mysql-up
-```
-
-MySQL をDBログ/設定運用で使う場合は、`WAF_STORAGE_BACKEND=db`・`WAF_DB_DRIVER=mysql`・`WAF_DB_DSN`（例: `tukuyomi:tukuyomi@tcp(mysql:3306)/tukuyomi?charset=utf8mb4&parseTime=true`）を設定してください。
-
-複数ノード運用では `WAF_DB_SYNC_INTERVAL_SEC`（例: `10`）を設定すると、各ノードが `config_blobs` から定期的に実行時ファイルを同期し、内容差分がある場合のみ reload します。
-
-スケールアウト運用では、共有MySQLを使う `db + mysql` を標準構成にしてください。`file` と `db + sqlite` は基本的に単一ノード運用/ローカル検証向けです。
-
-### WAF回帰テスト（GoTestWAF）
-
-ローカルで回帰テストを実行:
-
-```bash
-make gotestwaf-file
-```
-
-前提条件:
-
-- Docker と Docker Compose が利用可能であること
-- スクリプトが `coraza` と `nginx` を自動で build/up すること
-- 既定のホスト公開ポートは `HOST_CORAZA_PORT=19090` と `HOST_NGINX_PORT=18080`
-- 互換のため `HOST_OPENRESTY_PORT` も引き続き利用可能
-- 初回実行時は GoTestWAF イメージ取得のため時間がかかる場合があること
-
-デフォルトの合否基準は `MIN_BLOCKED_RATIO=70` です。追加基準は任意で指定できます:
-
-```bash
-MIN_TRUE_NEGATIVE_PASSED_RATIO=95 MAX_FALSE_POSITIVE_RATIO=5 MAX_BYPASS_RATIO=30 ./scripts/run_gotestwaf.sh
-```
-
-レポート出力先は `data/logs/gotestwaf/` です:
-
-- JSONフルレポート: `gotestwaf-report.json`
-- Markdownサマリ: `gotestwaf-report-summary.md`
-- Key-Valueサマリ: `gotestwaf-report-summary.txt`
-
-### デプロイ例
-
-実用向けのサンプル構成を以下に用意しています:
-
-- `examples/nextjs`（Next.js フロントエンド）
-- `examples/wordpress`（WordPress + 高パラノイア CRS 設定）
-- `examples/api-gateway`（REST API + 厳しめレート制限プロファイル）
-
-共通の起動手順は `examples/README.md` を参照してください。example compose は現在、default では direct な `client -> tukuyomi -> app` を起動し、optional `front-proxy` profile で `client -> nginx-like front -> tukuyomi -> app` も確認できます。
-`examples/api-gateway`、`examples/nextjs`、`examples/wordpress` には `PROTECTED_HOST=protected.example.test ./smoke.sh` があり、repo ルートからは thin-front path 向けに `./scripts/ci_example_smoke.sh <example>` で Docker smoke も回せます。
-repo ルートの統一入口として使うなら、`make example-smoke EXAMPLE=api-gateway` または `make example-smoke-all` も利用できます。
-
-direct な `client -> tukuyomi -> app` 確認をしたい場合は、`make standalone-regression-fast EXAMPLE=api-gateway` または `make standalone-smoke-all` を使ってください。
-deployment guide の検証をまとめて回したい場合は、`make deployment-smoke` を使ってください。
-現時点の standalone regression matrix は `docs/operations/standalone-regression.md` にまとめています。
-
-### FPチューナー（HTTPスタブ）送受信テスト
-
-`http` モードをローカルスタブで検証する場合:
-
-```bash
-./scripts/test_fp_tuner_http.sh
-```
-
-このスクリプトは次を自動実行します:
-
-- `127.0.0.1:${MOCK_PROVIDER_PORT:-18091}` に一時的なプロバイダスタブを起動
-- `WAF_FP_TUNER_ENDPOINT` をローカルスタブに向けて `coraza` を起動/再ビルド
-- `propose` / `apply` の契約を確認
-- 外部送信前にマスキング済みペイロードであることを検証
-
-既定のAPI公開ポートは `HOST_CORAZA_PORT=19090` です（`:80` は使用しません）。
-
-### FPチューナー（コマンドブリッジ）送受信テスト
-
-外部ツール連携（将来的な Codex CLI / Claude Code 連携を含む）向けに、`command` モードのブリッジ検証も可能です:
-
-```bash
-./scripts/test_fp_tuner_bridge_command.sh
-```
-
-関連スクリプト:
-
-- `scripts/fp_tuner_provider_bridge.py`: ローカルHTTPブリッジ（`/propose`）
-- `scripts/fp_tuner_provider_cmd_example.sh`: サンプルのコマンドプロバイダ（stdin JSON -> stdout JSON）
-- `scripts/fp_tuner_provider_openai.sh`: OpenAI互換API向けコマンドプロバイダ（stdin JSON -> API呼び出し -> stdout JSON）
-- `scripts/fp_tuner_provider_claude.sh`: Claude Messages API向けコマンドプロバイダ（stdin JSON -> API呼び出し -> stdout JSON）
-
-独自コマンドに差し替える場合:
-
-```bash
-BRIDGE_COMMAND="/path/to/your-provider-command.sh" ./scripts/test_fp_tuner_bridge_command.sh
-```
-
-プロバイダ契約:
-- Coraza 互換の host-scoped exclusion JSON だけを返す
-- 安全な除外を正当化できない場合は `no_proposal` を返す
-
-OpenAIコマンドプロバイダの利用例:
-
-```bash
-export FP_TUNER_OPENAI_API_KEY="<your-api-key>"
-export FP_TUNER_OPENAI_MODEL="<your-model-name>"
-
-BRIDGE_COMMAND="./scripts/fp_tuner_provider_openai.sh" ./scripts/test_fp_tuner_bridge_command.sh
-```
-
-OpenAIコマンドプロバイダのローカルモックテスト:
-
-```bash
-./scripts/test_fp_tuner_openai_command.sh
-```
-
-Claudeコマンドプロバイダの利用例:
-
-```bash
-export FP_TUNER_CLAUDE_API_KEY="<your-api-key>"
-export FP_TUNER_CLAUDE_MODEL="claude-sonnet-4-6"
-
-BRIDGE_COMMAND="./scripts/fp_tuner_provider_claude.sh" ./scripts/test_fp_tuner_bridge_command.sh
-```
-
-Claudeコマンドプロバイダのローカルモックテスト:
-
-```bash
-./scripts/test_fp_tuner_claude_command.sh
-```
-
-### FPチューナー（管理UI）運用フロー
-
-管理画面（`/fp-tuner`）で、最近の `waf_block` ログから対象イベントを1件選択して提案生成できます。
-
-基本フロー:
-
-1. 管理UIの `FP Tuner` を開く
-2. `Pick From Recent waf_block Logs` で調整対象の行の `Use` を押す
-3. 自動反映されたイベント項目（`path` / `rule_id` / `matched_variable` / `matched_value`）を確認
-4. `Propose` を実行し、`proposal.rule_line` を必要に応じて編集
-5. `Apply` を実行（まず `simulate`、必要なら承認トークン付きで実適用）
-
-1回の提案で送る外部プロバイダ向け入力は選択した1イベントのみです（送信量を抑制）。
-
----
-
-## API管理エンドポイント（/tukuyomi-api）
-
-### エンドポイント一覧
-
-リクエスト/レスポンスの詳細スキーマは [docs/api/admin-openapi.yaml](docs/api/admin-openapi.yaml) にまとめています（OpenAPI 3.0 / Swagger互換）。
-
-| メソッド | パス | 説明 |
-| --- | --- | --- |
-| GET | `/tukuyomi-api/auth/session` | 現在のブラウザ管理 session 状態を返し、session 有効時は CSRF cookie を更新 |
-| POST | `/tukuyomi-api/auth/login` | 有効な管理 API key を same-origin session cookie へ交換 |
-| POST | `/tukuyomi-api/auth/logout` | ブラウザ管理 session cookie を削除。session 認証中は `X-CSRF-Token` が必要 |
-| GET | `/tukuyomi-api/status` | 現在のWAF設定状態を取得 |
-| GET | `/tukuyomi-api/metrics` | rate limit / semantic の実行カウンタを Prometheus 形式で出力 |
-| GET | `/tukuyomi-api/logs/read` | WAFログ（tail）を取得（`country` クエリで国別フィルタ可） |
-| GET | `/tukuyomi-api/logs/stats` | WAFブロック統計 + 時間別seriesを取得（`hours` / `scan` クエリ対応） |
-| GET | `/tukuyomi-api/logs/download` | 3種類のログファイル（`waf` / `accerr` / `intr`）をZIPでまとめてダウンロード |
-| GET | `/tukuyomi-api/rules` | ルールファイル一覧を取得（複数対応） |
-| POST | `/tukuyomi-api/rules:validate` | 指定ルールファイルの構文検証（保存なし） |
-| PUT | `/tukuyomi-api/rules` | 指定ルールファイルを保存し、WAFベースルールをホットリロード（`If-Match`対応） |
-| GET | `/tukuyomi-api/crs-rule-sets` | CRS本体ルール一覧と有効/無効状態を取得 |
-| POST | `/tukuyomi-api/crs-rule-sets:validate` | CRS本体ルール選択の検証（保存なし） |
-| PUT | `/tukuyomi-api/crs-rule-sets` | CRS本体ルール選択を保存し、ホットリロード（`If-Match`対応） |
-| GET | `/tukuyomi-api/bypass-rules` | バイパス設定ファイルの内容を取得 |
-| POST | `/tukuyomi-api/bypass-rules:validate` | 送信内容の構文・検証のみ（保存なし） |
-| PUT | `/tukuyomi-api/bypass-rules` | バイパス設定ファイルを上書き保存（`If-Match` に `ETag` を指定して楽観ロック） |
-| GET  | `/tukuyomi-api/country-block-rules` | 国別ブロック設定ファイルの内容を取得 |
-| POST | `/tukuyomi-api/country-block-rules:validate` | 国別ブロック設定の構文検証のみ（保存なし） |
-| PUT  | `/tukuyomi-api/country-block-rules` | 国別ブロック設定ファイルを保存（`If-Match` に `ETag` を指定して楽観ロック） |
-| GET  | `/tukuyomi-api/rate-limit-rules` | レート制限設定ファイルの内容を取得 |
-| POST | `/tukuyomi-api/rate-limit-rules:validate` | レート制限設定の構文検証のみ（保存なし） |
-| PUT  | `/tukuyomi-api/rate-limit-rules` | レート制限設定ファイルを保存（`If-Match` に `ETag` を指定して楽観ロック） |
-| GET  | `/tukuyomi-api/notifications` | 集計通知設定ファイルの内容を取得 |
-| GET  | `/tukuyomi-api/notifications/status` | 通知ランタイム状態と active alert を取得 |
-| POST | `/tukuyomi-api/notifications/validate` | 通知設定の構文検証のみ（保存なし） |
-| POST | `/tukuyomi-api/notifications/test` | 現在設定でテスト通知を送信 |
-| PUT  | `/tukuyomi-api/notifications` | 通知設定ファイルを保存（`If-Match` に `ETag` を指定して楽観ロック） |
-| GET  | `/tukuyomi-api/ip-reputation` | IP reputation 設定と runtime status を取得 |
-| POST | `/tukuyomi-api/ip-reputation:validate` | IP reputation 設定の構文検証のみ（保存なし） |
-| PUT  | `/tukuyomi-api/ip-reputation` | IP reputation 設定ファイルを保存（`If-Match` に `ETag` を指定して楽観ロック） |
-| GET  | `/tukuyomi-api/bot-defense-rules` | Bot defense設定ファイルの内容を取得 |
-| POST | `/tukuyomi-api/bot-defense-rules:validate` | Bot defense設定の構文検証のみ（保存なし） |
-| PUT  | `/tukuyomi-api/bot-defense-rules` | Bot defense設定ファイルを保存（`If-Match` に `ETag` を指定して楽観ロック） |
-| GET  | `/tukuyomi-api/semantic-rules` | Semantic設定と実行統計を取得 |
-| POST | `/tukuyomi-api/semantic-rules:validate` | Semantic設定の構文検証のみ（保存なし） |
-| PUT  | `/tukuyomi-api/semantic-rules` | Semantic設定ファイルを保存（`If-Match` に `ETag` を指定して楽観ロック） |
-| GET  | `/tukuyomi-api/verify-manifest` | 外部WAF検証ランナー向けの verification manifest 雛形を出力 |
-| GET  | `/tukuyomi-api/fp-tuner/recent-waf-blocks` | FP Tuner picker 用に最近の `waf_block` 行だけを返す |
-| POST | `/tukuyomi-api/fp-tuner/propose` | リクエスト入力（`event` または `events[]`）または最新 `waf_block` / `semantic_anomaly` ログからFP調整案を生成 |
-| POST | `/tukuyomi-api/fp-tuner/apply` | 調整案の検証/適用（既定は `simulate=true`、実適用は承認トークン必須設定可） |
-| GET  | `/tukuyomi-api/cache-rules` | cache.conf の現在内容（Raw + 構造化）と `ETag` を返す |
-| POST | `/tukuyomi-api/cache-rules:validate` | 送信内容の構文・検証のみ（保存なし） |
-| PUT | `/tukuyomi-api/cache-rules` | cache.conf を保存（`If-Match` に `ETag` を指定して楽観ロック） |
-
-
-ログやルールが設定されていない場合は `500` で `{"error": "...説明..."}` を返します。
-
-browser session メモ:
-
-- ブラウザ session は same-origin cookie と、状態変更系 request に対する `X-CSRF-Token` を使います。
-- CLI / 自動化は browser session を作らずに `X-API-Key` を直接使えます。
-
----
-
-## WAFバイパス・特別ルール設定について
-
-tukuyomiでは、CorazaによるWAF検査を特定のリクエストに対して除外（バイパス）したり、特定のルールのみを適用する機能を備えています。
-
-### バイパスファイルの指定
-
-環境変数 `WAF_BYPASS_FILE` で除外・特別ルール定義ファイルを指定します。デフォルトは `conf/waf.bypass` です。
-
-### ファイル記述形式
-
-```text
-# 通常のバイパス指定
-/about/
-/about/user.php
-
-# 特別ルール適用（WAFバイパスせず、指定ルールを使用）
-/about/admin.php rules/admin-rule.conf
-
-# コメント（先頭 #）
-#/should/be/ignored.php rules/test.conf
-```
-
-### UIからの編集
-
-管理ダッシュボード `/bypass` 画面から、`waf.bypass` ファイルの内容を直接編集・保存できます。
-この画面では、全体の設定内容をテキスト形式で表示・編集し、保存ボタンで即時適用できます。
-
-### 国別ブロック設定
-
-管理ダッシュボード `/country-block` から、`WAF_COUNTRY_BLOCK_FILE`（既定: `conf/country-block.conf`）を編集できます。  
-1行に1つの国コードを記述します（例: `US`, `CN`, `RU`, `KR`, `TW`, `SG`, `IN`, `DE`, `FR`, `GB`, `UNKNOWN`）。
-該当する国コードのアクセスは WAF 前段で `403` になります。
-
-### レート制限設定
-
-管理ダッシュボード `/rate-limit` から、`WAF_RATE_LIMIT_FILE`（既定: `conf/rate-limit.conf`）を編集できます。  
-設定は JSON 形式で、`default_policy` と `rules` を管理します。  
-超過時は `action.status`（通常 `429`）を返し、`Retry-After` ヘッダを付与します。
-
-### IP Reputation 設定
-
-管理ダッシュボード `/ip-reputation` から、`WAF_IP_REPUTATION_FILE`（既定: `conf/ip-reputation.conf`）を編集できます。
-request-time security plugin は `ip_reputation -> bot_defense -> semantic` の順で WAF より前に実行されます。
-静的な allow/block CIDR と、任意の feed refresh を設定できます。
-plugin 作成手順は [`docs/request_security_plugins.md`](docs/request_security_plugins.md) を参照してください。
-
-#### JSONパラメータ早見表（何を変えるとどうなるか）
-
-| パラメータ | 例 | 影響 |
-| --- | --- | --- |
-| `enabled` | `true` / `false` | レート制限全体の有効/無効。`false` なら全リクエストを素通し。 |
-| `allowlist_ips` | `["127.0.0.1/32", "10.0.0.5"]` | 一致IPは常に制限対象外。CIDRと単体IPの両方を指定可。 |
-| `allowlist_countries` | `["JP", "US"]` | 一致国コードは常に制限対象外。 |
-| `session_cookie_names` | `["session", "sid"]` | `key_by` が session 系のときに参照する Cookie 名。 |
-| `jwt_header_names` | `["Authorization"]` | JWT subject 抽出に使うヘッダ名。 |
-| `jwt_cookie_names` | `["token", "access_token"]` | JWT subject 抽出に使う Cookie 名。 |
-| `adaptive_enabled` | `true` / `false` | semantic リスクスコアが高いクライアントだけ制限を自動で厳しくする。 |
-| `adaptive_score_threshold` | `6` | adaptive 制御を開始する最小リスクスコア。 |
-| `adaptive_limit_factor_percent` | `50` | adaptive 時に `limit` へ掛ける割合。 |
-| `adaptive_burst_factor_percent` | `50` | adaptive 時に `burst` へ掛ける割合。 |
-| `default_policy.enabled` | `true` | デフォルトポリシー自体の有効/無効。 |
-| `default_policy.limit` | `120` | ウィンドウ期間内の基本許可回数。 |
-| `default_policy.burst` | `20` | `limit` に上乗せする瞬間許容量。実効上限は `limit + burst`。 |
-| `default_policy.window_seconds` | `60` | カウント窓の秒数。短いほど厳密、長いほど緩やか。 |
-| `default_policy.key_by` | `"ip"` | 集計キー。`ip` / `country` / `ip_country` / `session` / `ip_session` / `jwt_sub` / `ip_jwt_sub`。 |
-| `default_policy.action.status` | `429` | 超過時のHTTPステータス。`4xx/5xx`のみ。 |
-| `default_policy.action.retry_after_seconds` | `60` | `Retry-After` ヘッダ秒数。`0` なら次ウィンドウまでの残秒を自動計算。 |
-| `rules[]` | 下記参照 | 条件一致時に `default_policy` より優先して適用。先頭から順に評価。 |
-| `rules[].match_type` | `"prefix"` | ルールの一致方式。`exact` / `prefix` / `regex`。 |
-| `rules[].match_value` | `"/login"` | 一致対象。`match_type` に応じて完全一致/前方一致/正規表現。 |
-| `rules[].methods` | `["POST"]` | 対象メソッド限定。空なら全メソッド対象。 |
-| `rules[].policy.*` |  | ルール一致時に使う制限値（`default_policy` と同じ意味）。 |
-
-#### 運用でよくやる調整
-
-- 全体を一時停止したい: `enabled=false`
-- 短時間スパイクに強くしたい: `burst` を増やす
-- ログイン単位・ユーザー単位に分けたい: `key_by="session"` または `key_by="jwt_sub"`
-- 怪しいクライアントだけ厳しくしたい: `adaptive_enabled=true`
-- ログインだけ厳しくしたい: `rules` に `match_type=prefix`, `match_value=/login`, `methods=["POST"]` を追加
-- 同一IP内で国別に分けたい: `key_by="ip_country"`
-- 特定拠点を除外したい: `allowlist_ips` または `allowlist_countries` に追加
-
-#### 推奨設定
-
-- 一般公開トラフィック: `default_policy.key_by="ip"` を基本にする
-- 安定した session cookie があるブラウザのログイン/フォーム: `key_by="session"` を使う
-- 安定して信頼できる JWT `sub` を持つ認証 API: `key_by="jwt_sub"` を使う
-- adaptive 制御はまずログインや更新系パスから有効化する: `adaptive_enabled=true`, `adaptive_score_threshold=6`, `adaptive_limit_factor_percent=50`, `adaptive_burst_factor_percent=50`
-
-巨大な JWT header/cookie 値は `jwt_sub` 抽出対象から除外され、base64 decode や JSON parse は行いません。
-
-#### 監視ポイント
-
-- `/tukuyomi-api/metrics` で rate-limit の blocked / adaptive カウンタ増加を確認する
-- `/tukuyomi-api/metrics` で login / write 系パス周辺の semantic action カウンタを確認する
-- 調整時はログの `rl_key_hash`, `adaptive`, `risk_score`, `reason_list`, `score_breakdown` を見る
-
-### Notifications 設定
-
-管理ダッシュボード `/notifications` から、`WAF_NOTIFICATION_FILE`（既定: `conf/notifications.conf`）を編集できます。
-通知は既定で無効で、ブロック 1 件ごとではなく、集計された状態遷移だけを送ります。
-
-- upstream 通知は、proxy error の集計に応じて `quiet -> active -> escalated -> quiet(recovered)` で遷移します
-- security 通知は、`waf_block`, `rate_limited`, `semantic_anomaly`, `bot_challenge`, `ip_reputation` の集計に応じて `quiet -> active -> escalated -> quiet(recovered)` で遷移します
-- sink は `webhook` と `email` をサポートします
-- `POST /tukuyomi-api/notifications/test` で現在設定のテスト通知を送れます
-- `GET /tukuyomi-api/notifications/status` で active alert、sink 数、最終 dispatch error を確認できます
-
-#### JSONパラメータ早見表
-
-| パラメータ | 例 | 影響 |
-| --- | --- | --- |
-| `enabled` | `true` / `false` | 通知配送全体の ON/OFF。既定は `false`。 |
-| `cooldown_seconds` | `900` | 同じ alert key / state で再送するまでの最小秒数。 |
-| `sinks[].type` | `"webhook"` / `"email"` | 配送方式。 |
-| `sinks[].enabled` | `true` / `false` | 個別 sink の ON/OFF。 |
-| `sinks[].webhook_url` | `"https://hooks.example.invalid/tukuyomi"` | webhook 配送先 URL。 |
-| `sinks[].headers` | `{"X-Tukuyomi-Token":"..."}` | 任意の webhook header。 |
-| `sinks[].smtp_address` | `"smtp.example.invalid:587"` | email sink が使う SMTP relay。 |
-| `sinks[].from` / `sinks[].to` | `"alerts@example.invalid"` / `["secops@example.invalid"]` | email の送信元と送信先。 |
-| `upstream.window_seconds` | `60` | proxy error を集計する窓秒数。 |
-| `upstream.active_threshold` | `3` | upstream alert を `quiet` から `active` に進める件数。 |
-| `upstream.escalated_threshold` | `10` | upstream alert を `active` から `escalated` に進める件数。 |
-| `security.window_seconds` | `300` | security event を集計する窓秒数。 |
-| `security.active_threshold` | `20` | security alert を `quiet` から `active` に進める件数。 |
-| `security.escalated_threshold` | `100` | security alert を `active` から `escalated` に進める件数。 |
-| `security.sources` | `["waf_block","rate_limited"]` | 集計対象にする security event 種別。 |
-
-#### 推奨設定
-
-- `POST /tukuyomi-api/notifications/test` で疎通確認できるまでは通知を有効化しない
-- 最初は webhook を優先する。Slack / Teams 連携は多くの場合 webhook sink で吸収できる
-- public reverse proxy では upstream 通知を先に有効化して、backend 障害を per-request 通知なしで検知する
-- security 通知は、rate-limit / semantic のしきい値調整が終わってから有効化する
-
-例:
+### 最小 route-scoped backend pool 例
 
 ```json
 {
-  "enabled": false,
-  "cooldown_seconds": 900,
-  "sinks": [
-    {
-      "name": "primary-webhook",
-      "type": "webhook",
-      "enabled": false,
-      "webhook_url": "https://hooks.example.invalid/tukuyomi",
-      "timeout_seconds": 5
-    }
+  "upstreams": [
+    { "name": "localhost1", "url": "http://127.0.0.1:8081", "weight": 1, "enabled": true },
+    { "name": "localhost2", "url": "http://127.0.0.1:8082", "weight": 1, "enabled": true },
+    { "name": "localhost3", "url": "http://127.0.0.1:9081", "weight": 1, "enabled": true },
+    { "name": "localhost4", "url": "http://127.0.0.1:9082", "weight": 1, "enabled": true }
   ],
-  "upstream": {
-    "enabled": true,
-    "window_seconds": 60,
-    "active_threshold": 3,
-    "escalated_threshold": 10
-  },
-  "security": {
-    "enabled": true,
-    "window_seconds": 300,
-    "active_threshold": 20,
-    "escalated_threshold": 100,
-    "sources": ["waf_block", "rate_limited", "semantic_anomaly", "bot_challenge"]
-  }
+  "backend_pools": [
+    { "name": "site-localhost", "strategy": "round_robin", "members": ["localhost1", "localhost2"] },
+    { "name": "site-app", "strategy": "round_robin", "members": ["localhost3", "localhost4"] }
+  ],
+  "routes": [
+    { "name": "site-localhost", "priority": 10, "match": { "hosts": ["localhost"] }, "action": { "backend_pool": "site-localhost" } },
+    { "name": "site-app", "priority": 20, "match": { "hosts": ["app"] }, "action": { "backend_pool": "site-app" } }
+  ]
 }
 ```
 
-### Bot Defense 設定
+## 配備ガイド
 
-管理ダッシュボード `/bot-defense` から、`WAF_BOT_DEFENSE_FILE`（既定: `conf/bot-defense.conf`）を編集できます。  
-有効時は、対象パスの GET リクエストに対して（`mode` に応じて）challenge レスポンスを返し、通過後に通常処理へ進みます。
+配備形態に応じて次を参照してください。
 
-#### JSONパラメータ早見表
+- single binary / systemd:
+  - [docs/build/binary-deployment.ja.md](docs/build/binary-deployment.ja.md)
+- Docker / container platform:
+  - [docs/build/container-deployment.ja.md](docs/build/container-deployment.ja.md)
+- split public/admin listener 例:
+  - [docs/build/config.split-listener.example.json](docs/build/config.split-listener.example.json)
 
-| パラメータ | 例 | 影響 |
-| --- | --- | --- |
-| `enabled` | `true` / `false` | Bot challenge の全体ON/OFF。 |
-| `mode` | `"suspicious"` | `suspicious` は UA 条件一致時のみ、`always` は一致パスを常に challenge。 |
-| `path_prefixes` | `["/", "/login"]` | challenge 対象のパス前方一致。 |
-| `exempt_cidrs` | `["127.0.0.1/32"]` | challenge 除外する送信元 IP/CIDR。 |
-| `suspicious_user_agents` | `["curl", "wget"]` | `suspicious` モードで使う UA 部分一致。 |
-| `challenge_cookie_name` | `"__tukuyomi_bot_ok"` | challenge 通過に使う Cookie 名。 |
-| `challenge_secret` | `"long-random-secret"` | challenge トークン署名シークレット（空ならプロセス起動ごとに一時生成）。 |
-| `challenge_ttl_seconds` | `86400` | challenge トークン有効期限（秒）。 |
-| `challenge_status_code` | `429` | challenge 応答時の HTTP ステータス（`4xx/5xx`）。 |
+container platform 向けサンプル:
 
-### Semantic Security 設定
+- ECS single-instance:
+  - [docs/build/ecs-single-instance.task-definition.example.json](docs/build/ecs-single-instance.task-definition.example.json)
+  - [docs/build/ecs-single-instance.service.example.json](docs/build/ecs-single-instance.service.example.json)
+- Kubernetes single-instance:
+  - [docs/build/kubernetes-single-instance.example.yaml](docs/build/kubernetes-single-instance.example.yaml)
+- Azure Container Apps single-instance:
+  - [docs/build/azure-container-apps-single-instance.example.yaml](docs/build/azure-container-apps-single-instance.example.yaml)
 
-管理ダッシュボード `/semantic` から、`WAF_SEMANTIC_FILE`（既定: `conf/semantic.conf`）を編集できます。  
-これは機械学習ではなくルールベースのヒューリスティック検知で、`off | log_only | challenge | block` の段階制御に対応します。
+## ドキュメント索引
 
-#### JSONパラメータ早見表
+### Core Operator Reference
 
-| パラメータ | 例 | 影響 |
-| --- | --- | --- |
-| `enabled` | `true` / `false` | semantic スコアリング全体の有効/無効。 |
-| `mode` | `"challenge"` | 実行モード。`off` / `log_only` / `challenge` / `block`。 |
-| `exempt_path_prefixes` | `["/healthz"]` | 一致パスは semantic 検査をスキップ。 |
-| `log_threshold` | `4` | anomaly ログを出す最小スコア。 |
-| `challenge_threshold` | `7` | `challenge` モードで challenge 応答にする最小スコア。 |
-| `block_threshold` | `9` | `block` モードで `403` にする最小スコア。 |
-| `max_inspect_body` | `16384` | semantic が検査するリクエストボディ最大バイト数。 |
-| `temporal_window_seconds` | `10` | IP ごとの時系列観測に使うスライディングウィンドウ秒数。 |
-| `temporal_max_entries_per_ip` | `128` | IP ごとに保持する観測数の上限。 |
-| `temporal_burst_threshold` | `20` | `temporal:ip_burst` を発火させるリクエスト数閾値。 |
-| `temporal_burst_score` | `2` | `temporal:ip_burst` 発火時に加点するスコア。 |
-| `temporal_path_fanout_threshold` | `8` | `temporal:ip_path_fanout` を発火させる distinct path 数。 |
-| `temporal_path_fanout_score` | `2` | `temporal:ip_path_fanout` 発火時に加点するスコア。 |
-| `temporal_ua_churn_threshold` | `4` | `temporal:ip_ua_churn` を発火させる distinct User-Agent 数。 |
-| `temporal_ua_churn_score` | `1` | `temporal:ip_ua_churn` 発火時に加点するスコア。 |
+- operator reference:
+  - [docs/reference/operator-reference.ja.md](docs/reference/operator-reference.ja.md)
+- Admin API OpenAPI:
+  - [docs/api/admin-openapi.yaml](docs/api/admin-openapi.yaml)
+- Request security plugin model:
+  - [docs/request_security_plugins.ja.md](docs/request_security_plugins.ja.md)
 
-`semantic_anomaly` ログには `reason_list` と `score_breakdown` が入り、`/tukuyomi-api/metrics` では rate limit / semantic の実行カウンタを取得できます。
+### Security と Tuning
 
-### ルールファイル編集（複数対応）
+- WAF tuning:
+  - [docs/operations/waf-tuning.ja.md](docs/operations/waf-tuning.ja.md)
+- FP Tuner API contract:
+  - [docs/operations/fp-tuner-api.ja.md](docs/operations/fp-tuner-api.ja.md)
+- upstream HTTP/2 と h2c:
+  - [docs/operations/upstream-http2.ja.md](docs/operations/upstream-http2.ja.md)
+- static fastpath evaluation:
+  - [docs/operations/static-fastpath-evaluation.ja.md](docs/operations/static-fastpath-evaluation.ja.md)
 
-管理ダッシュボード `/rules` では、アクティブなベースルールセットを選択して編集できます（`WAF_RULES_FILE` と、CRS有効時は `crs-setup.conf` + 有効化されている `WAF_CRS_RULES_DIR` の `*.conf`）。  
-保存時はサーバ側で構文検証した後に反映され、Coraza のベースルールセットをホットリロードします。  
-リロード失敗時は自動でロールバックされます。
+### PHP と Scheduled Tasks
 
-### CRSルールセット切替
+- PHP-FPM runtime と VHosts:
+  - [docs/operations/php-fpm-vhosts.ja.md](docs/operations/php-fpm-vhosts.ja.md)
+- Scheduled Tasks と scheduler 配備:
+  - [docs/operations/php-scheduled-tasks.ja.md](docs/operations/php-scheduled-tasks.ja.md)
 
-管理ダッシュボード `/rule-sets` では、`rules/crs/rules/*.conf` の各ファイルを有効/無効で切り替えられます。  
-状態は `WAF_CRS_DISABLED_FILE` に保存され、保存時にWAFをホットリロードします。
+### DB / Metrics / Regression
 
-### 優先順位
+- DB 運用:
+  - [docs/operations/db-ops.ja.md](docs/operations/db-ops.ja.md)
+- benchmark baseline:
+  - [docs/operations/benchmark-baseline.ja.md](docs/operations/benchmark-baseline.ja.md)
+- regression matrix:
+  - [docs/operations/regression-matrix.ja.md](docs/operations/regression-matrix.ja.md)
+- release binary smoke:
+  - [docs/operations/release-binary-smoke.ja.md](docs/operations/release-binary-smoke.ja.md)
 
-* 特別ルールが優先されます（同じパスにバイパス設定があっても無視）
-* ルールファイルが存在しない場合
+## 品質ゲート
 
-  * `WAF_STRICT_OVERRIDE=true` のときは即時強制終了（log.Fatalf）
-  * `false` または未設定時はログ出力して通常ルールで処理継続
-
-### 例
-
-```text
-/about/                    # /about/ 以下すべてバイパス
-/about/admin.php rules/special.conf  # admin.php だけは WAF で特別ルール適用
-```
-
-### 注意
-
-* ルール記述はファイル上で上から順に評価されます
-* `extraRuleFile` を指定した行が優先されます
-* コメント行（`#`で始まる）は無視されます
-
----
-
-## ログの確認
-
-本システムのログは API 経由で取得できます。
+ローカル確認:
 
 ```bash
-curl -s -H "X-API-Key: <your-api-key>" \
-     "http://<host>/tukuyomi-api/logs/read?src=waf&tail=100&country=JP" | jq .
+make ci-local
 ```
 
-* src: ログ種別 (waf, accerr, intr)
-* tail: 取得件数
-* country: 国コード（例: `JP`, `US`, `UNKNOWN`。未指定または`ALL`で全件）
-  * 国コードは trusted header を `X-Country-Code` → `CF-IPCountry` の順で見ます。信頼できる header が無い場合は `UNKNOWN` になります。
-
-API キーは .env で設定した API_KEY を使用してください。
-実運用環境ではアクセス制限や認証を必ず設定してください。
-
-## キャッシュ機能
-
-キャッシュ対象のパスやTTLを動的に設定できる機能を追加しました。
-
-### 設定ファイル
-キャッシュ設定は `/data/conf/cache.conf` に記述します。  
-設定変更はホットリロードに対応しており、ファイル保存後すぐに反映されます。
-
-#### 記述例
+deployment guide 再生まで含めた拡張ローカル回帰:
 
 ```bash
-# 静的アセット（CSS/JS/画像）を10分キャッシュ
-ALLOW prefix=/_next/static/chunks/ methods=GET,HEAD ttl=600 vary=Accept-Encoding
-
-# 特定HTMLページ群を5分キャッシュ（正規表現）
-ALLOW regex=^/about/.*.html$ methods=GET ttl=300
-
-# API全域禁止（安全側）
-DENY prefix=/tukuyomi-api/
-
-# 認証ユーザーのプロフィールはキャッシュ禁止（正規表現）
-DENY regex=^/users/[0-9]+/profile
-
-# その他はデフォルトでキャッシュ禁止
+make ci-local-extended
 ```
 
-- ALLOW: キャッシュ許可（TTLは秒単位、Varyは任意）
-- DENY: キャッシュ対象外
-- メソッドは `GET` または `HEAD` を推奨（POST等はキャッシュされません）
-
-フィールド説明
-- prefix: 指定パスで始まる場合にマッチ
-- regex: 正規表現でマッチ（`^`や`$`を使って指定可能）
-- methods: 対象HTTPメソッド（カンマ区切り）
-- ttl: キャッシュ時間（秒）
-- vary: nginxに渡すVaryヘッダ値（カンマ区切り）
-
-### 動作概要
-
-- Go側でルールに一致したレスポンスに `X-Tukuyomi-Cacheable` と `X-Accel-Expires` を付与
-- `WAF_RESPONSE_CACHE_MODE=memory` を有効にすると、tukuyomi 自身が in-memory response cache を持ちます
-- `WAF_RESPONSE_CACHE_MODE=disk` を有効にすると、同じ cache 動作を維持しつつ `WAF_RESPONSE_CACHE_DIR` 配下に entry を保持し、cached body は必要時だけ disk から読み出す形で restart 後に restore できます
-- `WAF_RESPONSE_CACHE_STALE_SECONDS` で、期限切れ entry を `STALE` として返しつつ background refresh を試みる時間を制御します
-- `WAF_RESPONSE_CACHE_REFRESH_TIMEOUT_SECONDS` で、background refresh の upstream timeout を制御します
-- `WAF_RESPONSE_CACHE_REFRESH_BACKOFF_SECONDS` で、refresh failure 後に次の background refresh を再試行するまでの待ち時間を制御します
-- `WAF_RESPONSE_CACHE_DIR` で、disk-backed cache mode が使う runtime path を指定します
-- `WAF_RESPONSE_CACHE_MODE=off` の場合は、従来どおり nginx がこれらのヘッダを元にキャッシュを管理します
-- 認証付きリクエスト、Cookieあり、APIパスはデフォルトでキャッシュされません
-- `Set-Cookie` を含む上流レスポンスは保存されません（共有キャッシュ誤配信防止）
-
-### 確認方法
-
-- レスポンスヘッダに以下が含まれているか確認
-  - `X-Tukuyomi-Cacheable: 1`
-  - `X-Accel-Expires: <秒数>`
-- local standalone cache を有効にした場合は `X-Tukuyomi-Cache-Status: MISS|HIT|STALE|BYPASS` も確認可能
-- nginx の `X-Cache-Status` ヘッダでキャッシュヒット状況を確認可能（MISS/HIT/BYPASS 等）
-
----
-
-## 管理画面のアクセス制限について
-
-管理 auth があることと、安全な exposure posture があることは別です。
-tukuyomi の既定 posture では、埋め込み管理UIは trusted/private な直結 peer に限定され、untrusted external は認証付き管理APIだけへ到達できます。
-それでも `NGX_CORAZA_ADMIN_URL` や `WAF_API_BASEPATH` を trusted network の外へ出す場合は、Basic 認証、IP allowlist、mTLS などの front-side 制御を追加してください。
-remote admin API 自体が不要なら `WAF_ADMIN_EXTERNAL_MODE=deny_external` を使ってください。
-
----
-
-## 品質ゲート（CI）
-
-GitHub Actions の `ci` ワークフローで以下を検証します。
-
-- `go test ./...`（`coraza/src`）
-- `docker compose config` の妥当性確認
-- MySQL ログストア統合テスト（`docker compose --profile mysql up -d mysql` + `go test ./internal/handler -run TestLogsStatsMySQLStoreAggregatesAndIngestsIncrementally`）
-- `./scripts/run_gotestwaf.sh`（`waf-test` マトリクス、`MIN_BLOCKED_RATIO=70`、`WAF_DB_ENABLED=false/true`）
-
-運用では、以下をブランチ保護の Required Checks に設定してください。
+典型的な CI required checks は次です。
 
 - `ci / go-test`
 - `ci / mysql-logstore-test`
@@ -886,31 +255,19 @@ GitHub Actions の `ci` ワークフローで以下を検証します。
 - `ci / waf-test (file)`
 - `ci / waf-test (sqlite)`
 
----
+## ライセンス
 
-## 誤検知チューニング運用
+tukuyomi は、nginx と同じ permissive license 系列である BSD 2-Clause License
+で公開します。詳細は [LICENSE](LICENSE) を参照してください。
 
-誤検知の削減手順は以下を参照してください。
-
-- `docs/operations/waf-tuning.md`
-- `docs/operations/fp-tuner-api.md`
-- `docs/operations/standalone-regression.md`
-
-## DB運用
-
-SQLite 運用手順は以下を参照してください。
-
-- `docs/operations/db-ops.md`
-
----
+サードパーティ依存ライブラリの著作権表示は [NOTICE](NOTICE) を参照してください。
+依存ライセンスの metadata は `coraza/src/go.mod` / `coraza/src/go.sum` と
+`web/tukuyomi-admin/package-lock.json` から確認できます。
 
 ## tukuyomi とは？
 
 **tukuyomi** は、nginx + Coraza WAF をベースとした OSS WAF **mamotama** を前身として発展したプロダクトです。
 
-名前は **「護りたまえ」(mamoritamae)** という言葉に由来し、
-*「守護を与えよ」* という意味を持ちます。
-
-mamotama が「保護」を核心に据えていたのに対し、
-tukuyomi はより構造的でインテリジェントなアプローチを体現しています——
-Webシステムに秩序・可観測性・制御をもたらすことを目指しています。
+名前は **「護りたまえ」(mamoritamae)** に由来し、*「守護を与えよ」* という意味を持ちます。
+mamotama が「保護」を核心に据えていたのに対し、tukuyomi はより構造化され、
+運用しやすい web protection を目指しています。

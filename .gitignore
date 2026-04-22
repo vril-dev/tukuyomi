@@ -7,7 +7,6 @@
 *.dll
 *.so
 *.dylib
-/bin/
 
 # Test binary, built with `go test -c`
 *.test
@@ -25,30 +24,58 @@ profile.cov
 go.work
 go.work.sum
 
-# env file
-.env
-artifacts/benchmarks/
+# local root env file
+/.env
+dist/
+/bin/
+runtime/
 
 # Editor/IDE
 # .idea/
 # .vscode/
 
 data/rules/*
+!data/rules/empty
 !data/rules/tukuyomi.conf
-data/conf
-!data/conf/cache.conf
-!data/conf/waf.bypass
+data/conf/*
+!data/conf/
+!data/conf/cache-rules.json
+!data/conf/waf-bypass.json
+!data/conf/waf-bypass.sample.json
+!data/conf/country-block.json
 !data/conf/crs-disabled.conf
+!data/conf/proxy.json
+!data/conf/config.json
+!data/conf/sites.json
+!data/conf/scheduled-tasks.json
+!data/conf/rate-limit.json
+!data/conf/bot-defense.json
+!data/conf/semantic.json
+!data/conf/notifications.json
+!data/conf/ip-reputation.json
+!data/conf/rules/
+!data/conf/rules/README.md
+!data/conf/rules/search-endpoint.conf
 data/logs/coraza/*
 !data/logs/coraza/empty
-data/logs/nginx/*
-!data/logs/nginx/empty
-# legacy path (pre-nginx migration)
-data/logs/openresty/*
 data/logs/gotestwaf/*
 !data/logs/gotestwaf/empty
+data/logs/proxy/*
+!data/logs/proxy/empty
+data/scheduled-tasks/*
+!data/scheduled-tasks/
+!data/scheduled-tasks/README.md
+data/geoip/*
+!data/geoip/
+!data/geoip/README.md
+data/php-fpm/inventory.json
+data/php-fpm/inventory.*.json
+data/php-fpm/vhosts.json
+data/php-fpm/vhosts.*.json
+data/php-fpm/*.bak
 
 # examples
+!presets/minimal/.env
 examples/*/.env
 examples/nextjs/app/node_modules/
 examples/api-gateway/api/node_modules/
@@ -56,7 +83,3 @@ examples/*/data/rules/crs/*
 !examples/*/data/rules/crs/.gitkeep
 examples/*/data/logs/coraza/*
 !examples/*/data/logs/coraza/empty
-examples/*/data/logs/nginx/*
-!examples/*/data/logs/nginx/empty
-# legacy path (pre-nginx migration)
-examples/*/data/logs/openresty/*

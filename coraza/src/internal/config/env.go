@@ -2,6 +2,7 @@ package config
 
 import (
 	"log"
+	"net"
 	"net/netip"
 	"os"
 	"strconv"
@@ -12,46 +13,97 @@ import (
 )
 
 var (
-	AppURL                         string
-	RulesFile                      string
-	BypassFile                     string
-	CountryBlockFile               string
-	CountryHeaderNames             []string
-	RateLimitFile                  string
-	IPReputationFile               string
-	BotDefenseFile                 string
-	SemanticFile                   string
-	NotificationFile               string
-	LogFile                        string
-	LogOutputFile                  string
-	ProxyErrorHTMLFile             string
-	ProxyErrorRedirectURL          string
-	StrictOverride                 bool
-	APIBasePath                    string
-	UIBasePath                     string
-	AdminExternalMode              string
-	AdminTrustedCIDRs              []string
-	AdminTrustedCIDRPrefixes       []netip.Prefix
-	TrustedProxyCIDRs              []string
-	TrustedProxyPrefixes           []netip.Prefix
-	ForwardInternalResponseHeaders bool
-	ResponseCacheMode              string
-	ResponseCacheMaxEntries        int
-	ResponseCacheMaxBodyBytes      int64
-	ResponseCacheStaleSeconds      int
-	ResponseCacheRefreshTimeout    time.Duration
-	ResponseCacheRefreshBackoff    time.Duration
-	ResponseCacheDir               string
-	APIKeyPrimary                  string
-	APIKeySecondary                string
-	AdminSessionSecret             string
-	AdminSessionTTL                time.Duration
-	APIAuthDisable                 bool
-	APICORSOrigins                 []string
-	CRSEnable                      bool
-	CRSSetupFile                   string
-	CRSRulesDir                    string
-	CRSDisabledFile                string
+	ConfigFile                          string
+	ProxyConfigFile                     string
+	SiteConfigFile                      string
+	PHPRuntimeInventoryFile             string
+	VhostConfigFile                     string
+	ScheduledTaskConfigFile             string
+	SecurityAuditFile                   string
+	SecurityAuditBlobDir                string
+	CacheStoreFile                      string
+	UIBasePath                          string
+	UpstreamRuntimeFile                 string
+	ProxyRollbackMax                    int
+	ProxyAuditFile                      string
+	ProxyEngineMode                     string
+	SecurityAuditEnabled                bool
+	SecurityAuditCaptureMode            string
+	SecurityAuditCaptureHeaders         bool
+	SecurityAuditCaptureBody            bool
+	SecurityAuditMaxBodyBytes           int64
+	SecurityAuditRedactHeaders          []string
+	SecurityAuditRedactBodyContentTypes []string
+	SecurityAuditKeySource              string
+	SecurityAuditEncryptionKey          string
+	SecurityAuditEncryptionKeyID        string
+	SecurityAuditHMACKey                string
+	SecurityAuditHMACKeyID              string
+	ListenAddr                          string
+	ServerReadTimeout                   time.Duration
+	ServerReadHeaderTimeout             time.Duration
+	ServerWriteTimeout                  time.Duration
+	ServerIdleTimeout                   time.Duration
+	ServerGracefulShutdownTimeout       time.Duration
+	ServerMaxHeaderBytes                int
+	ServerMaxConcurrentReqs             int
+	ServerMaxQueuedReqs                 int
+	ServerQueuedRequestTimeout          time.Duration
+	ServerMaxConcurrentProxy            int
+	ServerMaxQueuedProxy                int
+	ServerQueuedProxyRequestTimeout     time.Duration
+	ServerProxyProtocolEnabled          bool
+	ServerProxyProtocolTrustedCIDRs     []string
+	ServerTLSEnabled                    bool
+	ServerTLSCertFile                   string
+	ServerTLSKeyFile                    string
+	ServerTLSMinVersion                 string
+	ServerTLSRedirectHTTP               bool
+	ServerTLSHTTPRedirectAddr           string
+	ServerHTTP3Enabled                  bool
+	ServerHTTP3AltSvcMaxAgeSec          int
+	ServerTLSACMEEnabled                bool
+	ServerTLSACMEEmail                  string
+	ServerTLSACMEDomains                []string
+	ServerTLSACMECacheDir               string
+	ServerTLSACMEStaging                bool
+	RuntimeGOMAXPROCS                   int
+	RuntimeMemoryLimitMB                int
+	RequestCountryMode                  string
+	RulesFile                           string
+	OverrideRulesDir                    string
+	BypassFile                          string
+	CountryBlockFile                    string
+	RateLimitFile                       string
+	BotDefenseFile                      string
+	SemanticFile                        string
+	NotificationFile                    string
+	IPReputationFile                    string
+	LogFile                             string
+	StrictOverride                      bool
+	APIBasePath                         string
+	AdminListenAddr                     string
+	AdminReadOnly                       bool
+	AdminExternalMode                   string
+	AdminTrustedCIDRs                   []string
+	AdminTrustForwardedFor              bool
+	AdminProxyProtocolEnabled           bool
+	AdminProxyProtocolTrustedCIDRs      []string
+	APIKeyPrimary                       string
+	APIKeySecondary                     string
+	AdminSessionSecret                  string
+	AdminSessionTTL                     time.Duration
+	APIAuthDisable                      bool
+	APICORSOrigins                      []string
+	AdminRateLimitEnabled               bool
+	AdminRateLimitRPS                   int
+	AdminRateLimitBurst                 int
+	AdminRateLimitStatusCode            int
+	AdminRateLimitRetryAfter            int
+	CRSEnable                           bool
+	CRSSetupFile                        string
+	CRSRulesDir                         string
+	CRSDisabledFile                     string
 
 	AllowInsecureDefaults bool
 
@@ -70,57 +122,224 @@ var (
 	DBPath          string
 	DBRetentionDays int
 	DBSyncInterval  time.Duration
-)
+	FileRotateBytes int64
+	FileMaxBytes    int64
+	FileRetention   time.Duration
 
-var defaultAdminTrustedCIDRs = []string{
-	"127.0.0.1/32",
-	"::1/128",
-	"10.0.0.0/8",
-	"172.16.0.0/12",
-	"192.168.0.0/16",
-}
+	TracingEnabled      bool
+	TracingServiceName  string
+	TracingOTLPEndpoint string
+	TracingInsecure     bool
+	TracingSampleRatio  float64
+	RequestLogEnabled   bool
+)
 
 func LoadEnv() {
 	_ = godotenv.Load()
+	path := strings.TrimSpace(os.Getenv("WAF_CONFIG_FILE"))
+	if err := ReloadFromConfigFile(path); err != nil {
+		log.Fatalf("[CONFIG][FATAL] load %s: %v", ConfigFile, err)
+	}
+}
 
-	AppURL = os.Getenv("WAF_APP_URL")
-	RulesFile = os.Getenv("WAF_RULES_FILE")
-	BypassFile = os.Getenv("WAF_BYPASS_FILE")
-	CountryBlockFile = strings.TrimSpace(os.Getenv("WAF_COUNTRY_BLOCK_FILE"))
+func ReloadFromConfigFile(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = "conf/config.json"
+	}
+	cfg, err := loadAppConfigFile(path)
+	if err != nil {
+		ConfigFile = path
+		return err
+	}
+	ConfigFile = path
+	applyAppConfig(cfg)
+	enforceSecureDefaults()
+	emitAdminExposureWarnings()
+	return nil
+}
+
+func applyAppConfig(cfg appConfigFile) {
+	ProxyConfigFile = strings.TrimSpace(cfg.Paths.ProxyConfigFile)
+	if ProxyConfigFile == "" {
+		ProxyConfigFile = "conf/proxy.json"
+	}
+	SiteConfigFile = strings.TrimSpace(cfg.Paths.SiteConfigFile)
+	if SiteConfigFile == "" {
+		SiteConfigFile = "conf/sites.json"
+	}
+	PHPRuntimeInventoryFile = strings.TrimSpace(cfg.Paths.PHPRuntimeInventoryFile)
+	if PHPRuntimeInventoryFile == "" {
+		PHPRuntimeInventoryFile = "data/php-fpm/inventory.json"
+	}
+	VhostConfigFile = strings.TrimSpace(cfg.Paths.VhostConfigFile)
+	if VhostConfigFile == "" {
+		VhostConfigFile = "data/php-fpm/vhosts.json"
+	}
+	ScheduledTaskConfigFile = strings.TrimSpace(cfg.Paths.ScheduledTaskConfigFile)
+	if ScheduledTaskConfigFile == "" {
+		ScheduledTaskConfigFile = "conf/scheduled-tasks.json"
+	}
+	SecurityAuditFile = strings.TrimSpace(cfg.Paths.SecurityAuditFile)
+	if SecurityAuditFile == "" {
+		SecurityAuditFile = "logs/coraza/security-audit.ndjson"
+	}
+	SecurityAuditBlobDir = strings.TrimSpace(cfg.Paths.SecurityAuditBlobDir)
+	if SecurityAuditBlobDir == "" {
+		SecurityAuditBlobDir = "logs/coraza/security-audit-blobs"
+	}
+	CacheStoreFile = strings.TrimSpace(cfg.Paths.CacheStoreFile)
+	if CacheStoreFile == "" {
+		CacheStoreFile = "conf/cache-store.json"
+	}
+	UIBasePath = strings.TrimSpace(cfg.Admin.UIBasePath)
+	if UIBasePath == "" {
+		UIBasePath = "/tukuyomi-ui"
+	}
+
+	ProxyRollbackMax = parseProxyRollbackHistorySize(strconv.Itoa(cfg.Proxy.RollbackHistorySize))
+	ProxyAuditFile = strings.TrimSpace(cfg.Proxy.AuditFile)
+	ProxyEngineMode = normalizeAppProxyEngineMode(cfg.Proxy.Engine.Mode)
+	if override := strings.TrimSpace(os.Getenv("WAF_PROXY_AUDIT_FILE")); override != "" {
+		ProxyAuditFile = override
+	}
+	if ProxyAuditFile == "" {
+		ProxyAuditFile = "/app/logs/coraza/proxy-rules-audit.ndjson"
+	}
+	SecurityAuditEnabled = cfg.SecurityAudit.Enabled
+	SecurityAuditCaptureMode = strings.ToLower(strings.TrimSpace(cfg.SecurityAudit.CaptureMode))
+	if SecurityAuditCaptureMode == "" {
+		SecurityAuditCaptureMode = "off"
+	}
+	SecurityAuditCaptureHeaders = cfg.SecurityAudit.CaptureHeaders
+	SecurityAuditCaptureBody = cfg.SecurityAudit.CaptureBody
+	SecurityAuditMaxBodyBytes = cfg.SecurityAudit.MaxBodyBytes
+	if SecurityAuditMaxBodyBytes <= 0 {
+		SecurityAuditMaxBodyBytes = 32 * 1024
+	}
+	SecurityAuditRedactHeaders = append([]string(nil), cfg.SecurityAudit.RedactHeaders...)
+	SecurityAuditRedactBodyContentTypes = append([]string(nil), cfg.SecurityAudit.RedactBodyContentTypes...)
+	SecurityAuditKeySource = strings.ToLower(strings.TrimSpace(cfg.SecurityAudit.KeySource))
+	if SecurityAuditKeySource == "" {
+		SecurityAuditKeySource = "config"
+	}
+	SecurityAuditEncryptionKey = strings.TrimSpace(cfg.SecurityAudit.EncryptionKey)
+	SecurityAuditEncryptionKeyID = strings.TrimSpace(cfg.SecurityAudit.EncryptionKeyID)
+	if SecurityAuditEncryptionKeyID == "" {
+		SecurityAuditEncryptionKeyID = "local-dev-aes-gcm"
+	}
+	SecurityAuditHMACKey = strings.TrimSpace(cfg.SecurityAudit.HMACKey)
+	SecurityAuditHMACKeyID = strings.TrimSpace(cfg.SecurityAudit.HMACKeyID)
+	if SecurityAuditHMACKeyID == "" {
+		SecurityAuditHMACKeyID = "local-dev-hmac"
+	}
+	if SecurityAuditKeySource == "env" || strings.TrimSpace(os.Getenv("WAF_SECURITY_AUDIT_ENCRYPTION_KEY")) != "" {
+		SecurityAuditEncryptionKey = strings.TrimSpace(os.Getenv("WAF_SECURITY_AUDIT_ENCRYPTION_KEY"))
+	}
+	if SecurityAuditKeySource == "env" || strings.TrimSpace(os.Getenv("WAF_SECURITY_AUDIT_ENCRYPTION_KEY_ID")) != "" {
+		if override := strings.TrimSpace(os.Getenv("WAF_SECURITY_AUDIT_ENCRYPTION_KEY_ID")); override != "" {
+			SecurityAuditEncryptionKeyID = override
+		}
+	}
+	if SecurityAuditKeySource == "env" || strings.TrimSpace(os.Getenv("WAF_SECURITY_AUDIT_HMAC_KEY")) != "" {
+		SecurityAuditHMACKey = strings.TrimSpace(os.Getenv("WAF_SECURITY_AUDIT_HMAC_KEY"))
+	}
+	if SecurityAuditKeySource == "env" || strings.TrimSpace(os.Getenv("WAF_SECURITY_AUDIT_HMAC_KEY_ID")) != "" {
+		if override := strings.TrimSpace(os.Getenv("WAF_SECURITY_AUDIT_HMAC_KEY_ID")); override != "" {
+			SecurityAuditHMACKeyID = override
+		}
+	}
+	if override := strings.TrimSpace(os.Getenv("WAF_SECURITY_AUDIT_FILE")); override != "" {
+		SecurityAuditFile = override
+	}
+	if override := strings.TrimSpace(os.Getenv("WAF_SECURITY_AUDIT_BLOB_DIR")); override != "" {
+		SecurityAuditBlobDir = override
+	}
+	ListenAddr = parseListenAddr(cfg.Server.ListenAddr)
+	ServerReadTimeout = time.Duration(parseServerTimeoutSec(strconv.Itoa(cfg.Server.ReadTimeoutSec), 30, false)) * time.Second
+	ServerReadHeaderTimeout = time.Duration(parseServerTimeoutSec(strconv.Itoa(cfg.Server.ReadHeaderTimeoutSec), 5, false)) * time.Second
+	ServerWriteTimeout = time.Duration(parseServerTimeoutSec(strconv.Itoa(cfg.Server.WriteTimeoutSec), 0, true)) * time.Second
+	ServerIdleTimeout = time.Duration(parseServerTimeoutSec(strconv.Itoa(cfg.Server.IdleTimeoutSec), 120, false)) * time.Second
+	ServerGracefulShutdownTimeout = time.Duration(parseServerTimeoutSec(strconv.Itoa(cfg.Server.GracefulShutdownTimeoutSec), 30, false)) * time.Second
+	ServerMaxHeaderBytes = parseServerMaxHeaderBytes(strconv.Itoa(cfg.Server.MaxHeaderBytes))
+	ServerMaxConcurrentReqs = parseServerConcurrency(strconv.Itoa(cfg.Server.MaxConcurrentRequests))
+	ServerMaxQueuedReqs = parseServerQueueSize(strconv.Itoa(cfg.Server.MaxQueuedRequests))
+	ServerQueuedRequestTimeout = time.Duration(parseServerQueueTimeoutMS(strconv.Itoa(cfg.Server.QueuedRequestTimeoutMS))) * time.Millisecond
+	ServerMaxConcurrentProxy = parseServerConcurrency(strconv.Itoa(cfg.Server.MaxConcurrentProxyRequests))
+	ServerMaxQueuedProxy = parseServerQueueSize(strconv.Itoa(cfg.Server.MaxQueuedProxyRequests))
+	ServerQueuedProxyRequestTimeout = time.Duration(parseServerQueueTimeoutMS(strconv.Itoa(cfg.Server.QueuedProxyRequestTimeoutMS))) * time.Millisecond
+	ServerProxyProtocolEnabled = cfg.Server.ProxyProtocol.Enabled
+	ServerProxyProtocolTrustedCIDRs = append([]string(nil), cfg.Server.ProxyProtocol.TrustedCIDRs...)
+	ServerTLSEnabled = cfg.Server.TLS.Enabled
+	ServerTLSCertFile = strings.TrimSpace(cfg.Server.TLS.CertFile)
+	ServerTLSKeyFile = strings.TrimSpace(cfg.Server.TLS.KeyFile)
+	ServerTLSMinVersion = normalizeServerTLSMinVersion(cfg.Server.TLS.MinVersion)
+	ServerTLSRedirectHTTP = cfg.Server.TLS.RedirectHTTP
+	ServerTLSHTTPRedirectAddr = strings.TrimSpace(cfg.Server.TLS.HTTPRedirectAddr)
+	if ServerTLSHTTPRedirectAddr != "" {
+		ServerTLSHTTPRedirectAddr = parseListenAddr(ServerTLSHTTPRedirectAddr)
+	}
+	ServerHTTP3Enabled = cfg.Server.HTTP3.Enabled
+	ServerHTTP3AltSvcMaxAgeSec = cfg.Server.HTTP3.AltSvcMaxAgeSec
+	if ServerHTTP3AltSvcMaxAgeSec < 0 {
+		ServerHTTP3AltSvcMaxAgeSec = 86400
+	}
+	ServerTLSACMEEnabled = cfg.Server.TLS.ACME.Enabled
+	ServerTLSACMEEmail = strings.TrimSpace(cfg.Server.TLS.ACME.Email)
+	ServerTLSACMEDomains = append([]string(nil), cfg.Server.TLS.ACME.Domains...)
+	ServerTLSACMECacheDir = strings.TrimSpace(cfg.Server.TLS.ACME.CacheDir)
+	ServerTLSACMEStaging = cfg.Server.TLS.ACME.Staging
+	RuntimeGOMAXPROCS = parseRuntimeGOMAXPROCS(strconv.Itoa(cfg.Runtime.GOMAXPROCS))
+	RuntimeMemoryLimitMB = parseRuntimeMemoryLimitMB(strconv.Itoa(cfg.Runtime.MemoryLimitMB))
+	RequestCountryMode = strings.ToLower(strings.TrimSpace(cfg.RequestMeta.Country.Mode))
+	if RequestCountryMode == "" {
+		RequestCountryMode = "header"
+	}
+
+	RulesFile = strings.TrimSpace(cfg.Paths.RulesFile)
+	if RulesFile == "" {
+		RulesFile = "rules/tukuyomi.conf"
+	}
+	OverrideRulesDir = strings.TrimSpace(cfg.Paths.OverrideRulesDir)
+	if OverrideRulesDir == "" {
+		OverrideRulesDir = "conf/rules"
+	}
+	UpstreamRuntimeFile = strings.TrimSpace(cfg.Paths.UpstreamRuntimeFile)
+	if UpstreamRuntimeFile == "" {
+		UpstreamRuntimeFile = DefaultUpstreamRuntimeFilePath
+	}
+	BypassFile = strings.TrimSpace(cfg.Paths.BypassFile)
+	if BypassFile == "" {
+		BypassFile = DefaultBypassFilePath
+	}
+	CountryBlockFile = strings.TrimSpace(cfg.Paths.CountryBlockFile)
 	if CountryBlockFile == "" {
-		CountryBlockFile = "conf/country-block.conf"
+		CountryBlockFile = DefaultCountryBlockFilePath
 	}
-	CountryHeaderNames = parseCountryHeaderNames(os.Getenv("WAF_COUNTRY_HEADER_NAMES"))
-	RateLimitFile = strings.TrimSpace(os.Getenv("WAF_RATE_LIMIT_FILE"))
+	RateLimitFile = strings.TrimSpace(cfg.Paths.RateLimitFile)
 	if RateLimitFile == "" {
-		RateLimitFile = "conf/rate-limit.conf"
+		RateLimitFile = "conf/rate-limit.json"
 	}
-	IPReputationFile = strings.TrimSpace(os.Getenv("WAF_IP_REPUTATION_FILE"))
-	if IPReputationFile == "" {
-		IPReputationFile = "conf/ip-reputation.conf"
-	}
-	BotDefenseFile = strings.TrimSpace(os.Getenv("WAF_BOT_DEFENSE_FILE"))
+	BotDefenseFile = strings.TrimSpace(cfg.Paths.BotDefenseFile)
 	if BotDefenseFile == "" {
-		BotDefenseFile = "conf/bot-defense.conf"
+		BotDefenseFile = "conf/bot-defense.json"
 	}
-	SemanticFile = strings.TrimSpace(os.Getenv("WAF_SEMANTIC_FILE"))
+	SemanticFile = strings.TrimSpace(cfg.Paths.SemanticFile)
 	if SemanticFile == "" {
-		SemanticFile = "conf/semantic.conf"
+		SemanticFile = "conf/semantic.json"
 	}
-	NotificationFile = strings.TrimSpace(os.Getenv("WAF_NOTIFICATION_FILE"))
+	NotificationFile = strings.TrimSpace(cfg.Paths.NotificationFile)
 	if NotificationFile == "" {
-		NotificationFile = "conf/notifications.conf"
+		NotificationFile = "conf/notifications.json"
 	}
-	LogFile = os.Getenv("WAF_LOG_FILE")
-	LogOutputFile = strings.TrimSpace(os.Getenv("WAF_LOG_OUTPUT_FILE"))
-	if LogOutputFile == "" {
-		LogOutputFile = "conf/log-output.json"
+	IPReputationFile = strings.TrimSpace(cfg.Paths.IPReputationFile)
+	if IPReputationFile == "" {
+		IPReputationFile = "conf/ip-reputation.json"
 	}
-	ProxyErrorHTMLFile = strings.TrimSpace(os.Getenv("WAF_PROXY_ERROR_HTML_FILE"))
-	ProxyErrorRedirectURL = strings.TrimSpace(os.Getenv("WAF_PROXY_ERROR_REDIRECT_URL"))
-	StrictOverride = os.Getenv("WAF_STRICT_OVERRIDE") == "true"
+	LogFile = strings.TrimSpace(cfg.Paths.LogFile)
 
-	APIBasePath = os.Getenv("WAF_API_BASEPATH")
+	StrictOverride = cfg.Admin.StrictOverride
+	APIBasePath = strings.TrimSpace(cfg.Admin.APIBasePath)
 	if APIBasePath == "" {
 		APIBasePath = "/tukuyomi-api"
 	}
@@ -128,126 +347,200 @@ func LoadEnv() {
 		APIBasePath = "/" + APIBasePath
 	}
 	if APIBasePath == "/" {
-		log.Fatal("WAF_API_BASEPATH cannot be root path '/'")
+		log.Fatal("api_base_path cannot be root path '/'")
 	}
-	UIBasePath = os.Getenv("WAF_UI_BASEPATH")
-	if UIBasePath == "" {
-		UIBasePath = "/tukuyomi-admin"
+	AdminListenAddr = strings.TrimSpace(cfg.Admin.ListenAddr)
+	if AdminListenAddr != "" {
+		AdminListenAddr = parseListenAddr(AdminListenAddr)
 	}
-	if !strings.HasPrefix(UIBasePath, "/") {
-		UIBasePath = "/" + UIBasePath
+	AdminExternalMode = strings.ToLower(strings.TrimSpace(cfg.Admin.ExternalMode))
+	if AdminExternalMode == "" {
+		AdminExternalMode = "api_only_external"
 	}
-	if UIBasePath != "/" {
-		UIBasePath = strings.TrimRight(UIBasePath, "/")
-	}
-	if UIBasePath == "/" {
-		log.Fatal("WAF_UI_BASEPATH cannot be root path '/'")
-	}
-	if UIBasePath == APIBasePath {
-		log.Fatal("WAF_UI_BASEPATH must differ from WAF_API_BASEPATH")
-	}
-	AdminExternalMode = parseAdminExternalMode(os.Getenv("WAF_ADMIN_EXTERNAL_MODE"))
-	AdminTrustedCIDRs, AdminTrustedCIDRPrefixes = parseAdminTrustedCIDRs(os.Getenv("WAF_ADMIN_TRUSTED_CIDRS"))
-	TrustedProxyCIDRs, TrustedProxyPrefixes = parseTrustedProxyCIDRs(os.Getenv("WAF_TRUSTED_PROXY_CIDRS"))
-	ForwardInternalResponseHeaders = parseWAFDebugHeaderExposure(
-		os.Getenv("WAF_EXPOSE_WAF_DEBUG_HEADERS"),
-		os.Getenv("WAF_FORWARD_INTERNAL_RESPONSE_HEADERS"),
-	)
-	ResponseCacheMode = parseResponseCacheMode(os.Getenv("WAF_RESPONSE_CACHE_MODE"))
-	ResponseCacheMaxEntries = parseResponseCacheMaxEntries(os.Getenv("WAF_RESPONSE_CACHE_MAX_ENTRIES"))
-	ResponseCacheMaxBodyBytes = parseResponseCacheMaxBodyBytes(os.Getenv("WAF_RESPONSE_CACHE_MAX_BODY_BYTES"))
-	ResponseCacheStaleSeconds = parseResponseCacheStaleSeconds(os.Getenv("WAF_RESPONSE_CACHE_STALE_SECONDS"))
-	ResponseCacheRefreshTimeout = time.Duration(parseResponseCacheRefreshTimeoutSeconds(os.Getenv("WAF_RESPONSE_CACHE_REFRESH_TIMEOUT_SECONDS"))) * time.Second
-	ResponseCacheRefreshBackoff = time.Duration(parseResponseCacheRefreshBackoffSeconds(os.Getenv("WAF_RESPONSE_CACHE_REFRESH_BACKOFF_SECONDS"))) * time.Second
-	ResponseCacheDir = parseResponseCacheDir(os.Getenv("WAF_RESPONSE_CACHE_DIR"))
-
-	APIKeyPrimary = strings.TrimSpace(os.Getenv("WAF_API_KEY_PRIMARY"))
-	APIKeySecondary = strings.TrimSpace(os.Getenv("WAF_API_KEY_SECONDARY"))
-	AdminSessionSecret = strings.TrimSpace(os.Getenv("WAF_ADMIN_SESSION_SECRET"))
+	AdminTrustedCIDRs = append([]string(nil), cfg.Admin.TrustedCIDRs...)
+	AdminTrustForwardedFor = cfg.Admin.TrustForwardedFor
+	AdminProxyProtocolEnabled = cfg.Admin.ProxyProtocol.Enabled
+	AdminProxyProtocolTrustedCIDRs = append([]string(nil), cfg.Admin.ProxyProtocol.TrustedCIDRs...)
+	APIKeyPrimary = strings.TrimSpace(cfg.Admin.APIKeyPrimary)
+	APIKeySecondary = strings.TrimSpace(cfg.Admin.APIKeySecondary)
+	AdminSessionSecret = strings.TrimSpace(cfg.Admin.SessionSecret)
 	if AdminSessionSecret == "" {
 		AdminSessionSecret = APIKeyPrimary
 	}
-	adminSessionTTLSec := parseIntDefault(os.Getenv("WAF_ADMIN_SESSION_TTL_SEC"), 28800)
+	adminSessionTTLSec := cfg.Admin.SessionTTLSec
 	if adminSessionTTLSec < 300 || adminSessionTTLSec > 604800 {
 		adminSessionTTLSec = 28800
 	}
 	AdminSessionTTL = time.Duration(adminSessionTTLSec) * time.Second
-	APIAuthDisable = isTruthy(os.Getenv("WAF_API_AUTH_DISABLE"))
-	APICORSOrigins = parseCSV(os.Getenv("WAF_API_CORS_ALLOWED_ORIGINS"))
+	APIAuthDisable = cfg.Admin.APIAuthDisable
+	AdminReadOnly = cfg.Admin.ReadOnly
+	AdminRateLimitEnabled = cfg.Admin.RateLimit.Enabled
+	AdminRateLimitRPS = cfg.Admin.RateLimit.RPS
+	AdminRateLimitBurst = cfg.Admin.RateLimit.Burst
+	AdminRateLimitStatusCode = cfg.Admin.RateLimit.StatusCode
+	AdminRateLimitRetryAfter = cfg.Admin.RateLimit.RetryAfterSeconds
+	APICORSOrigins = make([]string, 0, len(cfg.Admin.CORSAllowedOrigins))
+	for _, origin := range cfg.Admin.CORSAllowedOrigins {
+		origin = strings.TrimSpace(origin)
+		if origin != "" {
+			APICORSOrigins = append(APICORSOrigins, origin)
+		}
+	}
 
-	CRSEnable = !isFalsy(os.Getenv("WAF_CRS_ENABLE"))
-	CRSSetupFile = strings.TrimSpace(os.Getenv("WAF_CRS_SETUP_FILE"))
+	CRSEnable = cfg.CRS.Enable
+	CRSSetupFile = strings.TrimSpace(cfg.Paths.CRSSetupFile)
 	if CRSSetupFile == "" {
 		CRSSetupFile = "rules/crs/crs-setup.conf"
 	}
-	CRSRulesDir = strings.TrimSpace(os.Getenv("WAF_CRS_RULES_DIR"))
+	CRSRulesDir = strings.TrimSpace(cfg.Paths.CRSRulesDir)
 	if CRSRulesDir == "" {
 		CRSRulesDir = "rules/crs/rules"
 	}
-	CRSDisabledFile = strings.TrimSpace(os.Getenv("WAF_CRS_DISABLED_FILE"))
+	CRSDisabledFile = strings.TrimSpace(cfg.Paths.CRSDisabledFile)
 	if CRSDisabledFile == "" {
 		CRSDisabledFile = "conf/crs-disabled.conf"
 	}
 
-	FPTunerEndpoint = strings.TrimSpace(os.Getenv("WAF_FP_TUNER_ENDPOINT"))
-	FPTunerAPIKey = strings.TrimSpace(os.Getenv("WAF_FP_TUNER_API_KEY"))
-	FPTunerModel = strings.TrimSpace(os.Getenv("WAF_FP_TUNER_MODEL"))
-	timeoutSec := parseIntDefault(os.Getenv("WAF_FP_TUNER_TIMEOUT_SEC"), 15)
+	FPTunerEndpoint = strings.TrimSpace(cfg.FPTuner.Endpoint)
+	FPTunerAPIKey = strings.TrimSpace(cfg.FPTuner.APIKey)
+	FPTunerModel = strings.TrimSpace(cfg.FPTuner.Model)
+	timeoutSec := cfg.FPTuner.TimeoutSec
 	if timeoutSec < 1 || timeoutSec > 300 {
 		timeoutSec = 15
 	}
 	FPTunerTimeout = time.Duration(timeoutSec) * time.Second
-	FPTunerRequireApproval = !isFalsy(os.Getenv("WAF_FP_TUNER_REQUIRE_APPROVAL"))
-	approvalTTLSec := parseIntDefault(os.Getenv("WAF_FP_TUNER_APPROVAL_TTL_SEC"), 600)
+	FPTunerRequireApproval = cfg.FPTuner.RequireApproval
+	approvalTTLSec := cfg.FPTuner.ApprovalTTLSec
 	if approvalTTLSec < 10 || approvalTTLSec > 86400 {
 		approvalTTLSec = 600
 	}
 	FPTunerApprovalTTL = time.Duration(approvalTTLSec) * time.Second
-	FPTunerAuditFile = strings.TrimSpace(os.Getenv("WAF_FP_TUNER_AUDIT_FILE"))
+	FPTunerAuditFile = strings.TrimSpace(cfg.FPTuner.AuditFile)
 	if FPTunerAuditFile == "" {
 		FPTunerAuditFile = "logs/coraza/fp-tuner-audit.ndjson"
 	}
-	legacyDBEnabled := isTruthy(os.Getenv("WAF_DB_ENABLED"))
-	StorageBackend = parseStorageBackend(os.Getenv("WAF_STORAGE_BACKEND"), legacyDBEnabled)
+
+	StorageBackend = parseStorageBackend(cfg.Storage.Backend, false)
 	DBEnabled = StorageBackend == "db"
-	DBDriver = parseDBDriver(os.Getenv("WAF_DB_DRIVER"))
-	DBDSN = strings.TrimSpace(os.Getenv("WAF_DB_DSN"))
-	DBPath = strings.TrimSpace(os.Getenv("WAF_DB_PATH"))
+	DBDriver = parseDBDriver(cfg.Storage.DBDriver)
+	DBDSN = strings.TrimSpace(cfg.Storage.DBDSN)
+	DBPath = strings.TrimSpace(cfg.Storage.DBPath)
 	if DBPath == "" {
 		DBPath = "logs/coraza/tukuyomi.db"
 	}
-	DBRetentionDays = parseIntDefault(os.Getenv("WAF_DB_RETENTION_DAYS"), 30)
+	DBRetentionDays = cfg.Storage.DBRetentionDays
 	if DBRetentionDays < 0 {
 		DBRetentionDays = 0
 	}
 	if DBRetentionDays > 3650 {
 		DBRetentionDays = 3650
 	}
-	dbSyncSec := parseDBSyncIntervalSec(os.Getenv("WAF_DB_SYNC_INTERVAL_SEC"))
+	dbSyncSec := parseDBSyncIntervalSec(strconv.Itoa(cfg.Storage.DBSyncIntervalSec))
 	DBSyncInterval = time.Duration(dbSyncSec) * time.Second
+	FileRotateBytes = cfg.Storage.FileRotateBytes
+	FileMaxBytes = cfg.Storage.FileMaxBytes
+	FileRetention = time.Duration(cfg.Storage.FileRetentionDays) * 24 * time.Hour
 
-	AllowInsecureDefaults = isTruthy(os.Getenv("WAF_ALLOW_INSECURE_DEFAULTS"))
-	enforceSecureDefaults()
+	AllowInsecureDefaults = cfg.Admin.AllowInsecureDefaults
+
+	RequestLogEnabled = cfg.Observability.RequestLog.Enabled
+	TracingEnabled = cfg.Observability.Tracing.Enabled
+	TracingServiceName = strings.TrimSpace(cfg.Observability.Tracing.ServiceName)
+	TracingOTLPEndpoint = strings.TrimSpace(cfg.Observability.Tracing.OTLPEndpoint)
+	TracingInsecure = cfg.Observability.Tracing.Insecure
+	TracingSampleRatio = cfg.Observability.Tracing.SampleRatio
 }
 
 func enforceSecureDefaults() {
 	if AllowInsecureDefaults {
-		log.Println("[SECURITY][WARN] WAF_ALLOW_INSECURE_DEFAULTS enabled; weak bootstrap settings are allowed")
+		log.Println("[SECURITY][WARN] admin.allow_insecure_defaults enabled; weak bootstrap settings are allowed")
 		return
 	}
 
 	if APIAuthDisable {
-		log.Fatal("[SECURITY] WAF_API_AUTH_DISABLE is enabled; set WAF_ALLOW_INSECURE_DEFAULTS=1 only for local testing")
+		log.Fatal("[SECURITY] admin.api_auth_disable is enabled; set admin.allow_insecure_defaults=true only for local testing")
 	}
 	if isWeakAPIKey(APIKeyPrimary) {
-		log.Fatal("[SECURITY] WAF_API_KEY_PRIMARY is weak; set a random key with 16+ chars")
+		log.Fatal("[SECURITY] admin.api_key_primary is weak; set a random key with 16+ chars")
 	}
 	if APIKeySecondary != "" && isWeakAPIKey(APIKeySecondary) {
-		log.Fatal("[SECURITY] WAF_API_KEY_SECONDARY is weak; set a random key with 16+ chars or leave it empty")
+		log.Fatal("[SECURITY] admin.api_key_secondary is weak; set a random key with 16+ chars or leave it empty")
 	}
 	if isWeakAPIKey(AdminSessionSecret) {
-		log.Fatal("[SECURITY] WAF_ADMIN_SESSION_SECRET is weak; set a random secret with 16+ chars")
+		log.Fatal("[SECURITY] admin.session_secret is weak; set a random secret with 16+ chars")
 	}
+}
+
+func emitAdminExposureWarnings() {
+	for _, warning := range adminExposureWarnings(ListenAddr, AdminExternalMode, AdminTrustedCIDRs) {
+		log.Printf("[SECURITY][WARN] %s", warning)
+	}
+}
+
+func adminExposureWarnings(listenAddr string, externalMode string, trustedCIDRs []string) []string {
+	mode := strings.ToLower(strings.TrimSpace(externalMode))
+	if mode == "" {
+		mode = "api_only_external"
+	}
+	if !listenAddrExposesBeyondLoopback(listenAddr) {
+		return nil
+	}
+
+	warnings := make([]string, 0, 3)
+	if mode == "full_external" {
+		warnings = append(warnings,
+			"admin.external_mode=full_external with a non-loopback server.listen_addr exposes the embedded admin UI and admin API to any network path that can reach this listener",
+			"prefer admin.external_mode=api_only_external (default) or deny_external, and add front-side allowlists/auth if you intentionally expose admin paths",
+		)
+	}
+
+	for _, raw := range trustedCIDRs {
+		if riskyPrefix, ok := trustedCIDRExposesBeyondPrivate(raw); ok {
+			warnings = append(warnings,
+				"admin.trusted_cidrs includes "+riskyPrefix+", so the embedded admin UI and admin API remain reachable from that network even when admin.external_mode is not full_external",
+			)
+			break
+		}
+	}
+	return warnings
+}
+
+func listenAddrExposesBeyondLoopback(addr string) bool {
+	s := parseListenAddr(addr)
+	if strings.HasPrefix(s, ":") {
+		return true
+	}
+	host, _, err := net.SplitHostPort(s)
+	if err != nil {
+		return true
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" || host == "*" {
+		return true
+	}
+	if strings.EqualFold(host, "localhost") {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return true
+	}
+	return !ip.IsLoopback()
+}
+
+func trustedCIDRExposesBeyondPrivate(raw string) (string, bool) {
+	prefix, err := netip.ParsePrefix(strings.TrimSpace(raw))
+	if err != nil {
+		return "", false
+	}
+	if prefix.Bits() == 0 {
+		return prefix.String(), true
+	}
+	addr := prefix.Addr()
+	if addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() {
+		return "", false
+	}
+	return prefix.String(), true
 }
 
 func isWeakAPIKey(v string) bool {
@@ -324,7 +617,7 @@ func parseStorageBackend(v string, legacyDBEnabled bool) string {
 		}
 		return "file"
 	default:
-		log.Printf("[CONFIG][WARN] unsupported WAF_STORAGE_BACKEND=%q, fallback=file", s)
+		log.Printf("[CONFIG][WARN] unsupported storage.backend=%q, fallback=file", s)
 		return "file"
 	}
 }
@@ -337,7 +630,7 @@ func parseDBDriver(v string) string {
 	case "sqlite", "mysql":
 		return s
 	default:
-		log.Printf("[CONFIG][WARN] unsupported WAF_DB_DRIVER=%q, fallback=sqlite", s)
+		log.Printf("[CONFIG][WARN] unsupported storage.db_driver=%q, fallback=sqlite", s)
 		return "sqlite"
 	}
 }
@@ -353,203 +646,100 @@ func parseDBSyncIntervalSec(v string) int {
 	return n
 }
 
-func parseTrustedProxyCIDRs(v string) ([]string, []netip.Prefix) {
-	return parseCIDRs(v, "WAF_TRUSTED_PROXY_CIDRS")
-}
-
-func parseCIDRs(v string, envName string) ([]string, []netip.Prefix) {
-	parts := parseCSV(v)
-	if len(parts) == 0 {
-		return nil, nil
-	}
-
-	cidrs := make([]string, 0, len(parts))
-	prefixes := make([]netip.Prefix, 0, len(parts))
-	for _, part := range parts {
-		if prefix, err := netip.ParsePrefix(part); err == nil {
-			prefix = prefix.Masked()
-			cidrs = append(cidrs, prefix.String())
-			prefixes = append(prefixes, prefix)
-			continue
-		}
-		if addr, err := netip.ParseAddr(part); err == nil {
-			addr = addr.Unmap()
-			prefix := netip.PrefixFrom(addr, addr.BitLen())
-			cidrs = append(cidrs, prefix.String())
-			prefixes = append(prefixes, prefix)
-			continue
-		}
-		log.Printf("[CONFIG][WARN] invalid %s entry ignored: %q", envName, part)
-	}
-
-	if len(cidrs) == 0 {
-		return nil, nil
-	}
-
-	return cidrs, prefixes
-}
-
-func parseAdminExternalMode(v string) string {
-	mode := strings.ToLower(strings.TrimSpace(v))
-	switch mode {
-	case "", "api_only_external":
-		return "api_only_external"
-	case "deny_external", "full_external":
-		return mode
-	default:
-		log.Printf("[CONFIG][WARN] unsupported WAF_ADMIN_EXTERNAL_MODE=%q, fallback=api_only_external", mode)
-		return "api_only_external"
-	}
-}
-
-func parseAdminTrustedCIDRs(v string) ([]string, []netip.Prefix) {
-	cidrs, prefixes := parseCIDRs(v, "WAF_ADMIN_TRUSTED_CIDRS")
-	if len(cidrs) != 0 {
-		return cidrs, prefixes
-	}
-	defaults, defaultPrefixes := parseCIDRs(strings.Join(defaultAdminTrustedCIDRs, ","), "WAF_ADMIN_TRUSTED_CIDRS")
-	return defaults, defaultPrefixes
-}
-
-func AdminExposureWarnings() []string {
-	warnings := make([]string, 0, 2)
-	switch AdminExternalMode {
-	case "full_external":
-		warnings = append(warnings,
-			"WAF_ADMIN_EXTERNAL_MODE=full_external exposes the embedded admin UI and admin API to any network path that can reach this runtime listener",
-			"prefer WAF_ADMIN_EXTERNAL_MODE=api_only_external (default) or deny_external, and add front-side allowlists/auth if you intentionally expose admin paths",
-		)
-	case "api_only_external":
-		if adminTrustedCIDRsAllowAll(AdminTrustedCIDRPrefixes) {
-			warnings = append(warnings,
-				"WAF_ADMIN_TRUSTED_CIDRS includes a catch-all range, so the default api_only_external posture also makes the embedded admin UI reachable from any client that can reach this runtime listener",
-			)
-		}
-	}
-	return warnings
-}
-
-func adminTrustedCIDRsAllowAll(prefixes []netip.Prefix) bool {
-	for _, prefix := range prefixes {
-		if prefix.Bits() == 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func parseResponseCacheMode(v string) string {
-	s := strings.ToLower(strings.TrimSpace(v))
-	switch s {
-	case "", "off":
-		return "off"
-	case "memory":
-		return "memory"
-	case "disk":
-		return "disk"
-	default:
-		log.Printf("[CONFIG][WARN] unsupported WAF_RESPONSE_CACHE_MODE=%q, fallback=off", s)
-		return "off"
-	}
-}
-
-func parseResponseCacheDir(v string) string {
+func parseListenAddr(v string) string {
 	s := strings.TrimSpace(v)
 	if s == "" {
-		return "logs/coraza/response-cache"
+		return ":9090"
+	}
+	if strings.HasPrefix(s, ":") {
+		return s
+	}
+	if _, err := strconv.Atoi(s); err == nil {
+		return ":" + s
 	}
 	return s
 }
 
-func parseResponseCacheMaxEntries(v string) int {
-	n := parseIntDefault(v, 512)
-	if n < 0 {
-		return 0
-	}
-	if n > 10000 {
-		return 10000
-	}
-	return n
-}
-
-func parseResponseCacheMaxBodyBytes(v string) int64 {
-	n := parseIntDefault(v, 1<<20)
-	if n < 0 {
-		return 0
-	}
-	if n > 64<<20 {
-		return 64 << 20
-	}
-	return int64(n)
-}
-
-func parseResponseCacheStaleSeconds(v string) int {
-	n := parseIntDefault(v, 30)
-	if n < 0 {
-		return 0
-	}
-	if n > 86400 {
-		return 86400
-	}
-	return n
-}
-
-func parseResponseCacheRefreshTimeoutSeconds(v string) int {
-	n := parseIntDefault(v, 5)
+func parseProxyRollbackHistorySize(v string) int {
+	n := parseIntDefault(v, 8)
 	if n < 1 {
 		return 1
 	}
-	if n > 300 {
-		return 300
+	if n > 64 {
+		return 64
 	}
 	return n
 }
 
-func parseResponseCacheRefreshBackoffSeconds(v string) int {
-	n := parseIntDefault(v, 5)
+func parseServerTimeoutSec(v string, def int, allowZero bool) int {
+	n := parseIntDefault(v, def)
+	if n < 0 {
+		return def
+	}
+	if n == 0 && !allowZero {
+		return def
+	}
+	if n > 3600 {
+		return 3600
+	}
+	return n
+}
+
+func parseServerMaxHeaderBytes(v string) int {
+	n := parseIntDefault(v, 1<<20)
+	if n < 1024 {
+		return 1024
+	}
+	if n > 16<<20 {
+		return 16 << 20
+	}
+	return n
+}
+
+func parseServerConcurrency(v string) int {
+	n := parseIntDefault(v, 0)
 	if n < 0 {
 		return 0
 	}
-	if n > 300 {
-		return 300
+	if n > 200000 {
+		return 200000
 	}
 	return n
 }
 
-func parseCountryHeaderNames(v string) []string {
-	parts := parseCSV(v)
-	if len(parts) == 0 {
-		parts = []string{"X-Country-Code", "CF-IPCountry"}
-	}
-
-	out := make([]string, 0, len(parts))
-	seen := map[string]struct{}{}
-	for _, part := range parts {
-		name := strings.TrimSpace(part)
-		if name == "" {
-			continue
-		}
-		key := strings.ToLower(name)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, name)
-	}
-
-	if len(out) == 0 {
-		return []string{"X-Country-Code", "CF-IPCountry"}
-	}
-
-	return out
+func parseServerQueueSize(v string) int {
+	return parseServerConcurrency(v)
 }
 
-func parseWAFDebugHeaderExposure(primary string, legacy string) bool {
-	if strings.TrimSpace(primary) != "" {
-		return isTruthy(primary)
+func parseServerQueueTimeoutMS(v string) int {
+	n := parseIntDefault(v, 0)
+	if n < 0 {
+		return 0
 	}
-	if strings.TrimSpace(legacy) != "" {
-		return isTruthy(legacy)
+	if n > 60000 {
+		return 60000
 	}
-	return false
+	return n
+}
+
+func parseRuntimeGOMAXPROCS(v string) int {
+	n := parseIntDefault(v, 0)
+	if n < 0 {
+		return 0
+	}
+	if n > 4096 {
+		return 4096
+	}
+	return n
+}
+
+func parseRuntimeMemoryLimitMB(v string) int {
+	n := parseIntDefault(v, 0)
+	if n < 0 {
+		return 0
+	}
+	if n > 1024*1024 {
+		return 1024 * 1024
+	}
+	return n
 }

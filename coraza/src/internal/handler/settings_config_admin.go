@@ -82,6 +82,7 @@ type settingsListenerAdminPathsConfig struct {
 	ScheduledTaskConfigFile string `json:"scheduled_task_config_file"`
 	SecurityAuditFile       string `json:"security_audit_file"`
 	SecurityAuditBlobDir    string `json:"security_audit_blob_dir"`
+	CacheRulesFile          string `json:"cache_rules_file"`
 	CacheStoreFile          string `json:"cache_store_file"`
 	RulesFile               string `json:"rules_file"`
 	OverrideRulesDir        string `json:"override_rules_dir"`
@@ -474,6 +475,7 @@ func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListener
 			ScheduledTaskConfigFile: cfg.Paths.ScheduledTaskConfigFile,
 			SecurityAuditFile:       cfg.Paths.SecurityAuditFile,
 			SecurityAuditBlobDir:    cfg.Paths.SecurityAuditBlobDir,
+			CacheRulesFile:          cfg.Paths.CacheRulesFile,
 			CacheStoreFile:          cfg.Paths.CacheStoreFile,
 			RulesFile:               cfg.Paths.RulesFile,
 			OverrideRulesDir:        cfg.Paths.OverrideRulesDir,
@@ -578,6 +580,7 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 	cfg.Paths.ScheduledTaskConfigFile = next.Paths.ScheduledTaskConfigFile
 	cfg.Paths.SecurityAuditFile = next.Paths.SecurityAuditFile
 	cfg.Paths.SecurityAuditBlobDir = next.Paths.SecurityAuditBlobDir
+	cfg.Paths.CacheRulesFile = next.Paths.CacheRulesFile
 	cfg.Paths.CacheStoreFile = next.Paths.CacheStoreFile
 	cfg.Paths.RulesFile = next.Paths.RulesFile
 	cfg.Paths.OverrideRulesDir = next.Paths.OverrideRulesDir

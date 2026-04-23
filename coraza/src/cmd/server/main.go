@@ -236,8 +236,6 @@ func main() {
 		log.Fatalf("[CACHE][DB][FATAL] sync failed: %v", err)
 	}
 
-	const cacheConfPath = config.DefaultCacheRulesFilePath
-	const legacyCacheConfPath = config.LegacyDefaultCacheRulesPath
 	if err := handler.SyncCacheRulesStorage(); err != nil {
 		log.Fatalf("[CACHE][DB][FATAL] sync failed: %v", err)
 	}
@@ -246,6 +244,11 @@ func main() {
 		log.Printf("[DB][SYNC] periodic sync loop enabled interval=%s", config.DBSyncInterval)
 	}
 	if !handler.DBStorageActive() {
+		cacheConfPath := strings.TrimSpace(config.CacheRulesFile)
+		if cacheConfPath == "" {
+			cacheConfPath = config.DefaultCacheRulesFilePath
+		}
+		legacyCacheConfPath := config.LegacyCompatPath(cacheConfPath, config.DefaultCacheRulesFilePath, config.LegacyDefaultCacheRulesPath)
 		stopWatch, err := cacheconf.Watch(cacheConfPath, legacyCacheConfPath, func(rs *cacheconf.Ruleset) {
 			//
 		})

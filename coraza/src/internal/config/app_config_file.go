@@ -124,6 +124,7 @@ type appPathsConfig struct {
 	ScheduledTaskConfigFile string `json:"scheduled_task_config_file"`
 	SecurityAuditFile       string `json:"security_audit_file"`
 	SecurityAuditBlobDir    string `json:"security_audit_blob_dir"`
+	CacheRulesFile          string `json:"cache_rules_file"`
 	CacheStoreFile          string `json:"cache_store_file"`
 	RulesFile               string `json:"rules_file"`
 	OverrideRulesDir        string `json:"override_rules_dir"`
@@ -298,6 +299,7 @@ func defaultAppConfigFile() appConfigFile {
 			ScheduledTaskConfigFile: "conf/scheduled-tasks.json",
 			SecurityAuditFile:       "audit/security-audit.ndjson",
 			SecurityAuditBlobDir:    "audit/security-audit-blobs",
+			CacheRulesFile:          DefaultCacheRulesFilePath,
 			CacheStoreFile:          "conf/cache-store.json",
 			RulesFile:               "rules/tukuyomi.conf",
 			OverrideRulesDir:        "conf/rules",
@@ -549,6 +551,9 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	}
 	if cfg.Paths.SecurityAuditBlobDir == "" {
 		return fmt.Errorf("paths.security_audit_blob_dir is required")
+	}
+	if cfg.Paths.CacheRulesFile == "" {
+		return fmt.Errorf("paths.cache_rules_file is required")
 	}
 	if cfg.Paths.CacheStoreFile == "" {
 		return fmt.Errorf("paths.cache_store_file is required")

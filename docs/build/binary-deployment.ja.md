@@ -39,6 +39,7 @@ make release-linux-all VERSION=v0.8.0
 ```text
 /opt/tukuyomi/bin/tukuyomi
 /opt/tukuyomi/conf/
+/opt/tukuyomi/seed/
 /opt/tukuyomi/db/
 /opt/tukuyomi/audit/
 /opt/tukuyomi/cache/
@@ -49,8 +50,8 @@ make release-linux-all VERSION=v0.8.0
 bundle 同梱の bootstrap/example:
 
 - `conf/config.json`
-- `conf/proxy.json`
-- `conf/sites.json`
+- `seed/proxy.json`
+- `seed/sites.json`
 - `conf/crs-disabled.conf`
 - `scripts/update_country_db.sh`
 
@@ -102,6 +103,7 @@ managed GeoIP country update も使う場合の追加物:
 sudo install -d -m 755 \
   /opt/tukuyomi/bin \
   /opt/tukuyomi/conf \
+  /opt/tukuyomi/seed \
   /opt/tukuyomi/db \
   /opt/tukuyomi/audit \
   /opt/tukuyomi/cache/response \
@@ -113,8 +115,9 @@ sudo install -d -m 755 \
 sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
 
-for f in config.json proxy.json sites.json; do
-  sudo install -m 644 "data/conf/${f}" "/opt/tukuyomi/conf/${f}"
+sudo install -m 644 data/conf/config.json /opt/tukuyomi/conf/config.json
+for f in proxy.json sites.json; do
+  sudo install -m 644 "data/seed/${f}" "/opt/tukuyomi/seed/${f}"
 done
 
 sudo touch /opt/tukuyomi/conf/crs-disabled.conf
@@ -124,8 +127,9 @@ sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 
 - `data/conf/*.bak` は本番へ持っていかないでください
 - `config.json` は DB 接続 bootstrap と DB `app_config` の seed/export material です
-- `proxy.json` は DB `proxy_rules` の seed/import/export material です
-- public release bundle が example seed として同梱するのは `config.json`、`proxy.json`、`sites.json` だけで、他の seed/import material は必要時に operator が用意します
+- `seed/proxy.json` は DB `proxy_rules` の seed/import/export material です
+- `seed/sites.json` は DB `sites` の seed/import/export material です
+- public release bundle が example seed として同梱するのは `conf/config.json` と `seed/proxy.json` / `seed/sites.json` だけで、他の seed/import material は必要時に operator が用意します
 - 既定の base WAF rule seed は binary に compile されています
 - CRS file は DB `waf_rule_assets` 向けの一時 import material であり、`make crs-install` が staging と cleanup を行います
 - `sites.json`、`scheduled-tasks.json`、`upstream-runtime.json`、policy JSON、

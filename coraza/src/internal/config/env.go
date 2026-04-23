@@ -22,6 +22,7 @@ var (
 	SecurityAuditFile                   string
 	SecurityAuditBlobDir                string
 	CacheStoreFile                      string
+	CacheRulesFile                      string
 	UIBasePath                          string
 	UpstreamRuntimeFile                 string
 	ProxyRollbackMax                    int
@@ -185,6 +186,10 @@ func applyAppConfig(cfg appConfigFile) {
 	SecurityAuditBlobDir = strings.TrimSpace(cfg.Paths.SecurityAuditBlobDir)
 	if SecurityAuditBlobDir == "" {
 		SecurityAuditBlobDir = "audit/security-audit-blobs"
+	}
+	CacheRulesFile = strings.TrimSpace(cfg.Paths.CacheRulesFile)
+	if CacheRulesFile == "" {
+		CacheRulesFile = DefaultCacheRulesFilePath
 	}
 	CacheStoreFile = strings.TrimSpace(cfg.Paths.CacheStoreFile)
 	if CacheStoreFile == "" {

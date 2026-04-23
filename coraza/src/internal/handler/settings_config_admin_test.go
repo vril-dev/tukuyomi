@@ -334,6 +334,7 @@ func writeSettingsConfigFixture(t *testing.T) string {
   },
   "paths": {
     "proxy_config_file": "conf/proxy.json",
+    "cache_rules_file": "conf/cache-rules.json",
     "security_audit_file": "audit/security-audit.ndjson",
     "security_audit_blob_dir": "audit/security-audit-blobs",
     "rules_file": "rules/tukuyomi.conf"
@@ -448,6 +449,7 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 			ScheduledTaskConfigFile: "conf/scheduled-tasks.json",
 			SecurityAuditFile:       "audit/security-audit.ndjson",
 			SecurityAuditBlobDir:    "audit/security-audit-blobs",
+			CacheRulesFile:          "conf/cache-rules.json",
 			CacheStoreFile:          "conf/cache-store.json",
 			RulesFile:               "rules/tukuyomi.conf",
 			BypassFile:              "conf/waf-bypass.json",

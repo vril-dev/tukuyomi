@@ -7,7 +7,7 @@ Use this preset when you want the embedded admin UI and a single default upstrea
 Before first real use, change:
 - `.env` API key values
 - `config.json` admin trusted CIDRs if you expose the admin API
-- `proxy.json` upstream target and any protected host routing you need
+- `seed/proxy.json` upstream target and any protected host routing you need
 
 Apply and validate with:
 

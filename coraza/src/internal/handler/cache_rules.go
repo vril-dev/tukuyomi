@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -11,11 +12,19 @@ import (
 	"tukuyomi/internal/config"
 )
 
-const (
-	cacheConfPath       = config.DefaultCacheRulesFilePath
-	legacyCacheConfPath = config.LegacyDefaultCacheRulesPath
-	cacheConfigBlobKey  = "cache_rules"
-)
+const cacheConfigBlobKey = "cache_rules"
+
+func configuredCacheRulesPath() string {
+	path := strings.TrimSpace(config.CacheRulesFile)
+	if path == "" {
+		return config.DefaultCacheRulesFilePath
+	}
+	return path
+}
+
+func configuredLegacyCacheRulesPath() string {
+	return config.LegacyCompatPath(configuredCacheRulesPath(), config.DefaultCacheRulesFilePath, config.LegacyDefaultCacheRulesPath)
+}
 
 type crPutBody struct {
 	RawMode bool                `json:"rawMode"`
@@ -24,7 +33,7 @@ type crPutBody struct {
 }
 
 func GetCacheRules(c *gin.Context) {
-	readPath := config.ResolveReadablePolicyPath(cacheConfPath, legacyCacheConfPath)
+	readPath := config.ResolveReadablePolicyPath(configuredCacheRulesPath(), configuredLegacyCacheRulesPath())
 	raw, _ := os.ReadFile(readPath)
 	savedAt := fileSavedAt(readPath)
 	if store := getLogsStatsStore(); store != nil {
@@ -156,14 +165,14 @@ func PutCacheRules(c *gin.Context) {
 	}
 
 	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(config.ResolveReadablePolicyPath(cacheConfPath, legacyCacheConfPath))
+	curRaw, _ := os.ReadFile(config.ResolveReadablePolicyPath(configuredCacheRulesPath(), configuredLegacyCacheRulesPath()))
 	curETag := cacheconf.ComputeETag(curRaw)
 	if ifMatch != "" && ifMatch != curETag {
 		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
 		return
 	}
 
-	if err := cacheconf.AtomicWriteWithBackup(cacheConfPath, outBytes); err != nil {
+	if err := cacheconf.AtomicWriteWithBackup(configuredCacheRulesPath(), outBytes); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

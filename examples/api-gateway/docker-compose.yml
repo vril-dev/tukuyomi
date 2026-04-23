@@ -13,8 +13,13 @@ services:
     environment:
       - WAF_CONFIG_FILE=${WAF_CONFIG_FILE:-conf/config.json}
     volumes:
+      - ./data/db:/app/db
+      - ./data/audit:/app/audit
+      - ./data/cache:/app/cache
+      - ./data/php-fpm:/app/data/php-fpm
       - ./data/rules:/app/rules
-      - ./data/conf:/app/conf
+      - ./data/seed:/app/seed:ro
+      - ./data/conf:/app/conf:ro
       - ./data/logs:/app/logs
     ports:
       - "${CORAZA_PORT:-19093}:${WAF_LISTEN_PORT:-9090}"

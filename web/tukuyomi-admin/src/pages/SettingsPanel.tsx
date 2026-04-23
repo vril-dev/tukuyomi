@@ -92,6 +92,7 @@ type ListenerAdminConfig = {
       scheduled_task_config_file: string;
       security_audit_file: string;
       security_audit_blob_dir: string;
+      cache_rules_file: string;
       cache_store_file: string;
       rules_file: string;
       override_rules_dir: string;
@@ -295,6 +296,7 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
       scheduled_task_config_file: "conf/scheduled-tasks.json",
       security_audit_file: "audit/security-audit.ndjson",
       security_audit_blob_dir: "audit/security-audit-blobs",
+      cache_rules_file: "conf/cache-rules.json",
       cache_store_file: "conf/cache-store.json",
       rules_file: "rules/tukuyomi.conf",
       override_rules_dir: "conf/rules",
@@ -1379,6 +1381,7 @@ export default function SettingsPanel() {
                         <Field label={tx("Scheduled Task Seed File")}><input value={listenerAdminConfig.paths.scheduled_task_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, scheduled_task_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
                         <Field label={tx("Security Audit File")}><input value={listenerAdminConfig.paths.security_audit_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, security_audit_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
                         <Field label={tx("Security Audit Blob Dir")}><input value={listenerAdminConfig.paths.security_audit_blob_dir} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, security_audit_blob_dir: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
+                        <Field label={tx("Cache Rules File")}><input value={listenerAdminConfig.paths.cache_rules_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, cache_rules_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
                         <Field label={tx("Cache Store File")}><input value={listenerAdminConfig.paths.cache_store_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, cache_store_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
                         <Field label={tx("Rules File")}><input value={listenerAdminConfig.paths.rules_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, rules_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
                         <Field label={tx("Override Rules Dir")}><input value={listenerAdminConfig.paths.override_rules_dir} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, override_rules_dir: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>

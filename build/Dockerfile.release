@@ -69,12 +69,11 @@ COPY docs/ ./docs/
 COPY testenv/release-binary/ ./testenv/release-binary/
 COPY presets/minimal/.env ./presets/minimal/.env
 COPY presets/minimal/config.json ./presets/minimal/config.json
-COPY presets/minimal/proxy.json ./presets/minimal/proxy.json
-COPY presets/minimal/sites.json ./presets/minimal/sites.json
+COPY presets/minimal/seed/ ./presets/minimal/seed/
 COPY data/scheduled-tasks/README.md ./data/scheduled-tasks/README.md
 COPY data/php-fpm/ ./data/php-fpm/
 COPY data/vhosts/ ./data/vhosts/
-COPY examples/api-gateway/data/conf/crs-disabled.conf ./examples/api-gateway/data/conf/crs-disabled.conf
+COPY examples/api-gateway/data/seed/crs-disabled.conf ./examples/api-gateway/data/seed/crs-disabled.conf
 COPY scripts/install_crs.sh ./scripts/install_crs.sh
 COPY scripts/update_country_db.sh ./scripts/update_country_db.sh
 
@@ -86,7 +85,7 @@ RUN set -eux; \
     fi; \
     archive_root="${APP_NAME}_${VERSION}_${os}_${arch}"; \
     bundle="/work/${archive_root}"; \
-    mkdir -p "${bundle}/bin" "${bundle}/conf" "${bundle}/rules/crs" "${bundle}/db" "${bundle}/audit" "${bundle}/cache/response" "${bundle}/logs/waf" "${bundle}/logs/proxy" "${bundle}/scripts" "${bundle}/data/scheduled-tasks" "${bundle}/data/php-fpm/binaries" "${bundle}/data/php-fpm/runtime" "${bundle}/data/vhosts/samples" "/out"; \
+    mkdir -p "${bundle}/bin" "${bundle}/conf" "${bundle}/seed" "${bundle}/rules/crs" "${bundle}/db" "${bundle}/audit" "${bundle}/cache/response" "${bundle}/logs/waf" "${bundle}/logs/proxy" "${bundle}/scripts" "${bundle}/data/scheduled-tasks" "${bundle}/data/php-fpm/binaries" "${bundle}/data/php-fpm/runtime" "${bundle}/data/vhosts/samples" "/out"; \
     cp "/tmp/out/${APP_NAME}" "${bundle}/${APP_NAME}"; \
     cp "/tmp/out/geoipupdate" "${bundle}/bin/geoipupdate"; \
     cp /src/README.md "${bundle}/README.md"; \
@@ -97,12 +96,11 @@ RUN set -eux; \
     cp -R /src/testenv "${bundle}/testenv"; \
     cp /src/presets/minimal/.env "${bundle}/.env.example"; \
     cp /src/presets/minimal/config.json "${bundle}/conf/config.json"; \
-    cp /src/presets/minimal/proxy.json "${bundle}/conf/proxy.json"; \
-    cp /src/presets/minimal/sites.json "${bundle}/conf/sites.json"; \
+    cp -R /src/presets/minimal/seed/. "${bundle}/seed/"; \
     cp /src/data/scheduled-tasks/README.md "${bundle}/data/scheduled-tasks/README.md"; \
     cp -R /src/data/php-fpm/. "${bundle}/data/php-fpm/"; \
     cp -R /src/data/vhosts/. "${bundle}/data/vhosts/"; \
-    cp /src/examples/api-gateway/data/conf/crs-disabled.conf "${bundle}/conf/crs-disabled.conf"; \
+    cp /src/examples/api-gateway/data/seed/crs-disabled.conf "${bundle}/conf/crs-disabled.conf"; \
     sed 's#DEST_DIR="${ROOT_DIR}/data/rules/crs"#DEST_DIR="${ROOT_DIR}/rules/crs"#' /src/scripts/install_crs.sh > "${bundle}/scripts/install_crs.sh"; \
     cp /src/scripts/update_country_db.sh "${bundle}/scripts/update_country_db.sh"; \
     chmod +x "${bundle}/${APP_NAME}" "${bundle}/bin/geoipupdate" "${bundle}/scripts/install_crs.sh" "${bundle}/scripts/update_country_db.sh"; \

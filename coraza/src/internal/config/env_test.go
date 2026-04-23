@@ -301,6 +301,9 @@ func TestLoadAppConfigFile(t *testing.T) {
 	if cfg.Paths.ScheduledTaskConfigFile != "conf/scheduled-tasks.json" {
 		t.Fatalf("unexpected scheduled_task_config_file: %s", cfg.Paths.ScheduledTaskConfigFile)
 	}
+	if cfg.Paths.CacheRulesFile != "conf/cache-rules.json" {
+		t.Fatalf("unexpected cache_rules_file: %s", cfg.Paths.CacheRulesFile)
+	}
 	if cfg.SecurityAudit.CaptureMode != "enforced_only" {
 		t.Fatalf("unexpected security audit capture mode: %s", cfg.SecurityAudit.CaptureMode)
 	}

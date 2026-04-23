@@ -70,8 +70,8 @@
     }
   },
   "paths": {
-    "proxy_config_file": "conf/proxy.json",
-    "site_config_file": "conf/sites.json",
+    "proxy_config_file": "seed/proxy.json",
+    "site_config_file": "seed/sites.json",
     "php_runtime_inventory_file": "data/php-fpm/inventory.json",
     "vhost_config_file": "data/php-fpm/vhosts.json",
     "scheduled_task_config_file": "conf/scheduled-tasks.json",

@@ -170,7 +170,7 @@ preset-list:
 preset-apply:
 	@set -euo pipefail; \
 	preset_dir="$(PRESET_DIR)"; \
-	for pair in "$$preset_dir/.env:.env" "$$preset_dir/config.json:data/conf/config.json" "$$preset_dir/proxy.json:data/conf/proxy.json" "$$preset_dir/sites.json:data/conf/sites.json"; do \
+	for pair in "$$preset_dir/.env:.env" "$$preset_dir/config.json:data/conf/config.json"; do \
 		src="$${pair%%:*}"; \
 		dst="$${pair#*:}"; \
 		if [[ ! -f "$$src" ]]; then \
@@ -188,12 +188,44 @@ preset-apply:
 		fi; \
 		cp "$$src" "$$dst"; \
 		echo "[preset-apply] applied $(PRESET) -> $$dst"; \
-	done
+	done; \
+	seed_dir="$$preset_dir/seed"; \
+	if [[ -d "$$seed_dir" ]]; then \
+		while IFS= read -r src; do \
+			rel="$${src#$$seed_dir/}"; \
+			dst="data/seed/$$rel"; \
+			mkdir -p "$$(dirname "$$dst")"; \
+			if [[ -f "$$dst" && "$(PRESET_OVERWRITE)" != "1" ]]; then \
+				if cmp -s "$$src" "$$dst"; then \
+					echo "[preset-apply] $$dst already matches $(PRESET)"; \
+					continue; \
+				fi; \
+				echo "[preset-apply] $$dst already exists (set PRESET_OVERWRITE=1 to replace)"; \
+				continue; \
+			fi; \
+			cp "$$src" "$$dst"; \
+			echo "[preset-apply] applied $(PRESET) -> $$dst"; \
+		done < <(find "$$seed_dir" -type f | sort); \
+	fi
 
 preset-check:
 	@set -euo pipefail; \
 	preset_dir="$(PRESET_DIR)"; \
-	for src in "$$preset_dir/.env" "$$preset_dir/config.json" "$$preset_dir/proxy.json" "$$preset_dir/sites.json"; do \
+	for src in "$$preset_dir/.env" "$$preset_dir/config.json"; do \
+		if [[ ! -f "$$src" ]]; then \
+			echo "[preset-check][ERROR] missing $$src" >&2; \
+			exit 1; \
+		fi; \
+	done; \
+	proxy_rel="$$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("paths", {}).get("proxy_config_file", "").strip())' "$$preset_dir/config.json")"; \
+	site_rel="$$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("paths", {}).get("site_config_file", "").strip())' "$$preset_dir/config.json")"; \
+	for rel in "$$proxy_rel" "$$site_rel"; do \
+		if [[ -z "$$rel" || "$$rel" = /* ]]; then \
+			echo "[preset-check][ERROR] $$preset_dir/config.json must use relative seed paths for proxy/site config" >&2; \
+			exit 1; \
+		fi; \
+	done; \
+	for src in "$$preset_dir/$$proxy_rel" "$$preset_dir/$$site_rel"; do \
 		if [[ ! -f "$$src" ]]; then \
 			echo "[preset-check][ERROR] missing $$src" >&2; \
 			exit 1; \
@@ -201,8 +233,8 @@ preset-check:
 	done; \
 	docker compose --env-file "$$preset_dir/.env" config >/dev/null; \
 	python3 -m json.tool "$$preset_dir/config.json" >/dev/null; \
-	python3 -m json.tool "$$preset_dir/proxy.json" >/dev/null; \
-	python3 -m json.tool "$$preset_dir/sites.json" >/dev/null; \
+	python3 -m json.tool "$$preset_dir/$$proxy_rel" >/dev/null; \
+	python3 -m json.tool "$$preset_dir/$$site_rel" >/dev/null; \
 	preset_mode="$$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("admin", {}).get("external_mode", "").strip().lower())' "$$preset_dir/config.json")"; \
 	if [[ -z "$$preset_mode" ]]; then \
 		echo "[preset-check][ERROR] $$preset_dir/config.json is missing admin.external_mode" >&2; \
@@ -216,7 +248,11 @@ preset-check:
 	if [[ "$$preset_mode" != "$$default_mode" ]]; then \
 		echo "[preset-check][ERROR] $$preset_dir/config.json admin.external_mode=$$preset_mode does not match [proxy] default admin.external_mode=$$default_mode" >&2; \
 		exit 1; \
-		fi; \
+	fi; \
+	if [[ "$$proxy_rel" != seed/* || "$$site_rel" != seed/* ]]; then \
+		echo "[preset-check][ERROR] $$preset_dir/config.json must keep proxy/site seed paths under seed/" >&2; \
+		exit 1; \
+	fi; \
 	echo "[preset-check] $(PRESET) ok"
 
 preset-check-minimal:

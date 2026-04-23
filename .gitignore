@@ -62,6 +62,8 @@ data/cache/*
 !data/cache/
 !data/cache/response/
 !data/cache/response/.gitignore
+data/seed/*
+!data/seed/.gitignore
 data/logs/*
 !data/logs/.gitignore
 data/tmp/*
@@ -83,6 +85,16 @@ data/php-fpm/*.bak
 examples/*/.env
 examples/nextjs/app/node_modules/
 examples/api-gateway/api/node_modules/
+examples/*/data/audit/*
+!examples/*/data/audit/.gitignore
+examples/*/data/cache/*
+!examples/*/data/cache/
+!examples/*/data/cache/response/
+!examples/*/data/cache/response/.gitignore
+examples/*/data/db/*
+!examples/*/data/db/.gitignore
+examples/*/data/php-fpm/*
+!examples/*/data/php-fpm/.gitignore
 examples/*/data/rules/crs/*
 !examples/*/data/rules/crs/.gitkeep
 examples/*/data/logs/*

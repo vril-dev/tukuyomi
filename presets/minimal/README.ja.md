@@ -7,7 +7,7 @@
 最初に実運用で使う前に、次を変更してください。
 - `.env` の API key 値
 - admin API を公開する場合は `config.json` の admin trusted CIDR
-- upstream target と必要な protected host routing は `proxy.json`
+- upstream target と必要な protected host routing は `seed/proxy.json`
 
 適用と検証:
 

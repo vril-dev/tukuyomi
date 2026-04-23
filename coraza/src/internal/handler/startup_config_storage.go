@@ -298,7 +298,7 @@ func importPolicyConfigStorage() error {
 		normalize func(string) ([]byte, error)
 		reason    string
 	}{
-		{domain: cacheConfigBlobKey, path: config.ResolveReadablePolicyPath(cacheConfPath, legacyCacheConfPath), normalize: normalizeCacheRulesPolicyRaw, reason: "cache rules seed import"},
+		{domain: cacheConfigBlobKey, path: config.ResolveReadablePolicyPath(configuredCacheRulesPath(), configuredLegacyCacheRulesPath()), normalize: normalizeCacheRulesPolicyRaw, reason: "cache rules seed import"},
 		{domain: bypassConfigBlobKey, path: config.BypassFile, normalize: normalizeBypassPolicyRaw, reason: "bypass rules seed import"},
 		{domain: countryBlockConfigBlobKey, path: config.CountryBlockFile, normalize: normalizeCountryBlockPolicyRaw, reason: "country block seed import"},
 		{domain: rateLimitConfigBlobKey, path: config.RateLimitFile, normalize: normalizeRateLimitPolicyRaw, reason: "rate limit seed import"},

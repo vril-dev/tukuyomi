@@ -3,8 +3,8 @@
 # tukuyomi example: API Gateway (Rate-limit focused)
 
 This example protects a JSON API and applies stricter limits on auth endpoints.
-`./setup.sh` provisions the example DB from the committed seed files before you
-start the stack.
+`./setup.sh` provisions the example DB from the built-in `api-gateway` import
+profile before you start the stack.
 
 ## Start
 
@@ -32,10 +32,10 @@ PROTECTED_HOST=protected.example.test ./smoke.sh
 
 This sends traffic with `Host: protected.example.test`, verifies the protected-host route matches, and checks that a simple XSS probe is blocked with `403`.
 
-If you change any example seed under `data/seed/`, rerun `./setup.sh` so the
-DB-backed runtime is rebuilt from those seeds before `docker compose up`.
-
-If you want to try a clone of your own site, keep the smoke script and replace the example upstream behind `data/seed/proxy.json`. When you change `PROTECTED_HOST`, update `data/seed/proxy.json` `routes[].match.hosts` to the same hostname so the protected-host route still matches.
+If you want to point the gateway at another upstream, rerun `./setup.sh` and
+then update proxy rules through the admin UI or API before `docker compose up`.
+When you change `PROTECTED_HOST`, update the protected-host route in the same
+place so the route still matches.
 
 Rate-limit check (expect `429` after repeated calls):
 

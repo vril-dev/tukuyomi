@@ -39,7 +39,6 @@ The binary expects a working directory that contains:
 ```text
 /opt/tukuyomi/bin/tukuyomi
 /opt/tukuyomi/conf/
-/opt/tukuyomi/seed/
 /opt/tukuyomi/db/
 /opt/tukuyomi/audit/
 /opt/tukuyomi/cache/
@@ -50,8 +49,6 @@ The binary expects a working directory that contains:
 Bundle-provided bootstrap/examples:
 
 - `conf/config.json`
-- `seed/proxy.json`
-- `seed/sites.json`
 - `conf/crs-disabled.conf`
 - `scripts/update_country_db.sh`
 
@@ -104,7 +101,6 @@ Install example:
 sudo install -d -m 755 \
   /opt/tukuyomi/bin \
   /opt/tukuyomi/conf \
-  /opt/tukuyomi/seed \
   /opt/tukuyomi/db \
   /opt/tukuyomi/audit \
   /opt/tukuyomi/cache/response \
@@ -117,9 +113,6 @@ sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
 
 sudo install -m 644 data/conf/config.json /opt/tukuyomi/conf/config.json
-for f in proxy.json sites.json; do
-  sudo install -m 644 "data/seed/${f}" "/opt/tukuyomi/seed/${f}"
-done
 
 sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 ```
@@ -128,9 +121,10 @@ Notes:
 
 - do not copy `data/conf/*.bak` into production
 - `config.json` is the DB connection bootstrap and seed/export material for DB `app_config`
-- `seed/proxy.json` is seed/import/export material for DB `proxy_rules`
-- `seed/sites.json` is seed/import/export material for DB `sites`
-- the public release bundle ships `conf/config.json` plus `seed/proxy.json` and `seed/sites.json` as example seed files; other seed/import material is operator-supplied when needed
+- `conf/proxy.json` is optional seed/import/export material for DB `proxy_rules`
+- `conf/sites.json` is optional seed/import/export material for DB `sites`
+- the public release bundle ships `conf/config.json`; other seed/import material is operator-supplied when needed
+- when `conf/proxy.json` / `conf/sites.json` are absent, `make db-import` seeds the built-in minimal defaults into DB
 - the default base WAF rule seed is compiled into the binary
 - CRS files are temporary import material for DB `waf_rule_assets`; `make crs-install` stages them and cleans up
 - `sites.json`, `scheduled-tasks.json`, `upstream-runtime.json`, policy JSON,

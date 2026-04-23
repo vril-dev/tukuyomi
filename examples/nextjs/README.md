@@ -12,6 +12,9 @@ cd examples/nextjs
 docker compose up -d --build
 ```
 
+`./setup.sh` seeds the runtime DB from the built-in `nextjs` import profile
+before the stack starts.
+
 - App URL: `http://localhost:${CORAZA_PORT:-19091}`
 - Coraza API: `http://localhost:${CORAZA_PORT:-19091}/tukuyomi-api/status`
 

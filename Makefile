@@ -188,25 +188,7 @@ preset-apply:
 		fi; \
 		cp "$$src" "$$dst"; \
 		echo "[preset-apply] applied $(PRESET) -> $$dst"; \
-	done; \
-	seed_dir="$$preset_dir/seed"; \
-	if [[ -d "$$seed_dir" ]]; then \
-		while IFS= read -r src; do \
-			rel="$${src#$$seed_dir/}"; \
-			dst="data/seed/$$rel"; \
-			mkdir -p "$$(dirname "$$dst")"; \
-			if [[ -f "$$dst" && "$(PRESET_OVERWRITE)" != "1" ]]; then \
-				if cmp -s "$$src" "$$dst"; then \
-					echo "[preset-apply] $$dst already matches $(PRESET)"; \
-					continue; \
-				fi; \
-				echo "[preset-apply] $$dst already exists (set PRESET_OVERWRITE=1 to replace)"; \
-				continue; \
-			fi; \
-			cp "$$src" "$$dst"; \
-			echo "[preset-apply] applied $(PRESET) -> $$dst"; \
-		done < <(find "$$seed_dir" -type f | sort); \
-	fi
+	done
 
 preset-check:
 	@set -euo pipefail; \
@@ -225,16 +207,8 @@ preset-check:
 			exit 1; \
 		fi; \
 	done; \
-	for src in "$$preset_dir/$$proxy_rel" "$$preset_dir/$$site_rel"; do \
-		if [[ ! -f "$$src" ]]; then \
-			echo "[preset-check][ERROR] missing $$src" >&2; \
-			exit 1; \
-		fi; \
-	done; \
 	docker compose --env-file "$$preset_dir/.env" config >/dev/null; \
 	python3 -m json.tool "$$preset_dir/config.json" >/dev/null; \
-	python3 -m json.tool "$$preset_dir/$$proxy_rel" >/dev/null; \
-	python3 -m json.tool "$$preset_dir/$$site_rel" >/dev/null; \
 	preset_mode="$$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("admin", {}).get("external_mode", "").strip().lower())' "$$preset_dir/config.json")"; \
 	if [[ -z "$$preset_mode" ]]; then \
 		echo "[preset-check][ERROR] $$preset_dir/config.json is missing admin.external_mode" >&2; \
@@ -249,8 +223,8 @@ preset-check:
 		echo "[preset-check][ERROR] $$preset_dir/config.json admin.external_mode=$$preset_mode does not match [proxy] default admin.external_mode=$$default_mode" >&2; \
 		exit 1; \
 	fi; \
-	if [[ "$$proxy_rel" != seed/* || "$$site_rel" != seed/* ]]; then \
-		echo "[preset-check][ERROR] $$preset_dir/config.json must keep proxy/site seed paths under seed/" >&2; \
+	if [[ "$$proxy_rel" != "conf/proxy.json" || "$$site_rel" != "conf/sites.json" ]]; then \
+		echo "[preset-check][ERROR] $$preset_dir/config.json must keep proxy/site paths at conf/proxy.json and conf/sites.json" >&2; \
 		exit 1; \
 	fi; \
 	echo "[preset-check] $(PRESET) ok"

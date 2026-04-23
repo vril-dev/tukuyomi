@@ -7,7 +7,7 @@ Use this preset when you want the embedded admin UI and a single default upstrea
 Before first real use, change:
 - `.env` API key values
 - `config.json` admin trusted CIDRs if you expose the admin API
-- `seed/proxy.json` upstream target and any protected host routing you need
+- optional `conf/proxy.json` if you want to override the built-in minimal upstream seed before `make db-import`
 
 Apply and validate with:
 

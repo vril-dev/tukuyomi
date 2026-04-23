@@ -50,6 +50,46 @@ func TestImportPolicyJSONStorage_SeedsBypassDBFromFile(t *testing.T) {
 	}
 }
 
+func TestImportProxyRulesStorage_SeedsBuiltInMinimalConfigWhenDefaultProxyFileMissing(t *testing.T) {
+	oldProxyPath := config.ProxyConfigFile
+	defer func() {
+		config.ProxyConfigFile = oldProxyPath
+	}()
+
+	tmp := t.TempDir()
+	config.ProxyConfigFile = filepath.Join(tmp, "conf", "proxy.json")
+
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	if err := importProxyRulesStorage(); err != nil {
+		t.Fatalf("import proxy storage: %v", err)
+	}
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected sqlite store")
+	}
+	cfg, _, found, err := store.loadActiveProxyConfig()
+	if err != nil || !found {
+		t.Fatalf("expected proxy config found=%v err=%v", found, err)
+	}
+	if len(cfg.Upstreams) != 1 {
+		t.Fatalf("upstreams=%d want=1", len(cfg.Upstreams))
+	}
+	if cfg.Upstreams[0].Name != "primary" {
+		t.Fatalf("upstream name=%q want=%q", cfg.Upstreams[0].Name, "primary")
+	}
+	if cfg.Upstreams[0].URL != "http://host.docker.internal:18080" {
+		t.Fatalf("upstream url=%q want=%q", cfg.Upstreams[0].URL, "http://host.docker.internal:18080")
+	}
+}
+
 func TestSyncBypassStorage_ImportsLegacyBlobAndAppliesRuntime(t *testing.T) {
 	restore := saveBypassAndCRSConfigForTest()
 	defer restore()

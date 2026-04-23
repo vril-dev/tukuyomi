@@ -12,6 +12,9 @@ cd examples/wordpress
 docker compose up -d --build
 ```
 
+`./setup.sh` は stack 起動前に built-in の `wordpress` import profile から
+runtime DB を seed します。
+
 - WordPress URL: `http://localhost:${CORAZA_PORT:-19092}`
 - Coraza API: `http://localhost:${CORAZA_PORT:-19092}/tukuyomi-api/status`
 

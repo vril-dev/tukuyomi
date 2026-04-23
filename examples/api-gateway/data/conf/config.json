@@ -35,19 +35,19 @@
     "allow_insecure_defaults": false
   },
   "paths": {
-    "proxy_config_file": "seed/proxy.json",
-    "site_config_file": "seed/sites.json",
+    "proxy_config_file": "conf/proxy.json",
+    "site_config_file": "conf/sites.json",
     "rules_file": "rules/tukuyomi.conf",
-    "bypass_file": "seed/waf-bypass.json",
-    "country_block_file": "seed/country-block.json",
-    "rate_limit_file": "seed/rate-limit.json",
-    "bot_defense_file": "seed/bot-defense.json",
-    "semantic_file": "seed/semantic.json",
-    "cache_rules_file": "seed/cache-rules.json",
+    "bypass_file": "conf/waf-bypass.json",
+    "country_block_file": "conf/country-block.json",
+    "rate_limit_file": "conf/rate-limit.json",
+    "bot_defense_file": "conf/bot-defense.json",
+    "semantic_file": "conf/semantic.json",
+    "cache_rules_file": "conf/cache-rules.json",
     "log_file": "",
     "crs_setup_file": "rules/crs/crs-setup.conf",
     "crs_rules_dir": "rules/crs/rules",
-    "crs_disabled_file": "seed/crs-disabled.conf"
+    "crs_disabled_file": "conf/crs-disabled.conf"
   },
   "proxy": {
     "rollback_history_size": 8,

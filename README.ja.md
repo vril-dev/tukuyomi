@@ -52,8 +52,9 @@ make preset-apply PRESET=minimal
 make preset-check PRESET=minimal
 ```
 
-bundled の `minimal` preset は proxy/site の seed file を `data/seed/`
-へ配置し、適用後の `data/conf/config.json` はその path を参照します。
+bundled の `minimal` preset が配置するのは `.env` と
+`data/conf/config.json` だけです。`conf/proxy.json` / `conf/sites.json`
+が無ければ、`make db-import` が初期 minimal 設定を DB へ直接投入します。
 
 初回 DB import 前には、bootstrap したい seed file を実値へ差し替えてください。
 

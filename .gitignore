@@ -62,8 +62,6 @@ data/cache/*
 !data/cache/
 !data/cache/response/
 !data/cache/response/.gitignore
-data/seed/*
-!data/seed/.gitignore
 data/logs/*
 !data/logs/.gitignore
 data/tmp/*

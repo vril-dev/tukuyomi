@@ -29,7 +29,10 @@ services:
     environment:
       - WAF_CONFIG_FILE=${WAF_CONFIG_FILE:-conf/config.json}
     volumes:
-      - ./data/rules:/app/rules
+      - ./data/db:/app/db
+      - ./data/audit:/app/audit
+      - ./data/cache:/app/cache
+      - ./data/php-fpm:/app/data/php-fpm
       - ./data/conf:/app/conf
       - ./data/logs:/app/logs
     ports:

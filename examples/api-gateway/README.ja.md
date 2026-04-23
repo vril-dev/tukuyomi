@@ -3,7 +3,8 @@
 # tukuyomi example: API Gateway（rate-limit 重視）
 
 この example は JSON API を保護し、auth endpoint に対してより strict な limit を適用します。
-`./setup.sh` は stack 起動前に commit 済み seed から example DB を構築します。
+`./setup.sh` は stack 起動前に built-in の `api-gateway` import profile から
+example DB を構築します。
 
 ## Start
 
@@ -31,10 +32,9 @@ PROTECTED_HOST=protected.example.test ./smoke.sh
 
 これは `Host: protected.example.test` を付けて traffic を送り、protected-host route が match することを確認した上で、簡単な XSS probe が `403` で block されることを検証します。
 
-`data/seed/` 配下の example seed を変えたら、`docker compose up` の前に
-`./setup.sh` を再実行して DB-backed runtime をその seed から作り直してください。
-
-clone 済みの自分のサイトで試したい場合は、smoke script はそのまま残し、`data/seed/proxy.json` の背後にある example upstream を差し替えてください。`PROTECTED_HOST` を変える時は、protected-host route が引き続き match するように `data/seed/proxy.json` の `routes[].match.hosts` も同じ hostname に更新してください。
+別の upstream に向けたい場合は、`./setup.sh` 実行後に admin UI / API から
+proxy rules を更新してください。`PROTECTED_HOST` を変える場合も、
+protected-host route を同じ場所で更新して route の match を維持してください。
 
 Rate-limit check（繰り返すと `429` を期待）:
 

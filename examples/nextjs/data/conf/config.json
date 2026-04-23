@@ -37,6 +37,7 @@
   "paths": {
     "proxy_config_file": "conf/proxy.json",
     "site_config_file": "conf/sites.json",
+    "cache_rules_file": "conf/cache-rules.json",
     "rules_file": "rules/tukuyomi.conf",
     "bypass_file": "conf/waf-bypass.json",
     "country_block_file": "conf/country-block.json",
@@ -58,12 +59,10 @@
     "enable": true
   },
   "fp_tuner": {
-    "mode": "mock",
     "endpoint": "",
     "api_key": "",
     "model": "",
     "timeout_sec": 15,
-    "mock_response_file": "conf/fp-tuner-mock-response.json",
     "require_approval": true,
     "approval_ttl_sec": 600,
     "audit_file": "audit/fp-tuner-audit.ndjson"

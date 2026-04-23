@@ -55,8 +55,9 @@ make preset-apply PRESET=minimal
 make preset-check PRESET=minimal
 ```
 
-The bundled `minimal` preset stages its proxy/site seed files under
-`data/seed/`; `data/conf/config.json` points at those paths after apply.
+The bundled `minimal` preset stages only `.env` and `data/conf/config.json`.
+When `conf/proxy.json` / `conf/sites.json` are absent, `make db-import` seeds
+their initial minimal defaults directly into DB.
 
 Before first DB import, replace the sample values in any seed files you want to
 bootstrap from:

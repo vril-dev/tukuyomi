@@ -17,8 +17,6 @@ services:
       - ./data/audit:/app/audit
       - ./data/cache:/app/cache
       - ./data/php-fpm:/app/data/php-fpm
-      - ./data/rules:/app/rules
-      - ./data/seed:/app/seed:ro
       - ./data/conf:/app/conf:ro
       - ./data/logs:/app/logs
     ports:

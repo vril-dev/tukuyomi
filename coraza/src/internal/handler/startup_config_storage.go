@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"tukuyomi/internal/bypassconf"
@@ -141,11 +142,12 @@ func importAppConfigStorage() error {
 }
 
 func importProxyRulesStorage() error {
-	raw, _, err := readFileMaybe(config.ProxyConfigFile)
+	raw, hadFile, err := readFileMaybe(config.ProxyConfigFile)
 	if err != nil {
 		return fmt.Errorf("read proxy seed file: %w", err)
 	}
-	prepared, err := prepareProxyRulesRaw(string(raw))
+	rawText := startupProxySeedRaw(config.ProxyConfigFile, raw, hadFile)
+	prepared, err := prepareProxyRulesRaw(rawText)
 	if err != nil {
 		return fmt.Errorf("validate proxy seed file: %w", err)
 	}
@@ -158,6 +160,15 @@ func importProxyRulesStorage() error {
 	}
 	_ = store.DeleteConfigBlob(proxyRulesConfigBlobKey)
 	return nil
+}
+
+func hasStartupSeedPathSuffix(path string, suffix string) bool {
+	path = strings.ToLower(filepath.ToSlash(strings.TrimSpace(path)))
+	suffix = strings.ToLower(filepath.ToSlash(strings.TrimSpace(suffix)))
+	if path == suffix {
+		return true
+	}
+	return strings.HasSuffix(path, "/"+suffix)
 }
 
 func importSiteConfigStorage() error {
@@ -322,14 +333,18 @@ func importPolicyConfigStorage() error {
 }
 
 func importPolicyJSONStorage(domain string, path string, normalize func(string) ([]byte, error), reason string) error {
-	raw, _, err := readFileMaybe(path)
+	raw, hadFile, err := readFileMaybe(path)
 	if err != nil {
 		return fmt.Errorf("read %s seed file: %w", domain, err)
 	}
-	if strings.TrimSpace(string(raw)) == "" {
+	rawText, err := startupPolicySeedRaw(domain, raw, hadFile)
+	if err != nil {
+		return fmt.Errorf("build %s startup seed: %w", domain, err)
+	}
+	if strings.TrimSpace(rawText) == "" {
 		return nil
 	}
-	normalized, err := normalize(string(raw))
+	normalized, err := normalize(rawText)
 	if err != nil {
 		return fmt.Errorf("validate %s seed file: %w", domain, err)
 	}

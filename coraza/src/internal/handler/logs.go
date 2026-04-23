@@ -23,10 +23,10 @@ import (
 )
 
 var (
-	logDirCoraza = "logs/coraza"
+	logDirWAF = "logs/waf"
 
 	logFiles = map[string]string{
-		"waf": filepath.Join(logDirCoraza, "waf-events.ndjson"),
+		"waf": filepath.Join(logDirWAF, "waf-events.ndjson"),
 	}
 
 	readChunkSize   = int64(64 * 1024)

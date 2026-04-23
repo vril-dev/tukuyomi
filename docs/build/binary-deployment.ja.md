@@ -39,14 +39,23 @@ make release-linux-all VERSION=v0.8.0
 ```text
 /opt/tukuyomi/bin/tukuyomi
 /opt/tukuyomi/conf/
-/opt/tukuyomi/rules/
+/opt/tukuyomi/db/
+/opt/tukuyomi/audit/
+/opt/tukuyomi/cache/
 /opt/tukuyomi/logs/
+/opt/tukuyomi/rules/
 ```
 
-初回 DB import 前に使う seed/import file:
+bundle 同梱の bootstrap/example:
 
 - `conf/config.json`
 - `conf/proxy.json`
+- `conf/sites.json`
+- `conf/crs-disabled.conf`
+- `scripts/update_country_db.sh`
+
+初回 DB import 前に operator が必要に応じて配置する seed/import file:
+
 - `conf/cache-rules.json`
 - `conf/waf-bypass.json`
 - `conf/waf-bypass.sample.json`
@@ -56,15 +65,13 @@ make release-linux-all VERSION=v0.8.0
 - `conf/semantic.json`
 - `conf/notifications.json`
 - `conf/ip-reputation.json`
-- `conf/sites.json`
 - `conf/scheduled-tasks.json`
 - `conf/upstream-runtime.json`
-- `rules/tukuyomi.conf`
-- `rules/crs/crs-setup.conf`
-- `rules/crs/rules/*.conf`
+- `conf/rules/*.conf`
+- `make crs-install` で stage する `rules/crs/...`
 
 これらは空 DB の初期投入、または import/export 用です。対応する normalized DB row が存在する後は
-runtime は normalized domain を DB から直接読み込み、JSON file の復元を起動条件にしません。
+runtime は normalized domain を DB から直接読み込み、file の復元を起動条件にしません。
 import 後の本番起動で必要なのは DB bootstrap 用の `conf/config.json` と DB row です。
 
 初回 DB import 前に使う PHP-FPM 追加物:
@@ -95,21 +102,21 @@ managed GeoIP country update も使う場合の追加物:
 sudo install -d -m 755 \
   /opt/tukuyomi/bin \
   /opt/tukuyomi/conf \
+  /opt/tukuyomi/db \
+  /opt/tukuyomi/audit \
+  /opt/tukuyomi/cache/response \
+  /opt/tukuyomi/logs/waf \
   /opt/tukuyomi/rules \
   /opt/tukuyomi/scripts \
-  /opt/tukuyomi/logs/coraza \
   /opt/tukuyomi/logs/proxy
 
 sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
 
-for f in config.json proxy.json sites.json scheduled-tasks.json upstream-runtime.json cache-rules.json waf-bypass.json waf-bypass.sample.json country-block.json rate-limit.json bot-defense.json semantic.json notifications.json ip-reputation.json; do
+for f in config.json proxy.json sites.json; do
   sudo install -m 644 "data/conf/${f}" "/opt/tukuyomi/conf/${f}"
 done
 
-sudo install -m 644 data/rules/tukuyomi.conf /opt/tukuyomi/rules/tukuyomi.conf
-sudo install -d -m 755 /opt/tukuyomi/rules/crs
-sudo DEST_DIR=/opt/tukuyomi/rules/crs ./scripts/install_crs.sh
 sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 ```
 
@@ -118,7 +125,9 @@ sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 - `data/conf/*.bak` は本番へ持っていかないでください
 - `config.json` は DB 接続 bootstrap と DB `app_config` の seed/export material です
 - `proxy.json` は DB `proxy_rules` の seed/import/export material です
-- `rules/tukuyomi.conf` と `rules/crs/**` は DB `waf_rule_assets` の seed/import material です
+- public release bundle が example seed として同梱するのは `config.json`、`proxy.json`、`sites.json` だけで、他の seed/import material は必要時に operator が用意します
+- 既定の base WAF rule seed は binary に compile されています
+- CRS file は DB `waf_rule_assets` 向けの一時 import material であり、`make crs-install` が staging と cleanup を行います
 - `sites.json`、`scheduled-tasks.json`、`upstream-runtime.json`、policy JSON、
   cache-rules JSON、WAF bypass JSON、PHP-FPM JSON manifest は DB bootstrap
   後は DB seed/export artifact です
@@ -128,8 +137,8 @@ sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 - public release bundle には `Options -> GeoIP Update -> Update now` 用の companion `bin/geoipupdate` が同梱されます
 - `GEOIPUPDATE_BIN` を使えば bundled updater path を override できます
 - managed country refresh 用の official wrapper は `./scripts/update_country_db.sh` です
-- managed GeoIP country DB、`GeoIP.conf`、update status は `make db-import` 後は DB-backed です。`data/geoip/*` を本番必須 runtime file として扱わないでください
-- managed bypass override rule は DB `override_rules` です。`conf/rules/*.conf` は新規DB import時のseed専用です
+- managed GeoIP country DB、`GeoIP.conf`、update status は `make db-import` 後は DB-backed です。main repo に `data/geoip` を置く必要はありません
+- managed bypass override rule は DB `override_rules` です。`conf/rules/*.conf` は新規DB import時だけ使う operator-provided seed です
 - `extra_rule` の値は DB-managed override rule への logical compatibility reference として残ります
 
 proxy engine 選択は restart-required な DB `app_config` 設定です:

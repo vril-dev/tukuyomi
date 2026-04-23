@@ -20,6 +20,7 @@ SERVER_PID=""
 UPSTREAM_PID=""
 SERVER_LOG=""
 UPSTREAM_LOG=""
+WAF_STAGE_ROOT=""
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -104,33 +105,26 @@ fi
 RUNTIME_ROOT="$(mktemp -d "${ROOT_DIR}/.tmp-dual-listener-smoke.XXXXXX")"
 RUNTIME_DIR="${RUNTIME_ROOT}/opt/tukuyomi"
 ENV_FILE="${RUNTIME_ROOT}/etc/tukuyomi/tukuyomi.env"
-SERVER_LOG="${RUNTIME_DIR}/logs/coraza/dual-listener-smoke.log"
+SERVER_LOG="${RUNTIME_DIR}/logs/waf/dual-listener-smoke.log"
 UPSTREAM_LOG="${RUNTIME_ROOT}/proxy-echo.log"
 
 log "staging dual-listener runtime tree at ${RUNTIME_DIR}"
-install -d -m 755 \
-  "${RUNTIME_DIR}/bin" \
-  "${RUNTIME_DIR}/conf" \
-  "${RUNTIME_DIR}/data/scheduled-tasks" \
-  "${RUNTIME_DIR}/rules" \
-  "${RUNTIME_DIR}/logs/coraza" \
-  "${RUNTIME_DIR}/logs/proxy" \
-  "${RUNTIME_ROOT}/etc/tukuyomi"
+  install -d -m 755 \
+    "${RUNTIME_DIR}/bin" \
+    "${RUNTIME_DIR}/conf" \
+    "${RUNTIME_DIR}/db" \
+    "${RUNTIME_DIR}/data/scheduled-tasks" \
+    "${RUNTIME_DIR}/audit" \
+    "${RUNTIME_DIR}/cache/response" \
+    "${RUNTIME_DIR}/logs/waf" \
+    "${RUNTIME_DIR}/logs/proxy" \
+    "${RUNTIME_ROOT}/etc/tukuyomi"
 
 install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${RUNTIME_DIR}/bin/tukuyomi"
 rsync -a --exclude '*.bak' "${ROOT_DIR}/data/conf/" "${RUNTIME_DIR}/conf/"
 if [[ -d "${ROOT_DIR}/data/scheduled-tasks" ]]; then
   rsync -a "${ROOT_DIR}/data/scheduled-tasks/" "${RUNTIME_DIR}/data/scheduled-tasks/"
 fi
-install -m 644 "${ROOT_DIR}/data/rules/tukuyomi.conf" "${RUNTIME_DIR}/rules/tukuyomi.conf"
-
-if [[ -d "${ROOT_DIR}/data/rules/crs/rules" ]]; then
-  rsync -a "${ROOT_DIR}/data/rules/crs/" "${RUNTIME_DIR}/rules/crs/"
-else
-  log "data/rules/crs missing; installing CRS into staged runtime"
-  DEST_DIR="${RUNTIME_DIR}/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh"
-fi
-
 touch "${RUNTIME_DIR}/conf/crs-disabled.conf"
 
 cp "${ROOT_DIR}/docs/build/tukuyomi.env.example" "${ENV_FILE}"
@@ -148,6 +142,16 @@ jq \
    | .admin.api_auth_disable = false' \
   "${RUNTIME_DIR}/conf/config.json" > "${RUNTIME_DIR}/conf/config.json.tmp"
 mv "${RUNTIME_DIR}/conf/config.json.tmp" "${RUNTIME_DIR}/conf/config.json"
+
+WAF_STAGE_ROOT="$(mktemp -d "${RUNTIME_DIR}/.tmp-waf-import.XXXXXX")"
+(
+  cd "${RUNTIME_DIR}"
+  DEST_DIR="${WAF_STAGE_ROOT}/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh"
+  WAF_CONFIG_FILE="conf/config.json" ./bin/tukuyomi db-migrate
+  WAF_RULE_ASSET_FS_ROOT="${WAF_STAGE_ROOT}" WAF_CONFIG_FILE="conf/config.json" ./bin/tukuyomi db-import-waf-rule-assets
+)
+rm -rf "${WAF_STAGE_ROOT}"
+WAF_STAGE_ROOT=""
 
 log "starting local proxy echo upstream on 127.0.0.1:${DUAL_LISTENER_SMOKE_UPSTREAM_PORT}"
 python3 "${ROOT_DIR}/scripts/proxy_echo_server.py" "${DUAL_LISTENER_SMOKE_UPSTREAM_PORT}" >"${UPSTREAM_LOG}" 2>&1 &
@@ -198,8 +202,8 @@ log "running admin + proxy-rules smoke through split listeners"
   ./scripts/ci_proxy_admin_smoke.sh
 )
 
-if [[ ! -f "${RUNTIME_DIR}/logs/coraza/proxy-rules-audit.ndjson" ]]; then
-  fail "expected staged runtime to create logs/coraza/proxy-rules-audit.ndjson"
+if [[ ! -f "${RUNTIME_DIR}/audit/proxy-rules-audit.ndjson" ]]; then
+  fail "expected staged runtime to create audit/proxy-rules-audit.ndjson"
 fi
 
 log "OK dual-listener smoke passed"

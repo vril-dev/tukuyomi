@@ -265,8 +265,8 @@ func TestLoadAppConfigFile(t *testing.T) {
 		},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
-			"security_audit_file": "logs/coraza/security-audit.ndjson",
-			"security_audit_blob_dir": "logs/coraza/security-audit-blobs",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
 			"rules_file": "rules/tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
@@ -328,8 +328,8 @@ func TestLoadAppConfigFileRejectsInvalid(t *testing.T) {
 		"admin": {"api_base_path": "/", "ui_base_path": "/tukuyomi-ui"},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
-			"security_audit_file": "logs/coraza/security-audit.ndjson",
-			"security_audit_blob_dir": "logs/coraza/security-audit-blobs",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
 			"rules_file": "rules/tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
@@ -351,8 +351,8 @@ func TestLoadAppConfigFileRejectsRemovedFileStorageBackend(t *testing.T) {
 		"admin": {"api_base_path": "/tukuyomi-api", "ui_base_path": "/tukuyomi-ui"},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
-			"security_audit_file": "logs/coraza/security-audit.ndjson",
-			"security_audit_blob_dir": "logs/coraza/security-audit-blobs",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
 			"rules_file": "rules/tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
@@ -378,8 +378,8 @@ func TestLoadAppConfigFileAcceptsPgSQLStorageDriver(t *testing.T) {
 		"admin": {"api_base_path": "/tukuyomi-api", "ui_base_path": "/tukuyomi-ui"},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
-			"security_audit_file": "logs/coraza/security-audit.ndjson",
-			"security_audit_blob_dir": "logs/coraza/security-audit-blobs",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
 			"rules_file": "rules/tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
@@ -405,8 +405,8 @@ func TestLoadAppConfigFileRejectsRemovedFPTunerMockMode(t *testing.T) {
 		"admin": {"api_base_path": "/tukuyomi-api", "ui_base_path": "/tukuyomi-ui"},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
-			"security_audit_file": "logs/coraza/security-audit.ndjson",
-			"security_audit_blob_dir": "logs/coraza/security-audit-blobs",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
 			"rules_file": "rules/tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
@@ -432,8 +432,8 @@ func TestLoadAppConfigFileRejectsInvalidProxyEngineMode(t *testing.T) {
 		"admin": {"api_base_path": "/tukuyomi-api", "ui_base_path": "/tukuyomi-ui"},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
-			"security_audit_file": "logs/coraza/security-audit.ndjson",
-			"security_audit_blob_dir": "logs/coraza/security-audit-blobs",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
 			"rules_file": "rules/tukuyomi.conf"
 		},
 		"proxy": {

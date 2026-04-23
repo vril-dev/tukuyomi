@@ -71,23 +71,9 @@ COPY presets/minimal/.env ./presets/minimal/.env
 COPY presets/minimal/config.json ./presets/minimal/config.json
 COPY presets/minimal/proxy.json ./presets/minimal/proxy.json
 COPY presets/minimal/sites.json ./presets/minimal/sites.json
-COPY data/conf/scheduled-tasks.json ./data/conf/scheduled-tasks.json
 COPY data/scheduled-tasks/README.md ./data/scheduled-tasks/README.md
-COPY data/geoip/README.md ./data/geoip/README.md
 COPY data/php-fpm/ ./data/php-fpm/
 COPY data/vhosts/ ./data/vhosts/
-COPY data/conf/cache-rules.json ./data/conf/cache-rules.json
-COPY data/conf/waf-bypass.json ./data/conf/waf-bypass.json
-COPY data/conf/waf-bypass.sample.json ./data/conf/waf-bypass.sample.json
-COPY data/conf/country-block.json ./data/conf/country-block.json
-COPY data/conf/rate-limit.json ./data/conf/rate-limit.json
-COPY data/conf/ip-reputation.json ./data/conf/ip-reputation.json
-COPY data/conf/bot-defense.json ./data/conf/bot-defense.json
-COPY data/conf/semantic.json ./data/conf/semantic.json
-COPY data/conf/notifications.json ./data/conf/notifications.json
-COPY data/conf/rules/ ./data/conf/rules/
-COPY data/rules/tukuyomi.conf ./data/rules/tukuyomi.conf
-COPY data/rules/crs/crs-setup.conf ./data/rules/crs/crs-setup.conf
 COPY examples/api-gateway/data/conf/crs-disabled.conf ./examples/api-gateway/data/conf/crs-disabled.conf
 COPY scripts/install_crs.sh ./scripts/install_crs.sh
 COPY scripts/update_country_db.sh ./scripts/update_country_db.sh
@@ -100,7 +86,7 @@ RUN set -eux; \
     fi; \
     archive_root="${APP_NAME}_${VERSION}_${os}_${arch}"; \
     bundle="/work/${archive_root}"; \
-    mkdir -p "${bundle}/bin" "${bundle}/conf" "${bundle}/conf/rules" "${bundle}/rules/crs" "${bundle}/logs/coraza" "${bundle}/logs/proxy" "${bundle}/scripts" "${bundle}/data/scheduled-tasks" "${bundle}/data/geoip" "${bundle}/data/php-fpm/binaries" "${bundle}/data/php-fpm/runtime" "${bundle}/data/vhosts/samples" "/out"; \
+    mkdir -p "${bundle}/bin" "${bundle}/conf" "${bundle}/rules/crs" "${bundle}/db" "${bundle}/audit" "${bundle}/cache/response" "${bundle}/logs/waf" "${bundle}/logs/proxy" "${bundle}/scripts" "${bundle}/data/scheduled-tasks" "${bundle}/data/php-fpm/binaries" "${bundle}/data/php-fpm/runtime" "${bundle}/data/vhosts/samples" "/out"; \
     cp "/tmp/out/${APP_NAME}" "${bundle}/${APP_NAME}"; \
     cp "/tmp/out/geoipupdate" "${bundle}/bin/geoipupdate"; \
     cp /src/README.md "${bundle}/README.md"; \
@@ -113,24 +99,10 @@ RUN set -eux; \
     cp /src/presets/minimal/config.json "${bundle}/conf/config.json"; \
     cp /src/presets/minimal/proxy.json "${bundle}/conf/proxy.json"; \
     cp /src/presets/minimal/sites.json "${bundle}/conf/sites.json"; \
-    cp /src/data/conf/scheduled-tasks.json "${bundle}/conf/scheduled-tasks.json"; \
     cp /src/data/scheduled-tasks/README.md "${bundle}/data/scheduled-tasks/README.md"; \
-    cp /src/data/geoip/README.md "${bundle}/data/geoip/README.md"; \
     cp -R /src/data/php-fpm/. "${bundle}/data/php-fpm/"; \
     cp -R /src/data/vhosts/. "${bundle}/data/vhosts/"; \
-    cp /src/data/conf/cache-rules.json "${bundle}/conf/cache-rules.json"; \
-    cp /src/data/conf/waf-bypass.json "${bundle}/conf/waf-bypass.json"; \
-    cp /src/data/conf/waf-bypass.sample.json "${bundle}/conf/waf-bypass.sample.json"; \
-    cp /src/data/conf/country-block.json "${bundle}/conf/country-block.json"; \
-    cp /src/data/conf/rate-limit.json "${bundle}/conf/rate-limit.json"; \
-    cp /src/data/conf/ip-reputation.json "${bundle}/conf/ip-reputation.json"; \
-    cp /src/data/conf/bot-defense.json "${bundle}/conf/bot-defense.json"; \
-    cp /src/data/conf/semantic.json "${bundle}/conf/semantic.json"; \
-    cp /src/data/conf/notifications.json "${bundle}/conf/notifications.json"; \
-    cp -R /src/data/conf/rules/. "${bundle}/conf/rules/"; \
     cp /src/examples/api-gateway/data/conf/crs-disabled.conf "${bundle}/conf/crs-disabled.conf"; \
-    cp /src/data/rules/tukuyomi.conf "${bundle}/rules/tukuyomi.conf"; \
-    cp /src/data/rules/crs/crs-setup.conf "${bundle}/rules/crs/crs-setup.conf"; \
     sed 's#DEST_DIR="${ROOT_DIR}/data/rules/crs"#DEST_DIR="${ROOT_DIR}/rules/crs"#' /src/scripts/install_crs.sh > "${bundle}/scripts/install_crs.sh"; \
     cp /src/scripts/update_country_db.sh "${bundle}/scripts/update_country_db.sh"; \
     chmod +x "${bundle}/${APP_NAME}" "${bundle}/bin/geoipupdate" "${bundle}/scripts/install_crs.sh" "${bundle}/scripts/update_country_db.sh"; \

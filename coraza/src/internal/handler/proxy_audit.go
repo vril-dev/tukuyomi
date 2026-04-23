@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	defaultProxyRulesAuditFile = "/app/logs/coraza/proxy-rules-audit.ndjson"
+	defaultProxyRulesAuditFile = "audit/proxy-rules-audit.ndjson"
 )
 
 type proxyRulesAuditRestoredFrom struct {

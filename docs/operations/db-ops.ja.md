@@ -64,7 +64,7 @@ DB 接続 bootstrap は `data/conf/config.json` の `storage` で設定します
 
 default の SQLite path:
 
-- `logs/coraza/tukuyomi.db`
+- `db/tukuyomi.db`
 
 DSN 要件:
 
@@ -136,8 +136,8 @@ import 後の本番起動で必要な file は次だけです。
 その他の seed/export file は operator workflow 用に残しても構いませんが、
 対応する normalized DB row が存在した後の runtime authority ではありません。
 `make db-migrate`、`make crs-install`、`make db-import` 後の本番 runtime では
-`data/conf/config.json` 以外の `data/conf/*.json`、`data/conf/rules/**`、
-`data/rules/**`、および `inventory.json`、`vhosts.json`、`runtime.json`、
+`data/conf/config.json` 以外の `data/conf/*.json`、
+および `inventory.json`、`vhosts.json`、`runtime.json`、
 `modules.json` などの PHP-FPM JSON manifest を削除できます。GeoIP managed
 asset も import 後は DB-backed です。
 
@@ -180,14 +180,14 @@ reload です。
 大きな変更の前には DB file を snapshot します。
 
 ```bash
-cp data/logs/coraza/tukuyomi.db data/logs/coraza/tukuyomi.db.bak.$(date +%Y%m%d%H%M%S)
+cp data/db/tukuyomi.db data/db/tukuyomi.db.bak.$(date +%Y%m%d%H%M%S)
 ```
 
 WAL file がある場合は一緒に backup します。
 
 ```bash
-cp data/logs/coraza/tukuyomi.db-wal data/logs/coraza/tukuyomi.db-wal.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
-cp data/logs/coraza/tukuyomi.db-shm data/logs/coraza/tukuyomi.db-shm.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
+cp data/db/tukuyomi.db-wal data/db/tukuyomi.db-wal.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
+cp data/db/tukuyomi.db-shm data/db/tukuyomi.db-shm.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
 ```
 
 ### MySQL
@@ -203,7 +203,7 @@ cp data/logs/coraza/tukuyomi.db-shm data/logs/coraza/tukuyomi.db-shm.bak.$(date 
 heavy test の後は次を実行します。
 
 ```bash
-sqlite3 data/logs/coraza/tukuyomi.db "PRAGMA wal_checkpoint(TRUNCATE); VACUUM;"
+sqlite3 data/db/tukuyomi.db "PRAGMA wal_checkpoint(TRUNCATE); VACUUM;"
 ```
 
 ## Recovery

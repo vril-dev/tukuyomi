@@ -104,29 +104,25 @@ run_official_single_instance_smoke() {
 }
 
 stage_read_only_runtime() {
+  local stage_root=""
   RUNTIME_ROOT="$(mktemp -d "${ROOT_DIR}/.tmp-container-platform-read-only.XXXXXX")"
   RUNTIME_DIR="${RUNTIME_ROOT}/opt/tukuyomi"
-  SERVER_LOG="${RUNTIME_DIR}/logs/coraza/container-platform-read-only.log"
+  SERVER_LOG="${RUNTIME_DIR}/logs/waf/container-platform-read-only.log"
 
   log "staging read-only runtime at ${RUNTIME_DIR}"
   install -d -m 755 \
     "${RUNTIME_DIR}/bin" \
     "${RUNTIME_DIR}/conf" \
+    "${RUNTIME_DIR}/db" \
     "${RUNTIME_DIR}/data/scheduled-tasks" \
-    "${RUNTIME_DIR}/logs/coraza" \
-    "${RUNTIME_DIR}/logs/proxy" \
-    "${RUNTIME_DIR}/rules"
+    "${RUNTIME_DIR}/audit" \
+    "${RUNTIME_DIR}/cache/response" \
+    "${RUNTIME_DIR}/logs/waf" \
+    "${RUNTIME_DIR}/logs/proxy"
   install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${RUNTIME_DIR}/bin/tukuyomi"
   rsync -a --exclude '*.bak' "${ROOT_DIR}/data/conf/" "${RUNTIME_DIR}/conf/"
   if [[ -d "${ROOT_DIR}/data/scheduled-tasks" ]]; then
     rsync -a "${ROOT_DIR}/data/scheduled-tasks/" "${RUNTIME_DIR}/data/scheduled-tasks/"
-  fi
-  install -m 644 "${ROOT_DIR}/data/rules/tukuyomi.conf" "${RUNTIME_DIR}/rules/tukuyomi.conf"
-  if [[ -d "${ROOT_DIR}/data/rules/crs/rules" ]]; then
-    rsync -a "${ROOT_DIR}/data/rules/crs/" "${RUNTIME_DIR}/rules/crs/"
-  else
-    log "data/rules/crs missing; installing CRS into staged runtime"
-    DEST_DIR="${RUNTIME_DIR}/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh"
   fi
   touch "${RUNTIME_DIR}/conf/crs-disabled.conf"
 
@@ -141,6 +137,15 @@ stage_read_only_runtime() {
      | .admin.read_only = true' \
     "${RUNTIME_DIR}/conf/config.json" > "${RUNTIME_DIR}/conf/config.json.tmp"
   mv "${RUNTIME_DIR}/conf/config.json.tmp" "${RUNTIME_DIR}/conf/config.json"
+
+  stage_root="$(mktemp -d "${RUNTIME_DIR}/.tmp-waf-import.XXXXXX")"
+  (
+    cd "${RUNTIME_DIR}"
+    DEST_DIR="${stage_root}/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh"
+    WAF_CONFIG_FILE="conf/config.json" ./bin/tukuyomi db-migrate
+    WAF_RULE_ASSET_FS_ROOT="${stage_root}" WAF_CONFIG_FILE="conf/config.json" ./bin/tukuyomi db-import-waf-rule-assets
+  )
+  rm -rf "${stage_root}"
 }
 
 curl_json() {

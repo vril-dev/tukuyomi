@@ -28,7 +28,7 @@ import (
 
 const (
 	responseCacheConfigBlobKey           = "cache_store"
-	defaultResponseCacheStoreDir         = "logs/coraza/cache"
+	defaultResponseCacheStoreDir         = "cache/response"
 	defaultResponseCacheMaxBytes         = int64(2 * 1024 * 1024 * 1024)
 	defaultResponseCacheMemoryMaxBytes   = int64(256 * 1024 * 1024)
 	defaultResponseCacheMemoryMaxEntries = 4096

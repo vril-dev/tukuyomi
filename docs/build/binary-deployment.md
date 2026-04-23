@@ -39,14 +39,23 @@ The binary expects a working directory that contains:
 ```text
 /opt/tukuyomi/bin/tukuyomi
 /opt/tukuyomi/conf/
-/opt/tukuyomi/rules/
+/opt/tukuyomi/db/
+/opt/tukuyomi/audit/
+/opt/tukuyomi/cache/
 /opt/tukuyomi/logs/
+/opt/tukuyomi/rules/
 ```
 
-Seed/import files normally used before the first DB import:
+Bundle-provided bootstrap/examples:
 
 - `conf/config.json`
 - `conf/proxy.json`
+- `conf/sites.json`
+- `conf/crs-disabled.conf`
+- `scripts/update_country_db.sh`
+
+Optional operator-supplied seed/import files before the first DB import:
+
 - `conf/cache-rules.json`
 - `conf/waf-bypass.json`
 - `conf/waf-bypass.sample.json`
@@ -56,16 +65,14 @@ Seed/import files normally used before the first DB import:
 - `conf/semantic.json`
 - `conf/notifications.json`
 - `conf/ip-reputation.json`
-- `conf/sites.json`
 - `conf/scheduled-tasks.json`
 - `conf/upstream-runtime.json`
-- `rules/tukuyomi.conf`
-- `rules/crs/crs-setup.conf`
-- `rules/crs/rules/*.conf`
+- `conf/rules/*.conf`
+- staged CRS files under `rules/crs/...` via `make crs-install`
 
 These seed an empty DB or support import/export workflows. Once the matching
 normalized DB domain exists, runtime loads normalized domains directly from DB
-and does not require those JSON files to be restored. After import, production
+and does not require those files to be restored. After import, production
 startup only requires `conf/config.json` for DB bootstrap plus the DB rows.
 
 Additional PHP-FPM files used before first DB import:
@@ -96,21 +103,21 @@ Install example:
 sudo install -d -m 755 \
   /opt/tukuyomi/bin \
   /opt/tukuyomi/conf \
+  /opt/tukuyomi/db \
+  /opt/tukuyomi/audit \
+  /opt/tukuyomi/cache/response \
+  /opt/tukuyomi/logs/waf \
   /opt/tukuyomi/rules \
   /opt/tukuyomi/scripts \
-  /opt/tukuyomi/logs/coraza \
   /opt/tukuyomi/logs/proxy
 
 sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
 
-for f in config.json proxy.json sites.json scheduled-tasks.json upstream-runtime.json cache-rules.json waf-bypass.json waf-bypass.sample.json country-block.json rate-limit.json bot-defense.json semantic.json notifications.json ip-reputation.json; do
+for f in config.json proxy.json sites.json; do
   sudo install -m 644 "data/conf/${f}" "/opt/tukuyomi/conf/${f}"
 done
 
-sudo install -m 644 data/rules/tukuyomi.conf /opt/tukuyomi/rules/tukuyomi.conf
-sudo install -d -m 755 /opt/tukuyomi/rules/crs
-sudo DEST_DIR=/opt/tukuyomi/rules/crs ./scripts/install_crs.sh
 sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 ```
 
@@ -119,7 +126,9 @@ Notes:
 - do not copy `data/conf/*.bak` into production
 - `config.json` is the DB connection bootstrap and seed/export material for DB `app_config`
 - `proxy.json` is seed/import/export material for DB `proxy_rules`
-- `rules/tukuyomi.conf` and `rules/crs/**` are seed/import material for DB `waf_rule_assets`
+- the public release bundle ships only `config.json`, `proxy.json`, and `sites.json` as example seed files; other seed/import material is operator-supplied when needed
+- the default base WAF rule seed is compiled into the binary
+- CRS files are temporary import material for DB `waf_rule_assets`; `make crs-install` stages them and cleans up
 - `sites.json`, `scheduled-tasks.json`, `upstream-runtime.json`, policy JSON,
   cache-rules JSON, WAF bypass JSON, and PHP-FPM JSON manifests are DB
   seed/export artifacts after DB bootstrap
@@ -129,8 +138,8 @@ Notes:
 - the public release bundle ships a companion `bin/geoipupdate` binary for `Options -> GeoIP Update -> Update now`
 - `GEOIPUPDATE_BIN` remains available if you want to override the bundled updater path
 - the official managed-country refresh wrapper is `./scripts/update_country_db.sh`
-- managed GeoIP country DB, `GeoIP.conf`, and update status are DB-backed after `make db-import`; do not treat `data/geoip/*` as required production runtime files
-- managed bypass override rules are DB `override_rules`; `conf/rules/*.conf` is seed-only when importing a new DB
+- managed GeoIP country DB, `GeoIP.conf`, and update status are DB-backed after `make db-import`; the main repo does not need to ship `data/geoip`
+- managed bypass override rules are DB `override_rules`; `conf/rules/*.conf` is an operator-provided seed-only location when importing a new DB
 - `extra_rule` values remain logical compatibility references to DB-managed override rules
 
 Proxy engine selection is a restart-required DB `app_config` setting:

@@ -66,12 +66,12 @@
     "mock_response_file": "conf/fp-tuner-mock-response.json",
     "require_approval": true,
     "approval_ttl_sec": 600,
-    "audit_file": "logs/coraza/fp-tuner-audit.ndjson"
+    "audit_file": "audit/fp-tuner-audit.ndjson"
   },
   "storage": {
     "db_driver": "sqlite",
     "db_dsn": "",
-    "db_path": "logs/coraza/tukuyomi.db",
+    "db_path": "db/tukuyomi.db",
     "db_retention_days": 30,
     "db_sync_interval_sec": 0
   }

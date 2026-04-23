@@ -69,6 +69,7 @@ wait_for_coraza() {
 require_cmd docker
 require_cmd curl
 require_cmd jq
+require_cmd make
 
 if [[ ! -f "${ROOT_DIR}/.env" ]]; then
   if [[ -f "${ROOT_DIR}/.env.example" ]]; then
@@ -80,10 +81,8 @@ if [[ ! -f "${ROOT_DIR}/.env" ]]; then
   fi
 fi
 
-if [[ -z "$(find "${ROOT_DIR}/data/rules/crs/rules" -maxdepth 1 -name '*.conf' -print -quit 2>/dev/null)" ]]; then
-  echo "[gotestwaf] CRS rules are missing. Installing defaults."
-  "${ROOT_DIR}/scripts/install_crs.sh"
-fi
+echo "[gotestwaf] ensuring DB-backed WAF rule assets"
+(cd "${ROOT_DIR}" && make crs-install)
 
 mkdir -p "${REPORT_DIR}"
 rm -f "${REPORT_JSON}" "${SUMMARY_TXT}" "${SUMMARY_MD}"

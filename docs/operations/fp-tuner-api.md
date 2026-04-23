@@ -161,14 +161,14 @@ Notes:
 - For `http:80` and `https:443`, host scope may use a narrow optional-default-port regex such as `^example\.com(:80)?$` or `^example\.com(:443)?$`.
 - Masked categories include bearer/jwt-like tokens, email, IPv4, and common secret query keys.
 - Only scoped exclusion format is accepted for apply.
-- Propose/apply actions are appended to `WAF_FP_TUNER_AUDIT_FILE` (default `logs/coraza/fp-tuner-audit.ndjson`).
+- Propose/apply actions are appended to `WAF_FP_TUNER_AUDIT_FILE` (default `audit/fp-tuner-audit.ndjson`).
 - Ensure the audit path is writable by the runtime UID/GID (`PUID`/`GUID`).
 
 ## Related Env Vars
 
 - `WAF_FP_TUNER_REQUIRE_APPROVAL` (`true` by default)
 - `WAF_FP_TUNER_APPROVAL_TTL_SEC` (default `600`)
-- `WAF_FP_TUNER_AUDIT_FILE` (default `logs/coraza/fp-tuner-audit.ndjson`)
+- `WAF_FP_TUNER_AUDIT_FILE` (default `audit/fp-tuner-audit.ndjson`)
 
 ## Local HTTP Mode Contract Test
 

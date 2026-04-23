@@ -68,7 +68,7 @@ connection has already been chosen.
 
 Default SQLite path:
 
-- `logs/coraza/tukuyomi.db`
+- `db/tukuyomi.db`
 
 DSN requirements:
 
@@ -141,8 +141,8 @@ The only file required by production startup after import is:
 Other seed/export files may be kept for operator workflows but are not runtime
 authority after their normalized DB rows exist. After `make db-migrate`,
 `make crs-install`, and `make db-import`, production runtime can remove
-`data/conf/*.json` except `data/conf/config.json`, `data/conf/rules/**`,
-`data/rules/**`, and PHP-FPM JSON manifests such as `inventory.json`,
+`data/conf/*.json` except `data/conf/config.json` and
+PHP-FPM JSON manifests such as `inventory.json`,
 `vhosts.json`, `runtime.json`, and `modules.json`. GeoIP managed assets are
 also DB-backed after import.
 
@@ -184,14 +184,14 @@ runtimes this is DB-to-memory/runtime reload, not DB-to-file restoration.
 Before major changes, snapshot DB file:
 
 ```bash
-cp data/logs/coraza/tukuyomi.db data/logs/coraza/tukuyomi.db.bak.$(date +%Y%m%d%H%M%S)
+cp data/db/tukuyomi.db data/db/tukuyomi.db.bak.$(date +%Y%m%d%H%M%S)
 ```
 
 If WAL files exist, back them up together:
 
 ```bash
-cp data/logs/coraza/tukuyomi.db-wal data/logs/coraza/tukuyomi.db-wal.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
-cp data/logs/coraza/tukuyomi.db-shm data/logs/coraza/tukuyomi.db-shm.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
+cp data/db/tukuyomi.db-wal data/db/tukuyomi.db-wal.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
+cp data/db/tukuyomi.db-shm data/db/tukuyomi.db-shm.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
 ```
 
 ### MySQL
@@ -207,7 +207,7 @@ Back up with your normal DB backup flow (for example `pg_dump`).
 After heavy tests, run:
 
 ```bash
-sqlite3 data/logs/coraza/tukuyomi.db "PRAGMA wal_checkpoint(TRUNCATE); VACUUM;"
+sqlite3 data/db/tukuyomi.db "PRAGMA wal_checkpoint(TRUNCATE); VACUUM;"
 ```
 
 ## Recovery

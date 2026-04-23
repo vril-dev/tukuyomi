@@ -30,8 +30,8 @@
   "paths": {
     "proxy_config_file": "testenv/release-binary/runtime/conf/proxy-routes.json",
     "site_config_file": "testenv/release-binary/runtime/conf/sites.json",
-    "security_audit_file": "testenv/release-binary/runtime/logs/coraza/security-audit.ndjson",
-    "security_audit_blob_dir": "testenv/release-binary/runtime/logs/coraza/security-audit-blobs",
+    "security_audit_file": "testenv/release-binary/runtime/audit/security-audit.ndjson",
+    "security_audit_blob_dir": "testenv/release-binary/runtime/audit/security-audit-blobs",
     "cache_store_file": "testenv/release-binary/runtime/conf/cache-store.json",
     "rules_file": "testenv/release-binary/runtime/rules/tukuyomi.conf",
     "override_rules_dir": "testenv/release-binary/runtime/conf/rules",
@@ -48,13 +48,13 @@
   },
   "proxy": {
     "rollback_history_size": 8,
-    "audit_file": "testenv/release-binary/runtime/logs/coraza/proxy-rules-audit.ndjson"
+    "audit_file": "testenv/release-binary/runtime/audit/proxy-rules-audit.ndjson"
   },
   "crs": {
     "enable": true
   },
   "storage": {
     "db_driver": "sqlite",
-    "db_path": "testenv/release-binary/runtime/logs/coraza/tukuyomi.db"
+    "db_path": "testenv/release-binary/runtime/db/tukuyomi.db"
   }
 }

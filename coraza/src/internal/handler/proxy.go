@@ -815,7 +815,7 @@ func releaseProxyRouteSelection(selection proxyRouteTransportSelection) {
 func appendEncodedEventToFile(raw []byte) error {
 	path := strings.TrimSpace(config.LogFile)
 	if path == "" {
-		path = "/app/logs/coraza/waf-events.ndjson"
+		path = "logs/waf/waf-events.ndjson"
 	}
 	return appendEncodedWAFEvent(raw, path)
 }
@@ -823,7 +823,7 @@ func appendEncodedEventToFile(raw []byte) error {
 func appendEncodedEventsToFile(raws [][]byte) error {
 	path := strings.TrimSpace(config.LogFile)
 	if path == "" {
-		path = "/app/logs/coraza/waf-events.ndjson"
+		path = "logs/waf/waf-events.ndjson"
 	}
 	return appendEncodedWAFEvents(raws, path)
 }

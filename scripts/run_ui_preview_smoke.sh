@@ -48,7 +48,7 @@ if isinstance(storage, dict):
     if raw is not None:
         db_path = str(raw).strip()
 if not db_path:
-    db_path = "logs/coraza/tukuyomi.db"
+    db_path = "db/tukuyomi.db"
 if db_path.startswith("/"):
     raise SystemExit(f"preview storage.db_path must be relative: {db_path}")
 parts = pathlib.PurePosixPath(db_path).parts
@@ -173,7 +173,6 @@ stage_workspace() {
   install -m 644 "${ROOT_DIR}/docker-compose.yml" "${WORKSPACE}/docker-compose.yml"
   rsync -a "${ROOT_DIR}/coraza/" "${WORKSPACE}/coraza/"
   rsync -a "${ROOT_DIR}/data/conf/" "${WORKSPACE}/data/conf/"
-  rsync -a "${ROOT_DIR}/data/rules/" "${WORKSPACE}/data/rules/"
   rsync -a "${ROOT_DIR}/scripts/" "${WORKSPACE}/scripts/"
   if [[ -d "${ROOT_DIR}/data/php-fpm" ]]; then
     rsync -a "${ROOT_DIR}/data/php-fpm/" "${WORKSPACE}/data/php-fpm/"

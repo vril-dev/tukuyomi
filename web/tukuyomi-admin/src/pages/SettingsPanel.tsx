@@ -280,7 +280,7 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
     },
     storage: {
       db_driver: "sqlite",
-      db_path: "logs/coraza/tukuyomi.db",
+      db_path: "db/tukuyomi.db",
       db_retention_days: 30,
       db_sync_interval_sec: 0,
       file_rotate_bytes: 8 * 1024 * 1024,
@@ -293,8 +293,8 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
       php_runtime_inventory_file: "data/php-fpm/inventory.json",
       vhost_config_file: "data/php-fpm/vhosts.json",
       scheduled_task_config_file: "conf/scheduled-tasks.json",
-      security_audit_file: "logs/coraza/security-audit.ndjson",
-      security_audit_blob_dir: "logs/coraza/security-audit-blobs",
+      security_audit_file: "audit/security-audit.ndjson",
+      security_audit_blob_dir: "audit/security-audit-blobs",
       cache_store_file: "conf/cache-store.json",
       rules_file: "rules/tukuyomi.conf",
       override_rules_dir: "conf/rules",
@@ -326,7 +326,7 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
       timeout_sec: 15,
       require_approval: true,
       approval_ttl_sec: 600,
-      audit_file: "logs/coraza/fp-tuner-audit.ndjson",
+      audit_file: "audit/fp-tuner-audit.ndjson",
     },
     observability: {
       tracing: {
@@ -1219,7 +1219,7 @@ export default function SettingsPanel() {
 	                      value={listenerAdminConfig.storage.db_path}
 	                      readOnly
 	                      className="w-full rounded border border-neutral-200 bg-neutral-100 text-neutral-600"
-	                      placeholder="logs/coraza/tukuyomi.db"
+	                      placeholder="db/tukuyomi.db"
 	                    />
                   </Field>
                   <NumberField

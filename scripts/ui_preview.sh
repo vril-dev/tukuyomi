@@ -33,7 +33,7 @@ if isinstance(storage, dict):
     if raw is not None:
         db_path = str(raw).strip()
 if not db_path:
-    db_path = "logs/coraza/tukuyomi.db"
+    db_path = "db/tukuyomi.db"
 if db_path.startswith("/"):
     raise SystemExit(f"preview storage.db_path must be relative: {db_path}")
 parts = pathlib.PurePosixPath(db_path).parts
@@ -139,8 +139,12 @@ run_preview_command() {
 }
 
 seed_preview_database() {
+  local stage_root=""
+  stage_root="$(mktemp -d "$ROOT_DIR/data/.tmp-preview-crs-import.XXXXXX")"
+  trap 'rm -rf "$stage_root"' RETURN
+  DEST_DIR="$stage_root/rules/crs" "$ROOT_DIR/scripts/install_crs.sh"
   run_preview_command db-migrate
-  run_preview_command db-import-waf-rule-assets
+  WAF_RULE_ASSET_FS_ROOT="$stage_root" run_preview_command db-import-waf-rule-assets
   run_preview_command db-import-preview
 }
 

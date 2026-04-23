@@ -39,6 +39,7 @@ fail() {
 stage_runtime_db_if_needed() {
   local db_path="${RUNTIME_DIR}/db/tukuyomi.db"
   local needs_seed="1"
+  local stage_root=""
 
   if [[ -f "${db_path}" ]]; then
     needs_seed="$(python3 - "${db_path}" <<'PY'
@@ -68,17 +69,20 @@ PY
   fi
 
   log "seeding staged runtime DB with preview bootstrap defaults"
+  stage_root="$(mktemp -d "${RUNTIME_DIR}/.tmp-waf-import.XXXXXX")"
   (
     cd "${RUNTIME_DIR}"
     set -a
     source "${ENV_FILE}"
     set +a
+    DEST_DIR="${stage_root}/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh"
     ./bin/tukuyomi db-migrate
-    ./bin/tukuyomi db-import-waf-rule-assets
+    WAF_RULE_ASSET_FS_ROOT="${stage_root}" ./bin/tukuyomi db-import-waf-rule-assets
     UI_PREVIEW_PUBLIC_ADDR=":${BINARY_DEPLOYMENT_PROXY_PORT}" \
     UI_PREVIEW_ADMIN_ADDR="" \
     ./bin/tukuyomi db-import-preview
   )
+  rm -rf "${stage_root}"
 }
 
 wait_for_http_code() {
@@ -148,20 +152,21 @@ fi
 RUNTIME_ROOT="$(mktemp -d "${ROOT_DIR}/.tmp-binary-deployment-smoke.XXXXXX")"
 RUNTIME_DIR="${RUNTIME_ROOT}/opt/tukuyomi"
 ENV_FILE="${RUNTIME_ROOT}/etc/tukuyomi/tukuyomi.env"
-SERVER_LOG="${RUNTIME_DIR}/logs/coraza/binary-deployment-smoke.log"
+SERVER_LOG="${RUNTIME_DIR}/logs/waf/binary-deployment-smoke.log"
 UPSTREAM_LOG="${RUNTIME_ROOT}/proxy-echo.log"
 
 log "staging runtime tree at ${RUNTIME_DIR}"
-install -d -m 755 \
-  "${RUNTIME_DIR}/bin" \
-  "${RUNTIME_DIR}/conf" \
-  "${RUNTIME_DIR}/db" \
-  "${RUNTIME_DIR}/data/scheduled-tasks" \
-  "${RUNTIME_DIR}/rules" \
-  "${RUNTIME_DIR}/scripts" \
-  "${RUNTIME_DIR}/logs/coraza" \
-  "${RUNTIME_DIR}/logs/proxy" \
-  "${RUNTIME_ROOT}/etc/tukuyomi"
+  install -d -m 755 \
+    "${RUNTIME_DIR}/bin" \
+    "${RUNTIME_DIR}/conf" \
+    "${RUNTIME_DIR}/db" \
+    "${RUNTIME_DIR}/audit" \
+    "${RUNTIME_DIR}/cache/response" \
+    "${RUNTIME_DIR}/data/scheduled-tasks" \
+    "${RUNTIME_DIR}/scripts" \
+    "${RUNTIME_DIR}/logs/waf" \
+    "${RUNTIME_DIR}/logs/proxy" \
+    "${RUNTIME_ROOT}/etc/tukuyomi"
 
 install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${RUNTIME_DIR}/bin/tukuyomi"
 install -m 755 "${ROOT_DIR}/scripts/update_country_db.sh" "${RUNTIME_DIR}/scripts/update_country_db.sh"
@@ -172,15 +177,6 @@ fi
 if [[ -f "${ROOT_DIR}/data/scheduled-tasks/README.md" ]]; then
   install -m 644 "${ROOT_DIR}/data/scheduled-tasks/README.md" "${RUNTIME_DIR}/data/scheduled-tasks/README.md"
 fi
-install -m 644 "${ROOT_DIR}/data/rules/tukuyomi.conf" "${RUNTIME_DIR}/rules/tukuyomi.conf"
-
-if [[ -d "${ROOT_DIR}/data/rules/crs/rules" ]]; then
-  rsync -a "${ROOT_DIR}/data/rules/crs/" "${RUNTIME_DIR}/rules/crs/"
-else
-  log "data/rules/crs missing; installing CRS into staged runtime"
-  DEST_DIR="${RUNTIME_DIR}/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh"
-fi
-
 touch "${RUNTIME_DIR}/conf/crs-disabled.conf"
 
 cp "${ROOT_DIR}/docs/build/tukuyomi.env.example" "${ENV_FILE}"
@@ -233,8 +229,8 @@ log "running admin + proxy-rules smoke through staged binary"
   ./scripts/ci_proxy_admin_smoke.sh
 )
 
-if [[ ! -f "${RUNTIME_DIR}/logs/coraza/proxy-rules-audit.ndjson" ]]; then
-  fail "expected staged runtime to create logs/coraza/proxy-rules-audit.ndjson"
+if [[ ! -f "${RUNTIME_DIR}/audit/proxy-rules-audit.ndjson" ]]; then
+  fail "expected staged runtime to create audit/proxy-rules-audit.ndjson"
 fi
 
 log "OK binary deployment smoke passed"

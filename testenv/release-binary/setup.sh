@@ -4,23 +4,15 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUNTIME_DIR="${ROOT_DIR}/testenv/release-binary/runtime"
 RUNTIME_CONF_DIR="${RUNTIME_DIR}/conf"
-RUNTIME_RULES_DIR="${RUNTIME_DIR}/rules"
 RUNTIME_LOG_DIR="${RUNTIME_DIR}/logs"
 RUNTIME_CACHE_DIR="${RUNTIME_DIR}/cache"
 COMPOSE_ENV_FILE="${ROOT_DIR}/testenv/release-binary/.env"
-CRS_RULE="${RUNTIME_RULES_DIR}/crs/rules/REQUEST-901-INITIALIZATION.conf"
 BINARY_PATH="${ROOT_DIR}/tukuyomi"
 
 if [[ -d "${ROOT_DIR}/conf" ]]; then
   SOURCE_CONF_DIR="${ROOT_DIR}/conf"
 else
   SOURCE_CONF_DIR="${ROOT_DIR}/data/conf"
-fi
-
-if [[ -d "${ROOT_DIR}/rules" ]]; then
-  SOURCE_RULES_DIR="${ROOT_DIR}/rules"
-else
-  SOURCE_RULES_DIR="${ROOT_DIR}/data/rules"
 fi
 
 copy_if_exists() {
@@ -36,8 +28,9 @@ copy_if_exists() {
 mkdir -p \
   "${RUNTIME_CONF_DIR}" \
   "${RUNTIME_CONF_DIR}/rules" \
-  "${RUNTIME_RULES_DIR}" \
-  "${RUNTIME_LOG_DIR}/coraza" \
+  "${RUNTIME_DIR}/audit" \
+  "${RUNTIME_DIR}/cache/response" \
+  "${RUNTIME_LOG_DIR}/waf" \
   "${RUNTIME_LOG_DIR}/proxy" \
   "${RUNTIME_CACHE_DIR}"
 
@@ -74,24 +67,23 @@ if [[ -d "${SOURCE_CONF_DIR}/rules" ]]; then
   cp -R "${SOURCE_CONF_DIR}/rules/." "${RUNTIME_CONF_DIR}/rules/"
 fi
 copy_if_exists "${SOURCE_CONF_DIR}/crs-disabled.conf" "${RUNTIME_CONF_DIR}/crs-disabled.conf"
-copy_if_exists "${SOURCE_RULES_DIR}/tukuyomi.conf" "${RUNTIME_RULES_DIR}/tukuyomi.conf"
-
-if [[ -d "${SOURCE_RULES_DIR}/crs" ]]; then
-  echo "[release-binary-setup] staging CRS files into runtime"
-  rm -rf "${RUNTIME_RULES_DIR}/crs"
-  cp -R "${SOURCE_RULES_DIR}/crs" "${RUNTIME_RULES_DIR}/crs"
-fi
 
 if [[ ! -f "${RUNTIME_CONF_DIR}/crs-disabled.conf" ]]; then
   : > "${RUNTIME_CONF_DIR}/crs-disabled.conf"
 fi
 
-if [[ ! -f "${CRS_RULE}" ]]; then
-  echo "[release-binary-setup] installing CRS into ${RUNTIME_RULES_DIR}/crs"
-  DEST_DIR="${RUNTIME_RULES_DIR}/crs" "${ROOT_DIR}/scripts/install_crs.sh"
-else
-  echo "[release-binary-setup] CRS already present"
-fi
+stage_root="$(mktemp -d "${ROOT_DIR}/.tmp-release-binary-crs.XXXXXX")"
+trap 'rm -rf "${stage_root}"' EXIT
+
+echo "[release-binary-setup] staging CRS import tree"
+DEST_DIR="${stage_root}/testenv/release-binary/runtime/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh"
+
+echo "[release-binary-setup] seeding runtime DB rule assets"
+(
+  cd "${ROOT_DIR}"
+  WAF_CONFIG_FILE="testenv/release-binary/proxy-config.json" "${BINARY_PATH}" db-migrate
+  WAF_RULE_ASSET_FS_ROOT="${stage_root}" WAF_CONFIG_FILE="testenv/release-binary/proxy-config.json" "${BINARY_PATH}" db-import-waf-rule-assets
+)
 
 echo "[release-binary-setup] ready"
 echo "[release-binary-setup] run: cd ${ROOT_DIR}/testenv/release-binary && docker compose up -d --build"

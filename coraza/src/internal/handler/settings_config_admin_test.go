@@ -130,7 +130,7 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	next.Admin.TrustForwardedFor = true
 	next.Storage.Backend = "db"
 	next.Storage.DBDriver = "mysql"
-	next.Storage.DBPath = "logs/coraza/custom.db"
+	next.Storage.DBPath = "db/custom.db"
 	next.Storage.DBRetentionDays = 90
 	next.Storage.DBSyncIntervalSec = 30
 	next.Storage.FileRotateBytes = 1024
@@ -145,7 +145,7 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	next.FPTuner.TimeoutSec = 20
 	next.FPTuner.RequireApproval = false
 	next.FPTuner.ApprovalTTLSec = 1200
-	next.FPTuner.AuditFile = "logs/coraza/fp-custom.ndjson"
+	next.FPTuner.AuditFile = "audit/fp-custom.ndjson"
 	next.Observability.Tracing.Enabled = true
 	next.Observability.Tracing.ServiceName = "tukuyomi-test"
 	next.Observability.Tracing.OTLPEndpoint = "http://otel-collector:4318"
@@ -205,7 +205,7 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	if saved.Storage.Backend != "" || saved.Storage.DBDriver != "sqlite" {
 		t.Fatalf("saved deprecated backend/driver=%q/%q want empty/sqlite bootstrap", saved.Storage.Backend, saved.Storage.DBDriver)
 	}
-	if saved.Storage.DBPath != "logs/coraza/tukuyomi.db" {
+	if saved.Storage.DBPath != "db/tukuyomi.db" {
 		t.Fatalf("saved db_path=%q want bootstrap default", saved.Storage.DBPath)
 	}
 	if saved.Storage.DBDSN != "fixture-db-dsn-secret" {
@@ -260,7 +260,7 @@ func TestLoadSettingsAppConfigUsesNormalizedDBAndPreservesBootstrapDBConnection(
 	}
 	dbCfg.Server.ListenAddr = ":28090"
 	dbCfg.Storage.DBDriver = "mysql"
-	dbCfg.Storage.DBPath = "logs/coraza/wrong.db"
+	dbCfg.Storage.DBPath = "db/wrong.db"
 	dbCfg.Storage.DBDSN = "wrong-db-dsn"
 	store := getLogsStatsStore()
 	_, bootstrapCfg, err := loadBootstrapAppConfig()
@@ -281,7 +281,7 @@ func TestLoadSettingsAppConfigUsesNormalizedDBAndPreservesBootstrapDBConnection(
 	if loaded.Storage.DBDriver != "sqlite" {
 		t.Fatalf("db_driver=%q want bootstrap sqlite", loaded.Storage.DBDriver)
 	}
-	if loaded.Storage.DBPath != "logs/coraza/tukuyomi.db" {
+	if loaded.Storage.DBPath != "db/tukuyomi.db" {
 		t.Fatalf("db_path=%q want bootstrap default", loaded.Storage.DBPath)
 	}
 	if loaded.Storage.DBDSN != "fixture-db-dsn-secret" {
@@ -334,8 +334,8 @@ func writeSettingsConfigFixture(t *testing.T) string {
   },
   "paths": {
     "proxy_config_file": "conf/proxy.json",
-    "security_audit_file": "logs/coraza/security-audit.ndjson",
-    "security_audit_blob_dir": "logs/coraza/security-audit-blobs",
+    "security_audit_file": "audit/security-audit.ndjson",
+    "security_audit_blob_dir": "audit/security-audit-blobs",
     "rules_file": "rules/tukuyomi.conf"
   },
   "proxy": {
@@ -433,7 +433,7 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 		Storage: settingsListenerAdminStorageConfig{
 			Backend:           "",
 			DBDriver:          "sqlite",
-			DBPath:            "logs/coraza/tukuyomi.db",
+			DBPath:            "db/tukuyomi.db",
 			DBRetentionDays:   30,
 			DBSyncIntervalSec: 0,
 			FileRotateBytes:   8 * 1024 * 1024,
@@ -446,8 +446,8 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 			PHPRuntimeInventoryFile: "data/php-fpm/inventory.json",
 			VhostConfigFile:         "data/php-fpm/vhosts.json",
 			ScheduledTaskConfigFile: "conf/scheduled-tasks.json",
-			SecurityAuditFile:       "logs/coraza/security-audit.ndjson",
-			SecurityAuditBlobDir:    "logs/coraza/security-audit-blobs",
+			SecurityAuditFile:       "audit/security-audit.ndjson",
+			SecurityAuditBlobDir:    "audit/security-audit-blobs",
 			CacheStoreFile:          "conf/cache-store.json",
 			RulesFile:               "rules/tukuyomi.conf",
 			BypassFile:              "conf/waf-bypass.json",
@@ -477,7 +477,7 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 			TimeoutSec:      15,
 			RequireApproval: true,
 			ApprovalTTLSec:  600,
-			AuditFile:       "logs/coraza/fp-tuner-audit.ndjson",
+			AuditFile:       "audit/fp-tuner-audit.ndjson",
 		},
 		Observability: settingsListenerAdminObservabilityConfig{
 			Tracing: settingsListenerAdminTracingConfig{

@@ -119,7 +119,7 @@ const exampleState: CacheRulesEditorState = {
 
 const defaultStoreConfig: CacheStoreConfig = {
   enabled: true,
-  store_dir: "logs/coraza/cache",
+  store_dir: "cache/response",
   max_bytes: 2 * 1024 * 1024 * 1024,
   memory_enabled: false,
   memory_max_bytes: 256 * 1024 * 1024,

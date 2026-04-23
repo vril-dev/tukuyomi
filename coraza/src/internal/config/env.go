@@ -180,11 +180,11 @@ func applyAppConfig(cfg appConfigFile) {
 	}
 	SecurityAuditFile = strings.TrimSpace(cfg.Paths.SecurityAuditFile)
 	if SecurityAuditFile == "" {
-		SecurityAuditFile = "logs/coraza/security-audit.ndjson"
+		SecurityAuditFile = "audit/security-audit.ndjson"
 	}
 	SecurityAuditBlobDir = strings.TrimSpace(cfg.Paths.SecurityAuditBlobDir)
 	if SecurityAuditBlobDir == "" {
-		SecurityAuditBlobDir = "logs/coraza/security-audit-blobs"
+		SecurityAuditBlobDir = "audit/security-audit-blobs"
 	}
 	CacheStoreFile = strings.TrimSpace(cfg.Paths.CacheStoreFile)
 	if CacheStoreFile == "" {
@@ -202,7 +202,7 @@ func applyAppConfig(cfg appConfigFile) {
 		ProxyAuditFile = override
 	}
 	if ProxyAuditFile == "" {
-		ProxyAuditFile = "/app/logs/coraza/proxy-rules-audit.ndjson"
+		ProxyAuditFile = "audit/proxy-rules-audit.ndjson"
 	}
 	SecurityAuditEnabled = cfg.SecurityAudit.Enabled
 	SecurityAuditCaptureMode = strings.ToLower(strings.TrimSpace(cfg.SecurityAudit.CaptureMode))
@@ -415,7 +415,7 @@ func applyAppConfig(cfg appConfigFile) {
 	FPTunerApprovalTTL = time.Duration(approvalTTLSec) * time.Second
 	FPTunerAuditFile = strings.TrimSpace(cfg.FPTuner.AuditFile)
 	if FPTunerAuditFile == "" {
-		FPTunerAuditFile = "logs/coraza/fp-tuner-audit.ndjson"
+		FPTunerAuditFile = "audit/fp-tuner-audit.ndjson"
 	}
 
 	DBDriver = parseDBDriver(cfg.Storage.DBDriver)
@@ -431,7 +431,7 @@ func applyAppConfig(cfg appConfigFile) {
 		DBPath = override
 	}
 	if DBPath == "" {
-		DBPath = "logs/coraza/tukuyomi.db"
+		DBPath = "db/tukuyomi.db"
 	}
 	DBRetentionDays = cfg.Storage.DBRetentionDays
 	if override := strings.TrimSpace(os.Getenv("WAF_STORAGE_DB_RETENTION_DAYS")); override != "" {

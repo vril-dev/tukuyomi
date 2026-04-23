@@ -76,7 +76,7 @@ if isinstance(storage, dict):
     if raw is not None:
         db_path = str(raw).strip()
 if not db_path:
-    db_path = "logs/coraza/tukuyomi.db"
+    db_path = "db/tukuyomi.db"
 
 pure = pathlib.PurePosixPath(db_path)
 if preview_mode:
@@ -108,7 +108,7 @@ if isinstance(storage, dict):
     if raw is not None:
         db_path = str(raw).strip()
 if not db_path:
-    db_path = "logs/coraza/tukuyomi.db"
+    db_path = "db/tukuyomi.db"
 print(pathlib.PurePosixPath("data", db_path).as_posix())
 PY
 }
@@ -220,7 +220,6 @@ stage_compose_workspace() {
   install -m 644 "${ROOT_DIR}/docker-compose.yml" "${workspace}/docker-compose.yml"
   rsync -a "${ROOT_DIR}/coraza/" "${workspace}/coraza/"
   rsync -a "${ROOT_DIR}/data/conf/" "${workspace}/data/conf/"
-  rsync -a "${ROOT_DIR}/data/rules/" "${workspace}/data/rules/"
   if [[ -d "${ROOT_DIR}/data/php-fpm" ]]; then
     rsync -a "${ROOT_DIR}/data/php-fpm/" "${workspace}/data/php-fpm/"
   else
@@ -283,13 +282,18 @@ put_task_config_via_preview_api() {
 seed_runtime_db_from_files() {
   local data_dir="$1"
   local binary_path="$2"
+  local stage_root=""
+
+  stage_root="$(mktemp -d "${data_dir}/.tmp-waf-import.XXXXXX")"
 
   (
     cd "${data_dir}"
+    DEST_DIR="${stage_root}/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh"
     WAF_CONFIG_FILE="conf/config.json" "${binary_path}" db-migrate
-    WAF_CONFIG_FILE="conf/config.json" "${binary_path}" db-import-waf-rule-assets
+    WAF_RULE_ASSET_FS_ROOT="${stage_root}" WAF_CONFIG_FILE="conf/config.json" "${binary_path}" db-import-waf-rule-assets
     WAF_CONFIG_FILE="conf/config.json" "${binary_path}" db-import
   )
+  rm -rf "${stage_root}"
 }
 
 cleanup() {
@@ -366,11 +370,9 @@ run_binary_smoke() {
     "${runtime_dir}/conf" \
     "${runtime_dir}/data/scheduled-tasks" \
     "${runtime_dir}/data/php-fpm" \
-    "${runtime_dir}/logs" \
-    "${runtime_dir}/rules"
+    "${runtime_dir}/logs"
   install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${runtime_dir}/bin/tukuyomi"
   rsync -a --exclude '*.bak' "${ROOT_DIR}/data/conf/" "${runtime_dir}/conf/"
-  rsync -a "${ROOT_DIR}/data/rules/" "${runtime_dir}/rules/"
   if [[ -d "${ROOT_DIR}/data/php-fpm" ]]; then
     rsync -a "${ROOT_DIR}/data/php-fpm/" "${runtime_dir}/data/php-fpm/"
   fi

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"tukuyomi/internal/config"
 )
 
 func TestValidateVhostConfigRawRequiresKnownRuntime(t *testing.T) {
@@ -591,6 +593,77 @@ func TestValidatePHPRuntimeInventoryRawLoadsBuiltArtifactModulesAndDefaults(t *t
 	}
 	if got, want := runtime.DefaultDisabledModules, []string{}; !slices.Equal(got, want) {
 		t.Fatalf("default_disabled_modules=%v want=%v", got, want)
+	}
+}
+
+func TestPHPRuntimeInventoryDBLoadsWithoutInventoryOrManifestJSON(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	tmp := t.TempDir()
+	inventoryPath := filepath.Join(tmp, "data", "php-fpm", "inventory.json")
+	if err := os.MkdirAll(filepath.Dir(inventoryPath), 0o755); err != nil {
+		t.Fatalf("mkdir inventory dir: %v", err)
+	}
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	binaryPath := writeTestPHPRuntimeArtifact(t, inventoryPath, "php83", testPHPRuntimeArtifactOptions{
+		DisplayName: "PHP 8.3",
+		Version:     "PHP 8.3.21 (fpm-fcgi)",
+		Modules:     []string{"mbstring", "fileinfo", "redis"},
+	})
+
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	oldInventoryPath := config.PHPRuntimeInventoryFile
+	config.PHPRuntimeInventoryFile = inventoryPath
+	t.Cleanup(func() {
+		config.PHPRuntimeInventoryFile = oldInventoryPath
+	})
+	if err := importPHPRuntimeInventoryStorage(); err != nil {
+		t.Fatalf("import php runtime inventory: %v", err)
+	}
+
+	runtimeDir := filepath.Dir(binaryPath)
+	for _, path := range []string{
+		inventoryPath,
+		filepath.Join(runtimeDir, "runtime.json"),
+		filepath.Join(runtimeDir, "modules.json"),
+	} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove %s: %v", path, err)
+		}
+	}
+
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+	raw, _, cfg, _ := PHPRuntimeInventorySnapshot()
+	if strings.Contains(raw, "runtime.json") || strings.Contains(raw, "modules.json") {
+		t.Fatalf("raw inventory should not reference deleted manifest paths: %s", raw)
+	}
+	if len(cfg.Runtimes) != 1 {
+		t.Fatalf("runtime count=%d want=1", len(cfg.Runtimes))
+	}
+	runtime := cfg.Runtimes[0]
+	if runtime.RuntimeID != "php83" {
+		t.Fatalf("runtime_id=%q want php83", runtime.RuntimeID)
+	}
+	if !runtime.Available {
+		t.Fatalf("runtime available=%v want=true (%s)", runtime.Available, runtime.AvailabilityMessage)
+	}
+	if got, want := runtime.Modules, []string{"mbstring", "fileinfo", "redis"}; !slices.Equal(got, want) {
+		t.Fatalf("modules=%v want=%v", got, want)
+	}
+	if _, err := os.Stat(inventoryPath); !os.IsNotExist(err) {
+		t.Fatalf("inventory json should not be recreated, stat err=%v", err)
 	}
 }
 

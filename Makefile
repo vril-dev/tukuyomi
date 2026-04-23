@@ -55,7 +55,7 @@ export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_API_KEY_PRIMAR
 
 .PHONY: \
 	help setup env-init crs-install crs-ensure \
-	go-test go-fuzz-short go-build db-migrate db-import build \
+	go-test go-fuzz-short go-build db-migrate db-import db-import-waf-rule-assets build \
 	release-linux-amd64 release-linux-arm64 release-linux-all \
 	ui-install ui-test ui-build ui-sync ui-build-sync \
 	ui-preview-up ui-preview-down ui-preview-smoke php-fpm-build php-fpm-copy php-fpm-prune php-fpm-remove php-fpm-up php-fpm-down php-fpm-reload php-fpm-test php-fpm-smoke \
@@ -68,16 +68,17 @@ export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_API_KEY_PRIMAR
 
 help:
 	@echo "Targets:"
-	@echo "  make setup                      Prepare local dev baseline (.env + CRS)"
+	@echo "  make setup                      Prepare local dev baseline (.env + DB migration + DB config/rule assets)"
 	@echo "  make env-init                   Create .env from .env.example if missing"
-	@echo "  make crs-install                Install OWASP CRS into data/rules/crs"
-	@echo "  make crs-ensure                 Install OWASP CRS only when data/rules/crs is missing"
+	@echo "  make crs-install                Run db-migrate, install OWASP CRS seed files, and import WAF rule assets into DB"
+	@echo "  make crs-ensure                 Run db-migrate, install CRS only when missing, and import WAF rule assets into DB"
 	@echo ""
 	@echo "  make go-test                    Run Go tests (coraza/src)"
 	@echo "  make go-fuzz-short              Run short native HTTP/1 fuzz passes"
 	@echo "  make go-build                   Build single binary into ./bin/$(APP_NAME)"
 	@echo "  make db-migrate                 Build binary and apply configured DB schema migrations"
-	@echo "  make db-import                  Import config.json/proxy.json seed files into DB"
+	@echo "  make db-import                  Import startup seed/export files into DB"
+	@echo "  make db-import-waf-rule-assets  Import base WAF and CRS rule/data assets into DB"
 	@echo "  make build                      One-shot build (ui-build-sync + go-build)"
 	@echo "  make release-linux-amd64        Build release tarball for linux/amd64 via docker buildx"
 	@echo "  make release-linux-arm64        Build release tarball for linux/arm64 via docker buildx"
@@ -221,21 +222,38 @@ preset-check:
 preset-check-minimal:
 	@$(MAKE) --no-print-directory preset-check PRESET=minimal
 
-crs-install:
-	./scripts/install_crs.sh
-
-crs-ensure:
+crs-install: db-migrate
 	@set -euo pipefail; \
-	crs_setup="data/rules/crs/crs-setup.conf"; \
-	crs_rule="$$(find data/rules/crs/rules -maxdepth 1 -type f -name '*.conf' -print -quit 2>/dev/null || true)"; \
+	workdir="$(DB_MIGRATE_WORKDIR)"; \
+	config_file="$${WAF_CONFIG_FILE:-$(DB_MIGRATE_CONFIG)}"; \
+	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" && -f "$(ROOT_DIR)/$$config_file" ]]; then \
+		config_file="$(ROOT_DIR)/$$config_file"; \
+	fi; \
+	DEST_DIR="$$workdir/rules/crs" ./scripts/install_crs.sh; \
+	echo "[crs-install] importing WAF rule assets into DB"; \
+	cd "$$workdir"; \
+	WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import-waf-rule-assets
+
+crs-ensure: db-migrate
+	@set -euo pipefail; \
+	workdir="$(DB_MIGRATE_WORKDIR)"; \
+	config_file="$${WAF_CONFIG_FILE:-$(DB_MIGRATE_CONFIG)}"; \
+	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" && -f "$(ROOT_DIR)/$$config_file" ]]; then \
+		config_file="$(ROOT_DIR)/$$config_file"; \
+	fi; \
+	crs_setup="$$workdir/rules/crs/crs-setup.conf"; \
+	crs_rule="$$(find "$$workdir/rules/crs/rules" -maxdepth 1 -type f -name '*.conf' -print -quit 2>/dev/null || true)"; \
 	if [[ ! -f "$$crs_setup" || -z "$$crs_rule" ]]; then \
-		echo "[crs-ensure] OWASP CRS is missing; running make crs-install"; \
-		$(MAKE) --no-print-directory crs-install; \
+		echo "[crs-ensure] OWASP CRS is missing; installing seed files"; \
+		DEST_DIR="$$workdir/rules/crs" ./scripts/install_crs.sh; \
 	else \
 		echo "[crs-ensure] OWASP CRS already installed"; \
-	fi
+	fi; \
+	echo "[crs-ensure] importing WAF rule assets into DB"; \
+	cd "$$workdir"; \
+	WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import-waf-rule-assets
 
-setup: env-init crs-install
+setup: env-init crs-install db-import
 
 go-test:
 	cd $(CORAZA_SRC) && $(GO) test ./...
@@ -288,6 +306,17 @@ db-import: db-migrate
 	echo "[db-import] workdir=$$workdir config=$$config_file"; \
 	cd "$$workdir"; \
 	WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import
+
+db-import-waf-rule-assets: db-migrate
+	@set -euo pipefail; \
+	workdir="$(DB_MIGRATE_WORKDIR)"; \
+	config_file="$${WAF_CONFIG_FILE:-$(DB_MIGRATE_CONFIG)}"; \
+	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" && -f "$(ROOT_DIR)/$$config_file" ]]; then \
+		config_file="$(ROOT_DIR)/$$config_file"; \
+	fi; \
+	echo "[db-import-waf-rule-assets] workdir=$$workdir config=$$config_file"; \
+	cd "$$workdir"; \
+	WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import-waf-rule-assets
 
 build: ui-build-sync go-build
 

@@ -116,3 +116,31 @@ func newUpstreamHealthMonitorForTest(t *testing.T, cfg ProxyRulesConfig) *upstre
 	}
 	return tracker
 }
+
+func importProxyRuntimeDBForTest(t *testing.T, raw string) ProxyRulesConfig {
+	t.Helper()
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected db store")
+	}
+	prepared, err := prepareProxyRulesRaw(raw)
+	if err != nil {
+		t.Fatalf("prepare proxy rules: %v", err)
+	}
+	if _, err := store.writeProxyConfigVersion("", prepared.cfg, configVersionSourceImport, "", "test proxy import", 0); err != nil {
+		t.Fatalf("write proxy config: %v", err)
+	}
+	seedUpstreamRuntimeDBForTest(t, prepared.cfg)
+	return prepared.cfg
+}
+
+func seedUpstreamRuntimeDBForTest(t *testing.T, cfg ProxyRulesConfig) {
+	t.Helper()
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected db store")
+	}
+	if _, _, err := store.writeUpstreamRuntimeConfigVersion("", upstreamRuntimeFile{}, configuredManagedBackendKeys(cfg), configVersionSourceImport, "", "test upstream runtime import", 0); err != nil {
+		t.Fatalf("write upstream runtime config: %v", err)
+	}
+}

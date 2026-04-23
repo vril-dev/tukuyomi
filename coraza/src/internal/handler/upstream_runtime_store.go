@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
@@ -162,7 +161,7 @@ func snapshotUpstreamRuntimeFile(cfg ProxyRulesConfig) (string, string, upstream
 	return string(payload), bypassconf.ComputeETag(payload), file, nil
 }
 
-func persistUpstreamRuntimeFile(cfg ProxyRulesConfig, file upstreamRuntimeFile) (string, string, upstreamRuntimeFile, error) {
+func persistUpstreamRuntimeFile(cfg ProxyRulesConfig, file upstreamRuntimeFile, expectedETag string) (string, string, upstreamRuntimeFile, error) {
 	path := managedUpstreamRuntimePath()
 	normalized, err := normalizeUpstreamRuntimeFile(file, configuredManagedBackendKeys(cfg))
 	if err != nil {
@@ -173,11 +172,15 @@ func persistUpstreamRuntimeFile(cfg ProxyRulesConfig, file upstreamRuntimeFile) 
 		return "", "", upstreamRuntimeFile{}, err
 	}
 	if store := getLogsStatsStore(); store != nil {
-		etag := bypassconf.ComputeETag(payload)
-		if err := store.UpsertConfigBlob(upstreamRuntimeConfigBlobKey, payload, etag, time.Now().UTC()); err != nil {
+		rec, normalized, err := store.writeUpstreamRuntimeConfigVersion(expectedETag, normalized, configuredManagedBackendKeys(cfg), configVersionSourceApply, "", "upstream runtime update", 0)
+		if err != nil {
 			return "", "", upstreamRuntimeFile{}, err
 		}
-		return string(payload), etag, normalized, nil
+		payload, err = MarshalUpstreamRuntimeJSON(normalized)
+		if err != nil {
+			return "", "", upstreamRuntimeFile{}, err
+		}
+		return string(payload), rec.ETag, normalized, nil
 	}
 	if strings.TrimSpace(path) != "" {
 		if err := ensureUpstreamRuntimeFile(path); err != nil {
@@ -191,60 +194,45 @@ func persistUpstreamRuntimeFile(cfg ProxyRulesConfig, file upstreamRuntimeFile) 
 }
 
 func snapshotUpstreamRuntimeDB(store *wafEventStore, seedPath string, knownKeys map[string]struct{}) (string, string, upstreamRuntimeFile, error) {
-	dbRaw, dbETag, found, err := store.GetConfigBlob(upstreamRuntimeConfigBlobKey)
+	file, rec, found, err := store.loadActiveUpstreamRuntimeConfig(knownKeys)
 	if err != nil {
 		return "", "", upstreamRuntimeFile{}, err
 	}
 	if found {
+		if upstreamRuntimeConfigHash(file) != rec.ContentHash {
+			nextRec, normalized, err := store.writeUpstreamRuntimeConfigVersion(rec.ETag, file, knownKeys, configVersionSourceApply, "", "upstream runtime prune", 0)
+			if err != nil {
+				return "", "", upstreamRuntimeFile{}, err
+			}
+			rec = nextRec
+			file = normalized
+		}
+		payload, err := MarshalUpstreamRuntimeJSON(file)
+		if err != nil {
+			return "", "", upstreamRuntimeFile{}, err
+		}
+		return string(payload), rec.ETag, file, nil
+	}
+	if dbRaw, _, legacyFound, err := store.GetConfigBlob(upstreamRuntimeConfigBlobKey); err != nil {
+		return "", "", upstreamRuntimeFile{}, err
+	} else if legacyFound {
 		parsed, err := ParseUpstreamRuntimeRaw(string(dbRaw))
 		if err != nil {
 			return "", "", upstreamRuntimeFile{}, err
 		}
-		normalized, err := normalizeUpstreamRuntimeFile(parsed, knownKeys)
+		rec, normalized, err := store.writeUpstreamRuntimeConfigVersion("", parsed, knownKeys, configVersionSourceImport, "", "legacy upstream runtime import", 0)
 		if err != nil {
 			return "", "", upstreamRuntimeFile{}, err
 		}
+		_ = store.DeleteConfigBlob(upstreamRuntimeConfigBlobKey)
 		payload, err := MarshalUpstreamRuntimeJSON(normalized)
 		if err != nil {
 			return "", "", upstreamRuntimeFile{}, err
 		}
-		etag := bypassconf.ComputeETag(payload)
-		if strings.TrimSpace(dbETag) != "" && string(dbRaw) == string(payload) {
-			etag = dbETag
-		}
-		if strings.TrimSpace(dbETag) == "" || string(dbRaw) != string(payload) {
-			if err := store.UpsertConfigBlob(upstreamRuntimeConfigBlobKey, payload, etag, time.Now().UTC()); err != nil {
-				return "", "", upstreamRuntimeFile{}, err
-			}
-		}
-		return string(payload), etag, normalized, nil
+		return string(payload), rec.ETag, normalized, nil
 	}
 
-	var raw []byte
-	if strings.TrimSpace(seedPath) != "" {
-		fileRaw, _, err := readFileMaybe(seedPath)
-		if err != nil {
-			return "", "", upstreamRuntimeFile{}, err
-		}
-		raw = fileRaw
-	}
-	parsed, err := ParseUpstreamRuntimeRaw(string(raw))
-	if err != nil {
-		return "", "", upstreamRuntimeFile{}, err
-	}
-	normalized, err := normalizeUpstreamRuntimeFile(parsed, knownKeys)
-	if err != nil {
-		return "", "", upstreamRuntimeFile{}, err
-	}
-	payload, err := MarshalUpstreamRuntimeJSON(normalized)
-	if err != nil {
-		return "", "", upstreamRuntimeFile{}, err
-	}
-	etag := bypassconf.ComputeETag(payload)
-	if err := store.UpsertConfigBlob(upstreamRuntimeConfigBlobKey, payload, etag, time.Now().UTC()); err != nil {
-		return "", "", upstreamRuntimeFile{}, err
-	}
-	return string(payload), etag, normalized, nil
+	return "", "", upstreamRuntimeFile{}, fmt.Errorf("normalized upstream runtime config missing in db; run make db-import before removing seed files")
 }
 
 func persistUpstreamRuntimeRaw(raw string) error {
@@ -253,11 +241,8 @@ func persistUpstreamRuntimeRaw(raw string) error {
 		if err != nil {
 			return err
 		}
-		payload, err := MarshalUpstreamRuntimeJSON(file)
-		if err != nil {
-			return err
-		}
-		return store.UpsertConfigBlob(upstreamRuntimeConfigBlobKey, payload, bypassconf.ComputeETag(payload), time.Now().UTC())
+		_, _, err = store.writeUpstreamRuntimeConfigVersion("", file, configuredManagedBackendKeys(currentProxyConfig()), configVersionSourceRollback, "", "upstream runtime restore", 0)
+		return err
 	}
 	path := managedUpstreamRuntimePath()
 	if strings.TrimSpace(path) == "" {

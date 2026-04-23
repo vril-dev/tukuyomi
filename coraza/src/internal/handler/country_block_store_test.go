@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 )
@@ -63,7 +62,7 @@ func TestParseCountryBlockRaw_Invalid(t *testing.T) {
 	}
 }
 
-func TestSyncCountryBlockStorage_SeedsDBFromFileWhenMissingBlob(t *testing.T) {
+func TestImportPolicyJSONStorage_SeedsCountryBlockDBFromFile(t *testing.T) {
 	restore := saveCountryBlockStateForTest()
 	defer restore()
 
@@ -85,27 +84,31 @@ func TestSyncCountryBlockStorage_SeedsDBFromFileWhenMissingBlob(t *testing.T) {
 		_ = InitLogsStatsStore(false, "", 0)
 	})
 
-	if err := SyncCountryBlockStorage(); err != nil {
-		t.Fatalf("sync country-block storage: %v", err)
+	if err := importPolicyJSONStorage(countryBlockConfigBlobKey, path, normalizeCountryBlockPolicyRaw, "country block seed import"); err != nil {
+		t.Fatalf("import country-block storage: %v", err)
 	}
 
 	store := getLogsStatsStore()
 	if store == nil {
 		t.Fatal("expected sqlite store")
 	}
-	gotRaw, _, found, err := store.GetConfigBlob(countryBlockConfigBlobKey)
+	gotRaw, _, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(countryBlockConfigBlobKey))
+	if err != nil || !found {
+		t.Fatalf("expected country-block normalized rows to be seeded found=%v err=%v", found, err)
+	}
+	file, err := ParseCountryBlockRaw(string(gotRaw))
 	if err != nil {
-		t.Fatalf("get config blob: %v", err)
+		t.Fatalf("seeded country-block invalid: %v", err)
 	}
-	if !found {
-		t.Fatal("expected country-block config blob to be seeded")
+	if got := flattenCountryBlockCodes(file); !reflect.DeepEqual(got, []string{"JP", "US"}) {
+		t.Fatalf("seeded country-block=%v", got)
 	}
-	if strings.TrimSpace(string(gotRaw)) != strings.TrimSpace(raw) {
-		t.Fatalf("seeded blob mismatch:\n got=%s\nwant=%s", string(gotRaw), raw)
+	if _, _, found, err := store.GetConfigBlob(countryBlockConfigBlobKey); err != nil || found {
+		t.Fatalf("legacy country-block blob found=%v err=%v", found, err)
 	}
 }
 
-func TestSyncCountryBlockStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
+func TestSyncCountryBlockStorage_ImportsLegacyBlobAndAppliesRuntime(t *testing.T) {
 	restore := saveCountryBlockStateForTest()
 	defer restore()
 
@@ -140,18 +143,13 @@ func TestSyncCountryBlockStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
 		t.Fatalf("sync country-block storage: %v", err)
 	}
 
-	gotFileRaw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read country-block file: %v", err)
-	}
-	if strings.TrimSpace(string(gotFileRaw)) != strings.TrimSpace(dbRaw) {
-		t.Fatalf("file should be restored from db blob:\n got=%s\nwant=%s", string(gotFileRaw), dbRaw)
-	}
-
 	gotBlocked := GetBlockedCountries()
 	wantBlocked := []string{"UNKNOWN", "US"}
 	if !reflect.DeepEqual(gotBlocked, wantBlocked) {
 		t.Fatalf("blocked countries=%v want=%v", gotBlocked, wantBlocked)
+	}
+	if _, _, found, err := store.GetConfigBlob(countryBlockConfigBlobKey); err != nil || found {
+		t.Fatalf("legacy country-block blob found=%v err=%v", found, err)
 	}
 }
 

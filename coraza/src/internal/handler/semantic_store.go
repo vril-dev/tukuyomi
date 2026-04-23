@@ -144,13 +144,24 @@ func InitSemantic(path string) error {
 	if target == "" {
 		return fmt.Errorf("semantic path is empty")
 	}
-	if err := ensureSemanticFile(target); err != nil {
-		return err
-	}
-
 	semanticMu.Lock()
 	semanticPath = target
 	semanticMu.Unlock()
+
+	if store := getLogsStatsStore(); store != nil {
+		raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(semanticConfigBlobKey), normalizeSemanticPolicyRaw, "semantic rules")
+		if err != nil {
+			return fmt.Errorf("read semantic config db: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("normalized semantic config missing in db; run make db-import before removing seed files")
+		}
+		return applySemanticPolicyRaw(raw)
+	}
+
+	if err := ensureSemanticFile(target); err != nil {
+		return err
+	}
 
 	return ReloadSemantic()
 }

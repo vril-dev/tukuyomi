@@ -16,7 +16,7 @@ This document covers the `/scheduled-tasks` workflow for command-line jobs manag
 
 ## Data Layout
 
-Persisted task definitions live in DB blob `scheduled_tasks`.
+Persisted task definitions live in the normalized `scheduled_tasks` DB domain.
 `conf/scheduled-tasks.json` is an empty-DB seed/export file, not the runtime
 source of truth after bootstrap.
 
@@ -81,7 +81,7 @@ That command:
 
 - loads `conf/config.json`
 - opens the configured DB store
-- reads DB blob `scheduled_tasks` directly, seeding from `conf/scheduled-tasks.json` only when the blob is missing
+- reads the normalized `scheduled_tasks` DB domain directly, seeding from `conf/scheduled-tasks.json` only when the domain is missing
 - executes only jobs whose cron expression matches the current minute
 - runs each task through `/bin/sh -lc`
 - records state/logs under `data/scheduled-tasks/`
@@ -170,7 +170,7 @@ make ui-preview-down
 
 Preview uses `conf/scheduled-tasks.ui-preview.json`, so edits made through the preview UI do not mutate the normal DB-backed scheduled-task config.
 
-By default, `ui-preview-up` rewrites that preview config to `{"tasks":[]}` and removes the isolated preview SQLite DB on each start, so previously saved preview tasks and DB blobs do not keep running by accident.
+By default, `ui-preview-up` rewrites that preview config to `{"tasks":[]}` and removes the isolated preview SQLite DB on each start, so previously saved preview tasks and DB rows do not keep running by accident.
 
 If you want preview edits to survive `down/up`, opt into retained preview files:
 

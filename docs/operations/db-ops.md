@@ -13,9 +13,25 @@ make db-migrate
 ```
 
 The target builds the local binary, loads the same `config.json` used by normal
-startup, applies embedded SQL migrations for the configured driver, records
-applied migration file names in `schema_migrations`, and exits without starting
-listeners or runtime sync loops.
+startup, applies embedded SQL migrations for the configured driver through
+golang-migrate, records the current schema version and dirty flag in
+`schema_migrations`, and exits without starting listeners or runtime sync loops.
+
+Install or refresh CRS after migrations so WAF rule assets can be imported into
+the DB:
+
+```bash
+make crs-install
+```
+
+`make crs-install` runs after `db-migrate`, installs CRS seed files under the
+configured workdir, and imports base WAF plus CRS `.conf` / `.data` assets into
+DB `waf_rule_assets`. To refresh DB rule assets from existing seed files without
+downloading CRS again, use:
+
+```bash
+make db-import-waf-rule-assets
+```
 
 Import the current bootstrap/export files after migrations when preparing a DB
 from file material:
@@ -24,9 +40,12 @@ from file material:
 make db-import
 ```
 
-`make db-import` runs `db-migrate` first, then imports `config.json` into
-`config_blobs.app_config` and `proxy.json` into `config_blobs.proxy_rules`.
-After those blobs exist, DB content is authoritative.
+`make db-import` runs `db-migrate` first, then imports seed/export material into
+versioned normalized DB tables. `config.json` supplies `app_config` values except
+the DB bootstrap fields, `proxy.json` supplies proxy config, and runtime files
+such as `sites`, `vhosts`, `scheduled_tasks`, `upstream_runtime`, and PHP-FPM
+runtime inventory are imported into their own feature tables. After import,
+those DB rows are authoritative.
 
 ## Driver Selection
 
@@ -44,7 +63,7 @@ rejected during config validation.
 
 `db_driver`, `db_path`, and `db_dsn` are always read from bootstrap
 `config.json` before DB is opened. They are not taken from `app_config`, because
-that would let a DB blob move the process to a different DB after the
+that would let a DB-stored value move the process to a different DB after the
 connection has already been chosen.
 
 Default SQLite path:
@@ -68,55 +87,81 @@ Ingested WAF log records (`waf-events.ndjson`) used by:
 - `/tukuyomi-api/logs/download?src=waf`
 - FP tuner latest-event lookup
 
-### 2. `config_blobs`
+### 2. Versioned runtime config tables
 
-Authoritative DB copies of admin-editable configuration used for startup sync,
-runtime reloads, export/import materialization, and multi-instance consistency.
+Operator-owned runtime config uses immutable versions:
 
-Current blob keys:
+- `config_domains`
+- `config_versions`
+- `config_rollbacks`
 
-- `app_config` (`config.json` minus bootstrap DB connection fields)
-- `proxy_rules` (`proxy.json`)
-- `cache_rules` (`cache-rules.json`)
-- `cache_store` (`cache-store.json`)
-- `rate_limit_rules` (`rate-limit.json`)
-- `country_block_rules` (`country-block.json`)
-- `bypass_rules` (`waf-bypass.json`)
-- `bot_defense_rules` (`bot-defense.json`)
-- `semantic_rules` (`semantic.json`)
-- `notification_rules` (`notifications.json`)
-- `ip_reputation_rules` (`ip-reputation.json`)
-- `sites` (`sites.json`)
-- `scheduled_tasks` (`scheduled-tasks.json`)
-- `upstream_runtime` (`upstream-runtime.json`)
-- `crs_disabled_rules` (`crs-disabled.conf`)
-- `rule_file_sha256:<sha256(path)>` (base rule files listed in `WAF_RULES_FILE`, for example `rules/tukuyomi.conf`)
+Feature-owned rows carry `version_id`. Current normalized domains include:
 
-Bootstrap/import files that intentionally remain on disk:
+- `app_config_values`, `app_config_lists`, `app_config_list_values`
+- `proxy_*`
+- `sites`, `site_hosts`, `site_tls`
+- `vhosts`, `vhost_*`
+- `scheduled_tasks`, `scheduled_task_env`, `scheduled_task_args`
+- `upstream_runtime_overrides`
+- `cache_rule_scopes`, `cache_rules`, `cache_rule_methods`,
+  `cache_rule_vary_headers`
+- `bypass_scopes`, `bypass_entries`
+- `country_block_scopes`, `country_block_countries`
+- `rate_limit_scopes`, `rate_limit_scope_values`, `rate_limit_rules`,
+  `rate_limit_rule_methods`
+- `bot_defense_scopes`, `bot_defense_scope_values`,
+  `bot_defense_path_policies`, `bot_defense_path_policy_prefixes`
+- `semantic_scopes`, `semantic_scope_values`
+- `notification_settings`, `notification_triggers`,
+  `notification_security_sources`, `notification_sinks`,
+  `notification_sink_headers`, `notification_sink_recipients`
+- `ip_reputation_scopes`, `ip_reputation_scope_values`
+- `response_cache_config`
+- `crs_disabled_rules`
+- `override_rules`, `override_rule_versions`
+- `php_runtime_inventory`, `php_runtime_modules`,
+  `php_runtime_default_disabled_modules`
 
-- `config.json`: DB connection bootstrap (`storage.db_driver`, `storage.db_path`, `storage.db_dsn`) plus seed/export material for `app_config`
-- `proxy.json`: seed/import/export material for `proxy_rules`
+### 3. `config_blobs`
 
-Those files are not runtime authority after their DB blobs exist.
+`config_blobs` is no longer the authority for normalized runtime or policy
+config domains. It remains only for legacy import compatibility and for content
+artifacts that are not configuration authority.
 
-### 3. `schema_migrations`
+Remaining blob examples:
 
-Applied embedded SQL migration file names. This table is operational metadata
-for `make db-migrate` and startup's defensive schema check.
+- `waf_rule_assets`, `waf_rule_asset_contents` (base WAF and CRS rule/data assets)
+
+The only file required by production startup after import is:
+
+- `config.json`: DB connection bootstrap (`storage.db_driver`,
+  `storage.db_path`, `storage.db_dsn`) plus seed/export material for
+  `app_config`
+
+Other seed/export files may be kept for operator workflows but are not runtime
+authority after their normalized DB rows exist. After `make db-migrate`,
+`make crs-install`, and `make db-import`, production runtime can remove
+`data/conf/*.json` except `data/conf/config.json`, `data/conf/rules/**`,
+`data/rules/**`, and PHP-FPM JSON manifests such as `inventory.json`,
+`vhosts.json`, `runtime.json`, and `modules.json`. GeoIP files are separate
+operator-managed runtime artifacts.
+
+### 4. `schema_migrations`
+
+The golang-migrate schema version table. It stores the current migration
+`version` and `dirty` state for `make db-migrate` and startup's defensive schema
+check.
 
 Other configured JSON/text files are not a runtime storage backend. They are
 initial seed/import/export artifacts:
 
-- if the DB blob is missing, startup seeds DB from the current configured file
+- if the normalized domain is missing, startup imports DB rows from the current
+  configured seed/export file
 - if `app_config` exists, startup applies it after the initial DB open while
   preserving DB connection fields from bootstrap `config.json`
-- if `proxy_rules` exists, startup loads proxy routing from DB instead of
-  `proxy.json`
-- if a DB blob exists for DB-native runtimes such as `sites`,
-  `scheduled_tasks`, or `upstream_runtime`, startup loads DB content directly
-  without restoring a JSON file first
-- file restoration is only a compatibility step for older subsystems that still
-  require a file-shaped parser/watcher boundary
+- proxy, sites, vhosts, scheduled tasks, upstream runtime, policy domains, WAF
+  assets, response cache, and PHP-FPM inventory load DB content directly without
+  restoring JSON files first
 - if sync, parsing, or reload fails, startup fails instead of falling back
 
 If `db_sync_interval_sec >= 1`, each node also runs periodic DB-to-runtime

@@ -34,7 +34,7 @@ Recommended order:
   "hosts": {
     "example.com": {
       "entries": [
-        { "path": "/search", "extra_rule": "conf/rules/search-endpoint.conf" }
+        { "path": "/search", "extra_rule": "conf/rules/orders-preview.conf" }
       ]
     }
   }
@@ -43,7 +43,7 @@ Recommended order:
 
 Host scope precedence is exact `host:port`, then bare `host`, then `default`. A host-specific scope replaces the default scope; it does not merge with it.
 
-`search-endpoint.conf` example:
+`orders-preview.conf` example:
 
 ```conf
 SecRuleEngine On
@@ -54,7 +54,7 @@ SecRule ARGS:q "@rx (?i)(<script|union([[:space:]]+all)?[[:space:]]+select|bench
 
 ## 4. Review CRS Settings
 
-1. Check the Paranoia Level in `data/rules/crs/crs-setup.conf`.
+1. Check the Paranoia Level through the DB-backed CRS setup asset imported from `rules/crs/crs-setup.conf`.
 2. Start from `PL1` during initial rollout and raise it gradually.
 3. Confirm that the anomaly threshold has not been lowered too aggressively.
 

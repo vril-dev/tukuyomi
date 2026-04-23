@@ -260,12 +260,11 @@ func ApplyFPTuning(c *gin.Context) {
 		simulate = *in.Simulate
 	}
 
-	curRaw, err := os.ReadFile(targetPath)
+	curRaw, curETag, domainETag, dbBacked, err := loadEditableWAFRuleAsset(targetPath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	curETag := bypassconf.ComputeETag(curRaw)
 	if ifMatch := c.GetHeader("If-Match"); ifMatch != "" && ifMatch != curETag {
 		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
 		return
@@ -329,6 +328,53 @@ func ApplyFPTuning(c *gin.Context) {
 			"hot_reloaded":     false,
 			"reloaded_file":    targetPath,
 			"preview_etag":     bypassconf.ComputeETag(nextRaw),
+		})
+		return
+	}
+
+	if dbBacked {
+		rec, asset, err := writeWAFRuleAssetUpdate(targetPath, nextRaw, domainETag, "fp tuner apply")
+		if err != nil {
+			appendFPTunerAudit(c, "fp_tuner_apply_error", map[string]any{
+				"proposal_id":   in.Proposal.ID,
+				"proposal_hash": proposalHash(in.Proposal),
+				"target_path":   targetPath,
+				"simulate":      false,
+				"error":         err.Error(),
+			})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if err := waf.ReloadBaseWAF(); err != nil {
+			_, _, _ = writeWAFRuleAssetUpdate(targetPath, curRaw, rec.ETag, "fp tuner rollback after reload failure")
+			_ = waf.ReloadBaseWAF()
+			appendFPTunerAudit(c, "fp_tuner_apply_error", map[string]any{
+				"proposal_id":   in.Proposal.ID,
+				"proposal_hash": proposalHash(in.Proposal),
+				"target_path":   targetPath,
+				"simulate":      false,
+				"error":         fmt.Sprintf("reload failed and rollback applied: %v", err),
+			})
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": fmt.Sprintf("reload failed and rollback applied: %v", err),
+			})
+			return
+		}
+
+		appendFPTunerAudit(c, "fp_tuner_apply_success", map[string]any{
+			"proposal_id":   in.Proposal.ID,
+			"proposal_hash": proposalHash(in.Proposal),
+			"target_path":   targetPath,
+			"simulate":      false,
+			"hot_reloaded":  true,
+		})
+		c.JSON(http.StatusOK, gin.H{
+			"ok":               true,
+			"contract_version": "fp_tuner.v1",
+			"etag":             asset.ETag,
+			"hot_reloaded":     true,
+			"reloaded_file":    targetPath,
+			"saved_at":         configVersionSavedAt(rec),
 		})
 		return
 	}

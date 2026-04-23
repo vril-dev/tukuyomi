@@ -6,8 +6,8 @@ lived inline in `README.md`.
 ## Runtime Configuration
 
 Use `.env` only for Docker/runtime wiring. `data/conf/config.json` is the DB
-connection bootstrap; after DB opens, application and proxy behavior are loaded
-from DB `config_blobs`.
+connection bootstrap; after DB opens, application, proxy, runtime, and policy
+behavior are loaded from normalized DB tables.
 
 ### Docker / Local MySQL (Optional)
 
@@ -178,7 +178,9 @@ UI samples live under `docs/images/ui-samples/`.
 ### Startup
 
 ```bash
-make setup
+make env-init
+make db-migrate
+make crs-install
 make compose-up
 ```
 
@@ -228,7 +230,7 @@ Routing model:
 - `routes[]` are evaluated in ascending `priority` order with first-match semantics.
 - Selection order is:
   1. explicit `routes[]`
-  2. generated host fallback routes from the DB `sites` config blob
+  2. generated host fallback routes from the DB `sites` domain
   3. `default_route`
   4. `upstreams[]`
 - Host matching supports exact host and `*.example.com` wildcard host.
@@ -274,7 +276,7 @@ Only Tukuyomi's native proxy engine is supported. Changing it requires a process
 
 ### Runtime Backend Operations
 
-- DB blob `upstream_runtime` stores opt-in runtime overrides for materialized backend keys from `Proxy Rules > Upstreams`; `data/conf/upstream-runtime.json` is only an empty-DB seed/export path.
+- The normalized `upstream_runtime` DB domain stores opt-in runtime overrides for materialized backend keys from `Proxy Rules > Upstreams`; `data/conf/upstream-runtime.json` is only an empty-DB seed/export path.
 - `Backends` lists canonical backend objects, not backend pools.
 - `Backends` is the runtime operations panel for:
   - `enabled`
@@ -526,15 +528,14 @@ Main endpoint groups:
   "hosts": {
     "example.com": {
       "entries": [
-        { "path": "/search", "extra_rule": "conf/rules/search-endpoint.conf" }
+        { "path": "/search", "extra_rule": "conf/rules/orders-preview.conf" }
       ]
     }
   }
 }
 ```
 
-Managed `extra_rule` files belong under `conf/rules/*.conf` and are edited from the `Override Rules` page. They are not added to the base WAF rule set at startup; they are loaded only when a bypass entry references them.
-See `conf/waf-bypass.sample.json` for the bundled sample that references `conf/rules/search-endpoint.conf`.
+Managed `extra_rule` bodies are stored in DB `override_rules` and edited from the `Override Rules` page. `conf/rules/*.conf` is seed-only for importing a new DB. They are not added to the base WAF rule set at startup; they are loaded only when a bypass entry references their logical `extra_rule` path.
 Host scope precedence is exact `host:port`, then bare `host`, then `default`. Host-specific entries replace the default scope; they do not merge with it.
 
 ### Country Block
@@ -629,7 +630,7 @@ Capabilities include:
 
 ### Rules / CRS Editing
 
-- `/rules` edits active base rule files
+- `/rules` edits active DB-backed base WAF rule assets
 - `/rule-sets` toggles CRS files under `rules/crs/rules/*.conf`
 - successful saves hot-reload WAF
 - failed reloads auto-rollback
@@ -645,8 +646,10 @@ curl -s -H "X-API-Key: <your-api-key>" \
 
 ### Cache Feature
 
-Cache config is stored in `data/conf/cache-rules.json`. Internal cache store settings
-live in `data/conf/cache-store.json`.
+Cache rules and internal cache store settings are versioned in DB tables after
+seed/import. `data/conf/cache-rules.json` and `data/conf/cache-store.json` are
+seed/import material for an empty DB, not runtime authority once the normalized
+rows exist.
 
 Example:
 

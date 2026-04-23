@@ -38,11 +38,12 @@ family comparison.
 ## Rule Files and First Setup
 
 This repository intentionally does **not** bundle the full OWASP CRS files.
-It ships a minimal bootstrappable base rule file, `data/rules/tukuyomi.conf`.
+It ships a minimal bootstrappable base rule seed, `data/rules/tukuyomi.conf`.
 
-Fetch CRS first for normal runtime use:
+Prepare the DB first, then install CRS seed files and import WAF rule assets:
 
 ```bash
+make db-migrate
 make crs-install
 ```
 
@@ -54,15 +55,19 @@ make preset-apply PRESET=minimal
 make preset-check PRESET=minimal
 ```
 
-Before production use, replace the sample values in:
+Before first DB import, replace the sample values in any seed files you want to
+bootstrap from:
 
 - `data/conf/config.json` for DB connection bootstrap
 - `data/conf/proxy.json` as the initial proxy rules seed/import file
 - `data/conf/sites.json` as the initial site seed/import file when site ownership / TLS is enabled
-- `conf/scheduled-tasks.json` as the initial scheduled task seed/import file when scheduled tasks are enabled
+- `data/conf/scheduled-tasks.json` as the initial scheduled task seed/import file when scheduled tasks are enabled
 
-Then run `make db-migrate` and, when importing file material into a new DB,
-`make db-import` before starting production.
+Then run `make db-import` before starting production so the remaining config
+seeds are stored in the DB. `make crs-install` already runs after
+`make db-migrate` and imports WAF/CRS rule assets into DB. After import,
+production startup requires `data/conf/config.json` for DB bootstrap plus the DB
+rows; the other seed JSON/rule files are not runtime authority.
 
 ## Quick Start
 
@@ -75,8 +80,9 @@ make preset-apply PRESET=minimal
 make ui-preview-up
 ```
 
-`make ui-preview-up` runs `make crs-install` automatically on first launch when
-`data/rules/crs` is not installed yet.
+`make ui-preview-up` runs the CRS ensure flow automatically; that flow runs
+`make db-migrate`, installs CRS seed files when missing, and imports WAF rule
+assets into DB.
 
 Then open:
 
@@ -94,20 +100,26 @@ that DB plus preview config files on each start. If you use
 
 - `.env`: Docker-only runtime wiring
 - `data/conf/config.json`: DB connection bootstrap and app config seed/export material
-- DB `config_blobs.app_config`: global runtime, listener, admin, storage policy, and path config
-- DB `config_blobs.proxy_rules`: live proxy transport and routing config
+- DB `app_config_*`: global runtime, listener, admin, storage policy, and path config
+- DB `proxy_*`: live proxy transport and routing config
 - `data/conf/proxy.json`: proxy rules seed/import/export material
-- DB `config_blobs.proxy_rules.backend_pools[]`: route-scoped balancing groups built from named upstream members
+- DB `proxy_backend_pools` / `proxy_backend_pool_members`: route-scoped balancing groups built from named upstream members
 - `data/conf/upstream-runtime.json`: seed/import/export material for opt-in runtime overrides from `Proxy Rules > Upstreams`
 - `data/conf/sites.json`: site ownership and TLS binding seed/import/export material
-- `data/conf/rules/*.conf`: managed bypass `extra_rule` files
-- `data/php-fpm/vhosts.json`: PHP-FPM vhost definitions, internal `generated_target`, and canonical `linked_upstream_name`
-- `conf/scheduled-tasks.json`: scheduled task seed/import/export material
+- DB `vhosts` / `vhost_*`: live vhost and PHP-FPM vhost config
+- DB `waf_rule_assets`: base WAF and CRS rule/data assets
+- DB `override_rules`: managed bypass `extra_rule` rule bodies
+- `data/conf/rules/*.conf`: optional seed files for managed bypass overrides
+- DB `php_runtime_inventory` / `php_runtime_modules`: PHP-FPM runtime inventory and module metadata
+- `data/php-fpm/inventory.json` and `data/php-fpm/vhosts.json`: PHP-FPM seed/import/export material
+- `data/conf/scheduled-tasks.json`: scheduled task seed/import/export material
 
-Managed bypass override rules under `data/conf/rules/*.conf` are edited from
-`Override Rules`. They are not loaded into the base WAF rule set at
-normal startup; they are loaded only when `waf-bypass.json` references them via
-`extra_rule`.
+Base WAF/CRS assets and managed bypass overrides are DB-backed after import.
+The configured paths remain logical asset names and compatibility references;
+runtime does not require the seed files to be present once the DB has active
+generations. The same applies to startup, policy, site, vhost, scheduled task,
+upstream runtime, response cache, and PHP-FPM inventory domains after
+`make db-import`.
 
 For the detailed operator model, see:
 

@@ -140,6 +140,7 @@ const JA_STRINGS: Record<string, string> = {
   File: "ファイル",
   Path: "パス",
   "No CRS rule files found.": "CRSルールファイルが見つかりません。",
+  "Edit the DB-backed base WAF rule assets loaded into the active rule set.": "active rule set に読み込まれる DB-backed base WAF rule asset を編集します。",
   Total: "総数",
   "Last saved: {time}": "最終保存: {time}",
   Loading: "Loading",

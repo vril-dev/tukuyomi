@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"bytes"
 	"fmt"
 	"net/http"
 	"os"
@@ -22,6 +21,10 @@ const overrideRuleConfigBlobPrefix = "override_rule:"
 type overrideRuleBody struct {
 	Name string `json:"name"`
 	Raw  string `json:"raw"`
+}
+
+func init() {
+	waf.SetOverrideRuleLoader(loadManagedOverrideRuleForWAF)
 }
 
 func GetManagedOverrideRules(c *gin.Context) {
@@ -71,13 +74,47 @@ func PutManagedOverrideRule(c *gin.Context) {
 	}
 
 	store := getLogsStatsStore()
-	curRaw, curETag, _, _, err := managedOverrideRuleCurrent(name)
+	_, curETag, _, _, err := managedOverrideRuleCurrent(name)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	if ifMatch := c.GetHeader("If-Match"); ifMatch != "" && ifMatch != curETag {
 		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
+		return
+	}
+	now := time.Now().UTC()
+	newETag := bypassconf.ComputeETag([]byte(in.Raw))
+
+	if store != nil {
+		rules, rec, found, err := loadRuntimeManagedOverrideRules(store)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		byName := managedOverrideRuleMap(rules)
+		byName[name] = managedOverrideRuleVersion{Name: name, Raw: []byte(in.Raw), ETag: newETag}
+		next := make([]managedOverrideRuleVersion, 0, len(byName))
+		for _, rule := range byName {
+			next = append(next, rule)
+		}
+		expectedDomainETag := ""
+		if found {
+			expectedDomainETag = rec.ETag
+		}
+		if _, _, err := store.writeManagedOverrideRulesVersion(expectedDomainETag, next, configVersionSourceApply, "", "override rule update", 0); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		waf.InvalidateOverrideWAF(target)
+		c.JSON(http.StatusOK, gin.H{
+			"ok":       true,
+			"name":     name,
+			"path":     target,
+			"etag":     newETag,
+			"saved":    true,
+			"saved_at": now.Format(time.RFC3339Nano),
+		})
 		return
 	}
 
@@ -90,16 +127,6 @@ func PutManagedOverrideRule(c *gin.Context) {
 		return
 	}
 	waf.InvalidateOverrideWAF(target)
-
-	now := time.Now().UTC()
-	newETag := bypassconf.ComputeETag([]byte(in.Raw))
-	if store != nil {
-		if err := store.UpsertConfigBlob(overrideRuleConfigBlobKey(name), []byte(in.Raw), newETag, now); err != nil {
-			_ = rollbackRuleFile(target, len(curRaw) > 0, curRaw)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("db sync failed and rollback applied: %v", err)})
-			return
-		}
-	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"ok":       true,
@@ -128,12 +155,38 @@ func DeleteManagedOverrideRule(c *gin.Context) {
 	}
 
 	store := getLogsStatsStore()
+	var next []managedOverrideRuleVersion
+	var expectedDomainETag string
 	if store != nil {
-		if err := store.DeleteConfigBlob(overrideRuleConfigBlobKey(name)); err != nil {
+		rules, rec, _, err := loadRuntimeManagedOverrideRules(store)
+		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		expectedDomainETag = rec.ETag
+		byName := managedOverrideRuleMap(rules)
+		delete(byName, name)
+		next = make([]managedOverrideRuleVersion, 0, len(byName))
+		for _, rule := range byName {
+			next = append(next, rule)
+		}
 	}
+	if store != nil {
+		if _, _, err := store.writeManagedOverrideRulesVersion(expectedDomainETag, next, configVersionSourceApply, "", "override rule delete", 0); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		_ = os.Remove(target)
+		waf.InvalidateOverrideWAF(target)
+		c.JSON(http.StatusOK, gin.H{
+			"ok":      true,
+			"name":    name,
+			"path":    target,
+			"deleted": true,
+		})
+		return
+	}
+
 	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -153,76 +206,8 @@ func SyncManagedOverrideRulesStorage() error {
 	if store == nil {
 		return nil
 	}
-
-	fsNames, err := listManagedOverrideRuleNamesFromFS()
-	if err != nil {
-		return err
-	}
-	fsSet := make(map[string]struct{}, len(fsNames))
-	for _, name := range fsNames {
-		fsSet[name] = struct{}{}
-	}
-
-	blobs, err := store.ListConfigBlobs(overrideRuleConfigBlobPrefix)
-	if err != nil {
-		return err
-	}
-	blobByName := make(map[string]configBlobRecord, len(blobs))
-	for _, blob := range blobs {
-		name := strings.TrimPrefix(blob.ConfigKey, overrideRuleConfigBlobPrefix)
-		if _, _, err := managedOverrideRuleTarget(name); err != nil {
-			continue
-		}
-		blobByName[name] = blob
-	}
-
-	for _, name := range fsNames {
-		target := managedOverrideRulePath(name)
-		fileRaw, hadFile, err := readFileMaybe(target)
-		if err != nil {
-			return err
-		}
-		blob, found := blobByName[name]
-		if found {
-			if strings.TrimSpace(blob.ETag) == "" {
-				blob.ETag = bypassconf.ComputeETag(blob.Raw)
-				if err := store.UpsertConfigBlob(overrideRuleConfigBlobKey(name), blob.Raw, blob.ETag, time.Now().UTC()); err != nil {
-					return err
-				}
-			}
-			if !hadFile || !bytes.Equal(fileRaw, blob.Raw) {
-				if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-					return err
-				}
-				if err := bypassconf.AtomicWriteWithBackup(target, blob.Raw); err != nil {
-					return err
-				}
-				waf.InvalidateOverrideWAF(target)
-			}
-			continue
-		}
-		if hadFile && len(fileRaw) > 0 {
-			if err := store.UpsertConfigBlob(overrideRuleConfigBlobKey(name), fileRaw, bypassconf.ComputeETag(fileRaw), time.Now().UTC()); err != nil {
-				return err
-			}
-		}
-	}
-
-	for name, blob := range blobByName {
-		if _, ok := fsSet[name]; ok {
-			continue
-		}
-		target := managedOverrideRulePath(name)
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		if err := bypassconf.AtomicWriteWithBackup(target, blob.Raw); err != nil {
-			return err
-		}
-		waf.InvalidateOverrideWAF(target)
-	}
-
-	return nil
+	_, _, _, err := loadRuntimeManagedOverrideRules(store)
+	return err
 }
 
 func managedOverrideRuleSnapshot() ([]gin.H, error) {
@@ -235,19 +220,20 @@ func managedOverrideRuleSnapshot() ([]gin.H, error) {
 	for _, name := range fsNames {
 		nameSet[name] = struct{}{}
 	}
-	blobByName := map[string]configBlobRecord{}
+	ruleByName := map[string]managedOverrideRuleVersion{}
+	ruleSavedAt := ""
 	if store != nil {
-		blobs, err := store.ListConfigBlobs(overrideRuleConfigBlobPrefix)
+		rules, rec, found, err := loadRuntimeManagedOverrideRules(store)
 		if err != nil {
 			return nil, err
 		}
-		for _, blob := range blobs {
-			name := strings.TrimPrefix(blob.ConfigKey, overrideRuleConfigBlobPrefix)
-			if _, _, err := managedOverrideRuleTarget(name); err != nil {
-				continue
+		if found {
+			ruleSavedAt = configVersionSavedAt(rec)
+			ruleByName = managedOverrideRuleMap(rules)
+			nameSet = map[string]struct{}{}
+			for name := range ruleByName {
+				nameSet[name] = struct{}{}
 			}
-			blobByName[name] = blob
-			nameSet[name] = struct{}{}
 		}
 	}
 
@@ -260,17 +246,17 @@ func managedOverrideRuleSnapshot() ([]gin.H, error) {
 	out := make([]gin.H, 0, len(names))
 	for _, name := range names {
 		target := managedOverrideRulePath(name)
-		if blob, ok := blobByName[name]; ok {
-			etag := strings.TrimSpace(blob.ETag)
+		if rule, ok := ruleByName[name]; ok {
+			etag := strings.TrimSpace(rule.ETag)
 			if etag == "" {
-				etag = bypassconf.ComputeETag(blob.Raw)
+				etag = bypassconf.ComputeETag(rule.Raw)
 			}
 			out = append(out, gin.H{
 				"name":     name,
 				"path":     target,
-				"raw":      string(blob.Raw),
+				"raw":      string(rule.Raw),
 				"etag":     etag,
-				"saved_at": strings.TrimSpace(blob.UpdatedAt),
+				"saved_at": ruleSavedAt,
 			})
 			continue
 		}
@@ -327,16 +313,20 @@ func managedOverrideRuleCurrent(name string) ([]byte, string, bool, bool, error)
 	target := managedOverrideRulePath(name)
 	store := getLogsStatsStore()
 	if store != nil {
-		dbRaw, dbETag, found, err := store.GetConfigBlob(overrideRuleConfigBlobKey(name))
+		rules, _, found, err := loadRuntimeManagedOverrideRules(store)
 		if err != nil {
 			return nil, "", false, false, err
 		}
 		if found {
-			if strings.TrimSpace(dbETag) == "" {
-				dbETag = bypassconf.ComputeETag(dbRaw)
+			if rule, ok := managedOverrideRuleMap(rules)[name]; ok {
+				etag := strings.TrimSpace(rule.ETag)
+				if etag == "" {
+					etag = bypassconf.ComputeETag(rule.Raw)
+				}
+				return rule.Raw, etag, true, true, nil
 			}
-			return dbRaw, dbETag, true, true, nil
 		}
+		return nil, "", false, true, nil
 	}
 	raw, hadFile, err := readFileMaybe(target)
 	if err != nil {
@@ -378,13 +368,67 @@ func overrideRuleConfigBlobKey(name string) string {
 
 func managedOverrideRuleInUse(target string) ([]string, bool) {
 	target = filepath.Clean(strings.TrimSpace(target))
+	targetName := filepath.Base(target)
 	inUse := []string{}
 	for _, entry := range bypassconf.Get() {
-		if filepath.Clean(strings.TrimSpace(entry.ExtraRule)) != target {
+		if filepath.Clean(strings.TrimSpace(entry.ExtraRule)) == target {
+			inUse = append(inUse, entry.Path)
+			continue
+		}
+		refName, ok, _ := managedOverrideRuleRefName(entry.ExtraRule)
+		if !ok || refName != targetName {
 			continue
 		}
 		inUse = append(inUse, entry.Path)
 	}
 	sort.Strings(inUse)
 	return inUse, len(inUse) > 0
+}
+
+func loadManagedOverrideRuleForWAF(rule string) (waf.OverrideRuleSource, bool, error) {
+	store := getLogsStatsStore()
+	if store == nil {
+		return waf.OverrideRuleSource{}, false, nil
+	}
+	name, ok, err := managedOverrideRuleRefName(rule)
+	if err != nil || !ok {
+		return waf.OverrideRuleSource{}, false, err
+	}
+	rules, _, found, err := loadRuntimeManagedOverrideRules(store)
+	if err != nil || !found {
+		return waf.OverrideRuleSource{}, false, err
+	}
+	managed, ok := managedOverrideRuleMap(rules)[name]
+	if !ok {
+		return waf.OverrideRuleSource{}, false, nil
+	}
+	etag := strings.TrimSpace(managed.ETag)
+	if etag == "" {
+		etag = bypassconf.ComputeETag(managed.Raw)
+	}
+	return waf.OverrideRuleSource{
+		Raw:  append([]byte(nil), managed.Raw...),
+		ETag: etag,
+		Name: name,
+	}, true, nil
+}
+
+func managedOverrideRuleRefName(raw string) (string, bool, error) {
+	ref := strings.TrimSpace(raw)
+	if ref == "" {
+		return "", false, nil
+	}
+	clean := filepath.Clean(ref)
+	name := filepath.Base(clean)
+	if name == "." || name == string(filepath.Separator) {
+		return "", false, nil
+	}
+	name, target, err := managedOverrideRuleTarget(name)
+	if err != nil {
+		return "", false, nil
+	}
+	if clean == name || clean == filepath.Clean(target) {
+		return name, true, nil
+	}
+	return "", false, nil
 }

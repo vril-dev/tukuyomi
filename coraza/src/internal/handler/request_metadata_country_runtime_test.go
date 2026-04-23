@@ -12,7 +12,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
 )
 
@@ -116,8 +115,8 @@ func TestPutRequestCountryModePersistsNormalizedHeaderMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadSettingsAppConfig() error: %v", err)
 	}
-	if etag != bypassconf.ComputeETag([]byte(currentRaw)) {
-		t.Fatalf("settings etag mismatch")
+	if etag == "" || currentRaw == "" {
+		t.Fatalf("settings seed missing etag/raw")
 	}
 
 	rec := httptest.NewRecorder()

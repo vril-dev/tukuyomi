@@ -43,15 +43,26 @@ func InitCountryBlock(path, legacy string) error {
 		return fmt.Errorf("country block path is empty")
 	}
 	legacy = strings.TrimSpace(legacy)
-	if err := ensureCountryBlockFile(target, legacy); err != nil {
-		return err
-	}
-
 	countryBlockMu.Lock()
 	countryBlockPath = target
 	countryBlockLegacyPath = legacy
 	countryBlockActivePath = ""
 	countryBlockMu.Unlock()
+
+	if store := getLogsStatsStore(); store != nil {
+		raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(countryBlockConfigBlobKey), normalizeCountryBlockPolicyRaw, "country block rules")
+		if err != nil {
+			return fmt.Errorf("read country block config db: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("normalized country block config missing in db; run make db-import before removing seed files")
+		}
+		return applyCountryBlockPolicyRaw(raw)
+	}
+
+	if err := ensureCountryBlockFile(target, legacy); err != nil {
+		return err
+	}
 
 	return ReloadCountryBlock()
 }

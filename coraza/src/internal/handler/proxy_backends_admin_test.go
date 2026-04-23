@@ -83,6 +83,11 @@ func TestGetProxyBackendsReportsDBRuntimeStorage(t *testing.T) {
 }`), 0o644); err != nil {
 		t.Fatalf("write proxy.json: %v", err)
 	}
+	importProxyRuntimeDBForTest(t, `{
+  "upstreams": [
+    { "name": "primary", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+  ]
+}`)
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}

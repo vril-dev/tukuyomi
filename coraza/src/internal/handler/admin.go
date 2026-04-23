@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -377,40 +376,53 @@ func RulesHandler(c *gin.Context) {
 	files := configuredRuleFiles()
 	result := make(map[string]string)
 	out := make([]gin.H, 0, len(files))
+	assetByPath := map[string]wafRuleAssetVersion{}
+	var assetRec configVersionRecord
+	assetFound := false
 
+	if store := getLogsStatsStore(); store != nil {
+		assets, rec, found, err := loadRuntimeWAFRuleAssets(store)
+		if err != nil {
+			respondConfigBlobDBError(c, "rules db read failed", err)
+			return
+		}
+		if found {
+			assetFound = true
+			assetRec = rec
+			assetByPath = wafRuleAssetMap(assets)
+		}
+	}
 	for _, path := range files {
-		content, err := os.ReadFile(path)
-		savedAt := fileSavedAt(path)
-		if store := getLogsStatsStore(); store != nil {
-			key := ruleFileConfigBlobKey(path)
-			dbRaw, dbETag, found, dbErr := store.GetConfigBlob(key)
-			if dbErr != nil {
-				respondConfigBlobDBError(c, "rules db read failed", dbErr)
-				return
-			} else if found {
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = bypassconf.ComputeETag(dbRaw)
-					if err := store.UpsertConfigBlob(key, dbRaw, dbETag, time.Now().UTC()); err != nil {
-						respondConfigBlobDBError(c, "rules db etag normalization failed", err)
-						return
-					}
-				}
-				result[path] = string(dbRaw)
-				savedAt = configBlobSavedAt(store, key)
+		normalizedPath := normalizeWAFRuleAssetPath(path)
+		if assetFound {
+			asset, ok := assetByPath[normalizedPath]
+			if !ok {
+				result[path] = ""
 				out = append(out, gin.H{
 					"path":     path,
-					"raw":      string(dbRaw),
-					"etag":     dbETag,
-					"saved_at": savedAt,
+					"raw":      "",
+					"etag":     "",
+					"error":    "rule asset is not present in active DB generation",
+					"saved_at": wafRuleAssetSavedAt(assetRec, path),
 				})
 				continue
-			} else if err == nil && len(content) > 0 {
-				if err := store.UpsertConfigBlob(key, content, bypassconf.ComputeETag(content), time.Now().UTC()); err != nil {
-					respondConfigBlobDBError(c, "rules db seed failed", err)
-					return
-				}
 			}
+			etag := strings.TrimSpace(asset.ETag)
+			if etag == "" {
+				etag = bypassconf.ComputeETag(asset.Raw)
+			}
+			result[path] = string(asset.Raw)
+			out = append(out, gin.H{
+				"path":     path,
+				"raw":      string(asset.Raw),
+				"etag":     etag,
+				"saved_at": wafRuleAssetSavedAt(assetRec, path),
+			})
+			continue
 		}
+
+		content, err := os.ReadFile(path)
+		savedAt := fileSavedAt(path)
 		if err != nil {
 			result[path] = "[読込失敗] " + err.Error()
 			out = append(out, gin.H{
@@ -477,27 +489,10 @@ func PutRules(c *gin.Context) {
 	}
 
 	store := getLogsStatsStore()
-	curRaw, hadFile, err := readFileMaybe(target)
+	curRaw, curETag, domainETag, dbBacked, err := loadEditableWAFRuleAsset(target)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
-	}
-
-	curETag := bypassconf.ComputeETag(curRaw)
-	if store != nil {
-		key := ruleFileConfigBlobKey(target)
-		dbRaw, dbETag, found, getErr := store.GetConfigBlob(key)
-		if getErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": getErr.Error()})
-			return
-		}
-		if found {
-			curRaw = dbRaw
-			if strings.TrimSpace(dbETag) == "" {
-				dbETag = bypassconf.ComputeETag(dbRaw)
-			}
-			curETag = dbETag
-		}
 	}
 
 	if ifMatch := c.GetHeader("If-Match"); ifMatch != "" && ifMatch != curETag {
@@ -510,6 +505,35 @@ func PutRules(c *gin.Context) {
 		return
 	}
 
+	if store != nil && dbBacked {
+		rec, asset, err := writeWAFRuleAssetUpdate(target, []byte(in.Raw), domainETag, "base rule update")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if err := waf.ReloadBaseWAF(); err != nil {
+			_, _, _ = writeWAFRuleAssetUpdate(target, curRaw, rec.ETag, "base rule rollback after reload failure")
+			_ = waf.ReloadBaseWAF()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": fmt.Sprintf("reload failed and rollback applied: %v", err),
+			})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"ok":            true,
+			"etag":          asset.ETag,
+			"hot_reloaded":  true,
+			"reloaded_file": target,
+			"saved_at":      configVersionSavedAt(rec),
+		})
+		return
+	}
+
+	curRaw, hadFile, err := readFileMaybe(target)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -530,19 +554,6 @@ func PutRules(c *gin.Context) {
 
 	newETag := bypassconf.ComputeETag([]byte(in.Raw))
 	now := time.Now().UTC()
-	if store != nil {
-		key := ruleFileConfigBlobKey(target)
-		if err := store.UpsertConfigBlob(key, []byte(in.Raw), newETag, now); err != nil {
-			rollbackErr := rollbackRuleFile(target, hadFile, curRaw)
-			_ = waf.ReloadBaseWAF()
-			msg := fmt.Sprintf("db sync failed and rollback applied: %v", err)
-			if rollbackErr != nil {
-				msg = fmt.Sprintf("%s (rollback error: %v)", msg, rollbackErr)
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": msg})
-			return
-		}
-	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"ok":            true,
@@ -588,63 +599,6 @@ func ruleFileConfigBlobKey(path string) string {
 	cleaned := filepath.Clean(strings.TrimSpace(path))
 	sum := sha256.Sum256([]byte(cleaned))
 	return "rule_file_sha256:" + hex.EncodeToString(sum[:])
-}
-
-func SyncRuleFilesStorage() error {
-	store := getLogsStatsStore()
-	if store == nil {
-		return nil
-	}
-
-	changed := false
-	for _, path := range configuredRuleFiles() {
-		if strings.TrimSpace(path) == "" {
-			continue
-		}
-
-		fileRaw, hadFile, err := readFileMaybe(path)
-		if err != nil {
-			return err
-		}
-		key := ruleFileConfigBlobKey(path)
-		dbRaw, dbETag, found, err := store.GetConfigBlob(key)
-		if err != nil {
-			return err
-		}
-
-		if found {
-			if !hadFile || !bytes.Equal(fileRaw, dbRaw) {
-				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-					return err
-				}
-				if err := bypassconf.AtomicWriteWithBackup(path, dbRaw); err != nil {
-					return err
-				}
-				changed = true
-			}
-			if strings.TrimSpace(dbETag) == "" {
-				dbETag = bypassconf.ComputeETag(dbRaw)
-				if err := store.UpsertConfigBlob(key, dbRaw, dbETag, time.Now().UTC()); err != nil {
-					return err
-				}
-			}
-			continue
-		}
-
-		if !hadFile || len(fileRaw) == 0 {
-			continue
-		}
-		if err := store.UpsertConfigBlob(key, fileRaw, bypassconf.ComputeETag(fileRaw), time.Now().UTC()); err != nil {
-			return err
-		}
-	}
-
-	if changed && waf.GetBaseWAF() != nil {
-		if err := waf.ReloadBaseWAF(); err != nil {
-			return fmt.Errorf("reload base waf after rule sync: %w", err)
-		}
-	}
-	return nil
 }
 
 func rollbackRuleFile(path string, hadFile bool, raw []byte) error {

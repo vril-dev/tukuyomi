@@ -172,14 +172,14 @@ ephemeral local state を許容しないなら、これらを platform 側で mo
 ## Config と Secret
 
 `tukuyomi` は `conf/config.json` を DB 接続 bootstrap に使い、その後の
-operator-managed な app/proxy 設定は DB blob から読みます。
+operator-managed な app/proxy 設定は normalized DB table から読みます。
 
 典型的な本番パターン:
 
 - `conf/config.json` は `storage.db_driver`、`storage.db_path`、`storage.db_dsn` 用に secret manager / config management から render
 - `conf/proxy.json` と各種 policy file は seed/import/export material として mount または bake
-- 初回起動前に `make db-migrate` を実行し、新規 DB へ file material を取り込む場合は `make db-import` も実行します
-- `conf/sites.json`、`conf/scheduled-tasks.json`、`conf/upstream-runtime.json` は空 DB の seed/export file として扱います。bootstrap 後の正は DB blob です
+- 初回起動前に `make db-migrate`、`make crs-install` の順で WAF rule asset を install/import し、その後残りの seed material 用に `make db-import` を実行します
+- `conf/sites.json`、`conf/scheduled-tasks.json`、`conf/upstream-runtime.json` は空 DB の seed/export file として扱います。bootstrap 後の正は normalized DB row です
 - runtime env injection は主に次だけ
   - `WAF_CONFIG_FILE`
   - `WAF_PROXY_AUDIT_FILE`
@@ -214,9 +214,8 @@ server-side に閉じ込める値:
 - `tukuyomi` の既定 posture は `admin.external_mode=api_only_external` です。remote admin API が不要なら `deny_external` を使ってください
 - non-loopback listener で `full_external` に上書きする場合は、front-side の allowlist/auth を必須として扱ってください
 - `admin.trusted_cidrs` を public / catch-all network まで広げた場合も、埋め込み管理UI/API はその trusted source へ再露出され、起動時は warning のみです
-- managed bypass override rule は `/app/conf/rules/*.conf` 配下に置き、`Rules -> Override Rules` から編集します。`waf-bypass.json` からは `extra_rule` として参照します
-- container image と release bundle には harmless な standalone sample として `/app/conf/rules/search-endpoint.conf` も含まれます
-- その参照例として `/app/conf/waf-bypass.sample.json` も含まれます
+- base WAF と CRS asset は import 後 DB `waf_rule_assets` です。image-baked file は seed material であり runtime authority ではありません
+- managed bypass override rule は DB `override_rules` です。`extra_rule` の値は logical compatibility reference として残ります
 
 ## Platform 別の対応
 
@@ -397,7 +396,7 @@ docker compose \
 
 - `make ui-preview-up` では preview 専用の scheduler sidecar も一緒に起動します
 - 既定の preview は毎回初期化されます
-  - `ui-preview-up` のたびに `conf/scheduled-tasks.ui-preview.json` は `{"tasks":[]}` へ初期化され、preview 専用 SQLite DB も削除されるため、古い preview task や DB blob は引き継ぎません
+  - `ui-preview-up` のたびに `conf/scheduled-tasks.ui-preview.json` は `{"tasks":[]}` へ初期化され、preview 専用 SQLite DB も削除されるため、古い preview task や DB row は引き継ぎません
 - preview 用 config と DB state を保持したい時はこれです
 
 ```bash

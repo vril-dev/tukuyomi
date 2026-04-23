@@ -1,10 +1,9 @@
 package handler
 
 import (
-	"bytes"
+	"errors"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -29,40 +28,25 @@ func GetCacheRules(c *gin.Context) {
 	raw, _ := os.ReadFile(readPath)
 	savedAt := fileSavedAt(readPath)
 	if store := getLogsStatsStore(); store != nil {
-		dbRaw, dbETag, found, err := store.GetConfigBlob(cacheConfigBlobKey)
+		spec := mustPolicyJSONSpec(cacheConfigBlobKey)
+		dbRaw, rec, found, err := loadRuntimePolicyJSONConfig(store, spec, normalizeCacheRulesPolicyRaw, "cache rules")
 		if err != nil {
 			respondConfigBlobDBError(c, "cache-rules db read failed", err)
 			return
 		} else if found {
 			rsDB, parseErr := cacheconf.LoadFromBytes(dbRaw)
 			if parseErr != nil {
-				respondConfigBlobDBError(c, "cache-rules db blob parse failed", parseErr)
-				return
-			} else {
-				if !bytes.Equal(raw, dbRaw) {
-					if err := cacheconf.AtomicWriteWithBackup(cacheConfPath, dbRaw); err != nil {
-						respondConfigBlobDBError(c, "cache-rules file materialization failed", err)
-						return
-					}
-				}
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = cacheconf.ComputeETag(dbRaw)
-				}
-				normalizedRaw, _ := cacheconf.RulesetToJSON(rsDB)
-				savedAt = configBlobSavedAt(store, cacheConfigBlobKey)
-				c.JSON(http.StatusOK, cacheconf.RulesDTO{
-					ETag:    dbETag,
-					Raw:     string(normalizedRaw),
-					Rules:   cacheconf.ToDTO(rsDB),
-					SavedAt: savedAt,
-				})
+				respondConfigBlobDBError(c, "cache-rules db rows parse failed", parseErr)
 				return
 			}
-		} else if len(raw) > 0 {
-			if err := store.UpsertConfigBlob(cacheConfigBlobKey, raw, cacheconf.ComputeETag(raw), time.Now().UTC()); err != nil {
-				respondConfigBlobDBError(c, "cache-rules db seed failed", err)
-				return
-			}
+			savedAt = configVersionSavedAt(rec)
+			c.JSON(http.StatusOK, cacheconf.RulesDTO{
+				ETag:    rec.ETag,
+				Raw:     string(dbRaw),
+				Rules:   cacheconf.ToDTO(rsDB),
+				SavedAt: savedAt,
+			})
+			return
 		}
 	}
 
@@ -108,14 +92,6 @@ func ValidateCacheRules(c *gin.Context) {
 }
 
 func PutCacheRules(c *gin.Context) {
-	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(config.ResolveReadablePolicyPath(cacheConfPath, legacyCacheConfPath))
-	curETag := cacheconf.ComputeETag(curRaw)
-	if ifMatch != "" && ifMatch != curETag {
-		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
-		return
-	}
-
 	var in crPutBody
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -154,6 +130,39 @@ func PutCacheRules(c *gin.Context) {
 		}
 	}
 
+	if store := getLogsStatsStore(); store != nil {
+		spec := mustPolicyJSONSpec(cacheConfigBlobKey)
+		currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeCacheRulesPolicyRaw, "cache rules")
+		if err != nil {
+			respondConfigBlobDBError(c, "cache-rules db seed failed", err)
+			return
+		}
+		expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
+		rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, outBytes, configVersionSourceApply, "", "cache rules update", 0)
+		if err != nil {
+			if errors.Is(err, errConfigVersionConflict) {
+				c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, cacheConfigBlobKey)})
+				return
+			}
+			respondConfigBlobDBError(c, "cache-rules db update failed", err)
+			return
+		}
+		if err := applyCacheRulesPolicyRaw(outBytes); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "etag": rec.ETag, "saved_at": rec.ActivatedAt.Format(time.RFC3339Nano)})
+		return
+	}
+
+	ifMatch := c.GetHeader("If-Match")
+	curRaw, _ := os.ReadFile(config.ResolveReadablePolicyPath(cacheConfPath, legacyCacheConfPath))
+	curETag := cacheconf.ComputeETag(curRaw)
+	if ifMatch != "" && ifMatch != curETag {
+		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
+		return
+	}
+
 	if err := cacheconf.AtomicWriteWithBackup(cacheConfPath, outBytes); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -161,24 +170,6 @@ func PutCacheRules(c *gin.Context) {
 
 	now := time.Now().UTC()
 	newETag := cacheconf.ComputeETag(outBytes)
-	if store := getLogsStatsStore(); store != nil {
-		if err := store.UpsertConfigBlob(cacheConfigBlobKey, outBytes, newETag, now); err != nil {
-			rollbackErr := cacheconf.AtomicWriteWithBackup(cacheConfPath, curRaw)
-			if rollbackErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"error":          "cache db sync failed and rollback failed",
-					"db_error":       err.Error(),
-					"rollback_error": rollbackErr.Error(),
-				})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":    "cache db sync failed and rollback applied",
-				"db_error": err.Error(),
-			})
-			return
-		}
-	}
 
 	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": newETag, "saved_at": now.Format(time.RFC3339Nano)})
 }
@@ -192,15 +183,13 @@ func mustCacheRulesJSON(rs *cacheconf.Ruleset) []byte {
 }
 
 func SyncCacheRulesStorage() error {
-	return syncConfigBlobFilePath(configBlobSyncOptions{
-		ConfigKey: cacheConfigBlobKey,
-		Path:      cacheConfPath,
-		ValidateRaw: func(raw string) error {
-			_, err := cacheconf.LoadFromBytes([]byte(raw))
-			return err
-		},
-		WriteRaw:         cacheconf.AtomicWriteWithBackup,
-		ComputeETag:      cacheconf.ComputeETag,
-		SkipWriteIfEqual: true,
-	})
+	store := getLogsStatsStore()
+	if store == nil {
+		return nil
+	}
+	raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(cacheConfigBlobKey), normalizeCacheRulesPolicyRaw, "cache rules")
+	if err != nil || !found {
+		return err
+	}
+	return applyCacheRulesPolicyRaw(raw)
 }

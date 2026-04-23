@@ -296,10 +296,10 @@ paths:
   /tukuyomi-api/rules:
     get:
       tags: [waf]
-      summary: Get active editable WAF rule files
+      summary: Get active editable WAF rule assets
       responses:
         '200':
-          description: Rule file map plus per-file details
+          description: Rule asset map plus per-asset details
           content:
             application/json:
               schema:

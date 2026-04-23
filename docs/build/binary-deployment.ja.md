@@ -43,7 +43,7 @@ make release-linux-all VERSION=v0.8.0
 /opt/tukuyomi/logs/
 ```
 
-file-backed のまま残す起動ファイル:
+初回 DB import 前に使う seed/import file:
 
 - `conf/config.json`
 - `conf/proxy.json`
@@ -57,33 +57,34 @@ file-backed のまま残す起動ファイル:
 - `conf/semantic.json`
 - `conf/notifications.json`
 - `conf/ip-reputation.json`
+- `conf/sites.json`
+- `conf/scheduled-tasks.json`
+- `conf/upstream-runtime.json`
 - `rules/tukuyomi.conf`
 - `rules/crs/crs-setup.conf`
 - `rules/crs/rules/*.conf`
 
-DB-native な seed/export file:
+これらは空 DB の初期投入、または import/export 用です。対応する normalized DB row が存在する後は
+runtime は normalized domain を DB から直接読み込み、JSON file の復元を起動条件にしません。
+import 後の本番起動で必要なのは DB bootstrap 用の `conf/config.json` と DB row です。
 
-- `conf/sites.json`
-- `conf/scheduled-tasks.json`
-- `conf/upstream-runtime.json`
-
-これらは空 DB の初期投入、または import/export 用です。対応する DB blob が存在する後は
-`sites`、`scheduled_tasks`、`upstream_runtime` を DB から直接読み込み、JSON file
-の復元を起動条件にしません。
-
-PHP-FPM の `/options` と `/vhosts` も使う場合の追加物:
+初回 DB import 前に使う PHP-FPM 追加物:
 
 - `data/php-fpm/binaries/<runtime_id>/`
 - `data/php-fpm/inventory.json`
 - `data/php-fpm/vhosts.json`
 
+import 後、bundled PHP-FPM を使う場合は executable bundle 自体は必要ですが、
+`inventory.json`、`vhosts.json`、`runtime.json`、`modules.json` は runtime
+authority ではありません。
+
 `/scheduled-tasks` 実行状態も使う場合の追加物:
 
 - `data/scheduled-tasks/`
 
-managed bypass override rule も使う場合の追加物:
+managed bypass override rule を import する場合の任意 seed:
 
-- `conf/rules/*.conf`
+- `conf/rules/*.conf`（`make db-import` 前のみ）
 
 managed GeoIP country update も使う場合の追加物:
 
@@ -109,14 +110,6 @@ for f in config.json proxy.json sites.json scheduled-tasks.json upstream-runtime
   sudo install -m 644 "data/conf/${f}" "/opt/tukuyomi/conf/${f}"
 done
 
-if [[ -d data/conf/rules ]]; then
-  sudo install -d -m 755 /opt/tukuyomi/conf/rules
-  for f in data/conf/rules/*; do
-    [[ -f "${f}" ]] || continue
-    sudo install -m 644 "${f}" "/opt/tukuyomi/conf/rules/$(basename "${f}")"
-  done
-fi
-
 if [[ -f data/geoip/README.md ]]; then
   sudo install -m 644 data/geoip/README.md /opt/tukuyomi/data/geoip/README.md
 fi
@@ -132,17 +125,19 @@ sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 - `data/conf/*.bak` は本番へ持っていかないでください
 - `config.json` は DB 接続 bootstrap と DB `app_config` の seed/export material です
 - `proxy.json` は DB `proxy_rules` の seed/import/export material です
-- `sites.json`、`scheduled-tasks.json`、`upstream-runtime.json` は DB bootstrap 後は DB seed/export artifact です
+- `rules/tukuyomi.conf` と `rules/crs/**` は DB `waf_rule_assets` の seed/import material です
+- `sites.json`、`scheduled-tasks.json`、`upstream-runtime.json`、policy JSON、
+  cache JSON、WAF bypass JSON、PHP-FPM JSON manifest は DB bootstrap 後は
+  DB seed/export artifact です
 - 本番では `storage.db_driver`、`storage.db_path`、`storage.db_dsn` 用に `config.json` を secret manager / config management から render / mount してください
-- 初回起動前に `make db-migrate` を実行し、新規 DB へ file material を取り込む場合は `make db-import` も実行します
+- 初回起動前に `make db-migrate`、`make crs-install` の順で WAF rule asset を install/import し、その後残りの seed material 用に `make db-import` を実行します
 - embedded `Settings` 画面は DB `app_config` を編集します。listener/runtime/storage policy/observability 系の変更後は service を restart してください
 - public release bundle には `Options -> GeoIP Update -> Update now` 用の companion `bin/geoipupdate` が同梱されます
 - `GEOIPUPDATE_BIN` を使えば bundled updater path を override できます
 - managed country refresh 用の official wrapper は `./scripts/update_country_db.sh` です
 - `data/geoip/country.mmdb`, `data/geoip/GeoIP.conf`, `data/geoip/update-status.json` は operator-managed runtime artifact なので、generic な release bundle へ bake しないでください
-- managed bypass override rule は `conf/rules/*.conf` 配下に置き、`Rules -> Override Rules` から編集します。これは `waf-bypass.json` の `extra_rule` で参照された時だけ load されます
-- release bundle には harmless な standalone sample として `conf/rules/search-endpoint.conf` も含まれます
-- その参照例として `conf/waf-bypass.sample.json` も同梱します
+- managed bypass override rule は DB `override_rules` です。`conf/rules/*.conf` は新規DB import時のseed専用です
+- `extra_rule` の値は DB-managed override rule への logical compatibility reference として残ります
 
 proxy engine 選択は restart-required な DB `app_config` 設定です:
 
@@ -218,8 +213,8 @@ sudo make php-fpm-copy RUNTIME=php85 DEST=/srv/tukuyomi
 
 補足:
 
-- `php-fpm-copy` は `data/php-fpm/binaries/<runtime_id>/` を binary 配備ツリーへ同期し、`inventory.json` / `vhosts.json` が無ければ初期ファイルを作成します
-- 不要になった staged runtime bundle は `sudo make php-fpm-prune RUNTIME=php85` で削除できます。`vhosts.json` 参照と実行中 pid を確認してから `binaries/<runtime_id>` と `runtime/<runtime_id>` を消します
+- `php-fpm-copy` は `data/php-fpm/binaries/<runtime_id>/` を binary 配備ツリーへ同期します。PHP-FPM JSON manifest を削除する前に `make db-import` で inventory/module metadata を import してください
+- 不要になった staged runtime bundle は `sudo make php-fpm-prune RUNTIME=php85` で削除できます。DB vhost 参照と実行中 pid を確認してから `binaries/<runtime_id>` と `runtime/<runtime_id>` を消します
 - `data/php-fpm/runtime/` はコピー対象ではなく、`tukuyomi` 起動後に vhost 定義から生成されます
 - Docker が必要なのは `php-fpm-build` の build 時だけです。bundle 配置後の `tukuyomi` 実行時には Docker は不要です
 - PHP / base image library / PECL extension の security update は bundle を rebuild して再配置する必要があります

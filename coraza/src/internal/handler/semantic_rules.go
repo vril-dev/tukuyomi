@@ -1,9 +1,9 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -31,22 +31,19 @@ func GetSemanticRules(c *gin.Context) {
 	raw, _ := os.ReadFile(path)
 	savedAt := fileSavedAt(path)
 	if store := getLogsStatsStore(); store != nil {
-		dbRaw, dbETag, found, err := store.GetConfigBlob(semanticConfigBlobKey)
+		dbRaw, rec, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(semanticConfigBlobKey), normalizeSemanticPolicyRaw, "semantic rules")
 		if err != nil {
 			respondConfigBlobDBError(c, "semantic db read failed", err)
 			return
 		} else if found {
 			rt, parseErr := ValidateSemanticRaw(string(dbRaw))
 			if parseErr != nil {
-				respondConfigBlobDBError(c, "semantic db blob parse failed", parseErr)
+				respondConfigBlobDBError(c, "semantic db rows parse failed", parseErr)
 				return
 			} else {
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = bypassconf.ComputeETag(dbRaw)
-				}
-				savedAt = configBlobSavedAt(store, semanticConfigBlobKey)
+				savedAt = configVersionSavedAt(rec)
 				c.JSON(http.StatusOK, gin.H{
-					"etag":                 dbETag,
+					"etag":                 rec.ETag,
 					"raw":                  string(dbRaw),
 					"enabled":              rt.Raw.Enabled,
 					"mode":                 rt.Raw.Mode,
@@ -61,11 +58,6 @@ func GetSemanticRules(c *gin.Context) {
 					"stats":                GetSemanticStats(),
 					"saved_at":             savedAt,
 				})
-				return
-			}
-		} else if len(raw) > 0 {
-			if err := store.UpsertConfigBlob(semanticConfigBlobKey, raw, bypassconf.ComputeETag(raw), time.Now().UTC()); err != nil {
-				respondConfigBlobDBError(c, "semantic db seed failed", err)
 				return
 			}
 		}
@@ -122,32 +114,6 @@ func ValidateSemanticRules(c *gin.Context) {
 func PutSemanticRules(c *gin.Context) {
 	path := GetSemanticPath()
 	store := getLogsStatsStore()
-	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(path)
-	curETag := bypassconf.ComputeETag(curRaw)
-	if store != nil {
-		dbRaw, dbETag, found, err := store.GetConfigBlob(semanticConfigBlobKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		if found {
-			if _, parseErr := ValidateSemanticRaw(string(dbRaw)); parseErr == nil {
-				curRaw = dbRaw
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = bypassconf.ComputeETag(dbRaw)
-				}
-				curETag = dbETag
-			} else {
-				respondConfigBlobDBError(c, "semantic db blob parse failed for conflict check", parseErr)
-				return
-			}
-		}
-	}
-	if ifMatch != "" && ifMatch != curETag {
-		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
-		return
-	}
 
 	in, ok := bindSemanticPutBody(c)
 	if !ok {
@@ -157,6 +123,58 @@ func PutSemanticRules(c *gin.Context) {
 	rt, err := ValidateSemanticRaw(in.Raw)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
+		return
+	}
+
+	normalizedRaw, err := normalizeSemanticPolicyRaw(in.Raw)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
+		return
+	}
+	if store != nil {
+		spec := mustPolicyJSONSpec(semanticConfigBlobKey)
+		currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeSemanticPolicyRaw, "semantic rules")
+		if err != nil {
+			respondConfigBlobDBError(c, "semantic db seed failed", err)
+			return
+		}
+		expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
+		rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "semantic rules update", 0)
+		if err != nil {
+			if errors.Is(err, errConfigVersionConflict) {
+				c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, semanticConfigBlobKey)})
+				return
+			}
+			respondConfigBlobDBError(c, "semantic db update failed", err)
+			return
+		}
+		if err := applySemanticPolicyRaw(normalizedRaw); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"ok":                   true,
+			"etag":                 rec.ETag,
+			"enabled":              rt.Raw.Enabled,
+			"mode":                 rt.Raw.Mode,
+			"exempt_path_prefixes": rt.Raw.ExemptPathPrefixes,
+			"log_threshold":        rt.Raw.LogThreshold,
+			"challenge_threshold":  rt.Raw.ChallengeThreshold,
+			"block_threshold":      rt.Raw.BlockThreshold,
+			"max_inspect_body":     rt.Raw.MaxInspectBody,
+			"provider_enabled":     rt.Raw.Provider.Enabled,
+			"provider_name":        rt.Raw.Provider.Name,
+			"provider_timeout_ms":  rt.Raw.Provider.TimeoutMS,
+			"saved_at":             rec.ActivatedAt.Format(time.RFC3339Nano),
+		})
+		return
+	}
+
+	ifMatch := c.GetHeader("If-Match")
+	curRaw, _ := os.ReadFile(path)
+	curETag := bypassconf.ComputeETag(curRaw)
+	if ifMatch != "" && ifMatch != curETag {
+		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
 		return
 	}
 
@@ -173,17 +191,6 @@ func PutSemanticRules(c *gin.Context) {
 
 	now := time.Now().UTC()
 	newETag := bypassconf.ComputeETag([]byte(in.Raw))
-	if store != nil {
-		if err := store.UpsertConfigBlob(semanticConfigBlobKey, []byte(in.Raw), newETag, now); err != nil {
-			_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
-			_ = ReloadSemantic()
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":    "semantic db sync failed and rollback applied",
-				"db_error": err.Error(),
-			})
-			return
-		}
-	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"ok":                   true,
@@ -203,14 +210,13 @@ func PutSemanticRules(c *gin.Context) {
 }
 
 func SyncSemanticStorage() error {
-	return syncConfigBlobFilePath(configBlobSyncOptions{
-		ConfigKey: semanticConfigBlobKey,
-		Path:      GetSemanticPath(),
-		ValidateRaw: func(raw string) error {
-			_, err := ValidateSemanticRaw(raw)
-			return err
-		},
-		Reload:           ReloadSemantic,
-		SkipWriteIfEqual: true,
-	})
+	store := getLogsStatsStore()
+	if store == nil {
+		return nil
+	}
+	raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(semanticConfigBlobKey), normalizeSemanticPolicyRaw, "semantic rules")
+	if err != nil || !found {
+		return err
+	}
+	return applySemanticPolicyRaw(raw)
 }

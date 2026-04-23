@@ -38,33 +38,25 @@ func GetBypassRules(c *gin.Context) {
 	displayRaw := string(raw)
 	savedAt := fileSavedAt(path)
 	if store := getLogsStatsStore(); store != nil {
-		dbRaw, dbETag, found, err := store.GetConfigBlob(bypassConfigBlobKey)
+		dbRaw, rec, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(bypassConfigBlobKey), normalizeBypassPolicyRaw, "bypass rules")
 		if err != nil {
 			respondConfigBlobDBError(c, "bypass db read failed", err)
 			return
 		} else if found {
 			file, parseErr := bypassconf.Parse(string(dbRaw))
 			if parseErr != nil {
-				respondConfigBlobDBError(c, "bypass db blob parse failed", parseErr)
+				respondConfigBlobDBError(c, "bypass db rows parse failed", parseErr)
 				return
 			} else {
 				if normalized, err := bypassconf.MarshalJSON(file); err == nil {
 					displayRaw = string(normalized)
 				}
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = bypassconf.ComputeETag(dbRaw)
-				}
-				savedAt = configBlobSavedAt(store, bypassConfigBlobKey)
+				savedAt = configVersionSavedAt(rec)
 				c.JSON(http.StatusOK, gin.H{
-					"etag":     dbETag,
+					"etag":     rec.ETag,
 					"raw":      displayRaw,
 					"saved_at": savedAt,
 				})
-				return
-			}
-		} else if len(raw) > 0 {
-			if err := store.UpsertConfigBlob(bypassConfigBlobKey, raw, bypassconf.ComputeETag(raw), time.Now().UTC()); err != nil {
-				respondConfigBlobDBError(c, "bypass db seed failed", err)
 				return
 			}
 		}
@@ -104,33 +96,6 @@ func PutBypassRules(c *gin.Context) {
 	}
 	store := getLogsStatsStore()
 
-	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(currentPath)
-	curETag := bypassconf.ComputeETag(curRaw)
-	if store != nil {
-		dbRaw, dbETag, found, err := store.GetConfigBlob(bypassConfigBlobKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		if found {
-			if _, parseErr := validateRaw(string(dbRaw)); parseErr == nil {
-				curRaw = dbRaw
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = bypassconf.ComputeETag(dbRaw)
-				}
-				curETag = dbETag
-			} else {
-				respondConfigBlobDBError(c, "bypass db blob parse failed for conflict check", parseErr)
-				return
-			}
-		}
-	}
-	if ifMatch != "" && ifMatch != curETag {
-		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
-		return
-	}
-
 	in, ok := bindBypassPutBody(c)
 	if !ok {
 		return
@@ -148,6 +113,39 @@ func PutBypassRules(c *gin.Context) {
 		return
 	}
 
+	if store != nil {
+		spec := mustPolicyJSONSpec(bypassConfigBlobKey)
+		currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeBypassPolicyRaw, "bypass rules")
+		if err != nil {
+			respondConfigBlobDBError(c, "bypass db seed failed", err)
+			return
+		}
+		expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
+		rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "bypass rules update", 0)
+		if err != nil {
+			if errors.Is(err, errConfigVersionConflict) {
+				c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, bypassConfigBlobKey)})
+				return
+			}
+			respondConfigBlobDBError(c, "bypass db update failed", err)
+			return
+		}
+		if err := applyBypassPolicyRaw(normalizedRaw); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "etag": rec.ETag, "raw": string(normalizedRaw), "saved_at": rec.ActivatedAt.Format(time.RFC3339Nano)})
+		return
+	}
+
+	ifMatch := c.GetHeader("If-Match")
+	curRaw, _ := os.ReadFile(currentPath)
+	curETag := bypassconf.ComputeETag(curRaw)
+	if ifMatch != "" && ifMatch != curETag {
+		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
+		return
+	}
+
 	if err := bypassconf.AtomicWriteWithBackup(path, normalizedRaw); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -161,32 +159,20 @@ func PutBypassRules(c *gin.Context) {
 
 	now := time.Now().UTC()
 	newETag := bypassconf.ComputeETag(normalizedRaw)
-	if store != nil {
-		if err := store.UpsertConfigBlob(bypassConfigBlobKey, normalizedRaw, newETag, now); err != nil {
-			_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
-			_ = bypassconf.Reload()
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":    "bypass db sync failed and rollback applied",
-				"db_error": err.Error(),
-			})
-			return
-		}
-	}
 
 	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": newETag, "raw": string(normalizedRaw), "saved_at": now.Format(time.RFC3339Nano)})
 }
 
 func SyncBypassStorage() error {
-	return syncConfigBlobFilePath(configBlobSyncOptions{
-		ConfigKey: bypassConfigBlobKey,
-		Path:      config.BypassFile,
-		ValidateRaw: func(raw string) error {
-			_, err := validateRaw(raw)
-			return err
-		},
-		Reload:           bypassconf.Reload,
-		SkipWriteIfEqual: true,
-	})
+	store := getLogsStatsStore()
+	if store == nil {
+		return nil
+	}
+	raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(bypassConfigBlobKey), normalizeBypassPolicyRaw, "bypass rules")
+	if err != nil || !found {
+		return err
+	}
+	return applyBypassPolicyRaw(raw)
 }
 
 func validateRaw(s string) (int, error) {

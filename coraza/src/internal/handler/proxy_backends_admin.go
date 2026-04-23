@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -94,7 +95,11 @@ func PutProxyBackendRuntimeOverride(c *gin.Context) {
 	}
 	file.Backends[backendKey] = override
 
-	if err := persistAndRefreshUpstreamRuntimeOverrides(cfg, currentRaw, file); err != nil {
+	if err := persistAndRefreshUpstreamRuntimeOverrides(cfg, currentRaw, currentETag, file); err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": currentETag})
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
@@ -139,7 +144,11 @@ func DeleteProxyBackendRuntimeOverride(c *gin.Context) {
 	if len(file.Backends) > 0 {
 		delete(file.Backends, backendKey)
 	}
-	if err := persistAndRefreshUpstreamRuntimeOverrides(cfg, currentRaw, file); err != nil {
+	if err := persistAndRefreshUpstreamRuntimeOverrides(cfg, currentRaw, currentETag, file); err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": currentETag})
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
@@ -287,8 +296,8 @@ func proxyBackendRuntimeOpsSupported(cfg ProxyRulesConfig, key string) bool {
 	return ok
 }
 
-func persistAndRefreshUpstreamRuntimeOverrides(cfg ProxyRulesConfig, previousRaw string, file upstreamRuntimeFile) error {
-	_, _, _, err := persistUpstreamRuntimeFile(cfg, file)
+func persistAndRefreshUpstreamRuntimeOverrides(cfg ProxyRulesConfig, previousRaw string, previousETag string, file upstreamRuntimeFile) error {
+	_, _, _, err := persistUpstreamRuntimeFile(cfg, file, previousETag)
 	if err != nil {
 		return err
 	}

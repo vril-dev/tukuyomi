@@ -185,28 +185,48 @@ func InitResponseCacheRuntime(path string) error {
 	if path == "" {
 		return fmt.Errorf("cache store config path is required")
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("read cache store config (%s): %w", path, err)
-		}
-		cfg := normalizeResponseCacheConfig(responseCacheConfig{})
-		encoded, err := marshalResponseCacheConfig(cfg)
+	var raw []byte
+	var dbETag string
+	if store := getLogsStatsStore(); store != nil {
+		dbRaw, rec, found, err := loadRuntimeResponseCacheConfig(store)
 		if err != nil {
-			return err
+			return fmt.Errorf("read response cache config from db: %w", err)
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return err
+		if !found {
+			return fmt.Errorf("normalized response cache config missing in db; run make db-import before removing seed files")
 		}
-		if err := bypassconf.AtomicWriteWithBackup(path, encoded); err != nil {
-			return err
+		raw = dbRaw
+		dbETag = rec.ETag
+	}
+	if len(raw) == 0 {
+		fileRaw, err := os.ReadFile(path)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return fmt.Errorf("read cache store config (%s): %w", path, err)
+			}
+			cfg := normalizeResponseCacheConfig(responseCacheConfig{})
+			encoded, err := marshalResponseCacheConfig(cfg)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return err
+			}
+			if err := bypassconf.AtomicWriteWithBackup(path, encoded); err != nil {
+				return err
+			}
+			raw = encoded
+		} else {
+			raw = fileRaw
 		}
-		raw = encoded
 	}
 
 	prepared, err := prepareResponseCacheRaw(string(raw))
 	if err != nil {
 		return fmt.Errorf("invalid cache store config (%s): %w", path, err)
+	}
+	if dbETag == "" {
+		dbETag = prepared.etag
 	}
 	store, err := newProxyResponseCacheStore(prepared.cfg)
 	if err != nil {
@@ -217,7 +237,7 @@ func InitResponseCacheRuntime(path string) error {
 	responseCacheRt = &responseCacheRuntime{
 		configPath: path,
 		raw:        prepared.raw,
-		etag:       prepared.etag,
+		etag:       dbETag,
 		cfg:        prepared.cfg,
 		store:      store,
 	}
@@ -278,47 +298,60 @@ func ApplyResponseCacheRaw(ifMatch string, raw string) (string, responseCacheCon
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 
-	if ifMatch = strings.TrimSpace(ifMatch); ifMatch != "" && ifMatch != rt.etag {
+	if ifMatch = strings.TrimSpace(ifMatch); ifMatch != "" && ifMatch != rt.etag && ifMatch != bypassconf.ComputeETag([]byte(rt.raw)) {
 		return "", responseCacheConfig{}, responseCacheConfigConflictError{CurrentETag: rt.etag}
 	}
 
-	prevRaw := rt.raw
-	prevETag := rt.etag
 	prevCfg := rt.cfg
+	prevETag := rt.etag
 	prevStats := proxyResponseCacheStats{}
 	if rt.store != nil {
 		prevStats = rt.store.Snapshot()
 	}
 
-	if err := persistResponseCacheConfigRaw(rt.configPath, prepared.raw); err != nil {
-		return "", responseCacheConfig{}, err
-	}
+	nextETag := prepared.etag
 	if store := getLogsStatsStore(); store != nil {
-		if err := store.UpsertConfigBlob(responseCacheConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
-			_ = persistResponseCacheConfigRaw(rt.configPath, prevRaw)
-			return "", responseCacheConfig{}, err
-		}
-	}
-	if rt.store == nil {
-		rt.store, err = newProxyResponseCacheStore(prepared.cfg)
+		candidateStore, err := newProxyResponseCacheStore(prepared.cfg)
 		if err != nil {
-			_ = persistResponseCacheConfigRaw(rt.configPath, prevRaw)
 			return "", responseCacheConfig{}, err
 		}
-	} else if err := rt.store.Reconfigure(prepared.cfg); err != nil {
-		_ = persistResponseCacheConfigRaw(rt.configPath, prevRaw)
-		_ = rt.store.Reconfigure(prevCfg)
-		return "", responseCacheConfig{}, err
+		expectedETag := responseCacheExpectedETag(ifMatch, rt.raw, rt.etag)
+		rec, cfg, err := store.writeResponseCacheConfigVersion(expectedETag, prepared.cfg, configVersionSourceApply, "", "response cache config update", 0)
+		if err != nil {
+			if errors.Is(err, errConfigVersionConflict) {
+				return "", responseCacheConfig{}, responseCacheConfigConflictError{CurrentETag: policyConfigConflictETag(store, responseCacheConfigBlobKey)}
+			}
+			return "", responseCacheConfig{}, err
+		}
+		prepared.cfg = cfg
+		rt.store = candidateStore
+		nextETag = rec.ETag
+	} else {
+		prevRaw := rt.raw
+		if err := persistResponseCacheConfigRaw(rt.configPath, prepared.raw); err != nil {
+			return "", responseCacheConfig{}, err
+		}
+		if rt.store == nil {
+			rt.store, err = newProxyResponseCacheStore(prepared.cfg)
+			if err != nil {
+				_ = persistResponseCacheConfigRaw(rt.configPath, prevRaw)
+				return "", responseCacheConfig{}, err
+			}
+		} else if err := rt.store.Reconfigure(prepared.cfg); err != nil {
+			_ = persistResponseCacheConfigRaw(rt.configPath, prevRaw)
+			_ = rt.store.Reconfigure(prevCfg)
+			return "", responseCacheConfig{}, err
+		}
 	}
 
 	rt.raw = prepared.raw
-	rt.etag = prepared.etag
+	rt.etag = nextETag
 	rt.cfg = prepared.cfg
 
 	if prevStats.StoreDir != "" && prevStats.StoreDir != prepared.cfg.StoreDir {
 		log.Printf("[CACHE] switched internal cache dir from %s to %s", prevStats.StoreDir, prepared.cfg.StoreDir)
 	}
-	if prevETag != prepared.etag {
+	if prevETag != nextETag {
 		log.Printf("[CACHE] internal cache config applied enabled=%t store_dir=%s max_bytes=%d", prepared.cfg.Enabled, prepared.cfg.StoreDir, prepared.cfg.MaxBytes)
 	}
 
@@ -345,6 +378,30 @@ func SyncResponseCacheStoreStorage() error {
 		rt.mu.RUnlock()
 	}
 	if path == "" {
+		return nil
+	}
+	if store := getLogsStatsStore(); store != nil {
+		raw, rec, found, err := loadRuntimeResponseCacheConfig(store)
+		if err != nil || !found {
+			return err
+		}
+		prepared, err := prepareResponseCacheRaw(string(raw))
+		if err != nil {
+			return err
+		}
+		rt.mu.Lock()
+		defer rt.mu.Unlock()
+		if rt.store == nil {
+			rt.store, err = newProxyResponseCacheStore(prepared.cfg)
+			if err != nil {
+				return err
+			}
+		} else if err := rt.store.Reconfigure(prepared.cfg); err != nil {
+			return err
+		}
+		rt.raw = prepared.raw
+		rt.etag = rec.ETag
+		rt.cfg = prepared.cfg
 		return nil
 	}
 	return syncConfigBlobFilePath(configBlobSyncOptions{

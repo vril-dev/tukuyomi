@@ -298,7 +298,7 @@ func TestProxyRulesApplyAndRollback(t *testing.T) {
 	}
 }
 
-func TestProxyRulesApplyAndRollbackPersistDBBlob(t *testing.T) {
+func TestProxyRulesApplyAndRollbackPersistNormalizedDB(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "store.db")
 	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
@@ -317,41 +317,59 @@ func TestProxyRulesApplyAndRollbackPersistDBBlob(t *testing.T) {
 	if err := os.WriteFile(proxyPath, []byte(initial), 0o644); err != nil {
 		t.Fatalf("write initial proxy.json: %v", err)
 	}
+	importProxyRuntimeDBForTest(t, initial)
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
-	if _, _, found, err := getLogsStatsStore().GetConfigBlob(proxyRulesConfigBlobKey); err != nil {
-		t.Fatalf("GetConfigBlob(proxy_rules): %v", err)
-	} else if !found {
-		t.Fatal("proxy_rules blob should be seeded from proxy.json")
+	active, rec, found, err := getLogsStatsStore().loadActiveProxyConfig()
+	if err != nil {
+		t.Fatalf("loadActiveProxyConfig: %v", err)
+	}
+	if !found {
+		t.Fatal("normalized proxy config should be imported before startup")
+	}
+	if rec.Generation != 1 {
+		t.Fatalf("generation=%d want 1", rec.Generation)
+	}
+	if len(active.Upstreams) != 1 || !strings.Contains(active.Upstreams[0].URL, "8081") {
+		t.Fatalf("active upstreams after seed=%#v want 8081", active.Upstreams)
 	}
 	_, etag, _, _, _ := ProxyRulesSnapshot()
 	next := strings.Replace(initial, "127.0.0.1:8081", "127.0.0.1:8082", 1)
 	if _, _, err := ApplyProxyRulesRaw(etag, next); err != nil {
 		t.Fatalf("ApplyProxyRulesRaw: %v", err)
 	}
-	dbRaw, _, found, err := getLogsStatsStore().GetConfigBlob(proxyRulesConfigBlobKey)
+	active, rec, found, err = getLogsStatsStore().loadActiveProxyConfig()
 	if err != nil {
-		t.Fatalf("GetConfigBlob(proxy_rules): %v", err)
+		t.Fatalf("loadActiveProxyConfig after apply: %v", err)
 	}
 	if !found {
-		t.Fatal("proxy_rules blob should exist after apply")
+		t.Fatal("normalized proxy config should exist after apply")
 	}
-	if !strings.Contains(string(dbRaw), "127.0.0.1:8082") {
-		t.Fatalf("proxy_rules blob was not updated: %s", string(dbRaw))
+	if rec.Generation != 2 {
+		t.Fatalf("generation=%d want 2", rec.Generation)
+	}
+	if len(active.Upstreams) != 1 || !strings.Contains(active.Upstreams[0].URL, "8082") {
+		t.Fatalf("active upstreams after apply=%#v want 8082", active.Upstreams)
 	}
 	if _, _, _, err := RollbackProxyRules(); err != nil {
 		t.Fatalf("RollbackProxyRules: %v", err)
 	}
-	dbRaw, _, found, err = getLogsStatsStore().GetConfigBlob(proxyRulesConfigBlobKey)
+	active, rec, found, err = getLogsStatsStore().loadActiveProxyConfig()
 	if err != nil {
-		t.Fatalf("GetConfigBlob(proxy_rules): %v", err)
+		t.Fatalf("loadActiveProxyConfig after rollback: %v", err)
 	}
 	if !found {
-		t.Fatal("proxy_rules blob should exist after rollback")
+		t.Fatal("normalized proxy config should exist after rollback")
 	}
-	if !strings.Contains(string(dbRaw), "127.0.0.1:8081") {
-		t.Fatalf("proxy_rules blob was not rolled back: %s", string(dbRaw))
+	if rec.Generation != 3 {
+		t.Fatalf("generation=%d want 3", rec.Generation)
+	}
+	if rec.RestoredFromVersionID == 0 {
+		t.Fatal("rollback generation should record restored_from_version_id")
+	}
+	if len(active.Upstreams) != 1 || !strings.Contains(active.Upstreams[0].URL, "8081") {
+		t.Fatalf("active upstreams after rollback=%#v want 8081", active.Upstreams)
 	}
 }
 
@@ -378,6 +396,7 @@ func TestInitProxyRuntimeUsesDBBlobBeforeSeedFile(t *testing.T) {
 	if err := getLogsStatsStore().UpsertConfigBlob(proxyRulesConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
 		t.Fatalf("upsert proxy_rules: %v", err)
 	}
+	seedUpstreamRuntimeDBForTest(t, prepared.cfg)
 
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)

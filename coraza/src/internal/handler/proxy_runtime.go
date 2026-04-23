@@ -240,6 +240,7 @@ type proxyRuntime struct {
 	transport     *dynamicProxyTransport
 	health        *upstreamHealthMonitor
 	errRes        proxyErrorResponse
+	versionID     int64
 	rollbackMax   int
 	rollbackStack []proxyRollbackEntry
 }
@@ -254,20 +255,9 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 	if path == "" {
 		return fmt.Errorf("proxy config path is required")
 	}
-	raw, shouldSeedDB, err := loadProxyRulesStartupRaw(path)
+	prepared, versionID, err := loadProxyRulesStartupPrepared(path)
 	if err != nil {
 		return err
-	}
-	prepared, err := prepareProxyRulesRaw(raw)
-	if err != nil {
-		return fmt.Errorf("invalid proxy config (%s): %w", path, err)
-	}
-	if shouldSeedDB {
-		if store := getLogsStatsStore(); store != nil {
-			if err := store.UpsertConfigBlob(proxyRulesConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
-				return fmt.Errorf("seed proxy_rules db blob: %w", err)
-			}
-		}
 	}
 
 	health, err := newUpstreamHealthMonitor(prepared.effectiveCfg)
@@ -294,6 +284,7 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 		proxyEngine:   engine,
 		transport:     transport,
 		errRes:        prepared.errRes,
+		versionID:     versionID,
 		rollbackMax:   clampProxyRollbackMax(rollbackMax),
 		rollbackStack: make([]proxyRollbackEntry, 0, clampProxyRollbackMax(rollbackMax)),
 	}
@@ -309,26 +300,49 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 	return nil
 }
 
-func loadProxyRulesStartupRaw(path string) (string, bool, error) {
+func loadProxyRulesStartupPrepared(path string) (proxyRulesPreparedUpdate, int64, error) {
 	if store := getLogsStatsStore(); store != nil {
-		dbRaw, _, found, err := store.GetConfigBlob(proxyRulesConfigBlobKey)
+		cfg, rec, found, err := store.loadActiveProxyConfig()
 		if err != nil {
-			return "", false, fmt.Errorf("read proxy_rules from db: %w", err)
+			return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("read normalized proxy config from db: %w", err)
 		}
 		if found {
-			return string(dbRaw), false, nil
+			prepared, err := prepareProxyRulesRaw(mustJSON(cfg))
+			if err != nil {
+				return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("invalid normalized proxy config: %w", err)
+			}
+			prepared.etag = rec.ETag
+			return prepared, rec.VersionID, nil
 		}
-		raw, err := os.ReadFile(path)
+
+		dbRaw, _, found, err := store.GetConfigBlob(proxyRulesConfigBlobKey)
 		if err != nil {
-			return "", false, fmt.Errorf("read proxy seed file (%s): %w", path, err)
+			return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("read legacy proxy_rules blob: %w", err)
 		}
-		return string(raw), true, nil
+		if found {
+			prepared, err := prepareProxyRulesRaw(string(dbRaw))
+			if err != nil {
+				return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("invalid legacy proxy config: %w", err)
+			}
+			rec, err = store.writeProxyConfigVersion("", prepared.cfg, configVersionSourceImport, "", "legacy proxy import", 0)
+			if err != nil {
+				return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("import normalized proxy config: %w", err)
+			}
+			_ = store.DeleteConfigBlob(proxyRulesConfigBlobKey)
+			prepared.etag = rec.ETag
+			return prepared, rec.VersionID, nil
+		}
+		return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("normalized proxy config missing in db; run make db-import before removing seed files")
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return "", false, fmt.Errorf("read proxy config (%s): %w", path, err)
+		return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("read proxy config (%s): %w", path, err)
 	}
-	return string(raw), false, nil
+	prepared, err := prepareProxyRulesRaw(string(raw))
+	if err != nil {
+		return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("invalid proxy config (%s): %w", path, err)
+	}
+	return prepared, 0, nil
 }
 
 func rewriteTukuyomiProxyRequest(in *http.Request, out *http.Request) *http.Request {
@@ -655,12 +669,23 @@ func ApplyProxyRulesRaw(ifMatch string, raw string) (string, ProxyRulesConfig, e
 	prevRaw := rt.raw
 	prevETag := rt.etag
 	prevTarget := rt.target
+	prevVersionID := rt.versionID
 
-	if err := persistProxyConfigAuthoritative(rt.configPath, prepared.raw, prepared.etag); err != nil {
+	nextETag, nextVersionID, err := persistProxyConfigAuthoritative(rt.configPath, rt.etag, prepared, configVersionSourceApply, 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			return "", ProxyRulesConfig{}, proxyRulesConflictError{CurrentETag: rt.etag}
+		}
 		return "", ProxyRulesConfig{}, err
 	}
+	prepared.etag = nextETag
 	if err := rt.transport.Update(prepared.effectiveCfg); err != nil {
-		_ = persistProxyConfigAuthoritative(rt.configPath, prevRaw, prevETag)
+		if prevPrepared, prepErr := prepareProxyRulesRaw(prevRaw); prepErr == nil {
+			if restoredETag, restoredVersionID, restoreErr := persistProxyConfigAuthoritative(rt.configPath, prepared.etag, prevPrepared, configVersionSourceRollback, prevVersionID); restoreErr == nil {
+				rt.etag = restoredETag
+				rt.versionID = restoredVersionID
+			}
+		}
 		return "", ProxyRulesConfig{}, err
 	}
 
@@ -670,6 +695,7 @@ func ApplyProxyRulesRaw(ifMatch string, raw string) (string, ProxyRulesConfig, e
 	rt.effectiveCfg = prepared.effectiveCfg
 	rt.target = prepared.target
 	rt.errRes = prepared.errRes
+	rt.versionID = nextVersionID
 	setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
 	if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
@@ -677,7 +703,12 @@ func ApplyProxyRulesRaw(ifMatch string, raw string) (string, ProxyRulesConfig, e
 	}
 	if rt.health != nil {
 		if err := rt.health.Update(prepared.effectiveCfg); err != nil {
-			_ = persistProxyConfigAuthoritative(rt.configPath, prevRaw, prevETag)
+			if prevPrepared, prepErr := prepareProxyRulesRaw(prevRaw); prepErr == nil {
+				if restoredETag, restoredVersionID, restoreErr := persistProxyConfigAuthoritative(rt.configPath, prepared.etag, prevPrepared, configVersionSourceRollback, prevVersionID); restoreErr == nil {
+					rt.etag = restoredETag
+					rt.versionID = restoredVersionID
+				}
+			}
 			return "", ProxyRulesConfig{}, err
 		}
 	}
@@ -719,13 +750,30 @@ func RollbackProxyRules() (string, ProxyRulesConfig, proxyRollbackEntry, error) 
 
 	prevRaw := rt.raw
 	prevTarget := rt.target
+	prevVersionID := rt.versionID
+	restoredVersionID := int64(0)
+	if store := getLogsStatsStore(); store != nil {
+		if foundID, found, err := store.findProxyVersionIDByETag(entry.ETag); err == nil && found {
+			restoredVersionID = foundID
+		}
+	}
 
-	if err := persistProxyConfigAuthoritative(rt.configPath, prepared.raw, prepared.etag); err != nil {
+	nextETag, nextVersionID, err := persistProxyConfigAuthoritative(rt.configPath, rt.etag, prepared, configVersionSourceRollback, restoredVersionID)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			return "", ProxyRulesConfig{}, proxyRollbackEntry{}, proxyRulesConflictError{CurrentETag: rt.etag}
+		}
 		rt.pushRollbackLocked(entry)
 		return "", ProxyRulesConfig{}, proxyRollbackEntry{}, err
 	}
+	prepared.etag = nextETag
 	if err := rt.transport.Update(prepared.effectiveCfg); err != nil {
-		_ = persistProxyConfigAuthoritative(rt.configPath, prevRaw, bypassconf.ComputeETag([]byte(prevRaw)))
+		if prevPrepared, prepErr := prepareProxyRulesRaw(prevRaw); prepErr == nil {
+			if restoredETag, restoredVersionID, restoreErr := persistProxyConfigAuthoritative(rt.configPath, prepared.etag, prevPrepared, configVersionSourceApply, prevVersionID); restoreErr == nil {
+				rt.etag = restoredETag
+				rt.versionID = restoredVersionID
+			}
+		}
 		rt.pushRollbackLocked(entry)
 		return "", ProxyRulesConfig{}, proxyRollbackEntry{}, err
 	}
@@ -736,6 +784,7 @@ func RollbackProxyRules() (string, ProxyRulesConfig, proxyRollbackEntry, error) 
 	rt.effectiveCfg = prepared.effectiveCfg
 	rt.target = prepared.target
 	rt.errRes = prepared.errRes
+	rt.versionID = nextVersionID
 	setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
 	if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
@@ -743,7 +792,12 @@ func RollbackProxyRules() (string, ProxyRulesConfig, proxyRollbackEntry, error) 
 	}
 	if rt.health != nil {
 		if err := rt.health.Update(prepared.effectiveCfg); err != nil {
-			_ = persistProxyConfigAuthoritative(rt.configPath, prevRaw, bypassconf.ComputeETag([]byte(prevRaw)))
+			if prevPrepared, prepErr := prepareProxyRulesRaw(prevRaw); prepErr == nil {
+				if restoredETag, restoredVersionID, restoreErr := persistProxyConfigAuthoritative(rt.configPath, prepared.etag, prevPrepared, configVersionSourceApply, prevVersionID); restoreErr == nil {
+					rt.etag = restoredETag
+					rt.versionID = restoredVersionID
+				}
+			}
 			rt.pushRollbackLocked(entry)
 			return "", ProxyRulesConfig{}, proxyRollbackEntry{}, err
 		}
@@ -2136,14 +2190,18 @@ func persistProxyConfigRaw(path string, raw string) error {
 	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
 }
 
-func persistProxyConfigAuthoritative(path string, raw string, etag string) error {
+func persistProxyConfigAuthoritative(path string, expectedETag string, prepared proxyRulesPreparedUpdate, source string, restoredFromVersionID int64) (string, int64, error) {
 	if store := getLogsStatsStore(); store != nil {
-		if strings.TrimSpace(etag) == "" {
-			etag = bypassconf.ComputeETag([]byte(raw))
+		rec, err := store.writeProxyConfigVersion(expectedETag, prepared.cfg, source, "", "proxy config update", restoredFromVersionID)
+		if err != nil {
+			return "", 0, err
 		}
-		return store.UpsertConfigBlob(proxyRulesConfigBlobKey, []byte(raw), etag, time.Now().UTC())
+		return rec.ETag, rec.VersionID, nil
 	}
-	return persistProxyConfigRaw(path, raw)
+	if err := persistProxyConfigRaw(path, prepared.raw); err != nil {
+		return "", 0, err
+	}
+	return prepared.etag, 0, nil
 }
 
 func mustJSON(v any) string {

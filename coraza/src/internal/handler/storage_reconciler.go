@@ -10,6 +10,10 @@ import (
 
 var storageSyncMu sync.Mutex
 
+func DBStorageActive() bool {
+	return getLogsStatsStore() != nil
+}
+
 func SyncAllStorageFromDB() error {
 	storageSyncMu.Lock()
 	defer storageSyncMu.Unlock()

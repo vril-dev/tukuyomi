@@ -19,7 +19,10 @@ var (
 	defaultPHPRuntimeInventoryRaw    = "{}\n"
 )
 
-type phpRuntimeInventoryStateFile struct{}
+type phpRuntimeInventoryStateFile struct {
+	Runtimes         []PHPRuntimeRecord `json:"runtimes,omitempty"`
+	explicitRuntimes bool
+}
 
 type PHPRuntimeInventoryFile struct {
 	Runtimes []PHPRuntimeRecord `json:"runtimes,omitempty"`
@@ -68,6 +71,38 @@ func InitPHPRuntimeInventoryRuntime(path string, rollbackMax int) error {
 	if cfgPath == "" {
 		cfgPath = "data/php-fpm/inventory.json"
 	}
+	if store := getLogsStatsStore(); store != nil {
+		cfg, rec, found, err := store.loadActivePHPRuntimeInventoryConfig()
+		if err != nil {
+			return fmt.Errorf("read php runtime inventory db: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("normalized php runtime inventory config missing in db; run make db-import before removing seed files")
+		}
+		prepared, err := preparePHPRuntimeInventoryState(phpRuntimeInventoryStateFromConfig(cfg), cfgPath)
+		if err != nil {
+			return fmt.Errorf("invalid php runtime inventory db: %w", err)
+		}
+		rt := &phpRuntimeInventoryRuntime{
+			configPath:    cfgPath,
+			raw:           prepared.raw,
+			etag:          rec.ETag,
+			state:         prepared.state,
+			rollbackMax:   clampProxyRollbackMax(rollbackMax),
+			rollbackStack: make([]proxyRollbackEntry, 0, clampProxyRollbackMax(rollbackMax)),
+		}
+		phpRuntimeInventoryMu.Lock()
+		phpRuntimeInventoryRt = rt
+		phpRuntimeInventoryMu.Unlock()
+		if err := RefreshPHPRuntimeMaterialization(); err != nil {
+			return fmt.Errorf("materialize php runtime config: %w", err)
+		}
+		if err := ReconcilePHPRuntimeSupervisor(); err != nil {
+			return fmt.Errorf("reconcile php runtime supervisor: %w", err)
+		}
+		return nil
+	}
+
 	rawBytes, _, err := readFileMaybe(cfgPath)
 	if err != nil {
 		return fmt.Errorf("read php runtime inventory (%s): %w", cfgPath, err)
@@ -163,24 +198,35 @@ func ApplyPHPRuntimeInventoryRaw(ifMatch string, raw string) (string, PHPRuntime
 	prevRaw := rt.raw
 	prevETag := rt.etag
 	prevState := rt.state
-	if err := persistPHPRuntimeInventoryRaw(rt.configPath, prepared.raw); err != nil {
-		return "", PHPRuntimeInventoryFile{}, err
+	nextETag := prepared.etag
+	var dbStore *wafEventStore
+	if store := getLogsStatsStore(); store != nil {
+		dbStore = store
+		rec, err := store.writePHPRuntimeInventoryConfigVersion(ifMatch, prepared.cfg, configVersionSourceApply, "", "php runtime inventory update", 0)
+		if err != nil {
+			return "", PHPRuntimeInventoryFile{}, err
+		}
+		nextETag = rec.ETag
+	} else {
+		if err := persistPHPRuntimeInventoryRaw(rt.configPath, prepared.raw); err != nil {
+			return "", PHPRuntimeInventoryFile{}, err
+		}
 	}
 	rt.raw = prepared.raw
-	rt.etag = prepared.etag
+	rt.etag = nextETag
 	rt.state = prepared.state
 	if err := refreshPHPRuntimeMaterializationWithConfig(prepared.cfg, currentVhostConfig()); err != nil {
 		rt.raw = prevRaw
 		rt.etag = prevETag
 		rt.state = prevState
-		_ = persistPHPRuntimeInventoryRaw(rt.configPath, prevRaw)
+		_ = rollbackPersistedPHPRuntimeInventory(rt.configPath, dbStore, nextETag, prevState, prevRaw)
 		return "", PHPRuntimeInventoryFile{}, err
 	}
 	if err := ReconcilePHPRuntimeSupervisor(); err != nil {
 		rt.raw = prevRaw
 		rt.etag = prevETag
 		rt.state = prevState
-		_ = persistPHPRuntimeInventoryRaw(rt.configPath, prevRaw)
+		_ = rollbackPersistedPHPRuntimeInventory(rt.configPath, dbStore, nextETag, prevState, prevRaw)
 		prevCfg, _ := buildPHPRuntimeInventoryConfig(prevState, rt.configPath)
 		_ = refreshPHPRuntimeMaterializationWithConfig(prevCfg, currentVhostConfig())
 		_ = ReconcilePHPRuntimeSupervisor()
@@ -222,19 +268,31 @@ func RollbackPHPRuntimeInventory() (string, PHPRuntimeInventoryFile, proxyRollba
 	prevRaw := rt.raw
 	prevETag := rt.etag
 	prevState := rt.state
-	if err := persistPHPRuntimeInventoryRaw(rt.configPath, prepared.raw); err != nil {
-		rt.pushRollbackLocked(entry)
-		return "", PHPRuntimeInventoryFile{}, proxyRollbackEntry{}, err
+	nextETag := prepared.etag
+	var dbStore *wafEventStore
+	if store := getLogsStatsStore(); store != nil {
+		dbStore = store
+		rec, err := store.writePHPRuntimeInventoryConfigVersion(rt.etag, prepared.cfg, configVersionSourceRollback, "", "php runtime inventory rollback", 0)
+		if err != nil {
+			rt.pushRollbackLocked(entry)
+			return "", PHPRuntimeInventoryFile{}, proxyRollbackEntry{}, err
+		}
+		nextETag = rec.ETag
+	} else {
+		if err := persistPHPRuntimeInventoryRaw(rt.configPath, prepared.raw); err != nil {
+			rt.pushRollbackLocked(entry)
+			return "", PHPRuntimeInventoryFile{}, proxyRollbackEntry{}, err
+		}
 	}
 
 	rt.raw = prepared.raw
-	rt.etag = prepared.etag
+	rt.etag = nextETag
 	rt.state = prepared.state
 	if err := refreshPHPRuntimeMaterializationWithConfig(prepared.cfg, currentVhostConfig()); err != nil {
 		rt.raw = prevRaw
 		rt.etag = prevETag
 		rt.state = prevState
-		_ = persistPHPRuntimeInventoryRaw(rt.configPath, prevRaw)
+		_ = rollbackPersistedPHPRuntimeInventory(rt.configPath, dbStore, nextETag, prevState, prevRaw)
 		rt.pushRollbackLocked(entry)
 		return "", PHPRuntimeInventoryFile{}, proxyRollbackEntry{}, err
 	}
@@ -242,7 +300,7 @@ func RollbackPHPRuntimeInventory() (string, PHPRuntimeInventoryFile, proxyRollba
 		rt.raw = prevRaw
 		rt.etag = prevETag
 		rt.state = prevState
-		_ = persistPHPRuntimeInventoryRaw(rt.configPath, prevRaw)
+		_ = rollbackPersistedPHPRuntimeInventory(rt.configPath, dbStore, nextETag, prevState, prevRaw)
 		prevCfg, _ := buildPHPRuntimeInventoryConfig(prevState, rt.configPath)
 		_ = refreshPHPRuntimeMaterializationWithConfig(prevCfg, currentVhostConfig())
 		_ = ReconcilePHPRuntimeSupervisor()
@@ -277,11 +335,15 @@ func preparePHPRuntimeInventoryRaw(raw string, inventoryPath string) (phpRuntime
 	if err != nil {
 		return phpRuntimeInventoryPreparedConfig{}, err
 	}
+	return preparePHPRuntimeInventoryState(state, inventoryPath)
+}
+
+func preparePHPRuntimeInventoryState(state phpRuntimeInventoryStateFile, inventoryPath string) (phpRuntimeInventoryPreparedConfig, error) {
 	cfg, err := buildPHPRuntimeInventoryConfig(state, inventoryPath)
 	if err != nil {
 		return phpRuntimeInventoryPreparedConfig{}, err
 	}
-	normalizedRaw := mustJSON(state)
+	normalizedRaw := marshalPHPRuntimeInventoryStateRaw(state)
 	return phpRuntimeInventoryPreparedConfig{
 		state: state,
 		cfg:   cfg,
@@ -292,8 +354,8 @@ func preparePHPRuntimeInventoryRaw(raw string, inventoryPath string) (phpRuntime
 
 func parsePHPRuntimeInventoryRaw(raw string) (phpRuntimeInventoryStateFile, error) {
 	var in struct {
-		PHPEnabled json.RawMessage    `json:"php_enabled"`
-		Runtimes   []PHPRuntimeRecord `json:"runtimes,omitempty"`
+		PHPEnabled json.RawMessage `json:"php_enabled"`
+		Runtimes   json.RawMessage `json:"runtimes"`
 	}
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -303,7 +365,34 @@ func parsePHPRuntimeInventoryRaw(raw string) (phpRuntimeInventoryStateFile, erro
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return phpRuntimeInventoryStateFile{}, fmt.Errorf("invalid json")
 	}
-	return phpRuntimeInventoryStateFile{}, nil
+	state := phpRuntimeInventoryStateFile{}
+	if in.Runtimes != nil {
+		state.explicitRuntimes = true
+		if strings.TrimSpace(string(in.Runtimes)) != "null" {
+			if err := json.Unmarshal(in.Runtimes, &state.Runtimes); err != nil {
+				return phpRuntimeInventoryStateFile{}, fmt.Errorf("runtimes must be an array")
+			}
+		}
+	}
+	return state, nil
+}
+
+func phpRuntimeInventoryStateFromConfig(cfg PHPRuntimeInventoryFile) phpRuntimeInventoryStateFile {
+	return phpRuntimeInventoryStateFile{
+		Runtimes:         clonePHPRuntimeInventoryFile(cfg).Runtimes,
+		explicitRuntimes: true,
+	}
+}
+
+func marshalPHPRuntimeInventoryStateRaw(state phpRuntimeInventoryStateFile) string {
+	if !state.explicitRuntimes {
+		return defaultPHPRuntimeInventoryRaw
+	}
+	return mustJSON(struct {
+		Runtimes []PHPRuntimeRecord `json:"runtimes"`
+	}{
+		Runtimes: clonePHPRuntimeInventoryFile(PHPRuntimeInventoryFile{Runtimes: state.Runtimes}).Runtimes,
+	})
 }
 
 func normalizePHPRuntimeInventoryFile(in PHPRuntimeInventoryFile) PHPRuntimeInventoryFile {
@@ -567,9 +656,18 @@ type phpRuntimeArtifactManifest struct {
 }
 
 func buildPHPRuntimeInventoryConfig(state phpRuntimeInventoryStateFile, inventoryPath string) (PHPRuntimeInventoryFile, error) {
-	runtimes, err := discoverPHPRuntimesFromDisk(inventoryPath)
-	if err != nil {
-		return PHPRuntimeInventoryFile{}, err
+	var runtimes []PHPRuntimeRecord
+	var err error
+	if state.explicitRuntimes {
+		runtimes = clonePHPRuntimeInventoryFile(PHPRuntimeInventoryFile{Runtimes: state.Runtimes}).Runtimes
+		for i := range runtimes {
+			runtimes[i].Available, runtimes[i].AvailabilityMessage = detectPHPRuntimeAvailability(runtimes[i].BinaryPath, runtimes[i].Modules)
+		}
+	} else {
+		runtimes, err = discoverPHPRuntimesFromDisk(inventoryPath)
+		if err != nil {
+			return PHPRuntimeInventoryFile{}, err
+		}
 	}
 	cfg := normalizePHPRuntimeInventoryFile(PHPRuntimeInventoryFile{
 		Runtimes: runtimes,
@@ -707,6 +805,18 @@ func persistPHPRuntimeInventoryRaw(path string, raw string) error {
 		return err
 	}
 	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
+}
+
+func rollbackPersistedPHPRuntimeInventory(path string, store *wafEventStore, expectedETag string, state phpRuntimeInventoryStateFile, raw string) error {
+	if store != nil {
+		prepared, err := preparePHPRuntimeInventoryState(state, path)
+		if err != nil {
+			return err
+		}
+		_, err = store.writePHPRuntimeInventoryConfigVersion(expectedETag, prepared.cfg, configVersionSourceRollback, "", "php runtime inventory rollback after failed apply", 0)
+		return err
+	}
+	return persistPHPRuntimeInventoryRaw(path, raw)
 }
 
 func (rt *phpRuntimeInventoryRuntime) pushRollbackLocked(entry proxyRollbackEntry) {

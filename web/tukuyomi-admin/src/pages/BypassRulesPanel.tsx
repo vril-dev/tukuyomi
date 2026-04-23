@@ -38,14 +38,14 @@ type BypassRulesDTO = {
 const exampleState: BypassRulesEditorState = {
   defaultEntries: [
     { path: "/assets/", extraRule: "" },
-    { path: "/search", extraRule: "conf/rules/search-endpoint.conf" },
+    { path: "/search", extraRule: "" },
   ],
   hosts: [
     {
       host: "example.com",
       entries: [
         { path: "/internal/", extraRule: "" },
-        { path: "/admin/login", extraRule: "conf/rules/admin-login.conf" },
+        { path: "/admin/login", extraRule: "" },
       ],
     },
   ],

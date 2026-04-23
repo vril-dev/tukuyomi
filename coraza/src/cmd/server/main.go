@@ -29,6 +29,9 @@ func main() {
 		case "db-import":
 			runDBImportCommand()
 			return
+		case "db-import-waf-rule-assets":
+			runDBImportWAFRuleAssetsCommand()
+			return
 		case "run-scheduled-tasks":
 			runScheduledTasksCommand()
 			return
@@ -236,13 +239,15 @@ func main() {
 		handler.StartStorageSyncLoop(config.DBSyncInterval)
 		log.Printf("[DB][SYNC] periodic sync loop enabled interval=%s", config.DBSyncInterval)
 	}
-	stopWatch, err := cacheconf.Watch(cacheConfPath, legacyCacheConfPath, func(rs *cacheconf.Ruleset) {
-		//
-	})
-	if err != nil {
-		log.Printf("[CACHE] watch disabled: %v", err)
-	} else {
-		defer stopWatch()
+	if !handler.DBStorageActive() {
+		stopWatch, err := cacheconf.Watch(cacheConfPath, legacyCacheConfPath, func(rs *cacheconf.Ruleset) {
+			//
+		})
+		if err != nil {
+			log.Printf("[CACHE] watch disabled: %v", err)
+		} else {
+			defer stopWatch()
+		}
 	}
 
 	splitAdminListener := strings.TrimSpace(config.AdminListenAddr) != ""
@@ -435,6 +440,15 @@ func runDBImportCommand() {
 		log.Fatalf("[DB][IMPORT][FATAL] %v", err)
 	}
 	log.Printf("[DB][IMPORT] completed")
+}
+
+func runDBImportWAFRuleAssetsCommand() {
+	config.LoadEnv()
+	initRuntimeDBStoreOrFatal("[DB][IMPORT][WAF_RULE_ASSETS]")
+	if err := handler.ImportWAFRuleAssetsStorage(); err != nil {
+		log.Fatalf("[DB][IMPORT][WAF_RULE_ASSETS][FATAL] %v", err)
+	}
+	log.Printf("[DB][IMPORT][WAF_RULE_ASSETS] completed")
 }
 
 func runScheduledTasksCommand() {

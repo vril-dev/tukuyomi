@@ -16,7 +16,7 @@
 
 ## Data Layout
 
-保存される task 定義の正は DB blob `scheduled_tasks` です。
+保存される task 定義の正は normalized `scheduled_tasks` DB domain です。
 `conf/scheduled-tasks.json` は空 DB の seed/export file であり、bootstrap 後の
 runtime source of truth ではありません。
 
@@ -81,7 +81,7 @@ bundled PHP runtime を使いたいなら、その `php` wrapper を command lin
 
 - `conf/config.json` を読み込む
 - 設定された DB store を開く
-- DB blob `scheduled_tasks` を直接読む。blob が無い時だけ `conf/scheduled-tasks.json` から seed する
+- normalized `scheduled_tasks` DB domain を直接読む。domain が無い時だけ `conf/scheduled-tasks.json` から seed する
 - 現在 minute に一致する job だけを実行する
 - 各 task を `/bin/sh -lc` で起動する
 - state/log を `data/scheduled-tasks/` に記録する
@@ -168,7 +168,7 @@ make ui-preview-down
 
 preview は `conf/scheduled-tasks.ui-preview.json` を使うので、preview UI からの変更は通常の DB-backed scheduled-task config を汚しません。
 
-既定では `ui-preview-up` のたびにその preview config は `{"tasks":[]}` へ初期化され、preview 専用 SQLite DB も削除されます。以前の preview task や DB blob は引き継ぎません。
+既定では `ui-preview-up` のたびにその preview config は `{"tasks":[]}` へ初期化され、preview 専用 SQLite DB も削除されます。以前の preview task や DB row は引き継ぎません。
 
 `down/up` をまたいで preview 編集結果を残したい時は、これを使います。
 

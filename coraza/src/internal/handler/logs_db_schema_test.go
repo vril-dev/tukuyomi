@@ -3,7 +3,6 @@ package handler
 import (
 	"database/sql"
 	"path/filepath"
-	"reflect"
 	"testing"
 )
 
@@ -23,7 +22,50 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 	}
 	defer db.Close()
 
-	for _, table := range []string{"waf_events", "ingest_state", "config_blobs", "schema_migrations"} {
+	for _, table := range []string{
+		"waf_events",
+		"ingest_state",
+		"config_blobs",
+		"schema_migrations",
+		"config_domains",
+		"config_versions",
+		"config_rollbacks",
+		"proxy_settings",
+		"proxy_upstreams",
+		"proxy_routes",
+		"sites",
+		"vhosts",
+		"scheduled_tasks",
+		"upstream_runtime_overrides",
+		"php_runtime_inventory",
+		"php_runtime_modules",
+		"php_runtime_default_disabled_modules",
+		"app_config_values",
+		"app_config_lists",
+		"cache_rule_scopes",
+		"cache_rules",
+		"cache_rule_methods",
+		"cache_rule_vary_headers",
+		"bypass_scopes",
+		"bypass_entries",
+		"country_block_scopes",
+		"country_block_countries",
+		"rate_limit_scopes",
+		"rate_limit_rules",
+		"rate_limit_rule_methods",
+		"bot_defense_scopes",
+		"bot_defense_path_policies",
+		"semantic_scopes",
+		"notification_settings",
+		"notification_sinks",
+		"ip_reputation_scopes",
+		"response_cache_config",
+		"crs_disabled_rules",
+		"override_rules",
+		"override_rule_versions",
+		"waf_rule_assets",
+		"waf_rule_asset_contents",
+	} {
 		var name string
 		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
 		if err != nil {
@@ -31,43 +73,63 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		}
 	}
 
-	rows, err := db.Query(`SELECT migration_name FROM schema_migrations ORDER BY migration_name`)
-	if err != nil {
-		t.Fatalf("query migrations: %v", err)
+	var version int
+	var dirty int
+	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
+		t.Fatalf("query migration version: %v", err)
 	}
-	defer rows.Close()
-	var migrations []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			t.Fatalf("scan migration: %v", err)
-		}
-		migrations = append(migrations, name)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("migration rows: %v", err)
-	}
-	want := []string{"000_schema_migrations.sql", "001_init.sql"}
-	if !reflect.DeepEqual(migrations, want) {
-		t.Fatalf("migrations=%v want=%v", migrations, want)
+	if version != 7 || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=7 dirty=0", version, dirty)
 	}
 }
 
-func TestSplitSQLStatementsHandlesCommentsAndQuotedSemicolons(t *testing.T) {
-	statements, err := splitSQLStatements(`
-		-- leading comment
-		CREATE TABLE example (v TEXT DEFAULT 'a;b');
-		/* block ; comment */
-		INSERT INTO example (v) VALUES ('c'';d');
-	`)
+func TestMigrateLogsStatsStoreWithBackendSQLiteReplacesLegacyMigrationTable(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
+
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		t.Fatalf("split SQL: %v", err)
+		t.Fatalf("open sqlite: %v", err)
 	}
-	want := []string{
-		"CREATE TABLE example (v TEXT DEFAULT 'a;b')",
-		"INSERT INTO example (v) VALUES ('c'';d')",
+	if _, err := db.Exec(`
+		CREATE TABLE schema_migrations (
+			migration_name TEXT PRIMARY KEY,
+			applied_at_unix INTEGER NOT NULL,
+			applied_at TEXT NOT NULL
+		);
+		INSERT INTO schema_migrations (migration_name, applied_at_unix, applied_at)
+		VALUES ('001_init.sql', 1, 'legacy');
+	`); err != nil {
+		_ = db.Close()
+		t.Fatalf("seed legacy schema_migrations: %v", err)
 	}
-	if !reflect.DeepEqual(statements, want) {
-		t.Fatalf("statements=%q want=%q", statements, want)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close sqlite: %v", err)
+	}
+
+	if err := MigrateLogsStatsStoreWithBackend("db", "sqlite", dbPath, ""); err != nil {
+		t.Fatalf("migrate sqlite: %v", err)
+	}
+
+	db, err = sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("reopen sqlite: %v", err)
+	}
+	defer db.Close()
+
+	var version int
+	var dirty int
+	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
+		t.Fatalf("query migration version: %v", err)
+	}
+	if version != 7 || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=7 dirty=0", version, dirty)
+	}
+
+	var legacyColumns int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('schema_migrations') WHERE name = 'migration_name'`).Scan(&legacyColumns); err != nil {
+		t.Fatalf("query legacy columns: %v", err)
+	}
+	if legacyColumns != 0 {
+		t.Fatalf("legacy migration_name column still exists")
 	}
 }

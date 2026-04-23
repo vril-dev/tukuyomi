@@ -18,9 +18,11 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/lib/pq"
-	_ "modernc.org/sqlite"
+	gormsqlite "github.com/glebarez/sqlite"
+	gomysql "github.com/go-sql-driver/mysql"
+	gormmysql "gorm.io/driver/mysql"
+	gormpostgres "gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 const (
@@ -42,6 +44,7 @@ var (
 )
 
 type wafEventStore struct {
+	gormDB        *gorm.DB
 	db            *sql.DB
 	dbDriver      string
 	dbPath        string
@@ -188,6 +191,60 @@ func getLogsStatsStore() *wafEventStore {
 	return logStatsStore
 }
 
+func openGORMDatabase(driver, dbPath, dbDSN string) (*gorm.DB, *sql.DB, error) {
+	gormConfig := &gorm.Config{
+		DisableForeignKeyConstraintWhenMigrating: true,
+	}
+
+	var (
+		gormDB *gorm.DB
+		err    error
+	)
+	switch driver {
+	case logStatsDBDriverSQLite:
+		p := strings.TrimSpace(dbPath)
+		if p == "" {
+			return nil, nil, fmt.Errorf("sqlite db path is empty")
+		}
+		gormDB, err = gorm.Open(gormsqlite.Open(p), gormConfig)
+	case logStatsDBDriverMySQL:
+		dsn, err := mysqlDSNWithMultiStatements(dbDSN)
+		if err != nil {
+			return nil, nil, err
+		}
+		gormDB, err = gorm.Open(gormmysql.Open(dsn), gormConfig)
+	case logStatsDBDriverPostgres:
+		dsn := strings.TrimSpace(dbDSN)
+		if dsn == "" {
+			return nil, nil, fmt.Errorf("pgsql dsn is empty")
+		}
+		gormDB, err = gorm.Open(gormpostgres.Open(dsn), gormConfig)
+	default:
+		return nil, nil, fmt.Errorf("unsupported db driver: %s", driver)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	sqlDB, err := gormDB.DB()
+	if err != nil {
+		return nil, nil, err
+	}
+	return gormDB, sqlDB, nil
+}
+
+func mysqlDSNWithMultiStatements(dbDSN string) (string, error) {
+	dsn := strings.TrimSpace(dbDSN)
+	if dsn == "" {
+		return "", fmt.Errorf("mysql dsn is empty")
+	}
+	cfg, err := gomysql.ParseDSN(dsn)
+	if err != nil {
+		return "", fmt.Errorf("parse mysql dsn: %w", err)
+	}
+	cfg.MultiStatements = true
+	return cfg.FormatDSN(), nil
+}
+
 func openWAFEventStoreSQLite(dbPath string, retentionDays int) (*wafEventStore, error) {
 	p := strings.TrimSpace(dbPath)
 	if p == "" {
@@ -197,7 +254,7 @@ func openWAFEventStoreSQLite(dbPath string, retentionDays int) (*wafEventStore, 
 		return nil, fmt.Errorf("mkdir db dir: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", p)
+	gormDB, db, err := openGORMDatabase(logStatsDBDriverSQLite, p, "")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -235,6 +292,7 @@ func openWAFEventStoreSQLite(dbPath string, retentionDays int) (*wafEventStore, 
 		retentionDays = 0
 	}
 	return &wafEventStore{
+		gormDB:        gormDB,
 		db:            db,
 		dbDriver:      logStatsDBDriverSQLite,
 		dbPath:        p,
@@ -248,7 +306,7 @@ func openWAFEventStoreMySQL(dbDSN string, retentionDays int) (*wafEventStore, er
 		return nil, fmt.Errorf("mysql dsn is empty")
 	}
 
-	db, err := sql.Open("mysql", dsn)
+	gormDB, db, err := openGORMDatabase(logStatsDBDriverMySQL, "", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open mysql: %w", err)
 	}
@@ -272,6 +330,7 @@ func openWAFEventStoreMySQL(dbDSN string, retentionDays int) (*wafEventStore, er
 		retentionDays = 0
 	}
 	return &wafEventStore{
+		gormDB:        gormDB,
 		db:            db,
 		dbDriver:      logStatsDBDriverMySQL,
 		dbPath:        "",
@@ -285,7 +344,7 @@ func openWAFEventStorePostgres(dbDSN string, retentionDays int) (*wafEventStore,
 		return nil, fmt.Errorf("pgsql dsn is empty")
 	}
 
-	db, err := sql.Open("postgres", dsn)
+	gormDB, db, err := openGORMDatabase(logStatsDBDriverPostgres, "", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open pgsql: %w", err)
 	}
@@ -309,6 +368,7 @@ func openWAFEventStorePostgres(dbDSN string, retentionDays int) (*wafEventStore,
 		retentionDays = 0
 	}
 	return &wafEventStore{
+		gormDB:        gormDB,
 		db:            db,
 		dbDriver:      logStatsDBDriverPostgres,
 		dbPath:        "",

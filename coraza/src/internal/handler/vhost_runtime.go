@@ -68,9 +68,10 @@ type VhostBasicAuthUser struct {
 }
 
 type vhostPreparedConfig struct {
-	cfg  VhostConfigFile
-	raw  string
-	etag string
+	cfg       VhostConfigFile
+	raw       string
+	etag      string
+	versionID int64
 }
 
 type VhostRuntimeStatus struct {
@@ -96,6 +97,7 @@ type vhostRuntime struct {
 	configPath    string
 	raw           string
 	etag          string
+	versionID     int64
 	cfg           VhostConfigFile
 	loadError     string
 	rollbackMax   int
@@ -111,6 +113,32 @@ func InitVhostRuntime(path string, rollbackMax int) error {
 	cfgPath := strings.TrimSpace(path)
 	if cfgPath == "" {
 		cfgPath = "data/php-fpm/vhosts.json"
+	}
+	if store := getLogsStatsStore(); store != nil {
+		cfg, rec, found, err := store.loadActiveVhostConfig()
+		if err != nil {
+			return fmt.Errorf("read vhost config db: %w", err)
+		}
+		if found {
+			prepared, err := prepareVhostConfigRawWithInventory(mustJSON(cfg), currentPHPRuntimeInventoryConfig())
+			if err != nil {
+				return fmt.Errorf("read vhost config db: %w", err)
+			}
+			prepared.etag = rec.ETag
+			prepared.versionID = rec.VersionID
+			rt := newVhostRuntime(cfgPath, prepared.raw, prepared.cfg, "", rollbackMax)
+			rt.etag = prepared.etag
+			rt.versionID = prepared.versionID
+			setVhostRuntime(rt)
+			if err := RefreshPHPRuntimeMaterialization(); err != nil {
+				return fmt.Errorf("materialize php runtime config: %w", err)
+			}
+			if err := ReconcilePHPRuntimeSupervisor(); err != nil {
+				return fmt.Errorf("reconcile php runtime supervisor: %w", err)
+			}
+			return nil
+		}
+		return fmt.Errorf("normalized vhost config missing in db; run make db-import before removing seed files")
 	}
 	rawBytes, _, err := readFileMaybe(cfgPath)
 	if err != nil {
@@ -133,7 +161,17 @@ func InitVhostRuntime(path string, rollbackMax int) error {
 		}
 		return startupErr
 	}
+	if store := getLogsStatsStore(); store != nil {
+		rec, err := store.writeVhostConfigVersion("", prepared.cfg, configVersionSourceImport, "", "vhost file import", 0)
+		if err != nil {
+			return fmt.Errorf("import vhost config db: %w", err)
+		}
+		prepared.etag = rec.ETag
+		prepared.versionID = rec.VersionID
+	}
 	rt := newVhostRuntime(cfgPath, prepared.raw, prepared.cfg, "", rollbackMax)
+	rt.etag = prepared.etag
+	rt.versionID = prepared.versionID
 	setVhostRuntime(rt)
 	if err := RefreshPHPRuntimeMaterialization(); err != nil {
 		return fmt.Errorf("materialize php runtime config: %w", err)
@@ -228,32 +266,48 @@ func ApplyVhostConfigRaw(ifMatch string, raw string) (string, VhostConfigFile, e
 
 	prevRaw := rt.raw
 	prevETag := rt.etag
+	prevVersionID := rt.versionID
 	prevCfg := cloneVhostConfigFile(rt.cfg)
 	prevLoadError := rt.loadError
 	if _, err := prepareProxyRulesRawWithSitesAndVhosts(currentProxyRawConfigRaw(), currentSiteConfig(), prepared.cfg); err != nil {
 		return "", VhostConfigFile{}, err
 	}
-	if err := persistVhostConfigRaw(rt.configPath, prepared.raw); err != nil {
+	nextETag, nextVersionID, err := persistVhostConfigAuthoritative(rt.configPath, rt.etag, prepared, configVersionSourceApply, 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			return "", VhostConfigFile{}, proxyRulesConflictError{CurrentETag: rt.etag}
+		}
 		return "", VhostConfigFile{}, err
 	}
+	prepared.etag = nextETag
+	prepared.versionID = nextVersionID
 	rt.raw = prepared.raw
 	rt.etag = prepared.etag
+	rt.versionID = prepared.versionID
 	rt.cfg = cloneVhostConfigFile(prepared.cfg)
 	rt.loadError = ""
 	if err := refreshPHPRuntimeMaterializationWithConfig(currentPHPRuntimeInventoryConfig(), prepared.cfg); err != nil {
 		rt.raw = prevRaw
 		rt.etag = prevETag
+		rt.versionID = prevVersionID
 		rt.cfg = prevCfg
 		rt.loadError = prevLoadError
-		_ = persistVhostConfigRaw(rt.configPath, prevRaw)
+		if restoredETag, restoredVersionID, restoreErr := persistVhostConfigAuthoritative(rt.configPath, prepared.etag, vhostPreparedConfig{raw: prevRaw, etag: prevETag, cfg: prevCfg}, configVersionSourceRollback, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
 		return "", VhostConfigFile{}, err
 	}
 	if err := ReconcilePHPRuntimeSupervisor(); err != nil {
 		rt.raw = prevRaw
 		rt.etag = prevETag
+		rt.versionID = prevVersionID
 		rt.cfg = prevCfg
 		rt.loadError = prevLoadError
-		_ = persistVhostConfigRaw(rt.configPath, prevRaw)
+		if restoredETag, restoredVersionID, restoreErr := persistVhostConfigAuthoritative(rt.configPath, prepared.etag, vhostPreparedConfig{raw: prevRaw, etag: prevETag, cfg: prevCfg}, configVersionSourceRollback, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
 		_ = refreshPHPRuntimeMaterializationWithConfig(currentPHPRuntimeInventoryConfig(), prevCfg)
 		_ = ReconcilePHPRuntimeSupervisor()
 		return "", VhostConfigFile{}, err
@@ -261,9 +315,13 @@ func ApplyVhostConfigRaw(ifMatch string, raw string) (string, VhostConfigFile, e
 	if err := reloadProxyRuntimeWithSitesAndVhosts(currentSiteConfig(), prepared.cfg); err != nil {
 		rt.raw = prevRaw
 		rt.etag = prevETag
+		rt.versionID = prevVersionID
 		rt.cfg = prevCfg
 		rt.loadError = prevLoadError
-		_ = persistVhostConfigRaw(rt.configPath, prevRaw)
+		if restoredETag, restoredVersionID, restoreErr := persistVhostConfigAuthoritative(rt.configPath, prepared.etag, vhostPreparedConfig{raw: prevRaw, etag: prevETag, cfg: prevCfg}, configVersionSourceRollback, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
 		_ = refreshPHPRuntimeMaterializationWithConfig(currentPHPRuntimeInventoryConfig(), prevCfg)
 		_ = ReconcilePHPRuntimeSupervisor()
 		return "", VhostConfigFile{}, err
@@ -298,36 +356,58 @@ func RollbackVhostConfig() (string, VhostConfigFile, proxyRollbackEntry, error) 
 	}
 	prevRaw := rt.raw
 	prevETag := rt.etag
+	prevVersionID := rt.versionID
 	prevCfg := cloneVhostConfigFile(rt.cfg)
 	prevLoadError := rt.loadError
 	if _, err := prepareProxyRulesRawWithSitesAndVhosts(currentProxyRawConfigRaw(), currentSiteConfig(), prepared.cfg); err != nil {
 		rt.pushRollbackLocked(entry)
 		return "", VhostConfigFile{}, proxyRollbackEntry{}, err
 	}
-	if err := persistVhostConfigRaw(rt.configPath, prepared.raw); err != nil {
+	restoredVersionID := int64(0)
+	if store := getLogsStatsStore(); store != nil {
+		if foundID, found, err := store.findConfigVersionIDByETag(vhostConfigDomain, entry.ETag); err == nil && found {
+			restoredVersionID = foundID
+		}
+	}
+	nextETag, nextVersionID, err := persistVhostConfigAuthoritative(rt.configPath, rt.etag, prepared, configVersionSourceRollback, restoredVersionID)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			return "", VhostConfigFile{}, proxyRollbackEntry{}, proxyRulesConflictError{CurrentETag: rt.etag}
+		}
 		rt.pushRollbackLocked(entry)
 		return "", VhostConfigFile{}, proxyRollbackEntry{}, err
 	}
+	prepared.etag = nextETag
+	prepared.versionID = nextVersionID
 
 	rt.raw = prepared.raw
 	rt.etag = prepared.etag
+	rt.versionID = prepared.versionID
 	rt.cfg = cloneVhostConfigFile(prepared.cfg)
 	rt.loadError = ""
 	if err := refreshPHPRuntimeMaterializationWithConfig(currentPHPRuntimeInventoryConfig(), prepared.cfg); err != nil {
 		rt.raw = prevRaw
 		rt.etag = prevETag
+		rt.versionID = prevVersionID
 		rt.cfg = prevCfg
 		rt.loadError = prevLoadError
-		_ = persistVhostConfigRaw(rt.configPath, prevRaw)
+		if restoredETag, restoredVersionID, restoreErr := persistVhostConfigAuthoritative(rt.configPath, prepared.etag, vhostPreparedConfig{raw: prevRaw, etag: prevETag, cfg: prevCfg}, configVersionSourceApply, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
 		rt.pushRollbackLocked(entry)
 		return "", VhostConfigFile{}, proxyRollbackEntry{}, err
 	}
 	if err := ReconcilePHPRuntimeSupervisor(); err != nil {
 		rt.raw = prevRaw
 		rt.etag = prevETag
+		rt.versionID = prevVersionID
 		rt.cfg = prevCfg
 		rt.loadError = prevLoadError
-		_ = persistVhostConfigRaw(rt.configPath, prevRaw)
+		if restoredETag, restoredVersionID, restoreErr := persistVhostConfigAuthoritative(rt.configPath, prepared.etag, vhostPreparedConfig{raw: prevRaw, etag: prevETag, cfg: prevCfg}, configVersionSourceApply, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
 		_ = refreshPHPRuntimeMaterializationWithConfig(currentPHPRuntimeInventoryConfig(), prevCfg)
 		_ = ReconcilePHPRuntimeSupervisor()
 		rt.pushRollbackLocked(entry)
@@ -336,9 +416,13 @@ func RollbackVhostConfig() (string, VhostConfigFile, proxyRollbackEntry, error) 
 	if err := reloadProxyRuntimeWithSitesAndVhosts(currentSiteConfig(), prepared.cfg); err != nil {
 		rt.raw = prevRaw
 		rt.etag = prevETag
+		rt.versionID = prevVersionID
 		rt.cfg = prevCfg
 		rt.loadError = prevLoadError
-		_ = persistVhostConfigRaw(rt.configPath, prevRaw)
+		if restoredETag, restoredVersionID, restoreErr := persistVhostConfigAuthoritative(rt.configPath, prepared.etag, vhostPreparedConfig{raw: prevRaw, etag: prevETag, cfg: prevCfg}, configVersionSourceApply, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
 		_ = refreshPHPRuntimeMaterializationWithConfig(currentPHPRuntimeInventoryConfig(), prevCfg)
 		_ = ReconcilePHPRuntimeSupervisor()
 		rt.pushRollbackLocked(entry)
@@ -607,6 +691,20 @@ func persistVhostConfigRaw(path string, raw string) error {
 		return err
 	}
 	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
+}
+
+func persistVhostConfigAuthoritative(path string, expectedETag string, prepared vhostPreparedConfig, source string, restoredFromVersionID int64) (string, int64, error) {
+	if store := getLogsStatsStore(); store != nil {
+		rec, err := store.writeVhostConfigVersion(expectedETag, prepared.cfg, source, "", "vhost config update", restoredFromVersionID)
+		if err != nil {
+			return "", 0, err
+		}
+		return rec.ETag, rec.VersionID, nil
+	}
+	if err := persistVhostConfigRaw(path, prepared.raw); err != nil {
+		return "", 0, err
+	}
+	return prepared.etag, 0, nil
 }
 
 func normalizeVhostMode(v string) string {

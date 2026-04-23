@@ -34,7 +34,7 @@
   "hosts": {
     "example.com": {
       "entries": [
-        { "path": "/search", "extra_rule": "conf/rules/search-endpoint.conf" }
+        { "path": "/search", "extra_rule": "conf/rules/orders-preview.conf" }
       ]
     }
   }
@@ -43,7 +43,7 @@
 
 host scope の優先順は exact `host:port`、次に bare `host`、最後に `default` です。host-specific scope は default を merge せず置き換えます。
 
-`search-endpoint.conf` 例:
+`orders-preview.conf` 例:
 
 ```conf
 SecRuleEngine On
@@ -54,7 +54,7 @@ SecRule ARGS:q "@rx (?i)(<script|union([[:space:]]+all)?[[:space:]]+select|bench
 
 ## 4. CRS設定の見直し
 
-1. `data/rules/crs/crs-setup.conf` の Paranoia Level を確認する。
+1. `rules/crs/crs-setup.conf` から import された DB-backed CRS setup asset の Paranoia Level を確認する。
 2. 初期導入時は `PL1` から開始し、段階的に上げる。
 3. anomaly threshold を下げ過ぎていないか確認する。
 

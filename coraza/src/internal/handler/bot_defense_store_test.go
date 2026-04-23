@@ -1558,7 +1558,7 @@ func TestEvaluateBotDefense_QuarantineStrikesIsolatedByHostScope(t *testing.T) {
 	}
 }
 
-func TestSyncBotDefenseStorage_SeedsDBFromFileWhenMissingBlob(t *testing.T) {
+func TestImportPolicyJSONStorage_SeedsBotDefenseDBFromFile(t *testing.T) {
 	restore := saveBotDefenseStateForTest()
 	defer restore()
 
@@ -1589,27 +1589,31 @@ func TestSyncBotDefenseStorage_SeedsDBFromFileWhenMissingBlob(t *testing.T) {
 		_ = InitLogsStatsStore(false, "", 0)
 	})
 
-	if err := SyncBotDefenseStorage(); err != nil {
-		t.Fatalf("sync bot-defense storage: %v", err)
+	if err := importPolicyJSONStorage(botDefenseConfigBlobKey, path, normalizeBotDefensePolicyRaw, "bot defense seed import"); err != nil {
+		t.Fatalf("import bot-defense storage: %v", err)
 	}
 
 	store := getLogsStatsStore()
 	if store == nil {
 		t.Fatal("expected sqlite store")
 	}
-	gotRaw, _, found, err := store.GetConfigBlob(botDefenseConfigBlobKey)
+	gotRaw, _, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(botDefenseConfigBlobKey))
+	if err != nil || !found {
+		t.Fatalf("expected bot-defense normalized rows to be seeded found=%v err=%v", found, err)
+	}
+	rt, err := ValidateBotDefenseRaw(string(gotRaw))
 	if err != nil {
-		t.Fatalf("get config blob: %v", err)
+		t.Fatalf("seeded normalized bot-defense invalid: %v", err)
 	}
-	if !found {
-		t.Fatal("expected bot-defense config blob to be seeded")
+	if !rt.Raw.Enabled || rt.Raw.Mode != "suspicious" || len(rt.Raw.SuspiciousUserAgents) != 1 {
+		t.Fatalf("seeded bot-defense mismatch: %+v", rt.Raw)
 	}
-	if strings.TrimSpace(string(gotRaw)) != strings.TrimSpace(raw) {
-		t.Fatalf("seeded blob mismatch:\n got=%s\nwant=%s", string(gotRaw), raw)
+	if _, _, found, err := store.GetConfigBlob(botDefenseConfigBlobKey); err != nil || found {
+		t.Fatalf("legacy bot-defense blob found=%v err=%v", found, err)
 	}
 }
 
-func TestSyncBotDefenseStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
+func TestSyncBotDefenseStorage_ImportsLegacyBlobAndAppliesRuntime(t *testing.T) {
 	restore := saveBotDefenseStateForTest()
 	defer restore()
 
@@ -1656,17 +1660,12 @@ func TestSyncBotDefenseStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
 		t.Fatalf("sync bot-defense storage: %v", err)
 	}
 
-	gotFileRaw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read bot-defense file: %v", err)
-	}
-	if strings.TrimSpace(string(gotFileRaw)) != strings.TrimSpace(dbRaw) {
-		t.Fatalf("file should be restored from db blob:\n got=%s\nwant=%s", string(gotFileRaw), dbRaw)
-	}
-
 	cfg := GetBotDefenseConfig()
 	if !cfg.Enabled || cfg.Mode != "always" {
 		t.Fatalf("runtime config mismatch: enabled=%v mode=%q", cfg.Enabled, cfg.Mode)
+	}
+	if _, _, found, err := store.GetConfigBlob(botDefenseConfigBlobKey); err != nil || found {
+		t.Fatalf("legacy bot-defense blob found=%v err=%v", found, err)
 	}
 }
 

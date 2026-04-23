@@ -13,8 +13,24 @@ make db-migrate
 ```
 
 この target は local binary を build し、通常起動と同じ `config.json` を読み、
-設定 driver 用の embedded SQL migration を適用します。適用済み migration file
-名は `schema_migrations` に記録され、listener や runtime sync loop は起動しません。
+設定 driver 用の embedded SQL migration を golang-migrate で適用します。
+現在の schema version と dirty flag は `schema_migrations` に記録され、
+listener や runtime sync loop は起動しません。
+
+migration 後に CRS を install / refresh し、WAF rule asset を DB へ import します。
+
+```bash
+make crs-install
+```
+
+`make crs-install` は `db-migrate` 後に動き、設定 workdir 配下へ CRS seed file を
+配置し、base WAF と CRS の `.conf` / `.data` asset を DB `waf_rule_assets` へ
+import します。CRS を再ダウンロードせず既存 seed file から DB rule asset だけ
+更新する場合は次を使います。
+
+```bash
+make db-import-waf-rule-assets
+```
 
 既存の bootstrap/export file から DB を準備する場合は、migration 後に import します。
 
@@ -22,9 +38,12 @@ make db-migrate
 make db-import
 ```
 
-`make db-import` は先に `db-migrate` を実行し、その後 `config.json` を
-`config_blobs.app_config`、`proxy.json` を `config_blobs.proxy_rules` へ
-import します。これらの blob が作られた後は DB content が正です。
+`make db-import` は先に `db-migrate` を実行し、その後 seed/export material を
+versioned normalized DB table へ import します。`config.json` は DB bootstrap
+項目を除いた `app_config`、`proxy.json` は proxy config、`sites`、`vhosts`、
+`scheduled_tasks`、`upstream_runtime`、PHP-FPM runtime inventory などの
+runtime file は各 feature table へ import されます。import 後はそれらの DB
+row が正です。
 
 ## Driver Selection
 
@@ -40,7 +59,7 @@ DB 接続 bootstrap は `data/conf/config.json` の `storage` で設定します
 `storage.backend=file` は config validation で拒否されます。
 
 `db_driver`、`db_path`、`db_dsn` は DB を開く前に必ず bootstrap
-`config.json` から読みます。`app_config` からは採用しません。DB blob が
+`config.json` から読みます。`app_config` の DB stored value が
 接続済み process を別 DB へ移動させる循環を作らないためです。
 
 default の SQLite path:
@@ -64,55 +83,80 @@ DSN 要件:
 - `/tukuyomi-api/logs/download?src=waf`
 - FP tuner の latest-event lookup
 
-### 2. `config_blobs`
+### 2. Versioned runtime config tables
 
-startup sync、runtime reload、export/import materialization、multi-instance
-consistency に使う、admin から編集可能な config の authoritative DB copy です。
+operator-owned runtime config は immutable version で管理します。
 
-現在の blob key:
+- `config_domains`
+- `config_versions`
+- `config_rollbacks`
 
-- `app_config`（bootstrap DB 接続項目を除いた `config.json`）
-- `proxy_rules`（`proxy.json`）
-- `cache_rules`（`cache-rules.json`）
-- `cache_store`（`cache-store.json`）
-- `rate_limit_rules`（`rate-limit.json`）
-- `country_block_rules`（`country-block.json`）
-- `bypass_rules`（`waf-bypass.json`）
-- `bot_defense_rules`（`bot-defense.json`）
-- `semantic_rules`（`semantic.json`）
-- `notification_rules`（`notifications.json`）
-- `ip_reputation_rules`（`ip-reputation.json`）
-- `sites`（`sites.json`）
-- `scheduled_tasks`（`scheduled-tasks.json`）
-- `upstream_runtime`（`upstream-runtime.json`）
-- `crs_disabled_rules`（`crs-disabled.conf`）
-- `rule_file_sha256:<sha256(path)>`（`WAF_RULES_FILE` に列挙した base rule file。例: `rules/tukuyomi.conf`）
+feature-owned row は `version_id` を持ちます。現在 normalized 済みの domain:
 
-disk に残す bootstrap/import file:
+- `app_config_values`, `app_config_lists`, `app_config_list_values`
+- `proxy_*`
+- `sites`, `site_hosts`, `site_tls`
+- `vhosts`, `vhost_*`
+- `scheduled_tasks`, `scheduled_task_env`, `scheduled_task_args`
+- `upstream_runtime_overrides`
+- `cache_rule_scopes`, `cache_rules`, `cache_rule_methods`,
+  `cache_rule_vary_headers`
+- `bypass_scopes`, `bypass_entries`
+- `country_block_scopes`, `country_block_countries`
+- `rate_limit_scopes`, `rate_limit_scope_values`, `rate_limit_rules`,
+  `rate_limit_rule_methods`
+- `bot_defense_scopes`, `bot_defense_scope_values`,
+  `bot_defense_path_policies`, `bot_defense_path_policy_prefixes`
+- `semantic_scopes`, `semantic_scope_values`
+- `notification_settings`, `notification_triggers`,
+  `notification_security_sources`, `notification_sinks`,
+  `notification_sink_headers`, `notification_sink_recipients`
+- `ip_reputation_scopes`, `ip_reputation_scope_values`
+- `response_cache_config`
+- `crs_disabled_rules`
+- `override_rules`, `override_rule_versions`
+- `php_runtime_inventory`, `php_runtime_modules`,
+  `php_runtime_default_disabled_modules`
 
-- `config.json`: DB 接続 bootstrap（`storage.db_driver`、`storage.db_path`、`storage.db_dsn`）と `app_config` の seed/export material
-- `proxy.json`: `proxy_rules` の seed/import/export material
+### 3. `config_blobs`
 
-これらの file は、対応する DB blob が存在した後の runtime authority ではありません。
+`config_blobs` は normalized 済み runtime / policy config domain の
+authority ではありません。legacy import 互換と、config authority では
+ない content artifact のためだけに残っています。
 
-### 3. `schema_migrations`
+残っている blob 例:
 
-適用済み embedded SQL migration file 名です。`make db-migrate` と起動時の
-defensive schema check が使う運用 metadata です。
+- `waf_rule_assets`, `waf_rule_asset_contents`（base WAF と CRS の rule/data asset）
+
+import 後の本番起動で必要な file は次だけです。
+
+- `config.json`: DB 接続 bootstrap（`storage.db_driver`、`storage.db_path`、
+  `storage.db_dsn`）と `app_config` の seed/export material
+
+その他の seed/export file は operator workflow 用に残しても構いませんが、
+対応する normalized DB row が存在した後の runtime authority ではありません。
+`make db-migrate`、`make crs-install`、`make db-import` 後の本番 runtime では
+`data/conf/config.json` 以外の `data/conf/*.json`、`data/conf/rules/**`、
+`data/rules/**`、および `inventory.json`、`vhosts.json`、`runtime.json`、
+`modules.json` などの PHP-FPM JSON manifest を削除できます。GeoIP file は
+別管理の runtime artifact です。
+
+### 4. `schema_migrations`
+
+golang-migrate の schema version table です。`make db-migrate` と起動時の
+defensive schema check 用に、現在の migration `version` と `dirty` state を
+保持します。
 
 その他の設定済み JSON/text file は runtime storage backend ではありません。
 initial seed / import / export artifact です。
 
-- DB blob が存在しない場合、現在の設定 file から DB を seed します
+- normalized domain が存在しない場合、現在の seed/export file から DB row を
+  import します
 - `app_config` が存在する場合、初期 DB open 後にそれを適用します。ただし DB
   接続項目は bootstrap `config.json` の値を保持します
-- `proxy_rules` が存在する場合、startup proxy routing は `proxy.json` ではなく
-  DB から読みます
-- `sites`、`scheduled_tasks`、`upstream_runtime` のような DB-native runtime
-  は、DB blob が存在する場合、JSON file へ戻さず DB content を直接 runtime
-  state に読み込みます
-- file restoration は、まだ file-shaped parser / watcher boundary を必要とする
-  古い subsystem だけの互換処理です
+- proxy、sites、vhosts、scheduled tasks、upstream runtime、policy domain、
+  WAF asset、response cache、PHP-FPM inventory は JSON file へ戻さず DB content
+  を直接 runtime state に読み込みます
 - sync、parse、reload に失敗した場合、fallback せず起動を失敗させます
 
 `db_sync_interval_sec >= 1` の場合、各 node は periodic な DB-to-runtime

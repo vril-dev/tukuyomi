@@ -178,20 +178,20 @@ state.
 When you also use bundled PHP runtimes for `/options`, `/vhosts`, or scheduled
 PHP CLI jobs, mount `/app/data/php-fpm` as well.
 
-`/app/rules` may stay image-baked if you do not mutate rule files at runtime.
-Mount it only when you want runtime rule-file changes.
+`/app/rules` is seed material for DB `waf_rule_assets`. After import, runtime
+loads active WAF/CRS assets from DB rather than from that directory.
 
 ## Config and Secrets
 
 `tukuyomi` uses `conf/config.json` for DB connection bootstrap, then reads
-operator-managed app/proxy config from DB blobs.
+operator-managed app/proxy config from normalized DB tables.
 
 Typical production pattern:
 
 - render `conf/config.json` from your secret manager or config-management layer for `storage.db_driver`, `storage.db_path`, and `storage.db_dsn`
 - mount or bake `conf/proxy.json` and policy files as seed/import/export material
-- run `make db-migrate` before first start and `make db-import` when importing file material into a new DB
-- treat `conf/sites.json`, `conf/scheduled-tasks.json`, and `conf/upstream-runtime.json` as empty-DB seed/export files; DB blobs are authoritative after bootstrap
+- run `make db-migrate`, then `make crs-install` to install/import WAF rule assets, then `make db-import` for the remaining seed material before first start
+- treat `conf/sites.json`, `conf/scheduled-tasks.json`, and `conf/upstream-runtime.json` as empty-DB seed/export files; normalized DB rows are authoritative after bootstrap
 - use runtime env injection only for:
   - `WAF_CONFIG_FILE`
   - `WAF_PROXY_AUDIT_FILE`
@@ -228,9 +228,8 @@ Keep these server-side:
 - default `tukuyomi` posture is `admin.external_mode=api_only_external`; use `deny_external` when remote admin API access is unnecessary
 - if you override to `full_external` on a non-loopback listener, treat front-side allowlists/auth as mandatory
 - widening `admin.trusted_cidrs` to public or catch-all networks also re-exposes the embedded admin UI/API to those sources and only triggers a warning
-- managed bypass override rules belong under `/app/conf/rules/*.conf`; the `Rules -> Override Rules` surface edits those files and `waf-bypass.json` references them via `extra_rule`
-- the container image and release bundle ship `/app/conf/rules/search-endpoint.conf` as a harmless standalone sample
-- the paired sample reference is `/app/conf/waf-bypass.sample.json`
+- base WAF and CRS assets are DB `waf_rule_assets` after import; image-baked files are seed material, not runtime authority
+- managed bypass override rules are DB `override_rules`; `extra_rule` values remain logical compatibility references
 
 ## Platform Mapping
 
@@ -418,7 +417,7 @@ docker compose \
 
 - `make ui-preview-up` starts the preview-scoped scheduler sidecar too
 - default preview behavior is reset-on-start:
-  `ui-preview-up` rewrites `conf/scheduled-tasks.ui-preview.json` to `{"tasks":[]}` and removes the isolated preview SQLite DB on each start so old preview tasks and DB blobs do not carry over
+  `ui-preview-up` rewrites `conf/scheduled-tasks.ui-preview.json` to `{"tasks":[]}` and removes the isolated preview SQLite DB on each start so old preview tasks and DB rows do not carry over
 - opt into retained preview config and DB state with:
 
 ```bash

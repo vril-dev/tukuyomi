@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -8,7 +9,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
 )
 
@@ -341,13 +341,18 @@ func PutSettingsListenerAdmin(c *gin.Context) {
 		})
 		return
 	}
-	if err := persistSettingsAppConfigRaw(currentSettingsConfigPath(), nextRaw); err != nil {
+	nextETag, err := persistSettingsAppConfig(normalized, etag)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": etag})
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"ok":               true,
-		"etag":             bypassconf.ComputeETag([]byte(nextRaw)),
+		"etag":             nextETag,
 		"restart_required": true,
 		"config":           buildSettingsListenerAdminConfig(normalized),
 		"secrets":          buildSettingsListenerAdminSecretStatus(normalized),
@@ -372,13 +377,20 @@ func loadSettingsAppConfigOnly() (config.AppConfigFile, error) {
 	return cfg, err
 }
 
-func persistSettingsAppConfigRaw(path string, raw string) error {
-	_ = path
+func persistSettingsAppConfig(next config.AppConfigFile, expectedETag string) (string, error) {
 	store := getLogsStatsStore()
 	if store == nil {
-		return fmt.Errorf("db store is not initialized")
+		return "", fmt.Errorf("db store is not initialized")
 	}
-	return store.UpsertConfigBlob(appConfigBlobKey, []byte(raw), bypassconf.ComputeETag([]byte(raw)), time.Now().UTC())
+	_, bootstrap, err := loadBootstrapAppConfig()
+	if err != nil {
+		return "", err
+	}
+	rec, _, err := store.writeAppConfigVersion(expectedETag, next, bootstrap, configVersionSourceApply, "", "settings app config update", 0)
+	if err != nil {
+		return "", err
+	}
+	return rec.ETag, nil
 }
 
 func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListenerAdminConfig {

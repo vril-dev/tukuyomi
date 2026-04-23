@@ -209,12 +209,24 @@ func InitNotifications(path string) error {
 	if target == "" {
 		return fmt.Errorf("notification path is empty")
 	}
-	if err := ensureNotificationFile(target); err != nil {
-		return err
-	}
 	notificationMu.Lock()
 	notificationPath = target
 	notificationMu.Unlock()
+
+	if store := getLogsStatsStore(); store != nil {
+		raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(notificationConfigBlobKey), normalizeNotificationPolicyRaw, "notification rules")
+		if err != nil {
+			return fmt.Errorf("read notification config db: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("normalized notification config missing in db; run make db-import before removing seed files")
+		}
+		return applyNotificationPolicyRaw(raw)
+	}
+
+	if err := ensureNotificationFile(target); err != nil {
+		return err
+	}
 	return ReloadNotifications()
 }
 

@@ -8,11 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
 )
 
@@ -114,8 +112,8 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
-	if etag != bypassconf.ComputeETag([]byte(currentRaw)) {
-		t.Fatalf("settings etag mismatch")
+	if etag == "" || currentRaw == "" {
+		t.Fatalf("settings seed missing etag/raw")
 	}
 
 	next := createEmptySettingsTestConfig()
@@ -248,7 +246,7 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	}
 }
 
-func TestLoadSettingsAppConfigUsesDBBlobAndPreservesBootstrapDBConnection(t *testing.T) {
+func TestLoadSettingsAppConfigUsesNormalizedDBAndPreservesBootstrapDBConnection(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	cfgPath := writeSettingsConfigFixture(t)
@@ -264,13 +262,13 @@ func TestLoadSettingsAppConfigUsesDBBlobAndPreservesBootstrapDBConnection(t *tes
 	dbCfg.Storage.DBDriver = "mysql"
 	dbCfg.Storage.DBPath = "logs/coraza/wrong.db"
 	dbCfg.Storage.DBDSN = "wrong-db-dsn"
-	raw, err := config.MarshalAppConfigFile(dbCfg)
-	if err != nil {
-		t.Fatalf("marshal app_config blob: %v", err)
-	}
 	store := getLogsStatsStore()
-	if err := store.UpsertConfigBlob(appConfigBlobKey, []byte(raw), "", time.Now().UTC()); err != nil {
-		t.Fatalf("upsert app_config: %v", err)
+	_, bootstrapCfg, err := loadBootstrapAppConfig()
+	if err != nil {
+		t.Fatalf("load bootstrap: %v", err)
+	}
+	if _, _, err := store.writeAppConfigVersion("", dbCfg, bootstrapCfg, configVersionSourceApply, "", "test app update", 0); err != nil {
+		t.Fatalf("write normalized app_config: %v", err)
 	}
 
 	loaded, err := loadSettingsAppConfigOnly()
@@ -278,7 +276,7 @@ func TestLoadSettingsAppConfigUsesDBBlobAndPreservesBootstrapDBConnection(t *tes
 		t.Fatalf("loadSettingsAppConfigOnly: %v", err)
 	}
 	if loaded.Server.ListenAddr != ":28090" {
-		t.Fatalf("listen_addr=%q want db blob value", loaded.Server.ListenAddr)
+		t.Fatalf("listen_addr=%q want normalized DB value", loaded.Server.ListenAddr)
 	}
 	if loaded.Storage.DBDriver != "sqlite" {
 		t.Fatalf("db_driver=%q want bootstrap sqlite", loaded.Storage.DBDriver)
@@ -289,17 +287,9 @@ func TestLoadSettingsAppConfigUsesDBBlobAndPreservesBootstrapDBConnection(t *tes
 	if loaded.Storage.DBDSN != "fixture-db-dsn-secret" {
 		t.Fatalf("db_dsn=%q want bootstrap secret", loaded.Storage.DBDSN)
 	}
-	savedRaw, _, found, err := store.GetConfigBlob(appConfigBlobKey)
-	if err != nil {
-		t.Fatalf("GetConfigBlob(app_config): %v", err)
-	}
-	if !found {
-		t.Fatal("app_config blob should exist")
-	}
-	for _, forbidden := range [][]byte{[]byte(`"db_driver"`), []byte(`"db_path"`), []byte(`"db_dsn"`)} {
-		if bytes.Contains(savedRaw, forbidden) {
-			t.Fatalf("app_config blob still contains bootstrap DB field %s: %s", forbidden, string(savedRaw))
-		}
+	_, _, found, err := store.GetConfigBlob(appConfigBlobKey)
+	if err != nil || found {
+		t.Fatalf("legacy app_config blob found=%v err=%v", found, err)
 	}
 }
 

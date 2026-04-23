@@ -78,11 +78,16 @@ func PutRequestCountryMode(c *gin.Context) {
 	}
 	nextETag := etag
 	if nextRaw != raw {
-		if err := persistSettingsAppConfigRaw(currentSettingsConfigPath(), nextRaw); err != nil {
+		persistedETag, err := persistSettingsAppConfig(normalized, etag)
+		if err != nil {
+			if errors.Is(err, errConfigVersionConflict) {
+				c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": etag})
+				return
+			}
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 			return
 		}
-		nextETag = bypassconf.ComputeETag([]byte(nextRaw))
+		nextETag = persistedETag
 	}
 	c.JSON(http.StatusOK, buildRequestCountryDBStatusWithETag(nextETag))
 }

@@ -1,9 +1,9 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -31,32 +31,24 @@ func GetRateLimitRules(c *gin.Context) {
 	raw, _ := os.ReadFile(path)
 	savedAt := fileSavedAt(path)
 	if store := getLogsStatsStore(); store != nil {
-		dbRaw, dbETag, found, err := store.GetConfigBlob(rateLimitConfigBlobKey)
+		dbRaw, rec, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(rateLimitConfigBlobKey), normalizeRateLimitPolicyRaw, "rate limit rules")
 		if err != nil {
 			respondConfigBlobDBError(c, "rate-limit db read failed", err)
 			return
 		} else if found {
 			rt, parseErr := ValidateRateLimitRaw(string(dbRaw))
 			if parseErr != nil {
-				respondConfigBlobDBError(c, "rate-limit db blob parse failed", parseErr)
+				respondConfigBlobDBError(c, "rate-limit db rows parse failed", parseErr)
 				return
 			} else {
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = bypassconf.ComputeETag(dbRaw)
-				}
-				savedAt = configBlobSavedAt(store, rateLimitConfigBlobKey)
+				savedAt = configVersionSavedAt(rec)
 				c.JSON(http.StatusOK, gin.H{
-					"etag":     dbETag,
+					"etag":     rec.ETag,
 					"raw":      string(dbRaw),
 					"enabled":  rateLimitEnabled(rt.Raw),
 					"rules":    rateLimitRuleCount(rt.Raw),
 					"saved_at": savedAt,
 				})
-				return
-			}
-		} else if len(raw) > 0 {
-			if err := store.UpsertConfigBlob(rateLimitConfigBlobKey, raw, bypassconf.ComputeETag(raw), time.Now().UTC()); err != nil {
-				respondConfigBlobDBError(c, "rate-limit db seed failed", err)
 				return
 			}
 		}
@@ -96,33 +88,6 @@ func PutRateLimitRules(c *gin.Context) {
 	path := GetRateLimitPath()
 	store := getLogsStatsStore()
 
-	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(path)
-	curETag := bypassconf.ComputeETag(curRaw)
-	if store != nil {
-		dbRaw, dbETag, found, err := store.GetConfigBlob(rateLimitConfigBlobKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		if found {
-			if _, parseErr := ValidateRateLimitRaw(string(dbRaw)); parseErr == nil {
-				curRaw = dbRaw
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = bypassconf.ComputeETag(dbRaw)
-				}
-				curETag = dbETag
-			} else {
-				respondConfigBlobDBError(c, "rate-limit db blob parse failed for conflict check", parseErr)
-				return
-			}
-		}
-	}
-	if ifMatch != "" && ifMatch != curETag {
-		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
-		return
-	}
-
 	in, ok := bindRateLimitPutBody(c)
 	if !ok {
 		return
@@ -131,6 +96,50 @@ func PutRateLimitRules(c *gin.Context) {
 	rt, err := ValidateRateLimitRaw(in.Raw)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
+		return
+	}
+
+	normalizedRaw, err := normalizeRateLimitPolicyRaw(in.Raw)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
+		return
+	}
+	if store != nil {
+		spec := mustPolicyJSONSpec(rateLimitConfigBlobKey)
+		currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeRateLimitPolicyRaw, "rate limit rules")
+		if err != nil {
+			respondConfigBlobDBError(c, "rate-limit db seed failed", err)
+			return
+		}
+		expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
+		rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "rate limit rules update", 0)
+		if err != nil {
+			if errors.Is(err, errConfigVersionConflict) {
+				c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, rateLimitConfigBlobKey)})
+				return
+			}
+			respondConfigBlobDBError(c, "rate-limit db update failed", err)
+			return
+		}
+		if err := applyRateLimitPolicyRaw(normalizedRaw); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"ok":       true,
+			"etag":     rec.ETag,
+			"enabled":  rateLimitEnabled(rt.Raw),
+			"rules":    rateLimitRuleCount(rt.Raw),
+			"saved_at": rec.ActivatedAt.Format(time.RFC3339Nano),
+		})
+		return
+	}
+
+	ifMatch := c.GetHeader("If-Match")
+	curRaw, _ := os.ReadFile(path)
+	curETag := bypassconf.ComputeETag(curRaw)
+	if ifMatch != "" && ifMatch != curETag {
+		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
 		return
 	}
 
@@ -148,17 +157,6 @@ func PutRateLimitRules(c *gin.Context) {
 
 	now := time.Now().UTC()
 	newETag := bypassconf.ComputeETag([]byte(in.Raw))
-	if store != nil {
-		if err := store.UpsertConfigBlob(rateLimitConfigBlobKey, []byte(in.Raw), newETag, now); err != nil {
-			_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
-			_ = ReloadRateLimit()
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":    "rate-limit db sync failed and rollback applied",
-				"db_error": err.Error(),
-			})
-			return
-		}
-	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"ok":       true,
@@ -170,14 +168,13 @@ func PutRateLimitRules(c *gin.Context) {
 }
 
 func SyncRateLimitStorage() error {
-	return syncConfigBlobFilePath(configBlobSyncOptions{
-		ConfigKey: rateLimitConfigBlobKey,
-		Path:      GetRateLimitPath(),
-		ValidateRaw: func(raw string) error {
-			_, err := ValidateRateLimitRaw(raw)
-			return err
-		},
-		Reload:           ReloadRateLimit,
-		SkipWriteIfEqual: true,
-	})
+	store := getLogsStatsStore()
+	if store == nil {
+		return nil
+	}
+	raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(rateLimitConfigBlobKey), normalizeRateLimitPolicyRaw, "rate limit rules")
+	if err != nil || !found {
+		return err
+	}
+	return applyRateLimitPolicyRaw(raw)
 }

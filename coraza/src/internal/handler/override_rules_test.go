@@ -15,9 +15,16 @@ import (
 
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/waf"
 )
 
-func TestValidateManagedOverrideRuleAcceptsBundledSample(t *testing.T) {
+const standaloneOverrideRuleSample = `SecRuleEngine On
+
+SecRule ARGS:q "@rx (?i)(<script|union([[:space:]]+all)?[[:space:]]+select|benchmark\s*\(|sleep\s*\()" \
+  "id:100001,phase:2,deny,status:403,log,msg:'suspicious search query'"
+`
+
+func TestValidateManagedOverrideRuleAcceptsStandaloneRule(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	restore := saveOverrideRulesConfigForTest()
@@ -26,13 +33,9 @@ func TestValidateManagedOverrideRuleAcceptsBundledSample(t *testing.T) {
 	tmp := t.TempDir()
 	config.OverrideRulesDir = filepath.Join(tmp, "conf", "rules")
 
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "data", "conf", "rules", "search-endpoint.conf"))
-	if err != nil {
-		t.Fatalf("read bundled sample: %v", err)
-	}
 	body := overrideRuleBody{
-		Name: "search-endpoint.conf",
-		Raw:  string(raw),
+		Name: "orders-preview.conf",
+		Raw:  standaloneOverrideRuleSample,
 	}
 	payload, _ := json.Marshal(body)
 
@@ -129,7 +132,7 @@ func TestDeleteManagedOverrideRuleRejectsInUse(t *testing.T) {
 	}
 }
 
-func TestSyncManagedOverrideRulesStorageSeedsDBFromFileWhenMissingBlob(t *testing.T) {
+func TestImportManagedOverrideRulesStorageSeedsDBFromFile(t *testing.T) {
 	restore := saveOverrideRulesConfigForTest()
 	defer restore()
 
@@ -155,27 +158,32 @@ SecRule REQUEST_URI "@streq /api/orders/preview" "id:100001,phase:1,pass,nolog"
 		_ = InitLogsStatsStore(false, "", 0)
 	})
 
-	if err := SyncManagedOverrideRulesStorage(); err != nil {
-		t.Fatalf("sync override storage: %v", err)
+	if err := importManagedOverrideRulesStorage(); err != nil {
+		t.Fatalf("import override storage: %v", err)
 	}
 
 	store := getLogsStatsStore()
 	if store == nil {
 		t.Fatal("expected sqlite store")
 	}
-	gotRaw, _, found, err := store.GetConfigBlob(overrideRuleConfigBlobKey("orders-preview.conf"))
-	if err != nil {
-		t.Fatalf("get config blob: %v", err)
+	rules, _, found, err := store.loadActiveManagedOverrideRules()
+	if err != nil || !found {
+		t.Fatalf("expected override normalized rows to be seeded found=%v err=%v", found, err)
 	}
-	if !found {
-		t.Fatal("expected override config blob to be seeded")
+	byName := managedOverrideRuleMap(rules)
+	gotRule, ok := byName["orders-preview.conf"]
+	if !ok {
+		t.Fatalf("orders-preview.conf not found in normalized rules: %v", rules)
 	}
-	if strings.TrimSpace(string(gotRaw)) != strings.TrimSpace(string(fileRaw)) {
-		t.Fatalf("seeded blob mismatch:\n got=%s\nwant=%s", string(gotRaw), string(fileRaw))
+	if strings.TrimSpace(string(gotRule.Raw)) != strings.TrimSpace(string(fileRaw)) {
+		t.Fatalf("seeded rule mismatch:\n got=%s\nwant=%s", string(gotRule.Raw), string(fileRaw))
+	}
+	if _, _, found, err := store.GetConfigBlob(overrideRuleConfigBlobKey("orders-preview.conf")); err != nil || found {
+		t.Fatalf("legacy override blob found=%v err=%v", found, err)
 	}
 }
 
-func TestSyncManagedOverrideRulesStorageRestoresFileFromDB(t *testing.T) {
+func TestSyncManagedOverrideRulesStorageImportsLegacyBlobWithoutRestoringFile(t *testing.T) {
 	restore := saveOverrideRulesConfigForTest()
 	defer restore()
 
@@ -218,12 +226,62 @@ SecRule REQUEST_URI "@streq /api/orders/preview" "id:100001,phase:1,pass,nolog,c
 		t.Fatalf("sync override storage: %v", err)
 	}
 
-	got, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("read restored override file: %v", err)
+	if got, err := os.ReadFile(target); err != nil || strings.TrimSpace(string(got)) != "SecRuleEngine On" {
+		t.Fatalf("existing file should not be restored from db blob got=%q err=%v", string(got), err)
 	}
-	if strings.TrimSpace(string(got)) != strings.TrimSpace(string(dbRaw)) {
-		t.Fatalf("restored file mismatch:\n got=%s\nwant=%s", string(got), string(dbRaw))
+	rules, _, found, err := store.loadActiveManagedOverrideRules()
+	if err != nil || !found {
+		t.Fatalf("load active override rules found=%v err=%v", found, err)
+	}
+	gotRule, ok := managedOverrideRuleMap(rules)["orders-preview.conf"]
+	if !ok {
+		t.Fatalf("orders-preview.conf not found in DB rules: %v", rules)
+	}
+	if strings.TrimSpace(string(gotRule.Raw)) != strings.TrimSpace(string(dbRaw)) {
+		t.Fatalf("db rule mismatch:\n got=%s\nwant=%s", string(gotRule.Raw), string(dbRaw))
+	}
+	if _, _, found, err := store.GetConfigBlob(overrideRuleConfigBlobKey("orders-preview.conf")); err != nil || found {
+		t.Fatalf("legacy override blob found=%v err=%v", found, err)
+	}
+}
+
+func TestGetWAFForExtraRuleLoadsManagedOverrideFromDBWithoutFile(t *testing.T) {
+	restore := saveOverrideRulesConfigForTest()
+	defer restore()
+
+	tmp := t.TempDir()
+	config.OverrideRulesDir = filepath.Join(tmp, "conf", "rules")
+	target := filepath.Join(config.OverrideRulesDir, "orders-preview.conf")
+
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+		waf.InvalidateOverrideWAF(target)
+	})
+
+	store := getLogsStatsStore()
+	dbRaw := []byte(`SecRuleEngine On
+
+SecRule REQUEST_URI "@streq /api/orders/preview" "id:100001,phase:1,pass,nolog"
+`)
+	if _, _, err := store.writeManagedOverrideRulesVersion("", []managedOverrideRuleVersion{{
+		Name: "orders-preview.conf",
+		Raw:  dbRaw,
+	}}, configVersionSourceImport, "", "test override import", 0); err != nil {
+		t.Fatalf("write override rules: %v", err)
+	}
+
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("override file should not exist before WAF load, stat err=%v", err)
+	}
+	if _, err := waf.GetWAFForExtraRule(target); err != nil {
+		t.Fatalf("load extra rule from DB: %v", err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("override file should not be materialized by WAF load, stat err=%v", err)
 	}
 }
 

@@ -77,9 +77,10 @@ type scheduledTaskStateFile struct {
 }
 
 type scheduledTaskPreparedConfig struct {
-	cfg  ScheduledTaskConfigFile
-	raw  string
-	etag string
+	cfg       ScheduledTaskConfigFile
+	raw       string
+	etag      string
+	versionID int64
 }
 
 type scheduledTaskRuntime struct {
@@ -87,6 +88,7 @@ type scheduledTaskRuntime struct {
 	configPath    string
 	raw           string
 	etag          string
+	versionID     int64
 	cfg           ScheduledTaskConfigFile
 	rollbackMax   int
 	rollbackStack []proxyRollbackEntry
@@ -110,6 +112,7 @@ func InitScheduledTaskRuntime(path string, rollbackMax int) error {
 		configPath:    configPath,
 		raw:           prepared.raw,
 		etag:          prepared.etag,
+		versionID:     prepared.versionID,
 		cfg:           prepared.cfg,
 		rollbackMax:   clampProxyRollbackMax(rollbackMax),
 		rollbackStack: make([]proxyRollbackEntry, 0, clampProxyRollbackMax(rollbackMax)),
@@ -123,22 +126,36 @@ func InitScheduledTaskRuntime(path string, rollbackMax int) error {
 func loadScheduledTaskPreparedConfig(configPath string) (scheduledTaskPreparedConfig, error) {
 	store := getLogsStatsStore()
 	if store != nil {
-		dbRaw, dbETag, found, err := store.GetConfigBlob(scheduledTaskConfigBlobKey)
+		cfg, rec, found, err := store.loadActiveScheduledTaskConfig()
 		if err != nil {
 			return scheduledTaskPreparedConfig{}, err
 		}
 		if found {
+			prepared, err := prepareScheduledTaskConfigRaw(mustJSON(cfg), currentPHPRuntimeInventoryConfig())
+			if err != nil {
+				return scheduledTaskPreparedConfig{}, err
+			}
+			prepared.etag = rec.ETag
+			prepared.versionID = rec.VersionID
+			return prepared, nil
+		}
+		if dbRaw, _, legacyFound, err := store.GetConfigBlob(scheduledTaskConfigBlobKey); err != nil {
+			return scheduledTaskPreparedConfig{}, err
+		} else if legacyFound {
 			prepared, err := prepareScheduledTaskConfigRaw(string(dbRaw), currentPHPRuntimeInventoryConfig())
 			if err != nil {
 				return scheduledTaskPreparedConfig{}, err
 			}
-			if strings.TrimSpace(dbETag) == "" || string(dbRaw) != prepared.raw {
-				if err := store.UpsertConfigBlob(scheduledTaskConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
-					return scheduledTaskPreparedConfig{}, err
-				}
+			rec, err := store.writeScheduledTaskConfigVersion("", prepared.cfg, configVersionSourceImport, "", "legacy scheduled tasks import", 0)
+			if err != nil {
+				return scheduledTaskPreparedConfig{}, err
 			}
+			_ = store.DeleteConfigBlob(scheduledTaskConfigBlobKey)
+			prepared.etag = rec.ETag
+			prepared.versionID = rec.VersionID
 			return prepared, nil
 		}
+		return scheduledTaskPreparedConfig{}, fmt.Errorf("normalized scheduled task config missing in db; run make db-import before removing seed files")
 	}
 
 	raw, err := loadScheduledTaskConfigRaw(configPath)
@@ -153,9 +170,12 @@ func loadScheduledTaskPreparedConfig(configPath string) (scheduledTaskPreparedCo
 		return scheduledTaskPreparedConfig{}, err
 	}
 	if store != nil {
-		if err := store.UpsertConfigBlob(scheduledTaskConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
+		rec, err := store.writeScheduledTaskConfigVersion("", prepared.cfg, configVersionSourceImport, "", "scheduled tasks file import", 0)
+		if err != nil {
 			return scheduledTaskPreparedConfig{}, err
 		}
+		prepared.etag = rec.ETag
+		prepared.versionID = rec.VersionID
 	}
 	return prepared, nil
 }
@@ -230,12 +250,20 @@ func ApplyScheduledTaskConfigRaw(ifMatch string, raw string) (string, ScheduledT
 
 	prevRaw := rt.raw
 	prevETag := rt.etag
+	prevVersionID := rt.versionID
 	prevCfg := cloneScheduledTaskConfigFile(rt.cfg)
-	if err := persistScheduledTaskConfigAuthoritative(rt.configPath, prepared.raw, prepared.etag); err != nil {
+	nextETag, nextVersionID, err := persistScheduledTaskConfigAuthoritative(rt.configPath, rt.etag, prepared, configVersionSourceApply, 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			return "", ScheduledTaskConfigFile{}, proxyRulesConflictError{CurrentETag: rt.etag}
+		}
 		return "", ScheduledTaskConfigFile{}, err
 	}
+	prepared.etag = nextETag
+	prepared.versionID = nextVersionID
 	rt.raw = prepared.raw
 	rt.etag = prepared.etag
+	rt.versionID = prepared.versionID
 	rt.cfg = cloneScheduledTaskConfigFile(prepared.cfg)
 	rt.pushRollbackLocked(proxyRollbackEntry{
 		Raw:       prevRaw,
@@ -245,8 +273,12 @@ func ApplyScheduledTaskConfigRaw(ifMatch string, raw string) (string, ScheduledT
 	if err := pruneScheduledTaskState(rt.configPath, prepared.cfg); err != nil {
 		rt.raw = prevRaw
 		rt.etag = prevETag
+		rt.versionID = prevVersionID
 		rt.cfg = prevCfg
-		_ = persistScheduledTaskConfigAuthoritative(rt.configPath, prevRaw, prevETag)
+		if restoredETag, restoredVersionID, restoreErr := persistScheduledTaskConfigAuthoritative(rt.configPath, prepared.etag, scheduledTaskPreparedConfig{raw: prevRaw, etag: prevETag, cfg: prevCfg}, configVersionSourceRollback, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
 		return "", ScheduledTaskConfigFile{}, err
 	}
 	return rt.etag, cloneScheduledTaskConfigFile(rt.cfg), nil
@@ -275,19 +307,37 @@ func RollbackScheduledTaskConfig() (string, ScheduledTaskConfigFile, proxyRollba
 
 	prevRaw := rt.raw
 	prevETag := rt.etag
+	prevVersionID := rt.versionID
 	prevCfg := cloneScheduledTaskConfigFile(rt.cfg)
-	if err := persistScheduledTaskConfigAuthoritative(rt.configPath, prepared.raw, prepared.etag); err != nil {
+	restoredVersionID := int64(0)
+	if store := getLogsStatsStore(); store != nil {
+		if foundID, found, err := store.findConfigVersionIDByETag(scheduledTaskConfigDomain, entry.ETag); err == nil && found {
+			restoredVersionID = foundID
+		}
+	}
+	nextETag, nextVersionID, err := persistScheduledTaskConfigAuthoritative(rt.configPath, rt.etag, prepared, configVersionSourceRollback, restoredVersionID)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			return "", ScheduledTaskConfigFile{}, proxyRollbackEntry{}, proxyRulesConflictError{CurrentETag: rt.etag}
+		}
 		rt.pushRollbackLocked(entry)
 		return "", ScheduledTaskConfigFile{}, proxyRollbackEntry{}, err
 	}
+	prepared.etag = nextETag
+	prepared.versionID = nextVersionID
 	rt.raw = prepared.raw
 	rt.etag = prepared.etag
+	rt.versionID = prepared.versionID
 	rt.cfg = cloneScheduledTaskConfigFile(prepared.cfg)
 	if err := pruneScheduledTaskState(rt.configPath, prepared.cfg); err != nil {
 		rt.raw = prevRaw
 		rt.etag = prevETag
+		rt.versionID = prevVersionID
 		rt.cfg = prevCfg
-		_ = persistScheduledTaskConfigAuthoritative(rt.configPath, prevRaw, prevETag)
+		if restoredETag, restoredVersionID, restoreErr := persistScheduledTaskConfigAuthoritative(rt.configPath, prepared.etag, scheduledTaskPreparedConfig{raw: prevRaw, etag: prevETag, cfg: prevCfg}, configVersionSourceApply, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
 		rt.pushRollbackLocked(entry)
 		return "", ScheduledTaskConfigFile{}, proxyRollbackEntry{}, err
 	}
@@ -300,29 +350,23 @@ func SyncScheduledTaskStorage() error {
 	if store == nil || rt == nil {
 		return nil
 	}
-	dbRaw, dbETag, found, err := store.GetConfigBlob(scheduledTaskConfigBlobKey)
+	cfg, rec, found, err := store.loadActiveScheduledTaskConfig()
 	if err != nil {
 		return err
 	}
 	if !found {
 		rt.mu.RLock()
-		raw := rt.raw
-		etag := rt.etag
+		cfg := cloneScheduledTaskConfigFile(rt.cfg)
 		rt.mu.RUnlock()
-		if strings.TrimSpace(etag) == "" {
-			etag = bypassconf.ComputeETag([]byte(raw))
-		}
-		return store.UpsertConfigBlob(scheduledTaskConfigBlobKey, []byte(raw), etag, time.Now().UTC())
+		_, err := store.writeScheduledTaskConfigVersion("", cfg, configVersionSourceImport, "", "scheduled tasks runtime import", 0)
+		return err
 	}
-	prepared, err := prepareScheduledTaskConfigRaw(string(dbRaw), currentPHPRuntimeInventoryConfig())
+	prepared, err := prepareScheduledTaskConfigRaw(mustJSON(cfg), currentPHPRuntimeInventoryConfig())
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(dbETag) == "" || string(dbRaw) != prepared.raw {
-		if err := store.UpsertConfigBlob(scheduledTaskConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
-			return err
-		}
-	}
+	prepared.etag = rec.ETag
+	prepared.versionID = rec.VersionID
 
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -331,13 +375,16 @@ func SyncScheduledTaskStorage() error {
 	}
 	prevRaw := rt.raw
 	prevETag := rt.etag
+	prevVersionID := rt.versionID
 	prevCfg := cloneScheduledTaskConfigFile(rt.cfg)
 	rt.raw = prepared.raw
 	rt.etag = prepared.etag
+	rt.versionID = prepared.versionID
 	rt.cfg = cloneScheduledTaskConfigFile(prepared.cfg)
 	if err := pruneScheduledTaskState(rt.configPath, prepared.cfg); err != nil {
 		rt.raw = prevRaw
 		rt.etag = prevETag
+		rt.versionID = prevVersionID
 		rt.cfg = prevCfg
 		return err
 	}
@@ -698,14 +745,18 @@ func persistScheduledTaskConfigRaw(path string, raw string) error {
 	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
 }
 
-func persistScheduledTaskConfigAuthoritative(path string, raw string, etag string) error {
+func persistScheduledTaskConfigAuthoritative(path string, expectedETag string, prepared scheduledTaskPreparedConfig, source string, restoredFromVersionID int64) (string, int64, error) {
 	if store := getLogsStatsStore(); store != nil {
-		if strings.TrimSpace(etag) == "" {
-			etag = bypassconf.ComputeETag([]byte(raw))
+		rec, err := store.writeScheduledTaskConfigVersion(expectedETag, prepared.cfg, source, "", "scheduled tasks config update", restoredFromVersionID)
+		if err != nil {
+			return "", 0, err
 		}
-		return store.UpsertConfigBlob(scheduledTaskConfigBlobKey, []byte(raw), etag, time.Now().UTC())
+		return rec.ETag, rec.VersionID, nil
 	}
-	return persistScheduledTaskConfigRaw(path, raw)
+	if err := persistScheduledTaskConfigRaw(path, prepared.raw); err != nil {
+		return "", 0, err
+	}
+	return prepared.etag, 0, nil
 }
 
 func loadScheduledTaskConfigRaw(configPath string) (string, error) {

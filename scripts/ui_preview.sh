@@ -119,6 +119,35 @@ reset_preview_database() {
   rm -f "${db_paths[@]}"
 }
 
+preview_database_exists() {
+  local db_paths=()
+  mapfile -t db_paths < <(preview_db_host_paths)
+  [[ "${#db_paths[@]}" -gt 0 && -f "${db_paths[0]}" ]]
+}
+
+run_preview_db_command() {
+  local command="$1"
+  local bin="$ROOT_DIR/bin/tukuyomi"
+  if [[ ! -x "$bin" ]]; then
+    echo "[ui-preview][ERROR] missing executable: $bin" >&2
+    return 1
+  fi
+  (
+    cd "$ROOT_DIR/data"
+    WAF_CONFIG_FILE="conf/$PREVIEW_CONFIG_BASENAME" "$bin" "$command"
+  )
+}
+
+seed_preview_database() {
+  run_preview_db_command db-migrate
+  run_preview_db_command db-import-waf-rule-assets
+  run_preview_db_command db-import
+}
+
+upgrade_preview_database() {
+  run_preview_db_command db-migrate
+}
+
 ensure_preview_files() {
   mkdir -p "$(dirname "$PREVIEW_CONFIG")" "$(dirname "$PREVIEW_PROXY")" "$(dirname "$PREVIEW_INVENTORY")"
   if [[ "$UI_PREVIEW_PERSIST_VALUE" == "1" ]]; then
@@ -262,6 +291,11 @@ case "${1:-}" in
     if [[ "$UI_PREVIEW_PERSIST_VALUE" != "1" ]]; then
       run_preview_compose down --remove-orphans >/dev/null 2>&1 || true
       reset_preview_database
+      seed_preview_database
+    elif preview_database_exists; then
+      upgrade_preview_database
+    else
+      seed_preview_database
     fi
     run_preview_compose up -d --build coraza scheduled-task-runner
     echo "[ui-preview] public: ${UI_PREVIEW_PUBLIC_URL}"

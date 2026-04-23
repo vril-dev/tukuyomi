@@ -217,7 +217,7 @@ export default function Rules() {
                 <header className="flex items-center justify-between">
                     <div>
                         <h1 className="text-xl font-semibold">{tx("Rules")}</h1>
-                        <p className="text-sm text-neutral-500">{tx("Edit the base WAF rule files that are loaded into the active rule set at startup.")}</p>
+                        <p className="text-sm text-neutral-500">{tx("Edit the DB-backed base WAF rule assets loaded into the active rule set.")}</p>
                     </div>
                     <div className="flex items-center gap-2">
                         {activeRuleStatus}

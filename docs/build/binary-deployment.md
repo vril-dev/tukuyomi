@@ -43,7 +43,7 @@ The binary expects a working directory that contains:
 /opt/tukuyomi/logs/
 ```
 
-Startup files that must remain file-backed:
+Seed/import files normally used before the first DB import:
 
 - `conf/config.json`
 - `conf/proxy.json`
@@ -57,33 +57,35 @@ Startup files that must remain file-backed:
 - `conf/semantic.json`
 - `conf/notifications.json`
 - `conf/ip-reputation.json`
+- `conf/sites.json`
+- `conf/scheduled-tasks.json`
+- `conf/upstream-runtime.json`
 - `rules/tukuyomi.conf`
 - `rules/crs/crs-setup.conf`
 - `rules/crs/rules/*.conf`
 
-DB-native seed/export files:
+These seed an empty DB or support import/export workflows. Once the matching
+normalized DB domain exists, runtime loads normalized domains directly from DB
+and does not require those JSON files to be restored. After import, production
+startup only requires `conf/config.json` for DB bootstrap plus the DB rows.
 
-- `conf/sites.json`
-- `conf/scheduled-tasks.json`
-- `conf/upstream-runtime.json`
-
-These seed an empty DB or support import/export workflows. Once the matching DB
-blob exists, runtime loads `sites`, `scheduled_tasks`, and `upstream_runtime`
-directly from DB and does not require the JSON file to be restored.
-
-Additional files when you also want PHP-FPM `/options` and `/vhosts`:
+Additional PHP-FPM files used before first DB import:
 
 - `data/php-fpm/binaries/<runtime_id>/`
 - `data/php-fpm/inventory.json`
 - `data/php-fpm/vhosts.json`
 
+After import, the executable bundle remains required when using bundled PHP-FPM,
+but `inventory.json`, `vhosts.json`, `runtime.json`, and `modules.json` are not
+runtime authority.
+
 Additional files when you want `/scheduled-tasks` execution state:
 
 - `data/scheduled-tasks/`
 
-Additional files when you want managed bypass override rules:
+Optional seed files when you want to import managed bypass override rules:
 
-- `conf/rules/*.conf`
+- `conf/rules/*.conf` before `make db-import`
 
 Additional files when you want managed GeoIP country updates:
 
@@ -109,14 +111,6 @@ for f in config.json proxy.json sites.json scheduled-tasks.json upstream-runtime
   sudo install -m 644 "data/conf/${f}" "/opt/tukuyomi/conf/${f}"
 done
 
-if [[ -d data/conf/rules ]]; then
-  sudo install -d -m 755 /opt/tukuyomi/conf/rules
-  for f in data/conf/rules/*; do
-    [[ -f "${f}" ]] || continue
-    sudo install -m 644 "${f}" "/opt/tukuyomi/conf/rules/$(basename "${f}")"
-  done
-fi
-
 if [[ -f data/geoip/README.md ]]; then
   sudo install -m 644 data/geoip/README.md /opt/tukuyomi/data/geoip/README.md
 fi
@@ -132,17 +126,19 @@ Notes:
 - do not copy `data/conf/*.bak` into production
 - `config.json` is the DB connection bootstrap and seed/export material for DB `app_config`
 - `proxy.json` is seed/import/export material for DB `proxy_rules`
-- `sites.json`, `scheduled-tasks.json`, and `upstream-runtime.json` are DB seed/export artifacts after DB bootstrap
+- `rules/tukuyomi.conf` and `rules/crs/**` are seed/import material for DB `waf_rule_assets`
+- `sites.json`, `scheduled-tasks.json`, `upstream-runtime.json`, policy JSON,
+  cache JSON, WAF bypass JSON, and PHP-FPM JSON manifests are DB seed/export
+  artifacts after DB bootstrap
 - render or mount `config.json` from your secret manager or config-management layer in production for `storage.db_driver`, `storage.db_path`, and `storage.db_dsn`
-- run `make db-migrate` before first start and `make db-import` when importing file material into a new DB
+- run `make db-migrate`, then `make crs-install` to install/import WAF rule assets, then `make db-import` for the remaining seed material before first start
 - the embedded `Settings` page edits DB `app_config`; restart the service after listener/runtime/storage policy/observability changes
 - the public release bundle ships a companion `bin/geoipupdate` binary for `Options -> GeoIP Update -> Update now`
 - `GEOIPUPDATE_BIN` remains available if you want to override the bundled updater path
 - the official managed-country refresh wrapper is `./scripts/update_country_db.sh`
 - `data/geoip/country.mmdb`, `data/geoip/GeoIP.conf`, and `data/geoip/update-status.json` are operator-managed runtime artifacts; do not bake them into generic release bundles
-- managed bypass override rules live under `conf/rules/*.conf`; they are edited from `Rules -> Override Rules` and are loaded only when `waf-bypass.json` references them via `extra_rule`
-- the release bundle ships `conf/rules/search-endpoint.conf` as a harmless standalone sample
-- the paired sample reference is `conf/waf-bypass.sample.json`
+- managed bypass override rules are DB `override_rules`; `conf/rules/*.conf` is seed-only when importing a new DB
+- `extra_rule` values remain logical compatibility references to DB-managed override rules
 
 Proxy engine selection is a restart-required DB `app_config` setting:
 
@@ -221,8 +217,8 @@ sudo make php-fpm-copy RUNTIME=php85 DEST=/srv/tukuyomi
 
 Notes:
 
-- `php-fpm-copy` syncs `data/php-fpm/binaries/<runtime_id>/` into the binary deployment tree and creates `inventory.json` / `vhosts.json` if they are absent
-- remove an unneeded staged runtime bundle with `sudo make php-fpm-prune RUNTIME=php85`; it checks staged `vhosts.json` references and the runtime pid before deleting `binaries/<runtime_id>` and `runtime/<runtime_id>`
+- `php-fpm-copy` syncs `data/php-fpm/binaries/<runtime_id>/` into the binary deployment tree; import inventory/module metadata with `make db-import` before removing PHP-FPM JSON manifests
+- remove an unneeded staged runtime bundle with `sudo make php-fpm-prune RUNTIME=php85`; it checks DB vhost references and the runtime pid before deleting `binaries/<runtime_id>` and `runtime/<runtime_id>`
 - `data/php-fpm/runtime/` is not copied; `tukuyomi` generates it later from vhost definitions
 - Docker is needed only for `php-fpm-build`; runtime execution does not depend on Docker after the bundle is staged
 - PHP, base image libraries, and PECL extension security updates remain operator-managed: rebuild and restage the bundle when you need those updates

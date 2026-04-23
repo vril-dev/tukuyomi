@@ -70,6 +70,13 @@ func GetFile() File {
 	return cloneFile(fileState)
 }
 
+func SetFile(file File) {
+	mu.Lock()
+	fileState = cloneFile(file)
+	activePath = ""
+	mu.Unlock()
+}
+
 func Match(reqHost, reqPath string, tls bool) MatchResult {
 	p := normalize(reqPath)
 	mu.RLock()

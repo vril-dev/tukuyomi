@@ -8,12 +8,11 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-
-	"tukuyomi/internal/bypassconf"
 )
 
 type proxyBackendsStatusResponse struct {
 	Path      string                  `json:"path"`
+	Storage   string                  `json:"storage,omitempty"`
 	ETag      string                  `json:"etag"`
 	Strategy  string                  `json:"strategy,omitempty"`
 	Backends  []upstreamBackendStatus `json:"backends"`
@@ -176,11 +175,23 @@ func buildProxyBackendsStatusResponse() (proxyBackendsStatusResponse, error) {
 	})
 	return proxyBackendsStatusResponse{
 		Path:      managedUpstreamRuntimePath(),
+		Storage:   upstreamRuntimeStorageLabel(),
 		ETag:      etag,
 		Strategy:  strings.TrimSpace(cfg.LoadBalancingStrategy),
 		Backends:  backends,
 		UpdatedAt: updatedAt,
 	}, nil
+}
+
+func upstreamRuntimeStorageLabel() string {
+	if getLogsStatsStore() != nil {
+		return "db:" + upstreamRuntimeConfigBlobKey
+	}
+	path := strings.TrimSpace(managedUpstreamRuntimePath())
+	if path == "" {
+		return "memory"
+	}
+	return path
 }
 
 func buildProxyBackendsSurfaceStatuses(cfg ProxyRulesConfig, healthBackends []upstreamBackendStatus) ([]upstreamBackendStatus, string) {
@@ -282,10 +293,7 @@ func persistAndRefreshUpstreamRuntimeOverrides(cfg ProxyRulesConfig, previousRaw
 		return err
 	}
 	if err := refreshProxyBackendRuntimeOverrides(); err != nil {
-		path := managedUpstreamRuntimePath()
-		if strings.TrimSpace(path) != "" {
-			_ = bypassconf.AtomicWriteWithBackup(path, []byte(previousRaw))
-		}
+		_ = persistUpstreamRuntimeRaw(previousRaw)
 		_ = refreshProxyBackendRuntimeOverrides()
 		return err
 	}

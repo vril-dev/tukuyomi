@@ -11,11 +11,11 @@
   - materialization 状態 / process 状態の確認
 - `/vhosts`
   - 管理対象 `php-fpm` アプリ定義の管理
-  - host、port、docroot、rewrite、access rule、basic auth、`.htaccess` subset import、PHP ini override の管理
-  - route bind 用 generated target 名の管理
+  - host、port、docroot、rewrite、access rule、basic auth、PHP ini override の管理
+  - `linked_upstream_name` による configured upstream への bind
 - `/proxy-rules`
   - ルートへの紐付けのみ
-  - `/vhosts` が生成した target 名へトラフィックを流す
+  - `/vhosts` が参照する configured upstream 名へトラフィックを流す
   - raw の `fcgi://` を通常の運用入口にはしない
 
 ## データ配置
@@ -106,13 +106,11 @@ build 後の確認手順:
 - `hostname`
 - `listen_port`
 - `document_root`
-- `generated_target`
+- `linked_upstream_name`
 - `runtime_id`
 
 任意項目:
 
-- `override_file_name`
-  - 既定は `.htaccess`
 - `try_files`
 - rewrite rules
 - access rules
@@ -131,14 +129,10 @@ build 後の確認手順:
 6. `Apply` を実行する
 7. 直前の保存状態へ戻す必要がある時だけ `Rollback` を使う
 
-validate/apply 時には override file の取り込み結果も更新されます。UI では次が確認できます。
-
-- どの override file 名を見に行ったか
-- file が見つかったか
-- import した rewrite rule 数
-- import した access rule 数
-- basic auth を import したか
-- 解析 / 取り込みメッセージ
+Vhost の動作は nginx と同じく集中設定です。document root 内の
+`.htaccess` のようなファイルは、parse / import / watch / request 時再読込
+の対象にしません。古い config に残っている `override_file_name` は移行用
+として読み取るだけで、validate/apply 時に保存形から消えます。
 
 ## Linked Upstream と Route Binding
 
@@ -160,7 +154,8 @@ vhost 保存後の流れ:
 
 - `listen_port` は PHP-FPM の FastCGI listen port です
 - `http://127.0.0.1:<listen_port>` のような HTTP upstream としては扱いません
-- `generated_target` は内部互換 field として残ります。通常運用では route/default route から `linked_upstream_name` を参照してください
+- `generated_target` は server-owned の内部互換 alias / pool 名です。admin UI では operator input として表示しません
+- 通常運用では route/default route から `linked_upstream_name` を参照してください
 - `linked_upstream_name` が既存 configured upstream へ bind している場合、その direct upstream は Vhost を変更するまで `Proxy Rules > Upstreams` から削除できません
 
 `Proxy Rules` はルーティングに集中させ、管理対象 PHP アプリの詳細は `/vhosts` で管理してください。`conf/proxy.json` へ raw の `fcgi://` や generated target を手で書く前提にはしません。

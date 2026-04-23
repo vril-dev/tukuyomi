@@ -25,6 +25,7 @@ type BackendRecord = {
 
 type BackendsResponse = {
   path?: string;
+  storage?: string;
   etag?: string;
   strategy?: string;
   updated_at?: string;
@@ -169,7 +170,7 @@ export default function BackendsPanel() {
         </div>
         <div className="grid gap-3 sm:grid-cols-3 text-sm">
           <Metric label={tx("Default Strategy")} value={String(data?.strategy || "-")} />
-          <Metric label={tx("Runtime File")} value={String(data?.path || "-")} mono />
+          <Metric label={tx("Runtime Storage")} value={String(data?.storage || data?.path || "-")} mono />
           <Metric label={tx("Last Refresh")} value={formatTime(data?.updated_at, locale)} />
         </div>
         {notice ? <div className="rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">{notice}</div> : null}

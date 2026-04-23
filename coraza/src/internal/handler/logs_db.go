@@ -13,21 +13,23 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
 )
 
 const (
 	logStatsStoreSourceWAF = "waf"
 
-	logStatsStorageBackendFile = "file"
-	logStatsStorageBackendDB   = "db"
-	logStatsDBDriverSQLite     = "sqlite"
-	logStatsDBDriverMySQL      = "mysql"
+	logStatsStorageBackendDB = "db"
+	logStatsDBDriverSQLite   = "sqlite"
+	logStatsDBDriverMySQL    = "mysql"
+	logStatsDBDriverPostgres = "pgsql"
 
 	maxDBMatchedValueBytes = 2048
 )
@@ -67,13 +69,16 @@ type wafEventStoreStatus struct {
 }
 
 func InitLogsStatsStore(enabled bool, dbPath string, retentionDays int) error {
-	backend := logStatsStorageBackendFile
-	driver := ""
-	if enabled {
-		backend = logStatsStorageBackendDB
-		driver = logStatsDBDriverSQLite
+	if !enabled {
+		logStatsStoreMu.Lock()
+		defer logStatsStoreMu.Unlock()
+		if logStatsStore != nil {
+			_ = logStatsStore.Close()
+			logStatsStore = nil
+		}
+		return nil
 	}
-	return InitLogsStatsStoreWithBackend(backend, driver, dbPath, "", retentionDays)
+	return InitLogsStatsStoreWithBackend(logStatsStorageBackendDB, logStatsDBDriverSQLite, dbPath, "", retentionDays)
 }
 
 func InitLogsStatsStoreWithBackend(storageBackend, dbDriver, dbPath, dbDSN string, retentionDays int) error {
@@ -87,12 +92,12 @@ func InitLogsStatsStoreWithBackend(storageBackend, dbDriver, dbPath, dbDSN strin
 
 	backend := strings.ToLower(strings.TrimSpace(storageBackend))
 	if backend == "" {
-		backend = logStatsStorageBackendFile
-	}
-	if backend == logStatsStorageBackendFile {
-		return nil
+		backend = logStatsStorageBackendDB
 	}
 	if backend != logStatsStorageBackendDB {
+		if backend == "file" {
+			return fmt.Errorf("storage backend file has been removed")
+		}
 		return fmt.Errorf("unsupported storage backend: %s", backend)
 	}
 
@@ -119,11 +124,62 @@ func InitLogsStatsStoreWithBackend(storageBackend, dbDriver, dbPath, dbDSN strin
 		if err != nil {
 			return err
 		}
+	case logStatsDBDriverPostgres:
+		if strings.TrimSpace(dbDSN) == "" {
+			return fmt.Errorf("pgsql driver requires storage.db_dsn")
+		}
+		store, err = openWAFEventStorePostgres(dbDSN, retentionDays)
+		if err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unsupported db driver: %s", driver)
 	}
 	logStatsStore = store
 	return nil
+}
+
+func MigrateLogsStatsStoreWithBackend(storageBackend, dbDriver, dbPath, dbDSN string) error {
+	backend := strings.ToLower(strings.TrimSpace(storageBackend))
+	if backend == "" {
+		backend = logStatsStorageBackendDB
+	}
+	if backend != logStatsStorageBackendDB {
+		if backend == "file" {
+			return fmt.Errorf("storage backend file has been removed")
+		}
+		return fmt.Errorf("unsupported storage backend: %s", backend)
+	}
+
+	driver := strings.ToLower(strings.TrimSpace(dbDriver))
+	if driver == "" {
+		driver = logStatsDBDriverSQLite
+	}
+
+	var (
+		store *wafEventStore
+		err   error
+	)
+	switch driver {
+	case logStatsDBDriverSQLite:
+		store, err = openWAFEventStoreSQLite(dbPath, 0)
+	case logStatsDBDriverMySQL:
+		if strings.TrimSpace(dbDSN) == "" {
+			return fmt.Errorf("mysql driver requires storage.db_dsn")
+		}
+		store, err = openWAFEventStoreMySQL(dbDSN, 0)
+	case logStatsDBDriverPostgres:
+		if strings.TrimSpace(dbDSN) == "" {
+			return fmt.Errorf("pgsql driver requires storage.db_dsn")
+		}
+		store, err = openWAFEventStorePostgres(dbDSN, 0)
+	default:
+		return fmt.Errorf("unsupported db driver: %s", driver)
+	}
+	if err != nil {
+		return err
+	}
+	return store.Close()
 }
 
 func getLogsStatsStore() *wafEventStore {
@@ -147,51 +203,15 @@ func openWAFEventStoreSQLite(dbPath string, retentionDays int) (*wafEventStore, 
 	}
 	db.SetMaxOpenConns(1)
 
-	stmts := []string{
-		`PRAGMA journal_mode = WAL;`,
-		`PRAGMA synchronous = NORMAL;`,
-		`CREATE TABLE IF NOT EXISTS waf_events (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			event TEXT NOT NULL,
-			ts_unix INTEGER NOT NULL,
-			ts TEXT NOT NULL,
-			rule_id TEXT NOT NULL,
-			path TEXT NOT NULL,
-			country TEXT NOT NULL,
-			status INTEGER NOT NULL,
-			req_id TEXT,
-			method TEXT,
-			matched_variable TEXT,
-			matched_value TEXT,
-			raw_json TEXT NOT NULL,
-			line_hash TEXT NOT NULL UNIQUE
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_waf_events_ts_unix ON waf_events(ts_unix);`,
-		`CREATE INDEX IF NOT EXISTS idx_waf_events_event_ts ON waf_events(event, ts_unix);`,
-		`CREATE INDEX IF NOT EXISTS idx_waf_events_rule_id ON waf_events(rule_id);`,
-		`CREATE INDEX IF NOT EXISTS idx_waf_events_path ON waf_events(path);`,
-		`CREATE INDEX IF NOT EXISTS idx_waf_events_country ON waf_events(country);`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_waf_events_line_hash ON waf_events(line_hash);`,
-		`CREATE TABLE IF NOT EXISTS ingest_state (
-			source TEXT PRIMARY KEY,
-			offset INTEGER NOT NULL,
-			size INTEGER NOT NULL,
-			mod_time_ns INTEGER NOT NULL
-		);`,
-		`CREATE TABLE IF NOT EXISTS config_blobs (
-			config_key TEXT PRIMARY KEY,
-			raw_text TEXT NOT NULL,
-			etag TEXT NOT NULL,
-			updated_at_unix INTEGER NOT NULL,
-			updated_at TEXT NOT NULL
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_config_blobs_updated_at_unix ON config_blobs(updated_at_unix);`,
-	}
-	for _, stmt := range stmts {
+	for _, stmt := range []string{`PRAGMA journal_mode = WAL`, `PRAGMA synchronous = NORMAL`} {
 		if _, err := db.Exec(stmt); err != nil {
 			_ = db.Close()
-			return nil, fmt.Errorf("init sqlite schema: %w", err)
+			return nil, fmt.Errorf("init sqlite pragma: %w", err)
 		}
+	}
+	if err := applyEmbeddedDBMigrations(db, logStatsDBDriverSQLite); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("init sqlite schema: %w", err)
 	}
 
 	if err := ensureSQLiteColumn(db, "waf_events", "method", "TEXT"); err != nil {
@@ -243,49 +263,9 @@ func openWAFEventStoreMySQL(dbDSN string, retentionDays int) (*wafEventStore, er
 		return nil, fmt.Errorf("ping mysql: %w", err)
 	}
 
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS waf_events (
-			id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-			event VARCHAR(64) NOT NULL,
-			ts_unix BIGINT NOT NULL,
-			ts VARCHAR(64) NOT NULL,
-			rule_id VARCHAR(128) NOT NULL,
-			path TEXT NOT NULL,
-			country VARCHAR(16) NOT NULL,
-			status INT NOT NULL,
-			req_id VARCHAR(128) NULL,
-			method VARCHAR(16) NULL,
-			matched_variable VARCHAR(255) NULL,
-			matched_value TEXT NULL,
-			raw_json LONGTEXT NOT NULL,
-			line_hash CHAR(64) NOT NULL,
-			UNIQUE KEY uq_waf_events_line_hash (line_hash),
-			KEY idx_waf_events_ts_unix (ts_unix),
-			KEY idx_waf_events_event_ts (event, ts_unix),
-			KEY idx_waf_events_rule_id (rule_id),
-			KEY idx_waf_events_path (path(191)),
-			KEY idx_waf_events_country (country)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
-		"CREATE TABLE IF NOT EXISTS ingest_state (" +
-			"source VARCHAR(64) NOT NULL PRIMARY KEY," +
-			"`offset` BIGINT NOT NULL," +
-			"size BIGINT NOT NULL," +
-			"mod_time_ns BIGINT NOT NULL" +
-			") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;",
-		`CREATE TABLE IF NOT EXISTS config_blobs (
-			config_key VARCHAR(128) NOT NULL PRIMARY KEY,
-			raw_text LONGTEXT NOT NULL,
-			etag VARCHAR(128) NOT NULL,
-			updated_at_unix BIGINT NOT NULL,
-			updated_at VARCHAR(64) NOT NULL,
-			KEY idx_config_blobs_updated_at_unix (updated_at_unix)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
-	}
-	for _, stmt := range stmts {
-		if _, err := db.Exec(stmt); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("init mysql schema: %w", err)
-		}
+	if err := applyEmbeddedDBMigrations(db, logStatsDBDriverMySQL); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("init mysql schema: %w", err)
 	}
 
 	if retentionDays < 0 {
@@ -294,6 +274,43 @@ func openWAFEventStoreMySQL(dbDSN string, retentionDays int) (*wafEventStore, er
 	return &wafEventStore{
 		db:            db,
 		dbDriver:      logStatsDBDriverMySQL,
+		dbPath:        "",
+		retentionDays: retentionDays,
+	}, nil
+}
+
+func openWAFEventStorePostgres(dbDSN string, retentionDays int) (*wafEventStore, error) {
+	dsn := strings.TrimSpace(dbDSN)
+	if dsn == "" {
+		return nil, fmt.Errorf("pgsql dsn is empty")
+	}
+
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open pgsql: %w", err)
+	}
+	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetMaxOpenConns(16)
+	db.SetMaxIdleConns(8)
+
+	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := db.PingContext(pingCtx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("ping pgsql: %w", err)
+	}
+
+	if err := applyEmbeddedDBMigrations(db, logStatsDBDriverPostgres); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("init pgsql schema: %w", err)
+	}
+
+	if retentionDays < 0 {
+		retentionDays = 0
+	}
+	return &wafEventStore{
+		db:            db,
+		dbDriver:      logStatsDBDriverPostgres,
 		dbPath:        "",
 		retentionDays: retentionDays,
 	}, nil
@@ -348,6 +365,52 @@ func (s *wafEventStore) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+func (s *wafEventStore) bindSQL(query string) string {
+	if s == nil || s.dbDriver != logStatsDBDriverPostgres {
+		return query
+	}
+	var b strings.Builder
+	b.Grow(len(query) + 8)
+	arg := 1
+	for _, r := range query {
+		if r == '?' {
+			b.WriteByte('$')
+			b.WriteString(strconv.Itoa(arg))
+			arg++
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func (s *wafEventStore) query(query string, args ...any) (*sql.Rows, error) {
+	return s.db.Query(s.bindSQL(query), args...)
+}
+
+func (s *wafEventStore) queryRow(query string, args ...any) *sql.Row {
+	return s.db.QueryRow(s.bindSQL(query), args...)
+}
+
+func (s *wafEventStore) exec(query string, args ...any) (sql.Result, error) {
+	return s.db.Exec(s.bindSQL(query), args...)
+}
+
+func (s *wafEventStore) prepare(tx *sql.Tx, query string) (*sql.Stmt, error) {
+	return tx.Prepare(s.bindSQL(query))
+}
+
+func (s *wafEventStore) txExec(tx *sql.Tx, query string, args ...any) (sql.Result, error) {
+	return tx.Exec(s.bindSQL(query), args...)
+}
+
+func (s *wafEventStore) offsetColumn() string {
+	if s != nil && s.dbDriver == logStatsDBDriverPostgres {
+		return `"offset"`
+	}
+	return "`offset`"
 }
 
 func (s *wafEventStore) BuildLogsStats(logPath string, rangeHours int, now time.Time) (logsStatsResp, error) {
@@ -527,7 +590,7 @@ func (s *wafEventStore) ReadWAFLogs(logPath string, tail int, cursor *int64, dir
 	selectQuery += ` ORDER BY id ASC LIMIT ? OFFSET ?`
 	selectArgs = append(selectArgs, end-start, start)
 
-	rows, err := s.db.Query(selectQuery, selectArgs...)
+	rows, err := s.query(selectQuery, selectArgs...)
 	if err != nil {
 		return nil, nil, false, false, err
 	}
@@ -578,7 +641,7 @@ func (s *wafEventStore) ReadWAFRequestLogs(logPath string, reqIDFilter string, c
 	}
 	query += ` ORDER BY ts_unix ASC, id ASC`
 
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -627,7 +690,7 @@ func (s *wafEventStore) DownloadWAFLogs(logPath string, w io.Writer, from, to ti
 	}
 	query += ` ORDER BY id ASC`
 
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.query(query, args...)
 	if err != nil {
 		return err
 	}
@@ -656,7 +719,7 @@ func (s *wafEventStore) LatestWAFBlockEvent(logPath string) (fpTunerEventInput, 
 		return fpTunerEventInput{}, err
 	}
 
-	row := s.db.QueryRow(`
+	row := s.queryRow(`
 		SELECT raw_json
 		  FROM waf_events
 		 WHERE event = 'waf_block'
@@ -698,7 +761,7 @@ func (s *wafEventStore) RecentWAFBlockLogLines(logPath string, limit int) ([]log
 		return nil, err
 	}
 
-	rows, err := s.db.Query(`
+	rows, err := s.query(`
 		SELECT raw_json
 		  FROM waf_events
 		 WHERE event = 'waf_block'
@@ -766,7 +829,7 @@ func (s *wafEventStore) syncWAFEvents(logPath string) (logSyncResult, error) {
 		return logSyncResult{}, err
 	}
 
-	stmt, err := tx.Prepare(s.insertWAFEventStmt())
+	stmt, err := s.prepare(tx, s.insertWAFEventStmt())
 	if err != nil {
 		_ = tx.Rollback()
 		return logSyncResult{}, err
@@ -889,7 +952,7 @@ func ingestWAFEventLine(stmt *sql.Stmt, rawLine []byte) error {
 
 func (s *wafEventStore) loadIngestState(source string) (logIngestState, error) {
 	var st logIngestState
-	row := s.db.QueryRow("SELECT `offset`, size, mod_time_ns FROM ingest_state WHERE source = ?", source)
+	row := s.queryRow("SELECT "+s.offsetColumn()+", size, mod_time_ns FROM ingest_state WHERE source = ?", source)
 	switch err := row.Scan(&st.Offset, &st.Size, &st.ModTimeNS); {
 	case errors.Is(err, sql.ErrNoRows):
 		return logIngestState{}, nil
@@ -905,7 +968,7 @@ func (s *wafEventStore) pruneExpiredWAFEvents(tx *sql.Tx, now time.Time) error {
 		return nil
 	}
 	cutoffUnix := now.AddDate(0, 0, -s.retentionDays).Unix()
-	_, err := tx.Exec(
+	_, err := s.txExec(tx,
 		`DELETE FROM waf_events WHERE ts_unix >= 0 AND ts_unix < ?`,
 		cutoffUnix,
 	)
@@ -913,7 +976,7 @@ func (s *wafEventStore) pruneExpiredWAFEvents(tx *sql.Tx, now time.Time) error {
 }
 
 func (s *wafEventStore) saveIngestState(tx *sql.Tx, source string, st logIngestState) error {
-	_, err := tx.Exec(s.upsertIngestStateStmt(), source, st.Offset, st.Size, st.ModTimeNS)
+	_, err := s.txExec(tx, s.upsertIngestStateStmt(), source, st.Offset, st.Size, st.ModTimeNS)
 	return err
 }
 
@@ -924,6 +987,13 @@ func (s *wafEventStore) insertWAFEventStmt() string {
 			matched_variable, matched_value, raw_json, line_hash
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	}
+	if s != nil && s.dbDriver == logStatsDBDriverPostgres {
+		return `INSERT INTO waf_events (
+			event, ts_unix, ts, rule_id, path, country, status, req_id, method,
+			matched_variable, matched_value, raw_json, line_hash
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(line_hash) DO NOTHING`
+	}
 	return `INSERT OR IGNORE INTO waf_events (
 		event, ts_unix, ts, rule_id, path, country, status, req_id, method,
 		matched_variable, matched_value, raw_json, line_hash
@@ -931,18 +1001,19 @@ func (s *wafEventStore) insertWAFEventStmt() string {
 }
 
 func (s *wafEventStore) upsertIngestStateStmt() string {
+	offsetColumn := s.offsetColumn()
 	if s != nil && s.dbDriver == logStatsDBDriverMySQL {
-		return `INSERT INTO ingest_state (source, ` + "`offset`" + `, size, mod_time_ns)
+		return `INSERT INTO ingest_state (source, ` + offsetColumn + `, size, mod_time_ns)
 		 VALUES (?, ?, ?, ?)
 		 ON DUPLICATE KEY UPDATE
-			` + "`offset`" + ` = VALUES(` + "`offset`" + `),
+			` + offsetColumn + ` = VALUES(` + offsetColumn + `),
 			size = VALUES(size),
 			mod_time_ns = VALUES(mod_time_ns)`
 	}
-	return `INSERT INTO ingest_state (source, ` + "`offset`" + `, size, mod_time_ns)
+	return `INSERT INTO ingest_state (source, ` + offsetColumn + `, size, mod_time_ns)
 		 VALUES (?, ?, ?, ?)
 		 ON CONFLICT(source) DO UPDATE SET
-			` + "`offset`" + ` = excluded.` + "`offset`" + `,
+			` + offsetColumn + ` = excluded.` + offsetColumn + `,
 			size = excluded.size,
 			mod_time_ns = excluded.mod_time_ns`
 }
@@ -964,7 +1035,7 @@ func (s *wafEventStore) GetConfigBlob(configKey string) ([]byte, string, bool, e
 		raw  string
 		etag string
 	)
-	row := s.db.QueryRow(`SELECT raw_text, etag FROM config_blobs WHERE config_key = ?`, key)
+	row := s.queryRow(`SELECT raw_text, etag FROM config_blobs WHERE config_key = ?`, key)
 	switch err := row.Scan(&raw, &etag); {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, "", false, nil
@@ -989,7 +1060,7 @@ func (s *wafEventStore) GetConfigBlobUpdatedAt(configKey string) (string, bool, 
 	defer s.mu.Unlock()
 
 	var updatedAt string
-	row := s.db.QueryRow(`SELECT updated_at FROM config_blobs WHERE config_key = ?`, key)
+	row := s.queryRow(`SELECT updated_at FROM config_blobs WHERE config_key = ?`, key)
 	switch err := row.Scan(&updatedAt); {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", false, nil
@@ -1024,7 +1095,7 @@ func (s *wafEventStore) UpsertConfigBlob(configKey string, raw []byte, etag stri
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, err := s.db.Exec(
+	_, err := s.exec(
 		s.upsertConfigBlobStmt(),
 		key,
 		payload,
@@ -1055,7 +1126,7 @@ func (s *wafEventStore) ListConfigBlobs(prefix string) ([]configBlobRecord, erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rows, err := s.db.Query(`SELECT config_key, raw_text, etag, updated_at FROM config_blobs WHERE config_key LIKE ? ORDER BY config_key`, prefix+"%")
+	rows, err := s.query(`SELECT config_key, raw_text, etag, updated_at FROM config_blobs WHERE config_key LIKE ? ORDER BY config_key`, prefix+"%")
 	if err != nil {
 		return nil, err
 	}
@@ -1090,7 +1161,7 @@ func (s *wafEventStore) DeleteConfigBlob(configKey string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, err := s.db.Exec(`DELETE FROM config_blobs WHERE config_key = ?`, key)
+	_, err := s.exec(`DELETE FROM config_blobs WHERE config_key = ?`, key)
 	return err
 }
 
@@ -1128,11 +1199,27 @@ func (s *wafEventStore) estimateDBSizeBytes() (int64, error) {
 		return 0, nil
 	case logStatsDBDriverMySQL:
 		var n sql.NullInt64
-		row := s.db.QueryRow(`
+		row := s.queryRow(`
 			SELECT COALESCE(SUM(data_length + index_length), 0)
 			  FROM information_schema.tables
 			 WHERE table_schema = DATABASE()
 			   AND table_name IN ('waf_events', 'ingest_state', 'config_blobs')`)
+		if err := row.Scan(&n); err != nil {
+			return 0, err
+		}
+		if !n.Valid {
+			return 0, nil
+		}
+		return n.Int64, nil
+	case logStatsDBDriverPostgres:
+		var n sql.NullInt64
+		row := s.queryRow(`
+			SELECT COALESCE(
+				pg_total_relation_size('waf_events'::regclass) +
+				pg_total_relation_size('ingest_state'::regclass) +
+				pg_total_relation_size('config_blobs'::regclass),
+				0
+			)`)
 		if err := row.Scan(&n); err != nil {
 			return 0, err
 		}
@@ -1147,7 +1234,7 @@ func (s *wafEventStore) estimateDBSizeBytes() (int64, error) {
 
 func (s *wafEventStore) queryCount(query string, args ...any) (int, error) {
 	var n int
-	if err := s.db.QueryRow(query, args...).Scan(&n); err != nil {
+	if err := s.queryRow(query, args...).Scan(&n); err != nil {
 		return 0, err
 	}
 	return n, nil
@@ -1174,7 +1261,7 @@ func (s *wafEventStore) queryTopBuckets(column string, sinceUnix int64, n int) (
 		column,
 		column,
 	)
-	rows, err := s.db.Query(q, sinceUnix, n)
+	rows, err := s.query(q, sinceUnix, n)
 	if err != nil {
 		return nil, err
 	}
@@ -1205,7 +1292,7 @@ func (s *wafEventStore) querySeriesCounts(startUnix, endUnix int64) (map[int64]i
 		  WHERE event = 'waf_block' AND ts_unix >= ? AND ts_unix < ?
 		  GROUP BY bucket`
 	}
-	rows, err := s.db.Query(query, startUnix, endUnix)
+	rows, err := s.query(query, startUnix, endUnix)
 	if err != nil {
 		return nil, err
 	}
@@ -1229,7 +1316,7 @@ func (s *wafEventStore) querySeriesCounts(startUnix, endUnix int64) (map[int64]i
 func (s *wafEventStore) queryMinMaxTS() (int64, int64, error) {
 	var minTS sql.NullInt64
 	var maxTS sql.NullInt64
-	if err := s.db.QueryRow(
+	if err := s.queryRow(
 		`SELECT MIN(ts_unix), MAX(ts_unix)
 		   FROM waf_events
 		  WHERE event = 'waf_block' AND ts_unix >= 0`,

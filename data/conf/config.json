@@ -116,7 +116,6 @@
     "audit_file": "logs/coraza/fp-tuner-audit.ndjson"
   },
   "storage": {
-    "backend": "file",
     "db_driver": "sqlite",
     "db_dsn": "",
     "db_path": "logs/coraza/tukuyomi.db",

@@ -5,27 +5,13 @@
         "kind": "ALLOW",
         "match": {
           "type": "prefix",
-          "value": "/_next/static/chunks/"
+          "value": "/assets/"
         },
         "methods": [
           "GET",
           "HEAD"
         ],
         "ttl": 600,
-        "vary": [
-          "Accept-Encoding"
-        ]
-      },
-      {
-        "kind": "ALLOW",
-        "match": {
-          "type": "regex",
-          "value": "^/about/.*\\.html$"
-        },
-        "methods": [
-          "GET"
-        ],
-        "ttl": 300,
         "vary": [
           "Accept-Encoding"
         ]
@@ -40,10 +26,7 @@
           "GET",
           "HEAD"
         ],
-        "ttl": 600,
-        "vary": [
-          "Accept-Encoding"
-        ]
+        "ttl": 600
       }
     ]
   },
@@ -60,25 +43,7 @@
             "GET",
             "HEAD"
           ],
-          "ttl": 600,
-          "vary": [
-            "Accept-Encoding"
-          ]
-        },
-        {
-          "kind": "ALLOW",
-          "match": {
-            "type": "prefix",
-            "value": "/path-2/"
-          },
-          "methods": [
-            "GET",
-            "HEAD"
-          ],
-          "ttl": 600,
-          "vary": [
-            "Accept-Encoding"
-          ]
+          "ttl": 600
         }
       ]
     }

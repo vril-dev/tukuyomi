@@ -34,9 +34,6 @@ const wafLogArchivePruneInterval = time.Second
 var jsonLineBreak = []byte{'\n'}
 
 func appendEncodedWAFEvent(raw []byte, path string) error {
-	if config.StorageBackend != "file" {
-		return appendWAFEventRawLine(raw, path)
-	}
 	return runtimeWAFLogArchive.AppendEncoded(raw, path)
 }
 
@@ -46,9 +43,6 @@ func appendEncodedWAFEvents(raws [][]byte, path string) error {
 	}
 	if len(raws) == 1 {
 		return appendEncodedWAFEvent(raws[0], path)
-	}
-	if config.StorageBackend != "file" {
-		return appendWAFEventRawLines(raws, path)
 	}
 	return runtimeWAFLogArchive.AppendEncodedBatch(raws, path)
 }

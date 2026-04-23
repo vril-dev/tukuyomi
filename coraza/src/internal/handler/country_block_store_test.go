@@ -82,7 +82,7 @@ func TestSyncCountryBlockStorage_SeedsDBFromFileWhenMissingBlob(t *testing.T) {
 		t.Fatalf("init sqlite store: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = InitLogsStatsStoreWithBackend("file", "", "", "", 0)
+		_ = InitLogsStatsStore(false, "", 0)
 	})
 
 	if err := SyncCountryBlockStorage(); err != nil {
@@ -124,7 +124,7 @@ func TestSyncCountryBlockStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
 		t.Fatalf("init sqlite store: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = InitLogsStatsStoreWithBackend("file", "", "", "", 0)
+		_ = InitLogsStatsStore(false, "", 0)
 	})
 
 	store := getLogsStatsStore()

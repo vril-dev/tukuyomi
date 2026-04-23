@@ -4,8 +4,9 @@
 
 ## 実行時設定
 
-`.env` は Docker / 実行差分だけに使い、アプリ本体の挙動は
-`data/conf/config.json` で管理します。
+`.env` は Docker / 実行差分だけに使います。`data/conf/config.json` は DB
+接続 bootstrap であり、DB open 後の app/proxy 挙動は DB `config_blobs`
+から読みます。
 
 ### Docker / ローカル MySQL（任意）
 
@@ -18,7 +19,11 @@
 | `MYSQL_ROOT_PASSWORD` | `tukuyomi-root` | root パスワード。 |
 | `MYSQL_TZ` | `UTC` | コンテナのタイムゾーン。 |
 
-### `data/conf/config.json`
+### `data/conf/config.json` / DB `app_config`
+
+`data/conf/config.json` は DB を開く前に必要な `storage.db_driver`、
+`storage.db_path`、`storage.db_dsn` を提供します。その他の product-wide
+config は bootstrap/import 後、DB `app_config` に保存します。
 
 主な block:
 
@@ -28,9 +33,9 @@
 | `runtime` | `gomaxprocs`, `memory_limit_mb` など Go runtime 制御 |
 | `admin` | UI/API path, session, 外部公開方針, trusted CIDR, admin rate limit |
 | `paths` | rules, bypass, country, rate, bot, semantic, CRS, sites, tasks, artifact の配置 |
-| `proxy` | rollback 履歴など proxy runtime 制御 |
+| `proxy` | rollback 履歴と process-wide proxy engine 制御 |
 | `crs` | CRS enable flag |
-| `storage` | `file` / `db`, retention, sync interval |
+| `storage` | DB-only runtime store (`sqlite`, `mysql`, `pgsql`), retention, sync interval, log file rotation limit |
 | `fp_tuner` | 外部 provider endpoint, approval, timeout, audit |
 | `request_metadata` | `header` / `mmdb` など country 解決方法 |
 | `observability` | OTLP tracing 設定 |
@@ -100,7 +105,7 @@ container 起動で通常必要なのは:
 - HTTP/3 は `server.listen_addr` と同じ numeric port を UDP で使う
 - `server.tls.redirect_http=true` で plain HTTP listener を追加
 - ACME は `server.tls.acme.*`
-- `paths.site_config_file` の既定は `conf/sites.json`
+- `paths.site_config_file` の既定は `conf/sites.json` です。DB-backed runtime では、これは空 DB の seed/export path であり live source of truth ではありません。
 
 TLS 証明書選択は TLS handshake 時点で終わるため、route host/path より前に決まります。
 
@@ -149,7 +154,7 @@ sudo sysctl --system
 | `/status` | runtime status, config snapshot, listener topology |
 | `/logs` | WAF / security log 閲覧 |
 | `/rules` / `/rule-sets` | base rule 編集と CRS toggle |
-| `/bypass` / `/country-block` / `/rate-limit` | file-backed policy 編集 |
+| `/bypass` / `/country-block` / `/rate-limit` | DB-synced policy 編集 |
 | `/ip-reputation` / `/bot-defense` / `/semantic` | request-time security 制御 |
 | `/notifications` | aggregate alerting 設定 |
 | `/cache` | cache rules と internal cache store |
@@ -157,9 +162,9 @@ sudo sysctl --system
 | `/backends` | canonical backend object の一覧。direct named upstream は runtime enable / drain / disable / weight override に対応し、vhost に bind された configured upstream はこの slice では status-only |
 | `/sites` | site ownership と TLS binding |
 | `/options` | runtime inventory, optional artifact, GeoIP/Country DB 管理 |
-| `/vhosts` | static / `php-fpm` vhost、内部用 generated target、必須の configured upstream bind |
+| `/vhosts` | static / `php-fpm` vhost と必須の configured upstream bind |
 | `/scheduled-tasks` | cron-style command task と last-run status |
-| `/settings` | `conf/config.json` 編集（restart-required 設定） |
+| `/settings` | DB `app_config` 編集（restart-required 設定） |
 
 UI sample は `docs/images/ui-samples/` にあります。
 
@@ -216,7 +221,7 @@ routing model:
 - `routes[]` は `priority` 昇順で first-match
 - 選択順:
   1. explicit `routes[]`
-  2. `conf/sites.json` 由来の generated host fallback route
+  2. DB `sites` config blob 由来の generated host fallback route
   3. `default_route`
   4. `upstreams[]`
 - host match は exact と `*.example.com`
@@ -236,13 +241,13 @@ routing model:
 - `Upstreams` の各行には専用の `Probe` があり、configured upstream を1件ずつ疎通確認します。
 - `Vhosts` は `linked_upstream_name` を必須で持ちます。これにより route binding や backend-pool member から、同じ upstream 名 namespace で Vhost を参照できます。
 - `linked_upstream_name` は `Proxy Rules > Upstreams` に既に存在している configured upstream でなければなりません。Vhost 側で managed alias は作りません。
-- `generated_target` は vhost materialization の内部互換 field として残します。通常の route/pool 紐付けは `linked_upstream_name` を使います。
+- `generated_target` は vhost materialization 用の server-owned 内部互換 state です。operator の route/pool 紐付けは `linked_upstream_name` を使います。
 - Vhost が bind している direct upstream は、Vhost 側を relink するまで `Proxy Rules > Upstreams` から削除できません。
 
 ### Proxy Engine
 
-`conf/config.json` の `proxy.engine.mode` で process-wide proxy engine を表します。
-対応する engine は Tukuyomi native proxy のみです。この file の変更には process restart が必要です。
+DB `app_config` の `proxy.engine.mode` で process-wide proxy engine を表します。
+対応する engine は Tukuyomi native proxy のみです。この変更には process restart が必要です。
 
 ```json
 {
@@ -262,13 +267,13 @@ routing model:
 
 ### Runtime Backend Operations
 
-- `data/conf/upstream-runtime.json` は `Proxy Rules > Upstreams` から materialize された backend key ごとの opt-in runtime override を保持します
+- DB blob `upstream_runtime` が `Proxy Rules > Upstreams` から materialize された backend key ごとの opt-in runtime override を保持します。`data/conf/upstream-runtime.json` は空 DB の seed/export path です
 - `Backends` は canonical backend object を一覧しつつ、次の runtime 操作盤です
   - `enabled`
   - `draining`
   - `disabled`
   - 正の `weight_override`
-- override が無い backend は `data/conf/proxy.json` の設定どおりに動きます
+- override が無い backend は DB `proxy_rules` の設定どおりに動きます。`data/conf/proxy.json` は seed/import/export material です
 - runtime 操作対象は static direct upstream と DNS discovery で materialize された target です
 - vhost に bind された configured upstream は route / pool から参照でき、`Backends` に status-only の canonical object として表示されます
 - route 直書き URL、generated `static`、generated `php-fpm` target は runtime 操作対象外です
@@ -570,7 +575,7 @@ host scope の優先順は exact `host:port`、次に bare `host`、最後に `d
 ### Observability
 
 - `/metrics` は TLS, upstream HA, rate limit, semantic, request-security counter を expose
-- file backend rotation は `storage.file_rotate_bytes`, `storage.file_max_bytes`, `storage.file_retention_days`
+- WAF/access/audit log file rotation は `storage.file_rotate_bytes`, `storage.file_max_bytes`, `storage.file_retention_days`
 - optional OTLP tracing は `observability.tracing`
 
 ### Notifications

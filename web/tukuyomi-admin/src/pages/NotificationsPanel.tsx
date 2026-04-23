@@ -91,11 +91,9 @@ export default function NotificationsPanel() {
   const [activeAlerts, setActiveAlerts] = useState<number>(0);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [rawError, setRawError] = useState<string | null>(null);
   const [structuredError, setStructuredError] = useState<string | null>(null);
 
   const dirty = useMemo(() => raw !== serverRaw || !!structuredError, [raw, serverRaw, structuredError]);
-  const lineCount = useMemo(() => (raw ? raw.split(/\n/).length : 0), [raw]);
   const enabledSinkCount = useMemo(() => countEnabledNotificationSinkDrafts(editorState), [editorState]);
 
   const applyStructuredState = useCallback(
@@ -104,7 +102,6 @@ export default function NotificationsPanel() {
       setSinkBases(nextSinkBases);
       try {
         setRaw(serializeNotificationEditor(editorBase, next, nextSinkBases));
-        setRawError(null);
         setStructuredError(null);
       } catch (e: unknown) {
         setValid(null);
@@ -121,7 +118,6 @@ export default function NotificationsPanel() {
       setEditorState(next);
       setSinkBases(nextSinkBases);
       setRaw(serializeNotificationEditor(base, next, nextSinkBases));
-      setRawError(null);
       setStructuredError(null);
     },
     [],
@@ -145,7 +141,6 @@ export default function NotificationsPanel() {
       setValid(null);
       setMessages([]);
       setMessagesTone("success");
-      setRawError(null);
       setStructuredError(null);
     } catch (e: unknown) {
       setError(getErrorMessage(e, tx("Failed to load")));
@@ -210,7 +205,6 @@ export default function NotificationsPanel() {
       setEtag(js.etag ?? null);
       setRaw(raw);
       setServerRaw(raw);
-      setRawError(null);
       setStructuredError(null);
       setActiveAlerts(typeof js.active_alerts === "number" ? js.active_alerts : activeAlerts);
       setLastSavedAt(parseSavedAt(js.saved_at));
@@ -244,13 +238,13 @@ export default function NotificationsPanel() {
         return;
       }
       e.preventDefault();
-      if (!saving && !readOnly && !rawError && !structuredError) {
+      if (!saving && !readOnly && !structuredError) {
         void doSave();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [doSave, rawError, readOnly, saving, structuredError]);
+  }, [doSave, readOnly, saving, structuredError]);
 
   const statusBadge = useMemo(() => {
     if (loading) {
@@ -261,24 +255,6 @@ export default function NotificationsPanel() {
     }
     return valid ? <Badge color="green">{tx("Valid")}</Badge> : <Badge color="red">{tx("Invalid")}</Badge>;
   }, [loading, tx, valid]);
-
-  const handleRawChange = useCallback(
-    (nextRaw: string) => {
-      setRaw(nextRaw);
-      try {
-        const parsed = parseNotificationEditorDocument(nextRaw);
-        setEditorBase(parsed.base);
-        setSinkBases(parsed.sinkBases);
-        setEditorState(parsed.state);
-        setRawError(null);
-        setStructuredError(null);
-      } catch (e: unknown) {
-        setRawError(getErrorMessage(e, tx("Invalid")));
-        setStructuredError(null);
-      }
-    },
-    [tx],
-  );
 
   const updateTrigger = useCallback(
     (name: "upstream" | "security", updater: (trigger: NotificationTriggerDraft) => NotificationTriggerDraft) => {
@@ -332,8 +308,8 @@ export default function NotificationsPanel() {
         <div className="flex flex-wrap items-center gap-2 text-xs">
           {statusBadge}
           {editorState.enabled ? <Badge color="green">{tx("Enabled")}</Badge> : <Badge color="gray">{tx("Disabled")}</Badge>}
-          <Badge color={rawError || structuredError ? "red" : "green"}>
-            {structuredError ? tx("Structured editor conflict") : rawError ? tx("Raw JSON out of sync") : tx("Structured editor synced")}
+          <Badge color={structuredError ? "red" : "green"}>
+            {structuredError ? tx("Structured editor conflict") : tx("Structured editor synced")}
           </Badge>
           {dirty ? <Badge color="amber">{tx("Unsaved")}</Badge> : null}
           {etag ? <MonoTag label="ETag" value={etag} /> : null}
@@ -341,16 +317,11 @@ export default function NotificationsPanel() {
       </header>
 
       {error ? <Alert kind="error" title={tx("Error")} message={error} onClose={() => setError(null)} closeLabel={tx("Close")} /> : null}
-      {rawError ? (
-        <NoticeBar tone="warn">
-          {tx("Advanced JSON is currently invalid. The structured editor is still showing the last valid notification snapshot. Any structured edit will regenerate valid JSON from that snapshot.")}
-        </NoticeBar>
-      ) : null}
       {structuredError ? <NoticeBar tone="warn">{structuredError}</NoticeBar> : null}
 
       <SectionCard
         title={tx("Workflow")}
-        subtitle={tx("Structured edits still validate, save, and hot reload through the existing notification raw JSON API.")}
+        subtitle={tx("Structured edits validate, save, and hot reload through the existing notification backend API.")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <ActionButton
@@ -368,7 +339,7 @@ export default function NotificationsPanel() {
             <ActionButton onClick={() => void doTest()} disabled={readOnly || loading || testing}>
               {testing ? tx("Sending...") : tx("Test send")}
             </ActionButton>
-            <PrimaryButton onClick={() => void doSave()} disabled={readOnly || loading || saving || !dirty || !!rawError || !!structuredError}>
+            <PrimaryButton onClick={() => void doSave()} disabled={readOnly || loading || saving || !dirty || !!structuredError}>
               {saving ? tx("Saving...") : tx("Save & hot reload")}
             </PrimaryButton>
           </div>
@@ -538,23 +509,6 @@ export default function NotificationsPanel() {
         </div>
       </SectionCard>
 
-      <SectionCard title={tx("Advanced JSON")} subtitle={tx("Keep using raw JSON when needed. Structured edits and valid raw edits stay in sync.")}>
-        <textarea
-          className="w-full h-[320px] p-3 border rounded-xl font-mono text-sm leading-5 outline-none focus:ring-2 focus:ring-black/20"
-          value={raw}
-          onChange={(event) => handleRawChange(event.target.value)}
-          spellCheck={false}
-        />
-        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-500">
-          <div className="flex items-center gap-3">
-            <span>{tx("Lines")}: {lineCount}</span>
-            <span>{tx("Sinks")}: {editorState.sinks.length}</span>
-            <span>{tx("Enabled sinks")}: {enabledSinkCount}</span>
-            <span>{tx("Active alerts")}: {activeAlerts}</span>
-            {lastSavedAt ? <span>{tx("Last saved: {time}", { time: new Date(lastSavedAt).toLocaleString(locale === "ja" ? "ja-JP" : "en-US") })}</span> : null}
-          </div>
-        </div>
-      </SectionCard>
     </div>
   );
 }

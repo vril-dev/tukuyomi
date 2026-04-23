@@ -56,10 +56,13 @@ make preset-check PRESET=minimal
 
 Before production use, replace the sample values in:
 
-- `data/conf/config.json`
-- `data/conf/proxy.json`
-- `data/conf/sites.json` when site ownership / TLS is enabled
-- `conf/scheduled-tasks.json` when scheduled tasks are enabled
+- `data/conf/config.json` for DB connection bootstrap
+- `data/conf/proxy.json` as the initial proxy rules seed/import file
+- `data/conf/sites.json` as the initial site seed/import file when site ownership / TLS is enabled
+- `conf/scheduled-tasks.json` as the initial scheduled task seed/import file when scheduled tasks are enabled
+
+Then run `make db-migrate` and, when importing file material into a new DB,
+`make db-import` before starting production.
 
 ## Quick Start
 
@@ -80,21 +83,26 @@ Then open:
 - Admin UI: `http://localhost:9090/tukuyomi-ui`
 - Admin API: `http://localhost:9090/tukuyomi-api`
 
-If you use `UI_PREVIEW_PERSIST=1`, preview-specific config is kept across `ui-preview-down` / `ui-preview-up`.
+By default, `make ui-preview-up` uses an isolated preview SQLite DB and resets
+that DB plus preview config files on each start. If you use
+`UI_PREVIEW_PERSIST=1`, preview-specific config and DB state are kept across
+`ui-preview-down` / `ui-preview-up`.
 
 ### Runtime Config Model
 
 `tukuyomi` keeps configuration split by responsibility:
 
 - `.env`: Docker-only runtime wiring
-- `data/conf/config.json`: global runtime, listener, admin, storage, and path config
-- `data/conf/proxy.json`: live proxy transport and routing config
-- `data/conf/proxy.json.backend_pools[]`: route-scoped balancing groups built from named upstream members
-- `data/conf/upstream-runtime.json`: opt-in runtime overrides for direct named upstreams from `Proxy Rules > Upstreams`
-- `data/conf/sites.json`: site ownership and TLS binding
+- `data/conf/config.json`: DB connection bootstrap and app config seed/export material
+- DB `config_blobs.app_config`: global runtime, listener, admin, storage policy, and path config
+- DB `config_blobs.proxy_rules`: live proxy transport and routing config
+- `data/conf/proxy.json`: proxy rules seed/import/export material
+- DB `config_blobs.proxy_rules.backend_pools[]`: route-scoped balancing groups built from named upstream members
+- `data/conf/upstream-runtime.json`: seed/import/export material for opt-in runtime overrides from `Proxy Rules > Upstreams`
+- `data/conf/sites.json`: site ownership and TLS binding seed/import/export material
 - `data/conf/rules/*.conf`: managed bypass `extra_rule` files
 - `data/php-fpm/vhosts.json`: PHP-FPM vhost definitions, internal `generated_target`, and canonical `linked_upstream_name`
-- `conf/scheduled-tasks.json`: scheduled task definitions
+- `conf/scheduled-tasks.json`: scheduled task seed/import/export material
 
 Managed bypass override rules under `data/conf/rules/*.conf` are edited from
 `Override Rules`. They are not loaded into the base WAF rule set at
@@ -125,8 +133,9 @@ target.
 
 Direct named upstreams from `Proxy Rules > Upstreams` can be drained, disabled,
 or given a runtime weight override from `Backends` without editing
-`proxy.json`. Those runtime-only overrides live in
-`data/conf/upstream-runtime.json`.
+`proxy.json`. Proxy rule edits persist to DB `proxy_rules`; runtime-only backend
+overrides live in DB `upstream_runtime` and use `data/conf/upstream-runtime.json`
+only as seed/import/export material.
 
 For route-scoped web balancing, define backend nodes in `upstreams[]`, group
 them in `backend_pools[]`, then bind routes to those pools with

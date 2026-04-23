@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -34,11 +33,13 @@ func GetBotDefenseRules(c *gin.Context) {
 	if store := getLogsStatsStore(); store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(botDefenseConfigBlobKey)
 		if err != nil {
-			log.Printf("[BOT_DEFENSE][DB][WARN] get config blob failed: %v", err)
+			respondConfigBlobDBError(c, "bot-defense db read failed", err)
+			return
 		} else if found {
 			rt, parseErr := ValidateBotDefenseRaw(string(dbRaw))
 			if parseErr != nil {
-				log.Printf("[BOT_DEFENSE][DB][WARN] cached blob parse failed (fallback=file): %v", parseErr)
+				respondConfigBlobDBError(c, "bot-defense db blob parse failed", parseErr)
+				return
 			} else {
 				if strings.TrimSpace(dbETag) == "" {
 					dbETag = bypassconf.ComputeETag(dbRaw)
@@ -66,7 +67,8 @@ func GetBotDefenseRules(c *gin.Context) {
 			}
 		} else if len(raw) > 0 {
 			if err := store.UpsertConfigBlob(botDefenseConfigBlobKey, raw, bypassconf.ComputeETag(raw), time.Now().UTC()); err != nil {
-				log.Printf("[BOT_DEFENSE][DB][WARN] seed config blob failed: %v", err)
+				respondConfigBlobDBError(c, "bot-defense db seed failed", err)
+				return
 			}
 		}
 	}
@@ -143,7 +145,8 @@ func PutBotDefenseRules(c *gin.Context) {
 				}
 				curETag = dbETag
 			} else {
-				log.Printf("[BOT_DEFENSE][DB][WARN] cached blob parse failed for conflict check (fallback=file): %v", parseErr)
+				respondConfigBlobDBError(c, "bot-defense db blob parse failed for conflict check", parseErr)
+				return
 			}
 		}
 	}

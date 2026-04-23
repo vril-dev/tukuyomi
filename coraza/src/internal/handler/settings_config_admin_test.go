@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -21,6 +22,7 @@ func TestGetSettingsListenerAdmin(t *testing.T) {
 	cfgPath := writeSettingsConfigFixture(t)
 	restore := saveConfigFilePathForTest(t, cfgPath)
 	defer restore()
+	initSettingsDBStoreForTest(t)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/tukuyomi-api/settings/listener-admin", nil)
@@ -70,6 +72,7 @@ func TestValidateSettingsListenerAdminRejectsInvalid(t *testing.T) {
 	cfgPath := writeSettingsConfigFixture(t)
 	restore := saveConfigFilePathForTest(t, cfgPath)
 	defer restore()
+	initSettingsDBStoreForTest(t)
 
 	body := settingsListenerAdminPutBody{
 		Config: settingsListenerAdminConfig{
@@ -105,12 +108,15 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	cfgPath := writeSettingsConfigFixture(t)
 	restore := saveConfigFilePathForTest(t, cfgPath)
 	defer restore()
+	initSettingsDBStoreForTest(t)
 
-	currentRaw, _, err := readFileMaybe(cfgPath)
+	currentRaw, etag, _, err := loadSettingsAppConfig()
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
-	etag := bypassconf.ComputeETag(currentRaw)
+	if etag != bypassconf.ComputeETag([]byte(currentRaw)) {
+		t.Fatalf("settings etag mismatch")
+	}
 
 	next := createEmptySettingsTestConfig()
 	next.Server.ListenAddr = ":443"
@@ -164,7 +170,7 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	saved, err := config.LoadAppConfigFile(cfgPath)
+	saved, err := loadSettingsAppConfigOnly()
 	if err != nil {
 		t.Fatalf("reload saved config: %v", err)
 	}
@@ -198,8 +204,11 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	if !saved.Admin.TrustForwardedFor {
 		t.Fatal("expected trust_forwarded_for to be saved")
 	}
-	if saved.Storage.Backend != "db" || saved.Storage.DBDriver != "mysql" {
-		t.Fatalf("saved storage backend/driver=%q/%q want=db/mysql", saved.Storage.Backend, saved.Storage.DBDriver)
+	if saved.Storage.Backend != "" || saved.Storage.DBDriver != "sqlite" {
+		t.Fatalf("saved deprecated backend/driver=%q/%q want empty/sqlite bootstrap", saved.Storage.Backend, saved.Storage.DBDriver)
+	}
+	if saved.Storage.DBPath != "logs/coraza/tukuyomi.db" {
+		t.Fatalf("saved db_path=%q want bootstrap default", saved.Storage.DBPath)
 	}
 	if saved.Storage.DBDSN != "fixture-db-dsn-secret" {
 		t.Fatalf("db_dsn should be preserved, got %q", saved.Storage.DBDSN)
@@ -236,6 +245,61 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	}
 	if saved.Admin.SessionSecret != "very-strong-random-session-secret-12345" {
 		t.Fatalf("session secret should be preserved, got %q", saved.Admin.SessionSecret)
+	}
+}
+
+func TestLoadSettingsAppConfigUsesDBBlobAndPreservesBootstrapDBConnection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cfgPath := writeSettingsConfigFixture(t)
+	restore := saveConfigFilePathForTest(t, cfgPath)
+	defer restore()
+	initSettingsDBStoreForTest(t)
+
+	dbCfg, err := config.LoadAppConfigFile(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadAppConfigFile: %v", err)
+	}
+	dbCfg.Server.ListenAddr = ":28090"
+	dbCfg.Storage.DBDriver = "mysql"
+	dbCfg.Storage.DBPath = "logs/coraza/wrong.db"
+	dbCfg.Storage.DBDSN = "wrong-db-dsn"
+	raw, err := config.MarshalAppConfigFile(dbCfg)
+	if err != nil {
+		t.Fatalf("marshal app_config blob: %v", err)
+	}
+	store := getLogsStatsStore()
+	if err := store.UpsertConfigBlob(appConfigBlobKey, []byte(raw), "", time.Now().UTC()); err != nil {
+		t.Fatalf("upsert app_config: %v", err)
+	}
+
+	loaded, err := loadSettingsAppConfigOnly()
+	if err != nil {
+		t.Fatalf("loadSettingsAppConfigOnly: %v", err)
+	}
+	if loaded.Server.ListenAddr != ":28090" {
+		t.Fatalf("listen_addr=%q want db blob value", loaded.Server.ListenAddr)
+	}
+	if loaded.Storage.DBDriver != "sqlite" {
+		t.Fatalf("db_driver=%q want bootstrap sqlite", loaded.Storage.DBDriver)
+	}
+	if loaded.Storage.DBPath != "logs/coraza/tukuyomi.db" {
+		t.Fatalf("db_path=%q want bootstrap default", loaded.Storage.DBPath)
+	}
+	if loaded.Storage.DBDSN != "fixture-db-dsn-secret" {
+		t.Fatalf("db_dsn=%q want bootstrap secret", loaded.Storage.DBDSN)
+	}
+	savedRaw, _, found, err := store.GetConfigBlob(appConfigBlobKey)
+	if err != nil {
+		t.Fatalf("GetConfigBlob(app_config): %v", err)
+	}
+	if !found {
+		t.Fatal("app_config blob should exist")
+	}
+	for _, forbidden := range [][]byte{[]byte(`"db_driver"`), []byte(`"db_path"`), []byte(`"db_dsn"`)} {
+		if bytes.Contains(savedRaw, forbidden) {
+			t.Fatalf("app_config blob still contains bootstrap DB field %s: %s", forbidden, string(savedRaw))
+		}
 	}
 }
 
@@ -295,7 +359,7 @@ func writeSettingsConfigFixture(t *testing.T) string {
     "hmac_key_id": "sig-test"
   },
   "fp_tuner": {"api_key": "fp-secret-token", "timeout_sec": 15, "approval_ttl_sec": 600},
-  "storage": {"backend": "file", "db_driver": "sqlite", "db_dsn": "fixture-db-dsn-secret"}
+  "storage": {"db_driver": "sqlite", "db_dsn": "fixture-db-dsn-secret"}
 }`
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write fixture config: %v", err)
@@ -309,6 +373,20 @@ func saveConfigFilePathForTest(t *testing.T, path string) func() {
 	config.ConfigFile = path
 	return func() {
 		config.ConfigFile = prev
+	}
+}
+
+func initSettingsDBStoreForTest(t *testing.T) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "settings-store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+	if _, _, _, err := loadAppConfigStorage(true); err != nil {
+		t.Fatalf("seed app_config storage: %v", err)
 	}
 }
 
@@ -363,7 +441,7 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 			},
 		},
 		Storage: settingsListenerAdminStorageConfig{
-			Backend:           "file",
+			Backend:           "",
 			DBDriver:          "sqlite",
 			DBPath:            "logs/coraza/tukuyomi.db",
 			DBRetentionDays:   30,

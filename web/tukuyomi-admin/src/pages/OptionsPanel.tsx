@@ -408,7 +408,7 @@ export default function OptionsPanel() {
             <div>
               <h3 className="text-sm font-semibold">{tx("Country Resolution Mode")}</h3>
               <p className="text-sm text-neutral-500">
-                {tx("Choose whether request country comes from a trusted frontend header or from the installed local country database artifact. This updates config.json only and takes effect after restart.")}
+                {tx("Choose whether request country comes from a trusted frontend header or from the installed local country database artifact. This updates DB app_config and takes effect after restart.")}
               </p>
             </div>
             <div className="grid gap-3 text-sm">
@@ -439,7 +439,7 @@ export default function OptionsPanel() {
               </button>
             </div>
             <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-              {tx("Saving updates config.json only. Restart the process after switching modes.")}
+              {tx("Saving updates DB app_config. Restart the process after switching modes.")}
             </div>
             {modeNotice ? <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900">{modeNotice}</div> : null}
             {modeError ? <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">{modeError}</div> : null}
@@ -448,7 +448,7 @@ export default function OptionsPanel() {
 
       <div className="rounded-xl border border-neutral-200 p-4 space-y-3">
         <h2 className="text-sm font-semibold">{tx("Runtime Inventory")}</h2>
-        <p className="text-sm text-neutral-500">{tx("Runtime entries are read-only here. This panel is for visibility, readiness, and generated target status.")}</p>
+        <p className="text-sm text-neutral-500">{tx("Runtime entries are read-only here. This panel is for visibility, readiness, and process status.")}</p>
         {availableRuntimeCount === 0 ? (
           <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
             {tx("No built runtimes are available yet. Build a runtime bundle first, then return here to confirm readiness.")}
@@ -532,11 +532,6 @@ export default function OptionsPanel() {
                     )}
                   </div>
 
-                  {materializedEntry?.generated_targets?.length ? (
-                    <div className="text-xs text-neutral-600">
-                      {tx("Generated targets")}: {materializedEntry.generated_targets.join(", ")}
-                    </div>
-                  ) : null}
                   {process?.last_error ? (
                     <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                       {process.last_error}

@@ -43,11 +43,10 @@ The binary expects a working directory that contains:
 /opt/tukuyomi/logs/
 ```
 
-Minimum runtime files:
+Startup files that must remain file-backed:
 
 - `conf/config.json`
 - `conf/proxy.json`
-- `conf/sites.json`
 - `conf/cache-store.json`
 - `conf/cache-rules.json`
 - `conf/waf-bypass.json`
@@ -62,15 +61,25 @@ Minimum runtime files:
 - `rules/crs/crs-setup.conf`
 - `rules/crs/rules/*.conf`
 
+DB-native seed/export files:
+
+- `conf/sites.json`
+- `conf/scheduled-tasks.json`
+- `conf/upstream-runtime.json`
+
+These seed an empty DB or support import/export workflows. Once the matching DB
+blob exists, runtime loads `sites`, `scheduled_tasks`, and `upstream_runtime`
+directly from DB and does not require the JSON file to be restored.
+
 Additional files when you also want PHP-FPM `/options` and `/vhosts`:
 
 - `data/php-fpm/binaries/<runtime_id>/`
 - `data/php-fpm/inventory.json`
 - `data/php-fpm/vhosts.json`
 
-Additional files when you want `/scheduled-tasks`:
+Additional files when you want `/scheduled-tasks` execution state:
 
-- `conf/scheduled-tasks.json`
+- `data/scheduled-tasks/`
 
 Additional files when you want managed bypass override rules:
 
@@ -96,7 +105,7 @@ sudo install -d -m 755 \
 sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
 
-for f in config.json proxy.json sites.json scheduled-tasks.json cache-store.json cache-rules.json waf-bypass.json waf-bypass.sample.json country-block.json rate-limit.json bot-defense.json semantic.json notifications.json ip-reputation.json; do
+for f in config.json proxy.json sites.json scheduled-tasks.json upstream-runtime.json cache-store.json cache-rules.json waf-bypass.json waf-bypass.sample.json country-block.json rate-limit.json bot-defense.json semantic.json notifications.json ip-reputation.json; do
   sudo install -m 644 "data/conf/${f}" "/opt/tukuyomi/conf/${f}"
 done
 
@@ -121,9 +130,12 @@ sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 Notes:
 
 - do not copy `data/conf/*.bak` into production
-- `config.json` is the main server-side config contract for `tukuyomi`
-- render or mount `config.json` from your secret manager or config-management layer in production
-- the embedded `Settings` page edits the same `conf/config.json` surface for global product settings, but that flow is `Save config only`; restart the service after listener/runtime/storage/observability changes
+- `config.json` is the DB connection bootstrap and seed/export material for DB `app_config`
+- `proxy.json` is seed/import/export material for DB `proxy_rules`
+- `sites.json`, `scheduled-tasks.json`, and `upstream-runtime.json` are DB seed/export artifacts after DB bootstrap
+- render or mount `config.json` from your secret manager or config-management layer in production for `storage.db_driver`, `storage.db_path`, and `storage.db_dsn`
+- run `make db-migrate` before first start and `make db-import` when importing file material into a new DB
+- the embedded `Settings` page edits DB `app_config`; restart the service after listener/runtime/storage policy/observability changes
 - the public release bundle ships a companion `bin/geoipupdate` binary for `Options -> GeoIP Update -> Update now`
 - `GEOIPUPDATE_BIN` remains available if you want to override the bundled updater path
 - the official managed-country refresh wrapper is `./scripts/update_country_db.sh`
@@ -132,7 +144,7 @@ Notes:
 - the release bundle ships `conf/rules/search-endpoint.conf` as a harmless standalone sample
 - the paired sample reference is `conf/waf-bypass.sample.json`
 
-Proxy engine selection is also a restart-required `conf/config.json` setting:
+Proxy engine selection is a restart-required DB `app_config` setting:
 
 ```json
 {
@@ -239,7 +251,7 @@ Optional security-audit key overrides:
 
 ## Overload Tuning
 
-Keep overload controls in `conf/config.json` under `server`:
+Keep overload controls in DB `app_config` under `server`:
 
 - `max_concurrent_requests` is the process-wide guard.
 - `max_concurrent_proxy_requests` is the data-plane guard.
@@ -251,7 +263,7 @@ Keep overload controls in `conf/config.json` under `server`:
 
 ## Secret Handling
 
-- keep `admin.api_key_primary`, `admin.api_key_secondary`, and `admin.session_secret` in `conf/config.json`, not in the browser
+- keep `admin.api_key_primary`, `admin.api_key_secondary`, and `admin.session_secret` in managed app config, not in the browser
 - browser operators sign in once and receive same-origin session cookies
 - CLI / automation can continue to call `/tukuyomi-api/*` with `X-API-Key`
 - default `tukuyomi` posture is `admin.external_mode=api_only_external`; move to `deny_external` if remote admin API access is unnecessary
@@ -304,7 +316,7 @@ sudo systemctl enable --now tukuyomi.socket
 sudo systemctl enable --now tukuyomi.service
 ```
 
-Only enable socket units that match your `conf/config.json`. `ListenStream` /
+Only enable socket units that match effective DB `app_config`. `ListenStream` /
 `ListenDatagram` must match `server.listen_addr`, `admin.listen_addr`,
 `server.tls.http_redirect_addr`, and the HTTP/3 UDP port. The process validates
 the inherited socket address and fails closed on mismatch.

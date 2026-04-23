@@ -110,12 +110,15 @@ func TestPutRequestCountryModePersistsNormalizedHeaderMode(t *testing.T) {
 	}
 	restore := saveConfigFilePathForTest(t, cfgPath)
 	defer restore()
+	initSettingsDBStoreForTest(t)
 
-	currentRaw, err := os.ReadFile(cfgPath)
+	currentRaw, etag, _, err := loadSettingsAppConfig()
 	if err != nil {
-		t.Fatalf("ReadFile() error: %v", err)
+		t.Fatalf("loadSettingsAppConfig() error: %v", err)
 	}
-	etag := bypassconf.ComputeETag(currentRaw)
+	if etag != bypassconf.ComputeETag([]byte(currentRaw)) {
+		t.Fatalf("settings etag mismatch")
+	}
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/tukuyomi-api/request-country-mode", bytes.NewBufferString(`{"mode":"header"}`))
@@ -130,7 +133,7 @@ func TestPutRequestCountryModePersistsNormalizedHeaderMode(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	saved, err := config.LoadAppConfigFile(cfgPath)
+	saved, err := loadSettingsAppConfigOnly()
 	if err != nil {
 		t.Fatalf("reload saved config: %v", err)
 	}

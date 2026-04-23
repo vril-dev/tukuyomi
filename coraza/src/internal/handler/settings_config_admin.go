@@ -3,8 +3,6 @@ package handler
 import (
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -66,7 +64,7 @@ type settingsListenerAdminRequestMetadataConfig struct {
 }
 
 type settingsListenerAdminStorageConfig struct {
-	Backend           string `json:"backend"`
+	Backend           string `json:"backend,omitempty"`
 	DBDriver          string `json:"db_driver"`
 	DBPath            string `json:"db_path"`
 	DBRetentionDays   int    `json:"db_retention_days"`
@@ -225,8 +223,6 @@ type settingsListenerAdminRuntimeStatus struct {
 	ServerMaxQueuedProxy             int      `json:"server_max_queued_proxy_requests"`
 	ServerQueuedProxyTimeoutMS       int      `json:"server_queued_proxy_request_timeout_ms"`
 	ProxyEngineMode                  string   `json:"proxy_engine_mode"`
-	StorageBackend                   string   `json:"storage_backend"`
-	StorageDBEnabled                 bool     `json:"storage_db_enabled"`
 	StorageDBDriver                  string   `json:"storage_db_driver"`
 	StorageDBPath                    string   `json:"storage_db_path"`
 	StorageDBRetentionDays           int      `json:"storage_db_retention_days"`
@@ -273,6 +269,9 @@ func ValidateSettingsListenerAdmin(c *gin.Context) {
 		return
 	}
 	applySettingsListenerAdminConfig(&current, in.Config)
+	if _, bootstrap, err := loadBootstrapAppConfig(); err == nil {
+		preserveBootstrapDBConnection(&current, bootstrap)
+	}
 	normalized, err := config.NormalizeAndValidateAppConfigFile(current)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
@@ -314,6 +313,9 @@ func PutSettingsListenerAdmin(c *gin.Context) {
 	}
 
 	applySettingsListenerAdminConfig(&current, in.Config)
+	if _, bootstrap, err := loadBootstrapAppConfig(); err == nil {
+		preserveBootstrapDBConnection(&current, bootstrap)
+	}
 	normalized, err := config.NormalizeAndValidateAppConfigFile(current)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
@@ -323,7 +325,7 @@ func PutSettingsListenerAdmin(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
-	nextRaw, err := config.MarshalAppConfigFile(normalized)
+	nextRaw, err := marshalAppConfigBlob(normalized)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
@@ -362,34 +364,21 @@ func currentSettingsConfigPath() string {
 }
 
 func loadSettingsAppConfig() (string, string, config.AppConfigFile, error) {
-	rawBytes, _, err := readFileMaybe(currentSettingsConfigPath())
-	if err != nil {
-		return "", "", config.AppConfigFile{}, fmt.Errorf("read config.json: %w", err)
-	}
-	cfg, err := config.LoadAppConfigFile(currentSettingsConfigPath())
-	if err != nil {
-		return "", "", config.AppConfigFile{}, err
-	}
-	raw := string(rawBytes)
-	return raw, bypassconf.ComputeETag(rawBytes), cfg, nil
+	return loadAppConfigStorage(true)
 }
 
 func loadSettingsAppConfigOnly() (config.AppConfigFile, error) {
-	cfg, err := config.LoadAppConfigFile(currentSettingsConfigPath())
-	if err != nil {
-		return config.AppConfigFile{}, err
-	}
-	return cfg, nil
+	_, _, cfg, err := loadAppConfigStorage(true)
+	return cfg, err
 }
 
 func persistSettingsAppConfigRaw(path string, raw string) error {
-	if strings.TrimSpace(path) == "" {
-		return fmt.Errorf("config.json path is empty")
+	_ = path
+	store := getLogsStatsStore()
+	if store == nil {
+		return fmt.Errorf("db store is not initialized")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
+	return store.UpsertConfigBlob(appConfigBlobKey, []byte(raw), bypassconf.ComputeETag([]byte(raw)), time.Now().UTC())
 }
 
 func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListenerAdminConfig {
@@ -456,7 +445,7 @@ func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListener
 			},
 		},
 		Storage: settingsListenerAdminStorageConfig{
-			Backend:           cfg.Storage.Backend,
+			Backend:           "",
 			DBDriver:          cfg.Storage.DBDriver,
 			DBPath:            cfg.Storage.DBPath,
 			DBRetentionDays:   cfg.Storage.DBRetentionDays,
@@ -561,7 +550,7 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 	cfg.Admin.RateLimit.StatusCode = next.Admin.RateLimit.StatusCode
 	cfg.Admin.RateLimit.RetryAfterSeconds = next.Admin.RateLimit.RetryAfterSeconds
 
-	cfg.Storage.Backend = next.Storage.Backend
+	cfg.Storage.Backend = ""
 	cfg.Storage.DBDriver = next.Storage.DBDriver
 	cfg.Storage.DBPath = next.Storage.DBPath
 	cfg.Storage.DBRetentionDays = next.Storage.DBRetentionDays
@@ -660,8 +649,6 @@ func buildSettingsListenerAdminRuntimeStatus() settingsListenerAdminRuntimeStatu
 		ServerMaxQueuedProxy:             config.ServerMaxQueuedProxy,
 		ServerQueuedProxyTimeoutMS:       int(config.ServerQueuedProxyRequestTimeout / time.Millisecond),
 		ProxyEngineMode:                  normalizeProxyEngineMode(config.ProxyEngineMode),
-		StorageBackend:                   config.StorageBackend,
-		StorageDBEnabled:                 config.DBEnabled,
 		StorageDBDriver:                  config.DBDriver,
 		StorageDBPath:                    config.DBPath,
 		StorageDBRetentionDays:           config.DBRetentionDays,

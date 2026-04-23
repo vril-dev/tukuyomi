@@ -2,7 +2,6 @@ package handler
 
 import (
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -34,11 +33,13 @@ func GetNotificationRules(c *gin.Context) {
 	if store := getLogsStatsStore(); store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(notificationConfigBlobKey)
 		if err != nil {
-			log.Printf("[NOTIFY][DB][WARN] get config blob failed: %v", err)
+			respondConfigBlobDBError(c, "notification db read failed", err)
+			return
 		} else if found {
 			rt, parseErr := ValidateNotificationRaw(string(dbRaw))
 			if parseErr != nil {
-				log.Printf("[NOTIFY][DB][WARN] cached blob parse failed (fallback=file): %v", parseErr)
+				respondConfigBlobDBError(c, "notification db blob parse failed", parseErr)
+				return
 			} else {
 				if strings.TrimSpace(dbETag) == "" {
 					dbETag = bypassconf.ComputeETag(dbRaw)
@@ -57,7 +58,8 @@ func GetNotificationRules(c *gin.Context) {
 			}
 		} else if len(raw) > 0 {
 			if err := store.UpsertConfigBlob(notificationConfigBlobKey, raw, bypassconf.ComputeETag(raw), time.Now().UTC()); err != nil {
-				log.Printf("[NOTIFY][DB][WARN] seed config blob failed: %v", err)
+				respondConfigBlobDBError(c, "notification db seed failed", err)
+				return
 			}
 		}
 	}
@@ -119,7 +121,8 @@ func PutNotificationRules(c *gin.Context) {
 				}
 				curETag = dbETag
 			} else {
-				log.Printf("[NOTIFY][DB][WARN] cached blob parse failed for conflict check (fallback=file): %v", parseErr)
+				respondConfigBlobDBError(c, "notification db blob parse failed for conflict check", parseErr)
+				return
 			}
 		}
 	}

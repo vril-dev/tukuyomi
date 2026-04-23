@@ -17,7 +17,10 @@ import (
 	"tukuyomi/internal/config"
 )
 
-const defaultSiteConfigRaw = "{\n  \"sites\": []\n}\n"
+const (
+	defaultSiteConfigRaw = "{\n  \"sites\": []\n}\n"
+	siteConfigBlobKey    = "sites"
+)
 
 type SiteConfigFile struct {
 	Sites []SiteConfig `json:"sites,omitempty"`
@@ -102,17 +105,9 @@ func InitSiteRuntime(path string, rollbackMax int) error {
 	if cfgPath == "" {
 		cfgPath = "conf/sites.json"
 	}
-	rawBytes, _, err := readFileMaybe(cfgPath)
+	prepared, err := loadSitePreparedConfig(cfgPath)
 	if err != nil {
-		return fmt.Errorf("read sites config (%s): %w", cfgPath, err)
-	}
-	raw := string(rawBytes)
-	if strings.TrimSpace(raw) == "" {
-		raw = defaultSiteConfigRaw
-	}
-	prepared, err := prepareSiteConfigRaw(raw)
-	if err != nil {
-		return fmt.Errorf("invalid sites config (%s): %w", cfgPath, err)
+		return fmt.Errorf("initialize sites config (%s): %w", cfgPath, err)
 	}
 	rt := &siteRuntime{
 		configPath:    cfgPath,
@@ -128,6 +123,58 @@ func InitSiteRuntime(path string, rollbackMax int) error {
 	siteRt = rt
 	siteRuntimeMu.Unlock()
 	return nil
+}
+
+func siteConfigStorageLabel() string {
+	if getLogsStatsStore() != nil {
+		return "db:" + siteConfigBlobKey
+	}
+	path := strings.TrimSpace(config.SiteConfigFile)
+	if path == "" {
+		return "memory"
+	}
+	return path
+}
+
+func loadSitePreparedConfig(path string) (sitePreparedConfig, error) {
+	store := getLogsStatsStore()
+	if store != nil {
+		dbRaw, dbETag, found, err := store.GetConfigBlob(siteConfigBlobKey)
+		if err != nil {
+			return sitePreparedConfig{}, err
+		}
+		if found {
+			prepared, err := prepareSiteConfigRaw(string(dbRaw))
+			if err != nil {
+				return sitePreparedConfig{}, err
+			}
+			if strings.TrimSpace(dbETag) == "" || string(dbRaw) != prepared.raw {
+				if err := store.UpsertConfigBlob(siteConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
+					return sitePreparedConfig{}, err
+				}
+			}
+			return prepared, nil
+		}
+	}
+
+	rawBytes, _, err := readFileMaybe(path)
+	if err != nil {
+		return sitePreparedConfig{}, err
+	}
+	raw := string(rawBytes)
+	if strings.TrimSpace(raw) == "" {
+		raw = defaultSiteConfigRaw
+	}
+	prepared, err := prepareSiteConfigRaw(raw)
+	if err != nil {
+		return sitePreparedConfig{}, err
+	}
+	if store != nil {
+		if err := store.UpsertConfigBlob(siteConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
+			return sitePreparedConfig{}, err
+		}
+	}
+	return prepared, nil
 }
 
 func siteRuntimeInstance() *siteRuntime {
@@ -192,19 +239,19 @@ func ApplySiteConfigRaw(ifMatch string, raw string) (string, SiteConfigFile, []S
 	if _, err := prepareProxyRulesRawWithSites(currentProxyRawConfigRaw(), prepared.cfg); err != nil {
 		return "", SiteConfigFile{}, nil, err
 	}
-	if err := persistSiteConfigRaw(rt.configPath, prepared.raw); err != nil {
+	if err := persistSiteConfigAuthoritative(rt.configPath, prepared.raw, prepared.etag); err != nil {
 		return "", SiteConfigFile{}, nil, err
 	}
 	prev := rt.snapshotLocked()
 	rt.applyPreparedLocked(prepared)
 	if err := reloadProxyRuntimeWithSites(prepared.cfg); err != nil {
 		rt.restoreLocked(prev)
-		_ = persistSiteConfigRaw(rt.configPath, prevRaw)
+		_ = persistSiteConfigAuthoritative(rt.configPath, prevRaw, prevETag)
 		return "", SiteConfigFile{}, nil, err
 	}
 	if err := ReloadServerTLSRuntimeForSites(prepared.cfg, prepared.statuses); err != nil {
 		rt.restoreLocked(prev)
-		_ = persistSiteConfigRaw(rt.configPath, prevRaw)
+		_ = persistSiteConfigAuthoritative(rt.configPath, prevRaw, prevETag)
 		if restoreErr := reloadProxyRuntimeWithSites(prev.cfg); restoreErr != nil {
 			log.Printf("[TLS][WARN] failed to restore proxy runtime after tls reload error: %v", restoreErr)
 		}
@@ -244,11 +291,12 @@ func RollbackSiteConfig() (string, SiteConfigFile, []SiteRuntimeStatus, proxyRol
 	}
 
 	prevRaw := rt.raw
+	prevETag := rt.etag
 	if _, err := prepareProxyRulesRawWithSites(currentProxyRawConfigRaw(), prepared.cfg); err != nil {
 		rt.pushRollbackLocked(entry)
 		return "", SiteConfigFile{}, nil, proxyRollbackEntry{}, err
 	}
-	if err := persistSiteConfigRaw(rt.configPath, prepared.raw); err != nil {
+	if err := persistSiteConfigAuthoritative(rt.configPath, prepared.raw, prepared.etag); err != nil {
 		rt.pushRollbackLocked(entry)
 		return "", SiteConfigFile{}, nil, proxyRollbackEntry{}, err
 	}
@@ -256,13 +304,13 @@ func RollbackSiteConfig() (string, SiteConfigFile, []SiteRuntimeStatus, proxyRol
 	rt.applyPreparedLocked(prepared)
 	if err := reloadProxyRuntimeWithSites(prepared.cfg); err != nil {
 		rt.restoreLocked(prev)
-		_ = persistSiteConfigRaw(rt.configPath, prevRaw)
+		_ = persistSiteConfigAuthoritative(rt.configPath, prevRaw, prevETag)
 		rt.pushRollbackLocked(entry)
 		return "", SiteConfigFile{}, nil, proxyRollbackEntry{}, err
 	}
 	if err := ReloadServerTLSRuntimeForSites(prepared.cfg, prepared.statuses); err != nil {
 		rt.restoreLocked(prev)
-		_ = persistSiteConfigRaw(rt.configPath, prevRaw)
+		_ = persistSiteConfigAuthoritative(rt.configPath, prevRaw, prevETag)
 		if restoreErr := reloadProxyRuntimeWithSites(prev.cfg); restoreErr != nil {
 			log.Printf("[TLS][WARN] failed to restore proxy runtime after tls reload error: %v", restoreErr)
 		}
@@ -274,6 +322,63 @@ func RollbackSiteConfig() (string, SiteConfigFile, []SiteRuntimeStatus, proxyRol
 	}
 
 	return rt.etag, rt.cfg, cloneSiteRuntimeStatuses(rt.statuses), entry, nil
+}
+
+func SyncSiteStorage() error {
+	store := getLogsStatsStore()
+	rt := siteRuntimeInstance()
+	if store == nil || rt == nil {
+		return nil
+	}
+	dbRaw, dbETag, found, err := store.GetConfigBlob(siteConfigBlobKey)
+	if err != nil {
+		return err
+	}
+	if !found {
+		rt.mu.RLock()
+		raw := rt.raw
+		etag := rt.etag
+		rt.mu.RUnlock()
+		if strings.TrimSpace(etag) == "" {
+			etag = bypassconf.ComputeETag([]byte(raw))
+		}
+		return store.UpsertConfigBlob(siteConfigBlobKey, []byte(raw), etag, time.Now().UTC())
+	}
+	prepared, err := prepareSiteConfigRaw(string(dbRaw))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(dbETag) == "" || string(dbRaw) != prepared.raw {
+		if err := store.UpsertConfigBlob(siteConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
+			return err
+		}
+	}
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if prepared.etag == rt.etag {
+		return nil
+	}
+	if _, err := prepareProxyRulesRawWithSites(currentProxyRawConfigRaw(), prepared.cfg); err != nil {
+		return err
+	}
+	prev := rt.snapshotLocked()
+	rt.applyPreparedLocked(prepared)
+	if err := reloadProxyRuntimeWithSites(prepared.cfg); err != nil {
+		rt.restoreLocked(prev)
+		return err
+	}
+	if err := ReloadServerTLSRuntimeForSites(prepared.cfg, prepared.statuses); err != nil {
+		rt.restoreLocked(prev)
+		if restoreErr := reloadProxyRuntimeWithSites(prev.cfg); restoreErr != nil {
+			log.Printf("[TLS][WARN] failed to restore proxy runtime after site db sync error: %v", restoreErr)
+		}
+		if restoreErr := ReloadServerTLSRuntimeForSites(prev.cfg, prev.statuses); restoreErr != nil {
+			log.Printf("[TLS][WARN] failed to restore tls runtime after site db sync error: %v", restoreErr)
+		}
+		return err
+	}
+	return nil
 }
 
 func currentSiteConfig() SiteConfigFile {
@@ -853,6 +958,16 @@ func persistSiteConfigRaw(path string, raw string) error {
 		return err
 	}
 	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
+}
+
+func persistSiteConfigAuthoritative(path string, raw string, etag string) error {
+	if store := getLogsStatsStore(); store != nil {
+		if strings.TrimSpace(etag) == "" {
+			etag = bypassconf.ComputeETag([]byte(raw))
+		}
+		return store.UpsertConfigBlob(siteConfigBlobKey, []byte(raw), etag, time.Now().UTC())
+	}
+	return persistSiteConfigRaw(path, raw)
 }
 
 func currentProxyRawConfigRaw() string {

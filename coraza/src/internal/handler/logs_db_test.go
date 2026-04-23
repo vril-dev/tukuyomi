@@ -603,7 +603,7 @@ func TestWAFEventStoreStatusSnapshot(t *testing.T) {
 	}
 }
 
-func TestInitLogsStatsStoreWithBackend_FileDisablesStore(t *testing.T) {
+func TestInitLogsStatsStore_DisablesStoreForTests(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "tukuyomi.db")
 
@@ -614,11 +614,24 @@ func TestInitLogsStatsStoreWithBackend_FileDisablesStore(t *testing.T) {
 		t.Fatal("expected sqlite store")
 	}
 
-	if err := InitLogsStatsStoreWithBackend("file", "sqlite", dbPath, "", 30); err != nil {
-		t.Fatalf("switch to file backend: %v", err)
+	if err := InitLogsStatsStore(false, "", 0); err != nil {
+		t.Fatalf("disable store: %v", err)
 	}
 	if getLogsStatsStore() != nil {
-		t.Fatal("store should be nil when backend=file")
+		t.Fatal("store should be nil after explicit disable")
+	}
+}
+
+func TestInitLogsStatsStoreWithBackend_FileBackendIsRejected(t *testing.T) {
+	err := InitLogsStatsStoreWithBackend("file", "sqlite", "", "", 30)
+	if err == nil {
+		t.Fatal("expected file backend rejection")
+	}
+	if !strings.Contains(err.Error(), "storage backend file has been removed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if getLogsStatsStore() != nil {
+		t.Fatal("store should be nil after rejected backend switch")
 	}
 }
 
@@ -626,6 +639,16 @@ func TestInitLogsStatsStoreWithBackend_MySQLRequiresDSN(t *testing.T) {
 	err := InitLogsStatsStoreWithBackend("db", "mysql", "", "", 30)
 	if err == nil {
 		t.Fatal("expected error for missing mysql dsn")
+	}
+	if !strings.Contains(err.Error(), "requires storage.db_dsn") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInitLogsStatsStoreWithBackend_PgSQLRequiresDSN(t *testing.T) {
+	err := InitLogsStatsStoreWithBackend("db", "pgsql", "", "", 30)
+	if err == nil {
+		t.Fatal("expected error for missing pgsql dsn")
 	}
 	if !strings.Contains(err.Error(), "requires storage.db_dsn") {
 		t.Fatalf("unexpected error: %v", err)
@@ -664,6 +687,17 @@ func TestWAFEventStoreSQLDialectStatements(t *testing.T) {
 	if !strings.Contains(mysqlStore.upsertConfigBlobStmt(), "ON DUPLICATE KEY UPDATE") {
 		t.Fatalf("mysql config blob upsert stmt mismatch: %s", mysqlStore.upsertConfigBlobStmt())
 	}
+
+	pgStore := &wafEventStore{dbDriver: logStatsDBDriverPostgres}
+	if !strings.Contains(pgStore.insertWAFEventStmt(), "ON CONFLICT(line_hash) DO NOTHING") {
+		t.Fatalf("pgsql insert stmt mismatch: %s", pgStore.insertWAFEventStmt())
+	}
+	if !strings.Contains(pgStore.upsertIngestStateStmt(), `"offset" = excluded."offset"`) {
+		t.Fatalf("pgsql upsert stmt mismatch: %s", pgStore.upsertIngestStateStmt())
+	}
+	if got := pgStore.bindSQL("SELECT * FROM config_blobs WHERE config_key = ? AND etag = ?"); got != "SELECT * FROM config_blobs WHERE config_key = $1 AND etag = $2" {
+		t.Fatalf("pgsql placeholder bind=%q", got)
+	}
 }
 
 func TestConfigBlobSQLiteRoundTrip(t *testing.T) {
@@ -674,7 +708,7 @@ func TestConfigBlobSQLiteRoundTrip(t *testing.T) {
 		t.Fatalf("init sqlite store: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = InitLogsStatsStoreWithBackend("file", "", "", "", 0)
+		_ = InitLogsStatsStore(false, "", 0)
 	})
 
 	store := getLogsStatsStore()
@@ -712,7 +746,7 @@ func TestConfigBlobMySQLRoundTrip(t *testing.T) {
 		t.Fatalf("init mysql store: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = InitLogsStatsStoreWithBackend("file", "", "", "", 0)
+		_ = InitLogsStatsStore(false, "", 0)
 	})
 
 	store := getLogsStatsStore()
@@ -782,7 +816,7 @@ func TestLogsStatsMySQLStoreAggregatesAndIngestsIncrementally(t *testing.T) {
 		t.Fatalf("init mysql store: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = InitLogsStatsStoreWithBackend("file", "", "", "", 0)
+		_ = InitLogsStatsStore(false, "", 0)
 	})
 
 	store := getLogsStatsStore()

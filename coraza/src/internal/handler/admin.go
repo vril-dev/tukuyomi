@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -39,6 +38,7 @@ func StatusHandler(c *gin.Context) {
 	requestCountryStatus := RequestCountryRuntimeStatusSnapshot()
 	_, _, phpRuntimeInventory, phpRuntimeRollbackDepth := PHPRuntimeInventorySnapshot()
 	_, _, vhostCfg, vhostRollbackDepth := VhostConfigSnapshot()
+	vhostRuntimeStatus := VhostRuntimeStatusSnapshot()
 	phpRuntimeMaterialized := PHPRuntimeMaterializationSnapshot()
 	phpRuntimeProcesses := PHPRuntimeProcessSnapshot()
 	adminListenerEnabled := strings.TrimSpace(config.AdminListenAddr) != ""
@@ -158,6 +158,7 @@ func StatusHandler(c *gin.Context) {
 		"api_base":                                            config.APIBasePath,
 		"ui_path":                                             config.UIBasePath,
 		"site_config_file":                                    config.SiteConfigFile,
+		"site_config_storage":                                 siteConfigStorageLabel(),
 		"site_count":                                          len(siteStatuses),
 		"site_enabled_count":                                  countEnabledSiteStatuses(siteStatuses),
 		"sites":                                               siteStatuses,
@@ -173,6 +174,10 @@ func StatusHandler(c *gin.Context) {
 		"vhost_static_count":                                  countVhostsByMode(vhostCfg, "static"),
 		"vhost_php_fpm_count":                                 countVhostsByMode(vhostCfg, "php-fpm"),
 		"vhost_rollback_depth":                                vhostRollbackDepth,
+		"vhost_degraded":                                      vhostRuntimeStatus.Degraded,
+		"vhost_last_error":                                    vhostRuntimeStatus.LastError,
+		"scheduled_task_config_storage":                       scheduledTaskConfigStorageLabel(currentScheduledTaskConfigPath()),
+		"upstream_runtime_storage":                            upstreamRuntimeStorageLabel(),
 		"security_audit":                                      securityAuditStatus,
 		"security_audit_enabled":                              securityAuditStatus.Enabled,
 		"security_audit_capture_mode":                         securityAuditStatus.CaptureMode,
@@ -351,14 +356,12 @@ func StatusHandler(c *gin.Context) {
 		"crs_setup_file":                                      config.CRSSetupFile,
 		"crs_rules_dir":                                       config.CRSRulesDir,
 		"crs_disabled_file":                                   config.CRSDisabledFile,
-		"storage_backend":                                     config.StorageBackend,
-		"db_enabled":                                          config.DBEnabled,
 		"db_driver":                                           config.DBDriver,
 		"db_dsn_configured":                                   strings.TrimSpace(config.DBDSN) != "",
 		"db_path":                                             config.DBPath,
 		"db_retention_days":                                   config.DBRetentionDays,
 		"db_sync_interval_sec":                                int(config.DBSyncInterval / time.Second),
-		"db_sync_loop_enabled":                                config.DBEnabled && config.DBSyncInterval > 0,
+		"db_sync_loop_enabled":                                config.DBSyncInterval > 0,
 		"db_total_rows":                                       dbTotalRows,
 		"db_waf_block_rows":                                   dbWAFBlockRows,
 		"db_size_bytes":                                       dbSizeBytes,
@@ -382,12 +385,14 @@ func RulesHandler(c *gin.Context) {
 			key := ruleFileConfigBlobKey(path)
 			dbRaw, dbETag, found, dbErr := store.GetConfigBlob(key)
 			if dbErr != nil {
-				log.Printf("[RULES][DB][WARN] get config blob failed (path=%s): %v", path, dbErr)
+				respondConfigBlobDBError(c, "rules db read failed", dbErr)
+				return
 			} else if found {
 				if strings.TrimSpace(dbETag) == "" {
 					dbETag = bypassconf.ComputeETag(dbRaw)
 					if err := store.UpsertConfigBlob(key, dbRaw, dbETag, time.Now().UTC()); err != nil {
-						log.Printf("[RULES][DB][WARN] normalize etag failed (path=%s): %v", path, err)
+						respondConfigBlobDBError(c, "rules db etag normalization failed", err)
+						return
 					}
 				}
 				result[path] = string(dbRaw)
@@ -401,7 +406,8 @@ func RulesHandler(c *gin.Context) {
 				continue
 			} else if err == nil && len(content) > 0 {
 				if err := store.UpsertConfigBlob(key, content, bypassconf.ComputeETag(content), time.Now().UTC()); err != nil {
-					log.Printf("[RULES][DB][WARN] seed config blob failed (path=%s): %v", path, err)
+					respondConfigBlobDBError(c, "rules db seed failed", err)
+					return
 				}
 			}
 		}

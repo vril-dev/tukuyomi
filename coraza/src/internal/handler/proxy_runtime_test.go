@@ -298,6 +298,96 @@ func TestProxyRulesApplyAndRollback(t *testing.T) {
 	}
 }
 
+func TestProxyRulesApplyAndRollbackPersistDBBlob(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	}()
+
+	proxyPath := filepath.Join(tmp, "proxy.json")
+	initial := `{
+  "upstreams": [
+    { "name": "primary", "url": "http://127.0.0.1:8081", "weight": 1, "enabled": true }
+  ]
+}`
+	if err := os.WriteFile(proxyPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write initial proxy.json: %v", err)
+	}
+	if err := InitProxyRuntime(proxyPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+	if _, _, found, err := getLogsStatsStore().GetConfigBlob(proxyRulesConfigBlobKey); err != nil {
+		t.Fatalf("GetConfigBlob(proxy_rules): %v", err)
+	} else if !found {
+		t.Fatal("proxy_rules blob should be seeded from proxy.json")
+	}
+	_, etag, _, _, _ := ProxyRulesSnapshot()
+	next := strings.Replace(initial, "127.0.0.1:8081", "127.0.0.1:8082", 1)
+	if _, _, err := ApplyProxyRulesRaw(etag, next); err != nil {
+		t.Fatalf("ApplyProxyRulesRaw: %v", err)
+	}
+	dbRaw, _, found, err := getLogsStatsStore().GetConfigBlob(proxyRulesConfigBlobKey)
+	if err != nil {
+		t.Fatalf("GetConfigBlob(proxy_rules): %v", err)
+	}
+	if !found {
+		t.Fatal("proxy_rules blob should exist after apply")
+	}
+	if !strings.Contains(string(dbRaw), "127.0.0.1:8082") {
+		t.Fatalf("proxy_rules blob was not updated: %s", string(dbRaw))
+	}
+	if _, _, _, err := RollbackProxyRules(); err != nil {
+		t.Fatalf("RollbackProxyRules: %v", err)
+	}
+	dbRaw, _, found, err = getLogsStatsStore().GetConfigBlob(proxyRulesConfigBlobKey)
+	if err != nil {
+		t.Fatalf("GetConfigBlob(proxy_rules): %v", err)
+	}
+	if !found {
+		t.Fatal("proxy_rules blob should exist after rollback")
+	}
+	if !strings.Contains(string(dbRaw), "127.0.0.1:8081") {
+		t.Fatalf("proxy_rules blob was not rolled back: %s", string(dbRaw))
+	}
+}
+
+func TestInitProxyRuntimeUsesDBBlobBeforeSeedFile(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	}()
+
+	proxyPath := filepath.Join(tmp, "proxy.json")
+	fileRaw := `{"upstreams":[{"name":"file","url":"http://127.0.0.1:8081","weight":1,"enabled":true}]}`
+	dbRaw := `{"upstreams":[{"name":"db","url":"http://127.0.0.1:8082","weight":1,"enabled":true}]}`
+	if err := os.WriteFile(proxyPath, []byte(fileRaw), 0o644); err != nil {
+		t.Fatalf("write proxy seed: %v", err)
+	}
+	prepared, err := prepareProxyRulesRaw(dbRaw)
+	if err != nil {
+		t.Fatalf("prepare db raw: %v", err)
+	}
+	if err := getLogsStatsStore().UpsertConfigBlob(proxyRulesConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
+		t.Fatalf("upsert proxy_rules: %v", err)
+	}
+
+	if err := InitProxyRuntime(proxyPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+	_, _, cfg, _, _ := ProxyRulesSnapshot()
+	if len(cfg.Upstreams) != 1 || cfg.Upstreams[0].Name != "db" {
+		t.Fatalf("upstreams=%#v want db blob", cfg.Upstreams)
+	}
+}
+
 func TestProxyProbe(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

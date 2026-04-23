@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"tukuyomi/internal/config"
 )
@@ -138,6 +139,62 @@ func TestBuildProxyBackendStatesAppliesRuntimeOverrides(t *testing.T) {
 	}
 	if got := backends[1].EffectiveWeight; got != 1 {
 		t.Fatalf("secondary effective_weight=%d want=1", got)
+	}
+}
+
+func TestBuildProxyBackendStatesLoadsRuntimeOverridesFromDB(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	}()
+
+	oldPath := config.UpstreamRuntimeFile
+	config.UpstreamRuntimeFile = filepath.Join(tmp, "conf", "upstream-runtime.json")
+	defer func() {
+		config.UpstreamRuntimeFile = oldPath
+	}()
+
+	primaryKey := proxyBackendLookupKey("primary", "http://127.0.0.1:8080")
+	overrideRaw := fmt.Sprintf(`{
+  "version": "v1",
+  "backends": {
+    %q: {
+      "admin_state": "disabled",
+      "weight_override": 5
+    }
+  }
+}
+`, primaryKey)
+	store := getLogsStatsStore()
+	if err := store.UpsertConfigBlob(upstreamRuntimeConfigBlobKey, []byte(overrideRaw), "", time.Now().UTC()); err != nil {
+		t.Fatalf("UpsertConfigBlob: %v", err)
+	}
+
+	cfg := mustValidateProxyRulesRaw(t, `{
+  "upstreams": [
+    { "name": "primary", "url": "http://127.0.0.1:8080", "weight": 2, "enabled": true }
+  ]
+}`)
+
+	backends, err := buildProxyBackendStates(cfg, nil)
+	if err != nil {
+		t.Fatalf("buildProxyBackendStates: %v", err)
+	}
+	if len(backends) != 1 {
+		t.Fatalf("len(backends)=%d want=1", len(backends))
+	}
+	if got := backends[0].AdminState; got != upstreamAdminStateDisabled {
+		t.Fatalf("admin_state=%q want=%q", got, upstreamAdminStateDisabled)
+	}
+	if backends[0].WeightOverride == nil || *backends[0].WeightOverride != 5 {
+		t.Fatalf("weight_override=%v want=5", backends[0].WeightOverride)
+	}
+	if _, err := os.Stat(config.UpstreamRuntimeFile); !os.IsNotExist(err) {
+		t.Fatalf("upstream runtime file should not be restored, stat err=%v", err)
 	}
 }
 

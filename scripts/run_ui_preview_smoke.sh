@@ -10,6 +10,7 @@ UI_PREVIEW_SMOKE_SINGLE_PORT="${UI_PREVIEW_SMOKE_SINGLE_PORT:-19108}"
 UI_PREVIEW_SMOKE_PUBLIC_PORT="${UI_PREVIEW_SMOKE_PUBLIC_PORT:-19109}"
 UI_PREVIEW_SMOKE_ADMIN_PORT="${UI_PREVIEW_SMOKE_ADMIN_PORT:-19110}"
 UI_PREVIEW_SMOKE_PROJECT="tukuyomi-ui-preview-smoke-$$"
+UI_PREVIEW_SQLITE_DB_REL="logs/coraza/tukuyomi-ui-preview.db"
 
 PUID_VALUE="${PUID:-$(id -u)}"
 GUID_VALUE="${GUID:-$(id -g)}"
@@ -110,6 +111,10 @@ paths["proxy_config_file"] = "conf/proxy.ui-preview.json"
 paths["scheduled_task_config_file"] = "conf/scheduled-tasks.ui-preview.json"
 paths["php_runtime_inventory_file"] = "data/php-fpm/inventory.ui-preview.json"
 paths["vhost_config_file"] = "data/php-fpm/vhosts.ui-preview.json"
+storage = cfg.setdefault("storage", {})
+storage["db_driver"] = "sqlite"
+storage["db_dsn"] = ""
+storage["db_path"] = "logs/coraza/tukuyomi-ui-preview.db"
 dst.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 PY
 }
@@ -148,6 +153,54 @@ assert_task_count() {
   if [[ "${actual}" != "${expected}" ]]; then
     fail "expected ${path} to contain ${expected} tasks, got ${actual}"
   fi
+}
+
+assert_preview_db_config() {
+  local path="${WORKSPACE}/data/conf/config.ui-preview.json"
+  local driver
+  local db_path
+
+  driver="$(jq -r '.storage.db_driver // ""' "${path}")"
+  db_path="$(jq -r '.storage.db_path // ""' "${path}")"
+  if [[ "${driver}" != "sqlite" ]]; then
+    fail "preview db_driver=${driver} want sqlite"
+  fi
+  if [[ "${db_path}" != "${UI_PREVIEW_SQLITE_DB_REL}" ]]; then
+    fail "preview db_path=${db_path} want ${UI_PREVIEW_SQLITE_DB_REL}"
+  fi
+}
+
+write_stale_preview_db() {
+  local db_path="${WORKSPACE}/data/${UI_PREVIEW_SQLITE_DB_REL}"
+
+  mkdir -p "$(dirname "${db_path}")"
+  printf 'not a sqlite database\n' >"${db_path}"
+  printf 'stale wal\n' >"${db_path}-wal"
+  printf 'stale shm\n' >"${db_path}-shm"
+}
+
+poison_preview_db_config() {
+  python3 - "${WORKSPACE}/data/conf/config.ui-preview.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+cfg = json.loads(path.read_text(encoding="utf-8"))
+storage = cfg.setdefault("storage", {})
+storage["db_driver"] = "mysql"
+storage["db_dsn"] = "should-not-survive-preview-normalization"
+storage["db_path"] = "logs/coraza/stale-shared.db"
+path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+PY
+}
+
+assert_preview_db_removed() {
+  local db_path="${WORKSPACE}/data/${UI_PREVIEW_SQLITE_DB_REL}"
+
+  [[ ! -f "${db_path}" ]] || fail "preview DB should be removed: ${db_path}"
+  [[ ! -f "${db_path}-wal" ]] || fail "preview DB WAL should be removed: ${db_path}-wal"
+  [[ ! -f "${db_path}-shm" ]] || fail "preview DB SHM should be removed: ${db_path}-shm"
 }
 
 stage_workspace() {
@@ -219,15 +272,19 @@ stage_workspace
 log "verifying default reset/remove behavior without UI_PREVIEW_PERSIST"
 write_base_config ":${UI_PREVIEW_SMOKE_SINGLE_PORT}" ""
 write_preview_scheduled_tasks "ui-preview-reset-smoke"
+write_stale_preview_db
 preview_up 0 >/dev/null
 wait_for_http_code "200" "http://127.0.0.1:${UI_PREVIEW_SMOKE_SINGLE_PORT}/healthz" || fail "single-listener ui-preview did not become healthy"
+assert_preview_db_config
 assert_task_count "${WORKSPACE}/data/conf/scheduled-tasks.ui-preview.json" "0"
 preview_down 0
 [[ ! -f "${WORKSPACE}/data/conf/config.ui-preview.json" ]] || fail "config.ui-preview.json should be removed without UI_PREVIEW_PERSIST"
 [[ ! -f "${WORKSPACE}/data/conf/scheduled-tasks.ui-preview.json" ]] || fail "scheduled-tasks.ui-preview.json should be removed without UI_PREVIEW_PERSIST"
+assert_preview_db_removed
 
 log "verifying UI_PREVIEW_PERSIST=1 with split public/admin ports"
 write_preview_config ":${UI_PREVIEW_SMOKE_PUBLIC_PORT}" ":${UI_PREVIEW_SMOKE_ADMIN_PORT}"
+poison_preview_db_config
 cat >"${WORKSPACE}/data/conf/proxy.ui-preview.json" <<'EOF'
 {}
 EOF
@@ -241,6 +298,7 @@ cat >"${WORKSPACE}/data/php-fpm/vhosts.ui-preview.json" <<'EOF'
 }
 EOF
 preview_up 1 >/dev/null
+assert_preview_db_config
 wait_for_http_code "200" "http://127.0.0.1:${UI_PREVIEW_SMOKE_PUBLIC_PORT}/healthz" || fail "split public listener did not become healthy"
 wait_for_http_code "200" "http://127.0.0.1:${UI_PREVIEW_SMOKE_ADMIN_PORT}/healthz" || fail "split admin listener did not become healthy"
 [[ "$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1:${UI_PREVIEW_SMOKE_PUBLIC_PORT}/tukuyomi-ui" || true)" == "404" ]] || fail "public preview listener should not serve admin UI path in split mode"

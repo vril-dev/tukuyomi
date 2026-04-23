@@ -5,8 +5,9 @@ lived inline in `README.md`.
 
 ## Runtime Configuration
 
-Use `.env` only for Docker/runtime wiring. Application behavior belongs in
-`data/conf/config.json`.
+Use `.env` only for Docker/runtime wiring. `data/conf/config.json` is the DB
+connection bootstrap; after DB opens, application and proxy behavior are loaded
+from DB `config_blobs`.
 
 ### Docker / Local MySQL (Optional)
 
@@ -19,7 +20,11 @@ Use `.env` only for Docker/runtime wiring. Application behavior belongs in
 | `MYSQL_ROOT_PASSWORD` | `tukuyomi-root` | Root password for the local MySQL container. |
 | `MYSQL_TZ` | `UTC` | Container timezone. |
 
-### `data/conf/config.json`
+### `data/conf/config.json` / DB `app_config`
+
+`data/conf/config.json` must provide `storage.db_driver`, `storage.db_path`, and
+`storage.db_dsn` before DB can be opened. The rest of the product-wide config is
+stored in DB `app_config` after bootstrap/import.
 
 Main blocks:
 
@@ -29,9 +34,9 @@ Main blocks:
 | `runtime` | Go runtime caps such as `gomaxprocs` and `memory_limit_mb` |
 | `admin` | UI/API paths, session behavior, external exposure policy, trusted CIDRs, admin rate limit |
 | `paths` | File locations for rules, bypass, country, rate, bot, semantic, CRS, sites, scheduled tasks, and artifacts |
-| `proxy` | Rollback history limits and route-runtime behavior |
+| `proxy` | Rollback history limits and process-wide proxy engine behavior |
 | `crs` | CRS enable flag |
-| `storage` | `file` / `db` backend selection, DB connection, retention, sync interval |
+| `storage` | DB-only runtime store (`sqlite`, `mysql`, `pgsql`), retention, sync interval, log file rotation limits |
 | `fp_tuner` | External provider endpoint, approval, timeout, and audit controls |
 | `request_metadata` | Metadata resolution source such as `header` or `mmdb` for country resolution |
 | `observability` | OTLP tracing configuration |
@@ -105,7 +110,7 @@ Notes:
 - HTTP/3 uses the same numeric port as `server.listen_addr`, but over UDP.
 - `server.tls.redirect_http=true` starts a second plain HTTP listener that redirects to HTTPS.
 - ACME can be enabled with `server.tls.acme.*`.
-- `paths.site_config_file` defaults to `conf/sites.json`.
+- `paths.site_config_file` defaults to `conf/sites.json`; in DB-backed runtime this is the empty-DB seed/export path, not the live source of truth.
 
 TLS certificate selection happens during the TLS handshake, before host/path
 routing runs.
@@ -156,7 +161,7 @@ Main screens:
 | `/status` | Runtime status, config snapshot, listener topology, health/runtime disclosure |
 | `/logs` | WAF/security logs and detail lookups |
 | `/rules` / `/rule-sets` | Base rule editing and CRS toggles |
-| `/bypass` / `/country-block` / `/rate-limit` | File-backed policy editing |
+| `/bypass` / `/country-block` / `/rate-limit` | DB-synced policy editing |
 | `/ip-reputation` / `/bot-defense` / `/semantic` | Request-time security controls |
 | `/notifications` | Aggregate alerting config and runtime status |
 | `/cache` | Cache rules and internal cache store controls |
@@ -164,9 +169,9 @@ Main screens:
 | `/backends` | Canonical backend object inventory. Direct named upstreams support runtime enable/drain/disable and weight override; vhost-bound configured upstreams are status-only in this slice |
 | `/sites` | Site ownership and TLS binding |
 | `/options` | Runtime inventory, optional artifacts, GeoIP/Country DB management |
-| `/vhosts` | Static / `php-fpm` vhost definitions, internal generated targets, and required configured-upstream bindings |
+| `/vhosts` | Static / `php-fpm` vhost definitions and required configured-upstream bindings |
 | `/scheduled-tasks` | Command-based cron task definitions and run status |
-| `/settings` | Product-wide `conf/config.json` editor for restart-required settings |
+| `/settings` | Product-wide DB `app_config` editor for restart-required settings |
 
 UI samples live under `docs/images/ui-samples/`.
 
@@ -223,7 +228,7 @@ Routing model:
 - `routes[]` are evaluated in ascending `priority` order with first-match semantics.
 - Selection order is:
   1. explicit `routes[]`
-  2. generated host fallback routes from `conf/sites.json`
+  2. generated host fallback routes from the DB `sites` config blob
   3. `default_route`
   4. `upstreams[]`
 - Host matching supports exact host and `*.example.com` wildcard host.
@@ -243,13 +248,13 @@ Routing model:
 - Each `Upstreams` row has its own `Probe` action so connectivity checks target one configured upstream at a time.
 - `Vhosts` must define `linked_upstream_name` so route bindings and backend-pool members can reference a Vhost through the same upstream-name namespace.
 - `linked_upstream_name` must already exist in `Proxy Rules > Upstreams`; Vhosts do not create managed aliases here.
-- `generated_target` remains an internal compatibility field for vhost materialization. Normal route/pool binding should use `linked_upstream_name`.
+- `generated_target` is server-owned internal compatibility state for vhost materialization. Operator route/pool binding should use `linked_upstream_name`.
 - A direct upstream currently bound by a Vhost cannot be removed from `Proxy Rules > Upstreams` until the Vhost is relinked.
 
 ### Proxy Engine
 
-`conf/config.json` exposes the process-wide proxy engine under `proxy.engine.mode`.
-Only Tukuyomi's native proxy engine is supported. Changing this file requires a process restart.
+DB `app_config` exposes the process-wide proxy engine under `proxy.engine.mode`.
+Only Tukuyomi's native proxy engine is supported. Changing it requires a process restart.
 
 ```json
 {
@@ -269,14 +274,14 @@ Only Tukuyomi's native proxy engine is supported. Changing this file requires a 
 
 ### Runtime Backend Operations
 
-- `data/conf/upstream-runtime.json` stores opt-in runtime overrides for materialized backend keys from `Proxy Rules > Upstreams`.
+- DB blob `upstream_runtime` stores opt-in runtime overrides for materialized backend keys from `Proxy Rules > Upstreams`; `data/conf/upstream-runtime.json` is only an empty-DB seed/export path.
 - `Backends` lists canonical backend objects, not backend pools.
 - `Backends` is the runtime operations panel for:
   - `enabled`
   - `draining`
   - `disabled`
   - positive `weight_override`
-- No override means configured behavior from `data/conf/proxy.json`.
+- No override means configured behavior from DB `proxy_rules`; `data/conf/proxy.json` is only seed/import/export material.
 - Runtime operations apply to static direct upstreams and DNS-discovered materialized targets.
 - Configured upstreams bound by Vhosts are routable and pool-addressable, and `Backends` exposes them as status-only canonical objects.
 - Direct route URLs, generated `static`, and generated `php-fpm` targets are not included.
@@ -578,7 +583,7 @@ Key ideas:
 ### Observability
 
 - `/metrics` exposes TLS, upstream HA, rate limit, semantic, and request-security counters
-- file backend rotation is controlled by `storage.file_rotate_bytes`, `storage.file_max_bytes`, `storage.file_retention_days`
+- WAF/access/audit log file rotation is controlled by `storage.file_rotate_bytes`, `storage.file_max_bytes`, `storage.file_retention_days`
 - optional OTLP tracing is configured under `observability.tracing`
 
 ### Notifications

@@ -16,7 +16,9 @@
 
 ## Data Layout
 
-保存される設定は `conf/scheduled-tasks.json` にあります。
+保存される task 定義の正は DB blob `scheduled_tasks` です。
+`conf/scheduled-tasks.json` は空 DB の seed/export file であり、bootstrap 後の
+runtime source of truth ではありません。
 
 生成される runtime state は `data/scheduled-tasks/` にあります。
 
@@ -78,7 +80,8 @@ bundled PHP runtime を使いたいなら、その `php` wrapper を command lin
 この command は:
 
 - `conf/config.json` を読み込む
-- `conf/scheduled-tasks.json` を読む
+- 設定された DB store を開く
+- DB blob `scheduled_tasks` を直接読む。blob が無い時だけ `conf/scheduled-tasks.json` から seed する
 - 現在 minute に一致する job だけを実行する
 - 各 task を `/bin/sh -lc` で起動する
 - state/log を `data/scheduled-tasks/` に記録する
@@ -163,9 +166,9 @@ make ui-preview-up
 make ui-preview-down
 ```
 
-preview は `conf/scheduled-tasks.ui-preview.json` を使うので、preview UI からの変更は通常の `conf/scheduled-tasks.json` を汚しません。
+preview は `conf/scheduled-tasks.ui-preview.json` を使うので、preview UI からの変更は通常の DB-backed scheduled-task config を汚しません。
 
-既定では `ui-preview-up` のたびにその preview config は `{"tasks":[]}` へ初期化されるので、以前の preview task が勝手に走り続けません。
+既定では `ui-preview-up` のたびにその preview config は `{"tasks":[]}` へ初期化され、preview 専用 SQLite DB も削除されます。以前の preview task や DB blob は引き継ぎません。
 
 `down/up` をまたいで preview 編集結果を残したい時は、これを使います。
 
@@ -174,7 +177,7 @@ UI_PREVIEW_PERSIST=1 make ui-preview-up
 UI_PREVIEW_PERSIST=1 make ui-preview-down
 ```
 
-`UI_PREVIEW_PERSIST=1` では `conf/config.ui-preview.json` も保持されるので、`Settings` で保存した listener 変更を preview の `down/up` で確認できます。
+`UI_PREVIEW_PERSIST=1` では `conf/config.ui-preview.json` と preview SQLite DB も保持されるので、`Settings` で保存した listener 変更を preview の `down/up` で確認できます。
 
 split preview listener も使えますが、preview config の bind は `:80`, `:9090` のような host 到達可能な形にしてください。`localhost:80`, `127.0.0.1:80`, `[::1]:9090` のような loopback bind は Docker publish と噛み合わないため、`ui-preview-up` は明示エラーで止めます。
 

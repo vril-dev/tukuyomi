@@ -11,11 +11,11 @@ This document covers the optional PHP-FPM workflow exposed through `/options`, `
   - materialization and process visibility
 - `/vhosts`
   - source of truth for managed `php-fpm` applications
-  - host, port, docroot, rewrite, access rules, basic auth, `.htaccess` subset import, and PHP ini overrides
-  - generated target names for route binding
+  - host, port, docroot, rewrite, access rules, basic auth, and PHP ini overrides
+  - configured upstream binding through `linked_upstream_name`
 - `/proxy-rules`
   - route binding only
-  - bind traffic to generated target names from `/vhosts`
+  - bind traffic to configured upstream names referenced by `/vhosts`
   - do not treat raw `fcgi://` transport details as the normal operator entrypoint
 
 ## Data Layout
@@ -106,13 +106,11 @@ Each vhost requires:
 - `hostname`
 - `listen_port`
 - `document_root`
-- `generated_target`
+- `linked_upstream_name`
 - `runtime_id`
 
 Optional controls:
 
-- `override_file_name`
-  - defaults to `.htaccess`
 - `try_files`
 - rewrite rules
 - access rules
@@ -131,14 +129,10 @@ Typical flow:
 6. Run `Apply`.
 7. Use `Rollback` only when you need to restore the previous saved snapshot.
 
-Validation/apply also evaluates the optional override file import report. The UI shows:
-
-- which override file name was checked
-- whether the file was found
-- how many rewrite rules were imported
-- how many access rules were imported
-- whether basic auth was imported
-- parser/import messages
+Vhost behavior is centralized and nginx-style. Files in the document root such
+as `.htaccess` are not parsed, imported, watched, or re-read at request time.
+Legacy `override_file_name` fields in old config files are accepted only for
+migration and are normalized away on validate/apply.
 
 ## Linked Upstreams and Route Binding
 
@@ -160,7 +154,8 @@ Notes:
 
 - `listen_port` is the PHP-FPM FastCGI listen port
 - do not treat `http://127.0.0.1:<listen_port>` as an HTTP upstream
-- `generated_target` remains an internal compatibility field; normal operator flow should reference `linked_upstream_name` from routes or the default route
+- the server owns `generated_target` as an internal compatibility alias and pool name; the admin UI does not expose it as operator input
+- normal operator flow should reference `linked_upstream_name` from routes or the default route
 - if `linked_upstream_name` binds to an existing configured upstream, that direct upstream cannot be removed from `Proxy Rules > Upstreams` until the Vhost changes
 
 Keep `Proxy Rules` focused on routing. Managed PHP application details should stay in `/vhosts`, not as raw `fcgi://` or generated-target edits inside `conf/proxy.json`.

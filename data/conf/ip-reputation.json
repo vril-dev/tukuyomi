@@ -1,6 +1,6 @@
 {
   "default": {
-    "enabled": false,
+    "enabled": true,
     "feed_urls": [
       "https://feeds.example.invalid/ip-reputation.txt"
     ],

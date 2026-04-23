@@ -17,7 +17,6 @@ type DriftConfig = {
     memory_limit_mb: number;
   };
   storage: {
-    backend: string;
     db_driver: string;
     db_path: string;
   };
@@ -50,7 +49,6 @@ type DriftRuntime = {
   runtime_gomaxprocs?: number;
   runtime_memory_limit_mb?: number;
   request_country_effective_mode?: string;
-  storage_backend?: string;
   storage_db_driver?: string;
   storage_db_path?: string;
   tracing_enabled?: boolean;
@@ -79,7 +77,6 @@ export function computeSettingsRuntimeDrift(
   if ((runtime.admin_read_only ?? false) !== config.admin.read_only) drift.push(label("Admin Read Only"));
   if ((runtime.runtime_gomaxprocs ?? 0) !== config.runtime.gomaxprocs) drift.push(label("GOMAXPROCS"));
   if ((runtime.runtime_memory_limit_mb ?? 0) !== config.runtime.memory_limit_mb) drift.push(label("Memory Limit MB"));
-  if ((runtime.storage_backend ?? "") !== config.storage.backend) drift.push(label("Storage Backend"));
   if ((runtime.storage_db_driver ?? "") !== config.storage.db_driver) drift.push(label("DB Driver"));
   if ((runtime.storage_db_path ?? "") !== config.storage.db_path) drift.push(label("DB Path"));
   if ((runtime.tracing_enabled ?? false) !== config.observability.tracing.enabled) drift.push(label("Tracing Enabled"));

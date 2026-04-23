@@ -105,7 +105,6 @@ const JA_STRINGS: Record<string, string> = {
   "Rate Limit Enabled": "レート制限有効",
   "Bot Defense Enabled": "Bot防御有効",
   "Semantic Mode": "セマンティックモード",
-  "DB Enabled": "DB有効",
   "DB Retention Days": "DB保持日数",
   "DB Rows (Total)": "DB行数（全体）",
   "DB Rows (WAF Block)": "DB行数（WAF block）",
@@ -183,8 +182,6 @@ const JA_STRINGS: Record<string, string> = {
   "Add webhook": "webhook sink を追加",
   "Add webhook or email delivery targets. Disabled sinks stay in the file but do not receive notifications.":
     "webhook または email の配送先を追加します。無効な sink はファイルには残りますが通知は受け取りません。",
-  "Advanced JSON is currently invalid. The structured editor is still showing the last valid notification snapshot. Any structured edit will regenerate valid JSON from that snapshot.":
-    "現在の詳細JSONは無効です。構造化エディタには直近で有効だった notification snapshot を表示しています。構造化編集を行うと、その snapshot から有効な JSON を再生成します。",
   "Cooldown seconds": "cooldown 秒数",
   "Enable notification delivery": "通知配送を有効化",
   "Escalated threshold": "escalated 閾値",
@@ -206,8 +203,8 @@ const JA_STRINGS: Record<string, string> = {
   "SMTP username": "SMTP ユーザー名",
   "Security sources": "セキュリティ source",
   Sink: "sink",
-  "Structured edits still validate, save, and hot reload through the existing notification raw JSON API.":
-    "構造化編集でも検証、保存、hot reload は既存の notification raw JSON API を通ります。",
+  "Structured edits validate, save, and hot reload through the existing notification backend API.":
+    "構造化編集は既存の notification backend API で検証、保存、hot reload されます。",
   "Subject prefix": "件名 prefix",
   "Thresholds are evaluated over each trigger window before notifications transition state.":
     "通知 state が遷移する前に、各 trigger window 内で閾値を評価します。",
@@ -328,9 +325,6 @@ const JA_STRINGS: Record<string, string> = {
   Route: "ルート",
   Upstream: "upstream",
   "Final URL": "最終URL",
-  "Raw JSON": "Raw JSON",
-  "Keep using the existing raw editor for transport and low-level fields that are not part of the structured routing editor.":
-    "構造化ルーティングエディタの対象外である transport や低レベル項目は、引き続き既存の生JSONエディタで扱います。",
   "Validate Messages": "Validate Messages",
   "Probe Result": "Probe Result",
   "Recent changes": "Recent changes",
@@ -340,9 +334,7 @@ const JA_STRINGS: Record<string, string> = {
   "Action filter": "Action filter",
   all: "すべて",
   rollback: "ロールバック",
-  "Runtime Proxy": "Runtime Proxy",
   "Upstream Health": "Upstream Health",
-  "Dry Run Result": "Dry Run Result",
   "Priority decides order. The first matching route wins.": "priority が評価順を決めます。最初に一致した route が採用されます。",
   Priority: "優先度",
   Hosts: "ホスト一覧",
@@ -474,7 +466,6 @@ const JA_STRINGS: Record<string, string> = {
   "Save Store": "ストアを保存",
   "Clearing...": "削除中...",
   "Clear All": "全削除",
-  "Raw edit mode": "生編集モード",
   "Add rule": "ルール追加",
   "Validating...": "検証中...",
   Kind: "種別",
@@ -576,26 +567,28 @@ const JA_STRINGS: Record<string, string> = {
   "probe failed for {upstream}: {message}": "疎通失敗: {upstream}: {message}",
   "upstream name is required for probe": "疎通確認には upstream 名が必要です",
   "Review changes before apply": "Review changes before apply",
-  "Compare the current saved proxy rules with the JSON that will be applied.": "現在保存済みの proxy rules と、これから適用する JSON を比較します。",
+  "Compare the current saved proxy rules with the configuration that will be applied.":
+    "現在保存済みの proxy rules と、これから適用する設定を比較します。",
   "Review rollback target": "Review rollback target",
   "Compare the current saved proxy rules with the snapshot that will be restored.": "現在保存済みの proxy rules と、これから復元する snapshot を比較します。",
   "Unsaved editor changes are not part of rollback. Rollback restores the latest saved runtime snapshot.":
     "未保存のエディタ変更はロールバック対象に含まれません。ロールバックは直近の保存済み runtime snapshot を復元します。",
   "Apply rollback": "ロールバックを適用",
   "rollback preview failed": "ロールバック preview に失敗しました",
-  "Exported {count} audit entries as JSON.": "{count} 件の監査履歴を JSON として出力しました。",
-  "Export JSON": "エクスポート",
+  "Exported {count} audit entries.": "{count} 件の監査履歴を出力しました。",
+  Export: "エクスポート",
   "Copied selected audit summary.": "選択した監査サマリをコピーしました。",
   "failed to copy audit summary": "監査サマリのコピーに失敗しました",
   "dry-run failed": "ドライランに失敗しました",
-  "Edit route-aware upstream selection, path/query rewrites, and header operations with a structured builder, then keep raw JSON for the rest of the proxy transport knobs.":
-    "route を意識した upstream 選択、path/query 書き換え、header 操作を構造化ビルダで編集し、それ以外の proxy transport 項目は生JSONのまま扱います。",
-  "Raw JSON out of sync": "raw JSON と未同期",
+  "Edit route-aware upstream selection, path/query rewrites, header operations, and transport knobs with structured controls.":
+    "route を意識した upstream 選択、path/query 書き換え、header 操作、transport 設定を構造化コントロールで編集します。",
   "Structured editor synced": "構造化エディタ同期済み",
   ETag: "ETag",
   "Structured editor warning": "構造化エディタ警告",
-  "Raw JSON is currently invalid. The structured editor is still showing the last valid routing snapshot. Any structured edit will regenerate raw JSON from that snapshot.":
-    "現在の生JSONは無効です。構造化エディタには直近で有効だった routing snapshot を表示しています。構造化編集を行うと、その snapshot から生JSONを再生成します。",
+  "Invalid proxy rules": "proxy rules が無効です",
+  "Saved proxy rules could not be represented by the structured editor. The editor is showing the last valid routing snapshot; any structured edit will generate a replacement from that snapshot.":
+    "保存済み proxy rules を構造化エディタで表現できません。エディタには直近で有効だった routing snapshot を表示しており、構造化編集を行うとその snapshot から置換設定を生成します。",
+  "No upstream health data loaded.": "upstream health data はまだ読み込まれていません。",
   Probe: "疎通確認",
   "Preparing...": "Preparing...",
   Rollback: "ロールバック",
@@ -634,6 +627,33 @@ const JA_STRINGS: Record<string, string> = {
   "Health Path": "ヘルスパス",
   "Binary Path": "バイナリパス",
   "Config File": "設定ファイル",
+  "Bootstrap Config": "bootstrap 設定",
+  "Saved to DB app_config. Restart tukuyomi to apply global config changes from this panel.":
+    "DB app_config に保存しました。この画面の global 設定変更を反映するには tukuyomi を再起動してください。",
+  "Edit listener, runtime, storage policy, and observability settings stored in DB app_config. DB connection fields still come from the bootstrap config file.":
+    "DB app_config に保存される listener、runtime、storage policy、observability 設定を編集します。DB 接続項目は引き続き bootstrap 設定ファイルから読みます。",
+  "Listener, runtime, storage policy, and observability settings here are restart-required startup config. Saving updates DB app_config; db_driver, db_path, and db_dsn stay bootstrap-only in config.json.":
+    "ここにある listener、runtime、storage policy、observability は再起動が必要な startup 設定です。保存先は DB app_config です。db_driver、db_path、db_dsn は config.json の bootstrap 専用項目です。",
+  "Database storage policy and bootstrap connection status. Driver, path, and DSN are read from the bootstrap config file before DB is opened.":
+    "DB storage policy と bootstrap 接続状態です。driver、path、DSN は DB を開く前に bootstrap 設定ファイルから読みます。",
+  "DB connection is bootstrap-only. Current DSN status: {state}. Change db_driver, db_path, or db_dsn in the bootstrap config file, run migrations/import as needed, then restart.":
+    "DB 接続は bootstrap 専用です。現在の DSN 状態: {state}。db_driver、db_path、db_dsn は bootstrap 設定ファイルで変更し、必要に応じて migration/import を実行してから再起動してください。",
+  "Advanced paths and global support files affect the whole product. Runtime-owned JSON paths are seed/import/export locations after DB bootstrap. Validate before save and restart after changes.":
+    "advanced path と global support file はプロダクト全体に影響します。runtime 管理の JSON path は DB bootstrap 後は seed/import/export 用です。保存前に検証し、変更後に再起動してください。",
+  "Proxy Seed File": "Proxy 初期投入ファイル",
+  "Choose whether request country comes from a trusted frontend header or from the installed local country database artifact. This updates DB app_config and takes effect after restart.":
+    "request country を trusted frontend header から取るか、導入済み local country database artifact から取るかを選択します。DB app_config を更新し、再起動後に反映されます。",
+  "Saving updates DB app_config. Restart the process after switching modes.":
+    "保存先は DB app_config です。mode 切替後は process を再起動してください。",
+  "Config Storage": "設定保存先",
+  "Seed File": "初期投入ファイル",
+  "Runtime Storage": "ランタイム保存先",
+  "Site Config Storage": "Site 設定保存先",
+  "Scheduled Task Config Storage": "Scheduled Task 設定保存先",
+  "Upstream Runtime Storage": "Upstream Runtime 保存先",
+  "Site Seed File": "Site 初期投入ファイル",
+  "Scheduled Task Seed File": "Scheduled Task 初期投入ファイル",
+  "Upstream Runtime Seed File": "Upstream Runtime 初期投入ファイル",
   "Working Directory": "作業ディレクトリ",
   "Document Root": "ドキュメントルート",
   "Listen Address": "待受アドレス",
@@ -650,8 +670,8 @@ const JA_STRINGS: Record<string, string> = {
   "Rollback depth": "ロールバック世代",
   "Working...": "処理中...",
   "Add Site": "サイト追加",
-  "No sites configured. Existing `proxy.json` routing keeps working unchanged until you add a site.":
-    "site は未設定です。site を追加するまでは既存の `proxy.json` ルーティングがそのまま動きます。",
+  "No sites configured. Existing proxy routing keeps working unchanged until you add a site.":
+    "site は未設定です。site を追加するまでは既存の proxy routing がそのまま動きます。",
   "Generated route": "生成ルート",
   "Site name": "site 名",
   "Default upstream": "default upstream",
@@ -663,9 +683,7 @@ const JA_STRINGS: Record<string, string> = {
   disabled: "無効",
   route: "route",
   "cert not after": "証明書有効期限",
-  "Rendered JSON": "Rendered JSON",
   "Latest status payload": "Latest status payload",
-  "Apply and validate both use the generated JSON below.": "Apply と validate はどちらも以下の生成 JSON を使います。",
   "{label} (dry-run, non-enforcing)": "{label}（ドライラン・非強制）",
   "{label} (observed only)": "{label}（観測のみ）",
   "Blocked by waf_block (rule {ruleID})": "waf_block によりブロック（rule {ruleID}）",
@@ -686,7 +704,6 @@ const JA_STRINGS: Record<string, string> = {
   "Header signals": "ヘッダシグナル",
   "TLS signals": "TLS シグナル",
   Quarantine: "隔離",
-  "invalid raw JSON": "無効な生JSON",
   "rollback failed": "ロールバックに失敗しました",
   "Add upstream": "upstream を追加",
   "Add route": "route を追加",
@@ -713,19 +730,6 @@ const JA_STRINGS: Record<string, string> = {
   "Add entry": "エントリを追加",
   "Add host scope": "ホストスコープを追加",
   "Add path policy": "パス別ポリシーを追加",
-  "Advanced JSON": "詳細JSON",
-  "Advanced JSON is currently invalid. The structured editor is still showing the last valid IP reputation snapshot. Any structured edit will regenerate valid JSON from that snapshot.":
-    "現在の詳細JSONは無効です。構造化エディタには最後に有効だった IP reputation の内容を表示しています。ここで編集すると、そのスナップショットから有効な JSON を再生成します。",
-  "Advanced JSON is currently invalid. The structured editor is still showing the last valid bot-defense snapshot. Any structured edit will regenerate valid JSON from that snapshot.":
-    "現在の詳細JSONは無効です。構造化エディタには最後に有効だった bot-defense の内容を表示しています。ここで編集すると、そのスナップショットから有効な JSON を再生成します。",
-  "Advanced JSON is currently invalid. The structured editor is still showing the last valid bypass snapshot. Any structured edit will regenerate valid JSON from that snapshot.":
-    "現在の詳細JSONは無効です。構造化エディタには最後に有効だった bypass の内容を表示しています。ここで編集すると、そのスナップショットから有効な JSON を再生成します。",
-  "Advanced JSON is currently invalid. The structured editor is still showing the last valid country-block snapshot. Any structured edit will regenerate valid JSON from that snapshot.":
-    "現在の詳細JSONは無効です。構造化エディタには最後に有効だった country-block の内容を表示しています。ここで編集すると、そのスナップショットから有効な JSON を再生成します。",
-  "Advanced JSON is currently invalid. The structured editor is still showing the last valid rate-limit snapshot. Any structured edit will regenerate valid JSON from that snapshot.":
-    "現在の詳細JSONは無効です。構造化エディタには最後に有効だった rate-limit の内容を表示しています。ここで編集すると、そのスナップショットから有効な JSON を再生成します。",
-  "Advanced JSON is currently invalid. The structured editor is still showing the last valid semantic snapshot. Any structured edit will regenerate valid JSON from that snapshot.":
-    "現在の詳細JSONは無効です。構造化エディタには最後に有効だった semantic の内容を表示しています。ここで編集すると、そのスナップショットから有効な JSON を再生成します。",
   Allowlist: "許可リスト",
   "Allowlist IPs": "許可IP一覧",
   "Allowlist countries": "許可国コード一覧",
@@ -772,10 +776,6 @@ const JA_STRINGS: Record<string, string> = {
   "Dry run in some scope": "一部の scope がドライラン",
   "Dry-run override": "ドライラン上書き",
   "Dynamic penalties": "動的ペナルティ数",
-  "Edit default and host-scoped bypass entries with a structured surface, then keep advanced JSON available below.":
-    "default と host ごとの bypass entry を構造化エディタで編集しつつ、下の詳細JSONも引き続き使えます。",
-  "Edit default and per-host rate-limit policy scopes with structured forms while keeping advanced JSON fallback below.":
-    "default と host ごとの rate-limit policy scope を構造化フォームで編集しつつ、下の詳細JSON fallback も引き続き使えます。",
   "Enable IP reputation for this scope": "この scope で IP reputation を有効化",
   "Enable adaptive shrinking": "adaptive 縮小を有効化",
   "Enable bot defense for this scope": "この scope で bot defense を有効化",
@@ -818,8 +818,6 @@ const JA_STRINGS: Record<string, string> = {
   "Invisible max body bytes": "不可視埋め込みの最大 body bytes",
   "JWT cookie names": "JWT Cookie名",
   "JWT header names": "JWT ヘッダ名",
-  "Keep using raw JSON when needed. Structured edits and valid raw edits stay in sync.":
-    "必要に応じて raw JSON をそのまま使えます。構造化編集と有効な raw 編集は常に同期されます。",
   "Key by": "キーの単位",
   "Last refresh": "最終更新",
   "Last saved": "最終保存",
@@ -830,14 +828,16 @@ const JA_STRINGS: Record<string, string> = {
   "Log threshold": "ログ閾値",
   "Lowercase fragments matched against the request user-agent. One value per line.":
     "request の user-agent に対して小文字化して照合する断片文字列です。1 行に 1 件ずつ入力します。",
-  "Manage default and per-host IP reputation scopes with structured forms while keeping advanced JSON fallback below.":
-    "default と host ごとの IP reputation scope を構造化フォームで編集しつつ、下の詳細JSON fallback も引き続き使えます。",
-  "Manage default and per-host blocked country lists with a structured editor, then keep advanced JSON available below.":
-    "default と host ごとの blocked country list を構造化エディタで編集しつつ、下の詳細JSONも引き続き使えます。",
-  "Manage default and per-host bot-defense scopes with structured forms while keeping advanced JSON fallback and recent decision history below.":
-    "default と host ごとの bot-defense scope を構造化フォームで編集しつつ、下の詳細JSON fallback と recent decision 履歴も引き続き使えます。",
-  "Manage default and per-host semantic anomaly scopes with structured forms while keeping advanced JSON fallback below.":
-    "default と host ごとの semantic anomaly scope を構造化フォームで編集しつつ、下の詳細JSON fallback も引き続き使えます。",
+  "Manage default and per-host IP reputation scopes with structured controls.":
+    "default と host ごとの IP reputation scope を構造化コントロールで編集します。",
+  "Manage default and per-host blocked country lists with structured controls.":
+    "default と host ごとの blocked country list を構造化コントロールで編集します。",
+  "Manage default and per-host bot-defense scopes with structured controls and recent decision history.":
+    "default と host ごとの bot-defense scope と recent decision 履歴を構造化コントロールで管理します。",
+  "Manage default and per-host semantic anomaly scopes with structured controls.":
+    "default と host ごとの semantic anomaly scope を構造化コントロールで編集します。",
+  "Manage default and per-host cache policy rules with structured controls.":
+    "default と host ごとの cache policy rule を構造化コントロールで編集します。",
   "Match type": "マッチ種別",
   "Match value": "マッチ値",
   "Max inspect body bytes": "本文検査の最大 bytes",
@@ -919,8 +919,12 @@ const JA_STRINGS: Record<string, string> = {
   "Strikes required": "必要な strike 数",
   "Structured editor conflict": "構造化エディタの競合",
   "Structured editor has conflicting host scopes.": "構造化エディタに競合する host scope があります。",
-  "Structured edits still validate and save through the existing rate-limit raw JSON API, so hot reload behavior stays unchanged.":
-    "構造化編集でも検証と保存は既存の rate-limit raw JSON API を通るため、hot reload の挙動は変わりません。",
+  "Edit default and host-scoped bypass entries with structured controls.":
+    "default と host scope の bypass entry を構造化コントロールで編集します。",
+  "Edit default and per-host rate-limit policy scopes with structured controls.":
+    "default と host ごとの rate-limit policy scope を構造化コントロールで編集します。",
+  "Structured edits validate, save, and hot reload through the existing rate-limit backend API.":
+    "構造化編集は既存の rate-limit backend API で検証、保存、hot reload されます。",
   "Suspicious user-agent fragments": "疑わしい user-agent 断片",
   "TLS Signals": "TLS シグナル",
   "TTL seconds": "TTL秒数",

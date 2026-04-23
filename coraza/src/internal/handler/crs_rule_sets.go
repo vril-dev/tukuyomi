@@ -3,7 +3,6 @@ package handler
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -36,7 +35,8 @@ func GetCRSRuleSets(c *gin.Context) {
 	if store := getLogsStatsStore(); store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(crsDisabledConfigBlobKey)
 		if err != nil {
-			log.Printf("[CRS][DB][WARN] get config blob failed: %v", err)
+			respondConfigBlobDBError(c, "crs db read failed", err)
+			return
 		} else if found {
 			raw = dbRaw
 			if strings.TrimSpace(dbETag) == "" {
@@ -45,7 +45,8 @@ func GetCRSRuleSets(c *gin.Context) {
 			savedAt = configBlobSavedAt(store, crsDisabledConfigBlobKey)
 		} else if len(raw) > 0 {
 			if err := store.UpsertConfigBlob(crsDisabledConfigBlobKey, raw, bypassconf.ComputeETag(raw), time.Now().UTC()); err != nil {
-				log.Printf("[CRS][DB][WARN] seed config blob failed: %v", err)
+				respondConfigBlobDBError(c, "crs db seed failed", err)
+				return
 			}
 		}
 	}

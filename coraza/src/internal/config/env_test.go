@@ -58,30 +58,6 @@ func TestParseCSV(t *testing.T) {
 	}
 }
 
-func TestParseStorageBackend(t *testing.T) {
-	cases := []struct {
-		name            string
-		in              string
-		legacyDBEnabled bool
-		want            string
-	}{
-		{name: "explicit-file", in: "file", legacyDBEnabled: true, want: "file"},
-		{name: "explicit-db", in: "db", legacyDBEnabled: false, want: "db"},
-		{name: "legacy-fallback-db", in: "", legacyDBEnabled: true, want: "db"},
-		{name: "legacy-fallback-file", in: "", legacyDBEnabled: false, want: "file"},
-		{name: "invalid-fallback-file", in: "oracle", legacyDBEnabled: true, want: "file"},
-	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			got := parseStorageBackend(tc.in, tc.legacyDBEnabled)
-			if got != tc.want {
-				t.Fatalf("parseStorageBackend(%q, %v)=%q want=%q", tc.in, tc.legacyDBEnabled, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestParseDBDriver(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -90,6 +66,7 @@ func TestParseDBDriver(t *testing.T) {
 		{in: "", want: "sqlite"},
 		{in: "sqlite", want: "sqlite"},
 		{in: "mysql", want: "mysql"},
+		{in: "pgsql", want: "pgsql"},
 		{in: "oracle", want: "sqlite"},
 	}
 	for _, tc := range cases {
@@ -300,7 +277,7 @@ func TestLoadAppConfigFile(t *testing.T) {
 			"hmac_key_id": "sig-test"
 		},
 		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
-		"storage": {"backend": "file", "db_driver": "sqlite"}
+		"storage": {"db_driver": "sqlite"}
 	}`
 	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -357,13 +334,67 @@ func TestLoadAppConfigFileRejectsInvalid(t *testing.T) {
 		},
 		"proxy": {"rollback_history_size": 8},
 		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
-		"storage": {"backend": "file", "db_driver": "sqlite"}
+		"storage": {"db_driver": "sqlite"}
 	}`
 	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	if _, err := loadAppConfigFile(cfgPath); err == nil {
 		t.Fatal("expected validation error, got nil")
+	}
+}
+
+func TestLoadAppConfigFileRejectsRemovedFileStorageBackend(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	raw := `{
+		"server": {"listen_addr": ":9090"},
+		"admin": {"api_base_path": "/tukuyomi-api", "ui_base_path": "/tukuyomi-ui"},
+		"paths": {
+			"proxy_config_file": "conf/proxy.json",
+			"security_audit_file": "logs/coraza/security-audit.ndjson",
+			"security_audit_blob_dir": "logs/coraza/security-audit-blobs",
+			"rules_file": "rules/tukuyomi.conf"
+		},
+		"proxy": {"rollback_history_size": 8},
+		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
+		"storage": {"backend": "file", "db_driver": "sqlite"}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := loadAppConfigFile(cfgPath)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "storage.backend=file has been removed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadAppConfigFileAcceptsPgSQLStorageDriver(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	raw := `{
+		"server": {"listen_addr": ":9090"},
+		"admin": {"api_base_path": "/tukuyomi-api", "ui_base_path": "/tukuyomi-ui"},
+		"paths": {
+			"proxy_config_file": "conf/proxy.json",
+			"security_audit_file": "logs/coraza/security-audit.ndjson",
+			"security_audit_blob_dir": "logs/coraza/security-audit-blobs",
+			"rules_file": "rules/tukuyomi.conf"
+		},
+		"proxy": {"rollback_history_size": 8},
+		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
+		"storage": {"db_driver": "pgsql", "db_dsn": "postgres://user:pass@localhost/tukuyomi?sslmode=disable"}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := loadAppConfigFile(cfgPath)
+	if err != nil {
+		t.Fatalf("loadAppConfigFile returned error: %v", err)
+	}
+	if cfg.Storage.DBDriver != "pgsql" {
+		t.Fatalf("db_driver=%q want pgsql", cfg.Storage.DBDriver)
 	}
 }
 
@@ -380,7 +411,7 @@ func TestLoadAppConfigFileRejectsRemovedFPTunerMockMode(t *testing.T) {
 		},
 		"proxy": {"rollback_history_size": 8},
 		"fp_tuner": {"mode": "mock", "timeout_sec": 15, "approval_ttl_sec": 600},
-		"storage": {"backend": "file", "db_driver": "sqlite"}
+		"storage": {"db_driver": "sqlite"}
 	}`
 	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -410,7 +441,7 @@ func TestLoadAppConfigFileRejectsInvalidProxyEngineMode(t *testing.T) {
 			"engine": {"mode": "native"}
 		},
 		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
-		"storage": {"backend": "file", "db_driver": "sqlite"}
+		"storage": {"db_driver": "sqlite"}
 	}`
 	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)

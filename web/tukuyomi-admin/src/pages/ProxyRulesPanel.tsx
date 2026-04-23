@@ -101,7 +101,6 @@ export default function ProxyRulesPanel() {
   const [raw, setRaw] = useState("");
   const [serverRaw, setServerRaw] = useState("");
   const [etag, setEtag] = useState("");
-  const [proxy, setProxy] = useState<ProxyRuntimeView | null>(null);
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [rollbackDepth, setRollbackDepth] = useState(0);
   const [messages, setMessages] = useState<string[]>([]);
@@ -175,7 +174,7 @@ export default function ProxyRulesPanel() {
       setRoutingState(parsed.state);
       setStructuredError("");
     } catch (error: unknown) {
-      setStructuredError(getErrorMessage(error, tx("invalid raw JSON")));
+      setStructuredError(getErrorMessage(error, tx("Invalid proxy rules")));
     }
   }, [tx]);
 
@@ -190,7 +189,6 @@ export default function ProxyRulesPanel() {
       setRaw(nextRaw);
       setServerRaw(nextRaw);
       setEtag(data.etag || "");
-      setProxy(data.proxy || null);
       setHealth(data.health || null);
       setRollbackDepth(typeof data.rollback_depth === "number" ? data.rollback_depth : 0);
       setMessages([]);
@@ -252,14 +250,6 @@ export default function ProxyRulesPanel() {
     [auditActionFilter, auditActorFilter, auditEntries]
   );
 
-  const handleRawChange = useCallback(
-    (nextRaw: string) => {
-      setRaw(nextRaw);
-      syncStructuredFromRaw(nextRaw);
-    },
-    [syncStructuredFromRaw]
-  );
-
   const applyStructuredChange = useCallback(
     (updater: (current: ProxyRulesRoutingEditorState) => ProxyRulesRoutingEditorState) => {
       const nextState = updater(routingState);
@@ -276,12 +266,9 @@ export default function ProxyRulesPanel() {
     setMessagesTone("success");
     setError("");
     try {
-      const out = await apiPostJson<{ ok: boolean; messages?: string[]; proxy?: ProxyRuntimeView }>("/proxy-rules/validate", { raw });
+      const out = await apiPostJson<{ ok: boolean; messages?: string[] }>("/proxy-rules/validate", { raw });
       setMessages(out.messages && out.messages.length ? out.messages : [tx("Validation passed.")]);
       setMessagesTone("success");
-      if (out.proxy) {
-        setProxy(out.proxy);
-      }
     } catch (error: unknown) {
       setMessages([getErrorMessage(error, tx("validate failed"))]);
       setMessagesTone("error");
@@ -330,7 +317,7 @@ export default function ProxyRulesPanel() {
     setSaving(true);
     setError("");
     try {
-      const out = await apiPutJson<{ ok: boolean; etag?: string; proxy?: ProxyRuntimeView }>(
+      const out = await apiPutJson<{ ok: boolean; etag?: string }>(
         "/proxy-rules",
         { raw },
         { headers: etag ? { "If-Match": etag } : {} }
@@ -341,9 +328,6 @@ export default function ProxyRulesPanel() {
       setServerRaw(raw);
       if (out.etag) {
         setEtag(out.etag);
-      }
-      if (out.proxy) {
-        setProxy(out.proxy);
       }
       await refreshAll();
       return true;
@@ -375,7 +359,7 @@ export default function ProxyRulesPanel() {
         buildProxyRulesDiffPreview({
           mode: "save",
           title: tx("Review changes before apply"),
-          description: tx("Compare the current saved proxy rules with the JSON that will be applied."),
+          description: tx("Compare the current saved proxy rules with the configuration that will be applied."),
           currentRaw: serverRaw,
           nextRaw: raw,
           applyLabel: tx("Apply"),
@@ -421,7 +405,7 @@ export default function ProxyRulesPanel() {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    setAuditNotice(tx("Exported {count} audit entries as JSON.", { count: visibleAuditEntries.length }));
+    setAuditNotice(tx("Exported {count} audit entries.", { count: visibleAuditEntries.length }));
   }, [auditLimit, tx, visibleAuditEntries]);
 
   const copyAuditSummary = useCallback(async (text: string) => {
@@ -490,10 +474,10 @@ export default function ProxyRulesPanel() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Proxy Rules")}</h1>
-          <p className="text-sm text-neutral-500">{tx("Edit route-aware upstream selection, path/query rewrites, and header operations with a structured builder, then keep raw JSON for the rest of the proxy transport knobs.")}</p>
+          <p className="text-sm text-neutral-500">{tx("Edit route-aware upstream selection, path/query rewrites, header operations, and transport knobs with structured controls.")}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <Badge color={structuredError ? "red" : "green"}>{structuredError ? tx("Raw JSON out of sync") : tx("Structured editor synced")}</Badge>
+          <Badge color={structuredError ? "red" : "green"}>{structuredError ? tx("Structured editor conflict") : tx("Structured editor synced")}</Badge>
           {dirty ? <Badge color="amber">{tx("Unsaved")}</Badge> : <Badge color="gray">{tx("Saved")}</Badge>}
           <span className="px-2 py-0.5 rounded bg-neutral-100 text-neutral-700">{tx("rollback")}: {rollbackDepth}</span>
           {etag ? <MonoTag label={tx("ETag")} value={etag} /> : null}
@@ -503,7 +487,7 @@ export default function ProxyRulesPanel() {
       {error ? <NoticeBar tone="error">{error}</NoticeBar> : null}
       {structuredError ? (
         <NoticeBar tone="warn">
-          {tx("Raw JSON is currently invalid. The structured editor is still showing the last valid routing snapshot. Any structured edit will regenerate raw JSON from that snapshot.")}
+          {tx("Saved proxy rules could not be represented by the structured editor. The editor is showing the last valid routing snapshot; any structured edit will generate a replacement from that snapshot.")}
         </NoticeBar>
       ) : null}
 
@@ -511,7 +495,7 @@ export default function ProxyRulesPanel() {
         <div className="space-y-4">
           <SectionCard
             title="Workflow"
-            subtitle="Validate, save, and rollback stay on the same raw proxy-rules backend API. Structured edits only touch routing and rewrite fields."
+            subtitle="Validate, save, and rollback stay on the proxy-rules backend API. Structured edits preserve existing non-routing fields when possible."
             actions={
               <div className="flex flex-wrap items-center gap-2">
                 <ActionButton onClick={() => void refreshAll()} disabled={loading || saving || auditLoading}>
@@ -1165,33 +1149,24 @@ export default function ProxyRulesPanel() {
             />
           </SectionCard>
 
-          {dryRunResult ? (
-            <SectionCard title="Dry Run Result">
-              <div className="app-code-shell">
-                <pre className="app-code-block">{JSON.stringify(dryRunResult, null, 2)}</pre>
-              </div>
-            </SectionCard>
-          ) : null}
-
-          <SectionCard title="Raw JSON" subtitle="Keep using the existing raw editor for transport and low-level fields that are not part of the structured routing editor.">
-            <textarea
-              className="w-full h-[420px] p-3 border rounded-xl font-mono text-sm leading-5 outline-none focus:ring-2 focus:ring-black/20"
-              value={raw}
-              onChange={(e) => handleRawChange(e.target.value)}
-              spellCheck={false}
-            />
-          </SectionCard>
-
-          <SectionCard title="Runtime Proxy">
-            <div className="app-code-shell">
-              <pre className="app-code-block">{JSON.stringify(proxy, null, 2)}</pre>
-            </div>
-          </SectionCard>
-
           <SectionCard title="Upstream Health">
-            <div className="app-code-shell">
-              <pre className="app-code-block">{JSON.stringify(health, null, 2)}</pre>
-            </div>
+            {health ? (
+              <div className="space-y-3">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 text-sm">
+                  <StatBox label="Status" value={health.status || "-"} />
+                  <StatBox label="Endpoint" value={health.endpoint || "-"} />
+                  <StatBox label="Last status" value={typeof health.last_status_code === "number" ? String(health.last_status_code) : "-"} />
+                  <StatBox label="Latency" value={typeof health.last_latency_ms === "number" ? `${health.last_latency_ms}ms` : "-"} />
+                  <StatBox label="Checked" value={formatTimestamp(health.checked_at)} />
+                  <StatBox label="Last success" value={formatTimestamp(health.last_success_at)} />
+                  <StatBox label="Last failure" value={formatTimestamp(health.last_failure_at)} />
+                  <StatBox label="Failures" value={String(health.consecutive_failures ?? 0)} />
+                </div>
+                {health.last_error ? <NoticeBar tone="warn">{health.last_error}</NoticeBar> : null}
+              </div>
+            ) : (
+              <EmptyState>{tx("No upstream health data loaded.")}</EmptyState>
+            )}
           </SectionCard>
 
           <datalist id="proxy-route-target-options">
@@ -1225,7 +1200,7 @@ export default function ProxyRulesPanel() {
               </Field>
               <div className="flex items-end sm:justify-end">
                 <ActionButton onClick={exportAuditEntries} disabled={auditLoading || visibleAuditEntries.length === 0}>
-                  {tx("Export JSON")}
+                  {tx("Export")}
                 </ActionButton>
               </div>
               <Field label="Action filter">

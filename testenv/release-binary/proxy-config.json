@@ -54,7 +54,6 @@
     "enable": true
   },
   "storage": {
-    "backend": "file",
     "db_driver": "sqlite",
     "db_path": "testenv/release-binary/runtime/logs/coraza/tukuyomi.db"
   }

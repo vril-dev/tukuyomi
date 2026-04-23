@@ -115,6 +115,49 @@ func TestPrepareScheduledTaskConfigRawMigratesLegacyExecutorFields(t *testing.T)
 	}
 }
 
+func TestInitScheduledTaskRuntimeLoadsDBBlobWithoutRestoringFile(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	}()
+
+	raw := `{
+  "tasks": [
+    {
+      "name": "db-task",
+      "enabled": true,
+      "schedule": "*/5 * * * *",
+      "timezone": "UTC",
+      "command": "/usr/bin/env true"
+    }
+  ]
+}`
+	store := getLogsStatsStore()
+	if err := store.UpsertConfigBlob(scheduledTaskConfigBlobKey, []byte(raw), "", time.Now().UTC()); err != nil {
+		t.Fatalf("UpsertConfigBlob: %v", err)
+	}
+
+	configPath := filepath.Join(tmp, "conf", "scheduled-tasks.json")
+	if err := InitScheduledTaskRuntime(configPath, 2); err != nil {
+		t.Fatalf("InitScheduledTaskRuntime: %v", err)
+	}
+	_, _, cfg, _, _ := ScheduledTaskConfigSnapshot()
+	if len(cfg.Tasks) != 1 || cfg.Tasks[0].Name != "db-task" {
+		t.Fatalf("tasks=%+v", cfg.Tasks)
+	}
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("scheduled task file should not be restored, stat err=%v", err)
+	}
+	paths := CurrentScheduledTaskRuntimePaths()
+	if got, want := paths.ConfigStorage, "db:scheduled_tasks"; got != want {
+		t.Fatalf("config_storage=%q want=%q", got, want)
+	}
+}
+
 func TestRunDueScheduledTasksExecutesCommandOncePerMinute(t *testing.T) {
 	restore := resetPHPFoundationRuntimesForTest(t)
 	defer restore()

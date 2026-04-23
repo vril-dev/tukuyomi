@@ -9,6 +9,7 @@ PREVIEW_INVENTORY="$ROOT_DIR/data/php-fpm/inventory.ui-preview.json"
 PREVIEW_VHOSTS="$ROOT_DIR/data/php-fpm/vhosts.ui-preview.json"
 PREVIEW_OVERRIDE="$ROOT_DIR/data/conf/docker-compose.ui-preview.override.yml"
 PREVIEW_CONFIG_BASENAME="$(basename "$PREVIEW_CONFIG")"
+PREVIEW_SQLITE_DB_PATH="logs/coraza/tukuyomi-ui-preview.db"
 PUID_VALUE="${PUID:-$(id -u)}"
 GUID_VALUE="${GUID:-$(id -g)}"
 UI_PREVIEW_PERSIST_VALUE="${UI_PREVIEW_PERSIST:-0}"
@@ -42,20 +43,26 @@ EOF
 }
 
 write_preview_config() {
+  local src_config="${1:-$ROOT_DIR/data/conf/config.json}"
   mkdir -p "$(dirname "$PREVIEW_CONFIG")" "$(dirname "$PREVIEW_PROXY")" "$(dirname "$PREVIEW_INVENTORY")"
-  python3 - "$ROOT_DIR/data/conf/config.json" "$PREVIEW_CONFIG" <<'PY'
+  python3 - "$src_config" "$PREVIEW_CONFIG" "$PREVIEW_SQLITE_DB_PATH" <<'PY'
 import json
 import pathlib
 import sys
 
 src = pathlib.Path(sys.argv[1])
 dst = pathlib.Path(sys.argv[2])
+db_path = sys.argv[3]
 cfg = json.loads(src.read_text(encoding="utf-8"))
 paths = cfg.setdefault("paths", {})
 paths["proxy_config_file"] = "conf/proxy.ui-preview.json"
 paths["scheduled_task_config_file"] = "conf/scheduled-tasks.ui-preview.json"
 paths["php_runtime_inventory_file"] = "data/php-fpm/inventory.ui-preview.json"
 paths["vhost_config_file"] = "data/php-fpm/vhosts.ui-preview.json"
+storage = cfg.setdefault("storage", {})
+storage["db_driver"] = "sqlite"
+storage["db_dsn"] = ""
+storage["db_path"] = db_path
 dst.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 PY
 }
@@ -68,6 +75,50 @@ reset_preview_files() {
   write_preview_config
 }
 
+preview_db_host_paths() {
+  python3 - "$ROOT_DIR" "$PREVIEW_CONFIG" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+cfg_path = pathlib.Path(sys.argv[2])
+cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+storage = cfg.get("storage") or {}
+driver = str(storage.get("db_driver") or "").strip().lower()
+if driver != "sqlite":
+    raise SystemExit(f"preview db_driver must be sqlite, got {driver or '<empty>'}")
+db_path = str(storage.get("db_path") or "").strip()
+if not db_path:
+    raise SystemExit("preview storage.db_path is empty")
+if db_path.startswith("/"):
+    raise SystemExit(f"preview storage.db_path must be relative: {db_path}")
+parts = pathlib.PurePosixPath(db_path).parts
+if any(part in ("", ".", "..") for part in parts):
+    raise SystemExit(f"preview storage.db_path contains unsafe path segment: {db_path}")
+if len(parts) < 2 or parts[0] != "logs":
+    raise SystemExit(f"preview storage.db_path must be under logs/: {db_path}")
+target = (root / "data" / pathlib.Path(*parts)).resolve(strict=False)
+allowed = (root / "data" / "logs").resolve(strict=False)
+if target != allowed and allowed not in target.parents:
+    raise SystemExit(f"preview storage.db_path escapes data/logs: {db_path}")
+print(target)
+print(str(target) + "-wal")
+print(str(target) + "-shm")
+PY
+}
+
+reset_preview_database() {
+  local db_paths=()
+  mapfile -t db_paths < <(preview_db_host_paths)
+  if [[ "${#db_paths[@]}" -eq 0 ]]; then
+    echo "[ui-preview][ERROR] failed to resolve preview database path" >&2
+    return 1
+  fi
+  mkdir -p "$(dirname "${db_paths[0]}")"
+  rm -f "${db_paths[@]}"
+}
+
 ensure_preview_files() {
   mkdir -p "$(dirname "$PREVIEW_CONFIG")" "$(dirname "$PREVIEW_PROXY")" "$(dirname "$PREVIEW_INVENTORY")"
   if [[ "$UI_PREVIEW_PERSIST_VALUE" == "1" ]]; then
@@ -76,6 +127,7 @@ ensure_preview_files() {
     [[ -f "$PREVIEW_INVENTORY" ]] || write_preview_inventory
     [[ -f "$PREVIEW_VHOSTS" ]] || write_preview_vhosts
     [[ -f "$PREVIEW_CONFIG" ]] || write_preview_config
+    write_preview_config "$PREVIEW_CONFIG"
     return
   fi
   reset_preview_files
@@ -207,16 +259,19 @@ case "${1:-}" in
     ensure_preview_files
     load_preview_topology
     write_preview_override
+    if [[ "$UI_PREVIEW_PERSIST_VALUE" != "1" ]]; then
+      run_preview_compose down --remove-orphans >/dev/null 2>&1 || true
+      reset_preview_database
+    fi
     run_preview_compose up -d --build coraza scheduled-task-runner
     echo "[ui-preview] public: ${UI_PREVIEW_PUBLIC_URL}"
     echo "[ui-preview] admin ui: ${UI_PREVIEW_ADMIN_UI_URL}"
     echo "[ui-preview] admin api: ${UI_PREVIEW_ADMIN_API_URL}"
     echo "[ui-preview] scheduled-task runner is started by ui-preview-up"
     if [[ "$UI_PREVIEW_PERSIST_VALUE" == "1" ]]; then
-      echo "[ui-preview] UI_PREVIEW_PERSIST=1 keeps preview config/state files across down/up"
+      echo "[ui-preview] UI_PREVIEW_PERSIST=1 keeps preview config and DB state across down/up"
     else
-      echo "[ui-preview] scheduled-task edits stay in conf/scheduled-tasks.ui-preview.json"
-      echo "[ui-preview] preview scheduled tasks reset to tasks: [] on each ui-preview-up"
+      echo "[ui-preview] preview config files and SQLite DB reset on each ui-preview-up"
     fi
     ;;
   down)
@@ -238,6 +293,9 @@ case "${1:-}" in
     run_preview_compose down --remove-orphans >/dev/null 2>&1 || true
     rm -f "$PREVIEW_OVERRIDE"
     if [[ "$UI_PREVIEW_PERSIST_VALUE" != "1" ]]; then
+      if [[ -f "$PREVIEW_CONFIG" ]]; then
+        reset_preview_database || true
+      fi
       rm -f "$PREVIEW_CONFIG" "$PREVIEW_PROXY" "$PREVIEW_SCHEDULED_TASKS" "$PREVIEW_INVENTORY" "$PREVIEW_VHOSTS"
     fi
     echo "[ui-preview] stopped"

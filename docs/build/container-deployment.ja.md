@@ -71,7 +71,7 @@ container platform では、今の official topology を次で固定します。
 ## public/admin listener 分離
 
 public proxy listener を `:80` / `:443` に置きつつ、admin UI/API を別の
-high port に分けたい場合は `conf/config.json` の `admin.listen_addr` を
+high port に分けたい場合は DB `app_config` の `admin.listen_addr` を
 設定します。
 
 sample:
@@ -171,17 +171,20 @@ ephemeral local state を許容しないなら、これらを platform 側で mo
 
 ## Config と Secret
 
-`tukuyomi` は多数の env ではなく、主に `conf/config.json` で動くプロダクトです。
+`tukuyomi` は `conf/config.json` を DB 接続 bootstrap に使い、その後の
+operator-managed な app/proxy 設定は DB blob から読みます。
 
 典型的な本番パターン:
 
-- `conf/config.json` は secret manager / config management から render
-- `conf/proxy.json`、`conf/sites.json`、`conf/scheduled-tasks.json`、各種 policy file は mount または bake
+- `conf/config.json` は `storage.db_driver`、`storage.db_path`、`storage.db_dsn` 用に secret manager / config management から render
+- `conf/proxy.json` と各種 policy file は seed/import/export material として mount または bake
+- 初回起動前に `make db-migrate` を実行し、新規 DB へ file material を取り込む場合は `make db-import` も実行します
+- `conf/sites.json`、`conf/scheduled-tasks.json`、`conf/upstream-runtime.json` は空 DB の seed/export file として扱います。bootstrap 後の正は DB blob です
 - runtime env injection は主に次だけ
   - `WAF_CONFIG_FILE`
   - `WAF_PROXY_AUDIT_FILE`
   - `security_audit.key_source=env` を使う場合の security-audit key override
-- embedded `Settings` 画面も同じ `conf/config.json` を global settings として編集しますが、こちらも `Save config only` 前提です。listener/runtime/storage/observability 系の変更を反映するには container を recreate/restart してください
+- embedded `Settings` 画面は DB `app_config` を編集します。listener/runtime/storage policy/observability 系の変更を反映するには container を recreate/restart してください
 
 proxy engine 選択も同じ restart-required config surface です:
 
@@ -352,7 +355,7 @@ cloud では通常:
 
 `client -> ALB/nginx/ingress -> tukuyomi container -> app container/service`
 
-前段がある場合は、`conf/config.json` の trusted proxy range をその前段だけに絞ってください。
+前段がある場合は、DB `app_config` の trusted proxy range をその前段だけに絞ってください。
 
 `tukuyomi` 自体を direct public entrypoint にして built-in HTTP/3 を有効にする場合は、listener port の TCP/UDP を両方開けてください。
 
@@ -394,8 +397,8 @@ docker compose \
 
 - `make ui-preview-up` では preview 専用の scheduler sidecar も一緒に起動します
 - 既定の preview は毎回初期化されます
-  - `ui-preview-up` のたびに `conf/scheduled-tasks.ui-preview.json` は `{"tasks":[]}` へ初期化され、古い preview task は引き継ぎません
-- preview 用 config/state を保持したい時はこれです
+  - `ui-preview-up` のたびに `conf/scheduled-tasks.ui-preview.json` は `{"tasks":[]}` へ初期化され、preview 専用 SQLite DB も削除されるため、古い preview task や DB blob は引き継ぎません
+- preview 用 config と DB state を保持したい時はこれです
 
 ```bash
 UI_PREVIEW_PERSIST=1 make ui-preview-up
@@ -408,6 +411,7 @@ UI_PREVIEW_PERSIST=1 make ui-preview-down
   - `conf/scheduled-tasks.ui-preview.json`
   - `data/php-fpm/inventory.ui-preview.json`
   - `data/php-fpm/vhosts.ui-preview.json`
+  - `data/logs/coraza/tukuyomi-ui-preview.db`
 - `ui-preview-up` は `conf/config.ui-preview.json` から publish port を導出します
   - single listener なら public listener port を publish
   - split listener なら public/admin の両方を publish

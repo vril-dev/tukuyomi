@@ -286,19 +286,32 @@ func GetIPReputation(c *gin.Context) {
 	savedAt := fileSavedAt(path)
 	if store := getLogsStatsStore(); store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(ipReputationConfigBlobKey)
-		if err == nil && found {
-			if rt, parseErr := ValidateIPReputationRaw(string(dbRaw)); parseErr == nil {
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = bypassconf.ComputeETag(dbRaw)
-				}
-				savedAt = configBlobSavedAt(store, ipReputationConfigBlobKey)
-				c.JSON(http.StatusOK, gin.H{
-					"etag":     dbETag,
-					"raw":      string(dbRaw),
-					"config":   rt.Raw,
-					"status":   IPReputationStatus(),
-					"saved_at": savedAt,
-				})
+		if err != nil {
+			respondConfigBlobDBError(c, "ip-reputation db read failed", err)
+			return
+		}
+		if found {
+			rt, parseErr := ValidateIPReputationRaw(string(dbRaw))
+			if parseErr != nil {
+				respondConfigBlobDBError(c, "ip-reputation db blob parse failed", parseErr)
+				return
+			}
+			if strings.TrimSpace(dbETag) == "" {
+				dbETag = bypassconf.ComputeETag(dbRaw)
+			}
+			savedAt = configBlobSavedAt(store, ipReputationConfigBlobKey)
+			c.JSON(http.StatusOK, gin.H{
+				"etag":     dbETag,
+				"raw":      string(dbRaw),
+				"config":   rt.Raw,
+				"status":   IPReputationStatus(),
+				"saved_at": savedAt,
+			})
+			return
+		}
+		if len(raw) > 0 {
+			if err := store.UpsertConfigBlob(ipReputationConfigBlobKey, raw, bypassconf.ComputeETag(raw), time.Now().UTC()); err != nil {
+				respondConfigBlobDBError(c, "ip-reputation db seed failed", err)
 				return
 			}
 		}
@@ -340,13 +353,20 @@ func PutIPReputation(c *gin.Context) {
 	curETag := bypassconf.ComputeETag(curRaw)
 	if store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(ipReputationConfigBlobKey)
-		if err == nil && found {
+		if err != nil {
+			respondConfigBlobDBError(c, "ip-reputation db read failed", err)
+			return
+		}
+		if found {
 			if _, parseErr := ValidateIPReputationRaw(string(dbRaw)); parseErr == nil {
 				curRaw = dbRaw
 				if strings.TrimSpace(dbETag) == "" {
 					dbETag = bypassconf.ComputeETag(dbRaw)
 				}
 				curETag = dbETag
+			} else {
+				respondConfigBlobDBError(c, "ip-reputation db blob parse failed for conflict check", parseErr)
+				return
 			}
 		}
 	}

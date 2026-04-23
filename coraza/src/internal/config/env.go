@@ -115,8 +115,6 @@ var (
 	FPTunerApprovalTTL     time.Duration
 	FPTunerAuditFile       string
 
-	StorageBackend  string
-	DBEnabled       bool
 	DBDriver        string
 	DBDSN           string
 	DBPath          string
@@ -420,8 +418,6 @@ func applyAppConfig(cfg appConfigFile) {
 		FPTunerAuditFile = "logs/coraza/fp-tuner-audit.ndjson"
 	}
 
-	StorageBackend = parseStorageBackend(cfg.Storage.Backend, false)
-	DBEnabled = StorageBackend == "db"
 	DBDriver = parseDBDriver(cfg.Storage.DBDriver)
 	DBDSN = strings.TrimSpace(cfg.Storage.DBDSN)
 	DBPath = strings.TrimSpace(cfg.Storage.DBPath)
@@ -606,28 +602,12 @@ func parseIntDefault(v string, d int) int {
 	return n
 }
 
-func parseStorageBackend(v string, legacyDBEnabled bool) string {
-	s := strings.ToLower(strings.TrimSpace(v))
-	switch s {
-	case "file", "db":
-		return s
-	case "":
-		if legacyDBEnabled {
-			return "db"
-		}
-		return "file"
-	default:
-		log.Printf("[CONFIG][WARN] unsupported storage.backend=%q, fallback=file", s)
-		return "file"
-	}
-}
-
 func parseDBDriver(v string) string {
 	s := strings.ToLower(strings.TrimSpace(v))
 	switch s {
 	case "":
 		return "sqlite"
-	case "sqlite", "mysql":
+	case "sqlite", "mysql", "pgsql":
 		return s
 	default:
 		log.Printf("[CONFIG][WARN] unsupported storage.db_driver=%q, fallback=sqlite", s)

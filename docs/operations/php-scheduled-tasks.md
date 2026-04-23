@@ -16,7 +16,9 @@ This document covers the `/scheduled-tasks` workflow for command-line jobs manag
 
 ## Data Layout
 
-Persisted config lives in `conf/scheduled-tasks.json`.
+Persisted task definitions live in DB blob `scheduled_tasks`.
+`conf/scheduled-tasks.json` is an empty-DB seed/export file, not the runtime
+source of truth after bootstrap.
 
 Generated runtime state lives under `data/scheduled-tasks/`.
 
@@ -78,7 +80,8 @@ The external scheduler should invoke:
 That command:
 
 - loads `conf/config.json`
-- reads `conf/scheduled-tasks.json`
+- opens the configured DB store
+- reads DB blob `scheduled_tasks` directly, seeding from `conf/scheduled-tasks.json` only when the blob is missing
 - executes only jobs whose cron expression matches the current minute
 - runs each task through `/bin/sh -lc`
 - records state/logs under `data/scheduled-tasks/`
@@ -165,9 +168,9 @@ make ui-preview-up
 make ui-preview-down
 ```
 
-Preview uses `conf/scheduled-tasks.ui-preview.json`, so edits made through the preview UI do not mutate the normal `conf/scheduled-tasks.json`.
+Preview uses `conf/scheduled-tasks.ui-preview.json`, so edits made through the preview UI do not mutate the normal DB-backed scheduled-task config.
 
-By default, `ui-preview-up` rewrites that preview config to `{"tasks":[]}` on each start, so previously saved preview tasks do not keep running by accident.
+By default, `ui-preview-up` rewrites that preview config to `{"tasks":[]}` and removes the isolated preview SQLite DB on each start, so previously saved preview tasks and DB blobs do not keep running by accident.
 
 If you want preview edits to survive `down/up`, opt into retained preview files:
 
@@ -176,7 +179,7 @@ UI_PREVIEW_PERSIST=1 make ui-preview-up
 UI_PREVIEW_PERSIST=1 make ui-preview-down
 ```
 
-When `UI_PREVIEW_PERSIST=1` is set, preview keeps its own `conf/config.ui-preview.json` too. That means you can save listener changes in `Settings`, then confirm them with `ui-preview-down/up` without losing the preview config.
+When `UI_PREVIEW_PERSIST=1` is set, preview keeps its own `conf/config.ui-preview.json` and preview SQLite DB too. That means you can save listener changes in `Settings`, then confirm them with `ui-preview-down/up` without losing the preview config.
 
 Split preview listeners are supported as long as the preview config uses host-reachable binds such as `:80` and `:9090`. Do not use `localhost:80`, `127.0.0.1:80`, or `[::1]:9090` in preview config; `ui-preview-up` rejects loopback binds because they do not match Docker-published ports.
 

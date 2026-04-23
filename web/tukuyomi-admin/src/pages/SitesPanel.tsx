@@ -244,7 +244,7 @@ export default function SitesPanel() {
         <div className="space-y-4">
           {sites.length === 0 ? (
             <div className="rounded-xl border border-dashed border-neutral-200 bg-white p-6 text-sm text-neutral-500">
-              {tx("No sites configured. Existing `proxy.json` routing keeps working unchanged until you add a site.")}
+              {tx("No sites configured. Existing proxy routing keeps working unchanged until you add a site.")}
             </div>
           ) : null}
 
@@ -366,14 +366,6 @@ export default function SitesPanel() {
                   </div>
                 ))
               )}
-            </div>
-          </section>
-
-          <section className="rounded-xl border border-neutral-200 bg-white p-4">
-            <h2 className="text-sm font-semibold">{tx("Rendered JSON")}</h2>
-            <p className="mt-1 text-xs text-neutral-500">{tx("Apply and validate both use the generated JSON below.")}</p>
-            <div className="app-code-shell mt-3">
-              <pre className="app-code-block">{rawPreview}</pre>
             </div>
           </section>
         </div>

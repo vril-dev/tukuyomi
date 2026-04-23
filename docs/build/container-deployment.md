@@ -73,7 +73,7 @@ Operational constraints:
 ## Split Public/Admin Listeners
 
 When you need the public proxy listener on `:80` / `:443` but want admin UI/API
-on a separate high port, set `admin.listen_addr` in `conf/config.json`.
+on a separate high port, set `admin.listen_addr` in DB `app_config`.
 
 Sample:
 
@@ -183,17 +183,20 @@ Mount it only when you want runtime rule-file changes.
 
 ## Config and Secrets
 
-`tukuyomi` is primarily driven by `conf/config.json`, not by a large env surface.
+`tukuyomi` uses `conf/config.json` for DB connection bootstrap, then reads
+operator-managed app/proxy config from DB blobs.
 
 Typical production pattern:
 
-- render `conf/config.json` from your secret manager or config-management layer
-- mount or bake `conf/proxy.json`, `conf/sites.json`, `conf/scheduled-tasks.json`, and policy files
+- render `conf/config.json` from your secret manager or config-management layer for `storage.db_driver`, `storage.db_path`, and `storage.db_dsn`
+- mount or bake `conf/proxy.json` and policy files as seed/import/export material
+- run `make db-migrate` before first start and `make db-import` when importing file material into a new DB
+- treat `conf/sites.json`, `conf/scheduled-tasks.json`, and `conf/upstream-runtime.json` as empty-DB seed/export files; DB blobs are authoritative after bootstrap
 - use runtime env injection only for:
   - `WAF_CONFIG_FILE`
   - `WAF_PROXY_AUDIT_FILE`
   - security-audit key env overrides when `security_audit.key_source=env`
-- the embedded `Settings` page edits the same `conf/config.json` surface for global product settings, but those changes are still `Save config only`; recreate/restart the container to apply listener/runtime/storage/observability updates
+- the embedded `Settings` page edits DB `app_config`; recreate/restart the container to apply listener/runtime/storage policy/observability updates
 
 Proxy engine selection is part of the same restart-required config surface:
 
@@ -374,7 +377,7 @@ Typical cloud path:
 
 `client -> ALB/nginx/ingress -> tukuyomi container -> app container/service`
 
-If a front layer exists, restrict the trusted proxy ranges in `conf/config.json` to only that layer.
+If a front layer exists, restrict the trusted proxy ranges in DB `app_config` to only that layer.
 
 If `tukuyomi` itself is the direct public entrypoint and built-in HTTP/3 is enabled, open the listener port for both TCP and UDP.
 
@@ -415,8 +418,8 @@ docker compose \
 
 - `make ui-preview-up` starts the preview-scoped scheduler sidecar too
 - default preview behavior is reset-on-start:
-  `ui-preview-up` rewrites `conf/scheduled-tasks.ui-preview.json` to `{"tasks":[]}` on each start so old preview tasks do not keep running
-- opt into retained preview config/state with:
+  `ui-preview-up` rewrites `conf/scheduled-tasks.ui-preview.json` to `{"tasks":[]}` and removes the isolated preview SQLite DB on each start so old preview tasks and DB blobs do not carry over
+- opt into retained preview config and DB state with:
 
 ```bash
 UI_PREVIEW_PERSIST=1 make ui-preview-up
@@ -429,6 +432,7 @@ UI_PREVIEW_PERSIST=1 make ui-preview-down
   - `conf/scheduled-tasks.ui-preview.json`
   - `data/php-fpm/inventory.ui-preview.json`
   - `data/php-fpm/vhosts.ui-preview.json`
+  - `data/logs/coraza/tukuyomi-ui-preview.db`
 - `ui-preview-up` now derives published ports from `conf/config.ui-preview.json`
   - single listener preview publishes the public listener port
   - split listener preview publishes both public and admin listener ports

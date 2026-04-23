@@ -831,6 +831,106 @@ func TestServeProxyRunsFastCGITryFilesAndStaticAssets(t *testing.T) {
 	}
 }
 
+func TestServeProxyReturnsGeneric500ForFastCGIStderrOnly(t *testing.T) {
+	restore := resetPHPProxyFoundationForTest(t)
+	defer restore()
+
+	tmp := t.TempDir()
+	docroot := filepath.Join(tmp, "php-app", "public")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(docroot): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docroot, "index.php"), []byte("<?php syntax error"), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.php): %v", err)
+	}
+
+	listener, address := startTestFastCGIServerFunc(t, "tcp", "127.0.0.1:0", func(conn net.Conn) {
+		defer conn.Close()
+		if _, _, err := readTestFastCGIRequest(conn); err != nil {
+			panic(fmt.Sprintf("readTestFastCGIRequest: %v", err))
+		}
+		stderr := "PHP Parse error: syntax error, unexpected token in /app/index.php on line 1"
+		if err := writeFastCGIRecord(conn, fcgiStderr, fcgiRequestID, []byte(stderr)); err != nil {
+			panic(fmt.Sprintf("write stderr: %v", err))
+		}
+		if err := writeFastCGIRecord(conn, fcgiStderr, fcgiRequestID, nil); err != nil {
+			panic(fmt.Sprintf("write stderr eof: %v", err))
+		}
+		if err := writeFastCGIRecord(conn, fcgiEndRequest, fcgiRequestID, make([]byte, 8)); err != nil {
+			panic(fmt.Sprintf("write end request: %v", err))
+		}
+	})
+	defer listener.Close()
+	_, portText, _ := net.SplitHostPort(address)
+	port, _ := strconv.Atoi(portText)
+
+	inventoryPath := filepath.Join(tmp, "inventory.json")
+	vhostPath := filepath.Join(tmp, "vhosts.json")
+	proxyPath := filepath.Join(tmp, "proxy.json")
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	vhosts := `{
+  "vhosts": [
+    {
+      "name": "app",
+      "mode": "php-fpm",
+      "hostname": "app.example.com",
+      "listen_port": ` + strconv.Itoa(port) + `,
+      "document_root": "` + filepath.ToSlash(docroot) + `",
+      "generated_target": "app-php",
+      "linked_upstream_name": "app",
+      "runtime_id": "php82"
+    }
+  ]
+}`
+	if err := os.WriteFile(vhostPath, []byte(vhosts), 0o600); err != nil {
+		t.Fatalf("write vhosts: %v", err)
+	}
+	proxyRaw := `{
+  "upstreams": [
+    { "name": "app", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+  ],
+  "default_route": {
+    "action": {
+      "upstream": "app"
+    }
+  }
+}`
+	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o600); err != nil {
+		t.Fatalf("write proxy: %v", err)
+	}
+	writeTestPHPRuntimeArtifact(t, inventoryPath, "php82", testPHPRuntimeArtifactOptions{
+		DisplayName: "PHP 8.2",
+		Version:     "PHP 8.2.99 (fpm-fcgi)",
+		Modules:     []string{"mbstring", "redis"},
+	})
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+	if err := InitVhostRuntime(vhostPath, 2); err != nil {
+		t.Fatalf("InitVhostRuntime: %v", err)
+	}
+	if err := InitProxyRuntime(proxyPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/index.php", nil)
+	decision, err := resolveProxyRouteDecision(req, currentProxyConfig(), proxyRuntimeHealth())
+	if err != nil {
+		t.Fatalf("resolveProxyRouteDecision: %v", err)
+	}
+	req = req.WithContext(withProxyRouteDecision(req.Context(), decision))
+	rec := httptest.NewRecorder()
+	ServeProxy(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d want=500 body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "PHP Parse error") {
+		t.Fatalf("client body leaked php stderr: %q", rec.Body.String())
+	}
+}
+
 func TestServeProxyRunsFastCGIOverUnixSocket(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
@@ -922,6 +1022,10 @@ func TestServeProxyRunsFastCGIOverUnixSocket(t *testing.T) {
 }
 
 func startTestFastCGIServer(t *testing.T, network string, address string) (net.Listener, string) {
+	return startTestFastCGIServerFunc(t, network, address, handleTestFastCGIConn)
+}
+
+func startTestFastCGIServerFunc(t *testing.T, network string, address string, handler func(net.Conn)) (net.Listener, string) {
 	t.Helper()
 	if network == "unix" {
 		_ = os.Remove(address)
@@ -949,7 +1053,7 @@ func startTestFastCGIServer(t *testing.T, network string, address string) (net.L
 				}
 				return
 			}
-			go handleTestFastCGIConn(conn)
+			go handler(conn)
 		}
 	}()
 	t.Cleanup(func() {

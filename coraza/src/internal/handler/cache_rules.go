@@ -2,7 +2,6 @@ package handler
 
 import (
 	"bytes"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -32,15 +31,18 @@ func GetCacheRules(c *gin.Context) {
 	if store := getLogsStatsStore(); store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(cacheConfigBlobKey)
 		if err != nil {
-			log.Printf("[CACHE][DB][WARN] get config blob failed: %v", err)
+			respondConfigBlobDBError(c, "cache-rules db read failed", err)
+			return
 		} else if found {
 			rsDB, parseErr := cacheconf.LoadFromBytes(dbRaw)
 			if parseErr != nil {
-				log.Printf("[CACHE][DB][WARN] cached blob parse failed (fallback=file): %v", parseErr)
+				respondConfigBlobDBError(c, "cache-rules db blob parse failed", parseErr)
+				return
 			} else {
 				if !bytes.Equal(raw, dbRaw) {
 					if err := cacheconf.AtomicWriteWithBackup(cacheConfPath, dbRaw); err != nil {
-						log.Printf("[CACHE][DB][WARN] sync file from db failed: %v", err)
+						respondConfigBlobDBError(c, "cache-rules file materialization failed", err)
+						return
 					}
 				}
 				if strings.TrimSpace(dbETag) == "" {
@@ -58,7 +60,8 @@ func GetCacheRules(c *gin.Context) {
 			}
 		} else if len(raw) > 0 {
 			if err := store.UpsertConfigBlob(cacheConfigBlobKey, raw, cacheconf.ComputeETag(raw), time.Now().UTC()); err != nil {
-				log.Printf("[CACHE][DB][WARN] seed config blob failed: %v", err)
+				respondConfigBlobDBError(c, "cache-rules db seed failed", err)
+				return
 			}
 		}
 	}

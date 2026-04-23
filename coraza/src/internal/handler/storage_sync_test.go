@@ -31,7 +31,7 @@ func TestSyncBypassStorage_SeedsDBFromFileWhenMissingBlob(t *testing.T) {
 		t.Fatalf("init sqlite store: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = InitLogsStatsStoreWithBackend("file", "", "", "", 0)
+		_ = InitLogsStatsStore(false, "", 0)
 	})
 
 	if err := SyncBypassStorage(); err != nil {
@@ -74,7 +74,7 @@ func TestSyncBypassStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
 		t.Fatalf("init sqlite store: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = InitLogsStatsStoreWithBackend("file", "", "", "", 0)
+		_ = InitLogsStatsStore(false, "", 0)
 	})
 
 	store := getLogsStatsStore()
@@ -121,7 +121,7 @@ func TestSyncCRSDisabledStorage_SeedsDBFromFileWhenMissingBlob(t *testing.T) {
 		t.Fatalf("init sqlite store: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = InitLogsStatsStoreWithBackend("file", "", "", "", 0)
+		_ = InitLogsStatsStore(false, "", 0)
 	})
 
 	if err := SyncCRSDisabledStorage(); err != nil {
@@ -160,7 +160,7 @@ func TestSyncCRSDisabledStorage_RestoresFileFromDBWhenCRSDisabled(t *testing.T) 
 		t.Fatalf("init sqlite store: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = InitLogsStatsStoreWithBackend("file", "", "", "", 0)
+		_ = InitLogsStatsStore(false, "", 0)
 	})
 
 	store := getLogsStatsStore()

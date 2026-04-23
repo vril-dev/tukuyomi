@@ -47,7 +47,7 @@ func TestLoadAppConfigFileAcceptsServerTLSConfig(t *testing.T) {
 		},
 		"proxy": {"rollback_history_size": 8},
 		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
-		"storage": {"backend": "file", "db_driver": "sqlite"}
+		"storage": {"db_driver": "sqlite"}
 	}`
 	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -131,7 +131,7 @@ func TestLoadAppConfigFileRejectsInvalidServerTLSConfig(t *testing.T) {
 				},
 				"proxy": {"rollback_history_size": 8},
 				"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
-				"storage": {"backend": "file", "db_driver": "sqlite"}
+				"storage": {"db_driver": "sqlite"}
 			}`
 			if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
 				t.Fatalf("write config: %v", err)
@@ -180,7 +180,7 @@ func TestLoadAppConfigFileAcceptsServerTLSCompositeFallbackConfig(t *testing.T) 
 		},
 		"proxy": {"rollback_history_size": 8},
 		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
-		"storage": {"backend": "file", "db_driver": "sqlite"}
+		"storage": {"db_driver": "sqlite"}
 	}`
 	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)

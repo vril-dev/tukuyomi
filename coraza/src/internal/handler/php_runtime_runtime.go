@@ -134,7 +134,7 @@ func ValidatePHPRuntimeInventoryRaw(raw string) (PHPRuntimeInventoryFile, error)
 	if err != nil {
 		return PHPRuntimeInventoryFile{}, err
 	}
-	if _, err := ValidateVhostConfigRawWithInventory(currentVhostConfigRaw(), prepared.cfg); err != nil {
+	if err := validateVhostConfigFile(currentVhostConfig(), prepared.cfg); err != nil {
 		return PHPRuntimeInventoryFile{}, err
 	}
 	return clonePHPRuntimeInventoryFile(prepared.cfg), nil
@@ -149,7 +149,7 @@ func ApplyPHPRuntimeInventoryRaw(ifMatch string, raw string) (string, PHPRuntime
 	if err != nil {
 		return "", PHPRuntimeInventoryFile{}, err
 	}
-	if _, err := ValidateVhostConfigRawWithInventory(currentVhostConfigRaw(), prepared.cfg); err != nil {
+	if err := validateVhostConfigFile(currentVhostConfig(), prepared.cfg); err != nil {
 		return "", PHPRuntimeInventoryFile{}, err
 	}
 
@@ -214,7 +214,7 @@ func RollbackPHPRuntimeInventory() (string, PHPRuntimeInventoryFile, proxyRollba
 		rt.pushRollbackLocked(entry)
 		return "", PHPRuntimeInventoryFile{}, proxyRollbackEntry{}, err
 	}
-	if _, err := ValidateVhostConfigRawWithInventory(currentVhostConfigRaw(), prepared.cfg); err != nil {
+	if err := validateVhostConfigFile(currentVhostConfig(), prepared.cfg); err != nil {
 		rt.pushRollbackLocked(entry)
 		return "", PHPRuntimeInventoryFile{}, proxyRollbackEntry{}, err
 	}

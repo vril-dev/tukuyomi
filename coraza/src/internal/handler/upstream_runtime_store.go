@@ -10,12 +10,16 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
 )
 
-const upstreamRuntimeVersion = "v1"
+const (
+	upstreamRuntimeVersion       = "v1"
+	upstreamRuntimeConfigBlobKey = "upstream_runtime"
+)
 
 var upstreamRuntimeFileMu sync.Mutex
 
@@ -125,15 +129,16 @@ func ensureUpstreamRuntimeFile(path string) error {
 }
 
 func loadUpstreamRuntimeOverrides(cfg ProxyRulesConfig) (upstreamRuntimeFile, error) {
-	path := managedUpstreamRuntimePath()
-	if path == "" {
-		return normalizeUpstreamRuntimeFile(upstreamRuntimeFile{}, nil)
-	}
-	return LoadUpstreamRuntimeFile(path, configuredManagedBackendKeys(cfg))
+	_, _, file, err := snapshotUpstreamRuntimeFile(cfg)
+	return file, err
 }
 
 func snapshotUpstreamRuntimeFile(cfg ProxyRulesConfig) (string, string, upstreamRuntimeFile, error) {
 	path := managedUpstreamRuntimePath()
+	knownKeys := configuredManagedBackendKeys(cfg)
+	if store := getLogsStatsStore(); store != nil {
+		return snapshotUpstreamRuntimeDB(store, path, knownKeys)
+	}
 	if strings.TrimSpace(path) == "" {
 		file, err := normalizeUpstreamRuntimeFile(upstreamRuntimeFile{}, nil)
 		if err != nil {
@@ -146,7 +151,7 @@ func snapshotUpstreamRuntimeFile(cfg ProxyRulesConfig) (string, string, upstream
 		raw := string(payload)
 		return raw, bypassconf.ComputeETag(payload), file, nil
 	}
-	file, err := LoadUpstreamRuntimeFile(path, configuredManagedBackendKeys(cfg))
+	file, err := LoadUpstreamRuntimeFile(path, knownKeys)
 	if err != nil {
 		return "", "", upstreamRuntimeFile{}, err
 	}
@@ -167,6 +172,13 @@ func persistUpstreamRuntimeFile(cfg ProxyRulesConfig, file upstreamRuntimeFile) 
 	if err != nil {
 		return "", "", upstreamRuntimeFile{}, err
 	}
+	if store := getLogsStatsStore(); store != nil {
+		etag := bypassconf.ComputeETag(payload)
+		if err := store.UpsertConfigBlob(upstreamRuntimeConfigBlobKey, payload, etag, time.Now().UTC()); err != nil {
+			return "", "", upstreamRuntimeFile{}, err
+		}
+		return string(payload), etag, normalized, nil
+	}
 	if strings.TrimSpace(path) != "" {
 		if err := ensureUpstreamRuntimeFile(path); err != nil {
 			return "", "", upstreamRuntimeFile{}, err
@@ -176,6 +188,95 @@ func persistUpstreamRuntimeFile(cfg ProxyRulesConfig, file upstreamRuntimeFile) 
 		}
 	}
 	return string(payload), bypassconf.ComputeETag(payload), normalized, nil
+}
+
+func snapshotUpstreamRuntimeDB(store *wafEventStore, seedPath string, knownKeys map[string]struct{}) (string, string, upstreamRuntimeFile, error) {
+	dbRaw, dbETag, found, err := store.GetConfigBlob(upstreamRuntimeConfigBlobKey)
+	if err != nil {
+		return "", "", upstreamRuntimeFile{}, err
+	}
+	if found {
+		parsed, err := ParseUpstreamRuntimeRaw(string(dbRaw))
+		if err != nil {
+			return "", "", upstreamRuntimeFile{}, err
+		}
+		normalized, err := normalizeUpstreamRuntimeFile(parsed, knownKeys)
+		if err != nil {
+			return "", "", upstreamRuntimeFile{}, err
+		}
+		payload, err := MarshalUpstreamRuntimeJSON(normalized)
+		if err != nil {
+			return "", "", upstreamRuntimeFile{}, err
+		}
+		etag := bypassconf.ComputeETag(payload)
+		if strings.TrimSpace(dbETag) != "" && string(dbRaw) == string(payload) {
+			etag = dbETag
+		}
+		if strings.TrimSpace(dbETag) == "" || string(dbRaw) != string(payload) {
+			if err := store.UpsertConfigBlob(upstreamRuntimeConfigBlobKey, payload, etag, time.Now().UTC()); err != nil {
+				return "", "", upstreamRuntimeFile{}, err
+			}
+		}
+		return string(payload), etag, normalized, nil
+	}
+
+	var raw []byte
+	if strings.TrimSpace(seedPath) != "" {
+		fileRaw, _, err := readFileMaybe(seedPath)
+		if err != nil {
+			return "", "", upstreamRuntimeFile{}, err
+		}
+		raw = fileRaw
+	}
+	parsed, err := ParseUpstreamRuntimeRaw(string(raw))
+	if err != nil {
+		return "", "", upstreamRuntimeFile{}, err
+	}
+	normalized, err := normalizeUpstreamRuntimeFile(parsed, knownKeys)
+	if err != nil {
+		return "", "", upstreamRuntimeFile{}, err
+	}
+	payload, err := MarshalUpstreamRuntimeJSON(normalized)
+	if err != nil {
+		return "", "", upstreamRuntimeFile{}, err
+	}
+	etag := bypassconf.ComputeETag(payload)
+	if err := store.UpsertConfigBlob(upstreamRuntimeConfigBlobKey, payload, etag, time.Now().UTC()); err != nil {
+		return "", "", upstreamRuntimeFile{}, err
+	}
+	return string(payload), etag, normalized, nil
+}
+
+func persistUpstreamRuntimeRaw(raw string) error {
+	if store := getLogsStatsStore(); store != nil {
+		file, err := ParseUpstreamRuntimeRaw(raw)
+		if err != nil {
+			return err
+		}
+		payload, err := MarshalUpstreamRuntimeJSON(file)
+		if err != nil {
+			return err
+		}
+		return store.UpsertConfigBlob(upstreamRuntimeConfigBlobKey, payload, bypassconf.ComputeETag(payload), time.Now().UTC())
+	}
+	path := managedUpstreamRuntimePath()
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	if err := ensureUpstreamRuntimeFile(path); err != nil {
+		return err
+	}
+	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
+}
+
+func SyncUpstreamRuntimeStorage() error {
+	if getLogsStatsStore() == nil {
+		return nil
+	}
+	if _, _, _, err := snapshotUpstreamRuntimeFile(currentProxyConfig()); err != nil {
+		return err
+	}
+	return refreshProxyBackendRuntimeOverrides()
 }
 
 func refreshProxyBackendRuntimeOverrides() error {

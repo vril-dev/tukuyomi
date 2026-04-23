@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net"
 	"net/http"
@@ -551,6 +552,14 @@ func buildDirectStatusResponse(r *http.Request, statusCode int) *http.Response {
 	}
 }
 
+func vhostLogMessage(message string) string {
+	message = strings.TrimSpace(message)
+	if len(message) <= 2048 {
+		return message
+	}
+	return message[:2048] + "...[truncated]"
+}
+
 func buildFastCGIVhostResponse(r *http.Request, target *url.URL, vhost VhostConfig, resolved vhostResolvedRequest) (*http.Response, error) {
 	if target == nil {
 		return nil, fmt.Errorf("fcgi target is required")
@@ -563,12 +572,16 @@ func buildFastCGIVhostResponse(r *http.Request, target *url.URL, vhost VhostConf
 	if err != nil {
 		return nil, fmt.Errorf("fastcgi execute: %w", err)
 	}
-	if len(stdout) == 0 && len(stderr) > 0 {
-		return nil, fmt.Errorf("fastcgi stderr: %s", strings.TrimSpace(string(stderr)))
+	if len(stderr) > 0 {
+		log.Printf("[VHOST][PHP][ERROR] fastcgi stderr vhost=%q script=%q err=%s", vhost.Name, resolved.ScriptName, vhostLogMessage(string(stderr)))
+	}
+	if len(stdout) == 0 {
+		return buildDirectStatusResponse(r, http.StatusInternalServerError), nil
 	}
 	resp, err := parseFastCGIHTTPResponse(stdout, r)
 	if err != nil {
-		return nil, fmt.Errorf("fastcgi parse: %w", err)
+		log.Printf("[VHOST][PHP][ERROR] fastcgi response parse failed vhost=%q script=%q err=%s", vhost.Name, resolved.ScriptName, vhostLogMessage(err.Error()))
+		return buildDirectStatusResponse(r, http.StatusInternalServerError), nil
 	}
 	return resp, nil
 }

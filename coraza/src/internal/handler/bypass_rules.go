@@ -3,7 +3,6 @@ package handler
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -41,11 +40,13 @@ func GetBypassRules(c *gin.Context) {
 	if store := getLogsStatsStore(); store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(bypassConfigBlobKey)
 		if err != nil {
-			log.Printf("[BYPASS][DB][WARN] get config blob failed: %v", err)
+			respondConfigBlobDBError(c, "bypass db read failed", err)
+			return
 		} else if found {
 			file, parseErr := bypassconf.Parse(string(dbRaw))
 			if parseErr != nil {
-				log.Printf("[BYPASS][DB][WARN] cached blob parse failed (fallback=file): %v", parseErr)
+				respondConfigBlobDBError(c, "bypass db blob parse failed", parseErr)
+				return
 			} else {
 				if normalized, err := bypassconf.MarshalJSON(file); err == nil {
 					displayRaw = string(normalized)
@@ -63,7 +64,8 @@ func GetBypassRules(c *gin.Context) {
 			}
 		} else if len(raw) > 0 {
 			if err := store.UpsertConfigBlob(bypassConfigBlobKey, raw, bypassconf.ComputeETag(raw), time.Now().UTC()); err != nil {
-				log.Printf("[BYPASS][DB][WARN] seed config blob failed: %v", err)
+				respondConfigBlobDBError(c, "bypass db seed failed", err)
+				return
 			}
 		}
 	}
@@ -119,7 +121,8 @@ func PutBypassRules(c *gin.Context) {
 				}
 				curETag = dbETag
 			} else {
-				log.Printf("[BYPASS][DB][WARN] cached blob parse failed for conflict check (fallback=file): %v", parseErr)
+				respondConfigBlobDBError(c, "bypass db blob parse failed for conflict check", parseErr)
+				return
 			}
 		}
 	}

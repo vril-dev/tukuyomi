@@ -43,11 +43,10 @@ make release-linux-all VERSION=v0.8.0
 /opt/tukuyomi/logs/
 ```
 
-最低限必要な runtime file:
+file-backed のまま残す起動ファイル:
 
 - `conf/config.json`
 - `conf/proxy.json`
-- `conf/sites.json`
 - `conf/cache-store.json`
 - `conf/cache-rules.json`
 - `conf/waf-bypass.json`
@@ -62,15 +61,25 @@ make release-linux-all VERSION=v0.8.0
 - `rules/crs/crs-setup.conf`
 - `rules/crs/rules/*.conf`
 
+DB-native な seed/export file:
+
+- `conf/sites.json`
+- `conf/scheduled-tasks.json`
+- `conf/upstream-runtime.json`
+
+これらは空 DB の初期投入、または import/export 用です。対応する DB blob が存在する後は
+`sites`、`scheduled_tasks`、`upstream_runtime` を DB から直接読み込み、JSON file
+の復元を起動条件にしません。
+
 PHP-FPM の `/options` と `/vhosts` も使う場合の追加物:
 
 - `data/php-fpm/binaries/<runtime_id>/`
 - `data/php-fpm/inventory.json`
 - `data/php-fpm/vhosts.json`
 
-`/scheduled-tasks` も使う場合の追加物:
+`/scheduled-tasks` 実行状態も使う場合の追加物:
 
-- `conf/scheduled-tasks.json`
+- `data/scheduled-tasks/`
 
 managed bypass override rule も使う場合の追加物:
 
@@ -96,7 +105,7 @@ sudo install -d -m 755 \
 sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
 
-for f in config.json proxy.json sites.json scheduled-tasks.json cache-store.json cache-rules.json waf-bypass.json waf-bypass.sample.json country-block.json rate-limit.json bot-defense.json semantic.json notifications.json ip-reputation.json; do
+for f in config.json proxy.json sites.json scheduled-tasks.json upstream-runtime.json cache-store.json cache-rules.json waf-bypass.json waf-bypass.sample.json country-block.json rate-limit.json bot-defense.json semantic.json notifications.json ip-reputation.json; do
   sudo install -m 644 "data/conf/${f}" "/opt/tukuyomi/conf/${f}"
 done
 
@@ -121,9 +130,12 @@ sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 注意:
 
 - `data/conf/*.bak` は本番へ持っていかないでください
-- `tukuyomi` の server-side 設定の主契約は `conf/config.json` です
-- 本番では `config.json` を secret manager / config management から render / mount してください
-- embedded `Settings` 画面も同じ `conf/config.json` を global settings として編集しますが、この導線は `Save config only` です。listener/runtime/storage/observability 系の変更後は service を restart してください
+- `config.json` は DB 接続 bootstrap と DB `app_config` の seed/export material です
+- `proxy.json` は DB `proxy_rules` の seed/import/export material です
+- `sites.json`、`scheduled-tasks.json`、`upstream-runtime.json` は DB bootstrap 後は DB seed/export artifact です
+- 本番では `storage.db_driver`、`storage.db_path`、`storage.db_dsn` 用に `config.json` を secret manager / config management から render / mount してください
+- 初回起動前に `make db-migrate` を実行し、新規 DB へ file material を取り込む場合は `make db-import` も実行します
+- embedded `Settings` 画面は DB `app_config` を編集します。listener/runtime/storage policy/observability 系の変更後は service を restart してください
 - public release bundle には `Options -> GeoIP Update -> Update now` 用の companion `bin/geoipupdate` が同梱されます
 - `GEOIPUPDATE_BIN` を使えば bundled updater path を override できます
 - managed country refresh 用の official wrapper は `./scripts/update_country_db.sh` です
@@ -132,7 +144,7 @@ sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 - release bundle には harmless な standalone sample として `conf/rules/search-endpoint.conf` も含まれます
 - その参照例として `conf/waf-bypass.sample.json` も同梱します
 
-proxy engine 選択も restart-required な `conf/config.json` 設定です:
+proxy engine 選択は restart-required な DB `app_config` 設定です:
 
 ```json
 {
@@ -236,7 +248,7 @@ template:
 
 ## Overload Tuning
 
-overload 制御は `conf/config.json` の `server` 配下で調整します:
+overload 制御は DB `app_config` の `server` 配下で調整します:
 
 - `max_concurrent_requests` は process-wide guard です。
 - `max_concurrent_proxy_requests` は data-plane guard です。
@@ -248,7 +260,7 @@ overload 制御は `conf/config.json` の `server` 配下で調整します:
 
 ## Secret Handling
 
-- `admin.api_key_primary`、`admin.api_key_secondary`、`admin.session_secret` は `conf/config.json` に置き、browser へは出さないでください
+- `admin.api_key_primary`、`admin.api_key_secondary`、`admin.session_secret` は managed app config に置き、browser へは出さないでください
 - browser operator は 1 回 sign in すると same-origin session cookie を受け取ります
 - CLI / 自動化は従来どおり `X-API-Key` を使えます
 - `tukuyomi` の既定 posture は `admin.external_mode=api_only_external` です。remote admin API が不要なら `deny_external` にしてください
@@ -301,7 +313,7 @@ sudo systemctl enable --now tukuyomi.socket
 sudo systemctl enable --now tukuyomi.service
 ```
 
-有効化する socket unit は `conf/config.json` と一致するものだけにしてください。
+有効化する socket unit は effective DB `app_config` と一致するものだけにしてください。
 `ListenStream` / `ListenDatagram` は `server.listen_addr`, `admin.listen_addr`,
 `server.tls.http_redirect_addr`, HTTP/3 UDP port と一致する必要があります。
 process は inherited socket address を検証し、不一致なら fail closed します。

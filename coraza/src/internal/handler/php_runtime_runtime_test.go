@@ -82,6 +82,57 @@ func TestValidateVhostConfigRawAcceptsKnownRuntimeWithoutSupportToggle(t *testin
 	}
 }
 
+func TestValidateVhostConfigRawGeneratesHiddenTargetWhenOmitted(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	inventory := PHPRuntimeInventoryFile{
+		Runtimes: []PHPRuntimeRecord{
+			{
+				RuntimeID:  "php82",
+				BinaryPath: "data/php-fpm/binaries/php82/php-fpm",
+				Modules:    []string{"mbstring", "redis"},
+				Source:     "bundled",
+			},
+		},
+	}
+	raw := `{
+  "vhosts": [
+    {
+      "name": "app",
+      "mode": "php-fpm",
+      "hostname": "app.example.com",
+      "listen_port": 9081,
+      "document_root": "apps/app/public",
+      "runtime_id": "php82",
+      "linked_upstream_name": "app"
+    },
+    {
+      "name": "app php",
+      "mode": "php-fpm",
+      "hostname": "app-php.example.com",
+      "listen_port": 9082,
+      "document_root": "apps/app-php/public",
+      "runtime_id": "php82",
+      "linked_upstream_name": "app-upstream"
+    }
+  ]
+}`
+	cfg, err := ValidateVhostConfigRawWithInventory(raw, inventory)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Vhosts) != 2 {
+		t.Fatalf("vhost count=%d want=2", len(cfg.Vhosts))
+	}
+	if cfg.Vhosts[0].GeneratedTarget != "app-php" {
+		t.Fatalf("first generated_target=%q want app-php", cfg.Vhosts[0].GeneratedTarget)
+	}
+	if cfg.Vhosts[1].GeneratedTarget != "app-php-2" {
+		t.Fatalf("second generated_target=%q want app-php-2", cfg.Vhosts[1].GeneratedTarget)
+	}
+}
+
 func TestValidateVhostConfigRawRequiresLinkedUpstreamName(t *testing.T) {
 	restore := resetPHPFoundationRuntimesForTest(t)
 	defer restore()

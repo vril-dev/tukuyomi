@@ -25,7 +25,6 @@ func TestProxyAccessLogAsyncFlushWritesQueuedAccessLog(t *testing.T) {
 		runtimeProxyAccessLogSink = prevSink
 	}()
 
-	config.StorageBackend = "file"
 	config.FileRotateBytes = 0
 	config.FileMaxBytes = 0
 	config.FileRetention = 0
@@ -65,7 +64,6 @@ func TestProxyAccessLogAsyncEnqueueFailureFallsBackToSyncAppend(t *testing.T) {
 		runtimeProxyAccessLogSink = prevSink
 	}()
 
-	config.StorageBackend = "file"
 	config.FileRotateBytes = 0
 	config.FileMaxBytes = 0
 	config.FileRetention = 0
@@ -97,7 +95,6 @@ func TestProxyAccessLogAsyncAfterShutdownFallsBackToSyncAppend(t *testing.T) {
 		runtimeProxyAccessLogSink = prevSink
 	}()
 
-	config.StorageBackend = "file"
 	config.FileRotateBytes = 0
 	config.FileMaxBytes = 0
 	config.FileRetention = 0

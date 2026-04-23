@@ -229,6 +229,48 @@ func TestEffectiveServerTLSACMEDomainsIncludesEnabledSites(t *testing.T) {
 	}
 }
 
+func TestInitSiteRuntimeLoadsDBBlobWithoutRestoringFile(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	}()
+
+	raw := `{
+  "sites": [
+    {
+      "name": "db-site",
+      "enabled": false,
+      "hosts": ["db.example.com"],
+      "default_upstream": "http://db.internal:8080",
+      "tls": {"mode": "legacy"}
+    }
+  ]
+}`
+	store := getLogsStatsStore()
+	if err := store.UpsertConfigBlob(siteConfigBlobKey, []byte(raw), "", time.Now().UTC()); err != nil {
+		t.Fatalf("UpsertConfigBlob: %v", err)
+	}
+
+	sitePath := filepath.Join(tmp, "conf", "sites.json")
+	if err := InitSiteRuntime(sitePath, 2); err != nil {
+		t.Fatalf("InitSiteRuntime: %v", err)
+	}
+	_, _, cfg, statuses, _ := SiteConfigSnapshot()
+	if len(cfg.Sites) != 1 || cfg.Sites[0].Name != "db-site" {
+		t.Fatalf("sites cfg=%+v", cfg.Sites)
+	}
+	if len(statuses) != 1 || statuses[0].Name != "db-site" {
+		t.Fatalf("statuses=%+v", statuses)
+	}
+	if _, err := os.Stat(sitePath); !os.IsNotExist(err) {
+		t.Fatalf("site file should not be restored, stat err=%v", err)
+	}
+}
+
 func TestValidateSiteConfigRawUsesProposedACMECoverage(t *testing.T) {
 	restore := setSiteTLSGlobalsForTest(t)
 	defer restore()

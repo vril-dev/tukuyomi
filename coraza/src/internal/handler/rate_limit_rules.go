@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -34,11 +33,13 @@ func GetRateLimitRules(c *gin.Context) {
 	if store := getLogsStatsStore(); store != nil {
 		dbRaw, dbETag, found, err := store.GetConfigBlob(rateLimitConfigBlobKey)
 		if err != nil {
-			log.Printf("[RATE_LIMIT][DB][WARN] get config blob failed: %v", err)
+			respondConfigBlobDBError(c, "rate-limit db read failed", err)
+			return
 		} else if found {
 			rt, parseErr := ValidateRateLimitRaw(string(dbRaw))
 			if parseErr != nil {
-				log.Printf("[RATE_LIMIT][DB][WARN] cached blob parse failed (fallback=file): %v", parseErr)
+				respondConfigBlobDBError(c, "rate-limit db blob parse failed", parseErr)
+				return
 			} else {
 				if strings.TrimSpace(dbETag) == "" {
 					dbETag = bypassconf.ComputeETag(dbRaw)
@@ -55,7 +56,8 @@ func GetRateLimitRules(c *gin.Context) {
 			}
 		} else if len(raw) > 0 {
 			if err := store.UpsertConfigBlob(rateLimitConfigBlobKey, raw, bypassconf.ComputeETag(raw), time.Now().UTC()); err != nil {
-				log.Printf("[RATE_LIMIT][DB][WARN] seed config blob failed: %v", err)
+				respondConfigBlobDBError(c, "rate-limit db seed failed", err)
+				return
 			}
 		}
 	}
@@ -111,7 +113,8 @@ func PutRateLimitRules(c *gin.Context) {
 				}
 				curETag = dbETag
 			} else {
-				log.Printf("[RATE_LIMIT][DB][WARN] cached blob parse failed for conflict check (fallback=file): %v", parseErr)
+				respondConfigBlobDBError(c, "rate-limit db blob parse failed for conflict check", parseErr)
+				return
 			}
 		}
 	}

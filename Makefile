@@ -41,6 +41,9 @@ UI_EMBED_DIR := coraza/src/internal/handler/admin_ui_dist
 BIN_DIR ?= bin
 APP_NAME ?= tukuyomi
 APP_PKG ?= ./cmd/server
+DB_MIGRATE_BIN ?= $(abspath $(BIN_DIR))/$(APP_NAME)
+DB_MIGRATE_WORKDIR ?= data
+DB_MIGRATE_CONFIG ?= conf/config.json
 VERSION ?= dev
 RELEASE_DIR ?= dist/release
 RELEASE_DOCKERFILE ?= build/Dockerfile.release
@@ -52,7 +55,7 @@ export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_API_KEY_PRIMAR
 
 .PHONY: \
 	help setup env-init crs-install crs-ensure \
-	go-test go-fuzz-short go-build build \
+	go-test go-fuzz-short go-build db-migrate db-import build \
 	release-linux-amd64 release-linux-arm64 release-linux-all \
 	ui-install ui-test ui-build ui-sync ui-build-sync \
 	ui-preview-up ui-preview-down ui-preview-smoke php-fpm-build php-fpm-copy php-fpm-prune php-fpm-remove php-fpm-up php-fpm-down php-fpm-reload php-fpm-test php-fpm-smoke \
@@ -73,6 +76,8 @@ help:
 	@echo "  make go-test                    Run Go tests (coraza/src)"
 	@echo "  make go-fuzz-short              Run short native HTTP/1 fuzz passes"
 	@echo "  make go-build                   Build single binary into ./bin/$(APP_NAME)"
+	@echo "  make db-migrate                 Build binary and apply configured DB schema migrations"
+	@echo "  make db-import                  Import config.json/proxy.json seed files into DB"
 	@echo "  make build                      One-shot build (ui-build-sync + go-build)"
 	@echo "  make release-linux-amd64        Build release tarball for linux/amd64 via docker buildx"
 	@echo "  make release-linux-arm64        Build release tarball for linux/arm64 via docker buildx"
@@ -84,7 +89,7 @@ help:
 	@echo "  make ui-sync                    Sync web dist -> go:embed assets"
 	@echo "  make ui-build-sync              Build and sync embedded UI assets"
 	@echo "  make ui-preview-up              Build/sync UI and start preview runtime + scheduled-task sidecar"
-	@echo "    - optional: UI_PREVIEW_PERSIST=1 keeps preview config/state across down/up"
+	@echo "    - optional: UI_PREVIEW_PERSIST=1 keeps preview config and DB state across down/up"
 	@echo "  make ui-preview-down            Stop screenshot preview runtime and remove temp config"
 	@echo "  make ui-preview-smoke           Validate preview persistence, split-port publish, and loopback reject"
 	@echo "  make php-fpm-build VER=8.3      Build PHP-FPM runtime bundle under data/php-fpm/binaries/php83"
@@ -253,6 +258,36 @@ go-build:
 	mkdir -p $(abspath $(BIN_DIR))
 	cd $(CORAZA_SRC) && $(GO) build -o "$(abspath $(BIN_DIR))/$(APP_NAME)" $(APP_PKG)
 	@echo "[go-build] built $(abspath $(BIN_DIR))/$(APP_NAME)"
+
+db-migrate: go-build
+	@set -euo pipefail; \
+	workdir="$(DB_MIGRATE_WORKDIR)"; \
+	config_file="$${WAF_CONFIG_FILE:-$(DB_MIGRATE_CONFIG)}"; \
+	if [[ ! -d "$$workdir" ]]; then \
+		echo "[db-migrate][ERROR] DB_MIGRATE_WORKDIR does not exist: $$workdir" >&2; \
+		exit 1; \
+	fi; \
+	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" && -f "$(ROOT_DIR)/$$config_file" ]]; then \
+		config_file="$(ROOT_DIR)/$$config_file"; \
+	fi; \
+	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" ]]; then \
+		echo "[db-migrate][ERROR] config not found: $$workdir/$$config_file" >&2; \
+		exit 1; \
+	fi; \
+	echo "[db-migrate] workdir=$$workdir config=$$config_file"; \
+	cd "$$workdir"; \
+	WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-migrate
+
+db-import: db-migrate
+	@set -euo pipefail; \
+	workdir="$(DB_MIGRATE_WORKDIR)"; \
+	config_file="$${WAF_CONFIG_FILE:-$(DB_MIGRATE_CONFIG)}"; \
+	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" && -f "$(ROOT_DIR)/$$config_file" ]]; then \
+		config_file="$(ROOT_DIR)/$$config_file"; \
+	fi; \
+	echo "[db-import] workdir=$$workdir config=$$config_file"; \
+	cd "$$workdir"; \
+	WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import
 
 build: ui-build-sync go-build
 

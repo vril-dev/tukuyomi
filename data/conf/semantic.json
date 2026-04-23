@@ -1,6 +1,6 @@
 {
   "default": {
-    "enabled": false,
+    "enabled": true,
     "mode": "challenge",
     "exempt_path_prefixes": [
       "/healthz",

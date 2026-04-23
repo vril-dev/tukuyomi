@@ -183,7 +183,9 @@ type appFPTunerConfig struct {
 }
 
 type appStorageConfig struct {
-	Backend           string `json:"backend"`
+	// Deprecated: runtime storage is DB-only. Empty or "db" is accepted;
+	// "file" is rejected during validation.
+	Backend           string `json:"backend,omitempty"`
 	DBDriver          string `json:"db_driver"`
 	DBDSN             string `json:"db_dsn"`
 	DBPath            string `json:"db_path"`
@@ -346,7 +348,7 @@ func defaultAppConfigFile() appConfigFile {
 			AuditFile:       "logs/coraza/fp-tuner-audit.ndjson",
 		},
 		Storage: appStorageConfig{
-			Backend:           "file",
+			Backend:           "",
 			DBDriver:          "sqlite",
 			DBDSN:             "",
 			DBPath:            "logs/coraza/tukuyomi.db",
@@ -609,11 +611,15 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	if cfg.Runtime.GOMAXPROCS < 0 || cfg.Runtime.MemoryLimitMB < 0 {
 		return fmt.Errorf("runtime resource limits must be >= 0")
 	}
-	if cfg.Storage.Backend != "file" && cfg.Storage.Backend != "db" {
-		return fmt.Errorf("storage.backend must be one of: file, db")
+	switch cfg.Storage.Backend {
+	case "", "db":
+	case "file":
+		return fmt.Errorf("storage.backend=file has been removed; use storage.db_driver=sqlite, mysql, or pgsql")
+	default:
+		return fmt.Errorf("storage.backend must be empty or db")
 	}
-	if cfg.Storage.DBDriver != "sqlite" && cfg.Storage.DBDriver != "mysql" {
-		return fmt.Errorf("storage.db_driver must be one of: sqlite, mysql")
+	if cfg.Storage.DBDriver != "sqlite" && cfg.Storage.DBDriver != "mysql" && cfg.Storage.DBDriver != "pgsql" {
+		return fmt.Errorf("storage.db_driver must be one of: sqlite, mysql, pgsql")
 	}
 	if cfg.Storage.DBRetentionDays < 0 {
 		return fmt.Errorf("storage.db_retention_days must be >= 0")

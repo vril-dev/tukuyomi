@@ -25,6 +25,7 @@ const (
 	maxScheduledTaskTimeout        = 86400
 	defaultScheduledTaskConfigPath = "conf/scheduled-tasks.json"
 	defaultScheduledTaskRuntimeDir = "data/scheduled-tasks"
+	scheduledTaskConfigBlobKey     = "scheduled_tasks"
 )
 
 type ScheduledTaskConfigFile struct {
@@ -64,10 +65,11 @@ type ScheduledTaskStatus struct {
 }
 
 type ScheduledTaskRuntimePaths struct {
-	ConfigFile string `json:"config_file"`
-	RuntimeDir string `json:"runtime_dir"`
-	StateFile  string `json:"state_file"`
-	LogDir     string `json:"log_dir"`
+	ConfigFile    string `json:"config_file"`
+	ConfigStorage string `json:"config_storage,omitempty"`
+	RuntimeDir    string `json:"runtime_dir"`
+	StateFile     string `json:"state_file"`
+	LogDir        string `json:"log_dir"`
 }
 
 type scheduledTaskStateFile struct {
@@ -100,16 +102,9 @@ func InitScheduledTaskRuntime(path string, rollbackMax int) error {
 	if configPath == "" {
 		configPath = defaultScheduledTaskConfigPath
 	}
-	raw, err := loadScheduledTaskConfigRaw(configPath)
+	prepared, err := loadScheduledTaskPreparedConfig(configPath)
 	if err != nil {
-		return fmt.Errorf("read scheduled task config (%s): %w", configPath, err)
-	}
-	if strings.TrimSpace(raw) == "" {
-		raw = defaultScheduledTaskConfigRaw
-	}
-	prepared, err := prepareScheduledTaskConfigRaw(raw, currentPHPRuntimeInventoryConfig())
-	if err != nil {
-		return fmt.Errorf("invalid scheduled task config (%s): %w", configPath, err)
+		return fmt.Errorf("initialize scheduled task config (%s): %w", configPath, err)
 	}
 	rt := &scheduledTaskRuntime{
 		configPath:    configPath,
@@ -123,6 +118,46 @@ func InitScheduledTaskRuntime(path string, rollbackMax int) error {
 	scheduledTaskRt = rt
 	scheduledTaskRuntimeMu.Unlock()
 	return nil
+}
+
+func loadScheduledTaskPreparedConfig(configPath string) (scheduledTaskPreparedConfig, error) {
+	store := getLogsStatsStore()
+	if store != nil {
+		dbRaw, dbETag, found, err := store.GetConfigBlob(scheduledTaskConfigBlobKey)
+		if err != nil {
+			return scheduledTaskPreparedConfig{}, err
+		}
+		if found {
+			prepared, err := prepareScheduledTaskConfigRaw(string(dbRaw), currentPHPRuntimeInventoryConfig())
+			if err != nil {
+				return scheduledTaskPreparedConfig{}, err
+			}
+			if strings.TrimSpace(dbETag) == "" || string(dbRaw) != prepared.raw {
+				if err := store.UpsertConfigBlob(scheduledTaskConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
+					return scheduledTaskPreparedConfig{}, err
+				}
+			}
+			return prepared, nil
+		}
+	}
+
+	raw, err := loadScheduledTaskConfigRaw(configPath)
+	if err != nil {
+		return scheduledTaskPreparedConfig{}, err
+	}
+	if strings.TrimSpace(raw) == "" {
+		raw = defaultScheduledTaskConfigRaw
+	}
+	prepared, err := prepareScheduledTaskConfigRaw(raw, currentPHPRuntimeInventoryConfig())
+	if err != nil {
+		return scheduledTaskPreparedConfig{}, err
+	}
+	if store != nil {
+		if err := store.UpsertConfigBlob(scheduledTaskConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
+			return scheduledTaskPreparedConfig{}, err
+		}
+	}
+	return prepared, nil
 }
 
 func scheduledTaskRuntimeInstance() *scheduledTaskRuntime {
@@ -196,7 +231,7 @@ func ApplyScheduledTaskConfigRaw(ifMatch string, raw string) (string, ScheduledT
 	prevRaw := rt.raw
 	prevETag := rt.etag
 	prevCfg := cloneScheduledTaskConfigFile(rt.cfg)
-	if err := persistScheduledTaskConfigRaw(rt.configPath, prepared.raw); err != nil {
+	if err := persistScheduledTaskConfigAuthoritative(rt.configPath, prepared.raw, prepared.etag); err != nil {
 		return "", ScheduledTaskConfigFile{}, err
 	}
 	rt.raw = prepared.raw
@@ -211,7 +246,7 @@ func ApplyScheduledTaskConfigRaw(ifMatch string, raw string) (string, ScheduledT
 		rt.raw = prevRaw
 		rt.etag = prevETag
 		rt.cfg = prevCfg
-		_ = persistScheduledTaskConfigRaw(rt.configPath, prevRaw)
+		_ = persistScheduledTaskConfigAuthoritative(rt.configPath, prevRaw, prevETag)
 		return "", ScheduledTaskConfigFile{}, err
 	}
 	return rt.etag, cloneScheduledTaskConfigFile(rt.cfg), nil
@@ -241,7 +276,7 @@ func RollbackScheduledTaskConfig() (string, ScheduledTaskConfigFile, proxyRollba
 	prevRaw := rt.raw
 	prevETag := rt.etag
 	prevCfg := cloneScheduledTaskConfigFile(rt.cfg)
-	if err := persistScheduledTaskConfigRaw(rt.configPath, prepared.raw); err != nil {
+	if err := persistScheduledTaskConfigAuthoritative(rt.configPath, prepared.raw, prepared.etag); err != nil {
 		rt.pushRollbackLocked(entry)
 		return "", ScheduledTaskConfigFile{}, proxyRollbackEntry{}, err
 	}
@@ -252,11 +287,61 @@ func RollbackScheduledTaskConfig() (string, ScheduledTaskConfigFile, proxyRollba
 		rt.raw = prevRaw
 		rt.etag = prevETag
 		rt.cfg = prevCfg
-		_ = persistScheduledTaskConfigRaw(rt.configPath, prevRaw)
+		_ = persistScheduledTaskConfigAuthoritative(rt.configPath, prevRaw, prevETag)
 		rt.pushRollbackLocked(entry)
 		return "", ScheduledTaskConfigFile{}, proxyRollbackEntry{}, err
 	}
 	return rt.etag, cloneScheduledTaskConfigFile(rt.cfg), entry, nil
+}
+
+func SyncScheduledTaskStorage() error {
+	store := getLogsStatsStore()
+	rt := scheduledTaskRuntimeInstance()
+	if store == nil || rt == nil {
+		return nil
+	}
+	dbRaw, dbETag, found, err := store.GetConfigBlob(scheduledTaskConfigBlobKey)
+	if err != nil {
+		return err
+	}
+	if !found {
+		rt.mu.RLock()
+		raw := rt.raw
+		etag := rt.etag
+		rt.mu.RUnlock()
+		if strings.TrimSpace(etag) == "" {
+			etag = bypassconf.ComputeETag([]byte(raw))
+		}
+		return store.UpsertConfigBlob(scheduledTaskConfigBlobKey, []byte(raw), etag, time.Now().UTC())
+	}
+	prepared, err := prepareScheduledTaskConfigRaw(string(dbRaw), currentPHPRuntimeInventoryConfig())
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(dbETag) == "" || string(dbRaw) != prepared.raw {
+		if err := store.UpsertConfigBlob(scheduledTaskConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
+			return err
+		}
+	}
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if prepared.etag == rt.etag {
+		return nil
+	}
+	prevRaw := rt.raw
+	prevETag := rt.etag
+	prevCfg := cloneScheduledTaskConfigFile(rt.cfg)
+	rt.raw = prepared.raw
+	rt.etag = prepared.etag
+	rt.cfg = cloneScheduledTaskConfigFile(prepared.cfg)
+	if err := pruneScheduledTaskState(rt.configPath, prepared.cfg); err != nil {
+		rt.raw = prevRaw
+		rt.etag = prevETag
+		rt.cfg = prevCfg
+		return err
+	}
+	return nil
 }
 
 func ScheduledTaskStatusSnapshot(configPath string, cfg ScheduledTaskConfigFile) ([]ScheduledTaskStatus, error) {
@@ -613,6 +698,16 @@ func persistScheduledTaskConfigRaw(path string, raw string) error {
 	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
 }
 
+func persistScheduledTaskConfigAuthoritative(path string, raw string, etag string) error {
+	if store := getLogsStatsStore(); store != nil {
+		if strings.TrimSpace(etag) == "" {
+			etag = bypassconf.ComputeETag([]byte(raw))
+		}
+		return store.UpsertConfigBlob(scheduledTaskConfigBlobKey, []byte(raw), etag, time.Now().UTC())
+	}
+	return persistScheduledTaskConfigRaw(path, raw)
+}
+
 func loadScheduledTaskConfigRaw(configPath string) (string, error) {
 	rawBytes, _, err := readFileMaybe(configPath)
 	if err != nil {
@@ -653,11 +748,22 @@ func CurrentScheduledTaskRuntimePaths() ScheduledTaskRuntimePaths {
 	configPath := currentScheduledTaskConfigPath()
 	runtimeDir := scheduledTaskRuntimeDir(configPath)
 	return ScheduledTaskRuntimePaths{
-		ConfigFile: configPath,
-		RuntimeDir: runtimeDir,
-		StateFile:  scheduledTaskStatePath(configPath),
-		LogDir:     filepath.Join(runtimeDir, "logs"),
+		ConfigFile:    configPath,
+		ConfigStorage: scheduledTaskConfigStorageLabel(configPath),
+		RuntimeDir:    runtimeDir,
+		StateFile:     scheduledTaskStatePath(configPath),
+		LogDir:        filepath.Join(runtimeDir, "logs"),
 	}
+}
+
+func scheduledTaskConfigStorageLabel(configPath string) string {
+	if getLogsStatsStore() != nil {
+		return "db:" + scheduledTaskConfigBlobKey
+	}
+	if strings.TrimSpace(configPath) == "" {
+		return "memory"
+	}
+	return configPath
 }
 
 func loadScheduledTaskStateUnlocked(statePath string) (scheduledTaskStateFile, error) {

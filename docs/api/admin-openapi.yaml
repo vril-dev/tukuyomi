@@ -1666,7 +1666,7 @@ components:
         Runtime status object. Includes WAF state, proxy routing and health state, TLS/ACME
         state, optional client-facing HTTP/3 advertisement state, notification counters,
         IP reputation state, semantic counters, cache-store stats, client-facing response
-        compression state, and storage backend metadata.
+        compression state, and DB storage metadata.
     RulesFilesResponse:
       type: object
       properties:

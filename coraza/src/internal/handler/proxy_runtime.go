@@ -53,8 +53,6 @@ const (
 	maxProxyDiscoveryTimeoutMS           = 10000
 	maxProxyDiscoveryTargets             = 256
 
-	proxyConfigBlobKey = "proxy_rules"
-
 	proxyHTTP2ModeDefault      = "default"
 	proxyHTTP2ModeForceAttempt = "force_attempt"
 	proxyHTTP2ModeH2C          = "h2c_prior_knowledge"
@@ -256,13 +254,20 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 	if path == "" {
 		return fmt.Errorf("proxy config path is required")
 	}
-	raw, err := os.ReadFile(path)
+	raw, shouldSeedDB, err := loadProxyRulesStartupRaw(path)
 	if err != nil {
-		return fmt.Errorf("read proxy config (%s): %w", path, err)
+		return err
 	}
-	prepared, err := prepareProxyRulesRaw(string(raw))
+	prepared, err := prepareProxyRulesRaw(raw)
 	if err != nil {
 		return fmt.Errorf("invalid proxy config (%s): %w", path, err)
+	}
+	if shouldSeedDB {
+		if store := getLogsStatsStore(); store != nil {
+			if err := store.UpsertConfigBlob(proxyRulesConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
+				return fmt.Errorf("seed proxy_rules db blob: %w", err)
+			}
+		}
 	}
 
 	health, err := newUpstreamHealthMonitor(prepared.effectiveCfg)
@@ -302,6 +307,28 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 	emitProxyConfigApplied("proxy transport initialized", prepared.effectiveCfg)
 	emitProxyTLSInsecureWarning(prepared.effectiveCfg)
 	return nil
+}
+
+func loadProxyRulesStartupRaw(path string) (string, bool, error) {
+	if store := getLogsStatsStore(); store != nil {
+		dbRaw, _, found, err := store.GetConfigBlob(proxyRulesConfigBlobKey)
+		if err != nil {
+			return "", false, fmt.Errorf("read proxy_rules from db: %w", err)
+		}
+		if found {
+			return string(dbRaw), false, nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return "", false, fmt.Errorf("read proxy seed file (%s): %w", path, err)
+		}
+		return string(raw), true, nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", false, fmt.Errorf("read proxy config (%s): %w", path, err)
+	}
+	return string(raw), false, nil
 }
 
 func rewriteTukuyomiProxyRequest(in *http.Request, out *http.Request) *http.Request {
@@ -629,16 +656,11 @@ func ApplyProxyRulesRaw(ifMatch string, raw string) (string, ProxyRulesConfig, e
 	prevETag := rt.etag
 	prevTarget := rt.target
 
-	if err := persistProxyConfigRaw(rt.configPath, prepared.raw); err != nil {
-		return "", ProxyRulesConfig{}, err
-	}
-	if err := upsertProxyConfigBlob([]byte(prepared.raw), prepared.etag); err != nil {
-		_ = persistProxyConfigRaw(rt.configPath, prevRaw)
+	if err := persistProxyConfigAuthoritative(rt.configPath, prepared.raw, prepared.etag); err != nil {
 		return "", ProxyRulesConfig{}, err
 	}
 	if err := rt.transport.Update(prepared.effectiveCfg); err != nil {
-		_ = persistProxyConfigRaw(rt.configPath, prevRaw)
-		_ = upsertProxyConfigBlob([]byte(prevRaw), prevETag)
+		_ = persistProxyConfigAuthoritative(rt.configPath, prevRaw, prevETag)
 		return "", ProxyRulesConfig{}, err
 	}
 
@@ -655,8 +677,7 @@ func ApplyProxyRulesRaw(ifMatch string, raw string) (string, ProxyRulesConfig, e
 	}
 	if rt.health != nil {
 		if err := rt.health.Update(prepared.effectiveCfg); err != nil {
-			_ = persistProxyConfigRaw(rt.configPath, prevRaw)
-			_ = upsertProxyConfigBlob([]byte(prevRaw), prevETag)
+			_ = persistProxyConfigAuthoritative(rt.configPath, prevRaw, prevETag)
 			return "", ProxyRulesConfig{}, err
 		}
 	}
@@ -697,21 +718,14 @@ func RollbackProxyRules() (string, ProxyRulesConfig, proxyRollbackEntry, error) 
 	}
 
 	prevRaw := rt.raw
-	prevETag := rt.etag
 	prevTarget := rt.target
 
-	if err := persistProxyConfigRaw(rt.configPath, prepared.raw); err != nil {
-		rt.pushRollbackLocked(entry)
-		return "", ProxyRulesConfig{}, proxyRollbackEntry{}, err
-	}
-	if err := upsertProxyConfigBlob([]byte(prepared.raw), prepared.etag); err != nil {
-		_ = persistProxyConfigRaw(rt.configPath, prevRaw)
+	if err := persistProxyConfigAuthoritative(rt.configPath, prepared.raw, prepared.etag); err != nil {
 		rt.pushRollbackLocked(entry)
 		return "", ProxyRulesConfig{}, proxyRollbackEntry{}, err
 	}
 	if err := rt.transport.Update(prepared.effectiveCfg); err != nil {
-		_ = persistProxyConfigRaw(rt.configPath, prevRaw)
-		_ = upsertProxyConfigBlob([]byte(prevRaw), prevETag)
+		_ = persistProxyConfigAuthoritative(rt.configPath, prevRaw, bypassconf.ComputeETag([]byte(prevRaw)))
 		rt.pushRollbackLocked(entry)
 		return "", ProxyRulesConfig{}, proxyRollbackEntry{}, err
 	}
@@ -729,8 +743,7 @@ func RollbackProxyRules() (string, ProxyRulesConfig, proxyRollbackEntry, error) 
 	}
 	if rt.health != nil {
 		if err := rt.health.Update(prepared.effectiveCfg); err != nil {
-			_ = persistProxyConfigRaw(rt.configPath, prevRaw)
-			_ = upsertProxyConfigBlob([]byte(prevRaw), prevETag)
+			_ = persistProxyConfigAuthoritative(rt.configPath, prevRaw, bypassconf.ComputeETag([]byte(prevRaw)))
 			rt.pushRollbackLocked(entry)
 			return "", ProxyRulesConfig{}, proxyRollbackEntry{}, err
 		}
@@ -742,82 +755,6 @@ func RollbackProxyRules() (string, ProxyRulesConfig, proxyRollbackEntry, error) 
 		log.Printf("[PROXY][INFO] upstream changed by rollback from=%s to=%s", proxyTargetLabel(prevTarget), proxyTargetLabel(prepared.target))
 	}
 	return rt.etag, rt.cfg, entry, nil
-}
-
-func SyncProxyStorage() error {
-	rt := proxyRuntimeInstance()
-	if rt == nil {
-		return nil
-	}
-
-	rawFile, _, err := readFileMaybe(rt.configPath)
-	if err != nil {
-		return err
-	}
-	store := getLogsStatsStore()
-	if store == nil {
-		return nil
-	}
-	blobRaw, blobETag, found, err := store.GetConfigBlob(proxyConfigBlobKey)
-	if err != nil {
-		return err
-	}
-
-	if found {
-		prepared, err := prepareProxyRulesRaw(string(blobRaw))
-		if err != nil {
-			return err
-		}
-		rt.mu.Lock()
-		defer rt.mu.Unlock()
-
-		curRaw := rt.raw
-		curETag := rt.etag
-		if !bytes.Equal(rawFile, blobRaw) {
-			if err := persistProxyConfigRaw(rt.configPath, prepared.raw); err != nil {
-				return err
-			}
-		}
-		if strings.TrimSpace(blobETag) == "" {
-			blobETag = prepared.etag
-			if err := store.UpsertConfigBlob(proxyConfigBlobKey, []byte(prepared.raw), blobETag, time.Now().UTC()); err != nil {
-				return err
-			}
-		}
-		if err := rt.transport.Update(prepared.effectiveCfg); err != nil {
-			_ = persistProxyConfigRaw(rt.configPath, curRaw)
-			_ = upsertProxyConfigBlob([]byte(curRaw), curETag)
-			return err
-		}
-		rt.raw = prepared.raw
-		rt.etag = prepared.etag
-		rt.cfg = prepared.cfg
-		rt.effectiveCfg = prepared.effectiveCfg
-		rt.target = prepared.target
-		rt.errRes = prepared.errRes
-		setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
-		flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
-		if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
-			setter.SetFlushInterval(flushInterval)
-		}
-		if rt.health != nil {
-			if err := rt.health.Update(prepared.effectiveCfg); err != nil {
-				_ = persistProxyConfigRaw(rt.configPath, curRaw)
-				_ = upsertProxyConfigBlob([]byte(curRaw), curETag)
-				return err
-			}
-		}
-		return nil
-	}
-
-	if len(rawFile) == 0 {
-		return fmt.Errorf("proxy config file is empty: %s", rt.configPath)
-	}
-	prepared, err := prepareProxyRulesRaw(string(rawFile))
-	if err != nil {
-		return err
-	}
-	return store.UpsertConfigBlob(proxyConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC())
 }
 
 func ProxyProbe(raw string, upstreamName string, timeout time.Duration) (ProxyRulesConfig, string, int64, error) {
@@ -2199,15 +2136,14 @@ func persistProxyConfigRaw(path string, raw string) error {
 	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
 }
 
-func upsertProxyConfigBlob(raw []byte, etag string) error {
-	store := getLogsStatsStore()
-	if store == nil {
-		return nil
+func persistProxyConfigAuthoritative(path string, raw string, etag string) error {
+	if store := getLogsStatsStore(); store != nil {
+		if strings.TrimSpace(etag) == "" {
+			etag = bypassconf.ComputeETag([]byte(raw))
+		}
+		return store.UpsertConfigBlob(proxyRulesConfigBlobKey, []byte(raw), etag, time.Now().UTC())
 	}
-	if strings.TrimSpace(etag) == "" {
-		etag = bypassconf.ComputeETag(raw)
-	}
-	return store.UpsertConfigBlob(proxyConfigBlobKey, raw, etag, time.Now().UTC())
+	return persistProxyConfigRaw(path, raw)
 }
 
 func mustJSON(v any) string {

@@ -1,6 +1,6 @@
 {
   "default": {
-    "enabled": false,
+    "enabled": true,
     "dry_run": false,
     "mode": "suspicious",
     "path_prefixes": [

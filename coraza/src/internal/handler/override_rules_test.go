@@ -152,7 +152,7 @@ SecRule REQUEST_URI "@streq /api/orders/preview" "id:100001,phase:1,pass,nolog"
 		t.Fatalf("init sqlite store: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = InitLogsStatsStoreWithBackend("file", "", "", "", 0)
+		_ = InitLogsStatsStore(false, "", 0)
 	})
 
 	if err := SyncManagedOverrideRulesStorage(); err != nil {
@@ -194,7 +194,7 @@ func TestSyncManagedOverrideRulesStorageRestoresFileFromDB(t *testing.T) {
 		t.Fatalf("init sqlite store: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = InitLogsStatsStoreWithBackend("file", "", "", "", 0)
+		_ = InitLogsStatsStore(false, "", 0)
 	})
 
 	store := getLogsStatsStore()

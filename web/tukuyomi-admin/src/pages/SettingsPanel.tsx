@@ -76,7 +76,6 @@ type ListenerAdminConfig = {
     };
   };
   storage: {
-    backend: string;
     db_driver: string;
     db_path: string;
     db_retention_days: number;
@@ -180,8 +179,6 @@ type ListenerAdminRuntime = {
   server_max_queued_proxy_requests?: number;
   server_queued_proxy_request_timeout_ms?: number;
   proxy_engine_mode?: string;
-  storage_backend?: string;
-  storage_db_enabled?: boolean;
   storage_db_driver?: string;
   storage_db_path?: string;
   storage_db_retention_days?: number;
@@ -282,7 +279,6 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
       },
     },
     storage: {
-      backend: "file",
       db_driver: "sqlite",
       db_path: "logs/coraza/tukuyomi.db",
       db_retention_days: 30,
@@ -613,7 +609,7 @@ export default function SettingsPanel() {
       setETag(data.etag ?? "");
       setRestartRequired(data.restart_required !== false);
       setRuntime(data.runtime ?? null);
-      setConfigNotice(tx("Saved to config.json. Restart tukuyomi to apply global config changes from this panel."));
+      setConfigNotice(tx("Saved to DB app_config. Restart tukuyomi to apply global config changes from this panel."));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setConfigError(message);
@@ -641,12 +637,12 @@ export default function SettingsPanel() {
             <div>
               <div className="text-sm font-medium">{tx("Global Product Config")}</div>
               <p className="text-xs text-neutral-500">
-              {tx("Edit listener, runtime, storage, and observability settings from conf/config.json. These changes are saved immediately, but runtime behavior updates only after process restart.")}
+              {tx("Edit listener, runtime, storage policy, and observability settings stored in DB app_config. DB connection fields still come from the bootstrap config file.")}
               </p>
             </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-500">
             <span className="rounded bg-neutral-100 px-2 py-1">ETag {etag || "-"}</span>
-            <span className="rounded bg-neutral-100 px-2 py-1">{tx("Config File")}: {configFile || "-"}</span>
+            <span className="rounded bg-neutral-100 px-2 py-1">{tx("Bootstrap Config")}: {configFile || "-"}</span>
             <span className={`rounded px-2 py-1 ${restartRequired ? "bg-amber-100 text-amber-900" : "bg-green-100 text-green-800"}`}>
               {restartRequired ? tx("Restart required") : tx("No restart required")}
             </span>
@@ -673,7 +669,7 @@ export default function SettingsPanel() {
         ) : null}
 
         <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          {tx("Listener, runtime, storage, and observability settings here are startup config. Saving updates config.json only. Restart the process after saving.")}
+          {tx("Listener, runtime, storage policy, and observability settings here are restart-required startup config. Saving updates DB app_config; db_driver, db_path, and db_dsn stay bootstrap-only in config.json.")}
         </div>
 
         {configLoading ? (
@@ -1202,47 +1198,29 @@ export default function SettingsPanel() {
                 <div>
                   <div className="text-sm font-medium">{tx("Storage")}</div>
                   <p className="text-xs text-neutral-500">
-                    {tx("Persistence backend, database sync, and file retention settings for runtime state and audits.")}
+                    {tx("Database storage policy and bootstrap connection status. Driver, path, and DSN are read from the bootstrap config file before DB is opened.")}
                   </p>
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label={tx("Storage Backend")}>
-                    <select
-                      value={listenerAdminConfig.storage.backend}
-                      onChange={(e) => setListenerAdminConfig((current) => ({
-                        ...current,
-                        storage: { ...current.storage, backend: e.target.value },
-                      }))}
-                      className="w-full rounded border border-neutral-200 bg-white"
-                    >
-                      <option value="file">file</option>
-                      <option value="db">db</option>
-                    </select>
-                  </Field>
                   <Field label={tx("DB Driver")}>
-                    <select
-                      value={listenerAdminConfig.storage.db_driver}
-                      onChange={(e) => setListenerAdminConfig((current) => ({
-                        ...current,
-                        storage: { ...current.storage, db_driver: e.target.value },
-                      }))}
-                      className="w-full rounded border border-neutral-200 bg-white"
-                    >
+	                    <select
+	                      value={listenerAdminConfig.storage.db_driver}
+	                      disabled
+	                      className="w-full rounded border border-neutral-200 bg-neutral-100 text-neutral-600"
+	                    >
                       <option value="sqlite">sqlite</option>
                       <option value="mysql">mysql</option>
+                      <option value="pgsql">pgsql</option>
                     </select>
                   </Field>
                   <Field label={tx("DB Path")}>
-                    <input
-                      value={listenerAdminConfig.storage.db_path}
-                      onChange={(e) => setListenerAdminConfig((current) => ({
-                        ...current,
-                        storage: { ...current.storage, db_path: e.target.value },
-                      }))}
-                      className="w-full rounded border border-neutral-200 bg-white"
-                      placeholder="logs/coraza/tukuyomi.db"
-                    />
+	                    <input
+	                      value={listenerAdminConfig.storage.db_path}
+	                      readOnly
+	                      className="w-full rounded border border-neutral-200 bg-neutral-100 text-neutral-600"
+	                      placeholder="logs/coraza/tukuyomi.db"
+	                    />
                   </Field>
                   <NumberField
                     label={tx("DB Retention Days")}
@@ -1260,36 +1238,12 @@ export default function SettingsPanel() {
                       storage: { ...current.storage, db_sync_interval_sec: value },
                     }))}
                   />
-                  <NumberField
-                    label={tx("File Rotate Bytes")}
-                    value={listenerAdminConfig.storage.file_rotate_bytes}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      storage: { ...current.storage, file_rotate_bytes: value },
-                    }))}
-                  />
-                  <NumberField
-                    label={tx("File Max Bytes")}
-                    value={listenerAdminConfig.storage.file_max_bytes}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      storage: { ...current.storage, file_max_bytes: value },
-                    }))}
-                  />
-                  <NumberField
-                    label={tx("File Retention Days")}
-                    value={listenerAdminConfig.storage.file_retention_days}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      storage: { ...current.storage, file_retention_days: value },
-                    }))}
-                  />
                 </div>
 
                 <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                  {tx("DB DSN is treated as secret-backed config in this slice. Current status: {state}. Manage the literal value outside this panel for now.", {
-                    state: secretStatus.storage_db_dsn_configured ? tx("configured") : tx("not configured"),
-                  })}
+	                  {tx("DB connection is bootstrap-only. Current DSN status: {state}. Change db_driver, db_path, or db_dsn in the bootstrap config file, run migrations/import as needed, then restart.", {
+	                    state: secretStatus.storage_db_dsn_configured ? tx("configured") : tx("not configured"),
+	                  })}
                 </div>
               </section>
             </div>
@@ -1411,24 +1365,24 @@ export default function SettingsPanel() {
               {showAdvanced ? (
                 <div className="space-y-4">
                   <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                    {tx("Advanced paths and global support files affect the whole product. Validate before save and restart after changes.")}
+	                    {tx("Advanced paths and global support files affect the whole product. Runtime-owned JSON paths are seed/import/export locations after DB bootstrap. Validate before save and restart after changes.")}
                   </div>
 
                   <div className="grid gap-4 xl:grid-cols-2">
                     <section className="rounded border border-neutral-200 bg-neutral-50 p-4 space-y-3">
                       <div className="text-sm font-medium">{tx("Advanced Paths")}</div>
                       <div className="grid gap-3 sm:grid-cols-2">
-                        <Field label={tx("Proxy Config File")}><input value={listenerAdminConfig.paths.proxy_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, proxy_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Site Config File")}><input value={listenerAdminConfig.paths.site_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, site_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
+	                        <Field label={tx("Proxy Seed File")}><input value={listenerAdminConfig.paths.proxy_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, proxy_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
+                        <Field label={tx("Site Seed File")}><input value={listenerAdminConfig.paths.site_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, site_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
                         <Field label={tx("PHP Runtime Inventory File")}><input value={listenerAdminConfig.paths.php_runtime_inventory_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, php_runtime_inventory_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
                         <Field label={tx("Vhost Config File")}><input value={listenerAdminConfig.paths.vhost_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, vhost_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Scheduled Task Config File")}><input value={listenerAdminConfig.paths.scheduled_task_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, scheduled_task_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
+                        <Field label={tx("Scheduled Task Seed File")}><input value={listenerAdminConfig.paths.scheduled_task_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, scheduled_task_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
                         <Field label={tx("Security Audit File")}><input value={listenerAdminConfig.paths.security_audit_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, security_audit_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
                         <Field label={tx("Security Audit Blob Dir")}><input value={listenerAdminConfig.paths.security_audit_blob_dir} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, security_audit_blob_dir: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
                         <Field label={tx("Cache Store File")}><input value={listenerAdminConfig.paths.cache_store_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, cache_store_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
                         <Field label={tx("Rules File")}><input value={listenerAdminConfig.paths.rules_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, rules_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
                         <Field label={tx("Override Rules Dir")}><input value={listenerAdminConfig.paths.override_rules_dir} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, override_rules_dir: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Upstream Runtime File")}><input value={listenerAdminConfig.paths.upstream_runtime_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, upstream_runtime_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
+                        <Field label={tx("Upstream Runtime Seed File")}><input value={listenerAdminConfig.paths.upstream_runtime_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, upstream_runtime_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
                         <Field label={tx("Bypass File")}><input value={listenerAdminConfig.paths.bypass_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, bypass_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
                         <Field label={tx("Country Block File")}><input value={listenerAdminConfig.paths.country_block_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, country_block_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
                         <Field label={tx("Rate Limit File")}><input value={listenerAdminConfig.paths.rate_limit_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, rate_limit_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
@@ -1516,8 +1470,6 @@ export default function SettingsPanel() {
                   <RuntimeMetric label={tx("Current External Mode")} value={runtime.admin_external_mode} />
                   <RuntimeMetric label={tx("Current Read Only")} value={String(runtime.admin_read_only ?? "-")} />
                   <RuntimeMetric label={tx("Current Admin Rate Limit")} value={String(runtime.admin_rate_limit_enabled ?? "-")} />
-                  <RuntimeMetric label={tx("Current Storage Backend")} value={runtime.storage_backend} />
-                  <RuntimeMetric label={tx("Current DB Enabled")} value={String(runtime.storage_db_enabled ?? "-")} />
                   <RuntimeMetric label={tx("Current DB Driver")} value={runtime.storage_db_driver} />
                   <RuntimeMetric label={tx("Current DB Path")} value={runtime.storage_db_path} />
                   <RuntimeMetric label={tx("Current Tracing")} value={String(runtime.tracing_enabled ?? "-")} />

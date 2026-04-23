@@ -71,7 +71,7 @@ func PutRequestCountryMode(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
-	nextRaw, err := config.MarshalAppConfigFile(normalized)
+	nextRaw, err := marshalAppConfigBlob(normalized)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
@@ -154,7 +154,7 @@ func buildRequestCountryDBStatusWithETag(etag string) requestCountryDBStatusResp
 }
 
 func currentConfiguredRequestCountryMode() string {
-	cfg, err := config.LoadAppConfigFile(currentSettingsConfigPath())
+	cfg, err := loadSettingsAppConfigOnly()
 	if err == nil {
 		mode := strings.ToLower(strings.TrimSpace(cfg.RequestMeta.Country.Mode))
 		if mode == "" {

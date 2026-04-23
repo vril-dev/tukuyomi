@@ -19,7 +19,9 @@ func SyncAllStorageFromDB() error {
 		run  func() error
 	}
 	tasks := []task{
-		{name: "proxy-rules", run: SyncProxyStorage},
+		{name: "sites", run: SyncSiteStorage},
+		{name: "scheduled-tasks", run: SyncScheduledTaskStorage},
+		{name: "upstream-runtime", run: SyncUpstreamRuntimeStorage},
 		{name: "rules", run: SyncRuleFilesStorage},
 		{name: "override-rules", run: SyncManagedOverrideRulesStorage},
 		{name: "crs-disabled", run: SyncCRSDisabledStorage},

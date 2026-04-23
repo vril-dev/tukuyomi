@@ -59,6 +59,56 @@ func TestGetProxyBackendsReturnsRuntimeBackendList(t *testing.T) {
 	}
 }
 
+func TestGetProxyBackendsReportsDBRuntimeStorage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	runtimePath := filepath.Join(tmp, "conf", "upstream-runtime.json")
+	restore := saveUpstreamRuntimeFilePathForTest(t, runtimePath)
+	defer restore()
+
+	proxyPath := filepath.Join(tmp, "proxy.json")
+	if err := os.WriteFile(proxyPath, []byte(`{
+  "upstreams": [
+    { "name": "primary", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write proxy.json: %v", err)
+	}
+	if err := InitProxyRuntime(proxyPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/tukuyomi-api/proxy-backends", nil)
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = req
+
+	GetProxyBackends(ctx)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out proxyBackendsStatusResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if got, want := out.Storage, "db:upstream_runtime"; got != want {
+		t.Fatalf("storage=%q want=%q", got, want)
+	}
+	if _, err := os.Stat(runtimePath); !os.IsNotExist(err) {
+		t.Fatalf("upstream runtime seed file should not be restored, stat err=%v", err)
+	}
+}
+
 func TestPutAndDeleteProxyBackendRuntimeOverrideRoundTrip(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

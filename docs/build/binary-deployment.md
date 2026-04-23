@@ -47,7 +47,6 @@ Seed/import files normally used before the first DB import:
 
 - `conf/config.json`
 - `conf/proxy.json`
-- `conf/cache-store.json`
 - `conf/cache-rules.json`
 - `conf/waf-bypass.json`
 - `conf/waf-bypass.sample.json`
@@ -89,7 +88,6 @@ Optional seed files when you want to import managed bypass override rules:
 
 Additional files when you want managed GeoIP country updates:
 
-- `data/geoip/`
 - `scripts/update_country_db.sh`
 
 Install example:
@@ -98,7 +96,6 @@ Install example:
 sudo install -d -m 755 \
   /opt/tukuyomi/bin \
   /opt/tukuyomi/conf \
-  /opt/tukuyomi/data/geoip \
   /opt/tukuyomi/rules \
   /opt/tukuyomi/scripts \
   /opt/tukuyomi/logs/coraza \
@@ -107,13 +104,9 @@ sudo install -d -m 755 \
 sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
 
-for f in config.json proxy.json sites.json scheduled-tasks.json upstream-runtime.json cache-store.json cache-rules.json waf-bypass.json waf-bypass.sample.json country-block.json rate-limit.json bot-defense.json semantic.json notifications.json ip-reputation.json; do
+for f in config.json proxy.json sites.json scheduled-tasks.json upstream-runtime.json cache-rules.json waf-bypass.json waf-bypass.sample.json country-block.json rate-limit.json bot-defense.json semantic.json notifications.json ip-reputation.json; do
   sudo install -m 644 "data/conf/${f}" "/opt/tukuyomi/conf/${f}"
 done
-
-if [[ -f data/geoip/README.md ]]; then
-  sudo install -m 644 data/geoip/README.md /opt/tukuyomi/data/geoip/README.md
-fi
 
 sudo install -m 644 data/rules/tukuyomi.conf /opt/tukuyomi/rules/tukuyomi.conf
 sudo install -d -m 755 /opt/tukuyomi/rules/crs
@@ -128,15 +121,15 @@ Notes:
 - `proxy.json` is seed/import/export material for DB `proxy_rules`
 - `rules/tukuyomi.conf` and `rules/crs/**` are seed/import material for DB `waf_rule_assets`
 - `sites.json`, `scheduled-tasks.json`, `upstream-runtime.json`, policy JSON,
-  cache JSON, WAF bypass JSON, and PHP-FPM JSON manifests are DB seed/export
-  artifacts after DB bootstrap
+  cache-rules JSON, WAF bypass JSON, and PHP-FPM JSON manifests are DB
+  seed/export artifacts after DB bootstrap
 - render or mount `config.json` from your secret manager or config-management layer in production for `storage.db_driver`, `storage.db_path`, and `storage.db_dsn`
 - run `make db-migrate`, then `make crs-install` to install/import WAF rule assets, then `make db-import` for the remaining seed material before first start
 - the embedded `Settings` page edits DB `app_config`; restart the service after listener/runtime/storage policy/observability changes
 - the public release bundle ships a companion `bin/geoipupdate` binary for `Options -> GeoIP Update -> Update now`
 - `GEOIPUPDATE_BIN` remains available if you want to override the bundled updater path
 - the official managed-country refresh wrapper is `./scripts/update_country_db.sh`
-- `data/geoip/country.mmdb`, `data/geoip/GeoIP.conf`, and `data/geoip/update-status.json` are operator-managed runtime artifacts; do not bake them into generic release bundles
+- managed GeoIP country DB, `GeoIP.conf`, and update status are DB-backed after `make db-import`; do not treat `data/geoip/*` as required production runtime files
 - managed bypass override rules are DB `override_rules`; `conf/rules/*.conf` is seed-only when importing a new DB
 - `extra_rule` values remain logical compatibility references to DB-managed override rules
 

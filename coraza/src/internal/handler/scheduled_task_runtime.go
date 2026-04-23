@@ -69,6 +69,7 @@ type ScheduledTaskRuntimePaths struct {
 	ConfigStorage string `json:"config_storage,omitempty"`
 	RuntimeDir    string `json:"runtime_dir"`
 	StateFile     string `json:"state_file"`
+	StateStorage  string `json:"state_storage,omitempty"`
 	LogDir        string `json:"log_dir"`
 }
 
@@ -392,6 +393,9 @@ func SyncScheduledTaskStorage() error {
 }
 
 func ScheduledTaskStatusSnapshot(configPath string, cfg ScheduledTaskConfigFile) ([]ScheduledTaskStatus, error) {
+	if store := getLogsStatsStore(); store != nil {
+		return scheduledTaskStatusSnapshotFromDB(store, cfg)
+	}
 	var out []ScheduledTaskStatus
 	err := withScheduledTaskStateLocked(configPath, func(state *scheduledTaskStateFile) error {
 		if state.Tasks == nil {
@@ -798,13 +802,18 @@ func scheduledTaskLogPath(configPath string, taskName string) string {
 func CurrentScheduledTaskRuntimePaths() ScheduledTaskRuntimePaths {
 	configPath := currentScheduledTaskConfigPath()
 	runtimeDir := scheduledTaskRuntimeDir(configPath)
-	return ScheduledTaskRuntimePaths{
+	paths := ScheduledTaskRuntimePaths{
 		ConfigFile:    configPath,
 		ConfigStorage: scheduledTaskConfigStorageLabel(configPath),
 		RuntimeDir:    runtimeDir,
-		StateFile:     scheduledTaskStatePath(configPath),
 		LogDir:        filepath.Join(runtimeDir, "logs"),
 	}
+	if getLogsStatsStore() != nil {
+		paths.StateStorage = scheduledTaskStateStorageLabel
+		return paths
+	}
+	paths.StateFile = scheduledTaskStatePath(configPath)
+	return paths
 }
 
 func scheduledTaskConfigStorageLabel(configPath string) string {
@@ -874,6 +883,9 @@ func withScheduledTaskStateLocked(configPath string, fn func(*scheduledTaskState
 }
 
 func updateScheduledTaskStatus(configPath string, taskName string, fn func(*ScheduledTaskStatus)) error {
+	if store := getLogsStatsStore(); store != nil {
+		return store.updateScheduledTaskRuntimeStatus(taskName, fn)
+	}
 	return withScheduledTaskStateLocked(configPath, func(state *scheduledTaskStateFile) error {
 		status := state.Tasks[taskName]
 		status.Name = taskName
@@ -887,6 +899,9 @@ func pruneScheduledTaskState(configPath string, cfg ScheduledTaskConfigFile) err
 	allowed := make(map[string]struct{}, len(cfg.Tasks))
 	for _, task := range cfg.Tasks {
 		allowed[task.Name] = struct{}{}
+	}
+	if store := getLogsStatsStore(); store != nil {
+		return store.pruneScheduledTaskRuntimeStatuses(allowed)
 	}
 	return withScheduledTaskStateLocked(configPath, func(state *scheduledTaskStateFile) error {
 		changed := false
@@ -944,6 +959,42 @@ func scheduledTaskPIDAlive(pid int) bool {
 	}
 	err := syscall.Kill(pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+func scheduledTaskStatusSnapshotFromDB(store *wafEventStore, cfg ScheduledTaskConfigFile) ([]ScheduledTaskStatus, error) {
+	state, err := store.loadScheduledTaskRuntimeStatuses()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ScheduledTaskStatus, 0, len(cfg.Tasks))
+	for _, task := range cfg.Tasks {
+		status := state[task.Name]
+		if status.Name == "" {
+			status.Name = task.Name
+		}
+		if status.Running && status.PID > 0 && !scheduledTaskPIDAlive(status.PID) {
+			finishedAt := time.Now().UTC()
+			updated, markErr := store.markScheduledTaskStatusAbandoned(task.Name, status.PID, finishedAt)
+			if markErr != nil {
+				return nil, markErr
+			}
+			if updated {
+				status.Running = false
+				status.PID = 0
+				if status.LastFinishedAt == "" {
+					status.LastFinishedAt = finishedAt.Format(time.RFC3339Nano)
+				}
+				if status.LastResult == "" || status.LastResult == "running" {
+					status.LastResult = "abandoned"
+				}
+			}
+		}
+		out = append(out, status)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
 }
 
 func normalizeScheduledTaskCommand(task ScheduledTaskRecord, inventory PHPRuntimeInventoryFile) string {

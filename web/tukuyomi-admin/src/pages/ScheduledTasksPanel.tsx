@@ -314,7 +314,7 @@ export default function ScheduledTasksPanel() {
           <div>{tx("Saving a task does not execute it.")}</div>
           <div>{tx("Binary deployments need a systemd timer.")}</div>
           <div>{tx("Docker deployments need the scheduled-task-runner sidecar.")}</div>
-          <div>{tx("ui-preview-up starts its own preview scheduler sidecar and resets preview config and DB state unless UI_PREVIEW_PERSIST=1.")}</div>
+          <div>{tx("ui-preview-up starts its own preview scheduler sidecar and resets preview DB state unless UI_PREVIEW_PERSIST=1.")}</div>
           <div>{tx("Log Directory")}: <code>{runtimePaths.log_dir || "-"}</code></div>
         </div>
 

@@ -20,10 +20,10 @@
 `conf/scheduled-tasks.json` は空 DB の seed/export file であり、bootstrap 後の
 runtime source of truth ではありません。
 
-生成される runtime state は `data/scheduled-tasks/` にあります。
+最終実行状態は `scheduled_task_runtime_state` DB table に入ります。
 
-- `state.json`
-  - 最終実行状態
+生成される runtime artifact は引き続き `data/scheduled-tasks/` にあります。
+
 - `locks/`
   - task ごとの lock file
 - `logs/`
@@ -84,7 +84,8 @@ bundled PHP runtime を使いたいなら、その `php` wrapper を command lin
 - normalized `scheduled_tasks` DB domain を直接読む。domain が無い時だけ `conf/scheduled-tasks.json` から seed する
 - 現在 minute に一致する job だけを実行する
 - 各 task を `/bin/sh -lc` で起動する
-- state/log を `data/scheduled-tasks/` に記録する
+- task status を `scheduled_task_runtime_state` に記録する
+- lock/log artifact を `data/scheduled-tasks/` に記録する
 
 cron daemon 自体は持ちません。platform 側 scheduler から起動してください。
 
@@ -166,20 +167,20 @@ make ui-preview-up
 make ui-preview-down
 ```
 
-preview は `conf/scheduled-tasks.ui-preview.json` を使うので、preview UI からの変更は通常の DB-backed scheduled-task config を汚しません。
+preview は通常系とは別の preview 専用 DB-backed scheduled-task config を使うので、preview UI からの変更は通常の runtime config を汚しません。
 
-既定では `ui-preview-up` のたびにその preview config は `{"tasks":[]}` へ初期化され、preview 専用 SQLite DB も削除されます。以前の preview task や DB row は引き継ぎません。
+既定では `ui-preview-up` のたびに preview 専用 SQLite DB を作り直します。以前の preview task や DB row は引き継ぎません。
 
-`down/up` をまたいで preview 編集結果を残したい時は、これを使います。
+`down/up` をまたいで preview 編集結果を残したい時は、preview 用 DB state を保持します。
 
 ```bash
 UI_PREVIEW_PERSIST=1 make ui-preview-up
 UI_PREVIEW_PERSIST=1 make ui-preview-down
 ```
 
-`UI_PREVIEW_PERSIST=1` では `conf/config.ui-preview.json` と preview SQLite DB も保持されるので、`Settings` で保存した listener 変更を preview の `down/up` で確認できます。
+`UI_PREVIEW_PERSIST=1` では preview SQLite DB を保持するので、`Settings` で保存した listener 変更を preview の `down/up` で確認できます。
 
-split preview listener も使えますが、preview config の bind は `:80`, `:9090` のような host 到達可能な形にしてください。`localhost:80`, `127.0.0.1:80`, `[::1]:9090` のような loopback bind は Docker publish と噛み合わないため、`ui-preview-up` は明示エラーで止めます。
+split preview listener も使えますが、preview listener 設定の bind は `:80`, `:9090` のような host 到達可能な形にしてください。`localhost:80`, `127.0.0.1:80`, `[::1]:9090` のような loopback bind は Docker publish と噛み合わないため、`ui-preview-up` は明示エラーで止めます。
 
 binary、Docker sidecar、preview sidecar の 3 経路をまとめて回す回帰確認はこれです。
 
@@ -228,6 +229,6 @@ container image の command:
 
 operator flow:
 
-1. `Options -> GeoIP Update` から `GeoIP.conf` を upload
+1. `Options -> GeoIP Update` から `GeoIP.conf` を upload（DB mode では runtime DB authority に保存されます）
 2. `Update now` を 1 回実行して成功を確認
 3. deployment 形態に応じて上記いずれかの command を呼ぶ scheduled task を追加

@@ -26,8 +26,14 @@ services:
       dockerfile: Dockerfile
     environment:
       - WAF_CONFIG_FILE=${WAF_CONFIG_FILE:-conf/config.json}
+      - WAF_STORAGE_DB_DRIVER=${WAF_STORAGE_DB_DRIVER:-}
+      - WAF_STORAGE_DB_DSN=${WAF_STORAGE_DB_DSN:-}
+      - WAF_STORAGE_DB_PATH=${WAF_STORAGE_DB_PATH:-}
+      - WAF_STORAGE_DB_RETENTION_DAYS=${WAF_STORAGE_DB_RETENTION_DAYS:-}
+      - WAF_STORAGE_DB_SYNC_INTERVAL_SEC=${WAF_STORAGE_DB_SYNC_INTERVAL_SEC:-}
       - TUKUYOMI_PPROF_ADDR=${TUKUYOMI_PPROF_ADDR:-}
     volumes:
+      - ./data:/app/data
       - ./data/rules:/app/rules
       - ./data/conf:/app/conf
       - ./data/geoip:/app/data/geoip
@@ -55,7 +61,13 @@ services:
       dockerfile: Dockerfile
     environment:
       - WAF_CONFIG_FILE=${WAF_CONFIG_FILE:-conf/config.json}
+      - WAF_STORAGE_DB_DRIVER=${WAF_STORAGE_DB_DRIVER:-}
+      - WAF_STORAGE_DB_DSN=${WAF_STORAGE_DB_DSN:-}
+      - WAF_STORAGE_DB_PATH=${WAF_STORAGE_DB_PATH:-}
+      - WAF_STORAGE_DB_RETENTION_DAYS=${WAF_STORAGE_DB_RETENTION_DAYS:-}
+      - WAF_STORAGE_DB_SYNC_INTERVAL_SEC=${WAF_STORAGE_DB_SYNC_INTERVAL_SEC:-}
     volumes:
+      - ./data:/app/data
       - ./data/rules:/app/rules
       - ./data/conf:/app/conf
       - ./data/geoip:/app/data/geoip

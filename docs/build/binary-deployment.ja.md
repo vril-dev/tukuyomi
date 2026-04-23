@@ -47,7 +47,6 @@ make release-linux-all VERSION=v0.8.0
 
 - `conf/config.json`
 - `conf/proxy.json`
-- `conf/cache-store.json`
 - `conf/cache-rules.json`
 - `conf/waf-bypass.json`
 - `conf/waf-bypass.sample.json`
@@ -88,7 +87,6 @@ managed bypass override rule を import する場合の任意 seed:
 
 managed GeoIP country update も使う場合の追加物:
 
-- `data/geoip/`
 - `scripts/update_country_db.sh`
 
 配置例:
@@ -97,7 +95,6 @@ managed GeoIP country update も使う場合の追加物:
 sudo install -d -m 755 \
   /opt/tukuyomi/bin \
   /opt/tukuyomi/conf \
-  /opt/tukuyomi/data/geoip \
   /opt/tukuyomi/rules \
   /opt/tukuyomi/scripts \
   /opt/tukuyomi/logs/coraza \
@@ -106,13 +103,9 @@ sudo install -d -m 755 \
 sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
 
-for f in config.json proxy.json sites.json scheduled-tasks.json upstream-runtime.json cache-store.json cache-rules.json waf-bypass.json waf-bypass.sample.json country-block.json rate-limit.json bot-defense.json semantic.json notifications.json ip-reputation.json; do
+for f in config.json proxy.json sites.json scheduled-tasks.json upstream-runtime.json cache-rules.json waf-bypass.json waf-bypass.sample.json country-block.json rate-limit.json bot-defense.json semantic.json notifications.json ip-reputation.json; do
   sudo install -m 644 "data/conf/${f}" "/opt/tukuyomi/conf/${f}"
 done
-
-if [[ -f data/geoip/README.md ]]; then
-  sudo install -m 644 data/geoip/README.md /opt/tukuyomi/data/geoip/README.md
-fi
 
 sudo install -m 644 data/rules/tukuyomi.conf /opt/tukuyomi/rules/tukuyomi.conf
 sudo install -d -m 755 /opt/tukuyomi/rules/crs
@@ -127,15 +120,15 @@ sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 - `proxy.json` は DB `proxy_rules` の seed/import/export material です
 - `rules/tukuyomi.conf` と `rules/crs/**` は DB `waf_rule_assets` の seed/import material です
 - `sites.json`、`scheduled-tasks.json`、`upstream-runtime.json`、policy JSON、
-  cache JSON、WAF bypass JSON、PHP-FPM JSON manifest は DB bootstrap 後は
-  DB seed/export artifact です
+  cache-rules JSON、WAF bypass JSON、PHP-FPM JSON manifest は DB bootstrap
+  後は DB seed/export artifact です
 - 本番では `storage.db_driver`、`storage.db_path`、`storage.db_dsn` 用に `config.json` を secret manager / config management から render / mount してください
 - 初回起動前に `make db-migrate`、`make crs-install` の順で WAF rule asset を install/import し、その後残りの seed material 用に `make db-import` を実行します
 - embedded `Settings` 画面は DB `app_config` を編集します。listener/runtime/storage policy/observability 系の変更後は service を restart してください
 - public release bundle には `Options -> GeoIP Update -> Update now` 用の companion `bin/geoipupdate` が同梱されます
 - `GEOIPUPDATE_BIN` を使えば bundled updater path を override できます
 - managed country refresh 用の official wrapper は `./scripts/update_country_db.sh` です
-- `data/geoip/country.mmdb`, `data/geoip/GeoIP.conf`, `data/geoip/update-status.json` は operator-managed runtime artifact なので、generic な release bundle へ bake しないでください
+- managed GeoIP country DB、`GeoIP.conf`、update status は `make db-import` 後は DB-backed です。`data/geoip/*` を本番必須 runtime file として扱わないでください
 - managed bypass override rule は DB `override_rules` です。`conf/rules/*.conf` は新規DB import時のseed専用です
 - `extra_rule` の値は DB-managed override rule への logical compatibility reference として残ります
 

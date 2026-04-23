@@ -143,8 +143,8 @@ authority after their normalized DB rows exist. After `make db-migrate`,
 `make crs-install`, and `make db-import`, production runtime can remove
 `data/conf/*.json` except `data/conf/config.json`, `data/conf/rules/**`,
 `data/rules/**`, and PHP-FPM JSON manifests such as `inventory.json`,
-`vhosts.json`, `runtime.json`, and `modules.json`. GeoIP files are separate
-operator-managed runtime artifacts.
+`vhosts.json`, `runtime.json`, and `modules.json`. GeoIP managed assets are
+also DB-backed after import.
 
 ### 4. `schema_migrations`
 

@@ -284,12 +284,12 @@ export default function OptionsPanel() {
           <div className="space-y-3">
             <div>
               <h3 className="text-sm font-semibold">{tx("Country DB")}</h3>
-              <p className="text-sm text-neutral-500">{tx("Upload a managed .mmdb country database artifact here. Switch the runtime country resolution mode below after the artifact is ready.")}</p>
+              <p className="text-sm text-neutral-500">{tx("Upload the managed .mmdb country database here. In DB mode the artifact is stored in runtime DB authority, not as a persistent file.")}</p>
             </div>
             <div className="grid gap-3 md:grid-cols-2 text-sm">
               <div>
-                <div className="text-xs text-neutral-500">{tx("Managed Path")}</div>
-                <code className="break-all">{requestCountryDB?.managed_path || "data/geoip/country.mmdb"}</code>
+                <div className="text-xs text-neutral-500">{tx("Storage")}</div>
+                <code className="break-all">{requestCountryDB?.managed_path || "db:request_country_mmdb_asset"}</code>
               </div>
               <div>
                 <div className="text-xs text-neutral-500">{tx("Installed")}</div>
@@ -334,12 +334,12 @@ export default function OptionsPanel() {
           <div className="border-t border-neutral-200 pt-4 space-y-3">
             <div>
               <h3 className="text-sm font-semibold">{tx("GeoIP Update")}</h3>
-              <p className="text-sm text-neutral-500">{tx("Upload a managed GeoIP.conf here, then run Update now manually or call the same updater command from Scheduled Tasks.")}</p>
+              <p className="text-sm text-neutral-500">{tx("Upload the managed GeoIP.conf here, then run Update now manually or from Scheduled Tasks. In DB mode the config and update state are stored in DB authority.")}</p>
             </div>
             <div className="grid gap-3 md:grid-cols-2 text-sm">
               <div>
-                <div className="text-xs text-neutral-500">{tx("Managed Config Path")}</div>
-                <code className="break-all">{requestCountryUpdate?.managed_config_path || "data/geoip/GeoIP.conf"}</code>
+                <div className="text-xs text-neutral-500">{tx("Config Storage")}</div>
+                <code className="break-all">{requestCountryUpdate?.managed_config_path || "db:request_country_geoip_config"}</code>
               </div>
               <div>
                 <div className="text-xs text-neutral-500">{tx("Updater Available")}</div>

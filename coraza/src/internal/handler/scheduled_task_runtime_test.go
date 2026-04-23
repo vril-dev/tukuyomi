@@ -156,6 +156,12 @@ func TestInitScheduledTaskRuntimeLoadsDBBlobWithoutRestoringFile(t *testing.T) {
 	if got, want := paths.ConfigStorage, "db:scheduled_tasks"; got != want {
 		t.Fatalf("config_storage=%q want=%q", got, want)
 	}
+	if paths.StateFile != "" {
+		t.Fatalf("state_file=%q want empty in db mode", paths.StateFile)
+	}
+	if got, want := paths.StateStorage, scheduledTaskStateStorageLabel; got != want {
+		t.Fatalf("state_storage=%q want=%q", got, want)
+	}
 }
 
 func TestRunDueScheduledTasksExecutesCommandOncePerMinute(t *testing.T) {
@@ -243,5 +249,107 @@ func TestRunDueScheduledTasksExecutesCommandOncePerMinute(t *testing.T) {
 	}
 	if statuses[0].ResolvedCommand != command {
 		t.Fatalf("resolved_command=%q want=%q", statuses[0].ResolvedCommand, command)
+	}
+}
+
+func TestRunDueScheduledTasksPersistsStatusInDBWhenStoreEnabled(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	}()
+
+	outputPath := filepath.Join(tmp, "scheduled-task-output.log")
+	command := "printf success >> " + shellQuoteCommandPart(outputPath)
+	cfg := ScheduledTaskConfigFile{
+		Tasks: []ScheduledTaskRecord{
+			{
+				Name:       "db-task",
+				Enabled:    true,
+				Schedule:   "* * * * *",
+				Timezone:   "UTC",
+				Command:    command,
+				TimeoutSec: 30,
+			},
+		},
+	}
+	store := getLogsStatsStore()
+	if _, err := store.writeScheduledTaskConfigVersion("", cfg, configVersionSourceImport, "", "scheduled task db test", 0); err != nil {
+		t.Fatalf("writeScheduledTaskConfigVersion: %v", err)
+	}
+
+	configPath := filepath.Join(tmp, "conf", "scheduled-tasks.json")
+	if err := InitScheduledTaskRuntime(configPath, 2); err != nil {
+		t.Fatalf("InitScheduledTaskRuntime: %v", err)
+	}
+
+	now := time.Date(2026, 4, 23, 11, 0, 0, 0, time.UTC)
+	if err := RunDueScheduledTasks(now); err != nil {
+		t.Fatalf("RunDueScheduledTasks: %v", err)
+	}
+
+	statuses, err := ScheduledTaskStatusSnapshot(configPath, currentScheduledTaskConfig())
+	if err != nil {
+		t.Fatalf("ScheduledTaskStatusSnapshot: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("status count=%d want=1", len(statuses))
+	}
+	if got, want := statuses[0].LastResult, "success"; got != want {
+		t.Fatalf("last_result=%q want=%q", got, want)
+	}
+
+	state, err := store.loadScheduledTaskRuntimeStatuses()
+	if err != nil {
+		t.Fatalf("loadScheduledTaskRuntimeStatuses: %v", err)
+	}
+	if got, want := state["db-task"].LastResult, "success"; got != want {
+		t.Fatalf("db last_result=%q want=%q", got, want)
+	}
+	if _, err := os.Stat(scheduledTaskStatePath(configPath)); !os.IsNotExist(err) {
+		t.Fatalf("state file should not exist in db mode, stat err=%v", err)
+	}
+}
+
+func TestPruneScheduledTaskStateRemovesDBRowsWhenDBBacked(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	}()
+
+	store := getLogsStatsStore()
+	for _, name := range []string{"task-a", "task-b"} {
+		taskName := name
+		if err := store.updateScheduledTaskRuntimeStatus(taskName, func(status *ScheduledTaskStatus) {
+			status.Name = taskName
+			status.LastResult = "success"
+		}); err != nil {
+			t.Fatalf("updateScheduledTaskRuntimeStatus(%s): %v", taskName, err)
+		}
+	}
+
+	configPath := filepath.Join(tmp, "conf", "scheduled-tasks.json")
+	if err := pruneScheduledTaskState(configPath, ScheduledTaskConfigFile{
+		Tasks: []ScheduledTaskRecord{{Name: "task-a"}},
+	}); err != nil {
+		t.Fatalf("pruneScheduledTaskState: %v", err)
+	}
+
+	state, err := store.loadScheduledTaskRuntimeStatuses()
+	if err != nil {
+		t.Fatalf("loadScheduledTaskRuntimeStatuses: %v", err)
+	}
+	if _, ok := state["task-a"]; !ok {
+		t.Fatalf("task-a state missing after prune")
+	}
+	if _, ok := state["task-b"]; ok {
+		t.Fatalf("task-b state should be pruned")
 	}
 }

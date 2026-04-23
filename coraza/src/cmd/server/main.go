@@ -29,8 +29,14 @@ func main() {
 		case "db-import":
 			runDBImportCommand()
 			return
+		case "db-import-preview":
+			runDBImportPreviewCommand()
+			return
 		case "db-import-waf-rule-assets":
 			runDBImportWAFRuleAssetsCommand()
+			return
+		case "preview-print-topology":
+			runPreviewPrintTopologyCommand()
 			return
 		case "run-scheduled-tasks":
 			runScheduledTasksCommand()
@@ -414,6 +420,10 @@ func main() {
 
 func runUpdateCountryDBCommand() {
 	config.LoadEnv()
+	initRuntimeDBStoreOrFatal("[COUNTRY_DB][DB]")
+	if err := handler.SyncAppConfigStorage(); err != nil {
+		log.Fatalf("[COUNTRY_DB][CONFIG][FATAL] sync failed: %v", err)
+	}
 	if err := handler.RunManagedRequestCountryUpdateNow(context.Background()); err != nil {
 		log.Fatalf("[FATAL] update-country-db failed: %v", err)
 	}

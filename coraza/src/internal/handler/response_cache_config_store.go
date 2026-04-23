@@ -3,7 +3,6 @@ package handler
 import (
 	"database/sql"
 	"fmt"
-	"os"
 	"strings"
 
 	"tukuyomi/internal/bypassconf"
@@ -97,24 +96,7 @@ func loadOrSeedResponseCacheConfig(store *wafEventStore, path string) ([]byte, c
 		return raw, rec, found, err
 	}
 
-	raw = nil
-	if strings.TrimSpace(path) != "" {
-		fileRaw, fileErr := os.ReadFile(path)
-		if fileErr != nil && !os.IsNotExist(fileErr) {
-			return nil, configVersionRecord{}, false, fileErr
-		}
-		if fileErr == nil && strings.TrimSpace(string(fileRaw)) != "" {
-			raw = fileRaw
-		}
-	}
-	if len(raw) == 0 {
-		defaultRaw, marshalErr := marshalResponseCacheConfig(normalizeResponseCacheConfig(responseCacheConfig{}))
-		if marshalErr != nil {
-			return nil, configVersionRecord{}, false, marshalErr
-		}
-		raw = defaultRaw
-	}
-	prepared, err := prepareResponseCacheRaw(string(raw))
+	prepared, err := defaultPreparedResponseCacheConfig()
 	if err != nil {
 		return nil, configVersionRecord{}, false, fmt.Errorf("prepare response cache seed: %w", err)
 	}
@@ -134,4 +116,12 @@ func responseCacheExpectedETag(ifMatch string, currentRaw string, currentETag st
 		return currentETag
 	}
 	return ifMatch
+}
+
+func defaultPreparedResponseCacheConfig() (preparedResponseCacheConfig, error) {
+	raw, err := marshalResponseCacheConfig(normalizeResponseCacheConfig(responseCacheConfig{}))
+	if err != nil {
+		return preparedResponseCacheConfig{}, err
+	}
+	return prepareResponseCacheRaw(string(raw))
 }

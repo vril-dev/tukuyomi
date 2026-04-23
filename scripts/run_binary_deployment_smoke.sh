@@ -36,6 +36,51 @@ fail() {
   exit 1
 }
 
+stage_runtime_db_if_needed() {
+  local db_path="${RUNTIME_DIR}/db/tukuyomi.db"
+  local needs_seed="1"
+
+  if [[ -f "${db_path}" ]]; then
+    needs_seed="$(python3 - "${db_path}" <<'PY'
+import sqlite3
+import sys
+
+path = sys.argv[1]
+try:
+    conn = sqlite3.connect(path)
+    cur = conn.cursor()
+    cur.execute("select count(*) from php_runtime_inventory")
+    count = cur.fetchone()[0]
+    print("0" if count > 0 else "1")
+except Exception:
+    print("1")
+finally:
+    try:
+        conn.close()
+    except Exception:
+        pass
+PY
+)"
+  fi
+
+  if [[ "${needs_seed}" != "1" ]]; then
+    return 0
+  fi
+
+  log "seeding staged runtime DB with preview bootstrap defaults"
+  (
+    cd "${RUNTIME_DIR}"
+    set -a
+    source "${ENV_FILE}"
+    set +a
+    ./bin/tukuyomi db-migrate
+    ./bin/tukuyomi db-import-waf-rule-assets
+    UI_PREVIEW_PUBLIC_ADDR=":${BINARY_DEPLOYMENT_PROXY_PORT}" \
+    UI_PREVIEW_ADMIN_ADDR="" \
+    ./bin/tukuyomi db-import-preview
+  )
+}
+
 wait_for_http_code() {
   local expected_code="$1"
   local url="$2"
@@ -110,7 +155,7 @@ log "staging runtime tree at ${RUNTIME_DIR}"
 install -d -m 755 \
   "${RUNTIME_DIR}/bin" \
   "${RUNTIME_DIR}/conf" \
-  "${RUNTIME_DIR}/data/geoip" \
+  "${RUNTIME_DIR}/db" \
   "${RUNTIME_DIR}/data/scheduled-tasks" \
   "${RUNTIME_DIR}/rules" \
   "${RUNTIME_DIR}/scripts" \
@@ -121,8 +166,8 @@ install -d -m 755 \
 install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${RUNTIME_DIR}/bin/tukuyomi"
 install -m 755 "${ROOT_DIR}/scripts/update_country_db.sh" "${RUNTIME_DIR}/scripts/update_country_db.sh"
 rsync -a --exclude '*.bak' "${ROOT_DIR}/data/conf/" "${RUNTIME_DIR}/conf/"
-if [[ -f "${ROOT_DIR}/data/geoip/README.md" ]]; then
-  install -m 644 "${ROOT_DIR}/data/geoip/README.md" "${RUNTIME_DIR}/data/geoip/README.md"
+if [[ -f "${ROOT_DIR}/data/db/tukuyomi.db" ]]; then
+  rsync -a "${ROOT_DIR}/data/db/tukuyomi.db"* "${RUNTIME_DIR}/db/"
 fi
 if [[ -f "${ROOT_DIR}/data/scheduled-tasks/README.md" ]]; then
   install -m 644 "${ROOT_DIR}/data/scheduled-tasks/README.md" "${RUNTIME_DIR}/data/scheduled-tasks/README.md"
@@ -151,6 +196,8 @@ jq \
    | .admin.api_auth_disable = false' \
   "${RUNTIME_DIR}/conf/config.json" > "${RUNTIME_DIR}/conf/config.json.tmp"
 mv "${RUNTIME_DIR}/conf/config.json.tmp" "${RUNTIME_DIR}/conf/config.json"
+
+stage_runtime_db_if_needed
 
 log "starting local proxy echo upstream on 127.0.0.1:${BINARY_DEPLOYMENT_UPSTREAM_PORT}"
 python3 "${ROOT_DIR}/scripts/proxy_echo_server.py" "${BINARY_DEPLOYMENT_UPSTREAM_PORT}" >"${UPSTREAM_LOG}" 2>&1 &

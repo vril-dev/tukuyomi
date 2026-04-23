@@ -547,7 +547,7 @@ Host scope precedence is exact `host:port`, then bare `host`, then `default`. Ho
 - matched countries are blocked with `403` before WAF inspection
 - country resolution is now handled by `request_metadata_resolvers`
 - `header` mode trusts `X-Country-Code`
-- `mmdb` mode resolves from installed `country.mmdb`
+- `mmdb` mode resolves from the DB-managed country MMDB asset loaded into runtime
 - host scope precedence is exact `host:port`, then bare `host`, then `default`
 
 ### Rate Limit
@@ -646,10 +646,11 @@ curl -s -H "X-API-Key: <your-api-key>" \
 
 ### Cache Feature
 
-Cache rules and internal cache store settings are versioned in DB tables after
-seed/import. `data/conf/cache-rules.json` and `data/conf/cache-store.json` are
-seed/import material for an empty DB, not runtime authority once the normalized
-rows exist.
+Cache rules and internal cache store settings are versioned in DB tables.
+`data/conf/cache-rules.json` remains seed/import material for an empty DB.
+Internal cache store settings seed from DB defaults when the normalized row is
+missing, and `data/conf/cache-store.json` is only relevant for explicit no-DB
+fallback runs.
 
 Example:
 

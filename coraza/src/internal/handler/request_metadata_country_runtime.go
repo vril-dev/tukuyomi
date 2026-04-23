@@ -41,6 +41,8 @@ type requestCountryRuntime struct {
 	effectiveMode    string
 	managedPath      string
 	reader           *maxminddb.Reader
+	versionID        int64
+	versionETag      string
 	dbSizeBytes      int64
 	dbModTime        time.Time
 	lastError        string
@@ -60,6 +62,13 @@ func managedRequestCountryMMDBPath() string {
 
 func InitRequestCountryRuntime() error {
 	return reloadRequestCountryRuntime(config.RequestCountryMode)
+}
+
+func currentRequestCountryMMDBStorageLabel() string {
+	if getLogsStatsStore() != nil {
+		return requestCountryMMDBStorageLabel
+	}
+	return managedRequestCountryMMDBPath()
 }
 
 func ValidateRequestCountryRuntimeConfig(cfg config.AppConfigFile) error {
@@ -92,7 +101,7 @@ func RequestCountryRuntimeStatusSnapshot() requestCountryRuntimeStatus {
 		return requestCountryRuntimeStatus{
 			ConfiguredMode: mode,
 			EffectiveMode:  mode,
-			ManagedPath:    managedRequestCountryMMDBPath(),
+			ManagedPath:    currentRequestCountryMMDBStorageLabel(),
 			Loaded:         false,
 		}
 	}
@@ -119,7 +128,7 @@ func lookupRequestCountryMMDB(clientIP string) (string, bool, error) {
 	if rt == nil {
 		return "", false, fmt.Errorf("request country runtime is not initialized")
 	}
-	rt.maybeRefreshFromManagedFile()
+	rt.maybeRefreshFromManagedSource()
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
 	if rt.effectiveMode != "mmdb" {
@@ -153,11 +162,42 @@ func defaultLookupRequestCountryMMDB(reader *maxminddb.Reader, ip net.IP) (strin
 type loadedRequestCountryMMDBState struct {
 	reader      *maxminddb.Reader
 	managedPath string
+	versionID   int64
+	versionETag string
 	sizeBytes   int64
 	modTime     time.Time
 }
 
 func loadManagedRequestCountryMMDB() (loadedRequestCountryMMDBState, error) {
+	if store := getLogsStatsStore(); store != nil {
+		return loadManagedRequestCountryMMDBFromDB(store)
+	}
+	return loadManagedRequestCountryMMDBFromFile()
+}
+
+func loadManagedRequestCountryMMDBFromDB(store *wafEventStore) (loadedRequestCountryMMDBState, error) {
+	asset, rec, found, err := store.loadActiveRequestCountryMMDBAsset()
+	if err != nil {
+		return loadedRequestCountryMMDBState{}, fmt.Errorf("open managed country mmdb (%s): %w", requestCountryMMDBStorageLabel, err)
+	}
+	if !found || !asset.Present {
+		return loadedRequestCountryMMDBState{}, fmt.Errorf("open managed country mmdb (%s): not found", requestCountryMMDBStorageLabel)
+	}
+	reader, err := maxminddb.FromBytes(asset.Raw)
+	if err != nil {
+		return loadedRequestCountryMMDBState{}, fmt.Errorf("open managed country mmdb (%s): %w", requestCountryMMDBStorageLabel, err)
+	}
+	return loadedRequestCountryMMDBState{
+		reader:      reader,
+		managedPath: requestCountryMMDBStorageLabel,
+		versionID:   rec.VersionID,
+		versionETag: rec.ETag,
+		sizeBytes:   asset.SizeBytes,
+		modTime:     rec.ActivatedAt.UTC(),
+	}, nil
+}
+
+func loadManagedRequestCountryMMDBFromFile() (loadedRequestCountryMMDBState, error) {
 	path := managedRequestCountryMMDBPath()
 	info, err := os.Stat(path)
 	if err != nil {
@@ -178,7 +218,7 @@ func loadManagedRequestCountryMMDB() (loadedRequestCountryMMDBState, error) {
 	}, nil
 }
 
-func (rt *requestCountryRuntime) maybeRefreshFromManagedFile() {
+func (rt *requestCountryRuntime) maybeRefreshFromManagedSource() {
 	if rt == nil {
 		return
 	}
@@ -192,10 +232,60 @@ func (rt *requestCountryRuntime) maybeRefreshFromManagedFile() {
 		rt.mu.RUnlock()
 		return
 	}
+	currentVersionID := rt.versionID
+	currentVersionETag := rt.versionETag
 	currentPath := rt.managedPath
 	currentSize := rt.dbSizeBytes
 	currentModTime := rt.dbModTime
 	rt.mu.RUnlock()
+
+	if store := getLogsStatsStore(); store != nil {
+		_, rec, found, err := store.loadActiveRequestCountryMMDBAsset()
+		if err != nil {
+			rt.mu.Lock()
+			rt.nextRefreshCheck = now.Add(requestCountryRefreshInterval)
+			rt.lastError = err.Error()
+			rt.mu.Unlock()
+			return
+		}
+		if !found {
+			rt.mu.Lock()
+			rt.nextRefreshCheck = now.Add(requestCountryRefreshInterval)
+			rt.lastError = "managed country mmdb is not installed"
+			rt.mu.Unlock()
+			return
+		}
+		if rec.VersionID == currentVersionID && rec.ETag == currentVersionETag {
+			rt.mu.Lock()
+			rt.nextRefreshCheck = now.Add(requestCountryRefreshInterval)
+			rt.mu.Unlock()
+			return
+		}
+
+		state, err := requestCountryMMDBLoader()
+		if err != nil {
+			rt.mu.Lock()
+			rt.nextRefreshCheck = now.Add(requestCountryRefreshInterval)
+			rt.lastError = err.Error()
+			rt.mu.Unlock()
+			return
+		}
+		rt.mu.Lock()
+		oldReader := rt.reader
+		rt.reader = state.reader
+		rt.managedPath = state.managedPath
+		rt.versionID = state.versionID
+		rt.versionETag = state.versionETag
+		rt.dbSizeBytes = state.sizeBytes
+		rt.dbModTime = state.modTime
+		rt.lastError = ""
+		rt.nextRefreshCheck = now.Add(requestCountryRefreshInterval)
+		rt.mu.Unlock()
+		if oldReader != nil {
+			_ = oldReader.Close()
+		}
+		return
+	}
 
 	info, err := os.Stat(currentPath)
 	if err != nil {
@@ -226,6 +316,8 @@ func (rt *requestCountryRuntime) maybeRefreshFromManagedFile() {
 	oldReader := rt.reader
 	rt.reader = state.reader
 	rt.managedPath = state.managedPath
+	rt.versionID = state.versionID
+	rt.versionETag = state.versionETag
 	rt.dbSizeBytes = state.sizeBytes
 	rt.dbModTime = state.modTime
 	rt.lastError = ""
@@ -244,7 +336,7 @@ func reloadRequestCountryRuntime(mode string) error {
 	rt := &requestCountryRuntime{
 		configuredMode: mode,
 		effectiveMode:  mode,
-		managedPath:    managedRequestCountryMMDBPath(),
+		managedPath:    currentRequestCountryMMDBStorageLabel(),
 	}
 	if mode == "mmdb" {
 		state, err := loadManagedRequestCountryMMDB()
@@ -260,6 +352,8 @@ func reloadRequestCountryRuntime(mode string) error {
 			return err
 		}
 		rt.reader = state.reader
+		rt.versionID = state.versionID
+		rt.versionETag = state.versionETag
 		rt.dbSizeBytes = state.sizeBytes
 		rt.dbModTime = state.modTime
 		rt.managedPath = state.managedPath

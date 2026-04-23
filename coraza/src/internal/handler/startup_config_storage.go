@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"tukuyomi/internal/bypassconf"
@@ -51,6 +52,9 @@ func ImportStartupConfigStorage() error {
 		return err
 	}
 	if err := importResponseCacheConfigStorage(); err != nil {
+		return err
+	}
+	if err := importRequestCountryStorage(); err != nil {
 		return err
 	}
 	return nil
@@ -391,27 +395,13 @@ func importManagedOverrideRulesStorage() error {
 }
 
 func importResponseCacheConfigStorage() error {
-	path := strings.TrimSpace(config.CacheStoreFile)
-	if path == "" {
-		path = "conf/cache-store.json"
-	}
-	raw, _, err := readFileMaybe(path)
-	if err != nil {
-		return fmt.Errorf("read response cache seed file: %w", err)
-	}
-	if strings.TrimSpace(string(raw)) == "" {
-		raw, err = marshalResponseCacheConfig(normalizeResponseCacheConfig(responseCacheConfig{}))
-		if err != nil {
-			return err
-		}
-	}
-	prepared, err := prepareResponseCacheRaw(string(raw))
-	if err != nil {
-		return fmt.Errorf("validate response cache seed file: %w", err)
-	}
 	store := getLogsStatsStore()
 	if store == nil {
 		return fmt.Errorf("db store is not initialized")
+	}
+	prepared, err := defaultPreparedResponseCacheConfig()
+	if err != nil {
+		return fmt.Errorf("prepare default response cache config: %w", err)
 	}
 	if _, _, err := store.writeResponseCacheConfigVersion("", prepared.cfg, configVersionSourceImport, "", "response cache seed import", 0); err != nil {
 		return fmt.Errorf("import normalized response cache config: %w", err)
@@ -430,7 +420,23 @@ func loadBootstrapAppConfig() ([]byte, config.AppConfigFile, error) {
 	if err != nil {
 		return nil, config.AppConfigFile{}, fmt.Errorf("load bootstrap config.json: %w", err)
 	}
+	applyEffectiveBootstrapDBConnection(&cfg)
 	return raw, cfg, nil
+}
+
+func applyEffectiveBootstrapDBConnection(cfg *config.AppConfigFile) {
+	if cfg == nil {
+		return
+	}
+	if driver := strings.ToLower(strings.TrimSpace(os.Getenv("WAF_STORAGE_DB_DRIVER"))); driver != "" {
+		cfg.Storage.DBDriver = driver
+	}
+	if dsn := os.Getenv("WAF_STORAGE_DB_DSN"); strings.TrimSpace(dsn) != "" {
+		cfg.Storage.DBDSN = dsn
+	}
+	if path := strings.TrimSpace(os.Getenv("WAF_STORAGE_DB_PATH")); path != "" {
+		cfg.Storage.DBPath = path
+	}
 }
 
 func appConfigBlobRawFromCandidate(candidate config.AppConfigFile, bootstrap config.AppConfigFile) (config.AppConfigFile, string, error) {

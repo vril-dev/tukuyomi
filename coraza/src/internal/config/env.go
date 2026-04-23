@@ -419,12 +419,24 @@ func applyAppConfig(cfg appConfigFile) {
 	}
 
 	DBDriver = parseDBDriver(cfg.Storage.DBDriver)
+	if override := strings.TrimSpace(os.Getenv("WAF_STORAGE_DB_DRIVER")); override != "" {
+		DBDriver = parseDBDriver(override)
+	}
 	DBDSN = strings.TrimSpace(cfg.Storage.DBDSN)
+	if override := strings.TrimSpace(os.Getenv("WAF_STORAGE_DB_DSN")); override != "" {
+		DBDSN = override
+	}
 	DBPath = strings.TrimSpace(cfg.Storage.DBPath)
+	if override := strings.TrimSpace(os.Getenv("WAF_STORAGE_DB_PATH")); override != "" {
+		DBPath = override
+	}
 	if DBPath == "" {
 		DBPath = "logs/coraza/tukuyomi.db"
 	}
 	DBRetentionDays = cfg.Storage.DBRetentionDays
+	if override := strings.TrimSpace(os.Getenv("WAF_STORAGE_DB_RETENTION_DAYS")); override != "" {
+		DBRetentionDays = parseIntDefault(override, DBRetentionDays)
+	}
 	if DBRetentionDays < 0 {
 		DBRetentionDays = 0
 	}
@@ -432,6 +444,9 @@ func applyAppConfig(cfg appConfigFile) {
 		DBRetentionDays = 3650
 	}
 	dbSyncSec := parseDBSyncIntervalSec(strconv.Itoa(cfg.Storage.DBSyncIntervalSec))
+	if override := strings.TrimSpace(os.Getenv("WAF_STORAGE_DB_SYNC_INTERVAL_SEC")); override != "" {
+		dbSyncSec = parseDBSyncIntervalSec(override)
+	}
 	DBSyncInterval = time.Duration(dbSyncSec) * time.Second
 	FileRotateBytes = cfg.Storage.FileRotateBytes
 	FileMaxBytes = cfg.Storage.FileMaxBytes

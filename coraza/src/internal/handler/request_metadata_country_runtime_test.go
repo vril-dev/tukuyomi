@@ -48,6 +48,30 @@ func TestValidateRequestCountryRuntimeConfigRejectsMMDBWithoutInstalledDB(t *tes
 	}
 }
 
+func TestValidateRequestCountryRuntimeConfigAcceptsMMDBWithDBAsset(t *testing.T) {
+	cfg := loadTestAppConfig(t)
+	cfg.RequestMeta.Country.Mode = "mmdb"
+
+	cfgPath := writeSettingsConfigFixture(t)
+	restore := saveConfigFilePathForTest(t, cfgPath)
+	defer restore()
+	initSettingsDBStoreForTest(t)
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected db store")
+	}
+	if _, _, err := store.writeRequestCountryMMDBAssetVersion("", requestCountryMMDBAssetVersion{
+		Present: true,
+		Raw:     loadSampleCountryMMDBBytes(t),
+	}, configVersionSourceApply, "", "test mmdb", 0); err != nil {
+		t.Fatalf("writeRequestCountryMMDBAssetVersion: %v", err)
+	}
+
+	if err := ValidateRequestCountryRuntimeConfig(cfg); err != nil {
+		t.Fatalf("ValidateRequestCountryRuntimeConfig() error: %v", err)
+	}
+}
+
 func TestDeleteRequestCountryDBRejectsWhenModeIsMMDB(t *testing.T) {
 	prevMode := config.RequestCountryMode
 	config.RequestCountryMode = "mmdb"

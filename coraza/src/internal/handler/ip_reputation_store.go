@@ -447,7 +447,11 @@ func ensureIPReputationFile(path string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	defaultRaw := mustJSON(ipReputationConfig{
+	return bypassconf.AtomicWriteWithBackup(path, []byte(defaultIPReputationScopeRaw()))
+}
+
+func defaultIPReputationScopeConfig() ipReputationConfig {
+	return ipReputationConfig{
 		Enabled:            false,
 		FeedURLs:           nil,
 		Allowlist:          nil,
@@ -456,8 +460,15 @@ func ensureIPReputationFile(path string) error {
 		RequestTimeoutSec:  int(defaultIPReputationRequestTimeout / time.Second),
 		BlockStatusCode:    http.StatusForbidden,
 		FailOpen:           true,
-	})
-	return bypassconf.AtomicWriteWithBackup(path, []byte(defaultRaw))
+	}
+}
+
+func defaultIPReputationScopeRaw() string {
+	return mustJSON(defaultIPReputationScopeConfig())
+}
+
+func defaultIPReputationPolicyRaw() string {
+	return mustJSON(ipReputationFile{Default: defaultIPReputationScopeConfig()})
 }
 
 func normalizeAndValidateIPReputationConfig(in ipReputationConfig) (ipReputationConfig, error) {
@@ -810,6 +821,19 @@ func (s *ipReputationStore) isBlockedAt(ipStr string, now time.Time) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.feedDecisionUnavailableLocked() {
+		if containsIPPrefix(s.configAllow, ip) {
+			return false
+		}
+		s.cleanupDynamicLocked(now)
+		if until, ok := s.dynamicBlock[ip.Unmap().String()]; ok && now.Before(until) {
+			return true
+		}
+		if s.failOpen {
+			return containsIPPrefix(s.staticBlock, ip)
+		}
+		return true
+	}
 	if containsIPPrefix(s.effectiveAllow, ip) {
 		return false
 	}
@@ -859,7 +883,11 @@ func (s *ipReputationStore) ApplyPenalty(ipStr string, ttl time.Duration, now ti
 	ip = ip.Unmap()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if containsIPPrefix(s.effectiveAllow, ip) {
+	if s.feedDecisionUnavailableLocked() {
+		if containsIPPrefix(s.configAllow, ip) {
+			return false
+		}
+	} else if containsIPPrefix(s.effectiveAllow, ip) {
 		return false
 	}
 	s.cleanupDynamicLocked(now)
@@ -908,6 +936,9 @@ func (s *ipReputationStore) refresh(ctx context.Context) error {
 	if successFeeds == 0 && len(errs) > 0 {
 		s.lastRefreshErr = strings.Join(errs, "; ")
 		s.lastRefreshAt = time.Now().UTC()
+		s.feedAllow = nil
+		s.feedBlock = nil
+		s.recomputeLocked()
 		if s.failOpen {
 			return fmt.Errorf("%s", s.lastRefreshErr)
 		}
@@ -1013,6 +1044,10 @@ func (s *ipReputationStore) recomputeLocked() {
 	mergedBlock := dedupeIPPrefixes(append(append([]netip.Prefix(nil), s.staticBlock...), s.feedBlock...))
 	s.effectiveAllow = mergedAllow
 	s.activeBlock = applyIPAllowlist(mergedBlock, mergedAllow)
+}
+
+func (s *ipReputationStore) feedDecisionUnavailableLocked() bool {
+	return s != nil && s.enabled && len(s.feedURLs) > 0 && strings.TrimSpace(s.lastRefreshErr) != ""
 }
 
 func (s *ipReputationStore) cleanupDynamicLocked(now time.Time) {

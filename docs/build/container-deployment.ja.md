@@ -21,7 +21,6 @@ container platform 向けの support は 3 段階で整理します。
 - internal な `scheduled-task-runner` sidecar が 1 個
 - 次の writable path を共有する
   - `/app/conf`
-  - request country resolution で managed `.mmdb` を使うなら `/app/data/geoip`
   - `/app/data/scheduled-tasks`
   - `/app/logs`
   - bundled runtime を使うなら `/app/data/php-fpm`
@@ -117,7 +116,6 @@ dedicated scheduler role:
 - public ingress を持たない
 - frontend と同じ source of truth として次を mount する
   - `/app/conf`
-  - `/app/data/geoip`
   - `/app/data/scheduled-tasks`
   - `/app/logs`
   - bundled runtime を使うなら `/app/data/php-fpm`
@@ -159,7 +157,6 @@ docker build -f docs/build/Dockerfile.example -t tukuyomi:deploy .
 official な mutable single-instance path で最低限必要な writable path:
 
 - `/app/conf`
-- `/app/data/geoip`
 - `/app/data/scheduled-tasks`
 - `/app/logs`
 
@@ -396,8 +393,8 @@ docker compose \
 
 - `make ui-preview-up` では preview 専用の scheduler sidecar も一緒に起動します
 - 既定の preview は毎回初期化されます
-  - `ui-preview-up` のたびに `conf/scheduled-tasks.ui-preview.json` は `{"tasks":[]}` へ初期化され、preview 専用 SQLite DB も削除されるため、古い preview task や DB row は引き継ぎません
-- preview 用 config と DB state を保持したい時はこれです
+  - `ui-preview-up` のたびに preview 専用 SQLite DB を作り直すため、古い preview task、listener 変更、DB row は引き継ぎません
+- preview 用 DB state を保持したい時はこれです
 
 ```bash
 UI_PREVIEW_PERSIST=1 make ui-preview-up
@@ -405,37 +402,30 @@ UI_PREVIEW_PERSIST=1 make ui-preview-down
 ```
 
 - `UI_PREVIEW_PERSIST=1` では次を保持します
-  - `conf/config.ui-preview.json`
-  - `conf/proxy.ui-preview.json`
-  - `conf/scheduled-tasks.ui-preview.json`
-  - `data/php-fpm/inventory.ui-preview.json`
-  - `data/php-fpm/vhosts.ui-preview.json`
-  - `data/logs/coraza/tukuyomi-ui-preview.db`
-- `ui-preview-up` は `conf/config.ui-preview.json` から publish port を導出します
+  - `data/<dirname(storage.db_path)>/tukuyomi-ui-preview.db`
+  - 例えば `storage.db_path` が `db/tukuyomi.db` なら preview DB は `data/db/tukuyomi-ui-preview.db` です
+- `ui-preview-up` は preview DB に保存された active preview `app_config` から publish port を導出します
+  - 初回起動時だけ `conf/config.json` と `UI_PREVIEW_PUBLIC_ADDR` / `UI_PREVIEW_ADMIN_ADDR` override を土台にします
   - single listener なら public listener port を publish
   - split listener なら public/admin の両方を publish
   - healthcheck は split 時は admin listener を優先
-- split preview 設定例:
+- split preview の bootstrap 例:
 
-```json
-{
-  "server": {
-    "listen_addr": ":80"
-  },
-  "admin": {
-    "listen_addr": ":9090"
-  }
-}
+```bash
+UI_PREVIEW_PERSIST=1 \
+UI_PREVIEW_PUBLIC_ADDR=:80 \
+UI_PREVIEW_ADMIN_ADDR=:9090 \
+make ui-preview-up
 ```
 
 - この場合の確認先はこうです
   - public proxy: `http://127.0.0.1:80`
   - admin UI: `http://127.0.0.1:9090/tukuyomi-ui`
   - admin API: `http://127.0.0.1:9090/tukuyomi-api`
-- preview config で `localhost:80`, `127.0.0.1:80`, `[::1]:9090` のような loopback bind は使わないでください
+- preview listener 設定で `localhost:80`, `127.0.0.1:80`, `[::1]:9090` のような loopback bind は使わないでください
   - container 内 loopback bind と host publish が噛み合わないため、preview は明示エラーで止めます
 - `Settings` から listener を保存した後に preview で反映を確認する時は、`UI_PREVIEW_PERSIST=1 make ui-preview-down && UI_PREVIEW_PERSIST=1 make ui-preview-up` を使ってください
-  - `docker compose restart` では changed port publish は作り直されません
+  - listener 変更自体は preview DB に残りますが、`docker compose restart` では changed port publish は作り直されません
 - scheduler fault は sidecar の exit/restart と container logs で追います。恒久 fault は restart churn として見える想定です
 - scheduled task の command line が `/app/data/php-fpm/binaries/php85/php` のような bundled PHP path を指す場合は、その scheduler container に `/app/data/php-fpm` も mount してください
 - platform health endpoint は `/healthz` on `9090` です

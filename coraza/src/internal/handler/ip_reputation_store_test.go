@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -147,5 +148,75 @@ func TestApplyIPReputationPenaltyForScope_IsolatesDynamicPenalties(t *testing.T)
 	}
 	if snapshot := IPReputationStatusForHost("two.example.com", true); snapshot.DynamicPenaltyCount != 0 {
 		t.Fatalf("other host dynamic penalty count=%d want=0", snapshot.DynamicPenaltyCount)
+	}
+}
+
+func TestEvaluateIPReputationForHost_FailClosedOnFeedErrorsBlocksByDefault(t *testing.T) {
+	restore := saveIPReputationStateForTest()
+	defer restore()
+
+	missingFeed := filepath.Join(t.TempDir(), "missing-feed.txt")
+	rt, err := ValidateIPReputationRaw(`{
+  "default": {
+    "enabled": true,
+    "feed_urls": ["` + missingFeed + `"],
+    "allowlist": ["203.0.113.11/32"],
+    "block_status_code": 451,
+    "fail_open": false
+  }
+}`)
+	if err != nil {
+		t.Fatalf("ValidateIPReputationRaw() unexpected error: %v", err)
+	}
+
+	ipReputationMu.Lock()
+	ipReputationRuntime = &rt
+	ipReputationStoreRT = rt.Default.Store
+	ipReputationMu.Unlock()
+
+	blocked, status, scope := EvaluateIPReputationForHost("www.example.com", true, "203.0.113.10")
+	if !blocked || status != 451 || scope != ipReputationDefaultScope {
+		t.Fatalf("fail-closed scope mismatch: blocked=%v status=%d scope=%q", blocked, status, scope)
+	}
+
+	if blocked, _, _ := EvaluateIPReputationForHost("www.example.com", true, "203.0.113.11"); blocked {
+		t.Fatal("explicit allowlist should still pass during fail-closed feed outage")
+	}
+
+	if snapshot := IPReputationStatus(); snapshot.LastRefreshError == "" {
+		t.Fatal("expected refresh error snapshot during fail-closed feed outage")
+	}
+}
+
+func TestEvaluateIPReputationForHost_FailOpenOnFeedErrorsUsesLocalListsOnly(t *testing.T) {
+	restore := saveIPReputationStateForTest()
+	defer restore()
+
+	missingFeed := filepath.Join(t.TempDir(), "missing-feed.txt")
+	rt, err := ValidateIPReputationRaw(`{
+  "default": {
+    "enabled": true,
+    "feed_urls": ["` + missingFeed + `"],
+    "blocklist": ["203.0.113.12/32"],
+    "block_status_code": 451,
+    "fail_open": true
+  }
+}`)
+	if err != nil {
+		t.Fatalf("ValidateIPReputationRaw() unexpected error: %v", err)
+	}
+
+	ipReputationMu.Lock()
+	ipReputationRuntime = &rt
+	ipReputationStoreRT = rt.Default.Store
+	ipReputationMu.Unlock()
+
+	if blocked, _, _ := EvaluateIPReputationForHost("www.example.com", true, "203.0.113.10"); blocked {
+		t.Fatal("feed outage with fail-open should not deny by default")
+	}
+
+	blocked, status, scope := EvaluateIPReputationForHost("www.example.com", true, "203.0.113.12")
+	if !blocked || status != 451 || scope != ipReputationDefaultScope {
+		t.Fatalf("local blocklist should still apply during fail-open outage: blocked=%v status=%d scope=%q", blocked, status, scope)
 	}
 }

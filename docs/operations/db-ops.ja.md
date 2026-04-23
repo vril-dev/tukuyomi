@@ -138,8 +138,8 @@ import 後の本番起動で必要な file は次だけです。
 `make db-migrate`、`make crs-install`、`make db-import` 後の本番 runtime では
 `data/conf/config.json` 以外の `data/conf/*.json`、`data/conf/rules/**`、
 `data/rules/**`、および `inventory.json`、`vhosts.json`、`runtime.json`、
-`modules.json` などの PHP-FPM JSON manifest を削除できます。GeoIP file は
-別管理の runtime artifact です。
+`modules.json` などの PHP-FPM JSON manifest を削除できます。GeoIP managed
+asset も import 後は DB-backed です。
 
 ### 4. `schema_migrations`
 

@@ -65,6 +65,11 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		"override_rule_versions",
 		"waf_rule_assets",
 		"waf_rule_asset_contents",
+		"scheduled_task_runtime_state",
+		"request_country_mmdb_assets",
+		"request_country_geoip_configs",
+		"request_country_geoip_config_editions",
+		"request_country_update_state",
 	} {
 		var name string
 		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
@@ -78,8 +83,8 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("query migration version: %v", err)
 	}
-	if version != 7 || dirty != 0 {
-		t.Fatalf("migration version=%d dirty=%d want version=7 dirty=0", version, dirty)
+	if version != 9 || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=9 dirty=0", version, dirty)
 	}
 }
 
@@ -121,8 +126,8 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteReplacesLegacyMigrationTable(t *t
 	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("query migration version: %v", err)
 	}
-	if version != 7 || dirty != 0 {
-		t.Fatalf("migration version=%d dirty=%d want version=7 dirty=0", version, dirty)
+	if version != 9 || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=9 dirty=0", version, dirty)
 	}
 
 	var legacyColumns int

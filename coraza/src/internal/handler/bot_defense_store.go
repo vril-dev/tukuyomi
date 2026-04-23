@@ -1553,8 +1553,11 @@ func ensureBotDefenseFile(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	return os.WriteFile(path, []byte(defaultBotDefensePolicyRaw()), 0o644)
+}
 
-	const defaultRaw = `{
+func defaultBotDefensePolicyRaw() string {
+	return `{
   "enabled": true,
   "dry_run": false,
   "mode": "suspicious",
@@ -1646,5 +1649,4 @@ func ensureBotDefenseFile(path string) error {
   }
 }
 	`
-	return os.WriteFile(path, []byte(defaultRaw), 0o644)
 }

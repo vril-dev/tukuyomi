@@ -119,7 +119,7 @@ func DeleteRequestCountryDB(c *gin.Context) {
 		})
 		return
 	}
-	if err := os.Remove(managedRequestCountryMMDBPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := removeManagedCountryMMDB(); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
@@ -144,6 +144,23 @@ func buildRequestCountryDBStatusWithETag(etag string) requestCountryDBStatusResp
 		if _, currentETag, _, err := loadSettingsAppConfig(); err == nil {
 			out.ConfigETag = currentETag
 		}
+	}
+	if store := getLogsStatsStore(); store != nil {
+		asset, rec, found, err := store.loadActiveRequestCountryMMDBAsset()
+		if err != nil {
+			if out.LastError == "" {
+				out.LastError = err.Error()
+			}
+			return out
+		}
+		if found && asset.Present {
+			out.Installed = true
+			out.SizeBytes = asset.SizeBytes
+			if !rec.ActivatedAt.IsZero() {
+				out.ModTime = rec.ActivatedAt.UTC().Format(time.RFC3339Nano)
+			}
+		}
+		return out
 	}
 	info, err := os.Stat(managedRequestCountryMMDBPath())
 	if err == nil && !info.IsDir() {
@@ -178,45 +195,53 @@ func replaceManagedCountryMMDB(src io.Reader) error {
 	if src == nil {
 		return fmt.Errorf("country db upload source is required")
 	}
-	tmp, err := os.CreateTemp("", "tukuyomi-country-db-*.mmdb")
+	raw, err := io.ReadAll(io.LimitReader(src, maxRequestCountryDBUploadBytes+1))
 	if err != nil {
 		return err
 	}
-	tmpPath := tmp.Name()
-	defer func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-	}()
-	written, err := io.Copy(tmp, io.LimitReader(src, maxRequestCountryDBUploadBytes+1))
-	if err != nil {
-		return err
-	}
-	if written > maxRequestCountryDBUploadBytes {
+	if len(raw) > maxRequestCountryDBUploadBytes {
 		return fmt.Errorf("country db upload exceeds %d bytes", maxRequestCountryDBUploadBytes)
 	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	reader, err := maxminddb.Open(tmpPath)
+	return replaceManagedCountryMMDBRaw(raw, configVersionSourceApply, "request country mmdb upload")
+}
+
+func replaceManagedCountryMMDBRaw(raw []byte, source string, reason string) error {
+	reader, err := maxminddb.FromBytes(raw)
 	if err != nil {
 		return fmt.Errorf("invalid country mmdb: %w", err)
 	}
 	_ = reader.Close()
-	payload, err := os.ReadFile(tmpPath)
-	if err != nil {
-		return err
-	}
-	target := managedRequestCountryMMDBPath()
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
-	}
-	if err := bypassconf.AtomicWriteWithBackup(target, payload); err != nil {
-		return err
-	}
-	if strings.EqualFold(config.RequestCountryMode, "mmdb") {
-		if err := reloadRequestCountryRuntime(config.RequestCountryMode); err != nil {
+	if store := getLogsStatsStore(); store != nil {
+		if _, _, err := store.writeRequestCountryMMDBAssetVersion("", requestCountryMMDBAssetVersion{
+			Present: true,
+			Raw:     raw,
+		}, source, "", reason, 0); err != nil {
 			return err
 		}
+	} else {
+		target := managedRequestCountryMMDBPath()
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		if err := bypassconf.AtomicWriteWithBackup(target, raw); err != nil {
+			return err
+		}
+	}
+	if strings.EqualFold(RequestCountryRuntimeStatusSnapshot().EffectiveMode, "mmdb") {
+		if err := reloadRequestCountryRuntime("mmdb"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func removeManagedCountryMMDB() error {
+	if store := getLogsStatsStore(); store != nil {
+		_, _, err := store.writeRequestCountryMMDBAssetVersion("", requestCountryMMDBAssetVersion{Present: false}, configVersionSourceApply, "", "request country mmdb removal", 0)
+		return err
+	}
+	if err := os.Remove(managedRequestCountryMMDBPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	return nil
 }

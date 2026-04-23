@@ -851,7 +851,11 @@ func ensureNotificationFile(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	const defaultRaw = `{
+	return os.WriteFile(path, []byte(defaultNotificationPolicyRaw()), 0o644)
+}
+
+func defaultNotificationPolicyRaw() string {
+	return `{
   "enabled": false,
   "cooldown_seconds": 900,
   "sinks": [
@@ -892,7 +896,6 @@ func ensureNotificationFile(path string) error {
   }
 }
 `
-	return os.WriteFile(path, []byte(defaultRaw), 0o644)
 }
 
 func observeNotificationSummary(summary *notificationWindowSummary, obs notificationObservation) {

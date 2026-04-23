@@ -1,12 +1,13 @@
-`data/geoip/` keeps managed GeoIP artifacts such as `country.mmdb`,
-`GeoIP.conf`, and `update-status.json`.
+`data/geoip/` is now legacy/import-only material.
 
-The `Options` page uploads and replaces:
+DB-backed runtime stores managed GeoIP country assets and update state in the
+runtime database. The `Options` page uploads and replaces DB-backed assets.
 
-- `data/geoip/country.mmdb`
-- `data/geoip/GeoIP.conf`
+- legacy import source: `data/geoip/country.mmdb`
+- legacy import source: `data/geoip/GeoIP.conf`
+- legacy import source: `data/geoip/update-status.json`
 
-when request country resolution and managed updates are enabled.
+These files are read only during explicit import workflows such as
+`make db-import`.
 
-Only this `README.md` is intended to ship in generic release bundles. The
-actual managed artifacts remain operator-owned runtime files.
+Generic release bundles do not need persistent GeoIP runtime files.

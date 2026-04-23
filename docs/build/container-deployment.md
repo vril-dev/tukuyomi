@@ -21,7 +21,6 @@ This is the official supported path today.
 - one internal `scheduled-task-runner` sidecar
 - shared writable paths for:
   - `/app/conf`
-  - `/app/data/geoip` when request country resolution uses managed `.mmdb`
   - `/app/data/scheduled-tasks`
   - `/app/logs`
   - `/app/data/php-fpm` when bundled runtimes are used
@@ -126,7 +125,6 @@ Dedicated scheduler role:
 - has no public ingress
 - mounts the same source-of-truth paths as the frontend for:
   - `/app/conf`
-  - `/app/data/geoip`
   - `/app/data/scheduled-tasks`
   - `/app/logs`
   - `/app/data/php-fpm` when bundled runtimes are used
@@ -168,7 +166,6 @@ This path builds the Admin UI in-image, builds the Go binary, copies runtime con
 Minimum writable paths for the official mutable single-instance path:
 
 - `/app/conf`
-- `/app/data/geoip`
 - `/app/data/scheduled-tasks`
 - `/app/logs`
 
@@ -417,8 +414,8 @@ docker compose \
 
 - `make ui-preview-up` starts the preview-scoped scheduler sidecar too
 - default preview behavior is reset-on-start:
-  `ui-preview-up` rewrites `conf/scheduled-tasks.ui-preview.json` to `{"tasks":[]}` and removes the isolated preview SQLite DB on each start so old preview tasks and DB rows do not carry over
-- opt into retained preview config and DB state with:
+  `ui-preview-up` recreates the isolated preview SQLite DB on each start, so old preview tasks, listener changes, and DB rows do not carry over
+- opt into retained preview DB state with:
 
 ```bash
 UI_PREVIEW_PERSIST=1 make ui-preview-up
@@ -426,37 +423,30 @@ UI_PREVIEW_PERSIST=1 make ui-preview-down
 ```
 
 - when `UI_PREVIEW_PERSIST=1` is set, `ui-preview-up/down` keeps:
-  - `conf/config.ui-preview.json`
-  - `conf/proxy.ui-preview.json`
-  - `conf/scheduled-tasks.ui-preview.json`
-  - `data/php-fpm/inventory.ui-preview.json`
-  - `data/php-fpm/vhosts.ui-preview.json`
-  - `data/logs/coraza/tukuyomi-ui-preview.db`
-- `ui-preview-up` now derives published ports from `conf/config.ui-preview.json`
+  - `data/<dirname(storage.db_path)>/tukuyomi-ui-preview.db`
+  - for example, when `storage.db_path` is `db/tukuyomi.db`, the preview DB is `data/db/tukuyomi-ui-preview.db`
+- `ui-preview-up` derives published ports from the active preview `app_config` stored in the preview DB
+  - on first boot, preview starts from `conf/config.json` plus optional `UI_PREVIEW_PUBLIC_ADDR` / `UI_PREVIEW_ADMIN_ADDR` overrides
   - single listener preview publishes the public listener port
   - split listener preview publishes both public and admin listener ports
   - healthcheck follows the admin listener in split mode
-- example split preview config:
+- example split preview bootstrap:
 
-```json
-{
-  "server": {
-    "listen_addr": ":80"
-  },
-  "admin": {
-    "listen_addr": ":9090"
-  }
-}
+```bash
+UI_PREVIEW_PERSIST=1 \
+UI_PREVIEW_PUBLIC_ADDR=:80 \
+UI_PREVIEW_ADMIN_ADDR=:9090 \
+make ui-preview-up
 ```
 
 - that yields:
   - public proxy: `http://127.0.0.1:80`
   - admin UI: `http://127.0.0.1:9090/tukuyomi-ui`
   - admin API: `http://127.0.0.1:9090/tukuyomi-api`
-- do not use loopback listener binds such as `localhost:80`, `127.0.0.1:80`, or `[::1]:9090` in preview config
+- do not use loopback listener binds such as `localhost:80`, `127.0.0.1:80`, or `[::1]:9090` in preview listener settings
   - preview rejects them because container-local loopback bind does not match host-published ports
 - when you save listener changes through `Settings`, use `UI_PREVIEW_PERSIST=1 make ui-preview-down` then `UI_PREVIEW_PERSIST=1 make ui-preview-up`
-  - plain `docker compose restart` does not recreate changed published ports
+  - preview persists those listener changes in the preview DB, but plain `docker compose restart` does not recreate changed published ports
 - operational signal for scheduler faults is container exit/restart plus sidecar logs; persistent faults should show up as restart churn
 - if a scheduled task command line points at a bundled PHP path such as `/app/data/php-fpm/binaries/php85/php`, mount `/app/data/php-fpm` into that scheduler container too
 - the platform health endpoint is `/healthz` on port `9090`

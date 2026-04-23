@@ -539,7 +539,7 @@ host scope の優先順は exact `host:port`、次に bare `host`、最後に `d
 - match すると WAF 前に `403`
 - country 解決は `request_metadata_resolvers` が担当
 - `header` mode は `X-Country-Code`
-- `mmdb` mode は installed `country.mmdb`
+- `mmdb` mode は DB-managed な country MMDB asset を runtime へ load して解決します
 - host scope の優先順は exact `host:port`、次に bare `host`、最後に `default`
 
 ### Rate Limit
@@ -638,10 +638,10 @@ curl -s -H "X-API-Key: <your-api-key>" \
 
 ### Cache Feature
 
-cache rules と internal cache store 設定は seed/import 後に DB table で
-version 管理されます。`data/conf/cache-rules.json` と
-`data/conf/cache-store.json` は空 DB 向けの seed/import material であり、
-normalized row が存在した後の runtime authority ではありません。
+cache rules と internal cache store 設定は DB table で version 管理されます。
+`data/conf/cache-rules.json` は空 DB 向けの seed/import material のままです。
+internal cache store 設定は normalized row が無い時に DB default から seed され、
+`data/conf/cache-store.json` は明示的な no-DB fallback 実行時だけ意味を持ちます。
 
 例:
 

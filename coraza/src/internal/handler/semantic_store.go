@@ -972,8 +972,11 @@ func ensureSemanticFile(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	return os.WriteFile(path, []byte(defaultSemanticPolicyRaw()), 0o644)
+}
 
-	const defaultRaw = `{
+func defaultSemanticPolicyRaw() string {
+	return `{
   "enabled": true,
   "mode": "log_only",
   "provider": {
@@ -1006,5 +1009,4 @@ func ensureSemanticFile(path string) error {
   "temporal_ua_churn_score": 1
 }
 `
-	return os.WriteFile(path, []byte(defaultRaw), 0o644)
 }

@@ -292,13 +292,17 @@ func ensureCountryBlockFile(path, legacy string) error {
 		return err
 	}
 	if strings.HasSuffix(strings.ToLower(path), ".json") {
-		payload, err := MarshalCountryBlockJSON(countryBlockFile{Default: countryBlockScope{BlockedCountries: []string{}}})
+		payload, err := defaultCountryBlockPolicyRaw()
 		if err != nil {
 			return err
 		}
 		return os.WriteFile(path, payload, 0o644)
 	}
 	return os.WriteFile(path, []byte("# one country code per line (JP, US, UNKNOWN)\n"), 0o644)
+}
+
+func defaultCountryBlockPolicyRaw() ([]byte, error) {
+	return MarshalCountryBlockJSON(countryBlockFile{Default: countryBlockScope{BlockedCountries: []string{}}})
 }
 
 func normalizeCountryCodes(rawCodes []string, field string) ([]string, error) {

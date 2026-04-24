@@ -117,7 +117,7 @@ preview_database_exists() {
 }
 
 ensure_preview_runtime_dirs() {
-  mkdir -p "$ROOT_DIR/data/cache/response" "$ROOT_DIR/data/tmp"
+  mkdir -p "$ROOT_DIR/data/persistent" "$ROOT_DIR/data/cache/response" "$ROOT_DIR/data/tmp"
 }
 
 run_preview_command() {

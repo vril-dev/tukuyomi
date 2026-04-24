@@ -20,6 +20,19 @@ type DriftConfig = {
     db_driver: string;
     db_path: string;
   };
+  persistent_storage?: {
+    backend: string;
+    local: {
+      base_dir: string;
+    };
+    s3?: {
+      bucket?: string;
+      region?: string;
+      endpoint?: string;
+      prefix?: string;
+      force_path_style?: boolean;
+    };
+  };
   observability: {
     tracing: {
       enabled: boolean;
@@ -56,6 +69,13 @@ type DriftRuntime = {
   request_country_effective_mode?: string;
   storage_db_driver?: string;
   storage_db_path?: string;
+  persistent_storage_backend?: string;
+  persistent_storage_local_base_dir?: string;
+  persistent_storage_s3_bucket?: string;
+  persistent_storage_s3_region?: string;
+  persistent_storage_s3_endpoint?: string;
+  persistent_storage_s3_prefix?: string;
+  persistent_storage_s3_force_path_style?: boolean;
   tracing_enabled?: boolean;
   tracing_service_name?: string;
   tracing_otlp_endpoint?: string;
@@ -85,6 +105,17 @@ export function computeSettingsRuntimeDrift(
   if ((runtime.runtime_memory_limit_mb ?? 0) !== config.runtime.memory_limit_mb) drift.push(label("Memory Limit MB"));
   if ((runtime.storage_db_driver ?? "") !== config.storage.db_driver) drift.push(label("DB Driver"));
   if ((runtime.storage_db_path ?? "") !== config.storage.db_path) drift.push(label("DB Path"));
+  const persistentBackend = config.persistent_storage?.backend || "local";
+  const persistentLocalBaseDir = config.persistent_storage?.local?.base_dir || "data/persistent";
+  if ((runtime.persistent_storage_backend ?? "local") !== persistentBackend) drift.push(label("Persistent Storage Backend"));
+  if ((runtime.persistent_storage_local_base_dir ?? "data/persistent") !== persistentLocalBaseDir) drift.push(label("Persistent Storage Local Base Directory"));
+  if (persistentBackend === "s3") {
+    if ((runtime.persistent_storage_s3_bucket ?? "") !== (config.persistent_storage?.s3?.bucket ?? "")) drift.push(label("Persistent Storage S3 Bucket"));
+    if ((runtime.persistent_storage_s3_region ?? "") !== (config.persistent_storage?.s3?.region ?? "")) drift.push(label("Persistent Storage S3 Region"));
+    if ((runtime.persistent_storage_s3_endpoint ?? "") !== (config.persistent_storage?.s3?.endpoint ?? "")) drift.push(label("Persistent Storage S3 Endpoint"));
+    if ((runtime.persistent_storage_s3_prefix ?? "") !== (config.persistent_storage?.s3?.prefix ?? "")) drift.push(label("Persistent Storage S3 Prefix"));
+    if ((runtime.persistent_storage_s3_force_path_style ?? false) !== (config.persistent_storage?.s3?.force_path_style ?? false)) drift.push(label("Persistent Storage S3 Path Style"));
+  }
   if ((runtime.tracing_enabled ?? false) !== config.observability.tracing.enabled) drift.push(label("Tracing Enabled"));
   if ((runtime.tracing_service_name ?? "") !== config.observability.tracing.service_name) drift.push(label("Tracing Service Name"));
   if ((runtime.tracing_otlp_endpoint ?? "") !== config.observability.tracing.otlp_endpoint) drift.push(label("OTLP Endpoint"));

@@ -368,7 +368,7 @@ func main() {
 		log.Printf("[SERVER] tls enabled source=%s cert_file=%s acme_domains=%s min_version=%s redirect_http=%t redirect_addr=%s",
 			handler.ServerTLSRuntimeStatusSnapshot().Source,
 			config.ServerTLSCertFile,
-			strings.Join(config.ServerTLSACMEDomains, ","),
+			strings.Join(handler.EffectiveServerTLSACMEDomains(), ","),
 			config.ServerTLSMinVersion,
 			config.ServerTLSRedirectHTTP,
 			config.ServerTLSHTTPRedirectAddr,

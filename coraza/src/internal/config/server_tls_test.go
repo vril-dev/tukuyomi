@@ -161,12 +161,11 @@ func TestLoadAppConfigFileAcceptsServerTLSCompositeFallbackConfig(t *testing.T) 
 				"cert_file": ` + jsonString(certFile) + `,
 				"key_file": ` + jsonString(keyFile) + `,
 				"min_version": "1.2",
-				"acme": {
-					"enabled": true,
-					"email": "ops@example.com",
-					"domains": ["proxy.example.com"],
-					"cache_dir": "/tmp/acme"
-				}
+					"acme": {
+						"enabled": true,
+						"domains": ["proxy.example.com"],
+						"cache_dir": "/tmp/acme"
+					}
 			}
 		},
 		"admin": {

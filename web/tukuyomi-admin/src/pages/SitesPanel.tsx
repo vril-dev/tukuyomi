@@ -5,6 +5,7 @@ import { getErrorMessage } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 
 type SiteTLSMode = "legacy" | "manual" | "acme";
+type SiteACMEEnvironment = "production" | "staging";
 
 type SiteEntry = {
   name: string;
@@ -15,6 +16,10 @@ type SiteEntry = {
     mode: SiteTLSMode;
     cert_file?: string;
     key_file?: string;
+    acme?: {
+      environment?: SiteACMEEnvironment;
+      email?: string;
+    };
   };
 };
 
@@ -27,6 +32,7 @@ type SiteStatus = {
   tls_status?: string;
   tls_warning?: string;
   tls_cert_not_after?: string;
+  tls_acme_environment?: string;
   generated_route?: string;
 };
 
@@ -50,6 +56,10 @@ function createEmptySite(index: number): SiteEntry {
       mode: "legacy",
       cert_file: "",
       key_file: "",
+      acme: {
+        environment: "production",
+        email: "",
+      },
     },
   };
 }
@@ -64,6 +74,10 @@ function normalizeSites(sites: SiteEntry[]): SiteEntry[] {
       mode: site.tls.mode,
       cert_file: site.tls.cert_file?.trim() ?? "",
       key_file: site.tls.key_file?.trim() ?? "",
+      acme: {
+        environment: site.tls.acme?.environment ?? "production",
+        email: site.tls.acme?.email?.trim() ?? "",
+      },
     },
   }));
 }
@@ -78,6 +92,14 @@ function sitesToRaw(sites: SiteEntry[]) {
       mode: site.tls.mode,
       ...(site.tls.mode === "manual" && site.tls.cert_file ? { cert_file: site.tls.cert_file } : {}),
       ...(site.tls.mode === "manual" && site.tls.key_file ? { key_file: site.tls.key_file } : {}),
+      ...(site.tls.mode === "acme"
+        ? {
+            acme: {
+              environment: site.tls.acme?.environment ?? "production",
+              ...(site.tls.acme?.email ? { email: site.tls.acme.email } : {}),
+            },
+          }
+        : {}),
     },
   }));
   return JSON.stringify({ sites: normalized }, null, 2);
@@ -94,6 +116,10 @@ function parseSitesResponse(data?: SitesResponse): SiteEntry[] {
         mode: (site.tls?.mode ?? "legacy") as SiteTLSMode,
         cert_file: site.tls?.cert_file ?? "",
         key_file: site.tls?.key_file ?? "",
+        acme: {
+          environment: (site.tls?.acme?.environment ?? "production") as SiteACMEEnvironment,
+          email: site.tls?.acme?.email ?? "",
+        },
       },
     }));
   }
@@ -339,6 +365,48 @@ export default function SitesPanel() {
                     </label>
                   </>
                 ) : null}
+                {site.tls.mode === "acme" ? (
+                  <>
+                    <label className="space-y-1 text-sm">
+                      <span className="block text-xs text-neutral-600">{tx("ACME environment")}</span>
+                      <select
+                        value={site.tls.acme?.environment ?? "production"}
+                        onChange={(e) => updateSite(index, {
+                          ...site,
+                          tls: {
+                            ...site.tls,
+                            acme: {
+                              ...(site.tls.acme ?? {}),
+                              environment: e.target.value as SiteACMEEnvironment,
+                            },
+                          },
+                        })}
+                        className="w-full rounded border border-neutral-200 px-3 py-2 bg-white"
+                      >
+                        <option value="production">production</option>
+                        <option value="staging">staging</option>
+                      </select>
+                    </label>
+                    <label className="space-y-1 text-sm">
+                      <span className="block text-xs text-neutral-600">{tx("ACME account email")}</span>
+                      <input
+                        value={site.tls.acme?.email ?? ""}
+                        onChange={(e) => updateSite(index, {
+                          ...site,
+                          tls: {
+                            ...site.tls,
+                            acme: {
+                              ...(site.tls.acme ?? {}),
+                              email: e.target.value,
+                            },
+                          },
+                        })}
+                        className="w-full rounded border border-neutral-200 px-3 py-2 bg-white"
+                        placeholder="ops@example.com"
+                      />
+                    </label>
+                  </>
+                ) : null}
               </div>
             </article>
           ))}
@@ -361,6 +429,7 @@ export default function SitesPanel() {
                     </div>
                     {status.hosts?.length ? <div className="mt-1 text-neutral-600">{status.hosts.join(", ")}</div> : null}
                     {status.generated_route ? <div className="mt-1 text-neutral-500">{tx("route")} {status.generated_route}</div> : null}
+                    {status.tls_acme_environment ? <div className="mt-1 text-neutral-500">{tx("ACME environment")} {status.tls_acme_environment}</div> : null}
                     {status.tls_cert_not_after ? <div className="mt-1 text-neutral-500">{tx("cert not after")} {status.tls_cert_not_after}</div> : null}
                     {status.tls_warning ? <div className="mt-1 text-amber-700">{status.tls_warning}</div> : null}
                   </div>

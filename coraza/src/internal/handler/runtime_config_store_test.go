@@ -76,7 +76,7 @@ func TestNormalizedRuntimeConfigStoresVersionedTypedRows(t *testing.T) {
 		Enabled:         runtimeConfigBoolPtr(false),
 		Hosts:           []string{"app.example.com"},
 		DefaultUpstream: "http://127.0.0.1:8081",
-		TLS:             SiteTLSConfig{Mode: "legacy"},
+		TLS:             SiteTLSConfig{Mode: "acme", ACME: SiteTLSACMEConfig{Environment: "staging", Email: "ops@example.com"}},
 	}}}
 	rec1, err := store.writeSiteConfigVersion("", siteA, configVersionSourceImport, "", "test import", 0)
 	if err != nil {
@@ -102,6 +102,16 @@ func TestNormalizedRuntimeConfigStoresVersionedTypedRows(t *testing.T) {
 	}
 	if loadedSiteRec.ETag != rec3.ETag || loadedSite.Sites[0].DefaultUpstream != "http://127.0.0.1:8080" {
 		t.Fatalf("loaded site rec=%+v cfg=%+v", loadedSiteRec, loadedSite)
+	}
+	loadedSiteB, err := store.loadSiteConfigVersion(rec2.VersionID)
+	if err != nil {
+		t.Fatalf("load site version 2: %v", err)
+	}
+	if got := loadedSiteB.Sites[0].TLS.ACME.Environment; got != "staging" {
+		t.Fatalf("loaded site acme environment=%q", got)
+	}
+	if got := loadedSiteB.Sites[0].TLS.ACME.Email; got != "ops@example.com" {
+		t.Fatalf("loaded site acme email=%q", got)
 	}
 
 	vhostCfg := VhostConfigFile{Vhosts: []VhostConfig{{

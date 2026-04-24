@@ -109,8 +109,51 @@ Notes:
 - `server.http3.enabled=true` requires built-in TLS termination.
 - HTTP/3 uses the same numeric port as `server.listen_addr`, but over UDP.
 - `server.tls.redirect_http=true` starts a second plain HTTP listener that redirects to HTTPS.
-- ACME can be enabled with `server.tls.acme.*`.
+- ACME auto TLS is selected per site with `tls.mode=acme`; ACME account keys, challenge tokens, and certificate cache are stored below the `acme/` namespace in `persistent_storage`.
 - `paths.site_config_file` defaults to `conf/sites.json`; in DB-backed runtime this is the empty-DB seed/export path, not the live source of truth.
+
+### Persistent File Storage
+
+`persistent_storage` places runtime artifacts that must remain durable as bytes
+instead of DB rows, starting with the ACME cache.
+
+```json
+{
+  "persistent_storage": {
+    "backend": "local",
+    "local": {
+      "base_dir": "data/persistent"
+    }
+  }
+}
+```
+
+- `local` is for single-node installs or an operator-provided shared mount.
+- S3 config contains only non-secret placement fields such as bucket, region, endpoint, and prefix. Use `force_path_style=true` for S3-compatible endpoints such as MinIO.
+- API keys, secret keys, client secrets, tokens, and connection strings are not stored in JSON or DB app config. AWS/Azure/GCP credentials must come from env, managed identity, Workload Identity, ADC, or equivalent platform mechanisms.
+- The S3 backend reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`, and `AWS_REGION` / `AWS_DEFAULT_REGION` from runtime env.
+- Azure Blob Storage and Google Cloud Storage still fail closed until provider adapters are implemented. They do not silently fall back to local disk.
+
+S3-compatible backend example:
+
+```json
+{
+  "persistent_storage": {
+    "backend": "s3",
+    "s3": {
+      "bucket": "tukuyomi-runtime",
+      "region": "us-east-1",
+      "endpoint": "http://minio:9000",
+      "prefix": "prod",
+      "force_path_style": true
+    }
+  }
+}
+```
+
+The MinIO integration test is skipped in normal regression. To run it, create a
+bucket and set `TUKUYOMI_MINIO_S3_ENDPOINT`, `TUKUYOMI_MINIO_S3_BUCKET`,
+`AWS_ACCESS_KEY_ID`, and `AWS_SECRET_ACCESS_KEY`.
 
 TLS certificate selection happens during the TLS handshake, before host/path
 routing runs.

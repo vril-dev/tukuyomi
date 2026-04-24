@@ -58,6 +58,9 @@ data/conf/*
 !data/conf/rules/search-endpoint.conf
 data/audit/*
 !data/audit/.gitignore
+data/persistent/*
+!data/persistent/
+!data/persistent/.gitignore
 data/cache/*
 !data/cache/
 !data/cache/response/
@@ -85,6 +88,9 @@ examples/nextjs/app/node_modules/
 examples/api-gateway/api/node_modules/
 examples/*/data/audit/*
 !examples/*/data/audit/.gitignore
+examples/*/data/persistent/*
+!examples/*/data/persistent/
+!examples/*/data/persistent/.gitignore
 examples/*/data/cache/*
 !examples/*/data/cache/
 !examples/*/data/cache/response/

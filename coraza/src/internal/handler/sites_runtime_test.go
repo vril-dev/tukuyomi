@@ -161,7 +161,6 @@ func TestValidateSiteConfigRawRejectsACMEWildcardHost(t *testing.T) {
 	defer restore()
 
 	config.ServerTLSEnabled = true
-	config.ServerTLSACMEEnabled = true
 
 	raw := `{
   "sites": [
@@ -183,25 +182,49 @@ func TestValidateSiteConfigRawRejectsACMEWildcardHost(t *testing.T) {
 	}
 }
 
-func TestEffectiveServerTLSACMEDomainsIncludesEnabledSites(t *testing.T) {
+func TestValidateSiteConfigRawRejectsInvalidACMEEmail(t *testing.T) {
 	restore := setSiteTLSGlobalsForTest(t)
 	defer restore()
 
 	config.ServerTLSEnabled = true
-	config.ServerTLSACMEEnabled = true
-	config.ServerTLSACMEDomains = []string{"legacy.example.com", "LEGACY.EXAMPLE.COM."}
 
-	tmp := t.TempDir()
-	sitesPath := filepath.Join(tmp, "sites.json")
 	raw := `{
   "sites": [
     {
       "name": "blog",
       "hosts": ["blog.example.com"],
       "default_upstream": "http://blog.internal:8080",
-      "tls": {"mode": "acme"}
-    },
+      "tls": {"mode": "acme", "acme": {"email": "not an email"}}
+    }
+  ]
+}`
+
+	_, _, err := ValidateSiteConfigRaw(raw)
+	if err == nil {
+		t.Fatal("expected acme email validation error")
+	}
+	if !strings.Contains(err.Error(), "tls.acme.email") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEffectiveServerTLSACMEProfilesIncludeEnabledSites(t *testing.T) {
+	restore := setSiteTLSGlobalsForTest(t)
+	defer restore()
+
+	config.ServerTLSEnabled = true
+
+	tmp := t.TempDir()
+	sitesPath := filepath.Join(tmp, "sites.json")
+	raw := `{
+  "sites": [
     {
+	      "name": "blog",
+	      "hosts": ["blog.example.com"],
+	      "default_upstream": "http://blog.internal:8080",
+	      "tls": {"mode": "acme", "acme": {"environment": "staging", "email": "ops@example.com"}}
+	    },
+	    {
       "name": "disabled",
       "enabled": false,
       "hosts": ["disabled.example.com"],
@@ -217,10 +240,14 @@ func TestEffectiveServerTLSACMEDomainsIncludesEnabledSites(t *testing.T) {
 		t.Fatalf("InitSiteRuntime: %v", err)
 	}
 
-	domains := EffectiveServerTLSACMEDomains()
-	if !slices.Contains(domains, "legacy.example.com") {
-		t.Fatalf("domains=%v missing legacy.example.com", domains)
+	profiles := EffectiveServerTLSACMEProfilesForSites(currentSiteConfig())
+	if len(profiles) != 1 {
+		t.Fatalf("profiles=%#v want one", profiles)
 	}
+	if profiles[0].Environment != siteTLSACMEEnvironmentStaging || profiles[0].Email != "ops@example.com" {
+		t.Fatalf("profile=%#v", profiles[0])
+	}
+	domains := EffectiveServerTLSACMEDomains()
 	if !slices.Contains(domains, "blog.example.com") {
 		t.Fatalf("domains=%v missing blog.example.com", domains)
 	}
@@ -271,26 +298,11 @@ func TestInitSiteRuntimeLoadsDBBlobWithoutRestoringFile(t *testing.T) {
 	}
 }
 
-func TestValidateSiteConfigRawUsesProposedACMECoverage(t *testing.T) {
+func TestValidateSiteConfigRawLegacyRequiresListenerCertificate(t *testing.T) {
 	restore := setSiteTLSGlobalsForTest(t)
 	defer restore()
 
 	config.ServerTLSEnabled = true
-	config.ServerTLSACMEEnabled = true
-
-	etag, _, _ := initSiteAndProxyRuntimeForTest(t, `{
-  "sites": [
-    {
-      "name": "blog",
-      "hosts": ["blog.example.com"],
-      "default_upstream": "http://blog.internal:8080",
-      "tls": {"mode": "acme"}
-    }
-  ]
-}`)
-	if etag == "" {
-		t.Fatal("etag should not be empty")
-	}
 
 	raw := `{
   "sites": [
@@ -305,9 +317,9 @@ func TestValidateSiteConfigRawUsesProposedACMECoverage(t *testing.T) {
 
 	_, _, err := ValidateSiteConfigRaw(raw)
 	if err == nil {
-		t.Fatal("expected legacy acme coverage validation error")
+		t.Fatal("expected legacy listener certificate validation error")
 	}
-	if !strings.Contains(err.Error(), `host "blog.example.com" is not covered by legacy ACME domains`) {
+	if !strings.Contains(err.Error(), `legacy listener certificate is not configured`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -317,7 +329,6 @@ func TestApplySiteConfigRawReloadsServerTLSRuntime(t *testing.T) {
 	defer restore()
 
 	config.ServerTLSEnabled = true
-	config.ServerTLSACMEEnabled = true
 
 	etag, _, _ := initSiteAndProxyRuntimeForTest(t, defaultSiteConfigRaw)
 	var (
@@ -335,11 +346,11 @@ func TestApplySiteConfigRawReloadsServerTLSRuntime(t *testing.T) {
 	raw := `{
   "sites": [
     {
-      "name": "blog",
-      "hosts": ["blog.example.com"],
-      "default_upstream": "http://blog.internal:8080",
-      "tls": {"mode": "acme"}
-    }
+	      "name": "blog",
+	      "hosts": ["blog.example.com"],
+	      "default_upstream": "http://blog.internal:8080",
+	      "tls": {"mode": "acme", "acme": {"environment": "staging"}}
+	    }
   ]
 }`
 
@@ -359,6 +370,9 @@ func TestApplySiteConfigRawReloadsServerTLSRuntime(t *testing.T) {
 	if len(gotStatus) != 1 || gotStatus[0].TLSMode != "acme" {
 		t.Fatalf("gotStatus=%#v", gotStatus)
 	}
+	if gotStatus[0].TLSACMEEnv != siteTLSACMEEnvironmentStaging {
+		t.Fatalf("gotStatus[0].TLSACMEEnv=%q", gotStatus[0].TLSACMEEnv)
+	}
 	if len(cfg.Sites) != 1 || len(statuses) != 1 {
 		t.Fatalf("unexpected cfg/status counts: %d/%d", len(cfg.Sites), len(statuses))
 	}
@@ -376,7 +390,6 @@ func TestApplySiteConfigRawRollsBackWhenTLSReloadFails(t *testing.T) {
 	defer restore()
 
 	config.ServerTLSEnabled = true
-	config.ServerTLSACMEEnabled = true
 
 	etag, _, _ := initSiteAndProxyRuntimeForTest(t, defaultSiteConfigRaw)
 	SetServerTLSReloadHook(func(sites SiteConfigFile, statuses []SiteRuntimeStatus) error {

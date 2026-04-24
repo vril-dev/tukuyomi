@@ -165,10 +165,11 @@ remove_preview_db() {
 
 stage_workspace() {
   install -d -m 755 \
-    "${WORKSPACE}" \
-    "${WORKSPACE}/bin" \
-    "${WORKSPACE}/data/cache/response" \
-    "${WORKSPACE}/data" \
+	    "${WORKSPACE}" \
+	    "${WORKSPACE}/bin" \
+	    "${WORKSPACE}/data/persistent" \
+	    "${WORKSPACE}/data/cache/response" \
+	    "${WORKSPACE}/data" \
     "${WORKSPACE}/scripts"
   install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${WORKSPACE}/bin/tukuyomi"
   install -m 644 "${ROOT_DIR}/docker-compose.yml" "${WORKSPACE}/docker-compose.yml"

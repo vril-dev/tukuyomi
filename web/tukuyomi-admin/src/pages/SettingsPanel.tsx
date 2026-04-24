@@ -39,6 +39,9 @@ type ListenerAdminConfig = {
       min_version: string;
       redirect_http: boolean;
       http_redirect_addr: string;
+      acme: {
+        cache_dir: string;
+      };
     };
     http3: {
       enabled: boolean;
@@ -84,14 +87,37 @@ type ListenerAdminConfig = {
     file_max_bytes: number;
     file_retention_days: number;
   };
-    paths: {
-      proxy_config_file: string;
-      site_config_file: string;
-      php_runtime_inventory_file: string;
-      vhost_config_file: string;
-      scheduled_task_config_file: string;
-      security_audit_file: string;
-      security_audit_blob_dir: string;
+  persistent_storage: {
+    backend: string;
+    local: {
+      base_dir: string;
+    };
+    s3: {
+      bucket: string;
+      region: string;
+      endpoint: string;
+      prefix: string;
+      force_path_style: boolean;
+    };
+    azure_blob: {
+      account_name: string;
+      container: string;
+      endpoint: string;
+      prefix: string;
+    };
+    gcs: {
+      bucket: string;
+      prefix: string;
+    };
+  };
+  paths: {
+    proxy_config_file: string;
+    site_config_file: string;
+    php_runtime_inventory_file: string;
+    vhost_config_file: string;
+    scheduled_task_config_file: string;
+    security_audit_file: string;
+    security_audit_blob_dir: string;
       cache_rules_file: string;
       cache_store_file: string;
       rules_file: string;
@@ -195,6 +221,13 @@ type ListenerAdminRuntime = {
   storage_file_rotate_bytes?: number;
   storage_file_max_bytes?: number;
   storage_file_retention_days?: number;
+  persistent_storage_backend?: string;
+  persistent_storage_local_base_dir?: string;
+  persistent_storage_s3_bucket?: string;
+  persistent_storage_s3_region?: string;
+  persistent_storage_s3_endpoint?: string;
+  persistent_storage_s3_prefix?: string;
+  persistent_storage_s3_force_path_style?: boolean;
   tracing_enabled?: boolean;
   tracing_service_name?: string;
   tracing_otlp_endpoint?: string;
@@ -251,6 +284,9 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
         min_version: "tls1.2",
         redirect_http: false,
         http_redirect_addr: "",
+        acme: {
+          cache_dir: "",
+        },
       },
       http3: {
         enabled: false,
@@ -295,6 +331,29 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
       file_rotate_bytes: 8 * 1024 * 1024,
       file_max_bytes: 256 * 1024 * 1024,
       file_retention_days: 7,
+    },
+    persistent_storage: {
+      backend: "local",
+      local: {
+        base_dir: "data/persistent",
+      },
+      s3: {
+        bucket: "",
+        region: "",
+        endpoint: "",
+        prefix: "",
+        force_path_style: false,
+      },
+      azure_blob: {
+        account_name: "",
+        container: "",
+        endpoint: "",
+        prefix: "",
+      },
+      gcs: {
+        bucket: "",
+        prefix: "",
+      },
     },
     paths: {
       proxy_config_file: "conf/proxy.json",
@@ -376,6 +435,10 @@ function normalizeListenerAdminConfig(value: Partial<ListenerAdminConfig> | null
       tls: {
         ...base.server.tls,
         ...value.server?.tls,
+        acme: {
+          ...base.server.tls.acme,
+          ...value.server?.tls?.acme,
+        },
       },
       http3: {
         ...base.server.http3,
@@ -412,6 +475,26 @@ function normalizeListenerAdminConfig(value: Partial<ListenerAdminConfig> | null
     storage: {
       ...base.storage,
       ...value.storage,
+    },
+    persistent_storage: {
+      ...base.persistent_storage,
+      ...value.persistent_storage,
+      local: {
+        ...base.persistent_storage.local,
+        ...value.persistent_storage?.local,
+      },
+      s3: {
+        ...base.persistent_storage.s3,
+        ...value.persistent_storage?.s3,
+      },
+      azure_blob: {
+        ...base.persistent_storage.azure_blob,
+        ...value.persistent_storage?.azure_blob,
+      },
+      gcs: {
+        ...base.persistent_storage.gcs,
+        ...value.persistent_storage?.gcs,
+      },
     },
     paths: {
       ...base.paths,
@@ -1285,6 +1368,202 @@ export default function SettingsPanel() {
 	                    state: secretStatus.storage_db_dsn_configured ? tx("configured") : tx("not configured"),
 	                  })}
                 </div>
+              </section>
+
+              <section className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
+                <div>
+                  <div className="text-sm font-medium">{tx("Persistent File Storage")}</div>
+                  <p className="text-xs text-neutral-500">
+                    {tx("Durable runtime files such as ACME account keys and certificates. Provider credentials are read from environment or platform identity, not saved here.")}
+                  </p>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label={tx("Backend")}>
+                    <select
+                      value={listenerAdminConfig.persistent_storage.backend}
+                      onChange={(e) => setListenerAdminConfig((current) => ({
+                        ...current,
+                        persistent_storage: { ...current.persistent_storage, backend: e.target.value },
+                      }))}
+                      className="w-full rounded border border-neutral-200 bg-white"
+                    >
+                      <option value="local">{tx("Local")}</option>
+                      <option value="s3">{tx("S3")}</option>
+                      <option value="azure_blob">{tx("Azure Blob Storage")}</option>
+                      <option value="gcs">{tx("Google Cloud Storage")}</option>
+                    </select>
+                  </Field>
+                  <Field label={tx("Local Base Directory")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.local.base_dir}
+                      onChange={(e) => setListenerAdminConfig((current) => ({
+                        ...current,
+                        persistent_storage: {
+                          ...current.persistent_storage,
+                          local: { ...current.persistent_storage.local, base_dir: e.target.value },
+                        },
+                      }))}
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="data/persistent"
+                    />
+                  </Field>
+                  <Field label={tx("S3 Bucket")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.s3.bucket}
+                      onChange={(e) => setListenerAdminConfig((current) => ({
+                        ...current,
+                        persistent_storage: {
+                          ...current.persistent_storage,
+                          s3: { ...current.persistent_storage.s3, bucket: e.target.value },
+                        },
+                      }))}
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="tukuyomi-runtime"
+                    />
+                  </Field>
+                  <Field label={tx("S3 Region")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.s3.region}
+                      onChange={(e) => setListenerAdminConfig((current) => ({
+                        ...current,
+                        persistent_storage: {
+                          ...current.persistent_storage,
+                          s3: { ...current.persistent_storage.s3, region: e.target.value },
+                        },
+                      }))}
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="ap-northeast-1"
+                    />
+                  </Field>
+                  <Field label={tx("S3 Endpoint")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.s3.endpoint}
+                      onChange={(e) => setListenerAdminConfig((current) => ({
+                        ...current,
+                        persistent_storage: {
+                          ...current.persistent_storage,
+                          s3: { ...current.persistent_storage.s3, endpoint: e.target.value },
+                        },
+                      }))}
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="https://s3.example.com"
+                    />
+                  </Field>
+                  <Field label={tx("S3 Prefix")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.s3.prefix}
+                      onChange={(e) => setListenerAdminConfig((current) => ({
+                        ...current,
+                        persistent_storage: {
+                          ...current.persistent_storage,
+                          s3: { ...current.persistent_storage.s3, prefix: e.target.value },
+                        },
+                      }))}
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="prod"
+                    />
+                  </Field>
+                  <Field label={tx("Azure Account Name")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.azure_blob.account_name}
+                      onChange={(e) => setListenerAdminConfig((current) => ({
+                        ...current,
+                        persistent_storage: {
+                          ...current.persistent_storage,
+                          azure_blob: { ...current.persistent_storage.azure_blob, account_name: e.target.value },
+                        },
+                      }))}
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="tukuyomistorage"
+                    />
+                  </Field>
+                  <Field label={tx("Azure Container")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.azure_blob.container}
+                      onChange={(e) => setListenerAdminConfig((current) => ({
+                        ...current,
+                        persistent_storage: {
+                          ...current.persistent_storage,
+                          azure_blob: { ...current.persistent_storage.azure_blob, container: e.target.value },
+                        },
+                      }))}
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="runtime"
+                    />
+                  </Field>
+                  <Field label={tx("Azure Endpoint")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.azure_blob.endpoint}
+                      onChange={(e) => setListenerAdminConfig((current) => ({
+                        ...current,
+                        persistent_storage: {
+                          ...current.persistent_storage,
+                          azure_blob: { ...current.persistent_storage.azure_blob, endpoint: e.target.value },
+                        },
+                      }))}
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="https://account.blob.core.windows.net"
+                    />
+                  </Field>
+                  <Field label={tx("Azure Prefix")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.azure_blob.prefix}
+                      onChange={(e) => setListenerAdminConfig((current) => ({
+                        ...current,
+                        persistent_storage: {
+                          ...current.persistent_storage,
+                          azure_blob: { ...current.persistent_storage.azure_blob, prefix: e.target.value },
+                        },
+                      }))}
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="prod"
+                    />
+                  </Field>
+                  <Field label={tx("GCS Bucket")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.gcs.bucket}
+                      onChange={(e) => setListenerAdminConfig((current) => ({
+                        ...current,
+                        persistent_storage: {
+                          ...current.persistent_storage,
+                          gcs: { ...current.persistent_storage.gcs, bucket: e.target.value },
+                        },
+                      }))}
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="tukuyomi-runtime"
+                    />
+                  </Field>
+                  <Field label={tx("GCS Prefix")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.gcs.prefix}
+                      onChange={(e) => setListenerAdminConfig((current) => ({
+                        ...current,
+                        persistent_storage: {
+                          ...current.persistent_storage,
+                          gcs: { ...current.persistent_storage.gcs, prefix: e.target.value },
+                        },
+                      }))}
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="prod"
+                    />
+                  </Field>
+                </div>
+
+                <label className="flex items-center gap-2 text-xs text-neutral-700">
+                  <input
+                    type="checkbox"
+                    checked={listenerAdminConfig.persistent_storage.s3.force_path_style}
+                    onChange={(e) => setListenerAdminConfig((current) => ({
+                      ...current,
+                      persistent_storage: {
+                        ...current.persistent_storage,
+                        s3: { ...current.persistent_storage.s3, force_path_style: e.target.checked },
+                      },
+                    }))}
+                  />
+                  {tx("Use S3 path-style addressing")}
+                </label>
               </section>
             </div>
 

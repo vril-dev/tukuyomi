@@ -71,7 +71,7 @@ func (s *wafEventStore) insertSiteConfigRowsTx(tx *sql.Tx, versionID int64, cfg 
 				return err
 			}
 		}
-		if _, err := s.txExec(tx, `INSERT INTO site_tls (version_id, site_position, mode, cert_file, key_file) VALUES (?, ?, ?, ?, ?)`, versionID, i, site.TLS.Mode, site.TLS.CertFile, site.TLS.KeyFile); err != nil {
+		if _, err := s.txExec(tx, `INSERT INTO site_tls (version_id, site_position, mode, cert_file, key_file, acme_environment, acme_email) VALUES (?, ?, ?, ?, ?, ?, ?)`, versionID, i, site.TLS.Mode, site.TLS.CertFile, site.TLS.KeyFile, site.TLS.ACME.Environment, site.TLS.ACME.Email); err != nil {
 			return err
 		}
 	}
@@ -141,9 +141,9 @@ func (s *wafEventStore) loadSiteHosts(versionID int64, sitePosition int) ([]stri
 }
 
 func (s *wafEventStore) loadSiteTLS(versionID int64, sitePosition int) (SiteTLSConfig, error) {
-	row := s.queryRow(`SELECT mode, cert_file, key_file FROM site_tls WHERE version_id = ? AND site_position = ?`, versionID, sitePosition)
+	row := s.queryRow(`SELECT mode, cert_file, key_file, acme_environment, acme_email FROM site_tls WHERE version_id = ? AND site_position = ?`, versionID, sitePosition)
 	var out SiteTLSConfig
-	if err := row.Scan(&out.Mode, &out.CertFile, &out.KeyFile); err != nil {
+	if err := row.Scan(&out.Mode, &out.CertFile, &out.KeyFile, &out.ACME.Environment, &out.ACME.Email); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return SiteTLSConfig{}, nil
 		}

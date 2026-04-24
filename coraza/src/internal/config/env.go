@@ -126,6 +126,20 @@ var (
 	FileMaxBytes    int64
 	FileRetention   time.Duration
 
+	PersistentStorageBackend          string
+	PersistentStorageLocalBaseDir     string
+	PersistentStorageS3Bucket         string
+	PersistentStorageS3Region         string
+	PersistentStorageS3Endpoint       string
+	PersistentStorageS3Prefix         string
+	PersistentStorageS3ForcePathStyle bool
+	PersistentStorageAzureAccountName string
+	PersistentStorageAzureContainer   string
+	PersistentStorageAzureEndpoint    string
+	PersistentStorageAzurePrefix      string
+	PersistentStorageGCSBucket        string
+	PersistentStorageGCSPrefix        string
+
 	TracingEnabled      bool
 	TracingServiceName  string
 	TracingOTLPEndpoint string
@@ -458,6 +472,26 @@ func applyAppConfig(cfg appConfigFile) {
 	FileRotateBytes = cfg.Storage.FileRotateBytes
 	FileMaxBytes = cfg.Storage.FileMaxBytes
 	FileRetention = time.Duration(cfg.Storage.FileRetentionDays) * 24 * time.Hour
+
+	PersistentStorageBackend = strings.ToLower(strings.TrimSpace(cfg.Persistent.Backend))
+	if PersistentStorageBackend == "" {
+		PersistentStorageBackend = DefaultPersistentStorageBackend
+	}
+	PersistentStorageLocalBaseDir = strings.TrimSpace(cfg.Persistent.Local.BaseDir)
+	if PersistentStorageLocalBaseDir == "" {
+		PersistentStorageLocalBaseDir = DefaultPersistentStorageLocalDir
+	}
+	PersistentStorageS3Bucket = strings.TrimSpace(cfg.Persistent.S3.Bucket)
+	PersistentStorageS3Region = strings.TrimSpace(cfg.Persistent.S3.Region)
+	PersistentStorageS3Endpoint = strings.TrimSpace(cfg.Persistent.S3.Endpoint)
+	PersistentStorageS3Prefix = strings.Trim(strings.TrimSpace(cfg.Persistent.S3.Prefix), "/")
+	PersistentStorageS3ForcePathStyle = cfg.Persistent.S3.ForcePathStyle
+	PersistentStorageAzureAccountName = strings.TrimSpace(cfg.Persistent.AzureBlob.AccountName)
+	PersistentStorageAzureContainer = strings.TrimSpace(cfg.Persistent.AzureBlob.Container)
+	PersistentStorageAzureEndpoint = strings.TrimSpace(cfg.Persistent.AzureBlob.Endpoint)
+	PersistentStorageAzurePrefix = strings.Trim(strings.TrimSpace(cfg.Persistent.AzureBlob.Prefix), "/")
+	PersistentStorageGCSBucket = strings.TrimSpace(cfg.Persistent.GCS.Bucket)
+	PersistentStorageGCSPrefix = strings.Trim(strings.TrimSpace(cfg.Persistent.GCS.Prefix), "/")
 
 	AllowInsecureDefaults = cfg.Admin.AllowInsecureDefaults
 

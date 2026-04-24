@@ -136,6 +136,16 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	next.Storage.FileRotateBytes = 1024
 	next.Storage.FileMaxBytes = 4096
 	next.Storage.FileRetentionDays = 21
+	next.Persistent.Backend = config.PersistentStorageBackendLocal
+	next.Persistent.Local.BaseDir = "data/shared-persistent"
+	next.Persistent.S3.Bucket = "runtime-bucket"
+	next.Persistent.S3.Region = "ap-northeast-1"
+	next.Persistent.S3.Prefix = "prod/"
+	next.Persistent.AzureBlob.AccountName = "tukuyomitest"
+	next.Persistent.AzureBlob.Container = "runtime"
+	next.Persistent.AzureBlob.Prefix = "/prod"
+	next.Persistent.GCS.Bucket = "runtime-gcs"
+	next.Persistent.GCS.Prefix = "prod"
 	next.Paths.ScheduledTaskConfigFile = "conf/tasks.custom.json"
 	next.Proxy.RollbackHistorySize = 12
 	next.Proxy.Engine.Mode = config.ProxyEngineModeTukuyomiProxy
@@ -211,6 +221,15 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	}
 	if saved.Storage.DBDSN != "fixture-db-dsn-secret" {
 		t.Fatalf("db_dsn should be preserved, got %q", saved.Storage.DBDSN)
+	}
+	if saved.Persistent.Backend != config.PersistentStorageBackendLocal {
+		t.Fatalf("persistent_storage.backend=%q want local", saved.Persistent.Backend)
+	}
+	if saved.Persistent.Local.BaseDir != "data/shared-persistent" {
+		t.Fatalf("persistent_storage.local.base_dir=%q want data/shared-persistent", saved.Persistent.Local.BaseDir)
+	}
+	if saved.Persistent.S3.Bucket != "runtime-bucket" || saved.Persistent.S3.Prefix != "prod" {
+		t.Fatalf("persistent_storage.s3=%+v want bucket/runtime prefix prod", saved.Persistent.S3)
 	}
 	if !saved.Observability.Tracing.Enabled {
 		t.Fatal("expected tracing enabled after save")
@@ -408,6 +427,9 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 				MinVersion:       "tls1.2",
 				RedirectHTTP:     false,
 				HTTPRedirectAddr: "",
+				ACME: settingsListenerAdminServerTLSACMEConfig{
+					CacheDir: "",
+				},
 			},
 			HTTP3: settingsListenerAdminServerHTTP3Config{
 				Enabled:         false,
@@ -444,6 +466,12 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 			FileRotateBytes:   8 * 1024 * 1024,
 			FileMaxBytes:      256 * 1024 * 1024,
 			FileRetentionDays: 7,
+		},
+		Persistent: settingsListenerAdminPersistentStorageConfig{
+			Backend: config.PersistentStorageBackendLocal,
+			Local: settingsListenerAdminPersistentStorageLocalConfig{
+				BaseDir: config.DefaultPersistentStorageLocalDir,
+			},
 		},
 		Paths: settingsListenerAdminPathsConfig{
 			ProxyConfigFile:         "conf/proxy.json",

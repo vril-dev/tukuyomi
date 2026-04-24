@@ -319,6 +319,12 @@ func TestLoadAppConfigFile(t *testing.T) {
 	if cfg.WAF.Engine.Mode != WAFEngineModeCoraza {
 		t.Fatalf("unexpected WAF engine mode: %s", cfg.WAF.Engine.Mode)
 	}
+	if cfg.Persistent.Backend != PersistentStorageBackendLocal {
+		t.Fatalf("unexpected persistent storage backend: %s", cfg.Persistent.Backend)
+	}
+	if cfg.Persistent.Local.BaseDir != DefaultPersistentStorageLocalDir {
+		t.Fatalf("unexpected persistent storage local base dir: %s", cfg.Persistent.Local.BaseDir)
+	}
 	if err := ReloadFromConfigFile(cfgPath); err != nil {
 		t.Fatalf("ReloadFromConfigFile returned error: %v", err)
 	}
@@ -327,6 +333,12 @@ func TestLoadAppConfigFile(t *testing.T) {
 	}
 	if WAFEngineMode != WAFEngineModeCoraza {
 		t.Fatalf("unexpected runtime WAF engine mode: %s", WAFEngineMode)
+	}
+	if PersistentStorageBackend != PersistentStorageBackendLocal {
+		t.Fatalf("unexpected runtime persistent storage backend: %s", PersistentStorageBackend)
+	}
+	if PersistentStorageLocalBaseDir != DefaultPersistentStorageLocalDir {
+		t.Fatalf("unexpected runtime persistent storage local base dir: %s", PersistentStorageLocalBaseDir)
 	}
 }
 
@@ -357,7 +369,11 @@ func TestLoadAppConfigFileRejectsRemovedFileStorageBackend(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.json")
 	raw := `{
 		"server": {"listen_addr": ":9090"},
-		"admin": {"api_base_path": "/tukuyomi-api", "ui_base_path": "/tukuyomi-ui"},
+		"admin": {
+			"api_base_path": "/tukuyomi-api",
+			"ui_base_path": "/tukuyomi-ui",
+			"api_key_primary": "very-strong-random-api-key-12345"
+		},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
 			"security_audit_file": "audit/security-audit.ndjson",
@@ -376,6 +392,91 @@ func TestLoadAppConfigFileRejectsRemovedFileStorageBackend(t *testing.T) {
 		t.Fatal("expected validation error, got nil")
 	}
 	if !strings.Contains(err.Error(), "storage.backend=file has been removed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadAppConfigFileAcceptsS3PersistentStorageWithoutSecrets(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	raw := `{
+		"server": {"listen_addr": ":9090"},
+		"admin": {
+			"api_base_path": "/tukuyomi-api",
+			"ui_base_path": "/tukuyomi-ui",
+			"api_key_primary": "very-strong-random-api-key-12345"
+		},
+		"paths": {
+			"proxy_config_file": "conf/proxy.json",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
+			"rules_file": "tukuyomi.conf"
+		},
+		"proxy": {"rollback_history_size": 8},
+		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
+		"storage": {"db_driver": "sqlite"},
+		"persistent_storage": {
+			"backend": "s3",
+			"s3": {
+				"bucket": "runtime-bucket",
+				"region": "ap-northeast-1",
+				"prefix": "prod"
+			}
+		}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := loadAppConfigFile(cfgPath)
+	if err != nil {
+		t.Fatalf("loadAppConfigFile returned error: %v", err)
+	}
+	if cfg.Persistent.S3.Bucket != "runtime-bucket" {
+		t.Fatalf("s3 bucket=%q want runtime-bucket", cfg.Persistent.S3.Bucket)
+	}
+	if cfg.Persistent.S3.Prefix != "prod" {
+		t.Fatalf("s3 prefix=%q want prod", cfg.Persistent.S3.Prefix)
+	}
+	if err := ReloadFromConfigFile(cfgPath); err != nil {
+		t.Fatalf("ReloadFromConfigFile returned error: %v", err)
+	}
+	if PersistentStorageBackend != PersistentStorageBackendS3 {
+		t.Fatalf("runtime backend=%q want s3", PersistentStorageBackend)
+	}
+	if PersistentStorageS3Bucket != "runtime-bucket" {
+		t.Fatalf("runtime s3 bucket=%q want runtime-bucket", PersistentStorageS3Bucket)
+	}
+}
+
+func TestLoadAppConfigFileRejectsInvalidS3PersistentStorage(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	raw := `{
+		"server": {"listen_addr": ":9090"},
+		"admin": {"api_base_path": "/tukuyomi-api", "ui_base_path": "/tukuyomi-ui"},
+		"paths": {
+			"proxy_config_file": "conf/proxy.json",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
+			"rules_file": "tukuyomi.conf"
+		},
+		"proxy": {"rollback_history_size": 8},
+		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
+		"storage": {"db_driver": "sqlite"},
+		"persistent_storage": {
+			"backend": "s3",
+			"s3": {
+				"bucket": "runtime-bucket",
+				"endpoint": "ftp://s3.example.test"
+			}
+		}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := loadAppConfigFile(cfgPath)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "persistent_storage.s3.endpoint must start with http:// or https://") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

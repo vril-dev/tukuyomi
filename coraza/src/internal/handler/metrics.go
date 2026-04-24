@@ -77,7 +77,7 @@ func MetricsHandler(c *gin.Context) {
 	writePromGauge(&b, "tukuyomi_server_tls_source_manual", boolGauge(tlsStatus.Source == "manual" || tlsStatus.Source == "composite"))
 	writePromGauge(&b, "tukuyomi_server_tls_source_acme", boolGauge(tlsStatus.Source == "acme" || tlsStatus.Source == "composite"))
 	writePromGauge(&b, "tukuyomi_server_tls_source_composite", boolGauge(tlsStatus.Source == "composite"))
-	writePromGauge(&b, "tukuyomi_server_tls_acme_enabled", boolGauge(config.ServerTLSACMEEnabled))
+	writePromGauge(&b, "tukuyomi_server_tls_acme_enabled", boolGauge(tlsStatus.Source == "acme" || tlsStatus.Source == "composite"))
 	writePromGauge(&b, "tukuyomi_server_tls_cert_not_after_unix", optionalUnixGauge(tlsStatus.CertNotAfter))
 	writePromCounter(&b, "tukuyomi_server_tls_acme_success_total", tlsStatus.ACMESuccessTotal)
 	writePromCounter(&b, "tukuyomi_server_tls_acme_failure_total", tlsStatus.ACMEFailureTotal)

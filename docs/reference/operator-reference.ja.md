@@ -104,8 +104,48 @@ container 起動で通常必要なのは:
 - `server.http3.enabled=true` には built-in TLS が必要
 - HTTP/3 は `server.listen_addr` と同じ numeric port を UDP で使う
 - `server.tls.redirect_http=true` で plain HTTP listener を追加
-- ACME は `server.tls.acme.*`
+- ACME auto TLS は site ごとの `tls.mode=acme` で選択します。ACME account key・challenge token・証明書 cache は `persistent_storage` の `acme/` namespace に保存します。
 - `paths.site_config_file` の既定は `conf/sites.json` です。DB-backed runtime では、これは空 DB の seed/export path であり live source of truth ではありません。
+
+### Persistent File Storage
+
+`persistent_storage` は ACME cache など、DB ではなく byte として永続化する runtime artifact の配置先です。
+
+```json
+{
+  "persistent_storage": {
+    "backend": "local",
+    "local": {
+      "base_dir": "data/persistent"
+    }
+  }
+}
+```
+
+- `local` は単一 node または operator が用意した共有 mount 向けです。
+- S3 は provider 名、bucket、region、endpoint、prefix などの非秘密情報のみを設定対象にします。MinIO 等の S3-compatible endpoint では `force_path_style=true` を使います。
+- API key、secret key、client secret、token、connection string は JSON/DB に保存しません。AWS/Azure/GCP の認証は env、managed identity、Workload Identity、ADC など platform 側で供給します。
+- S3 backend は `AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`、任意の `AWS_SESSION_TOKEN`、`AWS_REGION` / `AWS_DEFAULT_REGION` を runtime env から読みます。
+- Azure Blob Storage / Google Cloud Storage は provider adapter が入るまで fail-closed です。local へ暗黙 fallback しません。
+
+S3-compatible backend 例:
+
+```json
+{
+  "persistent_storage": {
+    "backend": "s3",
+    "s3": {
+      "bucket": "tukuyomi-runtime",
+      "region": "us-east-1",
+      "endpoint": "http://minio:9000",
+      "prefix": "prod",
+      "force_path_style": true
+    }
+  }
+}
+```
+
+MinIO integration test は通常回帰では skip されます。実行する場合は、既存 bucket を用意し、`TUKUYOMI_MINIO_S3_ENDPOINT`、`TUKUYOMI_MINIO_S3_BUCKET`、`AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY` を設定します。
 
 TLS 証明書選択は TLS handshake 時点で終わるため、route host/path より前に決まります。
 

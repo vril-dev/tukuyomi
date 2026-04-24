@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/mail"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,9 @@ import (
 const (
 	defaultSiteConfigRaw = "{\n  \"sites\": []\n}\n"
 	siteConfigBlobKey    = "sites"
+
+	siteTLSACMEEnvironmentProduction = "production"
+	siteTLSACMEEnvironmentStaging    = "staging"
 )
 
 type SiteConfigFile struct {
@@ -34,9 +38,15 @@ type SiteConfig struct {
 }
 
 type SiteTLSConfig struct {
-	Mode     string `json:"mode"`
-	CertFile string `json:"cert_file,omitempty"`
-	KeyFile  string `json:"key_file,omitempty"`
+	Mode     string            `json:"mode"`
+	CertFile string            `json:"cert_file,omitempty"`
+	KeyFile  string            `json:"key_file,omitempty"`
+	ACME     SiteTLSACMEConfig `json:"acme,omitempty"`
+}
+
+type SiteTLSACMEConfig struct {
+	Environment string `json:"environment,omitempty"`
+	Email       string `json:"email,omitempty"`
 }
 
 type SiteRuntimeStatus struct {
@@ -48,6 +58,7 @@ type SiteRuntimeStatus struct {
 	TLSStatus       string   `json:"tls_status"`
 	TLSWarning      string   `json:"tls_warning,omitempty"`
 	TLSCertNotAfter string   `json:"tls_cert_not_after,omitempty"`
+	TLSACMEEnv      string   `json:"tls_acme_environment,omitempty"`
 	GeneratedRoute  string   `json:"generated_route,omitempty"`
 }
 
@@ -55,8 +66,16 @@ type siteTLSBinding struct {
 	Name        string
 	Hosts       []string
 	Mode        string
+	ACMEProfile string
 	Certificate *tls.Certificate
 	NotAfter    string
+}
+
+type ServerTLSACMEProfile struct {
+	Key         string
+	Environment string
+	Email       string
+	Domains     []string
 }
 
 type sitePreparedConfig struct {
@@ -93,6 +112,7 @@ type siteRuntime struct {
 type siteBindingMatch struct {
 	Name        string
 	Mode        string
+	ACMEProfile string
 	Certificate *tls.Certificate
 	NotAfter    string
 }
@@ -470,6 +490,7 @@ func SiteBindingForHost(host string) siteBindingMatch {
 			return siteBindingMatch{
 				Name:        binding.Name,
 				Mode:        binding.Mode,
+				ACMEProfile: binding.ACMEProfile,
 				Certificate: binding.Certificate,
 				NotAfter:    binding.NotAfter,
 			}
@@ -615,6 +636,9 @@ func normalizeAndValidateSiteConfig(in SiteConfigFile) (SiteConfigFile, []SiteRu
 		status.TLSStatus = "covered"
 		status.TLSWarning = warning
 		status.TLSCertNotAfter = binding.NotAfter
+		if site.TLS.Mode == "acme" {
+			status.TLSACMEEnv = site.TLS.ACME.Environment
+		}
 		statuses = append(statuses, status)
 		bindings = append(bindings, binding)
 	}
@@ -644,6 +668,11 @@ func normalizeSiteConfigFile(in SiteConfigFile) SiteConfigFile {
 		next.TLS.Mode = normalizeSiteTLSMode(next.TLS.Mode)
 		next.TLS.CertFile = strings.TrimSpace(next.TLS.CertFile)
 		next.TLS.KeyFile = strings.TrimSpace(next.TLS.KeyFile)
+		next.TLS.ACME.Environment = normalizeSiteTLSACMEEnvironment(next.TLS.ACME.Environment)
+		next.TLS.ACME.Email = strings.TrimSpace(next.TLS.ACME.Email)
+		if next.TLS.Mode != "acme" {
+			next.TLS.ACME = SiteTLSACMEConfig{}
+		}
 		out.Sites = append(out.Sites, next)
 	}
 	return out
@@ -677,6 +706,17 @@ func normalizeSiteTLSMode(v string) string {
 		return "manual"
 	case "acme":
 		return "acme"
+	default:
+		return strings.ToLower(strings.TrimSpace(v))
+	}
+}
+
+func normalizeSiteTLSACMEEnvironment(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "prod", "production":
+		return siteTLSACMEEnvironmentProduction
+	case "stage", "staging":
+		return siteTLSACMEEnvironmentStaging
 	default:
 		return strings.ToLower(strings.TrimSpace(v))
 	}
@@ -718,13 +758,17 @@ func validateSiteTLSBinding(index int, site SiteConfig, cfg SiteConfigFile) (sit
 		if siteHasWildcardHost(site.Hosts) {
 			return siteTLSBinding{}, "", fmt.Errorf("sites[%d].tls.mode=acme supports exact hosts only", index)
 		}
-		if !config.ServerTLSACMEEnabled {
-			return siteTLSBinding{}, "", fmt.Errorf("sites[%d].tls.mode=acme requires server.tls.acme.enabled=true", index)
+		if site.TLS.ACME.Environment != siteTLSACMEEnvironmentProduction && site.TLS.ACME.Environment != siteTLSACMEEnvironmentStaging {
+			return siteTLSBinding{}, "", fmt.Errorf("sites[%d].tls.acme.environment must be production or staging", index)
+		}
+		if err := validateSiteTLSACMEEmail(site.TLS.ACME.Email); err != nil {
+			return siteTLSBinding{}, "", fmt.Errorf("sites[%d].tls.acme.email %w", index, err)
 		}
 		return siteTLSBinding{
-			Name:  site.Name,
-			Hosts: append([]string(nil), site.Hosts...),
-			Mode:  site.TLS.Mode,
+			Name:        site.Name,
+			Hosts:       append([]string(nil), site.Hosts...),
+			Mode:        site.TLS.Mode,
+			ACMEProfile: siteTLSACMEProfileKey(site.TLS.ACME.Environment, site.TLS.ACME.Email),
 		}, "", nil
 	case "legacy":
 		notAfter, warning, err := validateLegacySiteCoverage(site.Hosts, cfg)
@@ -743,21 +787,6 @@ func validateSiteTLSBinding(index int, site SiteConfig, cfg SiteConfigFile) (sit
 }
 
 func validateLegacySiteCoverage(hosts []string, sites SiteConfigFile) (string, string, error) {
-	if config.ServerTLSACMEEnabled {
-		acmeHosts := map[string]struct{}{}
-		for _, host := range EffectiveServerTLSACMEDomainsForSites(sites) {
-			acmeHosts[host] = struct{}{}
-		}
-		for _, host := range hosts {
-			if strings.HasPrefix(host, "*.") {
-				return "", "", fmt.Errorf("wildcard host %q is not covered by legacy ACME", host)
-			}
-			if _, ok := acmeHosts[host]; !ok {
-				return "", "", fmt.Errorf("host %q is not covered by legacy ACME domains", host)
-			}
-		}
-		return "", "coverage follows ACME issuance", nil
-	}
 	if config.ServerTLSCertFile == "" || config.ServerTLSKeyFile == "" {
 		return "", "", fmt.Errorf("legacy listener certificate is not configured")
 	}
@@ -778,24 +807,11 @@ func EffectiveServerTLSACMEDomains() []string {
 }
 
 func EffectiveServerTLSACMEDomainsForSites(sites SiteConfigFile) []string {
-	domains := make([]string, 0, len(config.ServerTLSACMEDomains))
+	profiles := EffectiveServerTLSACMEProfilesForSites(sites)
+	var domains []string
 	seen := map[string]struct{}{}
-	for _, host := range config.ServerTLSACMEDomains {
-		next := normalizeProxyHostPattern(host)
-		if next == "" {
-			continue
-		}
-		if _, ok := seen[next]; ok {
-			continue
-		}
-		seen[next] = struct{}{}
-		domains = append(domains, next)
-	}
-	for _, site := range sites.Sites {
-		if !siteEnabled(site.Enabled) || site.TLS.Mode != "acme" {
-			continue
-		}
-		for _, host := range site.Hosts {
+	for _, profile := range profiles {
+		for _, host := range profile.Domains {
 			if _, ok := seen[host]; ok {
 				continue
 			}
@@ -804,6 +820,70 @@ func EffectiveServerTLSACMEDomainsForSites(sites SiteConfigFile) []string {
 		}
 	}
 	return domains
+}
+
+func EffectiveServerTLSACMEProfilesForSites(sites SiteConfigFile) []ServerTLSACMEProfile {
+	profiles := make([]ServerTLSACMEProfile, 0)
+	seenProfiles := map[string]int{}
+	seenDomains := map[string]struct{}{}
+	for _, site := range sites.Sites {
+		if !siteEnabled(site.Enabled) || site.TLS.Mode != "acme" {
+			continue
+		}
+		environment := normalizeSiteTLSACMEEnvironment(site.TLS.ACME.Environment)
+		email := strings.TrimSpace(site.TLS.ACME.Email)
+		key := siteTLSACMEProfileKey(environment, email)
+		profileIndex, ok := seenProfiles[key]
+		if !ok {
+			profileIndex = len(profiles)
+			seenProfiles[key] = profileIndex
+			profiles = append(profiles, ServerTLSACMEProfile{
+				Key:         key,
+				Environment: environment,
+				Email:       email,
+			})
+		}
+		for _, host := range site.Hosts {
+			host = normalizeProxyHostPattern(host)
+			if host == "" {
+				continue
+			}
+			if _, ok := seenDomains[host]; ok {
+				continue
+			}
+			seenDomains[host] = struct{}{}
+			profiles[profileIndex].Domains = append(profiles[profileIndex].Domains, host)
+		}
+	}
+	return profiles
+}
+
+func siteACMEUsesStaging(sites SiteConfigFile) bool {
+	for _, profile := range EffectiveServerTLSACMEProfilesForSites(sites) {
+		if profile.Environment == siteTLSACMEEnvironmentStaging {
+			return true
+		}
+	}
+	return false
+}
+
+func siteTLSACMEProfileKey(environment string, email string) string {
+	return normalizeSiteTLSACMEEnvironment(environment) + "\x00" + strings.ToLower(strings.TrimSpace(email))
+}
+
+func validateSiteTLSACMEEmail(email string) error {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return nil
+	}
+	if len(email) > 254 {
+		return fmt.Errorf("must be at most 254 bytes")
+	}
+	addr, err := mail.ParseAddress(email)
+	if err != nil || addr == nil || addr.Name != "" || addr.Address != email {
+		return fmt.Errorf("must be an email address or empty")
+	}
+	return nil
 }
 
 func (rt *siteRuntime) snapshotLocked() siteRuntimeSnapshot {

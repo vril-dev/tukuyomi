@@ -135,7 +135,7 @@ func TestValidateVhostConfigRawGeneratesHiddenTargetWhenOmitted(t *testing.T) {
 	}
 }
 
-func TestValidateVhostConfigRawRequiresLinkedUpstreamName(t *testing.T) {
+func TestValidateVhostConfigRawAllowsOmittedLinkedUpstreamName(t *testing.T) {
 	restore := resetPHPFoundationRuntimesForTest(t)
 	defer restore()
 
@@ -162,8 +162,12 @@ func TestValidateVhostConfigRawRequiresLinkedUpstreamName(t *testing.T) {
     }
   ]
 }`
-	if _, err := ValidateVhostConfigRawWithInventory(raw, inventory); err == nil || !strings.Contains(err.Error(), "linked_upstream_name is required") {
+	cfg, err := ValidateVhostConfigRawWithInventory(raw, inventory)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Vhosts[0].LinkedUpstreamName != "" {
+		t.Fatalf("linked_upstream_name=%q want empty", cfg.Vhosts[0].LinkedUpstreamName)
 	}
 }
 

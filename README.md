@@ -130,11 +130,13 @@ For the detailed operator model, see:
 - [docs/reference/operator-reference.md](docs/reference/operator-reference.md)
 - [docs/operations/listener-topology.md](docs/operations/listener-topology.md)
 
-`Proxy Rules > Upstreams` is the direct backend node catalog. `Proxy Rules >
-Backend Pools` groups routable upstream names into route-scoped balancing sets,
-and routes normally bind to `action.backend_pool`. `Backends` lists canonical
-backend objects used by routing and keeps runtime operations on the direct
-named upstream nodes themselves.
+`Proxy Rules > Upstreams` is the catalog for direct non-vhost backend nodes.
+PHP-FPM/static application backends that are owned by Tukuyomi Vhosts are not
+configured there; move those host/docroot/runtime settings to `Vhosts` instead.
+`Proxy Rules > Backend Pools` groups direct routable upstream names into
+route-scoped balancing sets, and routes normally bind to `action.backend_pool`.
+`Backends` lists canonical backend objects used by routing and keeps runtime
+operations on the direct named upstream nodes themselves.
 
 In the structured `Proxy Rules` editor, the operator workflow is shown in this
 order:
@@ -153,20 +155,16 @@ or given a runtime weight override from `Backends` without editing
 overrides live in DB `upstream_runtime` and use `data/conf/upstream-runtime.json`
 only as seed/import/export material.
 
-For route-scoped web balancing, define backend nodes in `upstreams[]`, group
-them in `backend_pools[]`, then bind routes to those pools with
-`action.backend_pool`.
+For route-scoped web balancing outside Vhosts, define backend nodes in
+`upstreams[]`, group them in `backend_pools[]`, then bind routes to those pools
+with `action.backend_pool`.
 
-When a Vhost needs to participate in the same routing namespace,
-`linked_upstream_name` is required and must already exist in `Proxy Rules >
-Upstreams`. The Vhost binds to that configured upstream, and the effective
-runtime resolves that upstream as a vhost-backed target while the legacy
-`generated_target` remains an internal compatibility field for vhost
-materialization. A configured upstream bound by a Vhost cannot be removed from
-`Proxy Rules > Upstreams` until the Vhost is relinked.
-Vhost-bound configured upstreams are visible in `Backends` as status-only canonical
-objects, but runtime enable/drain/disable and runtime weight override remain
-limited to direct named upstreams in this first slice.
+For Vhost-owned applications, define the application in `Vhosts`. The runtime
+creates a generated backend and generated host route from the vhost definition.
+Configured upstream URLs in `Proxy Rules > Upstreams` are never rebound or
+rewritten by Vhosts. Vhost-generated backends are visible in `Backends` as
+status-only canonical objects, while runtime enable/drain/disable and runtime
+weight override remain limited to direct named upstreams.
 
 Standard `http://` and `https://` upstream proxying automatically adds:
 

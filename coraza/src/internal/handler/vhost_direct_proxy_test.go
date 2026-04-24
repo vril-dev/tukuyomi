@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"tukuyomi/internal/adminauth"
 	"tukuyomi/internal/cacheconf"
 )
 
@@ -226,6 +227,8 @@ func TestServeProxyWithCacheCachesStaticVhostAssets(t *testing.T) {
 
 	for i, want := range []string{"MISS", "HIT"} {
 		req := httptest.NewRequest(http.MethodGet, "http://docs.example.com/test.html", nil)
+		req.AddCookie(&http.Cookie{Name: adminauth.SessionCookieName, Value: "admin-session"})
+		req.AddCookie(&http.Cookie{Name: adminauth.CSRFCookieName, Value: "admin-csrf"})
 		decision, err := resolveProxyRouteDecision(req, currentProxyConfig(), proxyRuntimeHealth())
 		if err != nil {
 			t.Fatalf("resolveProxyRouteDecision %d: %v", i+1, err)
@@ -246,7 +249,7 @@ func TestServeProxyWithCacheCachesStaticVhostAssets(t *testing.T) {
 	}
 }
 
-func TestServeProxyServesStaticVhostAssetsViaLinkedBackendPool(t *testing.T) {
+func TestServeProxyServesStaticVhostAssetsViaGeneratedRoute(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
 
@@ -321,8 +324,8 @@ func TestServeProxyServesStaticVhostAssetsViaLinkedBackendPool(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if decision.SelectedUpstream != "docs" {
-		t.Fatalf("selected_upstream=%q want=%q", decision.SelectedUpstream, "docs")
+	if decision.SelectedUpstream != "docs-static" {
+		t.Fatalf("selected_upstream=%q want=%q", decision.SelectedUpstream, "docs-static")
 	}
 	if !strings.Contains(rec.Body.String(), "console.log('linked');") {
 		t.Fatalf("unexpected body=%q", rec.Body.String())
@@ -762,7 +765,7 @@ func TestServeProxyStaticVhostAllowsWellKnownPaths(t *testing.T) {
 	}
 }
 
-func TestConfiguredStaticUpstreamCanBecomeImplicitPrimaryTarget(t *testing.T) {
+func TestConfiguredUpstreamDoesNotBecomeImplicitVhostTarget(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
 
@@ -797,9 +800,14 @@ func TestConfiguredStaticUpstreamCanBecomeImplicitPrimaryTarget(t *testing.T) {
 	if err := os.WriteFile(vhostPath, []byte(vhosts), 0o600); err != nil {
 		t.Fatalf("write vhosts: %v", err)
 	}
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("primary-upstream\n"))
+	}))
+	defer primary.Close()
+
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "` + primary.URL + `", "weight": 1, "enabled": true }
   ]
 }`
 	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o600); err != nil {
@@ -820,14 +828,23 @@ func TestConfiguredStaticUpstreamCanBecomeImplicitPrimaryTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveProxyRouteDecision: %v", err)
 	}
+	if decision.SelectedUpstream != "docs" {
+		t.Fatalf("selected_upstream=%q want docs", decision.SelectedUpstream)
+	}
+	if decision.Target == nil || decision.Target.String() != primary.URL {
+		t.Fatalf("target=%v want %s", decision.Target, primary.URL)
+	}
 	req = req.WithContext(withProxyRouteDecision(req.Context(), decision))
 	rec := httptest.NewRecorder()
 	ServeProxy(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "static-index") {
+	if !strings.Contains(rec.Body.String(), "primary-upstream") {
 		t.Fatalf("unexpected body=%q", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "static-index") {
+		t.Fatalf("vhost body leaked through configured upstream: %q", rec.Body.String())
 	}
 }
 
@@ -1083,6 +1100,17 @@ func TestServeProxyRunsFastCGIOverUnixSocket(t *testing.T) {
       "name": "app",
       "url": "fcgi:///` + filepath.ToSlash(socketPath) + `",
       "enabled": true
+    }
+  ],
+  "routes": [
+    {
+      "name": "app-direct",
+      "match": {
+        "hosts": ["app.example.com"]
+      },
+      "action": {
+        "upstream": "app"
+      }
     }
   ],
   "default_route": {

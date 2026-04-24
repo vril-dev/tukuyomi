@@ -474,7 +474,7 @@ export default function ProxyRulesPanel() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Proxy Rules")}</h1>
-          <p className="text-sm text-neutral-500">{tx("Edit route-aware upstream selection, path/query rewrites, header operations, and transport knobs with structured controls.")}</p>
+          <p className="text-sm text-neutral-500">{tx("Edit route-aware direct upstream selection, path/query rewrites, header operations, and transport knobs with structured controls.")}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <Badge color={structuredError ? "red" : "green"}>{structuredError ? tx("Structured editor conflict") : tx("Structured editor synced")}</Badge>
@@ -531,7 +531,7 @@ export default function ProxyRulesPanel() {
 
           <SectionCard
             title="Upstreams"
-            subtitle="Define named backend nodes first. Backend Pools and Routes refer to these names."
+            subtitle="Define direct non-vhost backend nodes here. PHP-FPM/static app backends belong in Vhosts."
             actions={
               <ActionButton
                 disabled={readOnly}
@@ -548,7 +548,7 @@ export default function ProxyRulesPanel() {
           >
             <div className="space-y-3">
               {routingState.upstreams.length === 0 ? (
-                <EmptyState>{tx("No named upstreams configured. Add upstreams before creating route targets.")}</EmptyState>
+                <EmptyState>{tx("No named upstreams configured. Add upstreams only for direct non-vhost route targets.")}</EmptyState>
               ) : null}
               {routingState.upstreams.map((upstream, index) => (
                 <div key={`upstream-${index}`} className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
@@ -940,7 +940,7 @@ export default function ProxyRulesPanel() {
 
           <SectionCard
             title="Routing"
-            subtitle="Routes are evaluated in ascending priority. The first match wins, then default_route, then upstreams."
+            subtitle="Explicit routes run first, then generated Vhost/Site routes, default_route, and finally upstreams."
             actions={
               routingTab === "routes" ? (
                 <ActionButton
@@ -1000,7 +1000,7 @@ export default function ProxyRulesPanel() {
             <div className="mt-4">
               {routingTab === "routes" ? (
                 <div className="space-y-4">
-                  {routingState.routes.length === 0 ? <EmptyState>{tx("No route rules configured. Traffic falls through to `default_route` or upstreams.")}</EmptyState> : null}
+                  {routingState.routes.length === 0 ? <EmptyState>{tx("No explicit route rules configured. Traffic can still match generated Vhost/Site routes before default_route or upstreams.")}</EmptyState> : null}
                   {routingState.routes.map((route, index) => (
                     <RouteEditorCard
                       key={`route-${index}`}
@@ -1036,7 +1036,7 @@ export default function ProxyRulesPanel() {
                     allowMatch={false}
                   />
                 ) : (
-                  <EmptyState>{tx("Configure a default route when you want a distinct fallback before upstream selection.")}</EmptyState>
+                  <EmptyState>{tx("Configure a default route when you want a distinct fallback after generated Vhost/Site routes and before upstream selection.")}</EmptyState>
                 )
               ) : null}
             </div>
@@ -1461,7 +1461,7 @@ function RouteEditorCard({
             ))}
           </select>
         </Field>
-        <Field label="Action upstream" hint="Configured upstream name only. Route targets do not accept direct URLs or legacy generated targets.">
+        <Field label="Action upstream" hint="Direct upstream name only for operator-managed routes. Vhost-owned app traffic is published from Vhosts.">
           <input
             className={inputClass}
             list={routeTargetOptions.length > 0 ? "proxy-route-target-options" : undefined}

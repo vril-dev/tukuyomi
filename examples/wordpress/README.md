@@ -23,3 +23,13 @@ before the stack starts.
 - `./setup.sh` installs the high-paranoia CRS setup as the DB-imported CRS setup asset.
 - `tx.blocking_paranoia_level` and `tx.detection_paranoia_level` are set to `2`.
 - Login endpoint `/wp-login.php` has stricter rate limits.
+
+## Smoke tests
+
+```bash
+./smoke.sh
+```
+
+`./smoke.sh` verifies that WordPress is reachable, the admin status endpoint is
+available, and an XSS probe is blocked by WAF (`403`).
+The example includes a smoke-only admin API key for the status check.

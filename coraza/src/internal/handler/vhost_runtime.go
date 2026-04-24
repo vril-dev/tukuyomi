@@ -617,19 +617,18 @@ func validateVhostConfigFile(cfg VhostConfigFile, inventory PHPRuntimeInventoryF
 			return fmt.Errorf("%s.generated_target duplicates %q", field, vhost.GeneratedTarget)
 		}
 		seenUpstreamAliases[vhost.GeneratedTarget] = struct{}{}
-		if vhost.LinkedUpstreamName == "" {
-			return fmt.Errorf("%s.linked_upstream_name is required", field)
+		if vhost.LinkedUpstreamName != "" {
+			if vhost.LinkedUpstreamName == vhost.GeneratedTarget {
+				return fmt.Errorf("%s.linked_upstream_name must differ from generated_target", field)
+			}
+			if !isValidConfigToken(vhost.LinkedUpstreamName) {
+				return fmt.Errorf("%s.linked_upstream_name must contain only [a-z0-9._-]", field)
+			}
+			if _, exists := seenUpstreamAliases[vhost.LinkedUpstreamName]; exists {
+				return fmt.Errorf("%s.linked_upstream_name duplicates %q", field, vhost.LinkedUpstreamName)
+			}
+			seenUpstreamAliases[vhost.LinkedUpstreamName] = struct{}{}
 		}
-		if vhost.LinkedUpstreamName == vhost.GeneratedTarget {
-			return fmt.Errorf("%s.linked_upstream_name must differ from generated_target", field)
-		}
-		if !isValidConfigToken(vhost.LinkedUpstreamName) {
-			return fmt.Errorf("%s.linked_upstream_name must contain only [a-z0-9._-]", field)
-		}
-		if _, exists := seenUpstreamAliases[vhost.LinkedUpstreamName]; exists {
-			return fmt.Errorf("%s.linked_upstream_name duplicates %q", field, vhost.LinkedUpstreamName)
-		}
-		seenUpstreamAliases[vhost.LinkedUpstreamName] = struct{}{}
 		if vhost.Mode == "php-fpm" {
 			if vhost.RuntimeID == "" {
 				return fmt.Errorf("%s.runtime_id is required when mode=php-fpm", field)

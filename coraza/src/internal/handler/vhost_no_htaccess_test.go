@@ -92,17 +92,6 @@ func TestServeProxyIgnoresHtaccessLikeNginx(t *testing.T) {
 		Upstreams: []ProxyUpstream{
 			{Name: "docs", URL: "http://127.0.0.1:8080", Weight: 1, Enabled: true},
 		},
-		Routes: []ProxyRoute{
-			{
-				Name:     "docs",
-				Priority: 10,
-				Enabled:  boolPtrNH(true),
-				Match: ProxyRouteMatch{
-					Hosts: []string{"docs.example.com"},
-				},
-				Action: ProxyRouteAction{Upstream: "docs"},
-			},
-		},
 	}))
 	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o600); err != nil {
 		t.Fatalf("write proxy: %v", err)
@@ -254,8 +243,4 @@ func serveNoHtaccessDocsRequest(t *testing.T, requestPath string) *httptest.Resp
 	rec := httptest.NewRecorder()
 	ServeProxy(rec, req)
 	return rec
-}
-
-func boolPtrNH(v bool) *bool {
-	return &v
 }

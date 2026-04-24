@@ -197,7 +197,7 @@ func PutProxyRules(c *gin.Context) {
 		return
 	}
 
-	etag, cfg, err := ApplyProxyRulesRaw(ifMatch, in.Raw)
+	etag, cfg, err := applyProxyRulesRaw(ifMatch, in.Raw, adminAuditActor(c))
 	if err != nil {
 		var conflict proxyRulesConflictError
 		if asProxyRulesConflict(err, &conflict) {
@@ -226,7 +226,7 @@ func PutProxyRules(c *gin.Context) {
 
 func RollbackProxyRulesHandler(c *gin.Context) {
 	prevRaw, prevETag, _, _, _ := ProxyRulesSnapshot()
-	etag, cfg, restored, err := RollbackProxyRules()
+	etag, cfg, restored, err := rollbackProxyRules(adminAuditActor(c))
 	if err != nil {
 		if strings.Contains(err.Error(), "no rollback snapshot") {
 			c.JSON(http.StatusConflict, gin.H{"error": "no rollback snapshot"})

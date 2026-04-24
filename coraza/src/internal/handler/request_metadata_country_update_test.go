@@ -271,6 +271,8 @@ func TestBuildRequestCountryUpdateStatusUsesDBBackedConfigAndState(t *testing.T)
 }
 
 func TestDefaultRunRequestCountryDBUpdateNowPersistsDBAssetAndState(t *testing.T) {
+	t.Chdir(t.TempDir())
+
 	cfgPath := writeSettingsConfigFixture(t)
 	restore := saveConfigFilePathForTest(t, cfgPath)
 	defer restore()

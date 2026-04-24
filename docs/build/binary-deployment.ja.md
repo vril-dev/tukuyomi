@@ -54,7 +54,9 @@ make install TARGET=linux-systemd \
 
 - `PREFIX` 既定は `/opt/tukuyomi`
 - `PREFIX` が実行ユーザの home 配下の場合、`INSTALL_CREATE_USER=auto` は実行ユーザを runtime user にし、`useradd` は実行しません
+- home 配下へ install した runtime tree は、その login user / primary group 所有になります
 - `/opt/tukuyomi` など system path の場合、既定では `tukuyomi` system user/group を作成または再利用します
+- system path の service account 運用では、deployment root と `bin/`, `scripts/`, `conf/` は root 管理、`db/`, `audit/`, `cache/`, `data/` は runtime user 書き込み可になります
 - `config.json` と `/etc/tukuyomi/tukuyomi.env` は既存 file を既定で上書きしません
 - host install の権限が必要な操作だけ `sudo` を使います。build は通常 user のまま実行できます
 - 初回作成する `/etc/tukuyomi/tukuyomi.env` と systemd unit は `PREFIX` に合わせて render されます

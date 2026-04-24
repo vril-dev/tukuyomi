@@ -5,5 +5,9 @@
     "db_dsn": "",
     "db_retention_days": 30,
     "db_sync_interval_sec": 0
+  },
+  "admin": {
+    "api_key_primary": "wordpress-example-admin-key-12345",
+    "session_secret": "wordpress-example-session-secret-12345"
   }
 }

@@ -23,3 +23,13 @@ runtime DB を seed します。
 - `./setup.sh` が high-paranoia CRS setup を DB import される CRS setup asset として配置します。
 - `tx.blocking_paranoia_level` と `tx.detection_paranoia_level` は `2` に設定しています。
 - login endpoint `/wp-login.php` にはより strict な rate limit を適用しています。
+
+## Smoke tests
+
+```bash
+./smoke.sh
+```
+
+`./smoke.sh` は WordPress の到達性、admin status endpoint、XSS probe が WAF により
+`403` で block されることを確認します。
+status check には、この example に含まれる smoke 用 admin API key を使います。

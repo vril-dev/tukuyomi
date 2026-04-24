@@ -11,7 +11,7 @@ services:
       - ./data/audit:/app/audit
       - ./data/cache:/app/cache
       - ./data/conf:/app/conf:ro
-      - ./data/php-fpm:/app/data/php-fpm:ro
+      - ./data/php-fpm:/app/data/php-fpm
       - ./data/vhosts:/app/data/vhosts:ro
     ports:
       - "${CORAZA_PORT:-19094}:${WAF_LISTEN_PORT:-9090}"

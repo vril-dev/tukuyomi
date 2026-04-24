@@ -473,22 +473,29 @@ export default function CacheRulePanel() {
           </Field>
         </div>
 
-        <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6 text-sm">
-          <StatBox label={tx("Disk Entries")} value={String(storeStats.entry_count ?? 0)} />
-          <StatBox label={tx("Disk Size")} value={String(storeStats.size_bytes ?? 0)} />
-          <StatBox label={tx("Hits")} value={String(storeStats.hits_total ?? 0)} />
-          <StatBox label={tx("Misses")} value={String(storeStats.misses_total ?? 0)} />
-          <StatBox label={tx("Stores")} value={String(storeStats.stores_total ?? 0)} />
-          <StatBox label={tx("Evictions")} value={String(storeStats.evictions_total ?? 0)} />
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold uppercase text-neutral-500">{tx("Current Store")}</h3>
+          <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-5 text-sm">
+            <StatBox label={tx("Disk Entries")} value={String(storeStats.entry_count ?? 0)} />
+            <StatBox label={tx("Disk Size")} value={String(storeStats.size_bytes ?? 0)} />
+            <StatBox label={tx("L1 Enabled")} value={String(storeStats.memory_enabled ?? false)} />
+            <StatBox label={tx("L1 Entries")} value={String(storeStats.memory_entry_count ?? 0)} />
+            <StatBox label={tx("L1 Size")} value={String(storeStats.memory_size_bytes ?? 0)} />
+          </div>
         </div>
 
-        <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6 text-sm">
-          <StatBox label={tx("L1 Enabled")} value={String(storeStats.memory_enabled ?? false)} />
-          <StatBox label={tx("L1 Entries")} value={String(storeStats.memory_entry_count ?? 0)} />
-          <StatBox label={tx("L1 Size")} value={String(storeStats.memory_size_bytes ?? 0)} />
-          <StatBox label={tx("L1 Hits")} value={String(storeStats.memory_hits_total ?? 0)} />
-          <StatBox label={tx("L1 Misses")} value={String(storeStats.memory_misses_total ?? 0)} />
-          <StatBox label={tx("L1 Evictions")} value={String(storeStats.memory_evictions_total ?? 0)} />
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold uppercase text-neutral-500">{tx("Runtime Counters")}</h3>
+          <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6 text-sm">
+            <StatBox label={tx("Total Hits")} value={String(storeStats.hits_total ?? 0)} />
+            <StatBox label={tx("Total Misses")} value={String(storeStats.misses_total ?? 0)} />
+            <StatBox label={tx("Total Stores")} value={String(storeStats.stores_total ?? 0)} />
+            <StatBox label={tx("Total Evictions")} value={String(storeStats.evictions_total ?? 0)} />
+            <StatBox label={tx("Total Clears")} value={String(storeStats.clears_total ?? 0)} />
+            <StatBox label={tx("L1 Hits")} value={String(storeStats.memory_hits_total ?? 0)} />
+            <StatBox label={tx("L1 Misses")} value={String(storeStats.memory_misses_total ?? 0)} />
+            <StatBox label={tx("L1 Evictions")} value={String(storeStats.memory_evictions_total ?? 0)} />
+          </div>
         </div>
       </SectionCard>
 

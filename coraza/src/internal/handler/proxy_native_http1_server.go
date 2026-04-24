@@ -62,6 +62,8 @@ var nativeHTTP1ServerReaderPool = sync.Pool{
 	},
 }
 
+const nativeHTTP1MaxUnreadRequestBodyDrainBytes int64 = 256 * 1024
+
 var nativeHTTP1ServerMetricsSource atomic.Pointer[nativeHTTP1Server]
 
 func RegisterNativeHTTP1ServerMetricsSource(server *NativeHTTP1Server) {
@@ -334,6 +336,9 @@ func (s *nativeHTTP1Server) serveConn(baseCtx context.Context, conn net.Conn, tl
 			}
 		})
 		s.Handler.ServeHTTP(rw, req)
+		if !rw.isHijacked() && !nativeHTTP1DrainUnreadRequestBody(body, nativeHTTP1MaxUnreadRequestBodyDrainBytes) {
+			rw.closeAfter = true
+		}
 		if body.timedOut() {
 			return
 		}
@@ -1122,6 +1127,7 @@ func nativeHTTP1WriteRequestTimeout(conn net.Conn) {
 type nativeHTTP1ServerRequestBody struct {
 	io.ReadCloser
 	timeout        atomic.Bool
+	readStarted    atomic.Bool
 	expectContinue bool
 	continueOnce   sync.Once
 	sendContinue   func() error
@@ -1132,6 +1138,7 @@ func (b *nativeHTTP1ServerRequestBody) Read(p []byte) (int, error) {
 	if b == nil || b.ReadCloser == nil {
 		return 0, io.EOF
 	}
+	b.readStarted.Store(true)
 	if b.expectContinue && b.sendContinue != nil {
 		b.continueOnce.Do(func() {
 			b.continueErr = b.sendContinue()
@@ -1145,6 +1152,28 @@ func (b *nativeHTTP1ServerRequestBody) Read(p []byte) (int, error) {
 		b.timeout.Store(true)
 	}
 	return n, err
+}
+
+func nativeHTTP1DrainUnreadRequestBody(body *nativeHTTP1ServerRequestBody, maxBytes int64) bool {
+	if body == nil || body.ReadCloser == nil {
+		return true
+	}
+	if body.expectContinue && !body.readStarted.Load() {
+		return false
+	}
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	lr := &io.LimitedReader{R: body, N: maxBytes + 1}
+	_, err := io.Copy(io.Discard, lr)
+	_ = body.Close()
+	if body.timedOut() {
+		return false
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false
+	}
+	return lr.N > 0
 }
 
 func (b *nativeHTTP1ServerRequestBody) timedOut() bool {

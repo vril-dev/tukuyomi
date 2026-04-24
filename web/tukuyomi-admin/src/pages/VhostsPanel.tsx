@@ -69,21 +69,12 @@ type PHPRuntimesResponse = {
   };
 };
 
-type ProxyRulesUpstreamNameResponse = {
-  proxy?: {
-    upstreams?: Array<{
-      name?: string;
-    }>;
-  };
-};
-
 type VhostFormState = {
   name: string;
   mode: VhostMode;
   hostname: string;
   listenPort: string;
   documentRoot: string;
-  linkedUpstreamName: string;
   runtimeID: string;
   tryFilesText: string;
   rewriteRules: Array<{
@@ -112,7 +103,6 @@ function createEmptyVhost(index: number): VhostFormState {
     hostname: "",
     listenPort: String(9400 + index),
     documentRoot: "",
-    linkedUpstreamName: "",
     runtimeID: "",
     tryFilesText: "",
     rewriteRules: [],
@@ -126,15 +116,6 @@ function createEmptyVhost(index: number): VhostFormState {
 
 function runtimeLabel(runtime: PHPRuntimeRecord) {
   return runtime.display_name || runtime.detected_version || runtime.runtime_id;
-}
-
-function extractConfiguredUpstreamNames(data?: ProxyRulesUpstreamNameResponse) {
-  const names = Array.isArray(data?.proxy?.upstreams)
-    ? data.proxy.upstreams
-        .map((entry) => String(entry?.name || "").trim())
-        .filter(Boolean)
-    : [];
-  return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
 }
 
 function stringListToText(values?: string[]) {
@@ -210,7 +191,6 @@ function parseVhostsResponse(data?: VhostsResponse): VhostFormState[] {
     hostname: vhost.hostname || "",
     listenPort: String(vhost.listen_port || 0),
     documentRoot: vhost.document_root || "",
-    linkedUpstreamName: vhost.linked_upstream_name || "",
     runtimeID: vhost.runtime_id || "",
     tryFilesText: stringListToText(vhost.try_files),
     rewriteRules: Array.isArray(vhost.rewrite_rules)
@@ -253,7 +233,6 @@ function vhostsToRaw(vhosts: VhostFormState[]) {
       hostname: vhost.hostname.trim(),
       listen_port: Number(vhost.listenPort) || 0,
       document_root: vhost.documentRoot.trim(),
-      linked_upstream_name: vhost.linkedUpstreamName.trim(),
       ...(vhost.mode === "php-fpm" ? { runtime_id: vhost.runtimeID.trim() } : {}),
       ...(textToStringList(vhost.tryFilesText).length > 0 ? { try_files: textToStringList(vhost.tryFilesText) } : {}),
       ...(vhost.rewriteRules.length > 0
@@ -315,9 +294,6 @@ function validateVhostsForUI(vhosts: VhostFormState[], hasBuiltRuntime: boolean)
     if (!vhost.documentRoot.trim()) {
       return `${label}: document root is required`;
     }
-    if (!vhost.linkedUpstreamName.trim()) {
-      return `${label}: linked upstream name is required`;
-    }
     if (vhost.mode === "php-fpm" && !vhost.runtimeID.trim()) {
       return `${label}: runtime selection is required for php-fpm`;
     }
@@ -331,7 +307,6 @@ export default function VhostsPanel() {
   const [etag, setETag] = useState("");
   const [vhosts, setVhosts] = useState<VhostFormState[]>([]);
   const [runtimeOptions, setRuntimeOptions] = useState<PHPRuntimeRecord[]>([]);
-  const [configuredUpstreamNames, setConfiguredUpstreamNames] = useState<string[]>([]);
   const [rollbackDepth, setRollbackDepth] = useState(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -350,16 +325,14 @@ export default function VhostsPanel() {
     setLoading(true);
     setError("");
     try {
-      const [vhostData, runtimeData, proxyData] = await Promise.all([
+      const [vhostData, runtimeData] = await Promise.all([
         apiGetJson<VhostsResponse>("/vhosts"),
         apiGetJson<PHPRuntimesResponse>("/php-runtimes"),
-        apiGetJson<ProxyRulesUpstreamNameResponse>("/proxy-rules"),
       ]);
       setETag(vhostData.etag ?? "");
       setVhosts(parseVhostsResponse(vhostData));
       setRollbackDepth(typeof vhostData.rollback_depth === "number" ? vhostData.rollback_depth : 0);
       setRuntimeOptions(Array.isArray(runtimeData.runtimes?.runtimes) ? runtimeData.runtimes.runtimes : []);
-      setConfiguredUpstreamNames(extractConfiguredUpstreamNames(proxyData));
       setNotice("");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -448,7 +421,7 @@ export default function VhostsPanel() {
       <header className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Vhosts")}</h1>
-          <p className="text-sm text-neutral-500">{tx("Define PHP-FPM vhosts without hand-editing generated FastCGI upstream entries. Each vhost owns its hostname, port, docroot, runtime binding, and a required canonical linked upstream name for routes and backend pools.")}</p>
+          <p className="text-sm text-neutral-500">{tx("Define PHP-FPM vhosts here instead of creating proxy upstream rows. Each vhost owns its hostname, FastCGI port, docroot, and runtime binding.")}</p>
         </div>
         <div className="flex items-center gap-2 text-xs text-neutral-500">
           <span className="rounded bg-neutral-100 px-2 py-1">ETag {etag || "-"}</span>
@@ -490,7 +463,7 @@ export default function VhostsPanel() {
         <div className="space-y-4">
           {vhosts.length === 0 ? (
             <div className="rounded-xl border border-dashed border-neutral-200 bg-white p-6 text-sm text-neutral-500">
-              {tx("No PHP-FPM vhosts configured. Add one to bind configured upstreams to PHP-FPM runtimes.")}
+              {tx("No PHP-FPM vhosts configured. Add one to publish a host-backed PHP-FPM runtime.")}
             </div>
           ) : null}
 
@@ -499,7 +472,7 @@ export default function VhostsPanel() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h2 className="text-sm font-semibold">{vhost.name || `vhost-${index + 1}`}</h2>
-                  <p className="text-xs text-neutral-500">{tx("Linked upstream")}: <code>{vhost.linkedUpstreamName || "-"}</code></p>
+                  <p className="text-xs text-neutral-500">{tx("Hostname")}: <code>{vhost.hostname || "-"}</code></p>
                 </div>
                 <button type="button" className="text-sm underline" onClick={() => setVhosts((current) => current.filter((_, currentIndex) => currentIndex !== index))} disabled={readOnly || saving}>
                   {tx("Remove")}
@@ -524,25 +497,6 @@ export default function VhostsPanel() {
                     <label className="space-y-1 text-sm">
                       <span className="block text-xs text-neutral-600">{tx("Name")}</span>
                       <input value={vhost.name} onChange={(e) => updateVhost(index, { ...vhost, name: e.target.value })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white" />
-                    </label>
-                    <label className="space-y-1 text-sm">
-                      <span className="block text-xs text-neutral-600">{tx("Linked upstream name")}</span>
-                      <select
-                        value={vhost.linkedUpstreamName}
-                        onChange={(e) => updateVhost(index, { ...vhost, linkedUpstreamName: e.target.value })}
-                        className="w-full rounded border border-neutral-200 px-3 py-2 bg-white"
-                        disabled={configuredUpstreamNames.length === 0}
-                      >
-                        <option value="">{tx("Select linked upstream")}</option>
-                        {configuredUpstreamNames.map((name) => (
-                          <option key={`${vhost.name}:${index}:linked:${name}`} value={name}>
-                            {name}
-                          </option>
-                        ))}
-                      </select>
-                      <span className="block text-xs text-neutral-500">{configuredUpstreamNames.length === 0
-                        ? tx("Create a named upstream first in Proxy Rules > Upstreams. Vhosts can bind only to configured upstream names.")
-                        : tx("Required canonical upstream name for Routes and Backend Pools. Choose an existing configured upstream. Bound upstreams cannot be removed from Proxy Rules until the vhost changes.")}</span>
                     </label>
                     <label className="space-y-1 text-sm">
                       <span className="block text-xs text-neutral-600">{tx("Mode")}</span>

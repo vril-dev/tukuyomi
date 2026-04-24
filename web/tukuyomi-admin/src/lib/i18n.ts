@@ -323,22 +323,24 @@ const JA_STRINGS: Record<string, string> = {
   Name: "名前",
   URL: "URL",
   Weight: "重み",
-  "Named upstreams are the preferred route targets. A route action can point only to one of these configured names.":
-    "名前付き upstream が推奨の転送先です。route action はこれらの設定済み名のみを指定できます。",
-  "No named upstreams configured. Add upstreams before creating route targets.":
-    "名前付き upstream は未設定です。route target を作る前に upstream を追加してください。",
+  "Define direct non-vhost backend nodes here. PHP-FPM/static app backends belong in Vhosts.":
+    "ここでは vhost 以外の direct backend node を定義します。PHP-FPM/static app の backend は Vhosts 側です。",
+  "Named upstreams are direct non-vhost backends. Define PHP-FPM/static app backends in Vhosts instead.":
+    "名前付き upstream は vhost 以外の direct backend 用です。PHP-FPM/static app の backend は Vhosts で定義してください。",
+  "No named upstreams configured. Add upstreams only for direct non-vhost route targets.":
+    "名前付き upstream は未設定です。vhost 以外の direct route target が必要な場合だけ upstream を追加してください。",
   "Upstream #{index}": "upstream #{index}",
   "Name is referenced from route action.upstream.": "この名前は route の action.upstream から参照されます。",
   "Name is referenced from backend pools or route action.upstream.":
     "この名前は backend pool または route の action.upstream から参照されます。",
-  "Routes are evaluated in ascending priority. The first match wins, then default_route, then upstreams.":
-    "route は priority の昇順で評価されます。最初に一致した route が選ばれ、その次に default_route、最後に upstreams が使われます。",
-  "No route rules configured. Traffic falls through to `default_route` or upstreams.":
-    "route ルールは未設定です。トラフィックは `default_route` または upstreams へフォールスルーします。",
+  "Explicit routes run first, then generated Vhost/Site routes, default_route, and finally upstreams.":
+    "explicit route が先に評価され、その後 generated Vhost/Site route、default_route、最後に upstreams が使われます。",
+  "No explicit route rules configured. Traffic can still match generated Vhost/Site routes before default_route or upstreams.":
+    "explicit route は未設定です。トラフィックは default_route や upstreams の前に generated Vhost/Site route へ一致する場合があります。",
   "Used only when no route matches. If absent, upstreams are used.":
     "どの route にも一致しない時だけ使われます。未設定なら upstreams が使われます。",
-  "Configure a default route when you want a distinct fallback before upstream selection.":
-    "upstreams の選択に入る前に別の fallback を使いたい場合は default route を設定します。",
+  "Configure a default route when you want a distinct fallback after generated Vhost/Site routes and before upstream selection.":
+    "generated Vhost/Site route の後、upstreams の選択に入る前に別の fallback を使いたい場合は default route を設定します。",
   "Dry Run": "Dry Run",
   "Confirm which route would win and which final upstream URL would be used without changing live traffic.":
     "実トラフィックを変えずに、どの route が選ばれ、最終的にどの upstream URL が使われるか確認します。",
@@ -369,8 +371,8 @@ const JA_STRINGS: Record<string, string> = {
   prefix: "prefix",
   regex: "regex",
   "Action upstream": "action upstream",
-  "Configured upstream name only. Route targets do not accept direct URLs or legacy generated targets.":
-    "設定済み upstream 名のみを指定します。route target で direct URL や legacy generated target は使えません。",
+  "Direct upstream name only for operator-managed routes. Vhost-owned app traffic is published from Vhosts.":
+    "operator が管理する route では direct upstream 名だけを指定します。Vhost 管理 app の通信は Vhosts から公開されます。",
   "Host rewrite": "Host 書き換え",
   "Optional outbound Host header override.": "任意の送信先 Host ヘッダ上書きです。",
   "Path rewrite prefix": "パス書き換え prefix",
@@ -411,12 +413,12 @@ const JA_STRINGS: Record<string, string> = {
     "有効にすると、named upstream へ流れる request だけが backend へ X-Tukuyomi-Upstream-Name を送ります。direct URL と generated vhost target には付きません。",
   "This header is internal observability data. It is stripped from inbound requests and re-added only when a named upstream is finally selected after WAF.":
     "この header は内部 observability 用です。inbound request からは一度除去し、WAF 後に named upstream が最終選択された時だけ付け直します。",
-  "Inspect canonical backend objects used by routing. Direct named upstreams support runtime enable/drain/disable and weight overrides here; Vhost-bound configured upstreams appear as status-only objects in this slice.":
-    "routing で使われる canonical backend object を確認します。direct named upstream はここで runtime enable/drain/disable と weight override に対応し、Vhost に bind された configured upstream はこの slice では status-only で表示されます。",
-  "No direct upstreams or Vhost-bound configured upstreams are configured.":
-    "direct upstream も Vhost に bind された configured upstream も未設定です。",
-  "Add direct backends in Proxy Rules > Upstreams or link a Vhost to an upstream name, then return here for status and runtime operations.":
-    "Proxy Rules > Upstreams で direct backend を追加するか、Vhost を upstream 名へ link してから、status と runtime 操作のためにここへ戻ってください。",
+  "Inspect canonical backend objects used by routing. Direct named upstreams support runtime enable/drain/disable and weight overrides here; Vhost-generated backends appear as status-only objects in this slice.":
+    "routing で使われる canonical backend object を確認します。direct named upstream はここで runtime enable/drain/disable と weight override に対応し、Vhost-generated backend はこの slice では status-only で表示されます。",
+  "No direct upstreams or Vhost-generated backends are configured.":
+    "direct upstream も Vhost-generated backend も未設定です。",
+  "Add direct backends in Proxy Rules > Upstreams or add a Vhost, then return here for status and runtime operations.":
+    "Proxy Rules > Upstreams で direct backend を追加するか、Vhost を追加してから、status と runtime 操作のためにここへ戻ってください。",
   vhost: "vhost",
   "Runtime weight overrides are available only for direct named upstreams in this slice.":
     "この slice では runtime weight override は direct named upstream にだけ対応します。",
@@ -473,8 +475,15 @@ const JA_STRINGS: Record<string, string> = {
   "Enable bounded L1 memory cache": "上限制御付き L1 メモリキャッシュを有効化",
   "Memory Max Bytes": "メモリ最大バイト数",
   "Memory Max Entries": "メモリ最大エントリ数",
+  "Current Store": "現在の保存状態",
   "Disk Entries": "ディスクエントリ数",
   "Disk Size": "ディスクサイズ",
+  "Runtime Counters": "累積カウンタ",
+  "Total Hits": "累積ヒット",
+  "Total Misses": "累積ミス",
+  "Total Stores": "累積保存数",
+  "Total Evictions": "累積追い出し数",
+  "Total Clears": "累積削除数",
   Hits: "ヒット",
   Misses: "ミス",
   Stores: "保存数",
@@ -602,8 +611,8 @@ const JA_STRINGS: Record<string, string> = {
   "Copied selected audit summary.": "選択した監査サマリをコピーしました。",
   "failed to copy audit summary": "監査サマリのコピーに失敗しました",
   "dry-run failed": "ドライランに失敗しました",
-  "Edit route-aware upstream selection, path/query rewrites, header operations, and transport knobs with structured controls.":
-    "route を意識した upstream 選択、path/query 書き換え、header 操作、transport 設定を構造化コントロールで編集します。",
+  "Edit route-aware direct upstream selection, path/query rewrites, header operations, and transport knobs with structured controls.":
+    "route を意識した direct upstream 選択、path/query 書き換え、header 操作、transport 設定を構造化コントロールで編集します。",
   "Structured editor synced": "構造化エディタ同期済み",
   ETag: "ETag",
   "Structured editor warning": "構造化エディタ警告",
@@ -732,7 +741,6 @@ const JA_STRINGS: Record<string, string> = {
   "Listen Address": "待受アドレス",
   "External Upstream": "外部 upstream",
   "Use an absolute": "絶対",
-  "URL. Route binding stays in Proxy Rules.": "URL を使います。route binding は引き続き Proxy Rules 側です。",
   Reset: "リセット",
   "Validation passed.": "検証に成功しました。",
   "Saved. Site config applied.": "保存しました。site 設定を適用しました。",
@@ -751,6 +759,10 @@ const JA_STRINGS: Record<string, string> = {
   "TLS mode": "TLS モード",
   "ACME environment": "ACME environment",
   "ACME account email": "ACME account email",
+  "Define PHP-FPM vhosts here instead of creating proxy upstream rows. Each vhost owns its hostname, FastCGI port, docroot, and runtime binding.":
+    "proxy upstream 行を作らず、ここで PHP-FPM vhost を定義します。各 vhost は hostname、FastCGI port、docroot、runtime binding を持ちます。",
+  "No PHP-FPM vhosts configured. Add one to publish a host-backed PHP-FPM runtime.":
+    "PHP-FPM vhost は未設定です。host に紐づく PHP-FPM runtime を公開するには vhost を追加してください。",
   cert_file: "cert_file",
   key_file: "key_file",
   "Validation Summary": "Validation Summary",

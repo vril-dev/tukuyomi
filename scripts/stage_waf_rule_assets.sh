@@ -12,5 +12,8 @@ cp "${SEED_DIR}/tukuyomi.conf" "${STAGE_ROOT}/tukuyomi.conf"
 DEST_DIR="${STAGE_ROOT}/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh" "${CRS_VERSION}"
 
 if [[ -n "${WAF_RULE_SEED_CRS_SETUP_OVERRIDE:-}" ]]; then
-  cp "${WAF_RULE_SEED_CRS_SETUP_OVERRIDE}" "${STAGE_ROOT}/rules/crs/crs-setup.conf"
+  {
+    printf '\n'
+    cat "${WAF_RULE_SEED_CRS_SETUP_OVERRIDE}"
+  } >> "${STAGE_ROOT}/rules/crs/crs-setup.conf"
 fi

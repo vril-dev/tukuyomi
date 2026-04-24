@@ -26,8 +26,9 @@ before the stack starts.
 
 `./smoke.sh` verifies that the app is reachable and that the internal response
 cache returns `X-Tukuyomi-Cache: MISS` followed by `HIT` for a static fixture.
-Set `ADMIN_API_KEY` when the smoke should enable and clear the internal cache
-store before probing:
+The example includes a smoke-only admin API key so the script can enable and
+clear the internal cache store before probing. Override `ADMIN_API_KEY` only
+when the example config is changed:
 
 ```bash
 ADMIN_API_KEY='your-admin-api-key' ./smoke.sh

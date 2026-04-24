@@ -175,6 +175,7 @@ stage_workspace() {
   install -m 644 "${ROOT_DIR}/docker-compose.yml" "${WORKSPACE}/docker-compose.yml"
   rsync -a "${ROOT_DIR}/coraza/" "${WORKSPACE}/coraza/"
   rsync -a "${ROOT_DIR}/data/conf/" "${WORKSPACE}/data/conf/"
+  rsync -a "${ROOT_DIR}/seeds/" "${WORKSPACE}/seeds/"
   rsync -a "${ROOT_DIR}/scripts/" "${WORKSPACE}/scripts/"
   if [[ -d "${ROOT_DIR}/data/php-fpm" ]]; then
     rsync -a "${ROOT_DIR}/data/php-fpm/" "${WORKSPACE}/data/php-fpm/"

@@ -57,8 +57,12 @@ Behavior:
 - when `PREFIX` is under the invoking user's home directory,
   `INSTALL_CREATE_USER=auto` uses that user as the runtime user and skips
   `useradd`
+- a home-directory runtime tree is owned by that login user and primary group
 - for system paths such as `/opt/tukuyomi`, the default creates or reuses the
   `tukuyomi` system user/group
+- for service-account installs on system paths, the deployment root, `bin/`,
+  `scripts/`, and `conf/` stay root-managed, while `db/`, `audit/`, `cache/`,
+  and `data/` are writable by the runtime user
 - existing `config.json` and `/etc/tukuyomi/tukuyomi.env` are preserved by default
 - host install uses `sudo` only for privileged filesystem/systemd operations, so
   the build can run as the invoking user

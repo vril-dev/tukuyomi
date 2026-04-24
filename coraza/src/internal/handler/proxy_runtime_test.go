@@ -619,7 +619,7 @@ func TestProxyProbeSupportsFCGIUnixSocketTargets(t *testing.T) {
 	}
 }
 
-func TestPrepareProxyRulesRawForProbeSkipsDirectUpstreamDeleteGuard(t *testing.T) {
+func TestPrepareProxyRulesRawDoesNotBindConfiguredUpstreamToVhost(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
 
@@ -653,12 +653,23 @@ func TestPrepareProxyRulesRawForProbeSkipsDirectUpstreamDeleteGuard(t *testing.T
 	}
 
 	nextRaw := `{}`
-	if _, err := prepareProxyRulesRawWithSitesAndVhosts(nextRaw, SiteConfigFile{}, vhosts); err == nil || !strings.Contains(err.Error(), `upstreams removes "app" while vhost "app" still binds to that direct upstream`) {
-		t.Fatalf("expected delete guard error, got %v", err)
+	prepared, err := prepareProxyRulesRawWithSitesAndVhosts(nextRaw, SiteConfigFile{}, vhosts)
+	if err != nil {
+		t.Fatalf("prepareProxyRulesRawWithSitesAndVhosts: %v", err)
 	}
-	if _, err := prepareProxyRulesRawWithSitesAndVhostsOptions(nextRaw, SiteConfigFile{}, vhosts, proxyRulesValidationOptions{skipDirectUpstreamDeleteGuard: true}); err == nil || !strings.Contains(err.Error(), `linked_upstream_name "app" must reference a configured upstream`) {
-		t.Fatalf("probe prepare should skip delete guard but keep upstream binding validation, got %v", err)
+	if _, ok := findProxyUpstreamByName(prepared.effectiveCfg.Upstreams, "app"); ok {
+		t.Fatal("configured upstream app should not be synthesized from linked_upstream_name")
 	}
+	for _, route := range prepared.effectiveCfg.Routes {
+		if route.Name != "vhost:app" {
+			continue
+		}
+		if route.Action.Upstream != "vhost-1" {
+			t.Fatalf("generated vhost route upstream=%q want vhost-1", route.Action.Upstream)
+		}
+		return
+	}
+	t.Fatal("generated vhost route missing")
 }
 
 func TestBuildProxyTransportUsesH2CPriorKnowledge(t *testing.T) {

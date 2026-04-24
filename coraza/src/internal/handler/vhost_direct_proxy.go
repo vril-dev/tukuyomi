@@ -71,12 +71,16 @@ func proxyVhostForDecision(decision proxyRouteDecision) (VhostConfig, bool) {
 		if vhost.GeneratedTarget != "" && vhost.GeneratedTarget == decision.SelectedUpstream {
 			return vhost, true
 		}
-		if vhost.LinkedUpstreamName != "" && vhost.LinkedUpstreamName == decision.SelectedUpstream {
-			return vhost, true
-		}
 	}
 	if decision.Target == nil {
 		return VhostConfig{}, false
+	}
+	if shouldServeDirectProxyTarget(decision.Target) {
+		for _, vhost := range cfg.Vhosts {
+			if vhost.LinkedUpstreamName != "" && vhost.LinkedUpstreamName == decision.SelectedUpstream {
+				return vhost, true
+			}
+		}
 	}
 	target := decision.Target
 	if strings.EqualFold(target.Scheme, "fcgi") {

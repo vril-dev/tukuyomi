@@ -209,11 +209,11 @@ Main screens:
 | `/ip-reputation` / `/bot-defense` / `/semantic` | Request-time security controls |
 | `/notifications` | Aggregate alerting config and runtime status |
 | `/cache` | Cache rules and internal cache store controls |
-| `/proxy-rules` | Structured route/upstream/default-route editor with validate/probe/dry-run/apply/rollback |
-| `/backends` | Canonical backend object inventory. Direct named upstreams support runtime enable/drain/disable and weight override; vhost-bound configured upstreams are status-only in this slice |
+| `/proxy-rules` | Structured direct upstream/backend-pool/route editor for non-vhost traffic, with validate/probe/dry-run/apply/rollback |
+| `/backends` | Canonical backend object inventory. Direct named upstreams support runtime enable/drain/disable and weight override; vhost-generated backends are status-only |
 | `/sites` | Site ownership and TLS binding |
 | `/options` | Runtime inventory, optional artifacts, GeoIP/Country DB management |
-| `/vhosts` | Static / `php-fpm` vhost definitions and required configured-upstream bindings |
+| `/vhosts` | Static / `php-fpm` vhost host, docroot, runtime, and generated-route ownership |
 | `/scheduled-tasks` | Command-based cron task definitions and run status |
 | `/settings` | Product-wide DB `app_config` editor for restart-required settings |
 
@@ -274,15 +274,16 @@ Routing model:
 - `routes[]` are evaluated in ascending `priority` order with first-match semantics.
 - Selection order is:
   1. explicit `routes[]`
-  2. generated host fallback routes from the DB `sites` domain
-  3. `default_route`
-  4. `upstreams[]`
+  2. generated vhost host routes
+  3. generated host fallback routes from the DB `sites` domain
+  4. `default_route`
+  5. `upstreams[]`
 - Host matching supports exact host and `*.example.com` wildcard host.
 - Path matching supports `exact`, `prefix`, and `regex`.
-- `upstreams[]` is the named backend node catalog. A row can use either a static `url` or `discovery`, never both.
+- `upstreams[]` is the direct non-vhost backend node catalog. A row can use either a static `url` or `discovery`, never both.
 - `backend_pools[]` groups named upstream members into route-scoped balancing sets.
 - `action.backend_pool` is the standard route binding for balancing.
-- `action.upstream` accepts configured upstream names only.
+- `action.upstream` can reference a direct upstream name or a server-generated vhost upstream name. Normal vhost traffic is published through the `/vhosts` generated host route.
 - `action.canary_upstream` and `action.canary_weight_percent` provide route-level canary.
 - `action.host_rewrite`, `action.path_rewrite.prefix`, and `action.query_rewrite` rewrite outbound traffic.
 - `action.request_headers` and `action.response_headers` allow bounded header manipulation.
@@ -292,10 +293,10 @@ Routing model:
   2. `Backend Pools`
   3. `Routes` / `Default route`
 - Each `Upstreams` row has its own `Probe` action so connectivity checks target one configured upstream at a time.
-- `Vhosts` must define `linked_upstream_name` so route bindings and backend-pool members can reference a Vhost through the same upstream-name namespace.
-- `linked_upstream_name` must already exist in `Proxy Rules > Upstreams`; Vhosts do not create managed aliases here.
-- `generated_target` is server-owned internal compatibility state for vhost materialization. Operator route/pool binding should use `linked_upstream_name`.
-- A direct upstream currently bound by a Vhost cannot be removed from `Proxy Rules > Upstreams` until the Vhost is relinked.
+- `Vhosts` publish generated host routes and generated vhost backends in the effective runtime.
+- `Vhosts` do not rewrite configured upstream URLs. A configured `primary` remains the URL shown in `Proxy Rules > Upstreams`.
+- `generated_target` is server-owned vhost materialization state and is not normal operator input.
+- PHP-FPM/static application connection settings belong in `Vhosts`, not in `Proxy Rules > Upstreams`.
 
 ### Proxy Engine
 
@@ -320,7 +321,7 @@ Only Tukuyomi's native proxy engine is supported. Changing it requires a process
 
 ### Runtime Backend Operations
 
-- The normalized `upstream_runtime` DB domain stores opt-in runtime overrides for materialized backend keys from `Proxy Rules > Upstreams`; `data/conf/upstream-runtime.json` is only an empty-DB seed/export path.
+- The normalized `upstream_runtime` DB domain stores opt-in runtime overrides for backend keys materialized from direct upstreams and DNS discovery; `data/conf/upstream-runtime.json` is only an empty-DB seed/export path.
 - `Backends` lists canonical backend objects, not backend pools.
 - `Backends` is the runtime operations panel for:
   - `enabled`
@@ -329,8 +330,8 @@ Only Tukuyomi's native proxy engine is supported. Changing it requires a process
   - positive `weight_override`
 - No override means configured behavior from DB `proxy_rules`; `data/conf/proxy.json` is only seed/import/export material.
 - Runtime operations apply to static direct upstreams and DNS-discovered materialized targets.
-- Configured upstreams bound by Vhosts are routable and pool-addressable, and `Backends` exposes them as status-only canonical objects.
-- Direct route URLs, generated `static`, and generated `php-fpm` targets are not included.
+- Vhost-generated backends are exposed in `Backends` as status-only canonical objects.
+- Direct route URLs and vhost-generated backends are not runtime operation targets.
 - `draining`, `disabled`, and `unhealthy` backends are excluded from new target selection.
 - `proxy_access` logs now expose the selected backend runtime state via:
   - `selected_upstream_admin_state`

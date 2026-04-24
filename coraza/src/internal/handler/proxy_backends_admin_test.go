@@ -218,7 +218,7 @@ func TestPutAndDeleteProxyBackendRuntimeOverrideRoundTrip(t *testing.T) {
 	}
 }
 
-func TestGetProxyBackendsIncludesVhostManagedAliasAsStatusOnly(t *testing.T) {
+func TestGetProxyBackendsIncludesVhostGeneratedTargetAsStatusOnly(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	restore := resetPHPProxyFoundationForTest(t)
@@ -289,10 +289,10 @@ func TestGetProxyBackendsIncludesVhostManagedAliasAsStatusOnly(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
 	}
-	if got, want := len(out.Backends), 2; got != want {
+	if got, want := len(out.Backends), 3; got != want {
 		t.Fatalf("len(backends)=%d want=%d", got, want)
 	}
-	docs := findProxyBackendStatus(t, out.Backends, proxyBackendLookupKey("docs", "static://docs-static"))
+	docs := findProxyBackendStatus(t, out.Backends, proxyBackendLookupKey("docs-static", "static://docs-static"))
 	if got, want := docs.ProviderClass, proxyUpstreamProviderClassVhostManaged; got != want {
 		t.Fatalf("provider_class=%q want=%q", got, want)
 	}
@@ -300,7 +300,7 @@ func TestGetProxyBackendsIncludesVhostManagedAliasAsStatusOnly(t *testing.T) {
 		t.Fatalf("managed_by_vhost=%q want=%q", got, want)
 	}
 	if docs.RuntimeOpsSupported {
-		t.Fatal("vhost-bound configured upstream should be status-only in this slice")
+		t.Fatal("vhost-generated backend should be status-only in this slice")
 	}
 	if got, want := docs.HealthState, "unknown"; got != want {
 		t.Fatalf("health_state=%q want=%q", got, want)
@@ -377,7 +377,7 @@ func TestPutProxyBackendRuntimeOverrideRejectsVhostManagedAlias(t *testing.T) {
 		t.Fatalf("decode GET response: %v", err)
 	}
 
-	linkedKey := proxyBackendLookupKey("docs", "static://docs-static")
+	linkedKey := proxyBackendLookupKey("docs-static", "static://docs-static")
 	putRec := httptest.NewRecorder()
 	putReq := httptest.NewRequest(http.MethodPut, "/tukuyomi-api/proxy-backends/"+linkedKey+"/runtime-override", bytes.NewReader([]byte(`{"admin_state":"disabled"}`)))
 	putReq.Header.Set("Content-Type", "application/json")

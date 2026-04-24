@@ -11,11 +11,12 @@
   - materialization 状態 / process 状態の確認
 - `/vhosts`
   - 管理対象 `php-fpm` アプリ定義の管理
-  - host、port、docroot、rewrite、access rule、basic auth、PHP ini override の管理
-  - `linked_upstream_name` による configured upstream への bind
+  - host、FastCGI listen port、docroot、runtime、rewrite、access rule、basic auth、PHP ini override の管理
+  - vhost 用の生成 backend / host route の管理
 - `/proxy-rules`
-  - ルートへの紐付けのみ
-  - `/vhosts` が参照する configured upstream 名へトラフィックを流す
+  - vhost 以外の direct backend / backend pool / 明示 route 管理
+  - PHP-FPM アプリの接続先設定は `/vhosts` 側へ移す
+  - configured upstream の URL は `/vhosts` によって書き換えられません
   - raw の `fcgi://` を通常の運用入口にはしない
 
 ## データ配置
@@ -106,7 +107,6 @@ build 後の確認手順:
 - `hostname`
 - `listen_port`
 - `document_root`
-- `linked_upstream_name`
 - `runtime_id`
 
 任意項目:
@@ -134,31 +134,47 @@ Vhost の動作は nginx と同じく集中設定です。document root 内の
 の対象にしません。古い config に残っている `override_file_name` は移行用
 として読み取るだけで、validate/apply 時に保存形から消えます。
 
-## Linked Upstream と Route Binding
+## Upstream から Vhost への境界
 
-vhost を保存しただけではトラフィックは公開されません。
+PHP-FPM アプリを `Proxy Rules > Upstreams` に direct backend として置く運用はやめ、接続先設定は `/vhosts` に移します。
+
+- `Proxy Rules > Upstreams`
+  - 外部 HTTP/HTTPS backend など、vhost が所有しない direct backend 用
+  - configured upstream URL は表示値どおりに扱われ、vhost によって別 target へ差し替えられません
+- `/vhosts`
+  - PHP-FPM/static app の host、docroot、runtime、FastCGI listen port を管理
+  - 保存時に generated backend と generated host route を effective runtime へ公開
+
+## 生成 Vhost Route
+
+vhost を保存すると、その `hostname` 向けの通信は server-generated proxy state で公開されます。
 
 vhost 保存後の流れ:
 
 - `/vhosts` が定義を `data/php-fpm/vhosts.json` へ保存
 - runtime layer が `data/php-fpm/runtime/<runtime_id>/` に pool/config を生成
-- `linked_upstream_name` で指定した configured upstream が effective proxy runtime では vhost-backed target になります
-- `linked_upstream_name` は必須で、`Proxy Rules > Upstreams` に存在する upstream 名を指定する必要があります
+- effective proxy runtime に `generated_target` 名の generated upstream が追加される
+- effective proxy runtime に vhost hostname 用の generated host route `vhost:<name>` が追加される
+- `Proxy Rules > Upstreams` の configured upstream URL は変更されない
 
-実トラフィックの紐付けは `/proxy-rules` で行います。
+route の優先順は operator の明示設定を先に見ます。
 
-- `routes[].action.upstream` に vhost の `linked_upstream_name` を指定する
-- または `default_route.action.upstream` にその configured upstream 名を指定する
+- explicit `routes[]`
+- generated vhost host route
+- generated site host fallback route
+- `default_route`
+- `upstreams[]`
 
 補足:
 
 - `listen_port` は PHP-FPM の FastCGI listen port です
 - `http://127.0.0.1:<listen_port>` のような HTTP upstream としては扱いません
-- `generated_target` は server-owned の内部互換 alias / pool 名です。admin UI では operator input として表示しません
-- 通常運用では route/default route から `linked_upstream_name` を参照してください
-- `linked_upstream_name` が既存 configured upstream へ bind している場合、その direct upstream は Vhost を変更するまで `Proxy Rules > Upstreams` から削除できません
+- `generated_target` は server-owned の generated backend alias / pool 名です。admin UI では operator input として表示しません
+- 通常運用では `generated_target` を `Proxy Rules` に手入力しません。vhost hostname の publish は `/vhosts` の保存で完結します
+- `default_route` は一致した vhost hostname を上書きしません
+- 例外的に vhost routing を上書きしたい場合は、operator が explicit route を定義します
 
-`Proxy Rules` はルーティングに集中させ、管理対象 PHP アプリの詳細は `/vhosts` で管理してください。`conf/proxy.json` へ raw の `fcgi://` や generated target を手で書く前提にはしません。
+`Proxy Rules` は vhost 以外の routing / backend pool に集中させ、管理対象 PHP アプリの詳細は `/vhosts` で管理してください。`conf/proxy.json` へ raw の `fcgi://` や generated target を手で書く前提にはしません。
 
 ## Process Lifecycle
 

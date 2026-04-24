@@ -543,11 +543,12 @@ migrate-proxy-config:
 migrate-proxy-config-check:
 	./scripts/migrate_proxy_config.sh --check
 
-smoke: ui-build-sync
+smoke: db-import ui-build-sync
 	@set -euo pipefail; \
 	backup="$$(mktemp)"; \
-	cp data/conf/proxy.json "$$backup"; \
-	trap 'cp "$$backup" data/conf/proxy.json >/dev/null 2>&1 || true; rm -f "$$backup"; PUID="$(PUID)" GUID="$(GUID)" CORAZA_PORT="$(HOST_CORAZA_PORT)" docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT; \
+	had_proxy_seed=0; \
+	if [ -f data/conf/proxy.json ]; then cp data/conf/proxy.json "$$backup"; had_proxy_seed=1; fi; \
+	trap 'if [ "$$had_proxy_seed" = "1" ]; then cp "$$backup" data/conf/proxy.json >/dev/null 2>&1 || true; fi; rm -f "$$backup"; PUID="$(PUID)" GUID="$(GUID)" CORAZA_PORT="$(HOST_CORAZA_PORT)" docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT; \
 	PUID="$(PUID)" GUID="$(GUID)" CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" docker compose up -d --build coraza >/dev/null; \
 	HOST_CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" WAF_API_KEY_PRIMARY="$(WAF_API_KEY_PRIMARY)" PROTECTED_HOST="$(PROTECTED_HOST)" PROXY_ECHO_PORT="18080" PROXY_ECHO_URL="http://host.docker.internal:18080" ./scripts/ci_proxy_admin_smoke.sh
 

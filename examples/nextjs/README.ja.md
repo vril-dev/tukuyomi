@@ -26,8 +26,9 @@ runtime DB を seed します。
 
 `./smoke.sh` は app の到達性に加え、static fixture に対して internal response
 cache が `X-Tukuyomi-Cache: MISS`、次に `HIT` を返すことを確認します。
-smoke 実行前に internal cache store を有効化して clear したい場合は
-`ADMIN_API_KEY` を渡してください。
+この example には smoke 用の admin API key が含まれているため、script は
+internal cache store を有効化して clear してから確認します。example config を
+変更した場合だけ `ADMIN_API_KEY` を上書きしてください。
 
 ```bash
 ADMIN_API_KEY='your-admin-api-key' ./smoke.sh

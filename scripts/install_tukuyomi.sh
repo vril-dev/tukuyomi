@@ -43,6 +43,13 @@ use_service_account() {
   [[ -z "${DESTDIR}" && -n "${INSTALL_USER}" ]]
 }
 
+use_login_user_home_install() {
+  local owner owner_home
+  owner="$(invoking_user)"
+  owner_home="$(home_for_user "${owner}")"
+  [[ "${INSTALL_USER}" == "${owner}" ]] && path_is_under "${PREFIX}" "${owner_home}"
+}
+
 create_service_account() {
   [[ -z "${DESTDIR}" ]] && is_enabled "${INSTALL_CREATE_USER}"
 }
@@ -261,6 +268,19 @@ set_runtime_permissions() {
     return
   fi
   local conf_file
+  if use_login_user_home_install; then
+    run_priv chown -R "${INSTALL_USER}:${INSTALL_GROUP}" "${RUNTIME_DIR}"
+    run_priv chmod 755 "${RUNTIME_DIR}"
+    run_priv chmod 750 "${RUNTIME_DIR}/conf"
+    for conf_file in "${RUNTIME_DIR}/conf/config.json" "${RUNTIME_DIR}/conf/crs-disabled.conf"; do
+      if [[ -L "${conf_file}" ]]; then
+        log "preserve symlink permissions for ${conf_file}"
+        continue
+      fi
+      run_priv chmod 640 "${conf_file}"
+    done
+    return
+  fi
   run_priv chown root:root "${RUNTIME_DIR}"
   run_priv chown -R root:root "${RUNTIME_DIR}/bin" "${RUNTIME_DIR}/scripts"
   run_priv chown root:"${INSTALL_GROUP}" "${RUNTIME_DIR}/conf"

@@ -3,7 +3,7 @@ set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:${CORAZA_PORT:-19091}}"
 PROTECTED_HOST="${PROTECTED_HOST:-}"
-ADMIN_API_KEY="${ADMIN_API_KEY:-}"
+ADMIN_API_KEY="${ADMIN_API_KEY:-nextjs-example-admin-key-12345}"
 CACHE_PATH="${CACHE_PATH:-/tukuyomi-cache-smoke.txt}"
 CACHE_STORE_DIR="${CACHE_STORE_DIR:-cache/response}"
 CACHE_MAX_BYTES="${CACHE_MAX_BYTES:-1048576}"
@@ -200,8 +200,8 @@ require_header() {
   fi
 }
 
-enable_cache_store_if_possible
 wait_for_ready
+enable_cache_store_if_possible
 capture_cache_stats "${tmp_dir}/cache-store-before.json"
 
 fetch_cache_probe first

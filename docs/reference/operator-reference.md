@@ -110,6 +110,7 @@ Notes:
 - HTTP/3 uses the same numeric port as `server.listen_addr`, but over UDP.
 - `server.tls.redirect_http=true` starts a second plain HTTP listener that redirects to HTTPS.
 - ACME auto TLS is selected per site with `tls.mode=acme`; ACME account keys, challenge tokens, and certificate cache are stored below the `acme/` namespace in `persistent_storage`.
+- ACME HTTP-01 requires port 80 to reach `server.tls.http_redirect_addr`. Select Let's Encrypt `staging` or `production` per site through the ACME environment.
 - `paths.site_config_file` defaults to `conf/sites.json`; in DB-backed runtime this is the empty-DB seed/export path, not the live source of truth.
 
 ### Persistent File Storage
@@ -578,7 +579,7 @@ Main endpoint groups:
 }
 ```
 
-Managed `extra_rule` bodies are stored in DB `override_rules` and edited from the `Override Rules` page. There is no `conf/rules` filesystem fallback. They are not added to the base WAF rule set at startup; they are loaded only when a bypass entry references their logical `extra_rule` name.
+Managed `extra_rule` bodies are stored in DB `override_rules` and edited from the `Rules` page with usage set to `Bypass Rules extra_rule`. There is no `conf/rules` filesystem fallback. They are not added to the base WAF rule set at startup; they are loaded only when a bypass entry references their logical `extra_rule` name.
 Host scope precedence is exact `host:port`, then bare `host`, then `default`. Host-specific entries replace the default scope; they do not merge with it.
 
 ### Country Block

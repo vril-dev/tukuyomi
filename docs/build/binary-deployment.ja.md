@@ -42,6 +42,7 @@ make release-linux-all VERSION=v0.8.0
 /opt/tukuyomi/db/
 /opt/tukuyomi/audit/
 /opt/tukuyomi/cache/
+/opt/tukuyomi/data/persistent/
 /opt/tukuyomi/data/tmp/
 ```
 
@@ -97,6 +98,7 @@ sudo install -d -m 755 \
   /opt/tukuyomi/db \
   /opt/tukuyomi/audit \
   /opt/tukuyomi/cache/response \
+  /opt/tukuyomi/data/persistent \
   /opt/tukuyomi/data/tmp \
   /opt/tukuyomi/scripts
 
@@ -131,6 +133,35 @@ sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 - managed bypass override rule は DB `override_rules` です。`conf/rules` fallback directory は配備しません
 - WAF/access event は DB `waf_events` へ直接書き込みます。`paths.log_file` は古い `waf-events.ndjson` を明示的に取り込む場合だけの legacy import source です
 - `extra_rule` の値は DB-managed override rule への logical compatibility reference として残ります
+
+## 永続 byte storage
+
+DB ではなく file/object として保持する runtime artifact は `persistent_storage` で管理します。
+現在の主用途は site-managed ACME の account key、challenge token、証明書 cache です。
+
+default は local backend です:
+
+```json
+{
+  "persistent_storage": {
+    "backend": "local",
+    "local": {
+      "base_dir": "data/persistent"
+    }
+  }
+}
+```
+
+- single-node のオンプレ / VPS では `/opt/tukuyomi/data/persistent` を backup 対象にしてください
+- scale-out や node replacement 前提では、local backend ではなく S3 backend か共有 mount を使ってください
+- S3 backend では bucket / region / endpoint / prefix などの非秘密情報だけを DB `app_config` に保存します
+- `AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`、`AWS_SESSION_TOKEN` は env / platform secret injection で渡します
+- Azure Blob Storage / Google Cloud Storage は provider adapter が入るまで fail closed し、local へ暗黙 fallback しません
+
+site-managed ACME は `Sites` 画面で site ごとに `tls.mode=acme` を選びます。
+`production` / `staging` は Let's Encrypt の本番 CA / staging CA の選択で、account email は任意です。
+HTTP-01 challenge を使うため、`server.tls.redirect_http=true` と
+`server.tls.http_redirect_addr=:80`、または同等の port 80 forwarding を用意してください。
 
 proxy engine 選択は restart-required な DB `app_config` 設定です:
 
@@ -233,6 +264,13 @@ template:
 - `WAF_SECURITY_AUDIT_ENCRYPTION_KEY_ID`
 - `WAF_SECURITY_AUDIT_HMAC_KEY`
 - `WAF_SECURITY_AUDIT_HMAC_KEY_ID`
+
+`persistent_storage.backend=s3` の場合だけ必要な S3 credential:
+
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_SESSION_TOKEN`
+- `AWS_REGION` / `AWS_DEFAULT_REGION`
 
 ## Overload Tuning
 

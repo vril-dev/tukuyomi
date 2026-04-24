@@ -48,6 +48,8 @@ spec:
               mountPath: /app/data/scheduled-tasks
             - name: proxy-audit
               mountPath: /app/audit
+            - name: proxy-persistent
+              mountPath: /app/data/persistent
             - name: proxy-php-fpm
               mountPath: /app/data/php-fpm
       volumes:
@@ -60,6 +62,9 @@ spec:
         - name: proxy-audit
           persistentVolumeClaim:
             claimName: tukuyomi-audit
+        - name: proxy-persistent
+          persistentVolumeClaim:
+            claimName: tukuyomi-persistent
         - name: proxy-php-fpm
           persistentVolumeClaim:
             claimName: tukuyomi-php-fpm

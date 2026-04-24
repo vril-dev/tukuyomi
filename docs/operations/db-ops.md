@@ -142,6 +142,13 @@ The only file required by production startup after import is:
   `storage.db_path`, `storage.db_dsn`) plus storage retention/sync bootstrap
   values
 
+That statement is about configuration authority. Runtime byte artifacts are
+separate. When site-managed ACME uses the local backend, preserve
+`persistent_storage.local.base_dir` (default `data/persistent`). When enabled,
+`cache_store.store_dir`, security / FP tuner / proxy-rules audit files,
+scheduled-task logs, and PHP-FPM runtime logs/sockets are runtime artifacts, not
+DB configuration authority.
+
 Other seed/export files may be kept for operator workflows but are not runtime
 authority after their normalized DB rows exist. After `make db-migrate`,
 `make crs-install`, and `make db-import`, production runtime can remove

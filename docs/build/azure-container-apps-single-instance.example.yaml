@@ -22,6 +22,8 @@ properties:
             mountPath: /app/data/scheduled-tasks
           - volumeName: proxy-audit
             mountPath: /app/audit
+          - volumeName: proxy-persistent
+            mountPath: /app/data/persistent
           - volumeName: proxy-php-fpm
             mountPath: /app/data/php-fpm
       - name: scheduled-task-runner
@@ -57,6 +59,8 @@ properties:
             mountPath: /app/data/scheduled-tasks
           - volumeName: proxy-audit
             mountPath: /app/audit
+          - volumeName: proxy-persistent
+            mountPath: /app/data/persistent
           - volumeName: proxy-php-fpm
             mountPath: /app/data/php-fpm
     scale:
@@ -72,6 +76,9 @@ properties:
       - name: proxy-audit
         storageType: AzureFile
         storageName: proxyaudit
+      - name: proxy-persistent
+        storageType: AzureFile
+        storageName: proxypersistent
       - name: proxy-php-fpm
         storageType: AzureFile
         storageName: proxyphpfpm

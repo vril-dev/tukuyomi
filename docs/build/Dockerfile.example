@@ -34,7 +34,7 @@ COPY seeds/ /app/seeds/
 
 RUN find /app/conf -type f -name '*.bak' -delete \
     && chmod +x /app/scripts/install_crs.sh /app/scripts/stage_waf_rule_assets.sh \
-    && mkdir -p /app/db /app/audit /app/cache/response /app/data/tmp \
+    && mkdir -p /app/db /app/audit /app/cache/response /app/data/persistent /app/data/tmp \
     && /app/scripts/stage_waf_rule_assets.sh /app/data/tmp/waf-import \
     && WAF_CONFIG_FILE=/app/conf/config.json /app/tukuyomi db-migrate \
     && WAF_RULE_ASSET_FS_ROOT=/app/data/tmp/waf-import WAF_CONFIG_FILE=/app/conf/config.json /app/tukuyomi db-import-waf-rule-assets \

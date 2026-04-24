@@ -42,6 +42,7 @@ The binary expects a working directory that contains:
 /opt/tukuyomi/db/
 /opt/tukuyomi/audit/
 /opt/tukuyomi/cache/
+/opt/tukuyomi/data/persistent/
 /opt/tukuyomi/data/tmp/
 ```
 
@@ -98,6 +99,7 @@ sudo install -d -m 755 \
   /opt/tukuyomi/db \
   /opt/tukuyomi/audit \
   /opt/tukuyomi/cache/response \
+  /opt/tukuyomi/data/persistent \
   /opt/tukuyomi/data/tmp \
   /opt/tukuyomi/scripts
 
@@ -132,6 +134,37 @@ Notes:
 - managed bypass override rules are DB `override_rules`; do not ship a `conf/rules` fallback directory
 - WAF/access events are written to DB `waf_events`; `paths.log_file` is only a legacy import source when you intentionally ingest an old `waf-events.ndjson`
 - `extra_rule` values remain logical compatibility references to DB-managed override rules
+
+## Persistent Byte Storage
+
+Runtime artifacts that must remain durable as files/objects, rather than DB
+rows, are managed by `persistent_storage`. The current primary user is
+site-managed ACME: account keys, challenge tokens, and certificate cache.
+
+The default backend is local:
+
+```json
+{
+  "persistent_storage": {
+    "backend": "local",
+    "local": {
+      "base_dir": "data/persistent"
+    }
+  }
+}
+```
+
+- on single-node on-prem / VPS deployments, include `/opt/tukuyomi/data/persistent` in backups
+- for scale-out or node replacement, use the S3 backend or an operator-managed shared mount instead of node-local storage
+- the S3 backend stores only non-secret bucket / region / endpoint / prefix settings in DB `app_config`
+- pass `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` through env or platform secret injection
+- Azure Blob Storage and Google Cloud Storage fail closed until their provider adapters are implemented; they do not silently fall back to local
+
+Configure site-managed ACME per site on the `Sites` page by selecting
+`tls.mode=acme`. `production` / `staging` selects the Let's Encrypt production
+or staging CA, and account email is optional. ACME HTTP-01 needs
+`server.tls.redirect_http=true` with `server.tls.http_redirect_addr=:80`, or
+equivalent port 80 forwarding.
 
 Proxy engine selection is a restart-required DB `app_config` setting:
 
@@ -237,6 +270,13 @@ Optional security-audit key overrides:
 - `WAF_SECURITY_AUDIT_ENCRYPTION_KEY_ID`
 - `WAF_SECURITY_AUDIT_HMAC_KEY`
 - `WAF_SECURITY_AUDIT_HMAC_KEY_ID`
+
+S3 credentials required only when `persistent_storage.backend=s3`:
+
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_SESSION_TOKEN`
+- `AWS_REGION` / `AWS_DEFAULT_REGION`
 
 ## Overload Tuning
 

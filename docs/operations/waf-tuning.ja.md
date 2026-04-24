@@ -20,11 +20,11 @@
 
 推奨順序:
 
-1. `data/conf/waf-bypass.json` に対象パスのみの「特別ルール」を設定する。
-2. 必要なら専用 `*.conf` を用意し、対象Ruleを `ctl:ruleRemoveById` で限定無効化する。
+1. `Bypass Rules` で対象パスだけに `extra_rule` を指定する。
+2. 必要なら `Rules` で用途 `Bypass Rules extra_rule` の専用 `*.conf` asset を用意し、対象Ruleを `ctl:ruleRemoveById` で限定無効化する。
 3. 最終手段として広いパスのバイパスを使う（期限付きで実施し、後で戻す）。
 
-`waf-bypass.json` 例:
+Bypass Rules の JSON 例:
 
 ```json
 {
@@ -43,7 +43,7 @@
 
 host scope の優先順は exact `host:port`、次に bare `host`、最後に `default` です。host-specific scope は default を merge せず置き換えます。
 
-`orders-preview.conf` 例:
+`Rules` で管理する `orders-preview.conf` 例:
 
 ```conf
 SecRuleEngine On

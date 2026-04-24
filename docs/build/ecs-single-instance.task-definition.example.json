@@ -46,6 +46,11 @@
           "readOnly": false
         },
         {
+          "sourceVolume": "proxy-persistent",
+          "containerPath": "/app/data/persistent",
+          "readOnly": false
+        },
+        {
           "sourceVolume": "proxy-php-fpm",
           "containerPath": "/app/data/php-fpm",
           "readOnly": false
@@ -106,6 +111,11 @@
           "readOnly": false
         },
         {
+          "sourceVolume": "proxy-persistent",
+          "containerPath": "/app/data/persistent",
+          "readOnly": false
+        },
+        {
           "sourceVolume": "proxy-php-fpm",
           "containerPath": "/app/data/php-fpm",
           "readOnly": false
@@ -143,6 +153,14 @@
       "efsVolumeConfiguration": {
         "fileSystemId": "fs-0123456789abcdef0",
         "rootDirectory": "/tukuyomi/audit",
+        "transitEncryption": "ENABLED"
+      }
+    },
+    {
+      "name": "proxy-persistent",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-0123456789abcdef0",
+        "rootDirectory": "/tukuyomi/data/persistent",
         "transitEncryption": "ENABLED"
       }
     },

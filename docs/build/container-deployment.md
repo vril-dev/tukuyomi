@@ -23,6 +23,7 @@ This is the official supported path today.
   - `/app/conf`
   - `/app/data/scheduled-tasks`
   - `/app/audit`
+  - `/app/data/persistent` when using local `persistent_storage`
   - `/app/data/php-fpm` when bundled runtimes are used
 - live admin mutation is allowed
 
@@ -127,6 +128,7 @@ Dedicated scheduler role:
   - `/app/conf`
   - `/app/data/scheduled-tasks`
   - `/app/audit`
+  - `/app/data/persistent` when using local `persistent_storage`
   - `/app/data/php-fpm` when bundled runtimes are used
 
 This does not imply distributed mutable runtime support. It only makes
@@ -168,12 +170,16 @@ Minimum writable paths for the official mutable single-instance path:
 - `/app/conf`
 - `/app/data/scheduled-tasks`
 - `/app/audit`
+- `/app/data/persistent` when `persistent_storage.backend=local`
 
 Mount those from your platform unless you intentionally accept ephemeral local
 state.
 
 When you also use bundled PHP runtimes for `/options`, `/vhosts`, or scheduled
 PHP CLI jobs, mount `/app/data/php-fpm` as well.
+If internal response cache contents must survive node replacement, mount the
+path configured by `cache_store.store_dir`, such as `/app/cache/response`. That
+path is cache data, not runtime authority.
 
 WAF/CRS import material is staged under `/app/data/tmp` and imported into DB
 `waf_rule_assets`. Runtime loads active WAF/CRS assets from DB, not from a
@@ -193,8 +199,17 @@ Typical production pattern:
 - use runtime env injection only for:
   - `WAF_CONFIG_FILE`
   - `WAF_PROXY_AUDIT_FILE`
+  - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, and `AWS_REGION` / `AWS_DEFAULT_REGION` only when `persistent_storage.backend=s3`
   - security-audit key env overrides when `security_audit.key_source=env`
 - the embedded `Settings` page edits DB `app_config`; recreate/restart the container to apply listener/runtime/storage policy/observability updates
+
+Site-managed ACME is configured per site on the `Sites` page with
+`tls.mode=acme`. ACME cache data lives in the `acme/` namespace of
+`persistent_storage`. For a single-instance local backend, mount
+`/app/data/persistent`; for replicated or node-replacement deployments, use the
+S3 backend or an operator-managed shared mount. Azure Blob Storage and Google
+Cloud Storage backends fail closed until their provider adapters are
+implemented.
 
 Proxy engine selection is part of the same restart-required config surface:
 
@@ -262,6 +277,7 @@ These samples use separate EFS-backed mounts for:
 - `/app/conf`
 - `/app/data/scheduled-tasks`
 - `/app/audit`
+- `/app/data/persistent`
 - `/app/data/php-fpm`
 
 The task-definition sample also declares `9091/tcp` for `admin.listen_addr`.
@@ -300,6 +316,7 @@ The sample uses separate PVCs for:
 - `tukuyomi-conf`
 - `tukuyomi-scheduled-tasks`
 - `tukuyomi-audit`
+- `tukuyomi-persistent`
 - `tukuyomi-php-fpm`
 
 The sample now includes:
@@ -340,6 +357,7 @@ Container Apps environment for:
 - `proxyconf`
 - `proxyscheduledtasks`
 - `proxyaudit`
+- `proxypersistent`
 - `proxyphpfpm`
 
 Azure Container Apps still has one primary ingress target in the sample. When

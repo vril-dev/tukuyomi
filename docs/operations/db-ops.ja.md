@@ -137,6 +137,12 @@ import 後の本番起動で必要な file は次だけです。
 - `config.json`: DB 接続 bootstrap（`storage.db_driver`、`storage.db_path`、
   `storage.db_dsn`）と storage retention/sync bootstrap 値
 
+これは config authority の話です。runtime byte artifact は別扱いです。
+site-managed ACME を local backend で使う場合は `persistent_storage.local.base_dir`
+（既定 `data/persistent`）を保持してください。internal response cache を有効化
+した場合の `cache_store.store_dir`、security / FP tuner / proxy rules audit、
+scheduled task log、PHP-FPM runtime log/socket は DB 設定ではなく runtime artifact です。
+
 その他の seed/export file は operator workflow 用に残しても構いませんが、
 対応する normalized DB row が存在した後の runtime authority ではありません。
 `make db-migrate`、`make crs-install`、`make db-import` 後の本番 runtime では

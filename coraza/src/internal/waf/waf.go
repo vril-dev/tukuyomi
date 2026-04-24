@@ -301,15 +301,7 @@ func prepareInitialRuleSet() ([]string, fs.FS, error) {
 		}
 		return files, newMemoryRuleFS(bundle.Assets), nil
 	}
-
-	files, err := composeInitialRuleFiles(
-		config.RulesFile,
-		config.CRSEnable,
-		config.CRSSetupFile,
-		config.CRSRulesDir,
-		config.CRSDisabledFile,
-	)
-	return files, nil, err
+	return nil, nil, errors.New("DB-backed WAF rule assets are not initialized")
 }
 
 func prepareInitialRuleSetWithDisabled(disabled map[string]struct{}) ([]string, fs.FS, error) {
@@ -324,14 +316,7 @@ func prepareInitialRuleSetWithDisabled(disabled map[string]struct{}) ([]string, 
 		}
 		return files, newMemoryRuleFS(bundle.Assets), nil
 	}
-	files, err := composeInitialRuleFilesWithDisabledSet(
-		config.RulesFile,
-		config.CRSEnable,
-		config.CRSSetupFile,
-		config.CRSRulesDir,
-		disabled,
-	)
-	return files, nil, err
+	return nil, nil, errors.New("DB-backed WAF rule assets are not initialized")
 }
 
 func composeInitialRuleFilesWithDisabledSet(baseRuleSpec string, crsEnabled bool, crsSetupFile, crsRulesDir string, crsDisabled map[string]struct{}) ([]string, error) {
@@ -411,13 +396,7 @@ func PrepareInitialRuleFiles() ([]string, error) {
 		}
 		return composeInitialRuleFilesFromAssets(bundle, config.RulesFile, config.CRSEnable, config.CRSSetupFile, config.CRSRulesDir, disabled)
 	}
-	return composeInitialRuleFiles(
-		config.RulesFile,
-		config.CRSEnable,
-		config.CRSSetupFile,
-		config.CRSRulesDir,
-		config.CRSDisabledFile,
-	)
+	return nil, errors.New("DB-backed WAF rule assets are not initialized")
 }
 
 func loadCRSDisabledSelection(path string) (map[string]struct{}, error) {
@@ -436,7 +415,7 @@ func DiscoverCRSRuleFiles() ([]string, error) {
 	} else if found {
 		return discoverCRSRuleFilesFromAssets(bundle, config.CRSSetupFile, config.CRSRulesDir)
 	}
-	return discoverCRSRuleFiles(config.CRSSetupFile, config.CRSRulesDir)
+	return nil, errors.New("DB-backed WAF rule assets are not initialized")
 }
 
 func ValidateWithCRSSelection(enabledRuleNames []string) error {
@@ -499,54 +478,7 @@ func ValidateWithRuleOverride(targetPath string, raw []byte) error {
 		_, err = buildWAFWithRoot(files, newMemoryRuleFS(bundle.Assets))
 		return err
 	}
-
-	files, err := PrepareInitialRuleFiles()
-	if err != nil {
-		return err
-	}
-
-	replaced := false
-	for i, f := range files {
-		if filepath.Clean(f) != target {
-			continue
-		}
-
-		dir := filepath.Dir(target)
-		tmp, err := os.CreateTemp(dir, ".rule-validate.*.conf")
-		if err != nil {
-			// Some deployments mount rule files read-only for the runtime UID.
-			// Fall back to /tmp so validation can still run.
-			tmp, err = os.CreateTemp("", ".rule-validate.*.conf")
-			if err != nil {
-				return err
-			}
-		}
-		tmpPath := tmp.Name()
-		if _, err := tmp.Write(raw); err != nil {
-			tmp.Close()
-			_ = os.Remove(tmpPath)
-			return err
-		}
-		if err := tmp.Sync(); err != nil {
-			tmp.Close()
-			_ = os.Remove(tmpPath)
-			return err
-		}
-		if err := tmp.Close(); err != nil {
-			_ = os.Remove(tmpPath)
-			return err
-		}
-		defer os.Remove(tmpPath)
-		files[i] = tmpPath
-		replaced = true
-		break
-	}
-	if !replaced {
-		return fmt.Errorf("rule file %s is not part of active rule set", targetPath)
-	}
-
-	_, err = buildWAF(files)
-	return err
+	return errors.New("DB-backed WAF rule assets are not initialized")
 }
 
 func ReloadBaseWAF() error {
@@ -591,51 +523,10 @@ func GetWAFForExtraRule(extraRule string) (coraza.WAF, error) {
 			return w, nil
 		}
 	}
-
-	if w, ok := getCachedOverrideWAF(rule, ""); ok {
-		return w, nil
-	}
-
-	w, err := buildWAF([]string{rule})
-	if err != nil {
-		return nil, fmt.Errorf("failed to load extra rule %q: %w", rule, err)
-	}
-
-	var inserted bool
-	w, inserted = setCachedOverrideWAF(rule, "", w)
-	if inserted {
-		log.Printf("[BYPASS][RULE] loaded extra rules from: %s", rule)
-	}
-
-	return w, nil
+	return nil, fmt.Errorf("extra rule %q is not present in DB-managed override rules", rule)
 }
 
 func ValidateStandaloneRule(rulePath string, raw []byte) error {
-	dir := filepath.Dir(strings.TrimSpace(rulePath))
-	tmp, err := os.CreateTemp(dir, ".override-validate.*.conf")
-	if err != nil {
-		tmp, err = os.CreateTemp("", ".override-validate.*.conf")
-		if err != nil {
-			return err
-		}
-	}
-	tmpPath := tmp.Name()
-	if _, err := tmp.Write(raw); err != nil {
-		tmp.Close()
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	defer os.Remove(tmpPath)
-
-	_, err = buildWAF([]string{tmpPath})
+	_, err := buildWAFWithDirectives(raw)
 	return err
 }

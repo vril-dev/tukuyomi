@@ -42,8 +42,7 @@ make release-linux-all VERSION=v0.8.0
 /opt/tukuyomi/db/
 /opt/tukuyomi/audit/
 /opt/tukuyomi/cache/
-/opt/tukuyomi/logs/
-/opt/tukuyomi/rules/
+/opt/tukuyomi/data/tmp/
 ```
 
 bundle 同梱の bootstrap/example:
@@ -65,8 +64,7 @@ bundle 同梱の bootstrap/example:
 - `conf/ip-reputation.json`
 - `conf/scheduled-tasks.json`
 - `conf/upstream-runtime.json`
-- `conf/rules/*.conf`
-- `make crs-install` で stage する `rules/crs/...`
+- `make crs-install` で `data/tmp/...` 配下へ stage する WAF/CRS import material
 
 これらは空 DB の初期投入、または import/export 用です。対応する normalized DB row が存在する後は
 runtime は normalized domain を DB から直接読み込み、file の復元を起動条件にしません。
@@ -86,10 +84,6 @@ authority ではありません。
 
 - `data/scheduled-tasks/`
 
-managed bypass override rule を import する場合の任意 seed:
-
-- `conf/rules/*.conf`（`make db-import` 前のみ）
-
 managed GeoIP country update も使う場合の追加物:
 
 - `scripts/update_country_db.sh`
@@ -103,10 +97,8 @@ sudo install -d -m 755 \
   /opt/tukuyomi/db \
   /opt/tukuyomi/audit \
   /opt/tukuyomi/cache/response \
-  /opt/tukuyomi/logs/waf \
-  /opt/tukuyomi/rules \
-  /opt/tukuyomi/scripts \
-  /opt/tukuyomi/logs/proxy
+  /opt/tukuyomi/data/tmp \
+  /opt/tukuyomi/scripts
 
 sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
@@ -119,7 +111,7 @@ sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 注意:
 
 - `data/conf/*.bak` は本番へ持っていかないでください
-- `config.json` は DB 接続 bootstrap と DB `app_config` の seed/export material です
+- `config.json` は DB 接続 bootstrap です。release sample は `storage` block だけを保持します
 - `conf/proxy.json` は DB `proxy_rules` の任意 seed/import/export material です
 - `conf/sites.json` は DB `sites` の任意 seed/import/export material です
 - public release bundle が同梱するのは `conf/config.json` だけで、他の seed/import material は必要時に operator が用意します
@@ -135,8 +127,9 @@ sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 - public release bundle には `Options -> GeoIP Update -> Update now` 用の companion `bin/geoipupdate` が同梱されます
 - `GEOIPUPDATE_BIN` を使えば bundled updater path を override できます
 - managed country refresh 用の official wrapper は `./scripts/update_country_db.sh` です
-- managed GeoIP country DB、`GeoIP.conf`、update status は `make db-import` 後は DB-backed です。main repo に `data/geoip` を置く必要はありません
-- managed bypass override rule は DB `override_rules` です。`conf/rules/*.conf` は新規DB import時だけ使う operator-provided seed です
+- managed GeoIP country DB、`GeoIP.conf`、update status は DB-backed です。`data/geoip` fallback directory は配備しません
+- managed bypass override rule は DB `override_rules` です。`conf/rules` fallback directory は配備しません
+- WAF/access event は DB `waf_events` へ直接書き込みます。`paths.log_file` は古い `waf-events.ndjson` を明示的に取り込む場合だけの legacy import source です
 - `extra_rule` の値は DB-managed override rule への logical compatibility reference として残ります
 
 proxy engine 選択は restart-required な DB `app_config` 設定です:
@@ -335,7 +328,7 @@ HTTP/3 UDP socket handoff は対応しますが、既存 QUIC connection は pro
 
 ## Notes
 
-- sample unit は `WorkingDirectory=/opt/tukuyomi` を使うので、相対 `conf/`, `rules/`, `logs/` がそのまま機能します
+- sample unit は `WorkingDirectory=/opt/tukuyomi` を使うので、相対 `conf/`, `audit/`, `data/tmp/` は deployment root 内に収まります
 - `server.graceful_shutdown_timeout_sec` の既定値は `30` です。deploy 中も WebSocket を長く維持する運用なら値を引き上げてください
 - scheduled-task service も同じ working directory と env file を使うので、`run-scheduled-tasks` から main service と同じ `conf/` / `data/scheduled-tasks/` を見られます
 - sample unit は `CAP_NET_BIND_SERVICE` を付けるので、`server.listen_addr=:443` や `server.tls.http_redirect_addr=:80` の direct bind に対応します

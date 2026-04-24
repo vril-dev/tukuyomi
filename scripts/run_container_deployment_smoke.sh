@@ -82,12 +82,15 @@ install -d -m 755 \
   "${BUILD_CONTEXT}/coraza" \
   "${BUILD_CONTEXT}/web" \
   "${BUILD_CONTEXT}/data/conf" \
+  "${BUILD_CONTEXT}/seeds" \
   "${BUILD_CONTEXT}/scripts" \
   "${BUILD_CONTEXT}/docs/build"
 rsync -a "${ROOT_DIR}/coraza/" "${BUILD_CONTEXT}/coraza/"
 rsync -a --exclude 'node_modules' --exclude 'dist' "${ROOT_DIR}/web/tukuyomi-admin/" "${BUILD_CONTEXT}/web/tukuyomi-admin/"
 rsync -a --exclude '*.bak' "${ROOT_DIR}/data/conf/" "${BUILD_CONTEXT}/data/conf/"
 install -m 755 "${ROOT_DIR}/scripts/install_crs.sh" "${BUILD_CONTEXT}/scripts/install_crs.sh"
+install -m 755 "${ROOT_DIR}/scripts/stage_waf_rule_assets.sh" "${BUILD_CONTEXT}/scripts/stage_waf_rule_assets.sh"
+rsync -a "${ROOT_DIR}/seeds/" "${BUILD_CONTEXT}/seeds/"
 install -m 644 "${ROOT_DIR}/docs/build/Dockerfile.example" "${BUILD_CONTEXT}/docs/build/Dockerfile.example"
 
 jq \
@@ -130,7 +133,7 @@ log "checking runtime paths inside the deployment container"
 docker exec "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}" test -x /app/tukuyomi
 docker exec "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}" test -d /app/conf
 docker exec "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}" test -d /app/db
-docker exec "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}" test -d /app/logs
+docker exec "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}" test -d /app/audit
 docker exec "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}" test -f /app/conf/config.json
 docker exec "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}" test -f /app/db/tukuyomi.db
 if docker exec "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}" sh -lc 'find /app/conf -type f -name "*.bak" | grep -q .'; then

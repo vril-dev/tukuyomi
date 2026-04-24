@@ -25,9 +25,6 @@ func SyncAppConfigStorage() error {
 }
 
 func ImportStartupConfigStorage() error {
-	if err := importAppConfigStorage(); err != nil {
-		return err
-	}
 	if err := ImportWAFRuleAssetsStorage(); err != nil {
 		return err
 	}
@@ -56,6 +53,9 @@ func ImportStartupConfigStorage() error {
 		return err
 	}
 	if err := importRequestCountryStorage(); err != nil {
+		return err
+	}
+	if err := importAppConfigStorage(); err != nil {
 		return err
 	}
 	return nil
@@ -90,6 +90,13 @@ func loadAppConfigStorage(seedIfMissing bool) (string, string, config.AppConfigF
 		if err != nil {
 			return "", "", config.AppConfigFile{}, fmt.Errorf("decode legacy app_config db blob: %w", err)
 		}
+		candidate, _, err = appConfigBlobRawFromCandidate(candidate, bootstrapCfg)
+		if err != nil {
+			return "", "", config.AppConfigFile{}, err
+		}
+		if err := ValidateRequestCountryRuntimeConfig(candidate); err != nil {
+			return "", "", config.AppConfigFile{}, fmt.Errorf("validate legacy app_config request_metadata country mode: %w", err)
+		}
 		rec, cfg, err := store.writeAppConfigVersion("", candidate, bootstrapCfg, configVersionSourceImport, "", "legacy app config import", 0)
 		if err != nil {
 			return "", "", config.AppConfigFile{}, err
@@ -108,6 +115,9 @@ func loadAppConfigStorage(seedIfMissing bool) (string, string, config.AppConfigF
 	}
 	etag := bypassconf.ComputeETag([]byte(normalizedRaw))
 	if seedIfMissing {
+		if err := ValidateRequestCountryRuntimeConfig(cfg); err != nil {
+			return "", "", config.AppConfigFile{}, fmt.Errorf("validate app_config request_metadata country mode: %w", err)
+		}
 		rec, seededCfg, err := store.writeAppConfigVersion("", cfg, bootstrapCfg, configVersionSourceImport, "", "app config bootstrap import", 0)
 		if err != nil {
 			return "", "", config.AppConfigFile{}, fmt.Errorf("seed normalized app_config db: %w", err)
@@ -133,6 +143,9 @@ func importAppConfigStorage() error {
 	store := getLogsStatsStore()
 	if store == nil {
 		return fmt.Errorf("db store is not initialized")
+	}
+	if err := ValidateRequestCountryRuntimeConfig(bootstrapCfg); err != nil {
+		return fmt.Errorf("validate app_config request_metadata country mode: %w", err)
 	}
 	if _, _, err := store.writeAppConfigVersion("", bootstrapCfg, bootstrapCfg, configVersionSourceImport, "", "app config seed import", 0); err != nil {
 		return fmt.Errorf("import normalized app_config: %w", err)
@@ -378,35 +391,12 @@ func importCRSDisabledStorage() error {
 }
 
 func importManagedOverrideRulesStorage() error {
-	names, err := listManagedOverrideRuleNamesFromFS()
-	if err != nil {
-		return fmt.Errorf("list managed override rules: %w", err)
-	}
-	rules := make([]managedOverrideRuleVersion, 0, len(names))
-	for _, name := range names {
-		raw, hadFile, err := readFileMaybe(managedOverrideRulePath(name))
-		if err != nil {
-			return fmt.Errorf("read override rule %s: %w", name, err)
-		}
-		if !hadFile {
-			continue
-		}
-		rules = append(rules, managedOverrideRuleVersion{Name: name, Raw: raw})
-	}
 	store := getLogsStatsStore()
 	if store == nil {
 		return fmt.Errorf("db store is not initialized")
 	}
-	if _, _, err := store.writeManagedOverrideRulesVersion("", rules, configVersionSourceImport, "", "override rules seed import", 0); err != nil {
-		return fmt.Errorf("import normalized override rules: %w", err)
-	}
-	blobs, err := store.ListConfigBlobs(overrideRuleConfigBlobPrefix)
-	if err == nil {
-		for _, blob := range blobs {
-			_ = store.DeleteConfigBlob(blob.ConfigKey)
-		}
-	}
-	return nil
+	_, _, _, err := loadRuntimeManagedOverrideRules(store)
+	return err
 }
 
 func importResponseCacheConfigStorage() error {

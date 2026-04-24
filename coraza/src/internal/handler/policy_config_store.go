@@ -600,36 +600,6 @@ func loadRuntimeManagedOverrideRules(store *wafEventStore) ([]managedOverrideRul
 	return rules, rec, true, nil
 }
 
-func loadOrSeedManagedOverrideRules(store *wafEventStore) ([]managedOverrideRuleVersion, configVersionRecord, bool, error) {
-	rules, rec, found, err := loadRuntimeManagedOverrideRules(store)
-	if err != nil || found {
-		return rules, rec, found, err
-	}
-
-	fsNames, err := listManagedOverrideRuleNamesFromFS()
-	if err != nil {
-		return nil, configVersionRecord{}, false, err
-	}
-	for _, name := range fsNames {
-		raw, hadFile, readErr := readFileMaybe(managedOverrideRulePath(name))
-		if readErr != nil {
-			return nil, configVersionRecord{}, false, readErr
-		}
-		if !hadFile {
-			continue
-		}
-		rules = append(rules, managedOverrideRuleVersion{Name: name, Raw: raw})
-	}
-	if len(rules) == 0 {
-		return nil, configVersionRecord{}, false, nil
-	}
-	rec, rules, err = store.writeManagedOverrideRulesVersion("", rules, configVersionSourceImport, "", "override rules file import", 0)
-	if err != nil {
-		return nil, configVersionRecord{}, false, err
-	}
-	return rules, rec, true, nil
-}
-
 func managedOverrideRuleMap(rules []managedOverrideRuleVersion) map[string]managedOverrideRuleVersion {
 	out := make(map[string]managedOverrideRuleVersion, len(rules))
 	for _, rule := range normalizeManagedOverrideRules(rules) {

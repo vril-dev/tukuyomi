@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"time"
 
@@ -151,38 +150,26 @@ func PutCRSRuleSets(c *gin.Context) {
 		return
 	}
 
-	store := getLogsStatsStore()
-	var curRaw []byte
-	hadFile := false
-	if store == nil {
-		var err error
-		curRaw, hadFile, err = readFileMaybe(config.CRSDisabledFile)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-	}
-	expectedETag := c.GetHeader("If-Match")
-	if store != nil {
-		names, rec, found, getErr := loadRuntimeCRSDisabledConfig(store)
-		if getErr != nil {
-			respondConfigBlobDBError(c, "crs db read failed", getErr)
-			return
-		}
-		if found {
-			curRaw = crsselection.SerializeDisabled(names)
-			translated := policyWriteExpectedETag(expectedETag, curRaw, rec)
-			if translated != "" && translated != rec.ETag {
-				c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": rec.ETag})
-				return
-			}
-			expectedETag = translated
-		}
-	}
-	curETag := bypassconf.ComputeETag(curRaw)
-	if store == nil && expectedETag != "" && expectedETag != curETag {
-		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
 		return
+	}
+	var curRaw []byte
+	expectedETag := c.GetHeader("If-Match")
+	names, rec, found, getErr := loadRuntimeCRSDisabledConfig(store)
+	if getErr != nil {
+		respondConfigBlobDBError(c, "crs db read failed", getErr)
+		return
+	}
+	if found {
+		curRaw = crsselection.SerializeDisabled(names)
+		translated := policyWriteExpectedETag(expectedETag, curRaw, rec)
+		if translated != "" && translated != rec.ETag {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": rec.ETag})
+			return
+		}
+		expectedETag = translated
 	}
 
 	crsFiles, err := waf.DiscoverCRSRuleFiles()
@@ -201,58 +188,26 @@ func PutCRSRuleSets(c *gin.Context) {
 		return
 	}
 
-	nextRaw := crsselection.SerializeDisabled(disabledNames)
-
-	if store != nil {
-		now := time.Now().UTC()
-		rec, err := store.writeCRSDisabledConfigVersion(expectedETag, disabledNames, configVersionSourceApply, "", "crs disabled update", 0)
-		if err != nil {
-			if errors.Is(err, errConfigVersionConflict) {
-				c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, crsDisabledConfigDomain)})
-				return
-			}
-			respondConfigBlobDBError(c, "crs db update failed", err)
+	now := time.Now().UTC()
+	rec, err = store.writeCRSDisabledConfigVersion(expectedETag, disabledNames, configVersionSourceApply, "", "crs disabled update", 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, crsDisabledConfigDomain)})
 			return
 		}
-		if err := waf.ReloadBaseWAF(); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("reload failed: %v", err)})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"ok":             true,
-			"etag":           rec.ETag,
-			"hot_reloaded":   true,
-			"disabled_count": len(disabledNames),
-			"saved_at":       now.Format(time.RFC3339Nano),
-		})
-		return
-	}
-
-	if err := os.MkdirAll(filepath.Dir(config.CRSDisabledFile), 0o755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if err := bypassconf.AtomicWriteWithBackup(config.CRSDisabledFile, nextRaw); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondConfigBlobDBError(c, "crs db update failed", err)
 		return
 	}
 	if err := waf.ReloadBaseWAF(); err != nil {
-		rollbackErr := rollbackCRSDisabledFile(config.CRSDisabledFile, hadFile, curRaw)
-		_ = waf.ReloadBaseWAF()
-		msg := fmt.Sprintf("reload failed and rollback applied: %v", err)
-		if rollbackErr != nil {
-			msg = fmt.Sprintf("%s (rollback error: %v)", msg, rollbackErr)
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": msg})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("reload failed: %v", err)})
 		return
 	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"ok":             true,
-		"etag":           bypassconf.ComputeETag(nextRaw),
+		"etag":           rec.ETag,
 		"hot_reloaded":   true,
 		"disabled_count": len(disabledNames),
-		"saved_at":       time.Now().UTC().Format(time.RFC3339Nano),
+		"saved_at":       now.Format(time.RFC3339Nano),
 	})
 }
 

@@ -7,7 +7,7 @@ This document describes practical operating steps to safely reduce false positiv
 ## 1. Collect Evidence First
 
 1. Retrieve logs through the admin API and identify the `rule_id` and `path`.
-2. Trace the `req_id` in `interesting.ndjson` under `logs/proxy/` and narrow the client conditions (IP/UA/query).
+2. Trace the same `req_id` through `/tukuyomi-api/logs/read?src=waf&req_id=<id>` and narrow the client conditions (IP/UA/query).
 3. Always keep a reproducible HTTP request (curl or E2E).
 
 ## 2. Narrow the Impact Scope
@@ -34,7 +34,7 @@ Recommended order:
   "hosts": {
     "example.com": {
       "entries": [
-        { "path": "/search", "extra_rule": "conf/rules/orders-preview.conf" }
+        { "path": "/search", "extra_rule": "orders-preview.conf" }
       ]
     }
   }

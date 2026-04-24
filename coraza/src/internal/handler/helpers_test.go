@@ -117,6 +117,22 @@ func newUpstreamHealthMonitorForTest(t *testing.T, cfg ProxyRulesConfig) *upstre
 	return tracker
 }
 
+func initConfigDBStoreForTest(t *testing.T) *wafEventStore {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected sqlite store")
+	}
+	return store
+}
+
 func importProxyRuntimeDBForTest(t *testing.T, raw string) ProxyRulesConfig {
 	t.Helper()
 	store := getLogsStatsStore()
@@ -131,6 +147,74 @@ func importProxyRuntimeDBForTest(t *testing.T, raw string) ProxyRulesConfig {
 		t.Fatalf("write proxy config: %v", err)
 	}
 	seedUpstreamRuntimeDBForTest(t, prepared.cfg)
+	return prepared.cfg
+}
+
+func importCountryBlockDBForTest(t *testing.T, raw string) countryBlockFile {
+	t.Helper()
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected db store")
+	}
+	normalized, err := normalizeCountryBlockPolicyRaw(raw)
+	if err != nil {
+		t.Fatalf("normalize country block rules: %v", err)
+	}
+	file, err := ParseCountryBlockRaw(string(normalized))
+	if err != nil {
+		t.Fatalf("parse normalized country block rules: %v", err)
+	}
+	if _, err := store.writePolicyJSONConfigVersion("", mustPolicyJSONSpec(countryBlockConfigBlobKey), normalized, configVersionSourceImport, "", "test country block import", 0); err != nil {
+		t.Fatalf("write country block rules: %v", err)
+	}
+	return file
+}
+
+func importSiteRuntimeDBForTest(t *testing.T, raw string) SiteConfigFile {
+	t.Helper()
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected db store")
+	}
+	prepared, err := prepareSiteConfigRaw(raw)
+	if err != nil {
+		t.Fatalf("prepare site config: %v", err)
+	}
+	if _, err := store.writeSiteConfigVersion("", prepared.cfg, configVersionSourceImport, "", "test sites import", 0); err != nil {
+		t.Fatalf("write site config: %v", err)
+	}
+	return prepared.cfg
+}
+
+func importPHPRuntimeInventoryDBForTest(t *testing.T, raw string, inventoryPath string) PHPRuntimeInventoryFile {
+	t.Helper()
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected db store")
+	}
+	prepared, err := preparePHPRuntimeInventoryRaw(raw, inventoryPath)
+	if err != nil {
+		t.Fatalf("prepare php runtime inventory: %v", err)
+	}
+	if _, err := store.writePHPRuntimeInventoryConfigVersion("", prepared.cfg, configVersionSourceImport, "", "test php runtime inventory import", 0); err != nil {
+		t.Fatalf("write php runtime inventory config: %v", err)
+	}
+	return prepared.cfg
+}
+
+func importVhostRuntimeDBForTest(t *testing.T, raw string, inventory PHPRuntimeInventoryFile) VhostConfigFile {
+	t.Helper()
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected db store")
+	}
+	prepared, err := prepareVhostConfigRawWithInventory(raw, inventory)
+	if err != nil {
+		t.Fatalf("prepare vhost config: %v", err)
+	}
+	if _, err := store.writeVhostConfigVersion("", prepared.cfg, configVersionSourceImport, "", "test vhost import", 0); err != nil {
+		t.Fatalf("write vhost config: %v", err)
+	}
 	return prepared.cfg
 }
 

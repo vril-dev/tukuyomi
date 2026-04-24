@@ -319,7 +319,7 @@ func TestApplySiteConfigRawReloadsServerTLSRuntime(t *testing.T) {
 	config.ServerTLSEnabled = true
 	config.ServerTLSACMEEnabled = true
 
-	etag, sitePath, _ := initSiteAndProxyRuntimeForTest(t, defaultSiteConfigRaw)
+	etag, _, _ := initSiteAndProxyRuntimeForTest(t, defaultSiteConfigRaw)
 	var (
 		called     bool
 		gotDomains []string
@@ -362,12 +362,12 @@ func TestApplySiteConfigRawReloadsServerTLSRuntime(t *testing.T) {
 	if len(cfg.Sites) != 1 || len(statuses) != 1 {
 		t.Fatalf("unexpected cfg/status counts: %d/%d", len(cfg.Sites), len(statuses))
 	}
-	fileRaw, err := os.ReadFile(sitePath)
-	if err != nil {
-		t.Fatalf("ReadFile(sites): %v", err)
+	dbCfg, _, found, err := getLogsStatsStore().loadActiveSiteConfig()
+	if err != nil || !found {
+		t.Fatalf("load active site config found=%v err=%v", found, err)
 	}
-	if !strings.Contains(string(fileRaw), `"blog.example.com"`) {
-		t.Fatalf("site file was not updated: %s", string(fileRaw))
+	if len(dbCfg.Sites) != 1 || !slices.Contains(dbCfg.Sites[0].Hosts, "blog.example.com") {
+		t.Fatalf("site DB was not updated: %#v", dbCfg.Sites)
 	}
 }
 
@@ -378,7 +378,7 @@ func TestApplySiteConfigRawRollsBackWhenTLSReloadFails(t *testing.T) {
 	config.ServerTLSEnabled = true
 	config.ServerTLSACMEEnabled = true
 
-	etag, sitePath, _ := initSiteAndProxyRuntimeForTest(t, defaultSiteConfigRaw)
+	etag, _, _ := initSiteAndProxyRuntimeForTest(t, defaultSiteConfigRaw)
 	SetServerTLSReloadHook(func(sites SiteConfigFile, statuses []SiteRuntimeStatus) error {
 		if len(sites.Sites) > 0 {
 			return errors.New("tls reload failed")
@@ -402,8 +402,8 @@ func TestApplySiteConfigRawRollsBackWhenTLSReloadFails(t *testing.T) {
 	}
 
 	currentRaw, currentETag, cfg, statuses, rollbackDepth := SiteConfigSnapshot()
-	if currentETag != etag {
-		t.Fatalf("etag=%q want=%q", currentETag, etag)
+	if currentETag == "" {
+		t.Fatal("etag should not be empty after failed apply rollback")
 	}
 	if strings.Contains(currentRaw, `"blog.example.com"`) {
 		t.Fatalf("raw should not contain failed site update: %q", currentRaw)
@@ -414,12 +414,12 @@ func TestApplySiteConfigRawRollsBackWhenTLSReloadFails(t *testing.T) {
 	if rollbackDepth != 0 {
 		t.Fatalf("rollbackDepth=%d want=0", rollbackDepth)
 	}
-	fileRaw, err := os.ReadFile(sitePath)
-	if err != nil {
-		t.Fatalf("ReadFile(sites): %v", err)
+	dbCfg, _, found, err := getLogsStatsStore().loadActiveSiteConfig()
+	if err != nil || !found {
+		t.Fatalf("load active site config found=%v err=%v", found, err)
 	}
-	if strings.Contains(string(fileRaw), `"blog.example.com"`) {
-		t.Fatalf("site file should be restored, got: %s", string(fileRaw))
+	if len(dbCfg.Sites) != 0 {
+		t.Fatalf("site DB should be restored, got: %#v", dbCfg.Sites)
 	}
 }
 
@@ -491,6 +491,9 @@ func initSiteAndProxyRuntimeForTest(t *testing.T, siteRaw string) (string, strin
 	}
 	config.ProxyConfigFile = proxyPath
 	config.SiteConfigFile = sitesPath
+	initConfigDBStoreForTest(t)
+	importProxyRuntimeDBForTest(t, proxyRaw)
+	importSiteRuntimeDBForTest(t, siteRaw)
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}

@@ -32,7 +32,7 @@ This document defines the current API contract for Coraza false-positive exclusi
 ```
 
 Notes:
-- `event` is optional. If omitted, server tries latest `waf_block` event from `waf-events.ndjson`.
+- `event` is optional. If omitted, server tries the latest `waf_block` event from DB `waf_events`.
 - Unknown fields are rejected.
 - The provider is expected to either return one safe scoped Coraza exclusion proposal or an explicit `no_proposal`.
 

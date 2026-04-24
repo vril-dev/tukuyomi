@@ -16,7 +16,6 @@ import (
 
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/cacheconf"
-	"tukuyomi/internal/config"
 	"tukuyomi/internal/observability"
 	"tukuyomi/internal/waf"
 )
@@ -781,7 +780,7 @@ func emitJSONLogAndAppendEvent(obj map[string]any) {
 	if err != nil {
 		return
 	}
-	_ = appendEncodedEventToFile(raw)
+	_ = appendEncodedEventToDB(raw)
 }
 
 func encodeAndEmitJSONLog(obj map[string]any) ([]byte, error) {
@@ -812,20 +811,12 @@ func releaseProxyRouteSelection(selection proxyRouteTransportSelection) {
 	}
 }
 
-func appendEncodedEventToFile(raw []byte) error {
-	path := strings.TrimSpace(config.LogFile)
-	if path == "" {
-		path = "logs/waf/waf-events.ndjson"
-	}
-	return appendEncodedWAFEvent(raw, path)
+func appendEncodedEventToDB(raw []byte) error {
+	return appendEncodedWAFEvent(raw, "")
 }
 
-func appendEncodedEventsToFile(raws [][]byte) error {
-	path := strings.TrimSpace(config.LogFile)
-	if path == "" {
-		path = "logs/waf/waf-events.ndjson"
-	}
-	return appendEncodedWAFEvents(raws, path)
+func appendEncodedEventsToDB(raws [][]byte) error {
+	return appendEncodedWAFEvents(raws, "")
 }
 
 func requestPath(r *http.Request) string {

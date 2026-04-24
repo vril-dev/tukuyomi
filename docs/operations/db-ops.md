@@ -41,8 +41,9 @@ make db-import
 ```
 
 `make db-import` runs `db-migrate` first, then imports seed/export material into
-versioned normalized DB tables. `config.json` supplies `app_config` values except
-the DB bootstrap fields, `proxy.json` supplies proxy config, and runtime files
+versioned normalized DB tables. `config.json` is loaded as the `app_config` seed
+after built-in defaults are applied; bundled configs intentionally keep only the
+`storage` bootstrap block. `proxy.json` supplies proxy config, and runtime files
 such as `sites`, `vhosts`, `scheduled_tasks`, `upstream_runtime`, and PHP-FPM
 runtime inventory are imported into their own feature tables. After import,
 those DB rows are authoritative.
@@ -80,12 +81,15 @@ DSN requirements:
 
 ### 1. `waf_events`
 
-Ingested WAF log records (`waf-events.ndjson`) used by:
+WAF, access, and request-security event records used by:
 
 - `/tukuyomi-api/logs/stats`
 - `/tukuyomi-api/logs/read?src=waf`
 - `/tukuyomi-api/logs/download?src=waf`
 - FP tuner latest-event lookup
+
+Current runtime writes these events directly to DB. `waf-events.ndjson` is a
+legacy import source only when an operator intentionally ingests old file logs.
 
 ### 2. Versioned runtime config tables
 
@@ -135,8 +139,8 @@ Remaining blob examples:
 The only file required by production startup after import is:
 
 - `config.json`: DB connection bootstrap (`storage.db_driver`,
-  `storage.db_path`, `storage.db_dsn`) plus seed/export material for
-  `app_config`
+  `storage.db_path`, `storage.db_dsn`) plus storage retention/sync bootstrap
+  values
 
 Other seed/export files may be kept for operator workflows but are not runtime
 authority after their normalized DB rows exist. After `make db-migrate`,
@@ -221,8 +225,9 @@ If DB is missing or corrupted:
    configured files are a known-good seed/export.
 3. Start stack (`docker compose up -d coraza`) so schema bootstrap and initial
    seeding run.
-4. Call `/tukuyomi-api/logs/stats` once to trigger `waf_events` re-ingest from
-   `waf-events.ndjson`.
+4. Start the service; new WAF/access events are written directly to
+   `waf_events`. Only call `/tukuyomi-api/logs/stats` with a configured legacy
+   log file if you intentionally need to ingest old `waf-events.ndjson` data.
 
 ### MySQL / PostgreSQL
 
@@ -231,4 +236,5 @@ If DB is reset:
 1. Ensure the database is reachable with the configured DSN.
 2. Restore from DB backup, or prepare known-good config files for initial seed.
 3. Start/restart coraza so schema bootstrap and sync run.
-4. Trigger logs endpoint once for `waf_events` ingest.
+4. New WAF/access events are written directly to `waf_events`; trigger the logs
+   endpoint only when intentionally ingesting a legacy log file.

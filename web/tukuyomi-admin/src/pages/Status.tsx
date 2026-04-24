@@ -211,7 +211,7 @@ export default function Status() {
                 <Metric label={tx("Country Resolution Mode")} value={String(data.request_country_effective_mode ?? "-")} />
                 <Metric label={tx("Country DB Loaded")} value={String(data.request_country_loaded ?? "-")} />
                 <Metric label={tx("Country DB Path")} value={String(data.request_country_managed_path ?? "-")} />
-                <Metric label={tx("Rules File")} value={String(data.rules_file ?? "-")} />
+                <Metric label={tx("Base Rule Asset")} value={String(data.rules_file ?? "-")} />
                 <Metric label={tx("Proxy Upstream KeepAlive (sec)")} value={String(data.proxy_upstream_keepalive_sec ?? "-")} />
                 <Metric label={tx("CRS Enabled")} value={String(data.crs_enabled ?? "-")} />
                 <Metric label={tx("Rate Limit Enabled")} value={String(data.rate_limit_enabled ?? "-")} />

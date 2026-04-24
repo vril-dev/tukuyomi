@@ -69,13 +69,14 @@ PY
   fi
 
   log "seeding staged runtime DB with preview bootstrap defaults"
-  stage_root="$(mktemp -d "${RUNTIME_DIR}/.tmp-waf-import.XXXXXX")"
+  mkdir -p "${RUNTIME_DIR}/tmp"
+  stage_root="$(mktemp -d "${RUNTIME_DIR}/tmp/waf-import.XXXXXX")"
   (
     cd "${RUNTIME_DIR}"
     set -a
     source "${ENV_FILE}"
     set +a
-    DEST_DIR="${stage_root}/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh"
+    "${ROOT_DIR}/scripts/stage_waf_rule_assets.sh" "${stage_root}"
     ./bin/tukuyomi db-migrate
     WAF_RULE_ASSET_FS_ROOT="${stage_root}" ./bin/tukuyomi db-import-waf-rule-assets
     UI_PREVIEW_PUBLIC_ADDR=":${BINARY_DEPLOYMENT_PROXY_PORT}" \
@@ -152,7 +153,7 @@ fi
 RUNTIME_ROOT="$(mktemp -d "${ROOT_DIR}/.tmp-binary-deployment-smoke.XXXXXX")"
 RUNTIME_DIR="${RUNTIME_ROOT}/opt/tukuyomi"
 ENV_FILE="${RUNTIME_ROOT}/etc/tukuyomi/tukuyomi.env"
-SERVER_LOG="${RUNTIME_DIR}/logs/waf/binary-deployment-smoke.log"
+SERVER_LOG="${RUNTIME_DIR}/data/tmp/binary-deployment-smoke.log"
 UPSTREAM_LOG="${RUNTIME_ROOT}/proxy-echo.log"
 
 log "staging runtime tree at ${RUNTIME_DIR}"
@@ -162,10 +163,9 @@ log "staging runtime tree at ${RUNTIME_DIR}"
     "${RUNTIME_DIR}/db" \
     "${RUNTIME_DIR}/audit" \
     "${RUNTIME_DIR}/cache/response" \
+    "${RUNTIME_DIR}/data/tmp" \
     "${RUNTIME_DIR}/data/scheduled-tasks" \
     "${RUNTIME_DIR}/scripts" \
-    "${RUNTIME_DIR}/logs/waf" \
-    "${RUNTIME_DIR}/logs/proxy" \
     "${RUNTIME_ROOT}/etc/tukuyomi"
 
 install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${RUNTIME_DIR}/bin/tukuyomi"

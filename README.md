@@ -38,7 +38,7 @@ family comparison.
 ## Rule Files and First Setup
 
 This repository intentionally does **not** bundle the full OWASP CRS files.
-It ships a minimal bootstrappable base rule seed, `data/rules/tukuyomi.conf`.
+It ships a minimal bootstrappable base rule seed under `seeds/waf/rules/`.
 
 Prepare the DB first, then install CRS seed files and import WAF rule assets:
 
@@ -103,7 +103,7 @@ that DB plus preview config files on each start. If you use
 `tukuyomi` keeps configuration split by responsibility:
 
 - `.env`: Docker-only runtime wiring
-- `data/conf/config.json`: DB connection bootstrap and app config seed/export material
+- `data/conf/config.json`: DB connection bootstrap; bundled configs keep only the `storage` block
 - DB `app_config_*`: global runtime, listener, admin, storage policy, and path config
 - DB `proxy_*`: live proxy transport and routing config
 - `data/conf/proxy.json`: proxy rules seed/import/export material
@@ -113,15 +113,15 @@ that DB plus preview config files on each start. If you use
 - DB `vhosts` / `vhost_*`: live vhost and PHP-FPM vhost config
 - DB `waf_rule_assets`: base WAF and CRS rule/data assets
 - DB `override_rules`: managed bypass `extra_rule` rule bodies
-- `data/conf/rules/*.conf`: optional seed files for managed bypass overrides
 - DB `php_runtime_inventory` / `php_runtime_modules`: PHP-FPM runtime inventory and module metadata
 - `data/php-fpm/inventory.json` and `data/php-fpm/vhosts.json`: PHP-FPM seed/import/export material
 - `data/conf/scheduled-tasks.json`: scheduled task seed/import/export material
 
-Base WAF/CRS assets and managed bypass overrides are DB-backed after import.
+Base WAF/CRS assets and managed bypass overrides are DB-backed. `make crs-install`
+stages rule import material under `data/tmp`, imports it, and removes the stage.
 The configured paths remain logical asset names and compatibility references;
-runtime does not require the seed files to be present once the DB has active
-generations. The same applies to startup, policy, site, vhost, scheduled task,
+runtime does not use `data/rules`, `data/conf/rules`, or `data/geoip` fallback
+directories. The same applies to startup, policy, site, vhost, scheduled task,
 upstream runtime, response cache, and PHP-FPM inventory domains after
 `make db-import`.
 

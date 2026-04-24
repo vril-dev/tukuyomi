@@ -143,12 +143,11 @@ wait_for_task_success() {
   local db_path="$1"
   local task_name="$2"
   local task_log="$3"
-  local command_output="$4"
   local i
 
   for i in $(seq 1 "${SCHEDULED_TASKS_SMOKE_WAIT_SECONDS}"); do
     if db_has_task_success "${db_path}" "${task_name}" && \
-      [[ -f "${task_log}" ]] && [[ -f "${command_output}" ]]; then
+      [[ -s "${task_log}" ]]; then
       return 0
     fi
     sleep 1
@@ -230,11 +229,6 @@ stage_compose_workspace() {
   else
     mkdir -p "${workspace}/data/vhosts"
   fi
-  if [[ -d "${ROOT_DIR}/data/logs" ]]; then
-    rsync -a "${ROOT_DIR}/data/logs/" "${workspace}/data/logs/"
-  else
-    mkdir -p "${workspace}/data/logs"
-  fi
   rsync -a "${ROOT_DIR}/scripts/" "${workspace}/scripts/"
   reset_scheduled_task_runtime_dir "${workspace}/data/scheduled-tasks"
 }
@@ -284,11 +278,12 @@ seed_runtime_db_from_files() {
   local binary_path="$2"
   local stage_root=""
 
-  stage_root="$(mktemp -d "${data_dir}/.tmp-waf-import.XXXXXX")"
+  mkdir -p "${data_dir}/tmp"
+  stage_root="$(mktemp -d "${data_dir}/tmp/waf-import.XXXXXX")"
 
   (
     cd "${data_dir}"
-    DEST_DIR="${stage_root}/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh"
+    "${ROOT_DIR}/scripts/stage_waf_rule_assets.sh" "${stage_root}"
     WAF_CONFIG_FILE="conf/config.json" "${binary_path}" db-migrate
     WAF_RULE_ASSET_FS_ROOT="${stage_root}" WAF_CONFIG_FILE="conf/config.json" "${binary_path}" db-import-waf-rule-assets
     WAF_CONFIG_FILE="conf/config.json" "${binary_path}" db-import
@@ -356,49 +351,44 @@ run_binary_smoke() {
   local runtime_dir
   local db_path
   local task_log
-  local command_output
 
   BINARY_ROOT="$(mktemp -d "${ROOT_DIR}/.tmp-scheduled-tasks-binary-smoke.XXXXXX")"
   runtime_dir="${BINARY_ROOT}/opt/tukuyomi"
   db_path="$(resolve_db_path "${ROOT_DIR}/data/conf/config.json" "${runtime_dir}" 0)"
   task_log="${runtime_dir}/data/scheduled-tasks/logs/scheduled-task-binary-smoke.log"
-  command_output="${runtime_dir}/logs/scheduled-task-binary-command.log"
 
   log "staging binary scheduled-task smoke runtime at ${runtime_dir}"
   install -d -m 755 \
     "${runtime_dir}/bin" \
     "${runtime_dir}/conf" \
     "${runtime_dir}/data/scheduled-tasks" \
-    "${runtime_dir}/data/php-fpm" \
-    "${runtime_dir}/logs"
+    "${runtime_dir}/data/php-fpm"
   install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${runtime_dir}/bin/tukuyomi"
   rsync -a --exclude '*.bak' "${ROOT_DIR}/data/conf/" "${runtime_dir}/conf/"
   if [[ -d "${ROOT_DIR}/data/php-fpm" ]]; then
     rsync -a "${ROOT_DIR}/data/php-fpm/" "${runtime_dir}/data/php-fpm/"
   fi
-  write_minimal_runtime_seeds "${runtime_dir}/conf" "${runtime_dir}/data/php-fpm" "scheduled-task-binary-smoke" "date >> logs/scheduled-task-binary-command.log"
+  write_minimal_runtime_seeds "${runtime_dir}/conf" "${runtime_dir}/data/php-fpm" "scheduled-task-binary-smoke" "date"
   seed_runtime_db_from_files "${runtime_dir}" "./bin/tukuyomi"
   (
     cd "${runtime_dir}"
     WAF_CONFIG_FILE="${runtime_dir}/conf/config.json" ./bin/tukuyomi run-scheduled-tasks
   )
-  wait_for_task_success "${db_path}" "scheduled-task-binary-smoke" "${task_log}" "${command_output}" || fail "binary scheduled-task smoke did not produce expected state/log/output"
+  wait_for_task_success "${db_path}" "scheduled-task-binary-smoke" "${task_log}" || fail "binary scheduled-task smoke did not produce expected state/log/output"
 }
 
 run_compose_smoke() {
   local db_path
   local container_db_path
   local task_log
-  local command_output
 
   COMPOSE_WORKSPACE="$(mktemp -d "${ROOT_DIR}/.tmp-scheduled-tasks-compose-smoke.XXXXXX")"
   stage_compose_workspace "${COMPOSE_WORKSPACE}"
   db_path="$(resolve_db_path "${COMPOSE_WORKSPACE}/data/conf/config.json" "${COMPOSE_WORKSPACE}/data" 0)"
   container_db_path="$(resolve_container_db_path "${COMPOSE_WORKSPACE}/data/conf/config.json")"
   task_log="${COMPOSE_WORKSPACE}/data/scheduled-tasks/logs/scheduled-task-compose-smoke.log"
-  command_output="${COMPOSE_WORKSPACE}/data/logs/scheduled-task-compose-command.log"
 
-  write_minimal_runtime_seeds "${COMPOSE_WORKSPACE}/data/conf" "${COMPOSE_WORKSPACE}/data/php-fpm" "scheduled-task-compose-smoke" "date >> /app/logs/scheduled-task-compose-command.log"
+  write_minimal_runtime_seeds "${COMPOSE_WORKSPACE}/data/conf" "${COMPOSE_WORKSPACE}/data/php-fpm" "scheduled-task-compose-smoke" "date"
   seed_runtime_db_from_files "${COMPOSE_WORKSPACE}/data" "../bin/tukuyomi"
 
   log "starting docker scheduled-task sidecar smoke on port ${SCHEDULED_TASKS_SMOKE_COMPOSE_PORT}"
@@ -413,7 +403,7 @@ run_compose_smoke() {
     docker compose --profile scheduled-tasks up -d --build coraza scheduled-task-runner
   )
   wait_for_http_code "200" "http://127.0.0.1:${SCHEDULED_TASKS_SMOKE_COMPOSE_PORT}/healthz" || fail "compose scheduled-task smoke runtime did not become healthy"
-  wait_for_task_success "${db_path}" "scheduled-task-compose-smoke" "${task_log}" "${command_output}" || fail "docker scheduled-task sidecar smoke did not produce expected state/log/output"
+  wait_for_task_success "${db_path}" "scheduled-task-compose-smoke" "${task_log}" || fail "docker scheduled-task sidecar smoke did not produce expected state/log/output"
   (
     cd "${COMPOSE_WORKSPACE}"
     COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT}" PUID="${PUID_VALUE}" GUID="${GUID_VALUE}" docker compose --profile scheduled-tasks down --remove-orphans >/dev/null
@@ -423,13 +413,11 @@ run_compose_smoke() {
 run_preview_smoke() {
   local db_path
   local task_log
-  local command_output
 
   PREVIEW_WORKSPACE="$(mktemp -d "${ROOT_DIR}/.tmp-scheduled-tasks-preview-smoke.XXXXXX")"
   stage_compose_workspace "${PREVIEW_WORKSPACE}"
   db_path="$(resolve_db_path "${PREVIEW_WORKSPACE}/data/conf/config.json" "${PREVIEW_WORKSPACE}/data" 1)"
   task_log="${PREVIEW_WORKSPACE}/data/scheduled-tasks/logs/scheduled-task-preview-smoke.log"
-  command_output="${PREVIEW_WORKSPACE}/data/logs/scheduled-task-preview-command.log"
 
   log "starting ui-preview scheduled-task smoke on port ${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}"
   (
@@ -442,8 +430,8 @@ run_preview_smoke() {
   )
   wait_for_http_code "200" "http://127.0.0.1:${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}/healthz" || fail "ui-preview scheduled-task smoke runtime did not become healthy"
 
-  put_task_config_via_preview_api "${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}" "scheduled-task-preview-smoke" "date >> /app/logs/scheduled-task-preview-command.log"
-  wait_for_task_success "${db_path}" "scheduled-task-preview-smoke" "${task_log}" "${command_output}" || fail "preview scheduled-task smoke did not produce expected state/log/output"
+  put_task_config_via_preview_api "${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}" "scheduled-task-preview-smoke" "date"
+  wait_for_task_success "${db_path}" "scheduled-task-preview-smoke" "${task_log}" || fail "preview scheduled-task smoke did not produce expected state/log/output"
   (
     cd "${PREVIEW_WORKSPACE}"
     COMPOSE_PROJECT_NAME="${PREVIEW_PROJECT}" bash ./scripts/ui_preview.sh down >/dev/null

@@ -20,6 +20,6 @@ runtime DB を seed します。
 
 ## Notes
 
-- `data/conf/config.json` は `paths.crs_setup_file=rules/crs-setup-high-paranoia.conf` を使います。
+- `./setup.sh` が high-paranoia CRS setup を DB import される CRS setup asset として配置します。
 - `tx.blocking_paranoia_level` と `tx.detection_paranoia_level` は `2` に設定しています。
 - login endpoint `/wp-login.php` にはより strict な rate limit を適用しています。

@@ -22,7 +22,7 @@ This is the official supported path today.
 - shared writable paths for:
   - `/app/conf`
   - `/app/data/scheduled-tasks`
-  - `/app/logs`
+  - `/app/audit`
   - `/app/data/php-fpm` when bundled runtimes are used
 - live admin mutation is allowed
 
@@ -126,7 +126,7 @@ Dedicated scheduler role:
 - mounts the same source-of-truth paths as the frontend for:
   - `/app/conf`
   - `/app/data/scheduled-tasks`
-  - `/app/logs`
+  - `/app/audit`
   - `/app/data/php-fpm` when bundled runtimes are used
 
 This does not imply distributed mutable runtime support. It only makes
@@ -167,7 +167,7 @@ Minimum writable paths for the official mutable single-instance path:
 
 - `/app/conf`
 - `/app/data/scheduled-tasks`
-- `/app/logs`
+- `/app/audit`
 
 Mount those from your platform unless you intentionally accept ephemeral local
 state.
@@ -175,8 +175,9 @@ state.
 When you also use bundled PHP runtimes for `/options`, `/vhosts`, or scheduled
 PHP CLI jobs, mount `/app/data/php-fpm` as well.
 
-`/app/rules` is seed material for DB `waf_rule_assets`. After import, runtime
-loads active WAF/CRS assets from DB rather than from that directory.
+WAF/CRS import material is staged under `/app/data/tmp` and imported into DB
+`waf_rule_assets`. Runtime loads active WAF/CRS assets from DB, not from a
+mounted rules directory.
 
 ## Config and Secrets
 
@@ -260,7 +261,7 @@ These samples use separate EFS-backed mounts for:
 
 - `/app/conf`
 - `/app/data/scheduled-tasks`
-- `/app/logs`
+- `/app/audit`
 - `/app/data/php-fpm`
 
 The task-definition sample also declares `9091/tcp` for `admin.listen_addr`.
@@ -298,7 +299,7 @@ The sample uses separate PVCs for:
 
 - `tukuyomi-conf`
 - `tukuyomi-scheduled-tasks`
-- `tukuyomi-logs`
+- `tukuyomi-audit`
 - `tukuyomi-php-fpm`
 
 The sample now includes:
@@ -338,7 +339,7 @@ Container Apps environment for:
 
 - `proxyconf`
 - `proxyscheduledtasks`
-- `proxylogs`
+- `proxyaudit`
 - `proxyphpfpm`
 
 Azure Container Apps still has one primary ingress target in the sample. When
@@ -381,7 +382,7 @@ If `tukuyomi` itself is the direct public entrypoint and built-in HTTP/3 is enab
 
 - the embedded Admin UI is produced during image build, not at runtime
 - `scripts/install_crs.sh` can be run at image build time or startup time depending on your policy
-- for mutable runtime policy files, mount `/app/conf` and `/app/rules` instead of baking everything into the image
+- for mutable runtime policy files, mount `/app/conf`; WAF/CRS assets are imported from `/app/data/tmp` staging into DB
 - the repository `docker-compose.yml` now provides a real scheduler sidecar service named `scheduled-task-runner` behind the `scheduled-tasks` profile
 - the current sidecar model is explicit: a shell loop runs the image's proxy binary with `run-scheduled-tasks`, then sleeps until the next minute boundary
 - failure policy is explicit too: if `run-scheduled-tasks` returns non-zero, the sidecar exits non-zero and relies on container restart policy instead of hiding the fault

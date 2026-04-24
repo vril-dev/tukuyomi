@@ -350,8 +350,11 @@ func ValidateIPReputation(c *gin.Context) {
 }
 
 func PutIPReputation(c *gin.Context) {
-	path := GetIPReputationPath()
-	store := getLogsStatsStore()
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
+	}
 
 	var in struct {
 		Raw string `json:"raw"`
@@ -369,51 +372,27 @@ func PutIPReputation(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
-	if store != nil {
-		spec := mustPolicyJSONSpec(ipReputationConfigBlobKey)
-		currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeIPReputationPolicyRaw, "ip reputation rules")
-		if err != nil {
-			respondConfigBlobDBError(c, "ip-reputation db seed failed", err)
-			return
-		}
-		expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
-		rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "ip reputation rules update", 0)
-		if err != nil {
-			if errors.Is(err, errConfigVersionConflict) {
-				c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, ipReputationConfigBlobKey)})
-				return
-			}
-			respondConfigBlobDBError(c, "ip-reputation db update failed", err)
-			return
-		}
-		if err := applyIPReputationPolicyRaw(normalizedRaw); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"ok": true, "etag": rec.ETag, "status": IPReputationStatus(), "saved_at": rec.ActivatedAt.Format(time.RFC3339Nano)})
+	spec := mustPolicyJSONSpec(ipReputationConfigBlobKey)
+	currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeIPReputationPolicyRaw, "ip reputation rules")
+	if err != nil {
+		respondConfigBlobDBError(c, "ip-reputation db seed failed", err)
 		return
 	}
-
-	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(path)
-	curETag := bypassconf.ComputeETag(curRaw)
-	if ifMatch != "" && ifMatch != curETag {
-		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
+	expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
+	rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "ip reputation rules update", 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, ipReputationConfigBlobKey)})
+			return
+		}
+		respondConfigBlobDBError(c, "ip-reputation db update failed", err)
 		return
 	}
-	if err := bypassconf.AtomicWriteWithBackup(path, []byte(in.Raw)); err != nil {
+	if err := applyIPReputationPolicyRaw(normalizedRaw); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if err := ReloadIPReputation(); err != nil {
-		_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
-		_ = ReloadIPReputation()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	newETag := bypassconf.ComputeETag([]byte(in.Raw))
-	now := time.Now().UTC()
-	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": newETag, "status": IPReputationStatus(), "saved_at": now.Format(time.RFC3339Nano)})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": rec.ETag, "status": IPReputationStatus(), "saved_at": rec.ActivatedAt.Format(time.RFC3339Nano)})
 }
 
 func SyncIPReputationStorage() error {

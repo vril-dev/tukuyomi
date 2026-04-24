@@ -85,8 +85,11 @@ func ValidateRateLimitRules(c *gin.Context) {
 }
 
 func PutRateLimitRules(c *gin.Context) {
-	path := GetRateLimitPath()
-	store := getLogsStatsStore()
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
+	}
 
 	in, ok := bindRateLimitPutBody(c)
 	if !ok {
@@ -104,66 +107,32 @@ func PutRateLimitRules(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
-	if store != nil {
-		spec := mustPolicyJSONSpec(rateLimitConfigBlobKey)
-		currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeRateLimitPolicyRaw, "rate limit rules")
-		if err != nil {
-			respondConfigBlobDBError(c, "rate-limit db seed failed", err)
-			return
-		}
-		expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
-		rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "rate limit rules update", 0)
-		if err != nil {
-			if errors.Is(err, errConfigVersionConflict) {
-				c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, rateLimitConfigBlobKey)})
-				return
-			}
-			respondConfigBlobDBError(c, "rate-limit db update failed", err)
-			return
-		}
-		if err := applyRateLimitPolicyRaw(normalizedRaw); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"ok":       true,
-			"etag":     rec.ETag,
-			"enabled":  rateLimitEnabled(rt.Raw),
-			"rules":    rateLimitRuleCount(rt.Raw),
-			"saved_at": rec.ActivatedAt.Format(time.RFC3339Nano),
-		})
+	spec := mustPolicyJSONSpec(rateLimitConfigBlobKey)
+	currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeRateLimitPolicyRaw, "rate limit rules")
+	if err != nil {
+		respondConfigBlobDBError(c, "rate-limit db seed failed", err)
 		return
 	}
-
-	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(path)
-	curETag := bypassconf.ComputeETag(curRaw)
-	if ifMatch != "" && ifMatch != curETag {
-		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
+	expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
+	rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "rate limit rules update", 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, rateLimitConfigBlobKey)})
+			return
+		}
+		respondConfigBlobDBError(c, "rate-limit db update failed", err)
 		return
 	}
-
-	if err := bypassconf.AtomicWriteWithBackup(path, []byte(in.Raw)); err != nil {
+	if err := applyRateLimitPolicyRaw(normalizedRaw); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	if err := ReloadRateLimit(); err != nil {
-		_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
-		_ = ReloadRateLimit()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	now := time.Now().UTC()
-	newETag := bypassconf.ComputeETag([]byte(in.Raw))
-
 	c.JSON(http.StatusOK, gin.H{
 		"ok":       true,
-		"etag":     newETag,
+		"etag":     rec.ETag,
 		"enabled":  rateLimitEnabled(rt.Raw),
 		"rules":    rateLimitRuleCount(rt.Raw),
-		"saved_at": now.Format(time.RFC3339Nano),
+		"saved_at": rec.ActivatedAt.Format(time.RFC3339Nano),
 	})
 }
 

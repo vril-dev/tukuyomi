@@ -42,8 +42,7 @@ The binary expects a working directory that contains:
 /opt/tukuyomi/db/
 /opt/tukuyomi/audit/
 /opt/tukuyomi/cache/
-/opt/tukuyomi/logs/
-/opt/tukuyomi/rules/
+/opt/tukuyomi/data/tmp/
 ```
 
 Bundle-provided bootstrap/examples:
@@ -65,8 +64,7 @@ Optional operator-supplied seed/import files before the first DB import:
 - `conf/ip-reputation.json`
 - `conf/scheduled-tasks.json`
 - `conf/upstream-runtime.json`
-- `conf/rules/*.conf`
-- staged CRS files under `rules/crs/...` via `make crs-install`
+- staged WAF/CRS import material under `data/tmp/...` via `make crs-install`
 
 These seed an empty DB or support import/export workflows. Once the matching
 normalized DB domain exists, runtime loads normalized domains directly from DB
@@ -87,10 +85,6 @@ Additional files when you want `/scheduled-tasks` execution state:
 
 - `data/scheduled-tasks/`
 
-Optional seed files when you want to import managed bypass override rules:
-
-- `conf/rules/*.conf` before `make db-import`
-
 Additional files when you want managed GeoIP country updates:
 
 - `scripts/update_country_db.sh`
@@ -104,10 +98,8 @@ sudo install -d -m 755 \
   /opt/tukuyomi/db \
   /opt/tukuyomi/audit \
   /opt/tukuyomi/cache/response \
-  /opt/tukuyomi/logs/waf \
-  /opt/tukuyomi/rules \
-  /opt/tukuyomi/scripts \
-  /opt/tukuyomi/logs/proxy
+  /opt/tukuyomi/data/tmp \
+  /opt/tukuyomi/scripts
 
 sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
@@ -120,7 +112,7 @@ sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 Notes:
 
 - do not copy `data/conf/*.bak` into production
-- `config.json` is the DB connection bootstrap and seed/export material for DB `app_config`
+- `config.json` is the DB connection bootstrap; release samples keep only the `storage` block
 - `conf/proxy.json` is optional seed/import/export material for DB `proxy_rules`
 - `conf/sites.json` is optional seed/import/export material for DB `sites`
 - the public release bundle ships `conf/config.json`; other seed/import material is operator-supplied when needed
@@ -136,8 +128,9 @@ Notes:
 - the public release bundle ships a companion `bin/geoipupdate` binary for `Options -> GeoIP Update -> Update now`
 - `GEOIPUPDATE_BIN` remains available if you want to override the bundled updater path
 - the official managed-country refresh wrapper is `./scripts/update_country_db.sh`
-- managed GeoIP country DB, `GeoIP.conf`, and update status are DB-backed after `make db-import`; the main repo does not need to ship `data/geoip`
-- managed bypass override rules are DB `override_rules`; `conf/rules/*.conf` is an operator-provided seed-only location when importing a new DB
+- managed GeoIP country DB, `GeoIP.conf`, and update status are DB-backed; do not ship a `data/geoip` fallback directory
+- managed bypass override rules are DB `override_rules`; do not ship a `conf/rules` fallback directory
+- WAF/access events are written to DB `waf_events`; `paths.log_file` is only a legacy import source when you intentionally ingest an old `waf-events.ndjson`
 - `extra_rule` values remain logical compatibility references to DB-managed override rules
 
 Proxy engine selection is a restart-required DB `app_config` setting:
@@ -339,7 +332,7 @@ replacement.
 
 ## Notes
 
-- the sample unit uses `WorkingDirectory=/opt/tukuyomi`, so relative `conf/`, `rules/`, and `logs/` paths keep working
+- the sample unit uses `WorkingDirectory=/opt/tukuyomi`; relative `conf/`, `audit/`, and `data/tmp/` paths stay inside the deployment root
 - `server.graceful_shutdown_timeout_sec` defaults to `30`; set it higher if you intentionally keep long-lived WebSocket sessions during deploys
 - the scheduled-task service uses the same working directory and env file, so `run-scheduled-tasks` sees the same `conf/` and `data/scheduled-tasks/` tree as the main service
 - the sample unit includes `CAP_NET_BIND_SERVICE`, so direct binds such as `server.listen_addr=:443` and `server.tls.http_redirect_addr=:80` work under `User=tukuyomi`

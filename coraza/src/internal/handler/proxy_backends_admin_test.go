@@ -22,14 +22,17 @@ func TestGetProxyBackendsReturnsRuntimeBackendList(t *testing.T) {
 	defer restore()
 
 	proxyPath := filepath.Join(tmp, "proxy.json")
-	if err := os.WriteFile(proxyPath, []byte(`{
+	proxyRaw := `{
   "upstreams": [
     { "name": "primary", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true },
     { "name": "secondary", "url": "http://127.0.0.1:8081", "weight": 2, "enabled": true }
   ]
-}`), 0o644); err != nil {
+}`
+	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o644); err != nil {
 		t.Fatalf("write proxy.json: %v", err)
 	}
+	initConfigDBStoreForTest(t)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
@@ -122,14 +125,17 @@ func TestPutAndDeleteProxyBackendRuntimeOverrideRoundTrip(t *testing.T) {
 	defer restore()
 
 	proxyPath := filepath.Join(tmp, "proxy.json")
-	if err := os.WriteFile(proxyPath, []byte(`{
+	proxyRaw := `{
   "upstreams": [
     { "name": "primary", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true },
     { "name": "secondary", "url": "http://127.0.0.1:8081", "weight": 2, "enabled": true }
   ]
-}`), 0o644); err != nil {
+}`
+	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o644); err != nil {
 		t.Fatalf("write proxy.json: %v", err)
 	}
+	initConfigDBStoreForTest(t)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
@@ -176,12 +182,12 @@ func TestPutAndDeleteProxyBackendRuntimeOverrideRoundTrip(t *testing.T) {
 	if primaryAfterPut.EffectiveSelectable {
 		t.Fatal("draining backend should not be selectable")
 	}
-	raw, err := os.ReadFile(config.UpstreamRuntimeFile)
-	if err != nil {
-		t.Fatalf("ReadFile(upstream runtime): %v", err)
+	runtimeFile, _, found, err := getLogsStatsStore().loadActiveUpstreamRuntimeConfig(configuredManagedBackendKeys(currentProxyConfig()))
+	if err != nil || !found {
+		t.Fatalf("load upstream runtime from db found=%v err=%v", found, err)
 	}
-	if !bytes.Contains(raw, []byte(primaryKey)) {
-		t.Fatalf("runtime file missing primary key: %s", string(raw))
+	if _, ok := runtimeFile.Backends[primaryKey]; !ok {
+		t.Fatalf("runtime DB missing primary key: %#v", runtimeFile.Backends)
 	}
 
 	deleteRec := httptest.NewRecorder()

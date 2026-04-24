@@ -276,6 +276,9 @@ func TestApplyPHPRuntimeInventoryRawDoesNotDeadlockOnMaterializationRefresh(t *t
 		Version:     "PHP 8.3.21 (fpm-fcgi)",
 		Modules:     []string{"mbstring", "fileinfo", "redis"},
 	})
+	initConfigDBStoreForTest(t)
+	inventoryCfg := importPHPRuntimeInventoryDBForTest(t, defaultPHPRuntimeInventoryRaw, inventoryPath)
+	importVhostRuntimeDBForTest(t, defaultVhostConfigRaw, inventoryCfg)
 	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
 		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
 	}
@@ -331,6 +334,10 @@ func TestApplyAndRollbackVhostConfigRaw(t *testing.T) {
 		Version:     "PHP 8.2.99 (fpm-fcgi)",
 		Modules:     []string{"mbstring", "redis"},
 	})
+	initConfigDBStoreForTest(t)
+	inventoryCfg := importPHPRuntimeInventoryDBForTest(t, defaultPHPRuntimeInventoryRaw, inventoryPath)
+	importVhostRuntimeDBForTest(t, defaultVhostConfigRaw, inventoryCfg)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
 		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
 	}

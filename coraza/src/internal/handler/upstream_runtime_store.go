@@ -162,7 +162,6 @@ func snapshotUpstreamRuntimeFile(cfg ProxyRulesConfig) (string, string, upstream
 }
 
 func persistUpstreamRuntimeFile(cfg ProxyRulesConfig, file upstreamRuntimeFile, expectedETag string) (string, string, upstreamRuntimeFile, error) {
-	path := managedUpstreamRuntimePath()
 	normalized, err := normalizeUpstreamRuntimeFile(file, configuredManagedBackendKeys(cfg))
 	if err != nil {
 		return "", "", upstreamRuntimeFile{}, err
@@ -171,26 +170,19 @@ func persistUpstreamRuntimeFile(cfg ProxyRulesConfig, file upstreamRuntimeFile, 
 	if err != nil {
 		return "", "", upstreamRuntimeFile{}, err
 	}
-	if store := getLogsStatsStore(); store != nil {
-		rec, normalized, err := store.writeUpstreamRuntimeConfigVersion(expectedETag, normalized, configuredManagedBackendKeys(cfg), configVersionSourceApply, "", "upstream runtime update", 0)
-		if err != nil {
-			return "", "", upstreamRuntimeFile{}, err
-		}
-		payload, err = MarshalUpstreamRuntimeJSON(normalized)
-		if err != nil {
-			return "", "", upstreamRuntimeFile{}, err
-		}
-		return string(payload), rec.ETag, normalized, nil
+	store, err := requireConfigDBStore()
+	if err != nil {
+		return "", "", upstreamRuntimeFile{}, err
 	}
-	if strings.TrimSpace(path) != "" {
-		if err := ensureUpstreamRuntimeFile(path); err != nil {
-			return "", "", upstreamRuntimeFile{}, err
-		}
-		if err := bypassconf.AtomicWriteWithBackup(path, payload); err != nil {
-			return "", "", upstreamRuntimeFile{}, err
-		}
+	rec, normalized, err := store.writeUpstreamRuntimeConfigVersion(expectedETag, normalized, configuredManagedBackendKeys(cfg), configVersionSourceApply, "", "upstream runtime update", 0)
+	if err != nil {
+		return "", "", upstreamRuntimeFile{}, err
 	}
-	return string(payload), bypassconf.ComputeETag(payload), normalized, nil
+	payload, err = MarshalUpstreamRuntimeJSON(normalized)
+	if err != nil {
+		return "", "", upstreamRuntimeFile{}, err
+	}
+	return string(payload), rec.ETag, normalized, nil
 }
 
 func snapshotUpstreamRuntimeDB(store *wafEventStore, seedPath string, knownKeys map[string]struct{}) (string, string, upstreamRuntimeFile, error) {
@@ -236,22 +228,16 @@ func snapshotUpstreamRuntimeDB(store *wafEventStore, seedPath string, knownKeys 
 }
 
 func persistUpstreamRuntimeRaw(raw string) error {
-	if store := getLogsStatsStore(); store != nil {
-		file, err := ParseUpstreamRuntimeRaw(raw)
-		if err != nil {
-			return err
-		}
-		_, _, err = store.writeUpstreamRuntimeConfigVersion("", file, configuredManagedBackendKeys(currentProxyConfig()), configVersionSourceRollback, "", "upstream runtime restore", 0)
+	store, err := requireConfigDBStore()
+	if err != nil {
 		return err
 	}
-	path := managedUpstreamRuntimePath()
-	if strings.TrimSpace(path) == "" {
-		return nil
-	}
-	if err := ensureUpstreamRuntimeFile(path); err != nil {
+	file, err := ParseUpstreamRuntimeRaw(raw)
+	if err != nil {
 		return err
 	}
-	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
+	_, _, err = store.writeUpstreamRuntimeConfigVersion("", file, configuredManagedBackendKeys(currentProxyConfig()), configVersionSourceRollback, "", "upstream runtime restore", 0)
+	return err
 }
 
 func SyncUpstreamRuntimeStorage() error {

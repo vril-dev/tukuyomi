@@ -5,130 +5,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-func TestLogsStatsAggregatesWAFBlocks(t *testing.T) {
+func TestLogsStatsRequiresDBStore(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-
-	now := time.Now().UTC()
-	entries := []map[string]any{
-		{
-			"ts":      now.Add(-10 * time.Minute).Format(time.RFC3339Nano),
-			"event":   "waf_block",
-			"rule_id": 942100,
-			"path":    "/login",
-			"country": "jp",
-		},
-		{
-			"ts":      now.Add(-2 * time.Hour).Format(time.RFC3339Nano),
-			"event":   "waf_block",
-			"rule_id": "920350",
-			"path":    "/admin",
-			"country": "US",
-		},
-		{
-			"ts":      now.Add(-26 * time.Hour).Format(time.RFC3339Nano),
-			"event":   "waf_block",
-			"rule_id": 942100,
-			"path":    "/old",
-			"country": "DE",
-		},
-		{
-			"ts":    now.Add(-15 * time.Minute).Format(time.RFC3339Nano),
-			"event": "waf_hit_allow",
-			"path":  "/allow",
-		},
-		{
-			"ts":      now.Add(-20 * time.Minute).Format(time.RFC3339Nano),
-			"event":   "waf_block",
-			"rule_id": nil,
-			"path":    "",
-			"country": "",
-		},
-		{
-			"ts":      "invalid-ts",
-			"event":   "waf_block",
-			"rule_id": 999999,
-			"path":    "/invalid",
-			"country": "CN",
-		},
+	if err := InitLogsStatsStore(false, "", 0); err != nil {
+		t.Fatalf("disable logs db store: %v", err)
 	}
-
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "waf-events.ndjson")
-	writeNDJSONFile(t, path, entries)
-
-	restore := setWAFLogPathForTest(t, path)
-	defer restore()
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/tukuyomi-api/logs/stats?scan=100&hours=6", nil)
-
-	LogsStats(c)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
-	}
-
-	var out logsStatsResp
-	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-
-	if out.ScannedLines != len(entries) {
-		t.Fatalf("scanned_lines=%d want=%d", out.ScannedLines, len(entries))
-	}
-	if out.RangeHours != 6 {
-		t.Fatalf("range_hours=%d want=6", out.RangeHours)
-	}
-
-	if out.WAFBlock.TotalInScan != 5 {
-		t.Fatalf("total_in_scan=%d want=5", out.WAFBlock.TotalInScan)
-	}
-	if out.WAFBlock.Last1h != 2 {
-		t.Fatalf("last_1h=%d want=2", out.WAFBlock.Last1h)
-	}
-	if out.WAFBlock.Last24h != 3 {
-		t.Fatalf("last_24h=%d want=3", out.WAFBlock.Last24h)
-	}
-
-	assertBucketKeys(t, out.WAFBlock.TopRuleIDs24h, []string{"920350", "942100", "UNKNOWN"})
-	assertBucketKeys(t, out.WAFBlock.TopPaths24h, []string{"/", "/admin", "/login"})
-	assertBucketKeys(t, out.WAFBlock.TopCountries24h, []string{"JP", "UNKNOWN", "US"})
-
-	if len(out.WAFBlock.SeriesHourly) != 6 {
-		t.Fatalf("series_hourly length=%d want=6", len(out.WAFBlock.SeriesHourly))
-	}
-
-	expectedByHour := map[string]int{}
-	for _, ts := range []time.Time{
-		now.Add(-10 * time.Minute),
-		now.Add(-20 * time.Minute),
-		now.Add(-2 * time.Hour),
-	} {
-		key := ts.UTC().Truncate(time.Hour).Format(time.RFC3339)
-		expectedByHour[key]++
-	}
-	for bucketStart, expectedCount := range expectedByHour {
-		gotCount := countByHour(out.WAFBlock.SeriesHourly, bucketStart)
-		if gotCount != expectedCount {
-			t.Fatalf("series[%s]=%d want=%d", bucketStart, gotCount, expectedCount)
-		}
-	}
-}
-
-func TestLogsStatsMissingLogReturnsEmptyPayload(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	path := filepath.Join(t.TempDir(), "missing-waf-events.ndjson")
-	restore := setWAFLogPathForTest(t, path)
-	defer restore()
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -136,91 +22,45 @@ func TestLogsStatsMissingLogReturnsEmptyPayload(t *testing.T) {
 
 	LogsStats(c)
 
-	if w.Code != http.StatusOK {
+	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-
-	var out logsStatsResp
-	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-
-	if out.ScannedLines != 0 {
-		t.Fatalf("scanned_lines=%d want=0", out.ScannedLines)
-	}
-	if out.RangeHours != defaultStatsRangeHours {
-		t.Fatalf("range_hours=%d want=%d", out.RangeHours, defaultStatsRangeHours)
-	}
-	if out.WAFBlock.TotalInScan != 0 || out.WAFBlock.Last1h != 0 || out.WAFBlock.Last24h != 0 {
-		t.Fatalf("unexpected counters: %+v", out.WAFBlock)
-	}
-	if len(out.WAFBlock.TopRuleIDs24h) != 0 || len(out.WAFBlock.TopPaths24h) != 0 || len(out.WAFBlock.TopCountries24h) != 0 {
-		t.Fatalf("expected empty top buckets: %+v", out.WAFBlock)
-	}
-	if len(out.WAFBlock.SeriesHourly) != defaultStatsRangeHours {
-		t.Fatalf("series_hourly length=%d want=%d", len(out.WAFBlock.SeriesHourly), defaultStatsRangeHours)
-	}
-	for i, point := range out.WAFBlock.SeriesHourly {
-		if point.Count != 0 {
-			t.Fatalf("series_hourly[%d] count=%d want=0", i, point.Count)
-		}
+	if !json.Valid(w.Body.Bytes()) {
+		t.Fatalf("expected json response: %s", w.Body.String())
 	}
 }
 
-func TestLogsReadReqIDFilterWithoutDBStore(t *testing.T) {
+func TestLogsReadWAFRequiresDBStore(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-
-	now := time.Now().UTC()
-	entries := []map[string]any{
-		{
-			"ts":      now.Add(-3 * time.Minute).Format(time.RFC3339Nano),
-			"event":   "semantic_anomaly",
-			"req_id":  "req-shared",
-			"path":    "/checkout",
-			"country": "jp",
-			"status":  403,
-			"score":   75,
-		},
-		{
-			"ts":        now.Add(-2 * time.Minute).Format(time.RFC3339Nano),
-			"event":     "rate_limited",
-			"req_id":    "req-shared",
-			"path":      "/checkout",
-			"country":   "JP",
-			"status":    429,
-			"policy_id": "checkout",
-		},
-		{
-			"ts":      now.Add(-1 * time.Minute).Format(time.RFC3339Nano),
-			"event":   "waf_block",
-			"req_id":  "req-other",
-			"path":    "/admin",
-			"country": "US",
-			"status":  403,
-		},
+	if err := InitLogsStatsStore(false, "", 0); err != nil {
+		t.Fatalf("disable logs db store: %v", err)
 	}
 
-	path := filepath.Join(t.TempDir(), "waf-events.ndjson")
-	writeNDJSONFile(t, path, entries)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/tukuyomi-api/logs/read?src=waf&tail=10", nil)
 
-	restore := setWAFLogPathForTest(t, path)
-	defer restore()
+	LogsRead(c)
 
-	read := callLogsRead(t, "/tukuyomi-api/logs/read?src=waf&req_id=req-shared")
-	if len(read.Lines) != 2 {
-		t.Fatalf("lines=%d want=2", len(read.Lines))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-	if got := anyToString(read.Lines[0]["event"]); got != "semantic_anomaly" {
-		t.Fatalf("first event=%q want=semantic_anomaly", got)
+}
+
+func TestLogsDownloadWAFRequiresDBStore(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	if err := InitLogsStatsStore(false, "", 0); err != nil {
+		t.Fatalf("disable logs db store: %v", err)
 	}
-	if got := anyToString(read.Lines[1]["event"]); got != "rate_limited" {
-		t.Fatalf("second event=%q want=rate_limited", got)
-	}
-	if got := anyToString(read.Lines[0]["country"]); got != "JP" {
-		t.Fatalf("country=%q want=JP", got)
-	}
-	if read.HasPrev || read.HasNext || read.HasMore {
-		t.Fatalf("unexpected pagination flags: %+v", read)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/tukuyomi-api/logs/download?src=waf", nil)
+
+	LogsDownload(c)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 
@@ -257,25 +97,4 @@ func writeNDJSONFile(t *testing.T, path string, entries []map[string]any) {
 	if err := os.WriteFile(path, buf, 0o644); err != nil {
 		t.Fatalf("write ndjson fixture: %v", err)
 	}
-}
-
-func assertBucketKeys(t *testing.T, got []statsBucket, want []string) {
-	t.Helper()
-	if len(got) != len(want) {
-		t.Fatalf("bucket length=%d want=%d (got=%+v)", len(got), len(want), got)
-	}
-	for i := range want {
-		if got[i].Key != want[i] {
-			t.Fatalf("bucket[%d].key=%q want=%q", i, got[i].Key, want[i])
-		}
-	}
-}
-
-func countByHour(series []statsSeriesPoint, bucketStart string) int {
-	for _, point := range series {
-		if point.BucketStart == bucketStart {
-			return point.Count
-		}
-	}
-	return -1
 }

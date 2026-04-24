@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -29,6 +30,10 @@ func configBlobSavedAt(store *wafEventStore, configKey string) string {
 }
 
 func respondConfigBlobDBError(c *gin.Context, message string, err error) {
+	if errors.Is(err, errConfigDBStoreRequired) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusInternalServerError, gin.H{
 		"error":    message,
 		"db_error": err.Error(),

@@ -5,15 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/oschwald/maxminddb-golang"
 
-	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
 )
 
@@ -84,6 +81,9 @@ func PutRequestCountryMode(c *gin.Context) {
 				c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": etag})
 				return
 			}
+			if respondIfConfigDBStoreRequired(c, err) {
+				return
+			}
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 			return
 		}
@@ -106,6 +106,9 @@ func UploadRequestCountryDB(c *gin.Context) {
 	defer src.Close()
 
 	if err := replaceManagedCountryMMDB(src); err != nil {
+		if respondIfConfigDBStoreRequired(c, err) {
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
@@ -120,6 +123,9 @@ func DeleteRequestCountryDB(c *gin.Context) {
 		return
 	}
 	if err := removeManagedCountryMMDB(); err != nil {
+		if respondIfConfigDBStoreRequired(c, err) {
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
@@ -145,32 +151,26 @@ func buildRequestCountryDBStatusWithETag(etag string) requestCountryDBStatusResp
 			out.ConfigETag = currentETag
 		}
 	}
-	if store := getLogsStatsStore(); store != nil {
-		asset, rec, found, err := store.loadActiveRequestCountryMMDBAsset()
-		if err != nil {
-			if out.LastError == "" {
-				out.LastError = err.Error()
-			}
-			return out
-		}
-		if found && asset.Present {
-			out.Installed = true
-			out.SizeBytes = asset.SizeBytes
-			if !rec.ActivatedAt.IsZero() {
-				out.ModTime = rec.ActivatedAt.UTC().Format(time.RFC3339Nano)
-			}
+	store := getLogsStatsStore()
+	if store == nil {
+		if out.LastError == "" {
+			out.LastError = errConfigDBStoreRequired.Error()
 		}
 		return out
 	}
-	info, err := os.Stat(managedRequestCountryMMDBPath())
-	if err == nil && !info.IsDir() {
+	asset, rec, found, err := store.loadActiveRequestCountryMMDBAsset()
+	if err != nil {
+		if out.LastError == "" {
+			out.LastError = err.Error()
+		}
+		return out
+	}
+	if found && asset.Present {
 		out.Installed = true
-		out.SizeBytes = info.Size()
-		out.ModTime = info.ModTime().UTC().Format(time.RFC3339Nano)
-		return out
-	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) && out.LastError == "" {
-		out.LastError = err.Error()
+		out.SizeBytes = asset.SizeBytes
+		if !rec.ActivatedAt.IsZero() {
+			out.ModTime = rec.ActivatedAt.UTC().Format(time.RFC3339Nano)
+		}
 	}
 	return out
 }
@@ -211,21 +211,15 @@ func replaceManagedCountryMMDBRaw(raw []byte, source string, reason string) erro
 		return fmt.Errorf("invalid country mmdb: %w", err)
 	}
 	_ = reader.Close()
-	if store := getLogsStatsStore(); store != nil {
-		if _, _, err := store.writeRequestCountryMMDBAssetVersion("", requestCountryMMDBAssetVersion{
-			Present: true,
-			Raw:     raw,
-		}, source, "", reason, 0); err != nil {
-			return err
-		}
-	} else {
-		target := managedRequestCountryMMDBPath()
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		if err := bypassconf.AtomicWriteWithBackup(target, raw); err != nil {
-			return err
-		}
+	store, err := requireConfigDBStore()
+	if err != nil {
+		return err
+	}
+	if _, _, err := store.writeRequestCountryMMDBAssetVersion("", requestCountryMMDBAssetVersion{
+		Present: true,
+		Raw:     raw,
+	}, source, "", reason, 0); err != nil {
+		return err
 	}
 	if strings.EqualFold(RequestCountryRuntimeStatusSnapshot().EffectiveMode, "mmdb") {
 		if err := reloadRequestCountryRuntime("mmdb"); err != nil {
@@ -236,12 +230,10 @@ func replaceManagedCountryMMDBRaw(raw []byte, source string, reason string) erro
 }
 
 func removeManagedCountryMMDB() error {
-	if store := getLogsStatsStore(); store != nil {
-		_, _, err := store.writeRequestCountryMMDBAssetVersion("", requestCountryMMDBAssetVersion{Present: false}, configVersionSourceApply, "", "request country mmdb removal", 0)
+	store, err := requireConfigDBStore()
+	if err != nil {
 		return err
 	}
-	if err := os.Remove(managedRequestCountryMMDBPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
+	_, _, err = store.writeRequestCountryMMDBAssetVersion("", requestCountryMMDBAssetVersion{Present: false}, configVersionSourceApply, "", "request country mmdb removal", 0)
+	return err
 }

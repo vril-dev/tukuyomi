@@ -1,29 +1,70 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
+	"github.com/maxmind/mmdbwriter"
+	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/oschwald/maxminddb-golang"
 )
 
-func geoIPRepoRootPath() string {
-	_, file, _, _ := runtime.Caller(0)
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", ".."))
-}
-
 func loadSampleCountryMMDBBytes(t *testing.T) []byte {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(geoIPRepoRootPath(), "data", "geoip", "country.mmdb"))
+	writer, err := mmdbwriter.New(mmdbwriter.Options{
+		BuildEpoch:              1,
+		DatabaseType:            "GeoIP2-Country",
+		Description:             map[string]string{"en": "tukuyomi request country test database"},
+		IncludeReservedNetworks: true,
+		IPVersion:               4,
+		RecordSize:              24,
+	})
 	if err != nil {
-		t.Fatalf("read sample country mmdb: %v", err)
+		t.Fatalf("create sample country mmdb writer: %v", err)
 	}
-	return raw
+	_, network, err := net.ParseCIDR("203.0.113.0/24")
+	if err != nil {
+		t.Fatalf("parse sample country network: %v", err)
+	}
+	record := mmdbtype.Map{
+		"country": mmdbtype.Map{
+			"iso_code": mmdbtype.String("JP"),
+		},
+		"registered_country": mmdbtype.Map{
+			"iso_code": mmdbtype.String("JP"),
+		},
+	}
+	if err := writer.Insert(network, record); err != nil {
+		t.Fatalf("insert sample country network: %v", err)
+	}
+	var buf bytes.Buffer
+	if _, err := writer.WriteTo(&buf); err != nil {
+		t.Fatalf("write sample country mmdb: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestLoadSampleCountryMMDBBytesResolveCountry(t *testing.T) {
+	reader, err := maxminddb.FromBytes(loadSampleCountryMMDBBytes(t))
+	if err != nil {
+		t.Fatalf("open sample country mmdb: %v", err)
+	}
+	defer reader.Close()
+
+	var record requestCountryMMDBRecord
+	if err := reader.Lookup(net.ParseIP("203.0.113.10"), &record); err != nil {
+		t.Fatalf("lookup sample country: %v", err)
+	}
+	if got, want := record.Country.ISOCode, "JP"; got != want {
+		t.Fatalf("sample country iso_code=%q want=%q", got, want)
+	}
 }
 
 func TestParseRequestCountryGeoIPConfigAcceptsCountryEdition(t *testing.T) {
@@ -57,18 +98,43 @@ EditionIDs GeoLite2-City
 	}
 }
 
-func TestRequestCountryRuntimeMaybeRefreshFromManagedFileSwapsReaderState(t *testing.T) {
+func TestWriteManagedRequestCountryGeoIPConfigRequiresDBStoreWithoutFileFallback(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "country.mmdb")
-	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
-		t.Fatalf("write managed path: %v", err)
+	t.Chdir(dir)
+	if err := InitLogsStatsStore(false, "", 0); err != nil {
+		t.Fatalf("disable store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	raw := []byte("AccountID 12345\nLicenseKey secret\nEditionIDs GeoLite2-Country\n")
+	err := writeManagedRequestCountryGeoIPConfigRaw(raw, configVersionSourceApply, "test geoip config upload")
+	if !errors.Is(err, errConfigDBStoreRequired) {
+		t.Fatalf("error=%v want %v", err, errConfigDBStoreRequired)
+	}
+	if _, statErr := os.Stat(managedRequestCountryGeoIPConfigPath()); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("managed GeoIP config file should not be written without DB store, stat err=%v", statErr)
+	}
+}
+
+func TestRequestCountryRuntimeMaybeRefreshFromManagedDBSwapsReaderState(t *testing.T) {
+	initConfigDBStoreForTest(t)
+	store := getLogsStatsStore()
+	if _, _, err := store.writeRequestCountryMMDBAssetVersion("", requestCountryMMDBAssetVersion{
+		Present: true,
+		Raw:     loadSampleCountryMMDBBytes(t),
+	}, configVersionSourceApply, "", "test mmdb", 0); err != nil {
+		t.Fatalf("writeRequestCountryMMDBAssetVersion: %v", err)
 	}
 
 	prevLoader := requestCountryMMDBLoader
 	requestCountryMMDBLoader = func() (loadedRequestCountryMMDBState, error) {
 		return loadedRequestCountryMMDBState{
 			reader:      &maxminddb.Reader{},
-			managedPath: path,
+			managedPath: requestCountryMMDBStorageLabel,
+			versionID:   1,
+			versionETag: "etag",
 			sizeBytes:   99,
 			modTime:     time.Unix(20, 0).UTC(),
 		}, nil
@@ -77,7 +143,7 @@ func TestRequestCountryRuntimeMaybeRefreshFromManagedFileSwapsReaderState(t *tes
 
 	rt := &requestCountryRuntime{
 		effectiveMode: "mmdb",
-		managedPath:   path,
+		managedPath:   requestCountryMMDBStorageLabel,
 		dbSizeBytes:   1,
 		dbModTime:     time.Unix(10, 0).UTC(),
 	}
@@ -96,11 +162,14 @@ func TestRequestCountryRuntimeMaybeRefreshFromManagedFileSwapsReaderState(t *tes
 	}
 }
 
-func TestRequestCountryRuntimeMaybeRefreshFromManagedFileKeepsOldStateOnReloadError(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "country.mmdb")
-	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
-		t.Fatalf("write managed path: %v", err)
+func TestRequestCountryRuntimeMaybeRefreshFromManagedDBKeepsOldStateOnReloadError(t *testing.T) {
+	initConfigDBStoreForTest(t)
+	store := getLogsStatsStore()
+	if _, _, err := store.writeRequestCountryMMDBAssetVersion("", requestCountryMMDBAssetVersion{
+		Present: true,
+		Raw:     loadSampleCountryMMDBBytes(t),
+	}, configVersionSourceApply, "", "test mmdb reload error", 0); err != nil {
+		t.Fatalf("writeRequestCountryMMDBAssetVersion: %v", err)
 	}
 
 	prevLoader := requestCountryMMDBLoader
@@ -111,7 +180,7 @@ func TestRequestCountryRuntimeMaybeRefreshFromManagedFileKeepsOldStateOnReloadEr
 
 	rt := &requestCountryRuntime{
 		effectiveMode: "mmdb",
-		managedPath:   path,
+		managedPath:   requestCountryMMDBStorageLabel,
 		dbSizeBytes:   1,
 		dbModTime:     time.Unix(10, 0).UTC(),
 	}

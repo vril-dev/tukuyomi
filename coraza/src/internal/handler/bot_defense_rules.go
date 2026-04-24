@@ -118,8 +118,11 @@ func ValidateBotDefenseRules(c *gin.Context) {
 }
 
 func PutBotDefenseRules(c *gin.Context) {
-	path := GetBotDefensePath()
-	store := getLogsStatsStore()
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
+	}
 
 	in, ok := bindBotDefensePutBody(c)
 	if !ok {
@@ -137,73 +140,29 @@ func PutBotDefenseRules(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
-	if store != nil {
-		spec := mustPolicyJSONSpec(botDefenseConfigBlobKey)
-		currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeBotDefensePolicyRaw, "bot defense rules")
-		if err != nil {
-			respondConfigBlobDBError(c, "bot-defense db seed failed", err)
-			return
-		}
-		expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
-		rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "bot defense rules update", 0)
-		if err != nil {
-			if errors.Is(err, errConfigVersionConflict) {
-				c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, botDefenseConfigBlobKey)})
-				return
-			}
-			respondConfigBlobDBError(c, "bot-defense db update failed", err)
-			return
-		}
-		if err := applyBotDefensePolicyRaw(normalizedRaw); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"ok":                        true,
-			"etag":                      rec.ETag,
-			"enabled":                   rt.Raw.Enabled,
-			"dry_run":                   rt.Raw.DryRun,
-			"mode":                      rt.Raw.Mode,
-			"path_prefixes":             rt.Raw.PathPrefixes,
-			"path_policy_count":         len(rt.Raw.PathPolicies),
-			"path_policy_dry_run_count": countBotDefensePathPoliciesDryRun(rt.Raw),
-			"behavioral_enabled":        rt.Raw.BehavioralDetection.Enabled,
-			"browser_signals_enabled":   rt.Raw.BrowserSignals.Enabled,
-			"device_signals_enabled":    rt.Raw.DeviceSignals.Enabled,
-			"device_invisible_enabled":  rt.Raw.DeviceSignals.InvisibleHTMLInjection,
-			"header_signals_enabled":    rt.Raw.HeaderSignals.Enabled,
-			"tls_signals_enabled":       rt.Raw.TLSSignals.Enabled,
-			"quarantine_enabled":        rt.Raw.Quarantine.Enabled,
-			"saved_at":                  rec.ActivatedAt.Format(time.RFC3339Nano),
-		})
+	spec := mustPolicyJSONSpec(botDefenseConfigBlobKey)
+	currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeBotDefensePolicyRaw, "bot defense rules")
+	if err != nil {
+		respondConfigBlobDBError(c, "bot-defense db seed failed", err)
 		return
 	}
-
-	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(path)
-	curETag := bypassconf.ComputeETag(curRaw)
-	if ifMatch != "" && ifMatch != curETag {
-		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
+	expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
+	rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "bot defense rules update", 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, botDefenseConfigBlobKey)})
+			return
+		}
+		respondConfigBlobDBError(c, "bot-defense db update failed", err)
 		return
 	}
-
-	if err := bypassconf.AtomicWriteWithBackup(path, []byte(in.Raw)); err != nil {
+	if err := applyBotDefensePolicyRaw(normalizedRaw); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if err := ReloadBotDefense(); err != nil {
-		_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
-		_ = ReloadBotDefense()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	now := time.Now().UTC()
-	newETag := bypassconf.ComputeETag([]byte(in.Raw))
-
 	c.JSON(http.StatusOK, gin.H{
 		"ok":                        true,
-		"etag":                      newETag,
+		"etag":                      rec.ETag,
 		"enabled":                   rt.Raw.Enabled,
 		"dry_run":                   rt.Raw.DryRun,
 		"mode":                      rt.Raw.Mode,
@@ -217,7 +176,7 @@ func PutBotDefenseRules(c *gin.Context) {
 		"header_signals_enabled":    rt.Raw.HeaderSignals.Enabled,
 		"tls_signals_enabled":       rt.Raw.TLSSignals.Enabled,
 		"quarantine_enabled":        rt.Raw.Quarantine.Enabled,
-		"saved_at":                  now.Format(time.RFC3339Nano),
+		"saved_at":                  rec.ActivatedAt.Format(time.RFC3339Nano),
 	})
 }
 

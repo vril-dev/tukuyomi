@@ -38,8 +38,8 @@
           "readOnly": false
         },
         {
-          "sourceVolume": "proxy-logs",
-          "containerPath": "/app/logs",
+          "sourceVolume": "proxy-audit",
+          "containerPath": "/app/audit",
           "readOnly": false
         },
         {
@@ -76,10 +76,10 @@
       }
     },
     {
-      "name": "proxy-logs",
+      "name": "proxy-audit",
       "efsVolumeConfiguration": {
         "fileSystemId": "fs-0123456789abcdef0",
-        "rootDirectory": "/tukuyomi/logs",
+        "rootDirectory": "/tukuyomi/audit",
         "transitEncryption": "ENABLED"
       }
     },

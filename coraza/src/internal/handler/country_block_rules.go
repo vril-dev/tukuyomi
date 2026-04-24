@@ -90,12 +90,11 @@ func ValidateCountryBlockRules(c *gin.Context) {
 }
 
 func PutCountryBlockRules(c *gin.Context) {
-	path := GetCountryBlockPath()
-	currentPath := GetCountryBlockActivePath()
-	if strings.TrimSpace(currentPath) == "" {
-		currentPath = path
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
 	}
-	store := getLogsStatsStore()
 
 	in, ok := bindCountryBlockPutBody(c)
 	if !ok {
@@ -114,55 +113,27 @@ func PutCountryBlockRules(c *gin.Context) {
 		return
 	}
 
-	if store != nil {
-		spec := mustPolicyJSONSpec(countryBlockConfigBlobKey)
-		currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeCountryBlockPolicyRaw, "country block rules")
-		if err != nil {
-			respondConfigBlobDBError(c, "country-block db seed failed", err)
-			return
-		}
-		expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
-		rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "country block rules update", 0)
-		if err != nil {
-			if errors.Is(err, errConfigVersionConflict) {
-				c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, countryBlockConfigBlobKey)})
-				return
-			}
-			respondConfigBlobDBError(c, "country-block db update failed", err)
-			return
-		}
-		if err := applyCountryBlockPolicyRaw(normalizedRaw); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"ok": true, "etag": rec.ETag, "blocked": flattenCountryBlockCodes(file), "raw": string(normalizedRaw), "saved_at": rec.ActivatedAt.Format(time.RFC3339Nano)})
+	spec := mustPolicyJSONSpec(countryBlockConfigBlobKey)
+	currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeCountryBlockPolicyRaw, "country block rules")
+	if err != nil {
+		respondConfigBlobDBError(c, "country-block db seed failed", err)
 		return
 	}
-
-	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(currentPath)
-	curETag := bypassconf.ComputeETag(curRaw)
-	if ifMatch != "" && ifMatch != curETag {
-		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
+	expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
+	rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "country block rules update", 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, countryBlockConfigBlobKey)})
+			return
+		}
+		respondConfigBlobDBError(c, "country-block db update failed", err)
 		return
 	}
-
-	if err := bypassconf.AtomicWriteWithBackup(path, normalizedRaw); err != nil {
+	if err := applyCountryBlockPolicyRaw(normalizedRaw); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	if err := ReloadCountryBlock(); err != nil {
-		_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
-		_ = ReloadCountryBlock()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	now := time.Now().UTC()
-	newETag := bypassconf.ComputeETag(normalizedRaw)
-
-	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": newETag, "blocked": flattenCountryBlockCodes(file), "raw": string(normalizedRaw), "saved_at": now.Format(time.RFC3339Nano)})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": rec.ETag, "blocked": flattenCountryBlockCodes(file), "raw": string(normalizedRaw), "saved_at": rec.ActivatedAt.Format(time.RFC3339Nano)})
 }
 
 func SyncCountryBlockStorage() error {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -683,28 +682,16 @@ func countVhostsByMode(cfg VhostConfigFile, mode string) int {
 	return count
 }
 
-func persistVhostConfigRaw(path string, raw string) error {
-	if strings.TrimSpace(path) == "" {
-		return fmt.Errorf("vhost config path is empty")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
-}
-
 func persistVhostConfigAuthoritative(path string, expectedETag string, prepared vhostPreparedConfig, source string, restoredFromVersionID int64) (string, int64, error) {
-	if store := getLogsStatsStore(); store != nil {
-		rec, err := store.writeVhostConfigVersion(expectedETag, prepared.cfg, source, "", "vhost config update", restoredFromVersionID)
-		if err != nil {
-			return "", 0, err
-		}
-		return rec.ETag, rec.VersionID, nil
-	}
-	if err := persistVhostConfigRaw(path, prepared.raw); err != nil {
+	store, err := requireConfigDBStore()
+	if err != nil {
 		return "", 0, err
 	}
-	return prepared.etag, 0, nil
+	rec, err := store.writeVhostConfigVersion(expectedETag, prepared.cfg, source, "", "vhost config update", restoredFromVersionID)
+	if err != nil {
+		return "", 0, err
+	}
+	return rec.ETag, rec.VersionID, nil
 }
 
 func normalizeVhostMode(v string) string {

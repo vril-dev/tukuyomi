@@ -2,16 +2,12 @@ package handler
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
-
-	"tukuyomi/internal/config"
 )
 
 func TestProxyAccessLogAsyncFlushWritesQueuedAccessLog(t *testing.T) {
+	initConfigDBStoreForTest(t)
 	restoreConfig := saveWAFLogArchiveConfigForTest()
 	defer restoreConfig()
 
@@ -25,11 +21,6 @@ func TestProxyAccessLogAsyncFlushWritesQueuedAccessLog(t *testing.T) {
 		runtimeProxyAccessLogSink = prevSink
 	}()
 
-	config.FileRotateBytes = 0
-	config.FileMaxBytes = 0
-	config.FileRetention = 0
-	config.LogFile = filepath.Join(t.TempDir(), "waf-events.ndjson")
-
 	emitProxyAccessLogEvent(map[string]any{
 		"event":  "proxy_access",
 		"path":   "/bench",
@@ -42,19 +33,14 @@ func TestProxyAccessLogAsyncFlushWritesQueuedAccessLog(t *testing.T) {
 		t.Fatalf("Flush: %v", err)
 	}
 
-	got, err := os.ReadFile(config.LogFile)
-	if err != nil {
-		t.Fatalf("read log: %v", err)
-	}
-	if !strings.Contains(string(got), `"event":"proxy_access"`) {
-		t.Fatalf("log line missing proxy_access event: %s", string(got))
-	}
-	if !strings.HasSuffix(string(got), "\n") {
-		t.Fatalf("log line missing newline: %q", string(got))
+	evt := findLastProxyLogEvent(t, readProxyLogEvents(t), "proxy_access")
+	if got := anyToString(evt["path"]); got != "/bench" {
+		t.Fatalf("proxy_access path=%q want=/bench", got)
 	}
 }
 
 func TestProxyAccessLogAsyncEnqueueFailureFallsBackToSyncAppend(t *testing.T) {
+	initConfigDBStoreForTest(t)
 	restoreConfig := saveWAFLogArchiveConfigForTest()
 	defer restoreConfig()
 
@@ -64,27 +50,20 @@ func TestProxyAccessLogAsyncEnqueueFailureFallsBackToSyncAppend(t *testing.T) {
 		runtimeProxyAccessLogSink = prevSink
 	}()
 
-	config.FileRotateBytes = 0
-	config.FileMaxBytes = 0
-	config.FileRetention = 0
-	config.LogFile = filepath.Join(t.TempDir(), "waf-events.ndjson")
-
 	emitProxyAccessLogEvent(map[string]any{
 		"event":  "proxy_access",
 		"path":   "/fallback",
 		"status": 200,
 	})
 
-	got, err := os.ReadFile(config.LogFile)
-	if err != nil {
-		t.Fatalf("read fallback log: %v", err)
-	}
-	if !strings.Contains(string(got), `"path":"/fallback"`) {
-		t.Fatalf("fallback log missing event: %s", string(got))
+	evt := findLastProxyLogEvent(t, readProxyLogEvents(t), "proxy_access")
+	if got := anyToString(evt["path"]); got != "/fallback" {
+		t.Fatalf("proxy_access path=%q want=/fallback", got)
 	}
 }
 
 func TestProxyAccessLogAsyncAfterShutdownFallsBackToSyncAppend(t *testing.T) {
+	initConfigDBStoreForTest(t)
 	restoreConfig := saveWAFLogArchiveConfigForTest()
 	defer restoreConfig()
 
@@ -94,11 +73,6 @@ func TestProxyAccessLogAsyncAfterShutdownFallsBackToSyncAppend(t *testing.T) {
 	defer func() {
 		runtimeProxyAccessLogSink = prevSink
 	}()
-
-	config.FileRotateBytes = 0
-	config.FileMaxBytes = 0
-	config.FileRetention = 0
-	config.LogFile = filepath.Join(t.TempDir(), "waf-events.ndjson")
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -112,12 +86,9 @@ func TestProxyAccessLogAsyncAfterShutdownFallsBackToSyncAppend(t *testing.T) {
 		"status": 200,
 	})
 
-	got, err := os.ReadFile(config.LogFile)
-	if err != nil {
-		t.Fatalf("read shutdown fallback log: %v", err)
-	}
-	if !strings.Contains(string(got), `"path":"/after-shutdown"`) {
-		t.Fatalf("shutdown fallback log missing event: %s", string(got))
+	evt := findLastProxyLogEvent(t, readProxyLogEvents(t), "proxy_access")
+	if got := anyToString(evt["path"]); got != "/after-shutdown" {
+		t.Fatalf("proxy_access path=%q want=/after-shutdown", got)
 	}
 }
 

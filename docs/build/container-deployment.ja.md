@@ -22,7 +22,7 @@ container platform 向けの support は 3 段階で整理します。
 - 次の writable path を共有する
   - `/app/conf`
   - `/app/data/scheduled-tasks`
-  - `/app/logs`
+  - `/app/audit`
   - bundled runtime を使うなら `/app/data/php-fpm`
 - admin の live mutation を許可する
 
@@ -117,7 +117,7 @@ dedicated scheduler role:
 - frontend と同じ source of truth として次を mount する
   - `/app/conf`
   - `/app/data/scheduled-tasks`
-  - `/app/logs`
+  - `/app/audit`
   - bundled runtime を使うなら `/app/data/php-fpm`
 
 これは distributed mutable runtime support を意味しません。frontend を
@@ -158,13 +158,14 @@ official な mutable single-instance path で最低限必要な writable path:
 
 - `/app/conf`
 - `/app/data/scheduled-tasks`
-- `/app/logs`
+- `/app/audit`
 
 ephemeral local state を許容しないなら、これらを platform 側で mount してください。
 
 `/options`、`/vhosts`、または scheduled PHP CLI job で bundled PHP runtime も使う場合は、`/app/data/php-fpm` も mount してください。
 
-`/app/rules` は image bake のままでも構いません。runtime で rule file を変えたい時だけ mount してください。
+WAF/CRS import material は `/app/data/tmp` 配下へ stage し、DB `waf_rule_assets`
+へ import します。runtime は mounted rules directory ではなく DB の active WAF/CRS asset を読みます。
 
 ## Config と Secret
 
@@ -244,7 +245,7 @@ sample では次を別 EFS mount として分けています。
 
 - `/app/conf`
 - `/app/data/scheduled-tasks`
-- `/app/logs`
+- `/app/audit`
 - `/app/data/php-fpm`
 
 task-definition sample では `admin.listen_addr` 用に `9091/tcp` も宣言しています。
@@ -280,7 +281,7 @@ sample では次を別 PVC として分けています。
 
 - `tukuyomi-conf`
 - `tukuyomi-scheduled-tasks`
-- `tukuyomi-logs`
+- `tukuyomi-audit`
 - `tukuyomi-php-fpm`
 
 sample には次も含めています。
@@ -318,7 +319,7 @@ sample では Container Apps environment 側に次の Azure Files storage 定義
 
 - `proxyconf`
 - `proxyscheduledtasks`
-- `proxylogs`
+- `proxyaudit`
 - `proxyphpfpm`
 
 Azure Container Apps sample は引き続き primary ingress を 1 つだけ持ちます。
@@ -359,7 +360,7 @@ cloud では通常:
 
 - 埋め込み Admin UI は image build 時に生成され、runtime では build しません
 - `scripts/install_crs.sh` は image build 時でも startup 時でも実行できます
-- runtime で policy file を変更したい場合は、`/app/conf` と `/app/rules` を mount してください
+- runtime で policy file を変更したい場合は `/app/conf` を mount してください。WAF/CRS asset は `/app/data/tmp` staging から DB へ import します
 - repository 同梱の `docker-compose.yml` には、`scheduled-tasks` profile 配下で `scheduled-task-runner` sidecar が入ります
 - 現在の sidecar 実装は明示的です。image 内の proxy binary を `run-scheduled-tasks` 付きで呼び、次の minute 境界まで sleep します
 - failure policy も明示的です。`run-scheduled-tasks` が non-zero を返したら sidecar も non-zero で終了し、fault を握り潰さずに container restart policy へ渡します

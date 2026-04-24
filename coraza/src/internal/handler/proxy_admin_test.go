@@ -20,7 +20,7 @@ func TestRollbackPreviewProxyRulesHandler(t *testing.T) {
 
 	tmp := t.TempDir()
 	proxyPath := filepath.Join(tmp, "proxy.json")
-initial := `{
+	initial := `{
   "upstreams": [
     { "name": "primary", "url": "http://127.0.0.1:8081", "weight": 1, "enabled": true }
   ]
@@ -28,12 +28,14 @@ initial := `{
 	if err := os.WriteFile(proxyPath, []byte(initial), 0o644); err != nil {
 		t.Fatalf("write initial proxy.json: %v", err)
 	}
+	initConfigDBStoreForTest(t)
+	importProxyRuntimeDBForTest(t, initial)
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
 	_, etag, _, _, _ := ProxyRulesSnapshot()
 
-next := `{
+	next := `{
   "upstreams": [
     { "name": "primary", "url": "http://127.0.0.1:8082", "weight": 1, "enabled": true }
   ]
@@ -92,6 +94,8 @@ func TestPutProxyRulesAppendsAuditEntry(t *testing.T) {
 	if err := os.WriteFile(proxyPath, []byte(initial), 0o644); err != nil {
 		t.Fatalf("write initial proxy.json: %v", err)
 	}
+	initConfigDBStoreForTest(t)
+	importProxyRuntimeDBForTest(t, initial)
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
@@ -165,6 +169,8 @@ func TestRollbackProxyRulesAppendsAuditEntry(t *testing.T) {
 	if err := os.WriteFile(proxyPath, []byte(initial), 0o644); err != nil {
 		t.Fatalf("write initial proxy.json: %v", err)
 	}
+	initConfigDBStoreForTest(t)
+	importProxyRuntimeDBForTest(t, initial)
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
@@ -234,6 +240,8 @@ func TestProxyRulesAuditWriteFailureDoesNotFailApplyOrRollback(t *testing.T) {
 	if err := os.WriteFile(proxyPath, []byte(initial), 0o644); err != nil {
 		t.Fatalf("write initial proxy.json: %v", err)
 	}
+	initConfigDBStoreForTest(t)
+	importProxyRuntimeDBForTest(t, initial)
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}

@@ -159,7 +159,7 @@ func writeProxyAccessLogBatch(events []map[string]any) {
 		ObserveNotificationLogEvent(evt)
 		raws = append(raws, raw)
 	}
-	if err := appendEncodedEventsToFile(raws); err != nil {
+	if err := appendEncodedEventsToDB(raws); err != nil {
 		logProxyAccessLogAsyncWarning(err)
 	}
 }

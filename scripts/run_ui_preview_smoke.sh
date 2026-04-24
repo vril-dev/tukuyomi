@@ -184,11 +184,6 @@ stage_workspace() {
   else
     install -d -m 755 "${WORKSPACE}/data/vhosts"
   fi
-  if [[ -d "${ROOT_DIR}/data/logs" ]]; then
-    rsync -a "${ROOT_DIR}/data/logs/" "${WORKSPACE}/data/logs/"
-  else
-    install -d -m 755 "${WORKSPACE}/data/logs"
-  fi
   install -d -m 755 "${WORKSPACE}/data/scheduled-tasks"
 }
 

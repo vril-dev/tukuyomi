@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,6 +33,13 @@ func TestValidateManagedOverrideRuleAcceptsStandaloneRule(t *testing.T) {
 
 	tmp := t.TempDir()
 	config.OverrideRulesDir = filepath.Join(tmp, "conf", "rules")
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
 
 	body := overrideRuleBody{
 		Name: "orders-preview.conf",
@@ -60,6 +68,13 @@ func TestPutManagedOverrideRuleRoundTrip(t *testing.T) {
 
 	tmp := t.TempDir()
 	config.OverrideRulesDir = filepath.Join(tmp, "conf", "rules")
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
 
 	body := overrideRuleBody{
 		Name: "orders-preview.conf",
@@ -83,12 +98,65 @@ SecRule REQUEST_URI "@streq /api/orders/preview" "id:100001,phase:1,pass,nolog,c
 	}
 
 	target := filepath.Join(config.OverrideRulesDir, body.Name)
-	got, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("read override file: %v", err)
+	if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("override file should not be written, stat err=%v", err)
 	}
-	if strings.TrimSpace(string(got)) != strings.TrimSpace(body.Raw) {
-		t.Fatalf("saved override mismatch:\n got=%s\nwant=%s", string(got), body.Raw)
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected sqlite store")
+	}
+	rules, _, found, err := store.loadActiveManagedOverrideRules()
+	if err != nil || !found {
+		t.Fatalf("load override rules from db found=%v err=%v", found, err)
+	}
+	gotRule, ok := managedOverrideRuleMap(rules)[body.Name]
+	if !ok {
+		t.Fatalf("%s not found in DB rules: %v", body.Name, rules)
+	}
+	if strings.TrimSpace(string(gotRule.Raw)) != strings.TrimSpace(body.Raw) {
+		t.Fatalf("saved override mismatch:\n got=%s\nwant=%s", string(gotRule.Raw), body.Raw)
+	}
+}
+
+func TestPutManagedOverrideRuleRequiresDBStore(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	restore := saveOverrideRulesConfigForTest()
+	defer restore()
+	if err := InitLogsStatsStore(false, "", 0); err != nil {
+		t.Fatalf("disable store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	tmp := t.TempDir()
+	config.OverrideRulesDir = filepath.Join(tmp, "conf", "rules")
+
+	body := overrideRuleBody{
+		Name: "orders-preview.conf",
+		Raw: `SecRuleEngine On
+
+SecRule REQUEST_URI "@streq /api/orders/preview" "id:100001,phase:1,pass,nolog,ctl:ruleRemoveById=942100"
+`,
+	}
+	raw, _ := json.Marshal(body)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/tukuyomi-api/override-rules", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+
+	PutManagedOverrideRule(c)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	target := filepath.Join(config.OverrideRulesDir, body.Name)
+	if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("override file should not be written without DB store, stat err=%v", err)
 	}
 }
 
@@ -132,7 +200,7 @@ func TestDeleteManagedOverrideRuleRejectsInUse(t *testing.T) {
 	}
 }
 
-func TestImportManagedOverrideRulesStorageSeedsDBFromFile(t *testing.T) {
+func TestImportManagedOverrideRulesStorageIgnoresFileSeed(t *testing.T) {
 	restore := saveOverrideRulesConfigForTest()
 	defer restore()
 
@@ -166,17 +234,8 @@ SecRule REQUEST_URI "@streq /api/orders/preview" "id:100001,phase:1,pass,nolog"
 	if store == nil {
 		t.Fatal("expected sqlite store")
 	}
-	rules, _, found, err := store.loadActiveManagedOverrideRules()
-	if err != nil || !found {
-		t.Fatalf("expected override normalized rows to be seeded found=%v err=%v", found, err)
-	}
-	byName := managedOverrideRuleMap(rules)
-	gotRule, ok := byName["orders-preview.conf"]
-	if !ok {
-		t.Fatalf("orders-preview.conf not found in normalized rules: %v", rules)
-	}
-	if strings.TrimSpace(string(gotRule.Raw)) != strings.TrimSpace(string(fileRaw)) {
-		t.Fatalf("seeded rule mismatch:\n got=%s\nwant=%s", string(gotRule.Raw), string(fileRaw))
+	if rules, _, found, err := store.loadActiveManagedOverrideRules(); err != nil || found || len(rules) != 0 {
+		t.Fatalf("filesystem override seed should not be imported found=%v rules=%v err=%v", found, rules, err)
 	}
 	if _, _, found, err := store.GetConfigBlob(overrideRuleConfigBlobKey("orders-preview.conf")); err != nil || found {
 		t.Fatalf("legacy override blob found=%v err=%v", found, err)

@@ -227,7 +227,7 @@ export default function Rules() {
                 </header>
 
                 <div className="flex items-center gap-2">
-                    <label className="text-sm text-neutral-600">{tx("Edit target")}</label>
+                    <label className="text-sm text-neutral-600">{tx("Rule asset")}</label>
                     <select
                         className="border rounded px-2 py-1 text-sm min-w-[360px]"
                         value={selectedPath}

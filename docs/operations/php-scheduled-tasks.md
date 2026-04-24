@@ -29,7 +29,7 @@ Generated runtime artifacts still live under `data/scheduled-tasks/`.
 - `logs/`
   - per-task logs
 
-The default path wiring is controlled from `data/conf/config.json`:
+The default path wiring is controlled by effective DB `app_config` defaults:
 
 - `paths.scheduled_task_config_file`
 
@@ -40,8 +40,10 @@ Each task stores a cron-style full command line.
 Example:
 
 ```text
-date >> /app/logs/scheduled-task.log
+date
 ```
+
+Stdout and stderr are captured automatically into `data/scheduled-tasks/logs/`.
 
 This keeps the scheduled-task model simple:
 

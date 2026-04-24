@@ -39,11 +39,12 @@ make db-import
 ```
 
 `make db-import` は先に `db-migrate` を実行し、その後 seed/export material を
-versioned normalized DB table へ import します。`config.json` は DB bootstrap
-項目を除いた `app_config`、`proxy.json` は proxy config、`sites`、`vhosts`、
-`scheduled_tasks`、`upstream_runtime`、PHP-FPM runtime inventory などの
-runtime file は各 feature table へ import されます。import 後はそれらの DB
-row が正です。
+versioned normalized DB table へ import します。`config.json` は built-in default
+適用後の `app_config` seed として読みますが、bundled config は意図的に
+`storage` bootstrap block だけを保持します。`proxy.json` は proxy config、
+`sites`、`vhosts`、`scheduled_tasks`、`upstream_runtime`、PHP-FPM runtime
+inventory などの runtime file は各 feature table へ import されます。import
+後はそれらの DB row が正です。
 
 ## Driver Selection
 
@@ -76,12 +77,15 @@ DSN 要件:
 
 ### 1. `waf_events`
 
-以下のエンドポイントで使用する、取り込み済みの WAF log record（`waf-events.ndjson`）です。
+以下のエンドポイントで使用する WAF / access / request-security event record です。
 
 - `/tukuyomi-api/logs/stats`
 - `/tukuyomi-api/logs/read?src=waf`
 - `/tukuyomi-api/logs/download?src=waf`
 - FP tuner の latest-event lookup
+
+現在の runtime はこれらの event を DB へ直接書き込みます。`waf-events.ndjson`
+は、古い file log を operator が明示的に取り込む場合だけの legacy import source です。
 
 ### 2. Versioned runtime config tables
 
@@ -131,7 +135,7 @@ authority ではありません。legacy import 互換と、config authority で
 import 後の本番起動で必要な file は次だけです。
 
 - `config.json`: DB 接続 bootstrap（`storage.db_driver`、`storage.db_path`、
-  `storage.db_dsn`）と `app_config` の seed/export material
+  `storage.db_dsn`）と storage retention/sync bootstrap 値
 
 その他の seed/export file は operator workflow 用に残しても構いませんが、
 対応する normalized DB row が存在した後の runtime authority ではありません。
@@ -215,7 +219,7 @@ DB が missing / corrupted の場合:
 1. stack を止める（`docker compose down`）。
 2. DB backup から復元する。壊れた DB file を退避して再 seed するのは、設定 file が known-good な seed/export の場合だけにする。
 3. stack を起動する（`docker compose up -d coraza`）。schema bootstrap と initial seed が走ります。
-4. `/tukuyomi-api/logs/stats` を 1 回呼び、`waf-events.ndjson` から `waf_events` を再取り込みさせる。
+4. service を起動する。新しい WAF/access event は `waf_events` へ直接書き込まれる。古い `waf-events.ndjson` を明示的に取り込む場合だけ、legacy log file を設定して `/tukuyomi-api/logs/stats` を呼ぶ。
 
 ### MySQL / PostgreSQL
 
@@ -224,4 +228,4 @@ DB が reset された場合:
 1. 設定した DSN で DB に接続できることを確認する。
 2. DB backup から復元するか、initial seed 用の known-good config file を用意する。
 3. schema bootstrap と sync が走るように coraza を起動または再起動する。
-4. logs endpoint を 1 回叩いて `waf_events` の取り込みを発火させる。
+4. 新しい WAF/access event は `waf_events` へ直接書き込まれる。legacy log file を明示的に取り込む場合だけ logs endpoint を呼ぶ。

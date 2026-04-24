@@ -112,8 +112,11 @@ func ValidateSemanticRules(c *gin.Context) {
 }
 
 func PutSemanticRules(c *gin.Context) {
-	path := GetSemanticPath()
-	store := getLogsStatsStore()
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
+	}
 
 	in, ok := bindSemanticPutBody(c)
 	if !ok {
@@ -131,70 +134,29 @@ func PutSemanticRules(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
-	if store != nil {
-		spec := mustPolicyJSONSpec(semanticConfigBlobKey)
-		currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeSemanticPolicyRaw, "semantic rules")
-		if err != nil {
-			respondConfigBlobDBError(c, "semantic db seed failed", err)
-			return
-		}
-		expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
-		rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "semantic rules update", 0)
-		if err != nil {
-			if errors.Is(err, errConfigVersionConflict) {
-				c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, semanticConfigBlobKey)})
-				return
-			}
-			respondConfigBlobDBError(c, "semantic db update failed", err)
-			return
-		}
-		if err := applySemanticPolicyRaw(normalizedRaw); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"ok":                   true,
-			"etag":                 rec.ETag,
-			"enabled":              rt.Raw.Enabled,
-			"mode":                 rt.Raw.Mode,
-			"exempt_path_prefixes": rt.Raw.ExemptPathPrefixes,
-			"log_threshold":        rt.Raw.LogThreshold,
-			"challenge_threshold":  rt.Raw.ChallengeThreshold,
-			"block_threshold":      rt.Raw.BlockThreshold,
-			"max_inspect_body":     rt.Raw.MaxInspectBody,
-			"provider_enabled":     rt.Raw.Provider.Enabled,
-			"provider_name":        rt.Raw.Provider.Name,
-			"provider_timeout_ms":  rt.Raw.Provider.TimeoutMS,
-			"saved_at":             rec.ActivatedAt.Format(time.RFC3339Nano),
-		})
+	spec := mustPolicyJSONSpec(semanticConfigBlobKey)
+	currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeSemanticPolicyRaw, "semantic rules")
+	if err != nil {
+		respondConfigBlobDBError(c, "semantic db seed failed", err)
 		return
 	}
-
-	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(path)
-	curETag := bypassconf.ComputeETag(curRaw)
-	if ifMatch != "" && ifMatch != curETag {
-		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
+	expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
+	rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "semantic rules update", 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, semanticConfigBlobKey)})
+			return
+		}
+		respondConfigBlobDBError(c, "semantic db update failed", err)
 		return
 	}
-
-	if err := bypassconf.AtomicWriteWithBackup(path, []byte(in.Raw)); err != nil {
+	if err := applySemanticPolicyRaw(normalizedRaw); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if err := ReloadSemantic(); err != nil {
-		_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
-		_ = ReloadSemantic()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	now := time.Now().UTC()
-	newETag := bypassconf.ComputeETag([]byte(in.Raw))
-
 	c.JSON(http.StatusOK, gin.H{
 		"ok":                   true,
-		"etag":                 newETag,
+		"etag":                 rec.ETag,
 		"enabled":              rt.Raw.Enabled,
 		"mode":                 rt.Raw.Mode,
 		"exempt_path_prefixes": rt.Raw.ExemptPathPrefixes,
@@ -205,7 +167,7 @@ func PutSemanticRules(c *gin.Context) {
 		"provider_enabled":     rt.Raw.Provider.Enabled,
 		"provider_name":        rt.Raw.Provider.Name,
 		"provider_timeout_ms":  rt.Raw.Provider.TimeoutMS,
-		"saved_at":             now.Format(time.RFC3339Nano),
+		"saved_at":             rec.ActivatedAt.Format(time.RFC3339Nano),
 	})
 }
 

@@ -182,6 +182,10 @@ func TestApplyAndRollbackVhostConfigRawMaterializesRuntimeFiles(t *testing.T) {
 		Version:     "PHP 8.2.99 (fpm-fcgi)",
 		Modules:     []string{"mbstring", "redis"},
 	})
+	initConfigDBStoreForTest(t)
+	inventoryCfg := importPHPRuntimeInventoryDBForTest(t, defaultPHPRuntimeInventoryRaw, inventoryPath)
+	importVhostRuntimeDBForTest(t, defaultVhostConfigRaw, inventoryCfg)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
 		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
 	}
@@ -302,6 +306,10 @@ func TestApplyVhostConfigRawRefreshesProxyGeneratedTargets(t *testing.T) {
 		Version:     "PHP 8.2.99 (fpm-fcgi)",
 		Modules:     []string{"mbstring", "redis"},
 	})
+	initConfigDBStoreForTest(t)
+	inventoryCfg := importPHPRuntimeInventoryDBForTest(t, initialInventory, inventoryPath)
+	importVhostRuntimeDBForTest(t, initialVhosts, inventoryCfg)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
 		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
 	}
@@ -395,6 +403,10 @@ func TestApplyVhostConfigRawRejectsLinkedUpstreamRenameWhileProxyReferencesOldAl
 		Version:     "PHP 8.2.99 (fpm-fcgi)",
 		Modules:     []string{"mbstring", "redis"},
 	})
+	initConfigDBStoreForTest(t)
+	inventoryCfg := importPHPRuntimeInventoryDBForTest(t, initialInventory, inventoryPath)
+	importVhostRuntimeDBForTest(t, initialVhosts, inventoryCfg)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
 		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
 	}
@@ -472,6 +484,10 @@ func TestApplyVhostConfigRawRebindsConfiguredLinkedUpstreamWhenAlternateConfigur
 		Version:     "PHP 8.2.99 (fpm-fcgi)",
 		Modules:     []string{"mbstring", "redis"},
 	})
+	initConfigDBStoreForTest(t)
+	inventoryCfg := importPHPRuntimeInventoryDBForTest(t, initialInventory, inventoryPath)
+	importVhostRuntimeDBForTest(t, initialVhosts, inventoryCfg)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
 		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
 	}
@@ -569,6 +585,10 @@ func TestApplyVhostConfigRawRestoresConfiguredUpstreamWhenDeletingVhost(t *testi
 		Version:     "PHP 8.2.99 (fpm-fcgi)",
 		Modules:     []string{"mbstring", "redis"},
 	})
+	initConfigDBStoreForTest(t)
+	inventoryCfg := importPHPRuntimeInventoryDBForTest(t, initialInventory, inventoryPath)
+	importVhostRuntimeDBForTest(t, initialVhosts, inventoryCfg)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
 		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
 	}

@@ -18,7 +18,6 @@ services:
       - ./data/cache:/app/cache
       - ./data/php-fpm:/app/data/php-fpm
       - ./data/conf:/app/conf:ro
-      - ./data/logs:/app/logs
     ports:
       - "${CORAZA_PORT:-19093}:${WAF_LISTEN_PORT:-9090}"
     extra_hosts:

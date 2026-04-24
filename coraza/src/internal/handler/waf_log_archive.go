@@ -34,17 +34,18 @@ const wafLogArchivePruneInterval = time.Second
 var jsonLineBreak = []byte{'\n'}
 
 func appendEncodedWAFEvent(raw []byte, path string) error {
-	return runtimeWAFLogArchive.AppendEncoded(raw, path)
+	return appendEncodedWAFEvents([][]byte{raw}, path)
 }
 
 func appendEncodedWAFEvents(raws [][]byte, path string) error {
 	if len(raws) == 0 {
 		return nil
 	}
-	if len(raws) == 1 {
-		return appendEncodedWAFEvent(raws[0], path)
+	store := getLogsStatsStore()
+	if store == nil {
+		return errConfigDBStoreRequired
 	}
-	return runtimeWAFLogArchive.AppendEncodedBatch(raws, path)
+	return store.AppendWAFEventLines(raws)
 }
 
 func appendWAFEventRawLine(raw []byte, path string) error {

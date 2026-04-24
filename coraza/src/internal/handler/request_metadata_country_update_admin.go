@@ -24,6 +24,9 @@ func UploadRequestCountryUpdateConfig(c *gin.Context) {
 	}
 	defer src.Close()
 	if err := writeManagedRequestCountryGeoIPConfig(src); err != nil {
+		if respondIfConfigDBStoreRequired(c, err) {
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
@@ -32,6 +35,9 @@ func UploadRequestCountryUpdateConfig(c *gin.Context) {
 
 func DeleteRequestCountryUpdateConfig(c *gin.Context) {
 	if err := removeManagedRequestCountryGeoIPConfig(); err != nil {
+		if respondIfConfigDBStoreRequired(c, err) {
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}

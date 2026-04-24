@@ -369,12 +369,12 @@ export default function BypassRulesPanel() {
                     placeholder="/assets/"
                   />
                 </Field>
-                <Field label={tx("Extra rule file")} hint={tx("Optional `.conf` file applied instead of a full bypass when you need a narrow override.")}>
+                <Field label={tx("Extra rule reference")} hint={tx("Optional DB-managed `.conf` override applied instead of a full bypass when you need a narrow override.")}>
                   <input
                     className={inputClass}
                     value={entry.extraRule}
                     onChange={(event) => updateDefaultEntry(index, (current) => ({ ...current, extraRule: event.target.value }))}
-                    placeholder="conf/rules/override.conf"
+                    placeholder="override.conf"
                   />
                 </Field>
               </div>
@@ -506,14 +506,14 @@ export default function BypassRulesPanel() {
                           placeholder="/internal/"
                         />
                       </Field>
-                      <Field label={tx("Extra rule file")}>
+                      <Field label={tx("Extra rule reference")}>
                         <input
                           className={inputClass}
                           value={entry.extraRule}
                           onChange={(event) =>
                             updateHostEntry(hostIndex, entryIndex, (current) => ({ ...current, extraRule: event.target.value }))
                           }
-                          placeholder="conf/rules/internal.conf"
+                          placeholder="internal.conf"
                         />
                       </Field>
                     </div>

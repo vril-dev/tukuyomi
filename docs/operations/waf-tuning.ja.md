@@ -7,7 +7,7 @@
 ## 1. まず証跡を取る
 
 1. 管理APIでログを取得し、`rule_id` と `path` を確認する。
-2. `interesting.ndjson`（`logs/proxy/`）で `req_id` を追跡し、クライアント条件（IP/UA/クエリ）を絞る。
+2. 同じ `req_id` を `/tukuyomi-api/logs/read?src=waf&req_id=<id>` で追跡し、クライアント条件（IP/UA/クエリ）を絞る。
 3. 再現可能なHTTPリクエスト（curlやE2E）を必ず残す。
 
 ## 2. 影響範囲を切り分ける
@@ -34,7 +34,7 @@
   "hosts": {
     "example.com": {
       "entries": [
-        { "path": "/search", "extra_rule": "conf/rules/orders-preview.conf" }
+        { "path": "/search", "extra_rule": "orders-preview.conf" }
       ]
     }
   }

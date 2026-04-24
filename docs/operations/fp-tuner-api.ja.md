@@ -32,7 +32,7 @@
 ```
 
 注意:
-- `event` は optional です。省略した場合、server は `waf-events.ndjson` から最新の `waf_block` event を探します。
+- `event` は optional です。省略した場合、server は DB `waf_events` から最新の `waf_block` event を探します。
 - unknown field は reject されます。
 - provider は、安全な scoped Coraza exclusion proposal 1件、または明示的な `no_proposal` を返す前提です。
 

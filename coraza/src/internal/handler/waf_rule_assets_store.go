@@ -103,46 +103,6 @@ func (s *wafEventStore) loadWAFRuleAssetsVersion(versionID int64) ([]wafRuleAsse
 	return normalizeWAFRuleAssets(assets), nil
 }
 
-func loadOrSeedWAFRuleAssets(store *wafEventStore) ([]wafRuleAssetVersion, configVersionRecord, bool, error) {
-	assets, rec, found, err := loadRuntimeWAFRuleAssets(store)
-	if err != nil {
-		return nil, configVersionRecord{}, false, err
-	}
-	if found {
-		return assets, rec, true, nil
-	}
-
-	assets, err = collectWAFRuleAssetsFromFS()
-	if err != nil {
-		return nil, configVersionRecord{}, false, err
-	}
-	if len(assets) == 0 {
-		return nil, configVersionRecord{}, false, nil
-	}
-
-	legacy, err := legacyRuleFileAssets(store)
-	if err != nil {
-		return nil, configVersionRecord{}, false, err
-	}
-	if len(legacy) > 0 {
-		byPath := wafRuleAssetMap(assets)
-		for _, asset := range legacy {
-			byPath[asset.Path] = asset
-		}
-		assets = make([]wafRuleAssetVersion, 0, len(byPath))
-		for _, asset := range byPath {
-			assets = append(assets, asset)
-		}
-	}
-
-	rec, assets, err = store.writeWAFRuleAssetsVersion("", assets, configVersionSourceImport, "", "waf rule assets seed import", 0)
-	if err != nil {
-		return nil, configVersionRecord{}, false, err
-	}
-	_ = deleteLegacyRuleFileBlobs(store)
-	return assets, rec, true, nil
-}
-
 func loadRuntimeWAFRuleAssets(store *wafEventStore) ([]wafRuleAssetVersion, configVersionRecord, bool, error) {
 	assets, rec, found, err := store.loadActiveWAFRuleAssets()
 	if err != nil {
@@ -199,7 +159,7 @@ func SyncRuleFilesStorage() error {
 func loadWAFRuleAssetsForWAF() (waf.RuleAssetBundle, bool, error) {
 	store := getLogsStatsStore()
 	if store == nil {
-		return waf.RuleAssetBundle{}, false, nil
+		return waf.RuleAssetBundle{}, false, errConfigDBStoreRequired
 	}
 	assets, rec, found, err := loadRuntimeWAFRuleAssets(store)
 	if err != nil || !found {
@@ -235,25 +195,30 @@ func collectWAFRuleAssetsFromFS() ([]wafRuleAssetVersion, error) {
 
 	crsRoot := configuredCRSRoot()
 	if crsRoot != "" {
-		if err := filepath.WalkDir(crsRoot, func(path string, entry os.DirEntry, err error) error {
+		crsRootFS := wafRuleAssetSourcePath(crsRoot)
+		if err := filepath.WalkDir(crsRootFS, func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 			if entry.IsDir() {
 				return nil
 			}
-			asset, ok, err := readWAFRuleAssetFile(path, wafRuleAssetKindCRSAsset)
+			logicalPath := path
+			if rel, relErr := filepath.Rel(crsRootFS, path); relErr == nil {
+				logicalPath = filepath.Join(crsRoot, rel)
+			}
+			asset, ok, err := readWAFRuleAssetFile(logicalPath, wafRuleAssetKindCRSAsset)
 			if err != nil || !ok {
 				return err
 			}
-			if normalizeWAFRuleAssetPath(path) == normalizeWAFRuleAssetPath(config.CRSSetupFile) {
+			if normalizeWAFRuleAssetPath(logicalPath) == normalizeWAFRuleAssetPath(config.CRSSetupFile) {
 				asset.Kind = wafRuleAssetKindCRSSetup
 			}
 			assets = append(assets, asset)
 			return nil
 		}); err != nil {
 			if config.CRSEnable {
-				return nil, fmt.Errorf("read CRS asset tree %s: %w", crsRoot, err)
+				return nil, fmt.Errorf("read CRS asset tree %s: %w", crsRootFS, err)
 			}
 		}
 	}
@@ -277,13 +242,14 @@ func readWAFRuleAssetFile(path string, kind string) (wafRuleAssetVersion, bool, 
 	if err != nil {
 		return wafRuleAssetVersion{}, false, err
 	}
-	raw, hadFile, err := readFileMaybe(path)
+	sourcePath := wafRuleAssetSourcePath(normalized)
+	raw, hadFile, err := readFileMaybe(sourcePath)
 	if err != nil {
-		return wafRuleAssetVersion{}, false, fmt.Errorf("read waf rule asset %s: %w", path, err)
+		return wafRuleAssetVersion{}, false, fmt.Errorf("read waf rule asset %s: %w", sourcePath, err)
 	}
 	if !hadFile {
 		if kind == wafRuleAssetKindBase || (kind == wafRuleAssetKindCRSSetup && config.CRSEnable) {
-			return wafRuleAssetVersion{}, false, fmt.Errorf("waf rule asset not found: %s", path)
+			return wafRuleAssetVersion{}, false, fmt.Errorf("waf rule asset not found: %s", sourcePath)
 		}
 		return wafRuleAssetVersion{}, false, nil
 	}
@@ -293,6 +259,14 @@ func readWAFRuleAssetFile(path string, kind string) (wafRuleAssetVersion, bool, 
 		Raw:  raw,
 		ETag: bypassconf.ComputeETag(raw),
 	}, true, nil
+}
+
+func wafRuleAssetSourcePath(logicalPath string) string {
+	root := strings.TrimSpace(os.Getenv("WAF_RULE_ASSET_FS_ROOT"))
+	if root == "" || filepath.IsAbs(logicalPath) {
+		return logicalPath
+	}
+	return filepath.Join(root, filepath.FromSlash(normalizeWAFRuleAssetPath(logicalPath)))
 }
 
 func configuredCRSRoot() string {
@@ -498,30 +472,23 @@ func loadEditableWAFRuleAsset(target string) ([]byte, string, string, bool, erro
 		return nil, "", "", false, err
 	}
 	store := getLogsStatsStore()
-	if store != nil {
-		assets, rec, found, err := loadRuntimeWAFRuleAssets(store)
-		if err != nil {
-			return nil, "", "", false, err
-		}
-		if found {
-			if asset, ok := wafRuleAssetMap(assets)[targetPath]; ok {
-				etag := strings.TrimSpace(asset.ETag)
-				if etag == "" {
-					etag = bypassconf.ComputeETag(asset.Raw)
-				}
-				return append([]byte(nil), asset.Raw...), etag, rec.ETag, true, nil
-			}
-		}
-		return nil, "", "", false, fmt.Errorf("waf rule asset not found in active DB generation: %s", targetPath)
+	if store == nil {
+		return nil, "", "", false, errConfigDBStoreRequired
 	}
-	raw, hadFile, err := readFileMaybe(target)
+	assets, rec, found, err := loadRuntimeWAFRuleAssets(store)
 	if err != nil {
 		return nil, "", "", false, err
 	}
-	if !hadFile {
-		return nil, "", "", false, fmt.Errorf("waf rule asset not found: %s", target)
+	if found {
+		if asset, ok := wafRuleAssetMap(assets)[targetPath]; ok {
+			etag := strings.TrimSpace(asset.ETag)
+			if etag == "" {
+				etag = bypassconf.ComputeETag(asset.Raw)
+			}
+			return append([]byte(nil), asset.Raw...), etag, rec.ETag, true, nil
+		}
 	}
-	return raw, bypassconf.ComputeETag(raw), "", false, nil
+	return nil, "", "", false, fmt.Errorf("waf rule asset not found in active DB generation: %s", targetPath)
 }
 
 func wafRuleAssetSavedAt(rec configVersionRecord, path string) string {

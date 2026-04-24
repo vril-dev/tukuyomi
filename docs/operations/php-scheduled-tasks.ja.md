@@ -29,7 +29,7 @@ runtime source of truth ではありません。
 - `logs/`
   - task ごとの log
 
-既定 path は `data/conf/config.json` の以下で制御します。
+既定 path は effective DB `app_config` の default で制御します。
 
 - `paths.scheduled_task_config_file`
 
@@ -40,8 +40,10 @@ runtime source of truth ではありません。
 例:
 
 ```text
-date >> /app/logs/scheduled-task.log
+date
 ```
+
+stdout / stderr は自動的に `data/scheduled-tasks/logs/` へ保存されます。
 
 この形に寄せることで、scheduled task の model は単純になります。
 

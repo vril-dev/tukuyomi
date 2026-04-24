@@ -20,8 +20,8 @@ trap cleanup EXIT
 
 mkdir -p "${STAGE_PARENT}"
 STAGE_ROOT="$(mktemp -d "${STAGE_PARENT}/crs.XXXXXX")"
-"${ROOT_DIR}/../_shared/install_crs.sh" "${STAGE_ROOT}/rules/crs" "${1:-v4.23.0}"
-cp "${ROOT_DIR}/data/rules/crs-setup-high-paranoia.conf" "${STAGE_ROOT}/rules/crs-setup-high-paranoia.conf"
+WAF_RULE_SEED_CRS_SETUP_OVERRIDE="${ROOT_DIR}/../../seeds/waf/rules/crs-setup-high-paranoia.conf" \
+  "${ROOT_DIR}/../../scripts/stage_waf_rule_assets.sh" "${STAGE_ROOT}" "${1:-v4.23.0}"
 
 if [[ ! -f "${ROOT_DIR}/.env" ]]; then
   cp "${ROOT_DIR}/.env.example" "${ROOT_DIR}/.env"
@@ -32,8 +32,7 @@ mkdir -p \
   "${ROOT_DIR}/data/db" \
   "${ROOT_DIR}/data/audit" \
   "${ROOT_DIR}/data/cache/response" \
-  "${ROOT_DIR}/data/php-fpm" \
-  "${ROOT_DIR}/data/logs"
+  "${ROOT_DIR}/data/php-fpm"
 
 compose down --remove-orphans >/dev/null 2>&1 || true
 rm -f "${ROOT_DIR}/data/db/tukuyomi.db" "${ROOT_DIR}/data/db/tukuyomi.db-wal" "${ROOT_DIR}/data/db/tukuyomi.db-shm"

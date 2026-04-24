@@ -18,7 +18,7 @@ cd examples/<name>
 docker compose up -d --build
 ```
 
-`setup.sh` は `data/rules/crs/` に OWASP CRS をダウンロードし、`.env` が無い場合は `.env.example` から生成します。
+`setup.sh` は OWASP CRS を `data/tmp` 配下へ一時 stage し、WAF rule asset を DB へ import してから stage を削除します。`.env` が無い場合は `.env.example` から生成します。
 
 一部の example には `./smoke.sh` もあります。host-based な確認をしたい場合は、protected host fixture を付けて実行します。
 

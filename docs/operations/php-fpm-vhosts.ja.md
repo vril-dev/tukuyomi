@@ -33,7 +33,7 @@ PHP-FPM の運用データは `data/php-fpm/` に集約されています。
 
 汎用のサンプル docroot は `data/vhosts/samples/` に置きます。
 
-既定パスは `data/conf/config.json` の以下で決まります。
+既定パスは effective DB `app_config` の default で決まります。
 
 - `paths.php_runtime_inventory_file`
 - `paths.vhost_config_file`

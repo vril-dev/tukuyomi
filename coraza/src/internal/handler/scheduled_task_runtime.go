@@ -739,28 +739,16 @@ func cloneScheduledTaskConfigFile(in ScheduledTaskConfigFile) ScheduledTaskConfi
 	return out
 }
 
-func persistScheduledTaskConfigRaw(path string, raw string) error {
-	if strings.TrimSpace(path) == "" {
-		return fmt.Errorf("scheduled task config path is empty")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
-}
-
 func persistScheduledTaskConfigAuthoritative(path string, expectedETag string, prepared scheduledTaskPreparedConfig, source string, restoredFromVersionID int64) (string, int64, error) {
-	if store := getLogsStatsStore(); store != nil {
-		rec, err := store.writeScheduledTaskConfigVersion(expectedETag, prepared.cfg, source, "", "scheduled tasks config update", restoredFromVersionID)
-		if err != nil {
-			return "", 0, err
-		}
-		return rec.ETag, rec.VersionID, nil
-	}
-	if err := persistScheduledTaskConfigRaw(path, prepared.raw); err != nil {
+	store, err := requireConfigDBStore()
+	if err != nil {
 		return "", 0, err
 	}
-	return prepared.etag, 0, nil
+	rec, err := store.writeScheduledTaskConfigVersion(expectedETag, prepared.cfg, source, "", "scheduled tasks config update", restoredFromVersionID)
+	if err != nil {
+		return "", 0, err
+	}
+	return rec.ETag, rec.VersionID, nil
 }
 
 func loadScheduledTaskConfigRaw(configPath string) (string, error) {

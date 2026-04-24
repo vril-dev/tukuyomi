@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPORT_DIR="${ROOT_DIR}/data/logs/gotestwaf"
+REPORT_DIR="${ROOT_DIR}/data/tmp/gotestwaf"
 REPORT_NAME="${GOTESTWAF_REPORT_NAME:-gotestwaf-report}"
 REPORT_JSON="${REPORT_DIR}/${REPORT_NAME}.json"
 SUMMARY_TXT="${REPORT_DIR}/${REPORT_NAME}-summary.txt"

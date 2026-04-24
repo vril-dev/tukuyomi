@@ -33,7 +33,7 @@ PHP-FPM operator-managed data lives under `data/php-fpm/`.
 
 Generic sample docroots live under `data/vhosts/samples/`.
 
-The default path wiring is controlled from `data/conf/config.json`:
+The default path wiring is controlled by effective DB `app_config` defaults:
 
 - `paths.php_runtime_inventory_file`
 - `paths.vhost_config_file`

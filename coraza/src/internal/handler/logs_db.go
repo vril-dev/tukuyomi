@@ -950,6 +950,40 @@ func (s *wafEventStore) syncWAFEvents(logPath string) (logSyncResult, error) {
 	return logSyncResult{ScannedLines: scannedLines}, nil
 }
 
+func (s *wafEventStore) AppendWAFEventLines(raws [][]byte) error {
+	if s == nil || s.db == nil {
+		return errConfigDBStoreRequired
+	}
+	if len(raws) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := s.prepare(tx, s.insertWAFEventStmt())
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+
+	for _, raw := range raws {
+		if err := ingestWAFEventLine(stmt, raw); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	if err := s.pruneExpiredWAFEvents(tx, time.Now().UTC()); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
 func ingestWAFEventLine(stmt *sql.Stmt, rawLine []byte) error {
 	line := bytes.TrimSpace(rawLine)
 	if len(line) == 0 {

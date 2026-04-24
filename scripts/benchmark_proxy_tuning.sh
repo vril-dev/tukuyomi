@@ -25,8 +25,8 @@ BENCH_PROFILE="${BENCH_PROFILE:-0}"
 BENCH_PROFILE_ADDR="${BENCH_PROFILE_ADDR:-127.0.0.1:6060}"
 BENCH_PROFILE_SECONDS="${BENCH_PROFILE_SECONDS:-10}"
 UPSTREAM_PORT="${UPSTREAM_PORT:-}"
-OUTPUT_FILE="${OUTPUT_FILE:-data/logs/proxy/proxy-benchmark-summary.md}"
-OUTPUT_JSON_FILE="${OUTPUT_JSON_FILE:-data/logs/proxy/proxy-benchmark-summary.json}"
+OUTPUT_FILE="${OUTPUT_FILE:-data/tmp/reports/proxy/proxy-benchmark-summary.md}"
+OUTPUT_JSON_FILE="${OUTPUT_JSON_FILE:-data/tmp/reports/proxy/proxy-benchmark-summary.json}"
 
 benchmark_failed=0
 bench_ip_counter=10

@@ -105,7 +105,7 @@ fi
 RUNTIME_ROOT="$(mktemp -d "${ROOT_DIR}/.tmp-dual-listener-smoke.XXXXXX")"
 RUNTIME_DIR="${RUNTIME_ROOT}/opt/tukuyomi"
 ENV_FILE="${RUNTIME_ROOT}/etc/tukuyomi/tukuyomi.env"
-SERVER_LOG="${RUNTIME_DIR}/logs/waf/dual-listener-smoke.log"
+SERVER_LOG="${RUNTIME_DIR}/data/tmp/dual-listener-smoke.log"
 UPSTREAM_LOG="${RUNTIME_ROOT}/proxy-echo.log"
 
 log "staging dual-listener runtime tree at ${RUNTIME_DIR}"
@@ -113,11 +113,10 @@ log "staging dual-listener runtime tree at ${RUNTIME_DIR}"
     "${RUNTIME_DIR}/bin" \
     "${RUNTIME_DIR}/conf" \
     "${RUNTIME_DIR}/db" \
+    "${RUNTIME_DIR}/data/tmp" \
     "${RUNTIME_DIR}/data/scheduled-tasks" \
     "${RUNTIME_DIR}/audit" \
     "${RUNTIME_DIR}/cache/response" \
-    "${RUNTIME_DIR}/logs/waf" \
-    "${RUNTIME_DIR}/logs/proxy" \
     "${RUNTIME_ROOT}/etc/tukuyomi"
 
 install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${RUNTIME_DIR}/bin/tukuyomi"
@@ -143,10 +142,11 @@ jq \
   "${RUNTIME_DIR}/conf/config.json" > "${RUNTIME_DIR}/conf/config.json.tmp"
 mv "${RUNTIME_DIR}/conf/config.json.tmp" "${RUNTIME_DIR}/conf/config.json"
 
-WAF_STAGE_ROOT="$(mktemp -d "${RUNTIME_DIR}/.tmp-waf-import.XXXXXX")"
+mkdir -p "${RUNTIME_DIR}/tmp"
+WAF_STAGE_ROOT="$(mktemp -d "${RUNTIME_DIR}/tmp/waf-import.XXXXXX")"
 (
   cd "${RUNTIME_DIR}"
-  DEST_DIR="${WAF_STAGE_ROOT}/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh"
+  "${ROOT_DIR}/scripts/stage_waf_rule_assets.sh" "${WAF_STAGE_ROOT}"
   WAF_CONFIG_FILE="conf/config.json" ./bin/tukuyomi db-migrate
   WAF_RULE_ASSET_FS_ROOT="${WAF_STAGE_ROOT}" WAF_CONFIG_FILE="conf/config.json" ./bin/tukuyomi db-import-waf-rule-assets
 )

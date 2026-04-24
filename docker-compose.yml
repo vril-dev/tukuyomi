@@ -34,13 +34,10 @@ services:
       - TUKUYOMI_PPROF_ADDR=${TUKUYOMI_PPROF_ADDR:-}
     volumes:
       - ./data:/app/data
-      - ./data/rules:/app/rules
       - ./data/conf:/app/conf
-      - ./data/geoip:/app/data/geoip
       - ./data/scheduled-tasks:/app/data/scheduled-tasks
       - ./data/php-fpm:/app/data/php-fpm
       - ./data/vhosts:/app/data/vhosts
-      - ./data/logs:/app/logs
       - ./scripts:/app/scripts:ro
     ports:
       - "${CORAZA_PORT:-9090}:${WAF_LISTEN_PORT:-9090}"
@@ -68,13 +65,10 @@ services:
       - WAF_STORAGE_DB_SYNC_INTERVAL_SEC=${WAF_STORAGE_DB_SYNC_INTERVAL_SEC:-}
     volumes:
       - ./data:/app/data
-      - ./data/rules:/app/rules
       - ./data/conf:/app/conf
-      - ./data/geoip:/app/data/geoip
       - ./data/scheduled-tasks:/app/data/scheduled-tasks
       - ./data/php-fpm:/app/data/php-fpm
       - ./data/vhosts:/app/data/vhosts
-      - ./data/logs:/app/logs
     command:
       - /bin/sh
       - -lc
@@ -109,7 +103,7 @@ services:
       - --reportName=gotestwaf-report
       - --noEmailReport
     volumes:
-      - ./data/logs/gotestwaf:/app/reports
+      - ./data/tmp/gotestwaf:/app/reports
     restart: "no"
 
 volumes:

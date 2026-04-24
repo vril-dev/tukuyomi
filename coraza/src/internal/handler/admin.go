@@ -488,7 +488,10 @@ func PutRules(c *gin.Context) {
 		return
 	}
 
-	store := getLogsStatsStore()
+	if _, err := requireConfigDBStore(); err != nil {
+		respondConfigDBStoreRequired(c)
+		return
+	}
 	curRaw, curETag, domainETag, dbBacked, err := loadEditableWAFRuleAsset(target)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -505,62 +508,29 @@ func PutRules(c *gin.Context) {
 		return
 	}
 
-	if store != nil && dbBacked {
-		rec, asset, err := writeWAFRuleAssetUpdate(target, []byte(in.Raw), domainETag, "base rule update")
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		if err := waf.ReloadBaseWAF(); err != nil {
-			_, _, _ = writeWAFRuleAssetUpdate(target, curRaw, rec.ETag, "base rule rollback after reload failure")
-			_ = waf.ReloadBaseWAF()
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": fmt.Sprintf("reload failed and rollback applied: %v", err),
-			})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"ok":            true,
-			"etag":          asset.ETag,
-			"hot_reloaded":  true,
-			"reloaded_file": target,
-			"saved_at":      configVersionSavedAt(rec),
-		})
+	if !dbBacked {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": errConfigDBStoreRequired.Error()})
 		return
 	}
-
-	curRaw, hadFile, err := readFileMaybe(target)
+	rec, asset, err := writeWAFRuleAssetUpdate(target, []byte(in.Raw), domainETag, "base rule update")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if err := bypassconf.AtomicWriteWithBackup(target, []byte(in.Raw)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
 	if err := waf.ReloadBaseWAF(); err != nil {
-		_ = rollbackRuleFile(target, hadFile, curRaw)
+		_, _, _ = writeWAFRuleAssetUpdate(target, curRaw, rec.ETag, "base rule rollback after reload failure")
 		_ = waf.ReloadBaseWAF()
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("reload failed and rollback applied: %v", err),
 		})
 		return
 	}
-
-	newETag := bypassconf.ComputeETag([]byte(in.Raw))
-	now := time.Now().UTC()
-
 	c.JSON(http.StatusOK, gin.H{
 		"ok":            true,
-		"etag":          newETag,
+		"etag":          asset.ETag,
 		"hot_reloaded":  true,
 		"reloaded_file": target,
-		"saved_at":      now.Format(time.RFC3339Nano),
+		"saved_at":      configVersionSavedAt(rec),
 	})
 }
 
@@ -599,14 +569,4 @@ func ruleFileConfigBlobKey(path string) string {
 	cleaned := filepath.Clean(strings.TrimSpace(path))
 	sum := sha256.Sum256([]byte(cleaned))
 	return "rule_file_sha256:" + hex.EncodeToString(sum[:])
-}
-
-func rollbackRuleFile(path string, hadFile bool, raw []byte) error {
-	if hadFile {
-		return bypassconf.AtomicWriteWithBackup(path, raw)
-	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
 }

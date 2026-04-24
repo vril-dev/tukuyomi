@@ -307,7 +307,7 @@ export default function ScheduledTasksPanel() {
         ) : null}
 
         <div className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
-          {tx("Enter the full command line you would normally put into cron. Example: date >> /app/logs/scheduled-task.log")}
+          {tx("Enter the full command line you would normally put into cron. Stdout and stderr are captured to the task log automatically. Example: date")}
         </div>
 
         <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-700 space-y-1">
@@ -396,7 +396,7 @@ export default function ScheduledTasksPanel() {
                       </p>
                       <input
                         className="w-full"
-                        placeholder="date >> /app/logs/scheduled-task.log"
+                        placeholder="date"
                         value={task.command}
                         onChange={(event) => updateTask(index, { command: event.target.value })}
                       />

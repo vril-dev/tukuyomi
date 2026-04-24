@@ -18,7 +18,7 @@ cd examples/<name>
 docker compose up -d --build
 ```
 
-`setup.sh` downloads OWASP CRS into `data/rules/crs/` and creates `.env` from `.env.example` when missing.
+`setup.sh` stages OWASP CRS under `data/tmp`, imports WAF rule assets into DB, removes the stage, and creates `.env` from `.env.example` when missing.
 
 Some examples also include `./smoke.sh`. For host-based confidence checks, run it with a protected host fixture:
 

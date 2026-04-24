@@ -199,32 +199,36 @@ preset-check:
 			exit 1; \
 		fi; \
 	done; \
-	proxy_rel="$$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("paths", {}).get("proxy_config_file", "").strip())' "$$preset_dir/config.json")"; \
-	site_rel="$$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("paths", {}).get("site_config_file", "").strip())' "$$preset_dir/config.json")"; \
-	for rel in "$$proxy_rel" "$$site_rel"; do \
-		if [[ -z "$$rel" || "$$rel" = /* ]]; then \
-			echo "[preset-check][ERROR] $$preset_dir/config.json must use relative seed paths for proxy/site config" >&2; \
-			exit 1; \
-		fi; \
-	done; \
 	docker compose --env-file "$$preset_dir/.env" config >/dev/null; \
 	python3 -m json.tool "$$preset_dir/config.json" >/dev/null; \
-	preset_mode="$$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("admin", {}).get("external_mode", "").strip().lower())' "$$preset_dir/config.json")"; \
-	if [[ -z "$$preset_mode" ]]; then \
-		echo "[preset-check][ERROR] $$preset_dir/config.json is missing admin.external_mode" >&2; \
+	top_keys="$$(python3 -c 'import json, sys; print("\n".join(sorted(json.load(open(sys.argv[1], encoding="utf-8")).keys())))' "$$preset_dir/config.json")"; \
+	if [[ "$$top_keys" != "storage" ]]; then \
+		echo "[preset-check][ERROR] $$preset_dir/config.json must contain only the storage bootstrap block" >&2; \
 		exit 1; \
 	fi; \
-	default_mode="$$(grep -m 1 'ExternalMode:' coraza/src/internal/config/app_config_file.go | sed -E 's/.*"([^"]+)".*/\1/' | tr '[:upper:]' '[:lower:]')"; \
-	if [[ -z "$$default_mode" ]]; then \
-		echo "[preset-check][ERROR] could not read default admin.external_mode from coraza/src/internal/config/app_config_file.go" >&2; \
+	storage_keys="$$(python3 -c 'import json, sys; obj=json.load(open(sys.argv[1], encoding="utf-8")); storage=obj.get("storage"); print("\n".join(sorted(storage.keys())) if isinstance(storage, dict) else "")' "$$preset_dir/config.json")"; \
+	expected_storage_keys=$$'db_driver\ndb_dsn\ndb_path\ndb_retention_days\ndb_sync_interval_sec'; \
+	if [[ "$$storage_keys" != "$$expected_storage_keys" ]]; then \
+		echo "[preset-check][ERROR] $$preset_dir/config.json storage keys must be: db_driver, db_path, db_dsn, db_retention_days, db_sync_interval_sec" >&2; \
 		exit 1; \
 	fi; \
-	if [[ "$$preset_mode" != "$$default_mode" ]]; then \
-		echo "[preset-check][ERROR] $$preset_dir/config.json admin.external_mode=$$preset_mode does not match [proxy] default admin.external_mode=$$default_mode" >&2; \
+	db_driver="$$(python3 -c 'import json, sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["storage"]["db_driver"]).strip().lower())' "$$preset_dir/config.json")"; \
+	db_path="$$(python3 -c 'import json, sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["storage"]["db_path"]).strip())' "$$preset_dir/config.json")"; \
+	db_dsn="$$(python3 -c 'import json, sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["storage"]["db_dsn"]).strip())' "$$preset_dir/config.json")"; \
+	if [[ "$$db_driver" != "sqlite" && "$$db_driver" != "mysql" && "$$db_driver" != "pgsql" ]]; then \
+		echo "[preset-check][ERROR] $$preset_dir/config.json storage.db_driver must be sqlite, mysql, or pgsql" >&2; \
 		exit 1; \
 	fi; \
-	if [[ "$$proxy_rel" != "conf/proxy.json" || "$$site_rel" != "conf/sites.json" ]]; then \
-		echo "[preset-check][ERROR] $$preset_dir/config.json must keep proxy/site paths at conf/proxy.json and conf/sites.json" >&2; \
+	if [[ "$$db_driver" == "sqlite" && -z "$$db_path" ]]; then \
+		echo "[preset-check][ERROR] $$preset_dir/config.json storage.db_path is required for sqlite" >&2; \
+		exit 1; \
+	fi; \
+	if [[ "$$db_driver" != "sqlite" && -z "$$db_dsn" ]]; then \
+		echo "[preset-check][ERROR] $$preset_dir/config.json storage.db_dsn is required for mysql/pgsql" >&2; \
+		exit 1; \
+	fi; \
+	if ! python3 -c 'import json, sys; storage=json.load(open(sys.argv[1], encoding="utf-8"))["storage"]; ok=type(storage["db_retention_days"]) is int and storage["db_retention_days"] >= 0 and type(storage["db_sync_interval_sec"]) is int and storage["db_sync_interval_sec"] >= 0; raise SystemExit(0 if ok else 1)' "$$preset_dir/config.json"; then \
+		echo "[preset-check][ERROR] $$preset_dir/config.json storage retention/sync values must be non-negative integers" >&2; \
 		exit 1; \
 	fi; \
 	echo "[preset-check] $(PRESET) ok"
@@ -239,10 +243,13 @@ crs-install: db-migrate
 	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" && -f "$(ROOT_DIR)/$$config_file" ]]; then \
 		config_file="$(ROOT_DIR)/$$config_file"; \
 	fi; \
-	DEST_DIR="$$workdir/rules/crs" ./scripts/install_crs.sh; \
+	stage_root="$$workdir/tmp/waf-rule-assets"; \
+	rm -rf "$$stage_root"; \
+	mkdir -p "$$stage_root"; \
+	./scripts/stage_waf_rule_assets.sh "$$stage_root"; \
 	echo "[crs-install] importing WAF rule assets into DB"; \
 	cd "$$workdir"; \
-	WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import-waf-rule-assets
+	WAF_RULE_ASSET_FS_ROOT="tmp/waf-rule-assets" WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import-waf-rule-assets
 
 crs-ensure: db-migrate
 	@set -euo pipefail; \
@@ -251,17 +258,13 @@ crs-ensure: db-migrate
 	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" && -f "$(ROOT_DIR)/$$config_file" ]]; then \
 		config_file="$(ROOT_DIR)/$$config_file"; \
 	fi; \
-	crs_setup="$$workdir/rules/crs/crs-setup.conf"; \
-	crs_rule="$$(find "$$workdir/rules/crs/rules" -maxdepth 1 -type f -name '*.conf' -print -quit 2>/dev/null || true)"; \
-	if [[ ! -f "$$crs_setup" || -z "$$crs_rule" ]]; then \
-		echo "[crs-ensure] OWASP CRS is missing; installing seed files"; \
-		DEST_DIR="$$workdir/rules/crs" ./scripts/install_crs.sh; \
-	else \
-		echo "[crs-ensure] OWASP CRS already installed"; \
-	fi; \
+	stage_root="$$workdir/tmp/waf-rule-assets"; \
+	rm -rf "$$stage_root"; \
+	mkdir -p "$$stage_root"; \
+	./scripts/stage_waf_rule_assets.sh "$$stage_root"; \
 	echo "[crs-ensure] importing WAF rule assets into DB"; \
 	cd "$$workdir"; \
-	WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import-waf-rule-assets
+	WAF_RULE_ASSET_FS_ROOT="tmp/waf-rule-assets" WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import-waf-rule-assets
 
 setup: env-init crs-install db-import
 

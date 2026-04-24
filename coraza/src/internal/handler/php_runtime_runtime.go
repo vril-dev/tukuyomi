@@ -199,19 +199,15 @@ func ApplyPHPRuntimeInventoryRaw(ifMatch string, raw string) (string, PHPRuntime
 	prevETag := rt.etag
 	prevState := rt.state
 	nextETag := prepared.etag
-	var dbStore *wafEventStore
-	if store := getLogsStatsStore(); store != nil {
-		dbStore = store
-		rec, err := store.writePHPRuntimeInventoryConfigVersion(ifMatch, prepared.cfg, configVersionSourceApply, "", "php runtime inventory update", 0)
-		if err != nil {
-			return "", PHPRuntimeInventoryFile{}, err
-		}
-		nextETag = rec.ETag
-	} else {
-		if err := persistPHPRuntimeInventoryRaw(rt.configPath, prepared.raw); err != nil {
-			return "", PHPRuntimeInventoryFile{}, err
-		}
+	dbStore, err := requireConfigDBStore()
+	if err != nil {
+		return "", PHPRuntimeInventoryFile{}, err
 	}
+	rec, err := dbStore.writePHPRuntimeInventoryConfigVersion(ifMatch, prepared.cfg, configVersionSourceApply, "", "php runtime inventory update", 0)
+	if err != nil {
+		return "", PHPRuntimeInventoryFile{}, err
+	}
+	nextETag = rec.ETag
 	rt.raw = prepared.raw
 	rt.etag = nextETag
 	rt.state = prepared.state
@@ -269,21 +265,17 @@ func RollbackPHPRuntimeInventory() (string, PHPRuntimeInventoryFile, proxyRollba
 	prevETag := rt.etag
 	prevState := rt.state
 	nextETag := prepared.etag
-	var dbStore *wafEventStore
-	if store := getLogsStatsStore(); store != nil {
-		dbStore = store
-		rec, err := store.writePHPRuntimeInventoryConfigVersion(rt.etag, prepared.cfg, configVersionSourceRollback, "", "php runtime inventory rollback", 0)
-		if err != nil {
-			rt.pushRollbackLocked(entry)
-			return "", PHPRuntimeInventoryFile{}, proxyRollbackEntry{}, err
-		}
-		nextETag = rec.ETag
-	} else {
-		if err := persistPHPRuntimeInventoryRaw(rt.configPath, prepared.raw); err != nil {
-			rt.pushRollbackLocked(entry)
-			return "", PHPRuntimeInventoryFile{}, proxyRollbackEntry{}, err
-		}
+	dbStore, err := requireConfigDBStore()
+	if err != nil {
+		rt.pushRollbackLocked(entry)
+		return "", PHPRuntimeInventoryFile{}, proxyRollbackEntry{}, err
 	}
+	rec, err := dbStore.writePHPRuntimeInventoryConfigVersion(rt.etag, prepared.cfg, configVersionSourceRollback, "", "php runtime inventory rollback", 0)
+	if err != nil {
+		rt.pushRollbackLocked(entry)
+		return "", PHPRuntimeInventoryFile{}, proxyRollbackEntry{}, err
+	}
+	nextETag = rec.ETag
 
 	rt.raw = prepared.raw
 	rt.etag = nextETag
@@ -797,26 +789,16 @@ func isValidRuntimePrincipalToken(value string) bool {
 	return true
 }
 
-func persistPHPRuntimeInventoryRaw(path string, raw string) error {
-	if strings.TrimSpace(path) == "" {
-		return fmt.Errorf("php runtime inventory path is empty")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
-}
-
 func rollbackPersistedPHPRuntimeInventory(path string, store *wafEventStore, expectedETag string, state phpRuntimeInventoryStateFile, raw string) error {
-	if store != nil {
-		prepared, err := preparePHPRuntimeInventoryState(state, path)
-		if err != nil {
-			return err
-		}
-		_, err = store.writePHPRuntimeInventoryConfigVersion(expectedETag, prepared.cfg, configVersionSourceRollback, "", "php runtime inventory rollback after failed apply", 0)
+	if store == nil {
+		return errConfigDBStoreRequired
+	}
+	prepared, err := preparePHPRuntimeInventoryState(state, path)
+	if err != nil {
 		return err
 	}
-	return persistPHPRuntimeInventoryRaw(path, raw)
+	_, err = store.writePHPRuntimeInventoryConfigVersion(expectedETag, prepared.cfg, configVersionSourceRollback, "", "php runtime inventory rollback after failed apply", 0)
+	return err
 }
 
 func (rt *phpRuntimeInventoryRuntime) pushRollbackLocked(entry proxyRollbackEntry) {

@@ -140,9 +140,10 @@ run_preview_command() {
 
 seed_preview_database() {
   local stage_root=""
-  stage_root="$(mktemp -d "$ROOT_DIR/data/.tmp-preview-crs-import.XXXXXX")"
+  mkdir -p "$ROOT_DIR/data/tmp"
+  stage_root="$(mktemp -d "$ROOT_DIR/data/tmp/preview-crs-import.XXXXXX")"
   trap 'rm -rf "$stage_root"' RETURN
-  DEST_DIR="$stage_root/rules/crs" "$ROOT_DIR/scripts/install_crs.sh"
+  "$ROOT_DIR/scripts/stage_waf_rule_assets.sh" "$stage_root"
   run_preview_command db-migrate
   WAF_RULE_ASSET_FS_ROOT="$stage_root" run_preview_command db-import-waf-rule-assets
   run_preview_command db-import-preview

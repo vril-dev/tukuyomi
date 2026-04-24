@@ -1,9 +1,9 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -30,6 +30,10 @@ func init() {
 func GetManagedOverrideRules(c *gin.Context) {
 	files, err := managedOverrideRuleSnapshot()
 	if err != nil {
+		if errors.Is(err, errConfigDBStoreRequired) {
+			respondConfigDBStoreRequired(c)
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -73,7 +77,11 @@ func PutManagedOverrideRule(c *gin.Context) {
 		return
 	}
 
-	store := getLogsStatsStore()
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
+	}
 	_, curETag, _, _, err := managedOverrideRuleCurrent(name)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -86,48 +94,26 @@ func PutManagedOverrideRule(c *gin.Context) {
 	now := time.Now().UTC()
 	newETag := bypassconf.ComputeETag([]byte(in.Raw))
 
-	if store != nil {
-		rules, rec, found, err := loadRuntimeManagedOverrideRules(store)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		byName := managedOverrideRuleMap(rules)
-		byName[name] = managedOverrideRuleVersion{Name: name, Raw: []byte(in.Raw), ETag: newETag}
-		next := make([]managedOverrideRuleVersion, 0, len(byName))
-		for _, rule := range byName {
-			next = append(next, rule)
-		}
-		expectedDomainETag := ""
-		if found {
-			expectedDomainETag = rec.ETag
-		}
-		if _, _, err := store.writeManagedOverrideRulesVersion(expectedDomainETag, next, configVersionSourceApply, "", "override rule update", 0); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		waf.InvalidateOverrideWAF(target)
-		c.JSON(http.StatusOK, gin.H{
-			"ok":       true,
-			"name":     name,
-			"path":     target,
-			"etag":     newETag,
-			"saved":    true,
-			"saved_at": now.Format(time.RFC3339Nano),
-		})
-		return
-	}
-
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+	rules, rec, found, err := loadRuntimeManagedOverrideRules(store)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if err := bypassconf.AtomicWriteWithBackup(target, []byte(in.Raw)); err != nil {
+	byName := managedOverrideRuleMap(rules)
+	byName[name] = managedOverrideRuleVersion{Name: name, Raw: []byte(in.Raw), ETag: newETag}
+	next := make([]managedOverrideRuleVersion, 0, len(byName))
+	for _, rule := range byName {
+		next = append(next, rule)
+	}
+	expectedDomainETag := ""
+	if found {
+		expectedDomainETag = rec.ETag
+	}
+	if _, _, err := store.writeManagedOverrideRulesVersion(expectedDomainETag, next, configVersionSourceApply, "", "override rule update", 0); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	waf.InvalidateOverrideWAF(target)
-
 	c.JSON(http.StatusOK, gin.H{
 		"ok":       true,
 		"name":     name,
@@ -154,45 +140,30 @@ func DeleteManagedOverrideRule(c *gin.Context) {
 		return
 	}
 
-	store := getLogsStatsStore()
-	var next []managedOverrideRuleVersion
-	var expectedDomainETag string
-	if store != nil {
-		rules, rec, _, err := loadRuntimeManagedOverrideRules(store)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		expectedDomainETag = rec.ETag
-		byName := managedOverrideRuleMap(rules)
-		delete(byName, name)
-		next = make([]managedOverrideRuleVersion, 0, len(byName))
-		for _, rule := range byName {
-			next = append(next, rule)
-		}
-	}
-	if store != nil {
-		if _, _, err := store.writeManagedOverrideRulesVersion(expectedDomainETag, next, configVersionSourceApply, "", "override rule delete", 0); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		_ = os.Remove(target)
-		waf.InvalidateOverrideWAF(target)
-		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
-			"name":    name,
-			"path":    target,
-			"deleted": true,
-		})
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
 		return
 	}
-
-	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+	var next []managedOverrideRuleVersion
+	var expectedDomainETag string
+	rules, rec, _, err := loadRuntimeManagedOverrideRules(store)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	expectedDomainETag = rec.ETag
+	byName := managedOverrideRuleMap(rules)
+	delete(byName, name)
+	next = make([]managedOverrideRuleVersion, 0, len(byName))
+	for _, rule := range byName {
+		next = append(next, rule)
+	}
+	if _, _, err := store.writeManagedOverrideRulesVersion(expectedDomainETag, next, configVersionSourceApply, "", "override rule delete", 0); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	waf.InvalidateOverrideWAF(target)
-
 	c.JSON(http.StatusOK, gin.H{
 		"ok":      true,
 		"name":    name,
@@ -211,30 +182,22 @@ func SyncManagedOverrideRulesStorage() error {
 }
 
 func managedOverrideRuleSnapshot() ([]gin.H, error) {
-	store := getLogsStatsStore()
-	fsNames, err := listManagedOverrideRuleNamesFromFS()
+	store, err := requireConfigDBStore()
 	if err != nil {
 		return nil, err
 	}
-	nameSet := make(map[string]struct{}, len(fsNames))
-	for _, name := range fsNames {
-		nameSet[name] = struct{}{}
+	rules, rec, found, err := loadRuntimeManagedOverrideRules(store)
+	if err != nil {
+		return nil, err
 	}
-	ruleByName := map[string]managedOverrideRuleVersion{}
-	ruleSavedAt := ""
-	if store != nil {
-		rules, rec, found, err := loadRuntimeManagedOverrideRules(store)
-		if err != nil {
-			return nil, err
-		}
-		if found {
-			ruleSavedAt = configVersionSavedAt(rec)
-			ruleByName = managedOverrideRuleMap(rules)
-			nameSet = map[string]struct{}{}
-			for name := range ruleByName {
-				nameSet[name] = struct{}{}
-			}
-		}
+	if !found {
+		return []gin.H{}, nil
+	}
+	ruleSavedAt := configVersionSavedAt(rec)
+	ruleByName := managedOverrideRuleMap(rules)
+	nameSet := make(map[string]struct{}, len(ruleByName))
+	for name := range ruleByName {
+		nameSet[name] = struct{}{}
 	}
 
 	names := make([]string, 0, len(nameSet))
@@ -246,93 +209,42 @@ func managedOverrideRuleSnapshot() ([]gin.H, error) {
 	out := make([]gin.H, 0, len(names))
 	for _, name := range names {
 		target := managedOverrideRulePath(name)
-		if rule, ok := ruleByName[name]; ok {
-			etag := strings.TrimSpace(rule.ETag)
-			if etag == "" {
-				etag = bypassconf.ComputeETag(rule.Raw)
-			}
-			out = append(out, gin.H{
-				"name":     name,
-				"path":     target,
-				"raw":      string(rule.Raw),
-				"etag":     etag,
-				"saved_at": ruleSavedAt,
-			})
-			continue
-		}
-		raw, err := os.ReadFile(target)
-		savedAt := fileSavedAt(target)
-		if err != nil {
-			out = append(out, gin.H{
-				"name":     name,
-				"path":     target,
-				"raw":      "",
-				"etag":     "",
-				"error":    err.Error(),
-				"saved_at": savedAt,
-			})
-			continue
+		rule := ruleByName[name]
+		etag := strings.TrimSpace(rule.ETag)
+		if etag == "" {
+			etag = bypassconf.ComputeETag(rule.Raw)
 		}
 		out = append(out, gin.H{
 			"name":     name,
 			"path":     target,
-			"raw":      string(raw),
-			"etag":     bypassconf.ComputeETag(raw),
-			"saved_at": savedAt,
+			"raw":      string(rule.Raw),
+			"etag":     etag,
+			"saved_at": ruleSavedAt,
 		})
 	}
 
 	return out, nil
 }
 
-func listManagedOverrideRuleNamesFromFS() ([]string, error) {
-	dir := managedOverrideRulesDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	out := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasSuffix(strings.ToLower(name), ".conf") {
-			continue
-		}
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
 func managedOverrideRuleCurrent(name string) ([]byte, string, bool, bool, error) {
-	target := managedOverrideRulePath(name)
-	store := getLogsStatsStore()
-	if store != nil {
-		rules, _, found, err := loadRuntimeManagedOverrideRules(store)
-		if err != nil {
-			return nil, "", false, false, err
-		}
-		if found {
-			if rule, ok := managedOverrideRuleMap(rules)[name]; ok {
-				etag := strings.TrimSpace(rule.ETag)
-				if etag == "" {
-					etag = bypassconf.ComputeETag(rule.Raw)
-				}
-				return rule.Raw, etag, true, true, nil
-			}
-		}
-		return nil, "", false, true, nil
-	}
-	raw, hadFile, err := readFileMaybe(target)
+	store, err := requireConfigDBStore()
 	if err != nil {
 		return nil, "", false, false, err
 	}
-	return raw, bypassconf.ComputeETag(raw), hadFile, false, nil
+	rules, _, found, err := loadRuntimeManagedOverrideRules(store)
+	if err != nil {
+		return nil, "", false, false, err
+	}
+	if found {
+		if rule, ok := managedOverrideRuleMap(rules)[name]; ok {
+			etag := strings.TrimSpace(rule.ETag)
+			if etag == "" {
+				etag = bypassconf.ComputeETag(rule.Raw)
+			}
+			return rule.Raw, etag, true, true, nil
+		}
+	}
+	return nil, "", false, true, nil
 }
 
 func managedOverrideRuleTarget(raw string) (string, string, error) {
@@ -388,7 +300,7 @@ func managedOverrideRuleInUse(target string) ([]string, bool) {
 func loadManagedOverrideRuleForWAF(rule string) (waf.OverrideRuleSource, bool, error) {
 	store := getLogsStatsStore()
 	if store == nil {
-		return waf.OverrideRuleSource{}, false, nil
+		return waf.OverrideRuleSource{}, false, errConfigDBStoreRequired
 	}
 	name, ok, err := managedOverrideRuleRefName(rule)
 	if err != nil || !ok {

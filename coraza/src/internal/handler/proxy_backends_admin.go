@@ -100,6 +100,9 @@ func PutProxyBackendRuntimeOverride(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": currentETag})
 			return
 		}
+		if respondIfConfigDBStoreRequired(c, err) {
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
@@ -147,6 +150,9 @@ func DeleteProxyBackendRuntimeOverride(c *gin.Context) {
 	if err := persistAndRefreshUpstreamRuntimeOverrides(cfg, currentRaw, currentETag, file); err != nil {
 		if errors.Is(err, errConfigVersionConflict) {
 			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": currentETag})
+			return
+		}
+		if respondIfConfigDBStoreRequired(c, err) {
 			return
 		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})

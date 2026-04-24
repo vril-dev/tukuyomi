@@ -264,7 +264,7 @@ export default function OverrideRulesPanel() {
                     <div>
                         <h1 className="text-xl font-semibold">Override Rules</h1>
                         <p className="text-sm text-neutral-500">
-                            Managed bypass `extra_rule` files live under <code className="px-1 bg-neutral-100 rounded">{overrideDir}</code>.
+                            Managed bypass `extra_rule` bodies are stored in DB. Accepted references are <code className="px-1 bg-neutral-100 rounded">name.conf</code> or <code className="px-1 bg-neutral-100 rounded">{overrideDir}/name.conf</code>.
                         </p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -281,7 +281,7 @@ export default function OverrideRulesPanel() {
                 )}
 
                 <div className="flex flex-wrap items-center gap-2">
-                    <label className="text-sm text-neutral-600">Managed file</label>
+                    <label className="text-sm text-neutral-600">{tx("Managed rule")}</label>
                     <select
                         className="border rounded px-2 py-1 text-sm min-w-[260px]"
                         value={selectedOverrideName}

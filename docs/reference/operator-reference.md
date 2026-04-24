@@ -528,14 +528,14 @@ Main endpoint groups:
   "hosts": {
     "example.com": {
       "entries": [
-        { "path": "/search", "extra_rule": "conf/rules/orders-preview.conf" }
+        { "path": "/search", "extra_rule": "orders-preview.conf" }
       ]
     }
   }
 }
 ```
 
-Managed `extra_rule` bodies are stored in DB `override_rules` and edited from the `Override Rules` page. `conf/rules/*.conf` is seed-only for importing a new DB. They are not added to the base WAF rule set at startup; they are loaded only when a bypass entry references their logical `extra_rule` path.
+Managed `extra_rule` bodies are stored in DB `override_rules` and edited from the `Override Rules` page. There is no `conf/rules` filesystem fallback. They are not added to the base WAF rule set at startup; they are loaded only when a bypass entry references their logical `extra_rule` name.
 Host scope precedence is exact `host:port`, then bare `host`, then `default`. Host-specific entries replace the default scope; they do not merge with it.
 
 ### Country Block
@@ -584,7 +584,7 @@ Key ideas:
 ### Observability
 
 - `/metrics` exposes TLS, upstream HA, rate limit, semantic, and request-security counters
-- WAF/access/audit log file rotation is controlled by `storage.file_rotate_bytes`, `storage.file_max_bytes`, `storage.file_retention_days`
+- WAF/access events are DB-backed. Security audit remains a separate file/evidence stream; file rotation settings apply to file-backed audit/legacy log streams.
 - optional OTLP tracing is configured under `observability.tracing`
 
 ### Notifications
@@ -631,7 +631,7 @@ Capabilities include:
 ### Rules / CRS Editing
 
 - `/rules` edits active DB-backed base WAF rule assets
-- `/rule-sets` toggles CRS files under `rules/crs/rules/*.conf`
+- `/rule-sets` toggles DB-backed CRS assets under logical `rules/crs/rules/*.conf` names
 - successful saves hot-reload WAF
 - failed reloads auto-rollback
 

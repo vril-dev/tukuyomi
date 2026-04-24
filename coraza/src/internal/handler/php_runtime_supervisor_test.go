@@ -62,6 +62,10 @@ func TestPHPRuntimeSupervisorStartsRestartsAndStopsRuntime(t *testing.T) {
 		RunGroup:    runGroup,
 		BinaryBody:  fakePHPRuntimeSupervisorBinaryBody(),
 	})
+	initConfigDBStoreForTest(t)
+	inventoryCfg := importPHPRuntimeInventoryDBForTest(t, initialInventory, inventoryPath)
+	importVhostRuntimeDBForTest(t, initialVhosts, inventoryCfg)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
 		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
 	}

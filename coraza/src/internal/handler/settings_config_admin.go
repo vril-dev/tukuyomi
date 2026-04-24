@@ -2,7 +2,6 @@ package handler
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -348,6 +347,9 @@ func PutSettingsListenerAdmin(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": etag})
 			return
 		}
+		if respondIfConfigDBStoreRequired(c, err) {
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
@@ -379,9 +381,9 @@ func loadSettingsAppConfigOnly() (config.AppConfigFile, error) {
 }
 
 func persistSettingsAppConfig(next config.AppConfigFile, expectedETag string) (string, error) {
-	store := getLogsStatsStore()
-	if store == nil {
-		return "", fmt.Errorf("db store is not initialized")
+	store, err := requireConfigDBStore()
+	if err != nil {
+		return "", err
 	}
 	_, bootstrap, err := loadBootstrapAppConfig()
 	if err != nil {

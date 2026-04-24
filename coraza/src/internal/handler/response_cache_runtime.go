@@ -302,47 +302,31 @@ func ApplyResponseCacheRaw(ifMatch string, raw string) (string, responseCacheCon
 		return "", responseCacheConfig{}, responseCacheConfigConflictError{CurrentETag: rt.etag}
 	}
 
-	prevCfg := rt.cfg
 	prevETag := rt.etag
 	prevStats := proxyResponseCacheStats{}
 	if rt.store != nil {
 		prevStats = rt.store.Snapshot()
 	}
 
-	nextETag := prepared.etag
-	if store := getLogsStatsStore(); store != nil {
-		candidateStore, err := newProxyResponseCacheStore(prepared.cfg)
-		if err != nil {
-			return "", responseCacheConfig{}, err
-		}
-		expectedETag := responseCacheExpectedETag(ifMatch, rt.raw, rt.etag)
-		rec, cfg, err := store.writeResponseCacheConfigVersion(expectedETag, prepared.cfg, configVersionSourceApply, "", "response cache config update", 0)
-		if err != nil {
-			if errors.Is(err, errConfigVersionConflict) {
-				return "", responseCacheConfig{}, responseCacheConfigConflictError{CurrentETag: policyConfigConflictETag(store, responseCacheConfigBlobKey)}
-			}
-			return "", responseCacheConfig{}, err
-		}
-		prepared.cfg = cfg
-		rt.store = candidateStore
-		nextETag = rec.ETag
-	} else {
-		prevRaw := rt.raw
-		if err := persistResponseCacheConfigRaw(rt.configPath, prepared.raw); err != nil {
-			return "", responseCacheConfig{}, err
-		}
-		if rt.store == nil {
-			rt.store, err = newProxyResponseCacheStore(prepared.cfg)
-			if err != nil {
-				_ = persistResponseCacheConfigRaw(rt.configPath, prevRaw)
-				return "", responseCacheConfig{}, err
-			}
-		} else if err := rt.store.Reconfigure(prepared.cfg); err != nil {
-			_ = persistResponseCacheConfigRaw(rt.configPath, prevRaw)
-			_ = rt.store.Reconfigure(prevCfg)
-			return "", responseCacheConfig{}, err
-		}
+	store, err := requireConfigDBStore()
+	if err != nil {
+		return "", responseCacheConfig{}, err
 	}
+	candidateStore, err := newProxyResponseCacheStore(prepared.cfg)
+	if err != nil {
+		return "", responseCacheConfig{}, err
+	}
+	expectedETag := responseCacheExpectedETag(ifMatch, rt.raw, rt.etag)
+	rec, cfg, err := store.writeResponseCacheConfigVersion(expectedETag, prepared.cfg, configVersionSourceApply, "", "response cache config update", 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			return "", responseCacheConfig{}, responseCacheConfigConflictError{CurrentETag: policyConfigConflictETag(store, responseCacheConfigBlobKey)}
+		}
+		return "", responseCacheConfig{}, err
+	}
+	prepared.cfg = cfg
+	rt.store = candidateStore
+	nextETag := rec.ETag
 
 	rt.raw = prepared.raw
 	rt.etag = nextETag
@@ -404,21 +388,7 @@ func SyncResponseCacheStoreStorage() error {
 		rt.cfg = prepared.cfg
 		return nil
 	}
-	return syncConfigBlobFilePath(configBlobSyncOptions{
-		ConfigKey: responseCacheConfigBlobKey,
-		Path:      path,
-		ValidateRaw: func(raw string) error {
-			_, err := ValidateResponseCacheRaw(raw)
-			return err
-		},
-		WriteRaw:         bypassconf.AtomicWriteWithBackup,
-		ComputeETag:      bypassconf.ComputeETag,
-		SkipWriteIfEqual: true,
-		Reload: func() error {
-			_, _, err := ApplyResponseCacheRaw("", string(mustReadFile(path)))
-			return err
-		},
-	})
+	return nil
 }
 
 func GetResponseCacheStore(c *gin.Context) {
@@ -471,6 +441,9 @@ func PutResponseCacheStore(c *gin.Context) {
 		var conflictErr responseCacheConfigConflictError
 		if errors.As(err, &conflictErr) {
 			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": conflictErr.CurrentETag})
+			return
+		}
+		if respondIfConfigDBStoreRequired(c, err) {
 			return
 		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
@@ -647,10 +620,6 @@ func marshalResponseCacheConfig(cfg responseCacheConfig) ([]byte, error) {
 		return nil, err
 	}
 	return append(raw, '\n'), nil
-}
-
-func persistResponseCacheConfigRaw(path, raw string) error {
-	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
 }
 
 func mustReadFile(path string) []byte {

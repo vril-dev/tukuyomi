@@ -2,11 +2,8 @@ package handler
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -217,8 +214,8 @@ func TestBotDefenseRequestSecurityPlugin_DryRunDoesNotAbort(t *testing.T) {
 func TestSemanticRequestSecurityPlugin_ChallengeLogsEnforcingStatus(t *testing.T) {
 	restoreSemantic := saveSemanticStateForTest()
 	defer restoreSemantic()
-	logPath, restoreLogFile := setRequestSecurityLogFileForTest(t)
-	defer restoreLogFile()
+	restoreLogDB := initRequestSecurityLogDBForTest(t)
+	defer restoreLogDB()
 
 	raw := `{
   "enabled": true,
@@ -257,7 +254,7 @@ func TestSemanticRequestSecurityPlugin_ChallengeLogsEnforcingStatus(t *testing.T
 		t.Fatalf("status=%d want=%d", rec.Code, http.StatusTooManyRequests)
 	}
 
-	event := readLastRequestSecurityLogEvent(t, logPath)
+	event := readLastRequestSecurityLogEvent(t)
 	if got := anyToString(event["event"]); got != "semantic_anomaly" {
 		t.Fatalf("event=%q want=semantic_anomaly", got)
 	}
@@ -302,8 +299,8 @@ func TestSemanticRequestSecurityPlugin_ChallengeLogsEnforcingStatus(t *testing.T
 func TestSemanticRequestSecurityPlugin_BlockLogsEnforcingStatus(t *testing.T) {
 	restoreSemantic := saveSemanticStateForTest()
 	defer restoreSemantic()
-	logPath, restoreLogFile := setRequestSecurityLogFileForTest(t)
-	defer restoreLogFile()
+	restoreLogDB := initRequestSecurityLogDBForTest(t)
+	defer restoreLogDB()
 
 	raw := `{
   "enabled": true,
@@ -338,7 +335,7 @@ func TestSemanticRequestSecurityPlugin_BlockLogsEnforcingStatus(t *testing.T) {
 		t.Fatalf("status=%d want=%d", rec.Code, http.StatusForbidden)
 	}
 
-	event := readLastRequestSecurityLogEvent(t, logPath)
+	event := readLastRequestSecurityLogEvent(t)
 	if got := anyToString(event["event"]); got != "semantic_anomaly" {
 		t.Fatalf("event=%q want=semantic_anomaly", got)
 	}
@@ -350,8 +347,8 @@ func TestSemanticRequestSecurityPlugin_BlockLogsEnforcingStatus(t *testing.T) {
 func TestSemanticRequestSecurityPlugin_LogOnlyOmitsStatus(t *testing.T) {
 	restoreSemantic := saveSemanticStateForTest()
 	defer restoreSemantic()
-	logPath, restoreLogFile := setRequestSecurityLogFileForTest(t)
-	defer restoreLogFile()
+	restoreLogDB := initRequestSecurityLogDBForTest(t)
+	defer restoreLogDB()
 
 	raw := `{
   "enabled": true,
@@ -383,7 +380,7 @@ func TestSemanticRequestSecurityPlugin_LogOnlyOmitsStatus(t *testing.T) {
 		t.Fatal("semantic log_only should allow request to continue")
 	}
 
-	event := readLastRequestSecurityLogEvent(t, logPath)
+	event := readLastRequestSecurityLogEvent(t)
 	if got := anyToString(event["event"]); got != "semantic_anomaly" {
 		t.Fatalf("event=%q want=semantic_anomaly", got)
 	}
@@ -395,8 +392,8 @@ func TestSemanticRequestSecurityPlugin_LogOnlyOmitsStatus(t *testing.T) {
 func TestSemanticRequestSecurityPlugin_LogsProviderContributionSeparately(t *testing.T) {
 	restoreSemantic := saveSemanticStateForTest()
 	defer restoreSemantic()
-	logPath, restoreLogFile := setRequestSecurityLogFileForTest(t)
-	defer restoreLogFile()
+	restoreLogDB := initRequestSecurityLogDBForTest(t)
+	defer restoreLogDB()
 
 	raw := `{
   "enabled": true,
@@ -433,7 +430,7 @@ func TestSemanticRequestSecurityPlugin_LogsProviderContributionSeparately(t *tes
 		t.Fatal("semantic provider-backed challenge should stop the request")
 	}
 
-	event := readLastRequestSecurityLogEvent(t, logPath)
+	event := readLastRequestSecurityLogEvent(t)
 	if got := intValue(event["provider_score"]); got <= 0 {
 		t.Fatalf("provider_score=%d want>0", got)
 	}
@@ -469,8 +466,8 @@ func TestSemanticRequestSecurityPlugin_LogsProviderContributionSeparately(t *tes
 func TestSemanticRequestSecurityPlugin_LogsStatefulContributionSeparately(t *testing.T) {
 	restoreSemantic := saveSemanticStateForTest()
 	defer restoreSemantic()
-	logPath, restoreLogFile := setRequestSecurityLogFileForTest(t)
-	defer restoreLogFile()
+	restoreLogDB := initRequestSecurityLogDBForTest(t)
+	defer restoreLogDB()
 
 	raw := `{
   "enabled": true,
@@ -519,7 +516,7 @@ func TestSemanticRequestSecurityPlugin_LogsStatefulContributionSeparately(t *tes
 		t.Fatal("stateful log_only should allow request to continue")
 	}
 
-	event := readLastRequestSecurityLogEvent(t, logPath)
+	event := readLastRequestSecurityLogEvent(t)
 	if got := anyToString(event["event"]); got != "semantic_anomaly" {
 		t.Fatalf("event=%q want=semantic_anomaly", got)
 	}
@@ -545,34 +542,31 @@ func TestSemanticRequestSecurityPlugin_LogsStatefulContributionSeparately(t *tes
 	}
 }
 
-func setRequestSecurityLogFileForTest(t *testing.T) (string, func()) {
+func initRequestSecurityLogDBForTest(t *testing.T) func() {
 	t.Helper()
 
 	oldLogFile := config.LogFile
-	logPath := filepath.Join(t.TempDir(), "waf-events.ndjson")
-	config.LogFile = logPath
+	config.LogFile = ""
+	initConfigDBStoreForTest(t)
 
-	return logPath, func() {
+	return func() {
 		config.LogFile = oldLogFile
 	}
 }
 
-func readLastRequestSecurityLogEvent(t *testing.T, path string) map[string]any {
+func readLastRequestSecurityLogEvent(t *testing.T) map[string]any {
 	t.Helper()
 
-	raw, err := os.ReadFile(path)
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected sqlite store")
+	}
+	events, _, _, _, err := store.ReadWAFLogs("", 1000, nil, "", "")
 	if err != nil {
-		t.Fatalf("read log file: %v", err)
+		t.Fatalf("read db log events: %v", err)
 	}
-	lines := bytesSplitKeep(raw, '\n')
-	if len(lines) == 0 {
-		t.Fatal("expected at least one log line")
+	if len(events) == 0 {
+		t.Fatal("expected at least one db log event")
 	}
-
-	var event map[string]any
-	last := trimLastNewline(lines[len(lines)-1])
-	if err := json.Unmarshal(last, &event); err != nil {
-		t.Fatalf("decode log event: %v", err)
-	}
-	return event
+	return map[string]any(events[len(events)-1])
 }

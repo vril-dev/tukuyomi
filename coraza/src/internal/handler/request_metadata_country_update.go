@@ -3,7 +3,6 @@ package handler
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,13 +14,9 @@ import (
 	"time"
 
 	"github.com/oschwald/maxminddb-golang"
-
-	"tukuyomi/internal/bypassconf"
 )
 
 const (
-	managedCountryGeoIPConfigPath      = "data/geoip/GeoIP.conf"
-	managedCountryUpdateStatusPath     = "data/geoip/update-status.json"
 	maxRequestCountryConfigUploadBytes = 512 << 10
 	maxRequestCountryUpdateOutputBytes = 16 << 10
 )
@@ -66,18 +61,15 @@ type requestCountryUpdateStatusResponse struct {
 }
 
 func managedRequestCountryGeoIPConfigPath() string {
-	return managedCountryGeoIPConfigPath
+	return requestCountryGeoIPConfigStorageLabel
 }
 
 func managedRequestCountryUpdateStatusPath() string {
-	return managedCountryUpdateStatusPath
+	return requestCountryUpdateStateStorageLabel
 }
 
 func currentRequestCountryGeoIPConfigStorageLabel() string {
-	if getLogsStatsStore() != nil {
-		return requestCountryGeoIPConfigStorageLabel
-	}
-	return managedRequestCountryGeoIPConfigPath()
+	return requestCountryGeoIPConfigStorageLabel
 }
 
 func parseRequestCountryGeoIPConfig(raw []byte) (requestCountryGeoIPConfigSummary, error) {
@@ -191,76 +183,46 @@ func buildRequestCountryUpdateStatus() requestCountryUpdateStatusResponse {
 		out.LastError = err.Error()
 	}
 
-	if store := getLogsStatsStore(); store != nil {
-		cfg, rec, found, err := store.loadActiveRequestCountryGeoIPConfig()
-		if err != nil {
-			if out.LastError == "" {
-				out.LastError = err.Error()
-			}
-			return out
+	store := getLogsStatsStore()
+	if store == nil {
+		if out.LastError == "" {
+			out.LastError = errConfigDBStoreRequired.Error()
 		}
-		if !found || !cfg.Present {
-			return out
-		}
-		out.ConfigInstalled = true
-		out.ConfigSizeBytes = cfg.SizeBytes
-		if !rec.ActivatedAt.IsZero() {
-			out.ConfigModTime = rec.ActivatedAt.UTC().Format(time.RFC3339Nano)
-		}
-		out.EditionIDs = append([]string(nil), cfg.Summary.EditionIDs...)
-		out.SupportedCountryEdition = cfg.Summary.SupportedCountryEdition
 		return out
 	}
-
-	info, err := os.Stat(managedRequestCountryGeoIPConfigPath())
-	if err == nil && !info.IsDir() {
-		out.ConfigInstalled = true
-		out.ConfigSizeBytes = info.Size()
-		out.ConfigModTime = info.ModTime().UTC().Format(time.RFC3339Nano)
-		raw, readErr := os.ReadFile(managedRequestCountryGeoIPConfigPath())
-		if readErr != nil {
-			if out.LastError == "" {
-				out.LastError = readErr.Error()
-			}
-			return out
+	cfg, rec, found, err := store.loadActiveRequestCountryGeoIPConfig()
+	if err != nil {
+		if out.LastError == "" {
+			out.LastError = err.Error()
 		}
-		summary, parseErr := parseRequestCountryGeoIPConfig(raw)
-		if parseErr != nil {
-			if out.LastError == "" {
-				out.LastError = parseErr.Error()
-			}
-			return out
-		}
-		out.EditionIDs = summary.EditionIDs
-		out.SupportedCountryEdition = summary.SupportedCountryEdition
 		return out
 	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) && out.LastError == "" {
-		out.LastError = err.Error()
+	if !found || !cfg.Present {
+		return out
 	}
+	out.ConfigInstalled = true
+	out.ConfigSizeBytes = cfg.SizeBytes
+	if !rec.ActivatedAt.IsZero() {
+		out.ConfigModTime = rec.ActivatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	out.EditionIDs = append([]string(nil), cfg.Summary.EditionIDs...)
+	out.SupportedCountryEdition = cfg.Summary.SupportedCountryEdition
 	return out
 }
 
 func readManagedRequestCountryGeoIPConfig() ([]byte, requestCountryGeoIPConfigSummary, error) {
-	if store := getLogsStatsStore(); store != nil {
-		cfg, _, found, err := store.loadActiveRequestCountryGeoIPConfig()
-		if err != nil {
-			return nil, requestCountryGeoIPConfigSummary{}, fmt.Errorf("read managed GeoIP.conf (%s): %w", requestCountryGeoIPConfigStorageLabel, err)
-		}
-		if !found || !cfg.Present {
-			return nil, requestCountryGeoIPConfigSummary{}, fmt.Errorf("read managed GeoIP.conf (%s): not found", requestCountryGeoIPConfigStorageLabel)
-		}
-		return append([]byte(nil), cfg.Raw...), cfg.Summary, nil
-	}
-	raw, err := os.ReadFile(managedRequestCountryGeoIPConfigPath())
+	store, err := requireConfigDBStore()
 	if err != nil {
-		return nil, requestCountryGeoIPConfigSummary{}, fmt.Errorf("read managed GeoIP.conf: %w", err)
+		return nil, requestCountryGeoIPConfigSummary{}, err
 	}
-	summary, err := parseRequestCountryGeoIPConfig(raw)
+	cfg, _, found, err := store.loadActiveRequestCountryGeoIPConfig()
 	if err != nil {
-		return nil, summary, err
+		return nil, requestCountryGeoIPConfigSummary{}, fmt.Errorf("read managed GeoIP.conf (%s): %w", requestCountryGeoIPConfigStorageLabel, err)
 	}
-	return raw, summary, nil
+	if !found || !cfg.Present {
+		return nil, requestCountryGeoIPConfigSummary{}, fmt.Errorf("read managed GeoIP.conf (%s): not found", requestCountryGeoIPConfigStorageLabel)
+	}
+	return append([]byte(nil), cfg.Raw...), cfg.Summary, nil
 }
 
 func writeManagedRequestCountryGeoIPConfig(src io.Reader) error {
@@ -282,60 +244,41 @@ func writeManagedRequestCountryGeoIPConfigRaw(raw []byte, source string, reason 
 	if err != nil {
 		return err
 	}
-	if store := getLogsStatsStore(); store != nil {
-		_, _, err := store.writeRequestCountryGeoIPConfigVersion("", requestCountryGeoIPConfigVersion{
-			Present: true,
-			Raw:     raw,
-			Summary: summary,
-		}, source, "", reason, 0)
-		return err
-	}
-	target := managedRequestCountryGeoIPConfigPath()
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
-	}
-	return bypassconf.AtomicWriteWithBackup(target, raw)
-}
-
-func removeManagedRequestCountryGeoIPConfig() error {
-	if store := getLogsStatsStore(); store != nil {
-		_, _, err := store.writeRequestCountryGeoIPConfigVersion("", requestCountryGeoIPConfigVersion{Present: false}, configVersionSourceApply, "", "request country GeoIP config removal", 0)
-		return err
-	}
-	if err := os.Remove(managedRequestCountryGeoIPConfigPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
-}
-
-func readRequestCountryUpdateState() (requestCountryUpdateState, bool, error) {
-	if store := getLogsStatsStore(); store != nil {
-		return store.loadRequestCountryUpdateState()
-	}
-	raw, found, err := readFileMaybe(managedRequestCountryUpdateStatusPath())
-	if err != nil || !found {
-		return requestCountryUpdateState{}, found, err
-	}
-	var state requestCountryUpdateState
-	if err := json.Unmarshal(raw, &state); err != nil {
-		return requestCountryUpdateState{}, false, err
-	}
-	return normalizeRequestCountryUpdateState(state), true, nil
-}
-
-func persistRequestCountryUpdateState(state requestCountryUpdateState) error {
-	if store := getLogsStatsStore(); store != nil {
-		return store.upsertRequestCountryUpdateState(state, time.Now().UTC())
-	}
-	payload, err := json.MarshalIndent(normalizeRequestCountryUpdateState(state), "", "  ")
+	store, err := requireConfigDBStore()
 	if err != nil {
 		return err
 	}
-	path := managedRequestCountryUpdateStatusPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	_, _, err = store.writeRequestCountryGeoIPConfigVersion("", requestCountryGeoIPConfigVersion{
+		Present: true,
+		Raw:     raw,
+		Summary: summary,
+	}, source, "", reason, 0)
+	return err
+}
+
+func removeManagedRequestCountryGeoIPConfig() error {
+	store, err := requireConfigDBStore()
+	if err != nil {
 		return err
 	}
-	return bypassconf.AtomicWriteWithBackup(path, append(payload, '\n'))
+	_, _, err = store.writeRequestCountryGeoIPConfigVersion("", requestCountryGeoIPConfigVersion{Present: false}, configVersionSourceApply, "", "request country GeoIP config removal", 0)
+	return err
+}
+
+func readRequestCountryUpdateState() (requestCountryUpdateState, bool, error) {
+	store, err := requireConfigDBStore()
+	if err != nil {
+		return requestCountryUpdateState{}, false, err
+	}
+	return store.loadRequestCountryUpdateState()
+}
+
+func persistRequestCountryUpdateState(state requestCountryUpdateState) error {
+	store, err := requireConfigDBStore()
+	if err != nil {
+		return err
+	}
+	return store.upsertRequestCountryUpdateState(state, time.Now().UTC())
 }
 
 func resolveGeoIPUpdateBinary() (string, error) {
@@ -410,7 +353,7 @@ func defaultRunRequestCountryDBUpdateNow(ctx context.Context) error {
 		state.LastError = "GeoIP.conf does not include a supported country edition"
 		return errors.New(state.LastError)
 	}
-	tmpDir, err := os.MkdirTemp("", "tukuyomi-country-db-update-*")
+	tmpDir, err := makeRuntimeTempDir("country-db-update-*")
 	if err != nil {
 		state.LastError = err.Error()
 		return err

@@ -20,6 +20,6 @@ before the stack starts.
 
 ## Notes
 
-- `data/conf/config.json` uses `paths.crs_setup_file=rules/crs-setup-high-paranoia.conf`.
+- `./setup.sh` installs the high-paranoia CRS setup as the DB-imported CRS setup asset.
 - `tx.blocking_paranoia_level` and `tx.detection_paranoia_level` are set to `2`.
 - Login endpoint `/wp-login.php` has stricter rate limits.

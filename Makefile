@@ -50,11 +50,24 @@ RELEASE_DOCKERFILE ?= build/Dockerfile.release
 PRESET ?= minimal
 PRESET_DIR := presets/$(PRESET)
 PRESET_OVERWRITE ?= 0
+TARGET ?=
+INSTALL_TARGET ?= linux-systemd
+INSTALL_PREFIX ?= $(if $(PREFIX),$(PREFIX),/opt/tukuyomi)
+INSTALL_USER ?= tukuyomi
+INSTALL_GROUP ?= $(INSTALL_USER)
+INSTALL_ENABLE_SYSTEMD ?= 1
+INSTALL_ENABLE_SCHEDULED_TASKS ?= 0
+INSTALL_DB_SEED ?= auto
+DEPLOY_TARGET ?=
+DEPLOY_RENDER_OUT_DIR ?= dist/deploy
+DEPLOY_RENDER_OVERWRITE ?= 0
+IMAGE_URI ?=
 
 export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_API_KEY_PRIMARY PROTECTED_HOST
 
 .PHONY: \
 	help setup env-init crs-install crs-ensure \
+	install deploy-render install-smoke deploy-render-smoke \
 	go-test go-fuzz-short go-build db-migrate db-import db-import-waf-rule-assets build \
 	release-linux-amd64 release-linux-arm64 release-linux-all \
 	ui-install ui-test ui-build ui-sync ui-build-sync \
@@ -72,6 +85,10 @@ help:
 	@echo "  make env-init                   Create .env from .env.example if missing"
 	@echo "  make crs-install                Run db-migrate, install OWASP CRS seed files, and import WAF rule assets into DB"
 	@echo "  make crs-ensure                 Run db-migrate, install CRS only when missing, and import WAF rule assets into DB"
+	@echo "  make install TARGET=linux-systemd Install binary runtime onto this Linux host"
+	@echo "    - optional: PREFIX=/opt/tukuyomi INSTALL_ENABLE_SCHEDULED_TASKS=1 INSTALL_DB_SEED=auto|always|never"
+	@echo "  make deploy-render TARGET=ecs|kubernetes|azure-container-apps|container-image IMAGE_URI=... Render deploy artifacts"
+	@echo "    - optional: DEPLOY_RENDER_OUT_DIR=dist/deploy DEPLOY_RENDER_OVERWRITE=1"
 	@echo ""
 	@echo "  make go-test                    Run Go tests (coraza/src)"
 	@echo "  make go-fuzz-short              Run short native HTTP/1 fuzz passes"
@@ -236,6 +253,54 @@ preset-check:
 preset-check-minimal:
 	@$(MAKE) --no-print-directory preset-check PRESET=minimal
 
+install:
+	@TARGET="$(or $(TARGET),$(INSTALL_TARGET))" \
+	PREFIX="$(INSTALL_PREFIX)" \
+	INSTALL_USER="$(INSTALL_USER)" \
+	INSTALL_GROUP="$(INSTALL_GROUP)" \
+	INSTALL_ENABLE_SYSTEMD="$(INSTALL_ENABLE_SYSTEMD)" \
+	INSTALL_ENABLE_SCHEDULED_TASKS="$(INSTALL_ENABLE_SCHEDULED_TASKS)" \
+	INSTALL_DB_SEED="$(INSTALL_DB_SEED)" \
+	./scripts/install_tukuyomi.sh
+
+deploy-render:
+	@TARGET="$(or $(TARGET),$(DEPLOY_TARGET))" \
+	IMAGE_URI="$(IMAGE_URI)" \
+	DEPLOY_RENDER_OUT_DIR="$(DEPLOY_RENDER_OUT_DIR)" \
+	DEPLOY_RENDER_OVERWRITE="$(DEPLOY_RENDER_OVERWRITE)" \
+	./scripts/render_deploy_artifacts.sh
+
+install-smoke: build
+	@set -euo pipefail; \
+	tmp="$$(mktemp -d "$(ROOT_DIR)/.tmp-install-smoke.XXXXXX")"; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	TARGET=linux-systemd \
+	DESTDIR="$$tmp" \
+	PREFIX=/opt/tukuyomi \
+	INSTALL_SKIP_BUILD=1 \
+	INSTALL_ENABLE_SYSTEMD=0 \
+	INSTALL_DB_SEED=always \
+	./scripts/install_tukuyomi.sh; \
+	test -x "$$tmp/opt/tukuyomi/bin/tukuyomi"; \
+	test -f "$$tmp/opt/tukuyomi/conf/config.json"; \
+	test -d "$$tmp/opt/tukuyomi/data/persistent"; \
+	test -f "$$tmp/opt/tukuyomi/db/tukuyomi.db"; \
+	echo "[install-smoke] ok"
+
+deploy-render-smoke:
+	@set -euo pipefail; \
+	tmp="$$(mktemp -d "$(ROOT_DIR)/.tmp-deploy-render-smoke.XXXXXX")"; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	for target in ecs kubernetes azure-container-apps container-image; do \
+		TARGET="$$target" IMAGE_URI="registry.example.test/tukuyomi:smoke" DEPLOY_RENDER_OUT_DIR="$$(basename "$$tmp")" DEPLOY_RENDER_OVERWRITE=1 ./scripts/render_deploy_artifacts.sh; \
+	done; \
+	jq empty "$$tmp/ecs/task-definition.json"; \
+	jq empty "$$tmp/ecs/service.json"; \
+	test -f "$$tmp/kubernetes/single-instance.yaml"; \
+	test -f "$$tmp/azure-container-apps/single-instance.yaml"; \
+	test -x "$$tmp/container-image/build.sh"; \
+	echo "[deploy-render-smoke] ok"
+
 crs-install: db-migrate
 	@set -euo pipefail; \
 	workdir="$(DB_MIGRATE_WORKDIR)"; \
@@ -246,6 +311,7 @@ crs-install: db-migrate
 	stage_root="$$workdir/tmp/waf-rule-assets"; \
 	rm -rf "$$stage_root"; \
 	mkdir -p "$$stage_root"; \
+	trap 'rm -rf "$$stage_root"' EXIT; \
 	./scripts/stage_waf_rule_assets.sh "$$stage_root"; \
 	echo "[crs-install] importing WAF rule assets into DB"; \
 	cd "$$workdir"; \
@@ -261,6 +327,7 @@ crs-ensure: db-migrate
 	stage_root="$$workdir/tmp/waf-rule-assets"; \
 	rm -rf "$$stage_root"; \
 	mkdir -p "$$stage_root"; \
+	trap 'rm -rf "$$stage_root"' EXIT; \
 	./scripts/stage_waf_rule_assets.sh "$$stage_root"; \
 	echo "[crs-ensure] importing WAF rule assets into DB"; \
 	cd "$$workdir"; \

@@ -32,6 +32,46 @@ For reproducible release artifacts, use:
 make release-linux-all VERSION=v0.8.0
 ```
 
+## One-Shot Install
+
+For a direct Linux host install, this builds the binary, creates the runtime
+tree, runs DB migration, imports WAF/CRS assets, seeds a first DB, and installs
+systemd units:
+
+```bash
+make install TARGET=linux-systemd
+```
+
+Common overrides:
+
+```bash
+make install TARGET=linux-systemd \
+  PREFIX=/opt/tukuyomi \
+  INSTALL_ENABLE_SCHEDULED_TASKS=1 \
+  INSTALL_DB_SEED=auto
+```
+
+Behavior:
+
+- `PREFIX` defaults to `/opt/tukuyomi`
+- existing `config.json` and `/etc/tukuyomi/tukuyomi.env` are preserved by default
+- host install uses `sudo` only for privileged filesystem/systemd operations, so
+  the build can run as the invoking user
+- newly created `/etc/tukuyomi/tukuyomi.env` and systemd units are rendered for
+  the selected `PREFIX`
+- `conf/config.json` is root-owned `0640` with read access granted only through
+  the service group
+- `/etc/tukuyomi/tukuyomi.env` stays root-owned `0640` because it is expected to
+  carry secrets
+- `INSTALL_DB_SEED=auto` runs `db-import` only when the SQLite DB is not present yet
+- rerunning against an existing DB migrates schema and refreshes WAF/CRS assets
+- for an empty MySQL / PostgreSQL DB, set `INSTALL_DB_SEED=always` explicitly
+- the scheduled-task timer is enabled only with `INSTALL_ENABLE_SCHEDULED_TASKS=1`
+- staging / smoke flows can use `DESTDIR=<tmp> INSTALL_ENABLE_SYSTEMD=0`
+
+For ECS / Kubernetes / Azure Container Apps, render deployment artifacts rather
+than mutating the host. See [container-deployment.md](container-deployment.md).
+
 ## Runtime Layout
 
 The binary expects a working directory that contains:
@@ -106,9 +146,9 @@ sudo install -d -m 755 \
 sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
 
-sudo install -m 644 data/conf/config.json /opt/tukuyomi/conf/config.json
+sudo install -o root -g tukuyomi -m 640 data/conf/config.json /opt/tukuyomi/conf/config.json
 
-sudo touch /opt/tukuyomi/conf/crs-disabled.conf
+sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disabled.conf
 ```
 
 Notes:
@@ -119,13 +159,13 @@ Notes:
 - `conf/sites.json` is optional seed/import/export material for DB `sites`
 - the public release bundle ships `conf/config.json`; other seed/import material is operator-supplied when needed
 - when `conf/proxy.json` / `conf/sites.json` are absent, `make db-import` seeds the built-in minimal defaults into DB
-- the default base WAF rule seed is compiled into the binary
-- CRS files are temporary import material for DB `waf_rule_assets`; `make crs-install` stages them and cleans up
+- `make crs-install` stages the default base WAF rule seed from `seeds/waf/rules/tukuyomi.conf` and imports it into DB
+- CRS files are temporary import material for DB `waf_rule_assets`; `make crs-install` stages them under `data/tmp` and cleans up
 - `sites.json`, `scheduled-tasks.json`, `upstream-runtime.json`, policy JSON,
   cache-rules JSON, WAF bypass JSON, and PHP-FPM JSON manifests are DB
   seed/export artifacts after DB bootstrap
 - render or mount `config.json` from your secret manager or config-management layer in production for `storage.db_driver`, `storage.db_path`, and `storage.db_dsn`
-- run `make db-migrate`, then `make crs-install` to install/import WAF rule assets, then `make db-import` for the remaining seed material before first start
+- run `make db-migrate`, then `make crs-install` to install/import WAF rule assets, then `make db-import` for the remaining seed material before first start. `db-import` does not re-import WAF rule assets
 - the embedded `Settings` page edits DB `app_config`; restart the service after listener/runtime/storage policy/observability changes
 - the public release bundle ships a companion `bin/geoipupdate` binary for `Options -> GeoIP Update -> Update now`
 - `GEOIPUPDATE_BIN` remains available if you want to override the bundled updater path

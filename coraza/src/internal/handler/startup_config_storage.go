@@ -25,9 +25,6 @@ func SyncAppConfigStorage() error {
 }
 
 func ImportStartupConfigStorage() error {
-	if err := ImportWAFRuleAssetsStorage(); err != nil {
-		return err
-	}
 	if err := importProxyRulesStorage(); err != nil {
 		return err
 	}

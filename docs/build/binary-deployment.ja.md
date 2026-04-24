@@ -32,6 +32,42 @@ make go-build
 make release-linux-all VERSION=v0.8.0
 ```
 
+## One-shot install
+
+Linux host へ直接入れる場合は、次で build、runtime tree 作成、DB migrate、
+WAF/CRS asset import、初回 DB seed、systemd unit 配置まで実行できます。
+
+```bash
+make install TARGET=linux-systemd
+```
+
+主な override:
+
+```bash
+make install TARGET=linux-systemd \
+  PREFIX=/opt/tukuyomi \
+  INSTALL_ENABLE_SCHEDULED_TASKS=1 \
+  INSTALL_DB_SEED=auto
+```
+
+挙動:
+
+- `PREFIX` 既定は `/opt/tukuyomi`
+- `config.json` と `/etc/tukuyomi/tukuyomi.env` は既存 file を既定で上書きしません
+- host install の権限が必要な操作だけ `sudo` を使います。build は通常 user のまま実行できます
+- 初回作成する `/etc/tukuyomi/tukuyomi.env` と systemd unit は `PREFIX` に合わせて render されます
+- `conf/config.json` は root-owned `0640` とし、service group に読み取りだけ渡します
+- `/etc/tukuyomi/tukuyomi.env` は secret を含める前提で root-owned `0640` のまま保持します
+- `INSTALL_DB_SEED=auto` は SQLite DB がまだ無い初回だけ `db-import` を実行します
+- 既存 DB がある再実行時は DB migrate と WAF/CRS asset refresh を行います
+- MySQL / PostgreSQL の空 DB を初期投入する場合は `INSTALL_DB_SEED=always` を明示してください
+- scheduled task timer は `INSTALL_ENABLE_SCHEDULED_TASKS=1` の時だけ有効化します
+- smoke / package staging 用に `DESTDIR=<tmp> INSTALL_ENABLE_SYSTEMD=0` が使えます
+
+ECS / Kubernetes / Azure Container Apps 向けは host install ではなく
+`make deploy-render` を使います。詳しくは
+[container-deployment.ja.md](container-deployment.ja.md) を参照してください。
+
 ## 実行レイアウト
 
 バイナリは、作業ディレクトリ配下に次を前提とします。
@@ -105,9 +141,9 @@ sudo install -d -m 755 \
 sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
 
-sudo install -m 644 data/conf/config.json /opt/tukuyomi/conf/config.json
+sudo install -o root -g tukuyomi -m 640 data/conf/config.json /opt/tukuyomi/conf/config.json
 
-sudo touch /opt/tukuyomi/conf/crs-disabled.conf
+sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disabled.conf
 ```
 
 注意:
@@ -118,13 +154,13 @@ sudo touch /opt/tukuyomi/conf/crs-disabled.conf
 - `conf/sites.json` は DB `sites` の任意 seed/import/export material です
 - public release bundle が同梱するのは `conf/config.json` だけで、他の seed/import material は必要時に operator が用意します
 - `conf/proxy.json` / `conf/sites.json` が無い場合、`make db-import` が built-in の minimal 初期値を DB へ投入します
-- 既定の base WAF rule seed は binary に compile されています
-- CRS file は DB `waf_rule_assets` 向けの一時 import material であり、`make crs-install` が staging と cleanup を行います
+- 既定の base WAF rule seed は `make crs-install` が `seeds/waf/rules/tukuyomi.conf` から一時 stage して DB へ import します
+- CRS file は DB `waf_rule_assets` 向けの一時 import material であり、`make crs-install` が `data/tmp` で staging と cleanup を行います
 - `sites.json`、`scheduled-tasks.json`、`upstream-runtime.json`、policy JSON、
   cache-rules JSON、WAF bypass JSON、PHP-FPM JSON manifest は DB bootstrap
   後は DB seed/export artifact です
 - 本番では `storage.db_driver`、`storage.db_path`、`storage.db_dsn` 用に `config.json` を secret manager / config management から render / mount してください
-- 初回起動前に `make db-migrate`、`make crs-install` の順で WAF rule asset を install/import し、その後残りの seed material 用に `make db-import` を実行します
+- 初回起動前に `make db-migrate`、`make crs-install` の順で WAF rule asset を install/import し、その後残りの seed material 用に `make db-import` を実行します。`db-import` は WAF rule asset を再 import しません
 - embedded `Settings` 画面は DB `app_config` を編集します。listener/runtime/storage policy/observability 系の変更後は service を restart してください
 - public release bundle には `Options -> GeoIP Update -> Update now` 用の companion `bin/geoipupdate` が同梱されます
 - `GEOIPUPDATE_BIN` を使えば bundled updater path を override できます

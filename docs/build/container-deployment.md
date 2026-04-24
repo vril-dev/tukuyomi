@@ -163,6 +163,26 @@ docker build -f docs/build/Dockerfile.example -t tukuyomi:deploy .
 
 This path builds the Admin UI in-image, builds the Go binary, copies runtime config, and installs CRS during the image build.
 
+## Deployment Artifact Render
+
+For cloud/container platforms, render manifests for review instead of using the
+host-mutating `make install` path:
+
+```bash
+make deploy-render TARGET=container-image IMAGE_URI=registry.example.com/tukuyomi:1.1.0
+make deploy-render TARGET=ecs IMAGE_URI=registry.example.com/tukuyomi:1.1.0
+make deploy-render TARGET=kubernetes IMAGE_URI=registry.example.com/tukuyomi:1.1.0
+make deploy-render TARGET=azure-container-apps IMAGE_URI=registry.example.com/tukuyomi:1.1.0
+```
+
+Output goes to `dist/deploy/<target>/` by default.
+
+- `container-image` writes the deployment Dockerfile plus a local build helper; it does not push to a registry
+- `ecs` writes single-instance task/service artifacts plus replicated scheduler artifacts; it does not call AWS APIs
+- `kubernetes` writes single-instance and dedicated scheduler YAML; it does not run `kubectl apply`
+- `azure-container-apps` writes single-instance and scheduler singleton YAML; it does not call Azure APIs
+- set `DEPLOY_RENDER_OVERWRITE=1` to replace an existing output directory
+
 ## Shared Writable Paths
 
 Minimum writable paths for the official mutable single-instance path:
@@ -194,7 +214,7 @@ Typical production pattern:
 
 - render `conf/config.json` from your secret manager or config-management layer for `storage.db_driver`, `storage.db_path`, and `storage.db_dsn`
 - mount or bake `conf/proxy.json` and policy files as seed/import/export material
-- run `make db-migrate`, then `make crs-install` to install/import WAF rule assets, then `make db-import` for the remaining seed material before first start
+- run `make db-migrate`, then `make crs-install` to install/import WAF rule assets, then `make db-import` for the remaining seed material before first start. `db-import` does not re-import WAF rule assets
 - treat `conf/sites.json`, `conf/scheduled-tasks.json`, and `conf/upstream-runtime.json` as empty-DB seed/export files; normalized DB rows are authoritative after bootstrap
 - use runtime env injection only for:
   - `WAF_CONFIG_FILE`

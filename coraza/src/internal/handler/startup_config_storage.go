@@ -260,7 +260,7 @@ func importPHPRuntimeInventoryStorage() error {
 	if store == nil {
 		return fmt.Errorf("db store is not initialized")
 	}
-	if _, err := store.writePHPRuntimeInventoryConfigVersion("", prepared.cfg, configVersionSourceImport, "", "php runtime inventory seed import", 0); err != nil {
+	if _, err := store.writePHPRuntimeInventoryPreparedConfigVersion("", prepared, configVersionSourceImport, "", "php runtime inventory seed import", 0); err != nil {
 		return fmt.Errorf("import normalized php runtime inventory config: %w", err)
 	}
 	return nil

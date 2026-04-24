@@ -620,6 +620,19 @@ func TestPHPRuntimeInventoryDBLoadsWithoutInventoryOrManifestJSON(t *testing.T) 
 		Version:     "PHP 8.3.21 (fpm-fcgi)",
 		Modules:     []string{"mbstring", "fileinfo", "redis"},
 	})
+	explicitInventory := mustJSON(PHPRuntimeInventoryFile{Runtimes: []PHPRuntimeRecord{{
+		RuntimeID:              "php83",
+		DisplayName:            "PHP 8.3",
+		DetectedVersion:        "PHP 8.3.21 (fpm-fcgi)",
+		BinaryPath:             filepath.ToSlash(binaryPath),
+		CLIBinaryPath:          filepath.ToSlash(filepath.Join(filepath.Dir(binaryPath), "php")),
+		Modules:                []string{"mbstring", "fileinfo", "redis"},
+		DefaultDisabledModules: []string{},
+		Source:                 "bundled",
+	}}})
+	if err := os.WriteFile(inventoryPath, []byte(explicitInventory), 0o600); err != nil {
+		t.Fatalf("write explicit inventory: %v", err)
+	}
 
 	dbPath := filepath.Join(tmp, "store.db")
 	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
@@ -671,6 +684,162 @@ func TestPHPRuntimeInventoryDBLoadsWithoutInventoryOrManifestJSON(t *testing.T) 
 	}
 	if _, err := os.Stat(inventoryPath); !os.IsNotExist(err) {
 		t.Fatalf("inventory json should not be recreated, stat err=%v", err)
+	}
+}
+
+func TestPHPRuntimeInventoryDBAutoDiscoveryReflectsBuiltArtifactsAfterStartup(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	tmp := t.TempDir()
+	inventoryPath := filepath.Join(tmp, "data", "php-fpm", "inventory.json")
+	if err := os.MkdirAll(filepath.Dir(inventoryPath), 0o755); err != nil {
+		t.Fatalf("mkdir inventory dir: %v", err)
+	}
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	oldInventoryPath := config.PHPRuntimeInventoryFile
+	config.PHPRuntimeInventoryFile = inventoryPath
+	t.Cleanup(func() {
+		config.PHPRuntimeInventoryFile = oldInventoryPath
+	})
+	if err := importPHPRuntimeInventoryStorage(); err != nil {
+		t.Fatalf("import php runtime inventory: %v", err)
+	}
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+
+	_, _, cfg, _ := PHPRuntimeInventorySnapshot()
+	if len(cfg.Runtimes) != 0 {
+		t.Fatalf("runtime count before build=%d want=0", len(cfg.Runtimes))
+	}
+
+	writeTestPHPRuntimeArtifact(t, inventoryPath, "php85", testPHPRuntimeArtifactOptions{
+		DisplayName: "PHP 8.5",
+		Version:     "PHP 8.5.0-dev (fpm-fcgi)",
+		Modules:     []string{"mbstring", "fileinfo", "redis"},
+	})
+
+	_, _, cfg, _ = PHPRuntimeInventorySnapshot()
+	if len(cfg.Runtimes) != 1 {
+		t.Fatalf("runtime count after build=%d want=1", len(cfg.Runtimes))
+	}
+	if got := cfg.Runtimes[0].RuntimeID; got != "php85" {
+		t.Fatalf("runtime_id=%q want php85", got)
+	}
+	if !cfg.Runtimes[0].Available {
+		t.Fatalf("runtime available=%v want=true (%s)", cfg.Runtimes[0].Available, cfg.Runtimes[0].AvailabilityMessage)
+	}
+}
+
+func TestPHPRuntimeInventoryDBExplicitEmptyDoesNotAutoDiscover(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	tmp := t.TempDir()
+	inventoryPath := filepath.Join(tmp, "data", "php-fpm", "inventory.json")
+	if err := os.MkdirAll(filepath.Dir(inventoryPath), 0o755); err != nil {
+		t.Fatalf("mkdir inventory dir: %v", err)
+	}
+	if err := os.WriteFile(inventoryPath, []byte(`{"runtimes":[]}`), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	oldInventoryPath := config.PHPRuntimeInventoryFile
+	config.PHPRuntimeInventoryFile = inventoryPath
+	t.Cleanup(func() {
+		config.PHPRuntimeInventoryFile = oldInventoryPath
+	})
+	if err := importPHPRuntimeInventoryStorage(); err != nil {
+		t.Fatalf("import php runtime inventory: %v", err)
+	}
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+
+	writeTestPHPRuntimeArtifact(t, inventoryPath, "php85", testPHPRuntimeArtifactOptions{
+		DisplayName: "PHP 8.5",
+		Version:     "PHP 8.5.0-dev (fpm-fcgi)",
+		Modules:     []string{"mbstring", "fileinfo", "redis"},
+	})
+
+	_, _, cfg, _ := PHPRuntimeInventorySnapshot()
+	if len(cfg.Runtimes) != 0 {
+		t.Fatalf("runtime count=%d want=0 for explicit empty inventory", len(cfg.Runtimes))
+	}
+}
+
+func TestPHPRuntimeInventoryDBLegacyImportWithoutStateAutoDiscovers(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	tmp := t.TempDir()
+	inventoryPath := filepath.Join(tmp, "data", "php-fpm", "inventory.json")
+	if err := os.MkdirAll(filepath.Dir(inventoryPath), 0o755); err != nil {
+		t.Fatalf("mkdir inventory dir: %v", err)
+	}
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	oldInventoryPath := config.PHPRuntimeInventoryFile
+	config.PHPRuntimeInventoryFile = inventoryPath
+	t.Cleanup(func() {
+		config.PHPRuntimeInventoryFile = oldInventoryPath
+	})
+	if err := importPHPRuntimeInventoryStorage(); err != nil {
+		t.Fatalf("import php runtime inventory: %v", err)
+	}
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected db store")
+	}
+	if _, err := store.exec(`DELETE FROM php_runtime_inventory_state`); err != nil {
+		t.Fatalf("delete php runtime inventory state: %v", err)
+	}
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+
+	writeTestPHPRuntimeArtifact(t, inventoryPath, "php85", testPHPRuntimeArtifactOptions{
+		DisplayName: "PHP 8.5",
+		Version:     "PHP 8.5.0-dev (fpm-fcgi)",
+		Modules:     []string{"mbstring", "fileinfo", "redis"},
+	})
+
+	_, _, cfg, _ := PHPRuntimeInventorySnapshot()
+	if len(cfg.Runtimes) != 1 {
+		t.Fatalf("runtime count=%d want=1 for legacy import without inventory state", len(cfg.Runtimes))
+	}
+	if got := cfg.Runtimes[0].RuntimeID; got != "php85" {
+		t.Fatalf("runtime_id=%q want php85", got)
 	}
 }
 

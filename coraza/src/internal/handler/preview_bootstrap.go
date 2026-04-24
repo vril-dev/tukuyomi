@@ -64,7 +64,7 @@ func ImportPreviewConfigStorage(opts PreviewBootstrapOptions) error {
 	if err != nil {
 		return err
 	}
-	if _, err := store.writePHPRuntimeInventoryConfigVersion("", inventoryPrepared.cfg, configVersionSourceImport, "", "preview php runtime inventory seed import", 0); err != nil {
+	if _, err := store.writePHPRuntimeInventoryPreparedConfigVersion("", inventoryPrepared, configVersionSourceImport, "", "preview php runtime inventory seed import", 0); err != nil {
 		return fmt.Errorf("import preview php runtime inventory: %w", err)
 	}
 

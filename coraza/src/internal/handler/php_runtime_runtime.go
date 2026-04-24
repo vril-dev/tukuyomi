@@ -72,16 +72,12 @@ func InitPHPRuntimeInventoryRuntime(path string, rollbackMax int) error {
 		cfgPath = "data/php-fpm/inventory.json"
 	}
 	if store := getLogsStatsStore(); store != nil {
-		cfg, rec, found, err := store.loadActivePHPRuntimeInventoryConfig()
+		prepared, rec, found, err := store.loadActivePHPRuntimeInventoryPreparedConfig(cfgPath)
 		if err != nil {
 			return fmt.Errorf("read php runtime inventory db: %w", err)
 		}
 		if !found {
 			return fmt.Errorf("normalized php runtime inventory config missing in db; run make db-import before removing seed files")
-		}
-		prepared, err := preparePHPRuntimeInventoryState(phpRuntimeInventoryStateFromConfig(cfg), cfgPath)
-		if err != nil {
-			return fmt.Errorf("invalid php runtime inventory db: %w", err)
 		}
 		rt := &phpRuntimeInventoryRuntime{
 			configPath:    cfgPath,
@@ -203,7 +199,7 @@ func ApplyPHPRuntimeInventoryRaw(ifMatch string, raw string) (string, PHPRuntime
 	if err != nil {
 		return "", PHPRuntimeInventoryFile{}, err
 	}
-	rec, err := dbStore.writePHPRuntimeInventoryConfigVersion(ifMatch, prepared.cfg, configVersionSourceApply, "", "php runtime inventory update", 0)
+	rec, err := dbStore.writePHPRuntimeInventoryPreparedConfigVersion(ifMatch, prepared, configVersionSourceApply, "", "php runtime inventory update", 0)
 	if err != nil {
 		return "", PHPRuntimeInventoryFile{}, err
 	}
@@ -270,7 +266,7 @@ func RollbackPHPRuntimeInventory() (string, PHPRuntimeInventoryFile, proxyRollba
 		rt.pushRollbackLocked(entry)
 		return "", PHPRuntimeInventoryFile{}, proxyRollbackEntry{}, err
 	}
-	rec, err := dbStore.writePHPRuntimeInventoryConfigVersion(rt.etag, prepared.cfg, configVersionSourceRollback, "", "php runtime inventory rollback", 0)
+	rec, err := dbStore.writePHPRuntimeInventoryPreparedConfigVersion(rt.etag, prepared, configVersionSourceRollback, "", "php runtime inventory rollback", 0)
 	if err != nil {
 		rt.pushRollbackLocked(entry)
 		return "", PHPRuntimeInventoryFile{}, proxyRollbackEntry{}, err
@@ -797,7 +793,10 @@ func rollbackPersistedPHPRuntimeInventory(path string, store *wafEventStore, exp
 	if err != nil {
 		return err
 	}
-	_, err = store.writePHPRuntimeInventoryConfigVersion(expectedETag, prepared.cfg, configVersionSourceRollback, "", "php runtime inventory rollback after failed apply", 0)
+	if strings.TrimSpace(raw) != "" {
+		prepared.raw = strings.TrimSpace(raw)
+	}
+	_, err = store.writePHPRuntimeInventoryPreparedConfigVersion(expectedETag, prepared, configVersionSourceRollback, "", "php runtime inventory rollback after failed apply", 0)
 	return err
 }
 

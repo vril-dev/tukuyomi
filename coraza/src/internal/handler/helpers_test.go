@@ -196,7 +196,7 @@ func importPHPRuntimeInventoryDBForTest(t *testing.T, raw string, inventoryPath 
 	if err != nil {
 		t.Fatalf("prepare php runtime inventory: %v", err)
 	}
-	if _, err := store.writePHPRuntimeInventoryConfigVersion("", prepared.cfg, configVersionSourceImport, "", "test php runtime inventory import", 0); err != nil {
+	if _, err := store.writePHPRuntimeInventoryPreparedConfigVersion("", prepared, configVersionSourceImport, "", "test php runtime inventory import", 0); err != nil {
 		t.Fatalf("write php runtime inventory config: %v", err)
 	}
 	return prepared.cfg

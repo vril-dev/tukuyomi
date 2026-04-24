@@ -38,6 +38,7 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		"scheduled_tasks",
 		"upstream_runtime_overrides",
 		"php_runtime_inventory",
+		"php_runtime_inventory_state",
 		"php_runtime_modules",
 		"php_runtime_default_disabled_modules",
 		"app_config_values",
@@ -83,8 +84,8 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("query migration version: %v", err)
 	}
-	if version != 9 || dirty != 0 {
-		t.Fatalf("migration version=%d dirty=%d want version=9 dirty=0", version, dirty)
+	if version != 10 || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=10 dirty=0", version, dirty)
 	}
 }
 
@@ -126,8 +127,8 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteReplacesLegacyMigrationTable(t *t
 	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("query migration version: %v", err)
 	}
-	if version != 9 || dirty != 0 {
-		t.Fatalf("migration version=%d dirty=%d want version=9 dirty=0", version, dirty)
+	if version != 10 || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=10 dirty=0", version, dirty)
 	}
 
 	var legacyColumns int

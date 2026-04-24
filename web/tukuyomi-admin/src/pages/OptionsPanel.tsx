@@ -214,6 +214,7 @@ export default function OptionsPanel() {
   }
 
   async function onRunCountryUpdate() {
+    const previousAttempt = requestCountryUpdate?.last_attempt || "";
     setUpdatingNow(true);
     setUpdateError("");
     setUpdateNotice("");
@@ -224,12 +225,24 @@ export default function OptionsPanel() {
       setRequestCountryDB(db);
       setUpdateNotice(tx("Country DB update completed."));
     } catch (err: unknown) {
-      setUpdateError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
       try {
         const next = await apiGetJson<RequestCountryUpdateStatus>("/request-country-update");
         setRequestCountryUpdate(next);
+        if (next.last_result === "success" && next.last_attempt && next.last_attempt !== previousAttempt && !next.last_error) {
+          try {
+            const db = await apiGetJson<RequestCountryDBStatus>("/request-country-db");
+            setRequestCountryDB(db);
+          } catch {
+            //
+          }
+          setUpdateNotice(tx("Country DB update completed."));
+          setUpdateError("");
+          return;
+        }
+        setUpdateError(next.last_error || message);
       } catch {
-        //
+        setUpdateError(message);
       }
     } finally {
       setUpdatingNow(false);

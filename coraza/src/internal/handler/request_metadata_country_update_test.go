@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,6 +96,31 @@ EditionIDs GeoLite2-City
 	_, err := parseRequestCountryGeoIPConfig(raw)
 	if err == nil {
 		t.Fatal("expected error for config without supported country edition")
+	}
+}
+
+func TestRenderRequestCountryGeoIPConfigForCountryEditionFiltersNonCountryEditions(t *testing.T) {
+	raw := []byte(`
+# keep comments
+AccountID 12345
+LicenseKey secret
+EditionIDs GeoLite2-ASN GeoLite2-City GeoLite2-Country
+ProductIDs GeoLite2-ASN
+`)
+	out, err := renderRequestCountryGeoIPConfigForCountryEdition(raw, "GeoLite2-Country")
+	if err != nil {
+		t.Fatalf("renderRequestCountryGeoIPConfigForCountryEdition: %v", err)
+	}
+	text := string(out)
+	for _, want := range []string{"AccountID 12345", "LicenseKey secret", "EditionIDs GeoLite2-Country"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("rendered config missing %q:\n%s", want, text)
+		}
+	}
+	for _, blocked := range []string{"GeoLite2-ASN", "GeoLite2-City", "ProductIDs"} {
+		if strings.Contains(text, blocked) {
+			t.Fatalf("rendered config still contains %q:\n%s", blocked, text)
+		}
 	}
 }
 
@@ -254,7 +280,7 @@ func TestDefaultRunRequestCountryDBUpdateNowPersistsDBAssetAndState(t *testing.T
 		t.Fatal("expected db store")
 	}
 
-	rawConfig := []byte("AccountID 12345\nLicenseKey secret\nEditionIDs GeoLite2-Country\n")
+	rawConfig := []byte("AccountID 12345\nLicenseKey secret\nEditionIDs GeoLite2-ASN GeoLite2-City GeoLite2-Country\n")
 	summary, err := parseRequestCountryGeoIPConfig(rawConfig)
 	if err != nil {
 		t.Fatalf("parseRequestCountryGeoIPConfig: %v", err)
@@ -275,8 +301,18 @@ func TestDefaultRunRequestCountryDBUpdateNowPersistsDBAssetAndState(t *testing.T
 
 	prevRun := requestCountryUpdateRun
 	requestCountryUpdateRun = func(_ context.Context, _ string, configPath, databaseDir string) error {
-		if _, err := os.Stat(configPath); err != nil {
+		raw, err := os.ReadFile(configPath)
+		if err != nil {
 			t.Fatalf("temp config path missing: %v", err)
+		}
+		text := string(raw)
+		if !strings.Contains(text, "EditionIDs GeoLite2-Country") {
+			t.Fatalf("temp config missing country edition:\n%s", text)
+		}
+		for _, blocked := range []string{"GeoLite2-ASN", "GeoLite2-City"} {
+			if strings.Contains(text, blocked) {
+				t.Fatalf("temp config should not request %s:\n%s", blocked, text)
+			}
 		}
 		mmdbPath := filepath.Join(databaseDir, "GeoLite2-Country.mmdb")
 		return os.WriteFile(mmdbPath, loadSampleCountryMMDBBytes(t), 0o600)

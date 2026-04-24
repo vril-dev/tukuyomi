@@ -141,6 +141,47 @@ func selectSupportedCountryEdition(editionIDs []string) string {
 	return ""
 }
 
+func renderRequestCountryGeoIPConfigForCountryEdition(raw []byte, edition string) ([]byte, error) {
+	edition = selectSupportedCountryEdition([]string{strings.TrimSpace(edition)})
+	if edition == "" {
+		return nil, fmt.Errorf("GeoIP.conf country edition is required")
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
+	scanner.Buffer(make([]byte, 0, 4096), maxRequestCountryConfigUploadBytes)
+	var out strings.Builder
+	editionWritten := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			parts := strings.Fields(trimmed)
+			if len(parts) > 0 {
+				switch strings.ToLower(strings.TrimSpace(parts[0])) {
+				case "editionids", "productids":
+					if !editionWritten {
+						out.WriteString("EditionIDs ")
+						out.WriteString(edition)
+						out.WriteByte('\n')
+						editionWritten = true
+					}
+					continue
+				}
+			}
+		}
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read GeoIP.conf: %w", err)
+	}
+	if !editionWritten {
+		out.WriteString("EditionIDs ")
+		out.WriteString(edition)
+		out.WriteByte('\n')
+	}
+	return []byte(out.String()), nil
+}
+
 func uniqueSortedStrings(values []string) []string {
 	if len(values) == 0 {
 		return nil
@@ -353,6 +394,11 @@ func defaultRunRequestCountryDBUpdateNow(ctx context.Context) error {
 		state.LastError = "GeoIP.conf does not include a supported country edition"
 		return errors.New(state.LastError)
 	}
+	updateConfig, err := renderRequestCountryGeoIPConfigForCountryEdition(rawConfig, edition)
+	if err != nil {
+		state.LastError = err.Error()
+		return err
+	}
 	tmpDir, err := makeRuntimeTempDir("country-db-update-*")
 	if err != nil {
 		state.LastError = err.Error()
@@ -361,7 +407,7 @@ func defaultRunRequestCountryDBUpdateNow(ctx context.Context) error {
 	defer os.RemoveAll(tmpDir)
 
 	configPath := filepath.Join(tmpDir, "GeoIP.conf")
-	if err := os.WriteFile(configPath, rawConfig, 0o600); err != nil {
+	if err := os.WriteFile(configPath, updateConfig, 0o600); err != nil {
 		state.LastError = err.Error()
 		return err
 	}

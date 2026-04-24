@@ -772,24 +772,24 @@ func unique(in []string) []string {
 }
 
 func emitJSONLog(obj map[string]any) {
-	_, _ = encodeAndEmitJSONLog(obj)
-}
-
-func emitJSONLogAndAppendEvent(obj map[string]any) {
-	raw, err := encodeAndEmitJSONLog(obj)
+	raw, err := encodeJSONLogRaw(obj)
 	if err != nil {
 		return
 	}
-	_ = appendEncodedEventToDB(raw)
+	log.Println(string(raw))
+	ObserveNotificationLogEvent(obj)
 }
 
-func encodeAndEmitJSONLog(obj map[string]any) ([]byte, error) {
-	raw, err := json.Marshal(obj)
-	if err == nil {
-		log.Println(string(raw))
+func emitJSONLogAndAppendEvent(obj map[string]any) {
+	raw, err := encodeJSONLogRaw(obj)
+	if err != nil {
+		return
 	}
-	ObserveNotificationLogEvent(obj)
-	return raw, err
+	enqueueEncodedWAFEvent(raw)
+}
+
+func encodeJSONLogRaw(obj map[string]any) ([]byte, error) {
+	return json.Marshal(obj)
 }
 
 func proxyRuntimeHealth() *upstreamHealthMonitor {
@@ -809,10 +809,6 @@ func releaseProxyRouteSelection(selection proxyRouteTransportSelection) {
 	if health := proxyRuntimeHealth(); health != nil {
 		health.ReleaseTarget(selection.HealthKey)
 	}
-}
-
-func appendEncodedEventToDB(raw []byte) error {
-	return appendEncodedWAFEvent(raw, "")
 }
 
 func appendEncodedEventsToDB(raws [][]byte) error {

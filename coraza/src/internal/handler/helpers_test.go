@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"tukuyomi/internal/config"
 )
@@ -124,6 +126,9 @@ func initConfigDBStoreForTest(t *testing.T) *wafEventStore {
 		t.Fatalf("init sqlite store: %v", err)
 	}
 	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = FlushWAFEventAsync(ctx)
 		_ = InitLogsStatsStore(false, "", 0)
 	})
 	store := getLogsStatsStore()

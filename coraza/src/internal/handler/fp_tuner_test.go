@@ -504,7 +504,7 @@ func TestProposeFPTuningHTTPModeSanitizesProviderPayload(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	restore := saveFPTunerConfigForTest()
+	restore := saveFPTunerConfigForTest(t)
 	defer restore()
 	config.RulesFile = "tukuyomi.conf"
 	config.CRSEnable = false
@@ -613,7 +613,7 @@ func TestProposeFPTuningRejectsMismatchedTargetRuleID(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	restore := saveFPTunerConfigForTest()
+	restore := saveFPTunerConfigForTest(t)
 	defer restore()
 	config.RulesFile = "tukuyomi.conf"
 	config.CRSEnable = false
@@ -657,7 +657,7 @@ func TestProposeFPTuningRejectsMismatchedHost(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	restore := saveFPTunerConfigForTest()
+	restore := saveFPTunerConfigForTest(t)
 	defer restore()
 	config.RulesFile = "tukuyomi.conf"
 	config.CRSEnable = false
@@ -701,7 +701,7 @@ func TestProposeFPTuningRejectsMismatchedVariable(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	restore := saveFPTunerConfigForTest()
+	restore := saveFPTunerConfigForTest(t)
 	defer restore()
 	config.RulesFile = "tukuyomi.conf"
 	config.CRSEnable = false
@@ -742,7 +742,7 @@ func TestRequestFPTunerProposalHTTPStatusError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	restore := saveFPTunerConfigForTest()
+	restore := saveFPTunerConfigForTest(t)
 	defer restore()
 	config.FPTunerEndpoint = srv.URL
 	config.FPTunerTimeout = 2 * time.Second
@@ -904,7 +904,7 @@ func TestProposeFPTuningBatchHTTPReturnsV2(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	restore := saveFPTunerConfigForTest()
+	restore := saveFPTunerConfigForTest(t)
 	defer restore()
 	config.RulesFile = "tukuyomi.conf"
 	config.CRSEnable = false
@@ -977,7 +977,7 @@ func TestProposeFPTuningUnsafeProposalReturns422(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	restore := saveFPTunerConfigForTest()
+	restore := saveFPTunerConfigForTest(t)
 	defer restore()
 	config.RulesFile = "tukuyomi.conf"
 	config.CRSEnable = false
@@ -1014,7 +1014,7 @@ func TestProposeFPTuningNoProposalReturns200(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	restore := saveFPTunerConfigForTest()
+	restore := saveFPTunerConfigForTest(t)
 	defer restore()
 	config.RulesFile = "tukuyomi.conf"
 	config.CRSEnable = false
@@ -1268,7 +1268,8 @@ func TestGetFPTunerAuditMissingFileReturnsEmpty(t *testing.T) {
 	}
 }
 
-func saveFPTunerConfigForTest() func() {
+func saveFPTunerConfigForTest(t *testing.T) func() {
+	t.Helper()
 	oldRulesFile := config.RulesFile
 	oldCRSEnable := config.CRSEnable
 	oldEndpoint := config.FPTunerEndpoint
@@ -1276,6 +1277,7 @@ func saveFPTunerConfigForTest() func() {
 	oldTimeout := config.FPTunerTimeout
 	oldRequireApproval := config.FPTunerRequireApproval
 	oldAuditFile := config.FPTunerAuditFile
+	config.FPTunerAuditFile = filepath.Join(t.TempDir(), "fp-tuner-audit.ndjson")
 	return func() {
 		config.RulesFile = oldRulesFile
 		config.CRSEnable = oldCRSEnable

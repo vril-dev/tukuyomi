@@ -73,6 +73,9 @@ type wafEventStoreStatus struct {
 
 func InitLogsStatsStore(enabled bool, dbPath string, retentionDays int) error {
 	if !enabled {
+		if err := flushWAFEventAsyncBeforeStoreReset(); err != nil {
+			return err
+		}
 		logStatsStoreMu.Lock()
 		defer logStatsStoreMu.Unlock()
 		if logStatsStore != nil {
@@ -85,6 +88,10 @@ func InitLogsStatsStore(enabled bool, dbPath string, retentionDays int) error {
 }
 
 func InitLogsStatsStoreWithBackend(storageBackend, dbDriver, dbPath, dbDSN string, retentionDays int) error {
+	if err := flushWAFEventAsyncBeforeStoreReset(); err != nil {
+		return err
+	}
+
 	logStatsStoreMu.Lock()
 	defer logStatsStoreMu.Unlock()
 
@@ -139,6 +146,15 @@ func InitLogsStatsStoreWithBackend(storageBackend, dbDriver, dbPath, dbDSN strin
 		return fmt.Errorf("unsupported db driver: %s", driver)
 	}
 	logStatsStore = store
+	return nil
+}
+
+func flushWAFEventAsyncBeforeStoreReset() error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := FlushWAFEventAsync(ctx); err != nil {
+		return fmt.Errorf("flush async waf events before db store reset: %w", err)
+	}
 	return nil
 }
 

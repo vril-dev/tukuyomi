@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
@@ -556,6 +557,12 @@ func initRequestSecurityLogDBForTest(t *testing.T) func() {
 
 func readLastRequestSecurityLogEvent(t *testing.T) map[string]any {
 	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := FlushWAFEventAsync(ctx); err != nil {
+		t.Fatalf("flush async waf events: %v", err)
+	}
 
 	store := getLogsStatsStore()
 	if store == nil {

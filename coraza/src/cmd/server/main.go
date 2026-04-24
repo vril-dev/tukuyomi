@@ -82,8 +82,8 @@ func main() {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := handler.ShutdownProxyAccessLogAsync(ctx); err != nil {
-			log.Printf("[PROXY][WARN] shutdown async access log writer: %v", err)
+		if err := handler.ShutdownWAFEventAsync(ctx); err != nil {
+			log.Printf("[WAF_EVENT][WARN] shutdown async event writer: %v", err)
 		}
 	}()
 	if err := handler.InitSecurityAuditRuntime(); err != nil {

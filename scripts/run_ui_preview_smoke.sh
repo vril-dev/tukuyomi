@@ -167,6 +167,7 @@ stage_workspace() {
   install -d -m 755 \
     "${WORKSPACE}" \
     "${WORKSPACE}/bin" \
+    "${WORKSPACE}/data/cache/response" \
     "${WORKSPACE}/data" \
     "${WORKSPACE}/scripts"
   install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${WORKSPACE}/bin/tukuyomi"

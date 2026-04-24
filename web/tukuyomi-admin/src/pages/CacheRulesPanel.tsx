@@ -376,12 +376,20 @@ export default function CacheRulePanel() {
         title={tx("Internal Cache Store")}
         subtitle={tx("Disk-backed cache for matched ALLOW rules.")}
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {storeDirty ? <Badge color="amber">{tx("Unsaved")}</Badge> : null}
             {storeEtag ? <MonoTag label={tx("Store ETag")} value={storeEtag} /> : null}
+            <ActionButton onClick={() => void clearStore()} disabled={readOnly || loading || clearingStore}>
+              {clearingStore ? tx("Clearing...") : tx("Clear All")}
+            </ActionButton>
+            <ActionButton onClick={() => void saveStore()} disabled={readOnly || loading || savingStore || !storeDirty}>
+              {savingStore ? tx("Saving...") : tx("Save Store")}
+            </ActionButton>
           </div>
         }
       >
+        <ActionResultNotice tone={storeNotice?.tone || "success"} messages={storeNotice?.messages} />
+
         <div className="grid gap-3 md:grid-cols-3">
           <Field label={tx("Enabled")}>
             <label className="inline-flex items-center gap-2 rounded-xl border px-3 py-2">
@@ -471,16 +479,6 @@ export default function CacheRulePanel() {
           <StatBox label={tx("L1 Misses")} value={String(storeStats.memory_misses_total ?? 0)} />
           <StatBox label={tx("L1 Evictions")} value={String(storeStats.memory_evictions_total ?? 0)} />
         </div>
-
-        <div className="flex items-center gap-2">
-          <ActionButton onClick={() => void saveStore()} disabled={readOnly || loading || savingStore || !storeDirty}>
-            {savingStore ? tx("Saving...") : tx("Save Store")}
-          </ActionButton>
-          <ActionButton onClick={() => void clearStore()} disabled={readOnly || loading || clearingStore}>
-            {clearingStore ? tx("Clearing...") : tx("Clear All")}
-          </ActionButton>
-        </div>
-        <ActionResultNotice tone={storeNotice?.tone || "success"} messages={storeNotice?.messages} />
       </SectionCard>
 
       <SectionCard

@@ -34,6 +34,7 @@ services:
       - TUKUYOMI_PPROF_ADDR=${TUKUYOMI_PPROF_ADDR:-}
     volumes:
       - ./data:/app/data
+      - ./data/cache:/app/cache
       - ./data/conf:/app/conf
       - ./data/scheduled-tasks:/app/data/scheduled-tasks
       - ./data/php-fpm:/app/data/php-fpm
@@ -65,6 +66,7 @@ services:
       - WAF_STORAGE_DB_SYNC_INTERVAL_SEC=${WAF_STORAGE_DB_SYNC_INTERVAL_SEC:-}
     volumes:
       - ./data:/app/data
+      - ./data/cache:/app/cache
       - ./data/conf:/app/conf
       - ./data/scheduled-tasks:/app/data/scheduled-tasks
       - ./data/php-fpm:/app/data/php-fpm

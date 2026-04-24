@@ -116,6 +116,10 @@ preview_database_exists() {
   [[ "${#db_paths[@]}" -gt 0 && -f "${db_paths[0]}" ]]
 }
 
+ensure_preview_runtime_dirs() {
+  mkdir -p "$ROOT_DIR/data/cache/response" "$ROOT_DIR/data/tmp"
+}
+
 run_preview_command() {
   local command="$1"
   shift || true
@@ -140,7 +144,7 @@ run_preview_command() {
 
 seed_preview_database() {
   local stage_root=""
-  mkdir -p "$ROOT_DIR/data/tmp"
+  ensure_preview_runtime_dirs
   stage_root="$(mktemp -d "$ROOT_DIR/data/tmp/preview-crs-import.XXXXXX")"
   trap 'rm -rf "$stage_root"' RETURN
   "$ROOT_DIR/scripts/stage_waf_rule_assets.sh" "$stage_root"
@@ -226,6 +230,7 @@ case "${1:-}" in
     fi
     load_preview_topology
     write_preview_override
+    ensure_preview_runtime_dirs
     run_preview_compose up -d --build coraza scheduled-task-runner
     echo "[ui-preview] public: ${UI_PREVIEW_PUBLIC_URL}"
     echo "[ui-preview] admin ui: ${UI_PREVIEW_ADMIN_UI_URL}"

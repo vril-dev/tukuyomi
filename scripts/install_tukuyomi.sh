@@ -6,12 +6,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${TARGET:-${INSTALL_TARGET:-linux-systemd}}"
 PREFIX="${PREFIX:-${INSTALL_PREFIX:-/opt/tukuyomi}}"
 DESTDIR="${DESTDIR:-}"
-INSTALL_USER="${INSTALL_USER:-tukuyomi}"
-INSTALL_GROUP="${INSTALL_GROUP:-${INSTALL_USER}}"
+INSTALL_USER="${INSTALL_USER:-}"
+INSTALL_GROUP="${INSTALL_GROUP:-}"
 INSTALL_ENV_DIR="${INSTALL_ENV_DIR:-/etc/tukuyomi}"
 INSTALL_SYSTEMD_DIR="${INSTALL_SYSTEMD_DIR:-/etc/systemd/system}"
 INSTALL_SKIP_BUILD="${INSTALL_SKIP_BUILD:-0}"
-INSTALL_CREATE_USER="${INSTALL_CREATE_USER:-1}"
+INSTALL_CREATE_USER="${INSTALL_CREATE_USER:-auto}"
 INSTALL_OVERWRITE_CONFIG="${INSTALL_OVERWRITE_CONFIG:-0}"
 INSTALL_OVERWRITE_ENV="${INSTALL_OVERWRITE_ENV:-0}"
 INSTALL_ENABLE_SYSTEMD="${INSTALL_ENABLE_SYSTEMD:-1}"
@@ -39,7 +39,11 @@ is_enabled() {
   esac
 }
 
-use_install_account() {
+use_service_account() {
+  [[ -z "${DESTDIR}" && -n "${INSTALL_USER}" ]]
+}
+
+create_service_account() {
   [[ -z "${DESTDIR}" ]] && is_enabled "${INSTALL_CREATE_USER}"
 }
 
@@ -152,6 +156,72 @@ PY
   rm -f "${tmp}"
 }
 
+invoking_user() {
+  if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    printf '%s\n' "${SUDO_USER}"
+    return
+  fi
+  id -un
+}
+
+primary_group_for_user() {
+  local user="$1"
+  id -gn "${user}" 2>/dev/null || printf '%s\n' "${user}"
+}
+
+home_for_user() {
+  local user="$1"
+  getent passwd "${user}" | awk -F: '{print $6}'
+}
+
+path_is_under() {
+  local path="$1"
+  local parent="$2"
+  [[ -n "${parent}" ]] || return 1
+  [[ "${path}" == "${parent}" || "${path}" == "${parent%/}/"* ]]
+}
+
+resolve_install_account() {
+  local owner owner_home
+  owner="$(invoking_user)"
+  owner_home="$(home_for_user "${owner}")"
+
+  case "${INSTALL_CREATE_USER}" in
+    auto)
+      if path_is_under "${PREFIX}" "${owner_home}"; then
+        INSTALL_CREATE_USER=0
+        if [[ -z "${INSTALL_USER}" ]]; then
+          INSTALL_USER="${owner}"
+        fi
+      else
+        INSTALL_CREATE_USER=1
+        if [[ -z "${INSTALL_USER}" ]]; then
+          INSTALL_USER="tukuyomi"
+        fi
+      fi
+      ;;
+    1|true|TRUE|yes|YES|on|ON)
+      INSTALL_CREATE_USER=1
+      if [[ -z "${INSTALL_USER}" ]]; then
+        INSTALL_USER="tukuyomi"
+      fi
+      ;;
+    0|false|FALSE|no|NO|off|OFF)
+      INSTALL_CREATE_USER=0
+      if [[ -z "${INSTALL_USER}" ]]; then
+        INSTALL_USER="${owner}"
+      fi
+      ;;
+    *)
+      die "INSTALL_CREATE_USER must be auto, 1, or 0"
+      ;;
+  esac
+
+  if [[ -z "${INSTALL_GROUP}" ]]; then
+    INSTALL_GROUP="$(primary_group_for_user "${INSTALL_USER}")"
+  fi
+}
+
 ensure_linux_systemd_target() {
   [[ "${TARGET}" == "linux-systemd" ]] || die "unsupported install TARGET=${TARGET}; use make deploy-render for cloud/container targets"
   [[ "${PREFIX}" == /* ]] || die "PREFIX must be absolute"
@@ -171,10 +241,10 @@ ensure_linux_systemd_target() {
 }
 
 ensure_user_group() {
-  if ! use_install_account; then
-    if [[ -z "${DESTDIR}" ]] && is_enabled "${INSTALL_ENABLE_SYSTEMD}"; then
-      id -u "${INSTALL_USER}" >/dev/null 2>&1 || die "INSTALL_USER=${INSTALL_USER} does not exist; set INSTALL_CREATE_USER=1 or create it first"
-      getent group "${INSTALL_GROUP}" >/dev/null 2>&1 || die "INSTALL_GROUP=${INSTALL_GROUP} does not exist; set INSTALL_CREATE_USER=1 or create it first"
+  if ! create_service_account; then
+    if use_service_account || { [[ -z "${DESTDIR}" ]] && is_enabled "${INSTALL_ENABLE_SYSTEMD}"; }; then
+      id -u "${INSTALL_USER}" >/dev/null 2>&1 || die "INSTALL_USER=${INSTALL_USER} does not exist; set INSTALL_CREATE_USER=1 or choose an existing user"
+      getent group "${INSTALL_GROUP}" >/dev/null 2>&1 || die "INSTALL_GROUP=${INSTALL_GROUP} does not exist; set INSTALL_CREATE_USER=1 or choose an existing group"
     fi
     return
   fi
@@ -187,7 +257,7 @@ ensure_user_group() {
 }
 
 set_runtime_permissions() {
-  if ! use_install_account; then
+  if ! use_service_account; then
     return
   fi
   local conf_file
@@ -210,6 +280,23 @@ set_runtime_permissions() {
     "${RUNTIME_DIR}/data"
 }
 
+assert_runtime_accessible() {
+  if ! use_service_account || is_enabled "${INSTALL_DRY_RUN}"; then
+    return
+  fi
+  local -a cmd=(test -x "${RUNTIME_DIR}" -a -r "${RUNTIME_DIR}/conf/config.json" -a -w "${RUNTIME_DIR}/db")
+  if [[ "${EUID}" -eq 0 && -x /sbin/runuser ]]; then
+    /sbin/runuser -u "${INSTALL_USER}" -- "${cmd[@]}" || die "runtime path is not accessible to ${INSTALL_USER}: ${RUNTIME_DIR}; choose INSTALL_USER=$(invoking_user) for a home-directory PREFIX or install under /opt/tukuyomi"
+    return
+  fi
+  if command -v runuser >/dev/null 2>&1 && [[ "${EUID}" -eq 0 ]]; then
+    runuser -u "${INSTALL_USER}" -- "${cmd[@]}" || die "runtime path is not accessible to ${INSTALL_USER}: ${RUNTIME_DIR}; choose INSTALL_USER=$(invoking_user) for a home-directory PREFIX or install under /opt/tukuyomi"
+    return
+  fi
+  command -v sudo >/dev/null 2>&1 || die "sudo is required to validate runtime access for ${INSTALL_USER}"
+  sudo -H -u "${INSTALL_USER}" -- "${cmd[@]}" || die "runtime path is not accessible to ${INSTALL_USER}: ${RUNTIME_DIR}; choose INSTALL_USER=$(invoking_user) for a home-directory PREFIX or install under /opt/tukuyomi"
+}
+
 run_runtime() {
   local -a env_args=("WAF_CONFIG_FILE=conf/config.json")
   while [[ "$#" -gt 0 && "$1" == *=* ]]; do
@@ -223,7 +310,7 @@ run_runtime() {
     return
   fi
 
-  if ! use_install_account; then
+  if ! use_service_account; then
     (cd "${RUNTIME_DIR}" && "${cmd[@]}")
     return
   fi
@@ -347,7 +434,7 @@ initialize_db() {
     run_priv rm -rf "${stage_root}"
     run_priv install -d -m 755 "${stage_root}"
     run_priv "${ROOT_DIR}/scripts/stage_waf_rule_assets.sh" "${stage_root}" "${CRS_VERSION}"
-    if use_install_account; then
+    if use_service_account; then
       run_priv chown -R "${INSTALL_USER}:${INSTALL_GROUP}" "${stage_root}"
     fi
     run_runtime "WAF_RULE_ASSET_FS_ROOT=data/tmp/waf-rule-assets" db-import-waf-rule-assets
@@ -388,10 +475,12 @@ activate_systemd() {
 }
 
 ensure_linux_systemd_target
+resolve_install_account
 build_if_needed
 ensure_user_group
 install_files
+assert_runtime_accessible
 initialize_db
 activate_systemd
 
-log "completed TARGET=${TARGET} PREFIX=${PREFIX}${DESTDIR:+ DESTDIR=${DESTDIR}}"
+log "completed TARGET=${TARGET} PREFIX=${PREFIX} INSTALL_USER=${INSTALL_USER} INSTALL_CREATE_USER=${INSTALL_CREATE_USER}${DESTDIR:+ DESTDIR=${DESTDIR}}"

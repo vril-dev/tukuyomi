@@ -54,6 +54,11 @@ make install TARGET=linux-systemd \
 Behavior:
 
 - `PREFIX` defaults to `/opt/tukuyomi`
+- when `PREFIX` is under the invoking user's home directory,
+  `INSTALL_CREATE_USER=auto` uses that user as the runtime user and skips
+  `useradd`
+- for system paths such as `/opt/tukuyomi`, the default creates or reuses the
+  `tukuyomi` system user/group
 - existing `config.json` and `/etc/tukuyomi/tukuyomi.env` are preserved by default
 - host install uses `sudo` only for privileged filesystem/systemd operations, so
   the build can run as the invoking user
@@ -68,6 +73,16 @@ Behavior:
 - for an empty MySQL / PostgreSQL DB, set `INSTALL_DB_SEED=always` explicitly
 - the scheduled-task timer is enabled only with `INSTALL_ENABLE_SCHEDULED_TASKS=1`
 - staging / smoke flows can use `DESTDIR=<tmp> INSTALL_ENABLE_SYSTEMD=0`
+
+To run explicitly as the login user:
+
+```bash
+make install TARGET=linux-systemd \
+  PREFIX="$HOME/tukuyomi" \
+  INSTALL_USER="$(id -un)" \
+  INSTALL_GROUP="$(id -gn)" \
+  INSTALL_CREATE_USER=0
+```
 
 For ECS / Kubernetes / Azure Container Apps, render deployment artifacts rather
 than mutating the host. See [container-deployment.md](container-deployment.md).

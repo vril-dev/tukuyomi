@@ -53,6 +53,8 @@ make install TARGET=linux-systemd \
 挙動:
 
 - `PREFIX` 既定は `/opt/tukuyomi`
+- `PREFIX` が実行ユーザの home 配下の場合、`INSTALL_CREATE_USER=auto` は実行ユーザを runtime user にし、`useradd` は実行しません
+- `/opt/tukuyomi` など system path の場合、既定では `tukuyomi` system user/group を作成または再利用します
 - `config.json` と `/etc/tukuyomi/tukuyomi.env` は既存 file を既定で上書きしません
 - host install の権限が必要な操作だけ `sudo` を使います。build は通常 user のまま実行できます
 - 初回作成する `/etc/tukuyomi/tukuyomi.env` と systemd unit は `PREFIX` に合わせて render されます
@@ -63,6 +65,16 @@ make install TARGET=linux-systemd \
 - MySQL / PostgreSQL の空 DB を初期投入する場合は `INSTALL_DB_SEED=always` を明示してください
 - scheduled task timer は `INSTALL_ENABLE_SCHEDULED_TASKS=1` の時だけ有効化します
 - smoke / package staging 用に `DESTDIR=<tmp> INSTALL_ENABLE_SYSTEMD=0` が使えます
+
+login user で明示的に動かす場合:
+
+```bash
+make install TARGET=linux-systemd \
+  PREFIX="$HOME/tukuyomi" \
+  INSTALL_USER="$(id -un)" \
+  INSTALL_GROUP="$(id -gn)" \
+  INSTALL_CREATE_USER=0
+```
 
 ECS / Kubernetes / Azure Container Apps 向けは host install ではなく
 `make deploy-render` を使います。詳しくは

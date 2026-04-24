@@ -316,11 +316,17 @@ func TestLoadAppConfigFile(t *testing.T) {
 	if cfg.Proxy.Engine.Mode != ProxyEngineModeTukuyomiProxy {
 		t.Fatalf("unexpected proxy engine mode: %s", cfg.Proxy.Engine.Mode)
 	}
+	if cfg.WAF.Engine.Mode != WAFEngineModeCoraza {
+		t.Fatalf("unexpected WAF engine mode: %s", cfg.WAF.Engine.Mode)
+	}
 	if err := ReloadFromConfigFile(cfgPath); err != nil {
 		t.Fatalf("ReloadFromConfigFile returned error: %v", err)
 	}
 	if ProxyEngineMode != ProxyEngineModeTukuyomiProxy {
 		t.Fatalf("unexpected runtime proxy engine mode: %s", ProxyEngineMode)
+	}
+	if WAFEngineMode != WAFEngineModeCoraza {
+		t.Fatalf("unexpected runtime WAF engine mode: %s", WAFEngineMode)
 	}
 }
 
@@ -454,6 +460,36 @@ func TestLoadAppConfigFileRejectsInvalidProxyEngineMode(t *testing.T) {
 		t.Fatal("expected validation error, got nil")
 	}
 	if !strings.Contains(err.Error(), "proxy.engine.mode") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadAppConfigFileRejectsInvalidWAFEngineMode(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	raw := `{
+		"server": {"listen_addr": ":9090"},
+		"admin": {"api_base_path": "/tukuyomi-api", "ui_base_path": "/tukuyomi-ui"},
+		"paths": {
+			"proxy_config_file": "conf/proxy.json",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
+			"rules_file": "tukuyomi.conf"
+		},
+		"proxy": {"rollback_history_size": 8},
+		"waf": {
+			"engine": {"mode": "open_appsec"}
+		},
+		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
+		"storage": {"db_driver": "sqlite"}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := loadAppConfigFile(cfgPath)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "waf.engine.mode") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

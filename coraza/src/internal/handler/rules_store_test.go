@@ -374,7 +374,7 @@ func TestPutRulesCreatesBypassExtraRuleAsset(t *testing.T) {
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatalf("extra rule file should not be materialized, stat err=%v", err)
 	}
-	if _, err := waf.GetWAFForExtraRule(target); err != nil {
+	if _, err := waf.GetEngineForExtraRule(target); err != nil {
 		t.Fatalf("load DB-backed extra rule: %v", err)
 	}
 }

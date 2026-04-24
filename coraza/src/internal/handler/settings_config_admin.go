@@ -108,6 +108,14 @@ type settingsListenerAdminProxyConfig struct {
 	Engine              settingsListenerAdminProxyEngineConfig `json:"engine"`
 }
 
+type settingsListenerAdminWAFEngineConfig struct {
+	Mode string `json:"mode"`
+}
+
+type settingsListenerAdminWAFConfig struct {
+	Engine settingsListenerAdminWAFEngineConfig `json:"engine"`
+}
+
 type settingsListenerAdminCRSConfig struct {
 	Enable bool `json:"enable"`
 }
@@ -162,6 +170,7 @@ type settingsListenerAdminConfig struct {
 	Storage       settingsListenerAdminStorageConfig         `json:"storage"`
 	Paths         settingsListenerAdminPathsConfig           `json:"paths"`
 	Proxy         settingsListenerAdminProxyConfig           `json:"proxy"`
+	WAF           settingsListenerAdminWAFConfig             `json:"waf"`
 	CRS           settingsListenerAdminCRSConfig             `json:"crs"`
 	FPTuner       settingsListenerAdminFPTunerConfig         `json:"fp_tuner"`
 	Observability settingsListenerAdminObservabilityConfig   `json:"observability"`
@@ -223,6 +232,7 @@ type settingsListenerAdminRuntimeStatus struct {
 	ServerMaxQueuedProxy             int      `json:"server_max_queued_proxy_requests"`
 	ServerQueuedProxyTimeoutMS       int      `json:"server_queued_proxy_request_timeout_ms"`
 	ProxyEngineMode                  string   `json:"proxy_engine_mode"`
+	WAFEngineMode                    string   `json:"waf_engine_mode"`
 	StorageDBDriver                  string   `json:"storage_db_driver"`
 	StorageDBPath                    string   `json:"storage_db_path"`
 	StorageDBRetentionDays           int      `json:"storage_db_retention_days"`
@@ -500,6 +510,11 @@ func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListener
 				Mode: cfg.Proxy.Engine.Mode,
 			},
 		},
+		WAF: settingsListenerAdminWAFConfig{
+			Engine: settingsListenerAdminWAFEngineConfig{
+				Mode: cfg.WAF.Engine.Mode,
+			},
+		},
 		CRS: settingsListenerAdminCRSConfig{
 			Enable: cfg.CRS.Enable,
 		},
@@ -601,6 +616,7 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 
 	cfg.Proxy.RollbackHistorySize = next.Proxy.RollbackHistorySize
 	cfg.Proxy.Engine.Mode = next.Proxy.Engine.Mode
+	cfg.WAF.Engine.Mode = next.WAF.Engine.Mode
 	cfg.CRS.Enable = next.CRS.Enable
 
 	cfg.FPTuner.Mode = ""
@@ -666,6 +682,7 @@ func buildSettingsListenerAdminRuntimeStatus() settingsListenerAdminRuntimeStatu
 		ServerMaxQueuedProxy:             config.ServerMaxQueuedProxy,
 		ServerQueuedProxyTimeoutMS:       int(config.ServerQueuedProxyRequestTimeout / time.Millisecond),
 		ProxyEngineMode:                  normalizeProxyEngineMode(config.ProxyEngineMode),
+		WAFEngineMode:                    normalizeSettingsWAFEngineMode(config.WAFEngineMode),
 		StorageDBDriver:                  config.DBDriver,
 		StorageDBPath:                    config.DBPath,
 		StorageDBRetentionDays:           config.DBRetentionDays,
@@ -679,6 +696,14 @@ func buildSettingsListenerAdminRuntimeStatus() settingsListenerAdminRuntimeStatu
 		TracingInsecure:                  config.TracingInsecure,
 		TracingSampleRatio:               config.TracingSampleRatio,
 	}
+}
+
+func normalizeSettingsWAFEngineMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		return config.DefaultWAFEngineMode
+	}
+	return mode
 }
 
 func buildSettingsListenerAdminSecretStatus(cfg config.AppConfigFile) settingsListenerAdminSecretStatus {

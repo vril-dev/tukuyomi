@@ -315,7 +315,7 @@ SecRule REQUEST_URI "@streq /api/orders/preview" "id:100001,phase:1,pass,nolog,c
 	}
 }
 
-func TestGetWAFForExtraRuleLoadsManagedOverrideFromDBWithoutFile(t *testing.T) {
+func TestGetEngineForExtraRuleLoadsManagedOverrideFromDBWithoutFile(t *testing.T) {
 	restore := saveOverrideRulesConfigForTest()
 	defer restore()
 
@@ -347,7 +347,7 @@ SecRule REQUEST_URI "@streq /api/orders/preview" "id:100001,phase:1,pass,nolog"
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatalf("override file should not exist before WAF load, stat err=%v", err)
 	}
-	if _, err := waf.GetWAFForExtraRule(target); err != nil {
+	if _, err := waf.GetEngineForExtraRule(target); err != nil {
 		t.Fatalf("load extra rule from DB: %v", err)
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {

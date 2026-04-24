@@ -115,6 +115,11 @@ type ListenerAdminConfig = {
       mode: string;
     };
   };
+  waf: {
+    engine: {
+      mode: string;
+    };
+  };
   crs: {
     enable: boolean;
   };
@@ -180,6 +185,7 @@ type ListenerAdminRuntime = {
   server_max_queued_proxy_requests?: number;
   server_queued_proxy_request_timeout_ms?: number;
   proxy_engine_mode?: string;
+  waf_engine_mode?: string;
   storage_db_driver?: string;
   storage_db_path?: string;
   storage_db_retention_days?: number;
@@ -319,6 +325,11 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
         mode: "tukuyomi_proxy",
       },
     },
+    waf: {
+      engine: {
+        mode: "coraza",
+      },
+    },
     crs: {
       enable: true,
     },
@@ -410,6 +421,14 @@ function normalizeListenerAdminConfig(value: Partial<ListenerAdminConfig> | null
       engine: {
         ...base.proxy.engine,
         ...value.proxy?.engine,
+      },
+    },
+    waf: {
+      ...base.waf,
+      ...value.waf,
+      engine: {
+        ...base.waf.engine,
+        ...value.waf?.engine,
       },
     },
     crs: {
@@ -1413,6 +1432,16 @@ export default function SettingsPanel() {
                             {tx("tukuyomi_proxy is the built-in proxy engine. The legacy net_http bridge has been removed. Restart required after config file changes.")}
                           </p>
                         </Field>
+                        <Field label={tx("WAF Engine")}>
+                          <input
+                            value={listenerAdminConfig.waf.engine.mode || "coraza"}
+                            readOnly
+                            className="w-full rounded border border-neutral-200 bg-neutral-100 text-neutral-700"
+                          />
+                          <p className="mt-1 text-[11px] text-neutral-500">
+                            {tx("Coraza is the active WAF engine. Additional engines must be registered before this value can be changed.")}
+                          </p>
+                        </Field>
                         <NumberField label={tx("Proxy Rollback History Size")} value={listenerAdminConfig.proxy.rollback_history_size} onChange={(value) => setListenerAdminConfig((current) => ({ ...current, proxy: { ...current.proxy, rollback_history_size: value } }))} />
                         <label className="flex items-center gap-2 text-xs text-neutral-700">
                           <input type="checkbox" checked={listenerAdminConfig.crs.enable} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, crs: { ...current.crs, enable: e.target.checked } }))} />
@@ -1470,6 +1499,7 @@ export default function SettingsPanel() {
                   <RuntimeMetric label={tx("Current Max Concurrent Proxy")} value={runtime.server_max_concurrent_proxy_requests} />
                   <RuntimeMetric label={tx("Current Max Queued Proxy")} value={runtime.server_max_queued_proxy_requests} />
                   <RuntimeMetric label={tx("Current Proxy Engine")} value={runtime.proxy_engine_mode} />
+                  <RuntimeMetric label={tx("Current WAF Engine")} value={runtime.waf_engine_mode} />
                   <RuntimeMetric label={tx("Current External Mode")} value={runtime.admin_external_mode} />
                   <RuntimeMetric label={tx("Current Read Only")} value={String(runtime.admin_read_only ?? "-")} />
                   <RuntimeMetric label={tx("Current Admin Rate Limit")} value={String(runtime.admin_rate_limit_enabled ?? "-")} />

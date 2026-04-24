@@ -12,6 +12,8 @@ import (
 const (
 	ProxyEngineModeTukuyomiProxy = "tukuyomi_proxy"
 	DefaultProxyEngineMode       = ProxyEngineModeTukuyomiProxy
+	WAFEngineModeCoraza          = "coraza"
+	DefaultWAFEngineMode         = WAFEngineModeCoraza
 )
 
 type appConfigFile struct {
@@ -21,6 +23,7 @@ type appConfigFile struct {
 	Admin         appAdminConfig         `json:"admin"`
 	Paths         appPathsConfig         `json:"paths"`
 	Proxy         appProxyConfig         `json:"proxy"`
+	WAF           appWAFConfig           `json:"waf"`
 	SecurityAudit appSecurityAuditConfig `json:"security_audit"`
 	CRS           appCRSConfig           `json:"crs"`
 	FPTuner       appFPTunerConfig       `json:"fp_tuner"`
@@ -149,6 +152,14 @@ type appProxyConfig struct {
 }
 
 type appProxyEngineConfig struct {
+	Mode string `json:"mode"`
+}
+
+type appWAFConfig struct {
+	Engine appWAFEngineConfig `json:"engine"`
+}
+
+type appWAFEngineConfig struct {
 	Mode string `json:"mode"`
 }
 
@@ -323,6 +334,11 @@ func defaultAppConfigFile() appConfigFile {
 				Mode: DefaultProxyEngineMode,
 			},
 		},
+		WAF: appWAFConfig{
+			Engine: appWAFEngineConfig{
+				Mode: DefaultWAFEngineMode,
+			},
+		},
 		SecurityAudit: appSecurityAuditConfig{
 			Enabled:                false,
 			CaptureMode:            "off",
@@ -417,6 +433,7 @@ func normalizeAppConfigFile(cfg *appConfigFile) {
 	cfg.FPTuner.APIKey = strings.TrimSpace(cfg.FPTuner.APIKey)
 	cfg.FPTuner.Model = strings.TrimSpace(cfg.FPTuner.Model)
 	cfg.Proxy.Engine.Mode = normalizeAppProxyEngineMode(cfg.Proxy.Engine.Mode)
+	cfg.WAF.Engine.Mode = normalizeAppWAFEngineMode(cfg.WAF.Engine.Mode)
 	cfg.SecurityAudit.CaptureMode = strings.ToLower(strings.TrimSpace(cfg.SecurityAudit.CaptureMode))
 	cfg.SecurityAudit.KeySource = strings.ToLower(strings.TrimSpace(cfg.SecurityAudit.KeySource))
 	cfg.SecurityAudit.EncryptionKey = strings.TrimSpace(cfg.SecurityAudit.EncryptionKey)
@@ -575,6 +592,11 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	default:
 		return fmt.Errorf("proxy.engine.mode must be %s", ProxyEngineModeTukuyomiProxy)
 	}
+	switch cfg.WAF.Engine.Mode {
+	case WAFEngineModeCoraza:
+	default:
+		return fmt.Errorf("waf.engine.mode must be %s", WAFEngineModeCoraza)
+	}
 	switch cfg.SecurityAudit.CaptureMode {
 	case "", "off", "enforced_only", "security_events", "all_security_findings":
 	default:
@@ -666,6 +688,14 @@ func normalizeAppProxyEngineMode(mode string) string {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" {
 		return DefaultProxyEngineMode
+	}
+	return mode
+}
+
+func normalizeAppWAFEngineMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		return DefaultWAFEngineMode
 	}
 	return mode
 }

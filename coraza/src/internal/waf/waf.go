@@ -19,7 +19,7 @@ import (
 	"tukuyomi/internal/crsselection"
 )
 
-var WAF coraza.WAF
+var baseWAF coraza.WAF
 var baseMu sync.RWMutex
 var overrideMu sync.RWMutex
 var overrideWAFs = map[string]overrideWAFCacheEntry{}
@@ -36,15 +36,15 @@ type overrideWAFCacheEntry struct {
 	etag string
 }
 
-func GetBaseWAF() coraza.WAF {
+func getBaseWAF() coraza.WAF {
 	baseMu.RLock()
 	defer baseMu.RUnlock()
-	return WAF
+	return baseWAF
 }
 
 func setBaseWAF(w coraza.WAF) {
 	baseMu.Lock()
-	WAF = w
+	baseWAF = w
 	baseMu.Unlock()
 }
 
@@ -528,10 +528,10 @@ func ReloadBaseWAF() error {
 	return nil
 }
 
-func GetWAFForExtraRule(extraRule string) (coraza.WAF, error) {
+func getWAFForExtraRule(extraRule string) (coraza.WAF, error) {
 	rule := strings.TrimSpace(extraRule)
 	if rule == "" {
-		return GetBaseWAF(), nil
+		return getBaseWAF(), nil
 	}
 
 	if loader := currentOverrideRuleLoader(); loader != nil {

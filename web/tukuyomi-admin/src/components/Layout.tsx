@@ -12,11 +12,18 @@ type NavItem = {
   hint: string;
 };
 
+type NavSection = {
+  id: string;
+  label: string;
+  items: NavItem[];
+};
+
 type NavGroup = {
   id: string;
   label: string;
   hint: string;
-  items: NavItem[];
+  items?: NavItem[];
+  sections?: NavSection[];
 };
 
 type PHPRuntimeNavResponse = {
@@ -42,16 +49,28 @@ const baseNavGroups: NavGroup[] = [
     id: "security",
     label: "Security",
     hint: "rules, reputation, anomaly defense",
-    items: [
-      { to: "/rules", label: "Rules", hint: "base and bypass extra rules" },
-      { to: "/rule-sets", label: "Rule Sets", hint: "CRS toggles" },
-      { to: "/bypass", label: "Bypass Rules", hint: "path overrides" },
-      { to: "/country-block", label: "Country Block", hint: "country deny list" },
-      { to: "/rate-limit", label: "Rate Limit", hint: "traffic policies" },
-      { to: "/ip-reputation", label: "IP Reputation", hint: "allow/block feeds and CIDRs" },
-      { to: "/bot-defense", label: "Bot Defense", hint: "ua challenge policy" },
-      { to: "/semantic", label: "Semantic Security", hint: "heuristic anomaly scoring" },
-      { to: "/fp-tuner", label: "FP Tuner", hint: "propose and apply exclusions" },
+    sections: [
+      {
+        id: "coraza",
+        label: "Coraza",
+        items: [
+          { to: "/rules", label: "Rules", hint: "base and bypass extra rules" },
+          { to: "/rule-sets", label: "Rule Sets", hint: "CRS toggles" },
+        ],
+      },
+      {
+        id: "request-controls",
+        label: "Request Controls",
+        items: [
+          { to: "/bypass", label: "Bypass Rules", hint: "path overrides" },
+          { to: "/country-block", label: "Country Block", hint: "country deny list" },
+          { to: "/rate-limit", label: "Rate Limit", hint: "traffic policies" },
+          { to: "/ip-reputation", label: "IP Reputation", hint: "allow/block feeds and CIDRs" },
+          { to: "/bot-defense", label: "Bot Defense", hint: "ua challenge policy" },
+          { to: "/semantic", label: "Semantic Security", hint: "heuristic anomaly scoring" },
+          { to: "/fp-tuner", label: "FP Tuner", hint: "propose and apply exclusions" },
+        ],
+      },
     ],
   },
   {
@@ -81,6 +100,13 @@ const settingsNavItem: NavItem = {
   label: "Settings",
   hint: "admin session, operator identity, verify manifest",
 };
+
+function groupItems(group: NavGroup): NavItem[] {
+  if (group.sections) {
+    return group.sections.flatMap((section) => section.items);
+  }
+  return group.items ?? [];
+}
 
 function isActive(pathname: string, to: string) {
   return pathname === to || pathname.startsWith(`${to}/`);
@@ -123,20 +149,20 @@ export default function Layout() {
               ...group,
               items: hasBuiltRuntime
                 ? [
-                    ...group.items,
+                    ...groupItems(group),
                     { to: "/vhosts", label: "Vhosts", hint: "php-fpm host, port, and docroot bindings" },
                   ]
-                : group.items,
+                : groupItems(group),
             },
       ),
     [hasBuiltRuntime],
   );
-  const navItems = [...navGroups.flatMap((group) => group.items), settingsNavItem];
+  const navItems = [...navGroups.flatMap(groupItems), settingsNavItem];
   const current = navItems.find((item) => isActive(pathname, item.to));
   const currentGroup = isActive(pathname, settingsNavItem.to)
     ? { id: "settings", label: "Settings", hint: settingsNavItem.hint, items: [settingsNavItem] }
     : navGroups.find((group) =>
-        group.items.some((item) => isActive(pathname, item.to)),
+        groupItems(group).some((item) => isActive(pathname, item.to)),
       );
 
   return (
@@ -155,14 +181,28 @@ export default function Layout() {
                 <p className="app-nav-group-title">{tx(group.label)}</p>
               </div>
               <div className="app-nav-group-links">
-                {group.items.map((item) => {
-                  const active = isActive(pathname, item.to);
-                  return (
-                    <Link key={item.to} to={item.to} className={active ? "app-nav-link active" : "app-nav-link"}>
-                      <span className="app-nav-label">{tx(item.label)}</span>
-                    </Link>
-                  );
-                })}
+                {group.sections
+                  ? group.sections.map((section) => (
+                      <div key={section.id} className="app-nav-section">
+                        <p className="app-nav-section-title">{tx(section.label)}</p>
+                        {section.items.map((item) => {
+                          const active = isActive(pathname, item.to);
+                          return (
+                            <Link key={item.to} to={item.to} className={active ? "app-nav-link active" : "app-nav-link"}>
+                              <span className="app-nav-label">{tx(item.label)}</span>
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    ))
+                  : groupItems(group).map((item) => {
+                      const active = isActive(pathname, item.to);
+                      return (
+                        <Link key={item.to} to={item.to} className={active ? "app-nav-link active" : "app-nav-link"}>
+                          <span className="app-nav-label">{tx(item.label)}</span>
+                        </Link>
+                      );
+                    })}
               </div>
             </section>
           ))}

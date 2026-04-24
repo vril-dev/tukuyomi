@@ -262,6 +262,7 @@ func StatusHandler(c *gin.Context) {
 		"runtime_memory_limit_mb":                             config.RuntimeMemoryLimitMB,
 		"proxy_config_file":                                   config.ProxyConfigFile,
 		"proxy_engine_mode":                                   normalizeProxyEngineMode(config.ProxyEngineMode),
+		"waf_engine_mode":                                     normalizeSettingsWAFEngineMode(config.WAFEngineMode),
 		"proxy_etag":                                          proxyETag,
 		"proxy_dial_timeout":                                  proxyCfg.DialTimeout,
 		"proxy_response_header_timeout":                       proxyCfg.ResponseHeaderTimeout,

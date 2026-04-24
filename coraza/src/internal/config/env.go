@@ -28,6 +28,7 @@ var (
 	ProxyRollbackMax                    int
 	ProxyAuditFile                      string
 	ProxyEngineMode                     string
+	WAFEngineMode                       string
 	SecurityAuditEnabled                bool
 	SecurityAuditCaptureMode            string
 	SecurityAuditCaptureHeaders         bool
@@ -203,6 +204,7 @@ func applyAppConfig(cfg appConfigFile) {
 	ProxyRollbackMax = parseProxyRollbackHistorySize(strconv.Itoa(cfg.Proxy.RollbackHistorySize))
 	ProxyAuditFile = strings.TrimSpace(cfg.Proxy.AuditFile)
 	ProxyEngineMode = normalizeAppProxyEngineMode(cfg.Proxy.Engine.Mode)
+	WAFEngineMode = normalizeAppWAFEngineMode(cfg.WAF.Engine.Mode)
 	if override := strings.TrimSpace(os.Getenv("WAF_PROXY_AUDIT_FILE")); override != "" {
 		ProxyAuditFile = override
 	}

@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/corazawaf/coraza/v3"
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/bypassconf"
@@ -385,14 +384,14 @@ func ensureProxyRequestID(c *proxyServeContext) string {
 	return reqID
 }
 
-func selectWAFEngine(reqHost, reqPath string, tls bool) coraza.WAF {
-	wafEngine := waf.GetBaseWAF()
+func selectWAFEngine(reqHost, reqPath string, tls bool) waf.Engine {
+	wafEngine := waf.GetBaseEngine()
 	switch mr := bypassconf.Match(reqHost, reqPath, tls); mr.Action {
 	case bypassconf.ACTION_BYPASS:
 		return nil
 	case bypassconf.ACTION_RULE:
 		log.Printf("[BYPASS][RULE] host=%s path=%s extra=%s", reqHost, reqPath, mr.ExtraRule)
-		ruleWAF, err := waf.GetWAFForExtraRule(mr.ExtraRule)
+		ruleWAF, err := waf.GetEngineForExtraRule(mr.ExtraRule)
 		if err != nil {
 			log.Printf("[BYPASS][RULE][WARN] %v (fallback=default-rules)", err)
 			return wafEngine
@@ -665,34 +664,15 @@ func serveProxyRequest(c *proxyServeContext) {
 		return
 	}
 
-	tx := wafEngine.NewTransaction()
-	defer func() {
-		tx.ProcessLogging()
-		tx.Close()
-	}()
-
-	tx.ProcessURI(c.Request.URL.String(), c.Request.Method, c.Request.Proto)
-	tx.AddRequestHeader("Host", c.Request.Host)
-	if err := tx.ProcessRequestHeaders(); err != nil {
-		log.Println("Header error:", err)
+	wafDecision, err := wafEngine.InspectRequest(c.Request)
+	if err != nil {
+		log.Printf("[WAF][%s][WARN] %v", wafEngine.Name(), err)
 	}
-	if _, err := tx.ProcessRequestBody(); err != nil {
-		log.Println("Body error:", err)
-	}
+	ruleIDs := unique(wafDecision.RuleIDs)
+	setWAFContext(c, reqID, clientIP, country, countrySource, wafDecision.Hit, strings.Join(ruleIDs, ","))
 
-	wafHit := false
-	ruleIDs := make([]string, 0, 4)
-	for _, matched := range tx.MatchedRules() {
-		wafHit = true
-		if matched.Rule() != nil {
-			ruleIDs = append(ruleIDs, strconv.Itoa(matched.Rule().ID()))
-		}
-	}
-
-	setWAFContext(c, reqID, clientIP, country, countrySource, wafHit, strings.Join(unique(ruleIDs), ","))
-
-	if it := tx.Interruption(); it != nil {
-		primaryMatch, havePrimaryMatch := selectPrimaryWAFMatch(tx.MatchedRules(), it.RuleID)
+	if it := wafDecision.Interruption; it != nil {
+		primaryMatch, havePrimaryMatch := selectPrimaryWAFMatch(wafDecision.Matches, it.RuleID)
 		securityEvt := requestSecurityCtx.newSecurityEvent(c.Request, "waf", "waf", requestSecurityEventTypeWAFBlock, requestSecurityEventActionBlock)
 		securityEvt.Phase = "waf"
 		securityEvt.Enforced = true
@@ -711,7 +691,7 @@ func serveProxyRequest(c *proxyServeContext) {
 		}
 		requestSecurityCtx.publishSecurityEvent(securityEvt)
 		if auditTrail != nil {
-			wafNodeIDs := auditTrail.recordWAFMatches(tx.MatchedRules())
+			wafNodeIDs := auditTrail.recordWAFMatches(wafDecision.Matches)
 			auditTrail.recordWAFBlock(it.RuleID, it.Status, wafNodeIDs)
 			auditTrail.setTerminal("waf", "waf_block", "blocked", it.Status)
 		}

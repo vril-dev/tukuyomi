@@ -139,6 +139,7 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	next.Paths.ScheduledTaskConfigFile = "conf/tasks.custom.json"
 	next.Proxy.RollbackHistorySize = 12
 	next.Proxy.Engine.Mode = config.ProxyEngineModeTukuyomiProxy
+	next.WAF.Engine.Mode = config.WAFEngineModeCoraza
 	next.CRS.Enable = false
 	next.FPTuner.Endpoint = "https://fp.example.test/api"
 	next.FPTuner.Model = "gpt-test"
@@ -225,6 +226,9 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	}
 	if saved.Proxy.Engine.Mode != config.ProxyEngineModeTukuyomiProxy {
 		t.Fatalf("saved proxy.engine.mode=%q want=%q", saved.Proxy.Engine.Mode, config.ProxyEngineModeTukuyomiProxy)
+	}
+	if saved.WAF.Engine.Mode != config.WAFEngineModeCoraza {
+		t.Fatalf("saved waf.engine.mode=%q want=%q", saved.WAF.Engine.Mode, config.WAFEngineModeCoraza)
 	}
 	if saved.CRS.Enable {
 		t.Fatal("expected crs.enable=false after save")
@@ -468,6 +472,11 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 			RollbackHistorySize: 8,
 			Engine: settingsListenerAdminProxyEngineConfig{
 				Mode: config.ProxyEngineModeTukuyomiProxy,
+			},
+		},
+		WAF: settingsListenerAdminWAFConfig{
+			Engine: settingsListenerAdminWAFEngineConfig{
+				Mode: config.WAFEngineModeCoraza,
 			},
 		},
 		CRS: settingsListenerAdminCRSConfig{

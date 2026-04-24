@@ -10,6 +10,7 @@ test("computeSettingsRuntimeDrift returns empty when runtime matches configured 
     storage: { db_driver: "sqlite", db_path: "db/tukuyomi.db" },
     observability: { tracing: { enabled: false, service_name: "tukuyomi", otlp_endpoint: "" } },
     proxy: { engine: { mode: "tukuyomi_proxy" } },
+    waf: { engine: { mode: "coraza" } },
   };
   const runtime = {
     listen_addr: ":9090",
@@ -31,6 +32,7 @@ test("computeSettingsRuntimeDrift returns empty when runtime matches configured 
     tracing_service_name: "tukuyomi",
     tracing_otlp_endpoint: "",
     proxy_engine_mode: "tukuyomi_proxy",
+    waf_engine_mode: "coraza",
   };
 
   assert.deepEqual(computeSettingsRuntimeDrift(config, runtime), []);
@@ -44,6 +46,7 @@ test("computeSettingsRuntimeDrift returns labeled mismatches when restart is pen
     storage: { db_driver: "pgsql", db_path: "db/custom.db" },
     observability: { tracing: { enabled: true, service_name: "proxy-prod", otlp_endpoint: "http://otel:4318" } },
     proxy: { engine: { mode: "tukuyomi_proxy" } },
+    waf: { engine: { mode: "coraza" } },
   };
   const runtime = {
     listen_addr: ":9090",
@@ -65,6 +68,7 @@ test("computeSettingsRuntimeDrift returns labeled mismatches when restart is pen
     tracing_service_name: "tukuyomi",
     tracing_otlp_endpoint: "",
     proxy_engine_mode: "legacy_bridge",
+    waf_engine_mode: "open_appsec",
   };
 
   assert.deepEqual(computeSettingsRuntimeDrift(config, runtime), [
@@ -87,5 +91,6 @@ test("computeSettingsRuntimeDrift returns labeled mismatches when restart is pen
     "Tracing Service Name",
     "OTLP Endpoint",
     "Proxy Engine",
+    "WAF Engine",
   ]);
 });

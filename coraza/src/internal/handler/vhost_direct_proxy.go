@@ -722,6 +722,7 @@ func writeDirectProxyResponse(w http.ResponseWriter, r *http.Request, resp *http
 		return err
 	}
 	reqID := directProxyResponseRequestID(w, r)
+	cacheStatus := strings.TrimSpace(w.Header().Get(proxyResponseCacheHeader))
 	defer func() {
 		if resp.Body != nil {
 			_ = resp.Body.Close()
@@ -739,6 +740,9 @@ func writeDirectProxyResponse(w http.ResponseWriter, r *http.Request, resp *http
 	}
 	if reqID != "" {
 		dst.Set("X-Request-ID", reqID)
+	}
+	if cacheStatus != "" {
+		dst.Set(proxyResponseCacheHeader, cacheStatus)
 	}
 	w.WriteHeader(resp.StatusCode)
 	if r != nil && r.Method == http.MethodHead {

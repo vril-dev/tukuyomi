@@ -69,6 +69,8 @@ Behavior:
 - `/etc/tukuyomi/tukuyomi.env` stays root-owned `0640` because it is expected to
   carry secrets
 - `INSTALL_DB_SEED=auto` runs `db-import` only when the SQLite DB is not present yet
+- the first DB seed creates a default upstream named `primary`; update it to
+  the real backend endpoint before exposing the proxy to traffic
 - rerunning against an existing DB migrates schema and refreshes WAF/CRS assets
 - for an empty MySQL / PostgreSQL DB, set `INSTALL_DB_SEED=always` explicitly
 - the scheduled-task timer is enabled only with `INSTALL_ENABLE_SCHEDULED_TASKS=1`
@@ -296,9 +298,19 @@ make php-fpm-build RUNTIME=php85
 sudo make php-fpm-copy RUNTIME=php85 DEST=/srv/tukuyomi
 ```
 
+When `make install PREFIX="$HOME/tukuyomi"` installed into the login user's
+home directory, copy to the same deployment root. This normally does not require
+`sudo`.
+
+```bash
+make php-fpm-build RUNTIME=php85
+make php-fpm-copy RUNTIME=php85 DEST="$HOME/tukuyomi"
+```
+
 Notes:
 
 - `php-fpm-copy` syncs `data/php-fpm/binaries/<runtime_id>/` into the binary deployment tree; import inventory/module metadata with `make db-import` before removing PHP-FPM JSON manifests
+- after staging, refresh Options Runtime Inventory or restart `tukuyomi` when needed
 - remove an unneeded staged runtime bundle with `sudo make php-fpm-prune RUNTIME=php85`; it checks DB vhost references and the runtime pid before deleting `binaries/<runtime_id>` and `runtime/<runtime_id>`
 - `data/php-fpm/runtime/` is not copied; `tukuyomi` generates it later from vhost definitions
 - Docker is needed only for `php-fpm-build`; runtime execution does not depend on Docker after the bundle is staged

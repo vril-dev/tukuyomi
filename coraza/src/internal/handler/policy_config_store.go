@@ -160,13 +160,27 @@ func policyWriteExpectedETag(ifMatch string, currentRaw []byte, currentRec confi
 	if ifMatch == "" {
 		return ""
 	}
+	if currentRec.VersionID == 0 || currentRec.ETag == "" {
+		return ""
+	}
 	if currentRec.ETag != "" && ifMatch == currentRec.ETag {
+		return currentRec.ETag
+	}
+	if currentRec.ContentHash != "" && weakSHA256ETagHash(ifMatch) == currentRec.ContentHash {
 		return currentRec.ETag
 	}
 	if len(currentRaw) > 0 && ifMatch == bypassconf.ComputeETag(currentRaw) {
 		return currentRec.ETag
 	}
 	return ifMatch
+}
+
+func weakSHA256ETagHash(etag string) string {
+	etag = strings.TrimSpace(etag)
+	if !strings.HasPrefix(etag, `W/"sha256:`) || !strings.HasSuffix(etag, `"`) {
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(etag, `W/"sha256:`), `"`)
 }
 
 func normalizeCacheRulesPolicyRaw(raw string) ([]byte, error) {

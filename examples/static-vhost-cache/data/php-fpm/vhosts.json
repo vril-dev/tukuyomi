@@ -1,0 +1,13 @@
+{
+  "vhosts": [
+    {
+      "name": "static-site",
+      "mode": "static",
+      "hostname": "static-vhost-cache.example.test",
+      "listen_port": 9090,
+      "document_root": "data/vhosts/static-site/public",
+      "generated_target": "static-vhost-cache",
+      "linked_upstream_name": "static-site"
+    }
+  ]
+}

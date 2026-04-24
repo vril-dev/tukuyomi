@@ -5,6 +5,8 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+
+	"tukuyomi/internal/bypassconf"
 )
 
 func TestNormalizedPolicyConfigStoresTypedRowsAndVersions(t *testing.T) {
@@ -134,6 +136,36 @@ func TestNormalizedPolicyConfigStoresTypedRowsAndVersions(t *testing.T) {
 		if _, _, found, err := store.GetConfigBlob(key); err != nil || found {
 			t.Fatalf("legacy config blob %q found=%v err=%v", key, found, err)
 		}
+	}
+}
+
+func TestPolicyWriteExpectedETagAllowsInitialDBWriteFromFallbackETag(t *testing.T) {
+	store := initConfigDBStoreForTest(t)
+	spec := mustPolicyJSONSpec(cacheConfigBlobKey)
+	raw, err := normalizeCacheRulesPolicyRaw(`{"default":{"rules":[]}}`)
+	if err != nil {
+		t.Fatalf("normalize cache rules: %v", err)
+	}
+
+	fallbackETag := bypassconf.ComputeETag(raw)
+	expected := policyWriteExpectedETag(fallbackETag, nil, configVersionRecord{})
+	if expected != "" {
+		t.Fatalf("initial expected etag=%q want empty", expected)
+	}
+	rec, err := store.writePolicyJSONConfigVersion(expected, spec, raw, configVersionSourceApply, "", "initial cache rules update", 0)
+	if err != nil {
+		t.Fatalf("initial policy write should not conflict: %v", err)
+	}
+
+	loadedRaw, loadedRec, found, err := store.loadActivePolicyJSONConfig(spec)
+	if err != nil || !found {
+		t.Fatalf("load active policy found=%v err=%v", found, err)
+	}
+	if loadedRec.ETag != rec.ETag {
+		t.Fatalf("loaded etag=%q want %q", loadedRec.ETag, rec.ETag)
+	}
+	if translated := policyWriteExpectedETag(fallbackETag, loadedRaw, loadedRec); translated != loadedRec.ETag {
+		t.Fatalf("content etag translated to %q want %q", translated, loadedRec.ETag)
 	}
 }
 

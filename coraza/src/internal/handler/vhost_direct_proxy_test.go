@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"tukuyomi/internal/cacheconf"
 )
 
 func TestWriteDirectProxyResponsePreservesContextRequestID(t *testing.T) {
@@ -138,6 +140,109 @@ func TestServeProxyServesStaticVhostAssets(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "console.log('ok');") {
 		t.Fatalf("unexpected body=%q", rec.Body.String())
+	}
+}
+
+func TestServeProxyWithCacheCachesStaticVhostAssets(t *testing.T) {
+	restore := resetPHPProxyFoundationForTest(t)
+	defer restore()
+
+	tmp := t.TempDir()
+	docroot := filepath.Join(tmp, "static")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(docroot): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docroot, "test.html"), []byte("static cache body\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(test.html): %v", err)
+	}
+
+	inventoryPath := filepath.Join(tmp, "inventory.json")
+	vhostPath := filepath.Join(tmp, "vhosts.json")
+	proxyPath := filepath.Join(tmp, "proxy.json")
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	vhosts := `{
+  "vhosts": [
+    {
+      "name": "docs",
+      "mode": "static",
+      "hostname": "docs.example.com",
+      "listen_port": 9401,
+      "document_root": "` + filepath.ToSlash(docroot) + `",
+      "generated_target": "docs-static",
+      "linked_upstream_name": "docs"
+    }
+  ]
+}`
+	if err := os.WriteFile(vhostPath, []byte(vhosts), 0o600); err != nil {
+		t.Fatalf("write vhosts: %v", err)
+	}
+	proxyRaw := `{
+  "upstreams": [
+    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+  ],
+  "default_route": {
+    "action": {
+      "upstream": "docs"
+    }
+  }
+}`
+	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o600); err != nil {
+		t.Fatalf("write proxy: %v", err)
+	}
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+	if err := InitVhostRuntime(vhostPath, 2); err != nil {
+		t.Fatalf("InitVhostRuntime: %v", err)
+	}
+	if err := InitProxyRuntime(proxyPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+
+	cacheStorePath := filepath.Join(t.TempDir(), "cache-store.json")
+	cacheStoreDir := t.TempDir()
+	if err := os.WriteFile(cacheStorePath, []byte(`{"enabled":true,"store_dir":`+strconv.Quote(cacheStoreDir)+`,"max_bytes":1048576}`), 0o600); err != nil {
+		t.Fatalf("write cache store: %v", err)
+	}
+	if err := InitResponseCacheRuntime(cacheStorePath); err != nil {
+		t.Fatalf("InitResponseCacheRuntime: %v", err)
+	}
+	previousRules := cacheconf.Get()
+	t.Cleanup(func() {
+		if previousRules != nil {
+			cacheconf.Set(previousRules)
+			return
+		}
+		emptyRules, _ := cacheconf.LoadFromString("")
+		cacheconf.Set(emptyRules)
+	})
+	rules, err := cacheconf.LoadFromString(`ALLOW prefix=/test.html methods=GET,HEAD ttl=600 vary=Accept-Encoding`)
+	if err != nil {
+		t.Fatalf("load cache rules: %v", err)
+	}
+	cacheconf.Set(rules)
+
+	for i, want := range []string{"MISS", "HIT"} {
+		req := httptest.NewRequest(http.MethodGet, "http://docs.example.com/test.html", nil)
+		decision, err := resolveProxyRouteDecision(req, currentProxyConfig(), proxyRuntimeHealth())
+		if err != nil {
+			t.Fatalf("resolveProxyRouteDecision %d: %v", i+1, err)
+		}
+		req = req.WithContext(withProxyRouteDecision(req.Context(), decision))
+		rec := httptest.NewRecorder()
+		ServeProxyWithCacheHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d status=%d body=%s", i+1, rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get(proxyResponseCacheHeader); got != want {
+			t.Fatalf("request %d %s=%q want=%q headers=%v", i+1, proxyResponseCacheHeader, got, want, rec.Header())
+		}
+	}
+	_, _, _, stats := ResponseCacheSnapshot()
+	if stats.Stores != 1 || stats.EntryCount != 1 || stats.Hits != 1 || stats.Misses != 1 {
+		t.Fatalf("cache stats stores=%d entries=%d hits=%d misses=%d", stats.Stores, stats.EntryCount, stats.Hits, stats.Misses)
 	}
 }
 

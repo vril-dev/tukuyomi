@@ -9,6 +9,7 @@
 | Next.js | embedded gateway 直下での frontend app protection | `examples/nextjs` |
 | WordPress (High Paranoia) | より strict な CRS 設定での CMS protection | `examples/wordpress` |
 | API Gateway | route rule と rate limit を組み合わせる REST API protection | `examples/api-gateway` |
+| Static Vhost Cache | direct static vhost と internal response cache の検証 | `examples/static-vhost-cache` |
 
 ## Common flow
 

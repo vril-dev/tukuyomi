@@ -61,6 +61,8 @@ make install TARGET=linux-systemd \
 - `conf/config.json` は root-owned `0640` とし、service group に読み取りだけ渡します
 - `/etc/tukuyomi/tukuyomi.env` は secret を含める前提で root-owned `0640` のまま保持します
 - `INSTALL_DB_SEED=auto` は SQLite DB がまだ無い初回だけ `db-import` を実行します
+- 初回 DB seed では `primary` という default upstream が作成されます。proxy に
+  traffic を流す前に、実際の backend endpoint へ調整してください
 - 既存 DB がある再実行時は DB migrate と WAF/CRS asset refresh を行います
 - MySQL / PostgreSQL の空 DB を初期投入する場合は `INSTALL_DB_SEED=always` を明示してください
 - scheduled task timer は `INSTALL_ENABLE_SCHEDULED_TASKS=1` の時だけ有効化します
@@ -283,9 +285,18 @@ make php-fpm-build RUNTIME=php85
 sudo make php-fpm-copy RUNTIME=php85 DEST=/srv/tukuyomi
 ```
 
+`make install PREFIX="$HOME/tukuyomi"` などで login user の home 配下へ入れた場合は、
+copy も同じ配備先を指定します。この場合は通常 `sudo` は不要です。
+
+```bash
+make php-fpm-build RUNTIME=php85
+make php-fpm-copy RUNTIME=php85 DEST="$HOME/tukuyomi"
+```
+
 補足:
 
 - `php-fpm-copy` は `data/php-fpm/binaries/<runtime_id>/` を binary 配備ツリーへ同期します。PHP-FPM JSON manifest を削除する前に `make db-import` で inventory/module metadata を import してください
+- 配置後は Options の Runtime Inventory で Refresh するか、必要に応じて `tukuyomi` を restart してください
 - 不要になった staged runtime bundle は `sudo make php-fpm-prune RUNTIME=php85` で削除できます。DB vhost 参照と実行中 pid を確認してから `binaries/<runtime_id>` と `runtime/<runtime_id>` を消します
 - `data/php-fpm/runtime/` はコピー対象ではなく、`tukuyomi` 起動後に vhost 定義から生成されます
 - Docker が必要なのは `php-fpm-build` の build 時だけです。bundle 配置後の `tukuyomi` 実行時には Docker は不要です

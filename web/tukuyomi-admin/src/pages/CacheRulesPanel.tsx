@@ -160,6 +160,19 @@ export default function CacheRulePanel() {
     setRaw(serializeCacheRulesEditor(next));
   }, []);
 
+  const applyStoreData = useCallback((storeData: CacheStoreDTO) => {
+    const nextStore = storeData.store ?? defaultStoreConfig;
+    setStoreEtag(storeData.etag ?? null);
+    setStoreConfig(nextStore);
+    setStoreStats(storeData.stats ?? {});
+    setServerStoreSig(JSON.stringify(nextStore));
+  }, []);
+
+  const refreshStore = useCallback(async () => {
+    const storeData = await apiGetJson<CacheStoreDTO>("/cache-store");
+    applyStoreData(storeData);
+  }, [applyStoreData]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -170,15 +183,11 @@ export default function CacheRulePanel() {
       ]);
       const nextRaw = rulesData.raw ?? serializeCacheRulesEditor(createEmptyCacheRulesEditorState());
       const nextState = parseCacheRulesEditorDocument(nextRaw);
-      const nextStore = storeData.store ?? defaultStoreConfig;
       setEditorState(nextState);
       setRaw(nextRaw);
       setServerRaw(nextRaw);
       setEtag(rulesData.etag ?? null);
-      setStoreEtag(storeData.etag ?? null);
-      setStoreConfig(nextStore);
-      setStoreStats(storeData.stats ?? {});
-      setServerStoreSig(JSON.stringify(nextStore));
+      applyStoreData(storeData);
       setLastSavedAt(parseSavedAt(rulesData.saved_at));
       setValid(null);
       setMessages([]);
@@ -189,7 +198,7 @@ export default function CacheRulePanel() {
     } finally {
       setLoading(false);
     }
-  }, [tx]);
+  }, [applyStoreData, tx]);
 
   useEffect(() => {
     void load();
@@ -266,6 +275,7 @@ export default function CacheRulePanel() {
 
   const saveStore = useCallback(async () => {
     setSavingStore(true);
+    setError(null);
     setStoreNotice(null);
     try {
       const js = await apiPutJson<{ ok: boolean; etag?: string }>("/cache-store", storeConfig, {
@@ -275,17 +285,18 @@ export default function CacheRulePanel() {
         throw new Error(tx("save failed"));
       }
       setStoreEtag(js.etag ?? null);
-      await load();
+      await refreshStore();
       setStoreNotice({ tone: "success", messages: [tx("Cache store settings saved.")] });
     } catch (e: unknown) {
       setStoreNotice({ tone: "error", messages: [getErrorMessage(e, tx("save failed"))] });
     } finally {
       setSavingStore(false);
     }
-  }, [load, storeConfig, storeEtag, tx]);
+  }, [refreshStore, storeConfig, storeEtag, tx]);
 
   const clearStore = useCallback(async () => {
     setClearingStore(true);
+    setError(null);
     setStoreNotice(null);
     try {
       const js = await apiPostJson<{ ok: boolean; clear?: { cleared_entries?: number; cleared_bytes?: number } }>("/cache-store/clear", {});
@@ -299,14 +310,14 @@ export default function CacheRulePanel() {
           }),
         ],
       };
-      await load();
+      await refreshStore();
       setStoreNotice(nextStoreNotice);
     } catch (e: unknown) {
       setStoreNotice({ tone: "error", messages: [getErrorMessage(e, tx("clear failed"))] });
     } finally {
       setClearingStore(false);
     }
-  }, [load, tx]);
+  }, [refreshStore, tx]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -555,7 +566,7 @@ export default function CacheRulePanel() {
               ) : (
                 <div className="space-y-4">
                   {editorState.hosts.map((scope, index) => (
-                    <section key={`${scope.host}:${index}`} className="rounded-xl border border-neutral-200 p-4 space-y-3">
+                    <section key={`host-scope-${index}`} className="rounded-xl border border-neutral-200 p-4 space-y-3">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <Field label={tx("Host")} hint={tx("Exact host or host:port. Default ports collapse to the host-only scope.")}>
                           <input

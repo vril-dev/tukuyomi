@@ -21,8 +21,22 @@ before the stack starts.
 ## Smoke tests
 
 ```bash
-curl -i "http://localhost:19091/"
+./smoke.sh
+```
+
+`./smoke.sh` verifies that the app is reachable and that the internal response
+cache returns `X-Tukuyomi-Cache: MISS` followed by `HIT` for a static fixture.
+Set `ADMIN_API_KEY` when the smoke should enable and clear the internal cache
+store before probing:
+
+```bash
+ADMIN_API_KEY='your-admin-api-key' ./smoke.sh
+```
+
+You can still run a manual WAF block check:
+
+```bash
 curl -i "http://localhost:19091/?q=<script>alert(1)</script>"
 ```
 
-The second request should be blocked by WAF (`403`).
+The request should be blocked by WAF (`403`).

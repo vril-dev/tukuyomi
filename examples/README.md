@@ -9,6 +9,7 @@ The examples below show practical deployment patterns with tukuyomi as the front
 | Next.js | Frontend app protection with static-asset cache rules | `examples/nextjs` |
 | WordPress (High Paranoia) | CMS protection with stricter CRS setup | `examples/wordpress` |
 | API Gateway | REST API protection with rate-limit-first policy | `examples/api-gateway` |
+| Static Vhost Cache | Direct static vhost protection with internal response cache verification | `examples/static-vhost-cache` |
 
 ## Common flow
 

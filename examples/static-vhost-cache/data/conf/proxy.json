@@ -1,0 +1,19 @@
+{
+  "upstreams": [
+    {
+      "name": "static-site",
+      "url": "http://127.0.0.1:8080",
+      "weight": 1,
+      "enabled": true
+    }
+  ],
+  "default_route": {
+    "action": {
+      "upstream": "static-site"
+    }
+  },
+  "health_check_path": "",
+  "response_header_sanitize": {
+    "mode": "auto"
+  }
+}

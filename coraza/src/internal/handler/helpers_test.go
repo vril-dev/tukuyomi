@@ -35,14 +35,29 @@ func TestValidateRaw_StrictOverride(t *testing.T) {
 	restore := saveRuleConfig()
 	defer restore()
 
+	tmp := t.TempDir()
+	config.OverrideRulesDir = filepath.Join(tmp, "conf", "rules")
+
 	config.StrictOverride = false
-	if _, err := validateRaw("/foo rules/missing.conf\n"); err != nil {
-		t.Fatalf("validateRaw should allow missing extra rule when strict=false: %v", err)
+	if _, err := validateRaw(`{"entries":[{"path":"/foo","extra_rule":"missing.conf"}]}`); err == nil {
+		t.Fatal("validateRaw should reject missing DB-managed extra rule when strict=false")
 	}
 
 	config.StrictOverride = true
-	if _, err := validateRaw("/foo rules/missing.conf\n"); err == nil {
-		t.Fatal("validateRaw should fail when strict=true and extra rule is missing")
+	if _, err := validateRaw(`{"entries":[{"path":"/foo","extra_rule":"missing.conf"}]}`); err == nil {
+		t.Fatal("validateRaw should reject missing DB-managed extra rule when strict=true")
+	}
+
+	store := initConfigDBStoreForTest(t)
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{
+		{Path: config.DefaultBaseRuleAssetPath, Kind: wafRuleAssetKindBase, Raw: []byte("SecRuleEngine On\n")},
+		{Path: managedOverrideRulePath("extra.conf"), Kind: wafRuleAssetKindBypassExtra, Raw: []byte("SecRuleEngine On\n")},
+	}, configVersionSourceImport, "", "test waf assets import", 0); err != nil {
+		t.Fatalf("write waf rule assets: %v", err)
+	}
+
+	if _, err := validateRaw(`{"entries":[{"path":"/foo","extra_rule":"extra.conf"}]}`); err != nil {
+		t.Fatalf("validateRaw should accept existing DB-managed extra rule: %v", err)
 	}
 }
 
@@ -93,6 +108,7 @@ func saveRuleConfig() func() {
 	oldCRSRulesDir := config.CRSRulesDir
 	oldCRSDisabled := config.CRSDisabledFile
 	oldStrict := config.StrictOverride
+	oldOverrideRulesDir := config.OverrideRulesDir
 	return func() {
 		config.RulesFile = oldRulesFile
 		config.CRSEnable = oldCRSEnable
@@ -100,6 +116,7 @@ func saveRuleConfig() func() {
 		config.CRSRulesDir = oldCRSRulesDir
 		config.CRSDisabledFile = oldCRSDisabled
 		config.StrictOverride = oldStrict
+		config.OverrideRulesDir = oldOverrideRulesDir
 	}
 }
 

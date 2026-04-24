@@ -228,17 +228,170 @@ func TestRulesHandlerReturnsCanonicalDBAssetPath(t *testing.T) {
 	}
 }
 
+func TestPrepareInitialRuleFilesUsesDBBaseAssetOrder(t *testing.T) {
+	restore := saveRulesFileConfigForTest()
+	defer restore()
+
+	tmp := t.TempDir()
+	config.RulesFile = "a.conf,b.conf"
+	config.CRSEnable = false
+
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected sqlite store")
+	}
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{
+		{Path: "b.conf", Kind: wafRuleAssetKindBase, Raw: []byte("SecRuleEngine On\n")},
+		{Path: "a.conf", Kind: wafRuleAssetKindBase, Raw: []byte("SecRequestBodyAccess On\n")},
+	}, configVersionSourceImport, "", "test waf asset import", 0); err != nil {
+		t.Fatalf("write waf rule assets: %v", err)
+	}
+
+	files, err := waf.PrepareInitialRuleFiles()
+	if err != nil {
+		t.Fatalf("prepare initial rule files: %v", err)
+	}
+	want := []string{"b.conf", "a.conf"}
+	if strings.Join(files, ",") != strings.Join(want, ",") {
+		t.Fatalf("files=%v want=%v", files, want)
+	}
+}
+
+func TestRulesHandlerReturnsBypassExtraRuleAssets(t *testing.T) {
+	restore := saveRulesFileConfigForTest()
+	defer restore()
+
+	gin.SetMode(gin.TestMode)
+	tmp := t.TempDir()
+	config.RulesFile = config.DefaultBaseRuleAssetPath
+	config.CRSEnable = false
+	config.OverrideRulesDir = filepath.Join(tmp, "conf", "rules")
+	target := managedOverrideRulePath("orders-preview.conf")
+
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected sqlite store")
+	}
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{
+		{Path: config.DefaultBaseRuleAssetPath, Kind: wafRuleAssetKindBase, Raw: []byte("SecRuleEngine On\n")},
+		{Path: target, Kind: wafRuleAssetKindBypassExtra, Raw: []byte("SecRuleEngine On\n")},
+	}, configVersionSourceImport, "", "test waf asset import", 0); err != nil {
+		t.Fatalf("write waf rule assets: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/tukuyomi-api/rules", nil)
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+
+	RulesHandler(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Files []struct {
+			Path string `json:"path"`
+			Kind string `json:"kind"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode rules response: %v", err)
+	}
+	if len(out.Files) != 2 {
+		t.Fatalf("files len=%d want=2 body=%s", len(out.Files), rec.Body.String())
+	}
+	if out.Files[1].Path != filepath.ToSlash(target) || out.Files[1].Kind != wafRuleAssetKindBypassExtra {
+		t.Fatalf("extra asset=%+v want path=%q kind=%q", out.Files[1], filepath.ToSlash(target), wafRuleAssetKindBypassExtra)
+	}
+}
+
+func TestPutRulesCreatesBypassExtraRuleAsset(t *testing.T) {
+	restore := saveRulesFileConfigForTest()
+	defer restore()
+
+	gin.SetMode(gin.TestMode)
+	tmp := t.TempDir()
+	config.RulesFile = config.DefaultBaseRuleAssetPath
+	config.CRSEnable = false
+	config.OverrideRulesDir = filepath.Join(tmp, "conf", "rules")
+	target := managedOverrideRulePath("orders-preview.conf")
+
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+		waf.InvalidateOverrideWAF(target)
+	})
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected sqlite store")
+	}
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{{
+		Path: config.DefaultBaseRuleAssetPath,
+		Kind: wafRuleAssetKindBase,
+		Raw:  []byte("SecRuleEngine On\n"),
+	}}, configVersionSourceImport, "", "test waf asset import", 0); err != nil {
+		t.Fatalf("write waf rule assets: %v", err)
+	}
+
+	body := rulesPutBody{
+		Path: "orders-preview.conf",
+		Kind: wafRuleAssetKindBypassExtra,
+		Raw:  standaloneOverrideRuleSample,
+	}
+	payload, _ := json.Marshal(body)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/tukuyomi-api/rules", strings.NewReader(string(payload)))
+	req.Header.Set("Content-Type", "application/json")
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+
+	PutRules(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("extra rule file should not be materialized, stat err=%v", err)
+	}
+	if _, err := waf.GetWAFForExtraRule(target); err != nil {
+		t.Fatalf("load DB-backed extra rule: %v", err)
+	}
+}
+
 func saveRulesFileConfigForTest() func() {
 	oldRulesFile := config.RulesFile
 	oldCRSEnable := config.CRSEnable
 	oldCRSSetup := config.CRSSetupFile
 	oldCRSRulesDir := config.CRSRulesDir
 	oldCRSDisabled := config.CRSDisabledFile
+	oldOverrideRulesDir := config.OverrideRulesDir
 	return func() {
 		config.RulesFile = oldRulesFile
 		config.CRSEnable = oldCRSEnable
 		config.CRSSetupFile = oldCRSSetup
 		config.CRSRulesDir = oldCRSRulesDir
 		config.CRSDisabledFile = oldCRSDisabled
+		config.OverrideRulesDir = oldOverrideRulesDir
 	}
 }

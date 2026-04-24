@@ -156,11 +156,15 @@ func validateRaw(s string) (int, error) {
 		if e.ExtraRule == "" {
 			continue
 		}
-		if _, statErr := os.Stat(e.ExtraRule); statErr != nil {
-			if errors.Is(statErr, os.ErrNotExist) && !config.StrictOverride {
-				continue
+		target, found, err := wafRuleAssetExistsForKind(e.ExtraRule, wafRuleAssetKindBypassExtra)
+		if err != nil {
+			return 0, fmt.Errorf("extra rule lookup failed: %s: %w", e.ExtraRule, err)
+		}
+		if !found {
+			if target == "" {
+				target = e.ExtraRule
 			}
-			return 0, fmt.Errorf("extra rule not found: %s", e.ExtraRule)
+			return 0, fmt.Errorf("extra rule not found in DB-managed rule assets: %s", target)
 		}
 	}
 

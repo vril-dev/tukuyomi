@@ -43,8 +43,7 @@ const baseNavGroups: NavGroup[] = [
     label: "Security",
     hint: "rules, reputation, anomaly defense",
     items: [
-      { to: "/rules", label: "Rules", hint: "base directives" },
-      { to: "/override-rules", label: "Override Rules", hint: "managed extra_rule rules" },
+      { to: "/rules", label: "Rules", hint: "base and bypass extra rules" },
       { to: "/rule-sets", label: "Rule Sets", hint: "CRS toggles" },
       { to: "/bypass", label: "Bypass Rules", hint: "path overrides" },
       { to: "/country-block", label: "Country Block", hint: "country deny list" },

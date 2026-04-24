@@ -13,6 +13,7 @@ import (
 
 type RuleAsset struct {
 	Path string
+	Kind string
 	Raw  []byte
 }
 

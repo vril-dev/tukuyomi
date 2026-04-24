@@ -24,6 +24,13 @@ var baseMu sync.RWMutex
 var overrideMu sync.RWMutex
 var overrideWAFs = map[string]overrideWAFCacheEntry{}
 
+const (
+	ruleAssetKindBase        = "base"
+	ruleAssetKindCRSSetup    = "crs_setup"
+	ruleAssetKindCRSAsset    = "crs_asset"
+	ruleAssetKindBypassExtra = "bypass_extra_rule"
+)
+
 type overrideWAFCacheEntry struct {
 	w    coraza.WAF
 	etag string
@@ -174,11 +181,20 @@ func composeInitialRuleFiles(baseRuleSpec string, crsEnabled bool, crsSetupFile,
 }
 
 func composeInitialRuleFilesFromAssets(bundle RuleAssetBundle, baseRuleSpec string, crsEnabled bool, crsSetupFile, crsRulesDir string, crsDisabled map[string]struct{}) ([]string, error) {
+	_ = baseRuleSpec
 	files := make([]string, 0, 32)
 	seen := map[string]struct{}{}
 	assetSet := make(map[string]struct{}, len(bundle.Assets))
+	baseAssets := make([]string, 0, len(bundle.Assets))
 	for _, asset := range bundle.Assets {
-		assetSet[normalizeRuleAssetPath(asset.Path)] = struct{}{}
+		path := normalizeRuleAssetPath(asset.Path)
+		if path == "" {
+			continue
+		}
+		assetSet[path] = struct{}{}
+		if normalizeRuleAssetKind(asset.Kind) == ruleAssetKindBase {
+			baseAssets = append(baseAssets, path)
+		}
 	}
 	appendUnique := func(path string) {
 		path = normalizeRuleAssetPath(path)
@@ -208,11 +224,7 @@ func composeInitialRuleFilesFromAssets(bundle RuleAssetBundle, baseRuleSpec stri
 		}
 	}
 
-	for _, f := range splitRuleFiles(baseRuleSpec) {
-		path := normalizeRuleAssetPath(f)
-		if _, ok := assetSet[path]; !ok {
-			return nil, fmt.Errorf("base rule asset not found in DB: %s", f)
-		}
+	for _, path := range baseAssets {
 		appendUnique(path)
 	}
 	if len(files) == 0 {
@@ -235,6 +247,10 @@ func discoverCRSRuleFilesFromAssets(bundle RuleAssetBundle, setupFile, rulesDir 
 	hasSetup := false
 	out := []string{}
 	for _, asset := range bundle.Assets {
+		kind := normalizeRuleAssetKind(asset.Kind)
+		if kind != ruleAssetKindCRSSetup && kind != ruleAssetKindCRSAsset {
+			continue
+		}
 		p := normalizeRuleAssetPath(asset.Path)
 		if p == setupPath {
 			hasSetup = true
@@ -260,6 +276,19 @@ func discoverCRSRuleFilesFromAssets(bundle RuleAssetBundle, setupFile, rulesDir 
 		return nil, fmt.Errorf("no CRS rule assets found in DB under %s", rulesDir)
 	}
 	return out, nil
+}
+
+func normalizeRuleAssetKind(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case ruleAssetKindCRSSetup:
+		return ruleAssetKindCRSSetup
+	case ruleAssetKindCRSAsset:
+		return ruleAssetKindCRSAsset
+	case ruleAssetKindBypassExtra:
+		return ruleAssetKindBypassExtra
+	default:
+		return ruleAssetKindBase
+	}
 }
 
 func normalizeRuleAssetPath(raw string) string {
@@ -462,7 +491,11 @@ func ValidateWithRuleOverride(targetPath string, raw []byte) error {
 			break
 		}
 		if !replaced {
-			return fmt.Errorf("rule asset %s is not part of active rule set", targetPath)
+			bundle.Assets = append(bundle.Assets, RuleAsset{
+				Path: targetAsset,
+				Kind: ruleAssetKindBase,
+				Raw:  append([]byte(nil), raw...),
+			})
 		}
 		disabled := map[string]struct{}{}
 		if config.CRSEnable {

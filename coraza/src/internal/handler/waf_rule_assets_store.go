@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"tukuyomi/internal/bypassconf"
@@ -14,11 +13,12 @@ import (
 )
 
 const (
-	wafRuleAssetsConfigDomain  = "waf_rule_assets"
-	wafRuleAssetsSchemaVersion = 1
-	wafRuleAssetKindBase       = "base"
-	wafRuleAssetKindCRSSetup   = "crs_setup"
-	wafRuleAssetKindCRSAsset   = "crs_asset"
+	wafRuleAssetsConfigDomain   = "waf_rule_assets"
+	wafRuleAssetsSchemaVersion  = 1
+	wafRuleAssetKindBase        = "base"
+	wafRuleAssetKindCRSSetup    = "crs_setup"
+	wafRuleAssetKindCRSAsset    = "crs_asset"
+	wafRuleAssetKindBypassExtra = "bypass_extra_rule"
 )
 
 type wafRuleAssetVersion struct {
@@ -150,6 +150,7 @@ func loadWAFRuleAssetsForWAF() (waf.RuleAssetBundle, bool, error) {
 	for _, asset := range assets {
 		out.Assets = append(out.Assets, waf.RuleAsset{
 			Path: asset.Path,
+			Kind: asset.Kind,
 			Raw:  append([]byte(nil), asset.Raw...),
 		})
 	}
@@ -216,13 +217,10 @@ func collectWAFRuleAssetsFromFS() ([]wafRuleAssetVersion, error) {
 }
 
 func readWAFRuleAssetFile(path string, kind string) (wafRuleAssetVersion, bool, error) {
-	normalized, err := normalizeWAFRuleAssetPathStrict(path)
+	kind = normalizeWAFRuleAssetKind(kind)
+	normalized, err := normalizeWAFRuleAssetPathForKind(path, kind)
 	if err != nil {
 		return wafRuleAssetVersion{}, false, err
-	}
-	kind = normalizeWAFRuleAssetKind(kind)
-	if kind == wafRuleAssetKindBase {
-		normalized = config.NormalizeBaseRuleAssetPath(normalized)
 	}
 	sourcePath := wafRuleAssetSourcePath(normalized)
 	raw, hadFile, err := readFileMaybe(sourcePath)
@@ -271,32 +269,25 @@ func configuredCRSRoot() string {
 }
 
 func normalizeWAFRuleAssets(assets []wafRuleAssetVersion) []wafRuleAssetVersion {
-	byPath := make(map[string]wafRuleAssetVersion, len(assets))
+	out := make([]wafRuleAssetVersion, 0, len(assets))
+	byPath := make(map[string]int, len(assets))
 	for _, asset := range assets {
-		path, err := normalizeWAFRuleAssetPathStrict(asset.Path)
+		asset.Kind = normalizeWAFRuleAssetKind(asset.Kind)
+		path, err := normalizeWAFRuleAssetPathForKind(asset.Path, asset.Kind)
 		if err != nil {
 			continue
-		}
-		asset.Kind = normalizeWAFRuleAssetKind(asset.Kind)
-		if asset.Kind == wafRuleAssetKindBase {
-			path = config.NormalizeBaseRuleAssetPath(path)
 		}
 		asset.Path = path
 		if strings.TrimSpace(asset.ETag) == "" {
 			asset.ETag = bypassconf.ComputeETag(asset.Raw)
 		}
-		byPath[path] = asset
-	}
-	out := make([]wafRuleAssetVersion, 0, len(byPath))
-	for _, asset := range byPath {
+		if idx, ok := byPath[path]; ok {
+			out[idx] = asset
+			continue
+		}
+		byPath[path] = len(out)
 		out = append(out, asset)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Kind != out[j].Kind {
-			return wafRuleAssetKindOrder(out[i].Kind) < wafRuleAssetKindOrder(out[j].Kind)
-		}
-		return out[i].Path < out[j].Path
-	})
 	return out
 }
 
@@ -348,12 +339,43 @@ func normalizeWAFRuleAssetPath(raw string) string {
 	return out
 }
 
+func normalizeWAFRuleAssetPathForKind(raw string, kind string) (string, error) {
+	kind = normalizeWAFRuleAssetKind(kind)
+	switch kind {
+	case wafRuleAssetKindBase:
+		path, err := normalizeWAFRuleAssetPathStrict(raw)
+		if err != nil {
+			return "", err
+		}
+		return config.NormalizeBaseRuleAssetPath(path), nil
+	case wafRuleAssetKindBypassExtra:
+		name, ok, err := managedOverrideRuleRefName(raw)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			_, target, targetErr := managedOverrideRuleTarget(raw)
+			if targetErr != nil {
+				return "", targetErr
+			}
+			return filepath.ToSlash(target), nil
+		}
+		return filepath.ToSlash(managedOverrideRulePath(name)), nil
+	default:
+		return normalizeWAFRuleAssetPathStrict(raw)
+	}
+}
+
 func normalizeWAFRuleAssetKind(kind string) string {
 	switch strings.TrimSpace(kind) {
+	case "":
+		return wafRuleAssetKindBase
 	case wafRuleAssetKindBase:
 		return wafRuleAssetKindBase
 	case wafRuleAssetKindCRSSetup:
 		return wafRuleAssetKindCRSSetup
+	case wafRuleAssetKindBypassExtra:
+		return wafRuleAssetKindBypassExtra
 	default:
 		return wafRuleAssetKindCRSAsset
 	}
@@ -370,16 +392,51 @@ func wafRuleAssetKindOrder(kind string) int {
 	}
 }
 
-func writeWAFRuleAssetUpdate(target string, raw []byte, expectedDomainETag string, reason string) (configVersionRecord, wafRuleAssetVersion, error) {
+func normalizeEditableWAFRuleAssetKind(kind string) (string, error) {
+	switch strings.TrimSpace(kind) {
+	case "", wafRuleAssetKindBase:
+		return wafRuleAssetKindBase, nil
+	case wafRuleAssetKindBypassExtra:
+		return wafRuleAssetKindBypassExtra, nil
+	default:
+		return "", fmt.Errorf("unsupported editable rule asset kind: %s", kind)
+	}
+}
+
+func editableWAFRuleAssets(assets []wafRuleAssetVersion) []wafRuleAssetVersion {
+	assets = normalizeWAFRuleAssets(assets)
+	out := make([]wafRuleAssetVersion, 0, len(assets))
+	for _, asset := range assets {
+		if asset.Kind != wafRuleAssetKindBase && asset.Kind != wafRuleAssetKindBypassExtra {
+			continue
+		}
+		out = append(out, asset)
+	}
+	return out
+}
+
+func wafRuleAssetByPath(assets []wafRuleAssetVersion, path string) (wafRuleAssetVersion, bool) {
+	for _, asset := range normalizeWAFRuleAssets(assets) {
+		if asset.Path == path {
+			return asset, true
+		}
+	}
+	return wafRuleAssetVersion{}, false
+}
+
+func writeWAFRuleAssetUpdateForKind(target string, kind string, raw []byte, expectedDomainETag string, reason string) (configVersionRecord, wafRuleAssetVersion, error) {
 	store := getLogsStatsStore()
 	if store == nil {
-		return configVersionRecord{}, wafRuleAssetVersion{}, fmt.Errorf("db store is not initialized")
+		return configVersionRecord{}, wafRuleAssetVersion{}, errConfigDBStoreRequired
 	}
-	targetPath, err := normalizeWAFRuleAssetPathStrict(target)
+	targetKind, err := normalizeEditableWAFRuleAssetKind(kind)
 	if err != nil {
 		return configVersionRecord{}, wafRuleAssetVersion{}, err
 	}
-	targetPath = config.NormalizeBaseRuleAssetPath(targetPath)
+	targetPath, err := normalizeWAFRuleAssetPathForKind(target, targetKind)
+	if err != nil {
+		return configVersionRecord{}, wafRuleAssetVersion{}, err
+	}
 	assets, rec, found, err := loadRuntimeWAFRuleAssets(store)
 	if err != nil {
 		return configVersionRecord{}, wafRuleAssetVersion{}, err
@@ -390,32 +447,157 @@ func writeWAFRuleAssetUpdate(target string, raw []byte, expectedDomainETag strin
 	if found && strings.TrimSpace(expectedDomainETag) == "" {
 		expectedDomainETag = rec.ETag
 	}
-	byPath := wafRuleAssetMap(assets)
-	current, ok := byPath[targetPath]
-	if !ok {
-		current = wafRuleAssetVersion{Path: targetPath, Kind: wafRuleAssetKindBase}
+	next := normalizeWAFRuleAssets(assets)
+	current := wafRuleAssetVersion{
+		Path: targetPath,
+		Kind: targetKind,
+		Raw:  append([]byte(nil), raw...),
+		ETag: bypassconf.ComputeETag(raw),
 	}
-	current.Raw = append([]byte(nil), raw...)
-	current.ETag = bypassconf.ComputeETag(raw)
-	byPath[targetPath] = current
-
-	next := make([]wafRuleAssetVersion, 0, len(byPath))
-	for _, asset := range byPath {
-		next = append(next, asset)
+	replaced := false
+	for i := range next {
+		if next[i].Path != targetPath {
+			continue
+		}
+		current.Kind = targetKind
+		next[i] = current
+		replaced = true
+		break
+	}
+	if !replaced {
+		next = append(next, current)
 	}
 	nextRec, nextAssets, err := store.writeWAFRuleAssetsVersion(expectedDomainETag, next, configVersionSourceApply, "", reason, 0)
 	if err != nil {
 		return configVersionRecord{}, wafRuleAssetVersion{}, err
 	}
-	return nextRec, wafRuleAssetMap(nextAssets)[targetPath], nil
+	asset, _ := wafRuleAssetByPath(nextAssets, targetPath)
+	return nextRec, asset, nil
 }
 
-func loadEditableWAFRuleAsset(target string) ([]byte, string, string, bool, error) {
-	targetPath, err := normalizeWAFRuleAssetPathStrict(target)
+func writeWAFRuleAssetUpdate(target string, raw []byte, expectedDomainETag string, reason string) (configVersionRecord, wafRuleAssetVersion, error) {
+	return writeWAFRuleAssetUpdateForKind(target, wafRuleAssetKindBase, raw, expectedDomainETag, reason)
+}
+
+func deleteWAFRuleAssetForKind(target string, kind string, expectedDomainETag string, reason string) (configVersionRecord, error) {
+	store := getLogsStatsStore()
+	if store == nil {
+		return configVersionRecord{}, errConfigDBStoreRequired
+	}
+	targetKind, err := normalizeEditableWAFRuleAssetKind(kind)
+	if err != nil {
+		return configVersionRecord{}, err
+	}
+	targetPath, err := normalizeWAFRuleAssetPathForKind(target, targetKind)
+	if err != nil {
+		return configVersionRecord{}, err
+	}
+	assets, rec, found, err := loadRuntimeWAFRuleAssets(store)
+	if err != nil {
+		return configVersionRecord{}, err
+	}
+	if !found {
+		return configVersionRecord{}, fmt.Errorf("active waf rule assets missing in db; run make crs-install before editing rule assets")
+	}
+	if strings.TrimSpace(expectedDomainETag) == "" {
+		expectedDomainETag = rec.ETag
+	}
+	next := normalizeWAFRuleAssets(assets)
+	filtered := next[:0]
+	deleted := false
+	baseCount := 0
+	for _, asset := range next {
+		if asset.Kind == wafRuleAssetKindBase && asset.Path != targetPath {
+			baseCount++
+		}
+		if asset.Path == targetPath {
+			deleted = true
+			continue
+		}
+		filtered = append(filtered, asset)
+	}
+	if !deleted {
+		return configVersionRecord{}, fmt.Errorf("waf rule asset not found in active DB generation: %s", targetPath)
+	}
+	if targetKind == wafRuleAssetKindBase && baseCount == 0 {
+		return configVersionRecord{}, fmt.Errorf("at least one base rule asset is required")
+	}
+	rec, _, err = store.writeWAFRuleAssetsVersion(expectedDomainETag, filtered, configVersionSourceApply, "", reason, 0)
+	if err != nil {
+		return configVersionRecord{}, err
+	}
+	return rec, nil
+}
+
+func reorderEditableWAFRuleAssets(order []wafRuleAssetVersion, expectedDomainETag string, reason string) (configVersionRecord, []wafRuleAssetVersion, error) {
+	store := getLogsStatsStore()
+	if store == nil {
+		return configVersionRecord{}, nil, errConfigDBStoreRequired
+	}
+	assets, rec, found, err := loadRuntimeWAFRuleAssets(store)
+	if err != nil {
+		return configVersionRecord{}, nil, err
+	}
+	if !found {
+		return configVersionRecord{}, nil, fmt.Errorf("active waf rule assets missing in db; run make crs-install before editing rule assets")
+	}
+	normalized := normalizeWAFRuleAssets(assets)
+	editable := editableWAFRuleAssets(normalized)
+	if len(order) != len(editable) {
+		return configVersionRecord{}, nil, fmt.Errorf("rule asset order must include every editable rule asset")
+	}
+	byPath := make(map[string]wafRuleAssetVersion, len(editable))
+	for _, asset := range editable {
+		byPath[asset.Path] = asset
+	}
+	seen := make(map[string]struct{}, len(order))
+	orderedEditable := make([]wafRuleAssetVersion, 0, len(order))
+	for _, item := range order {
+		kind, err := normalizeEditableWAFRuleAssetKind(item.Kind)
+		if err != nil {
+			return configVersionRecord{}, nil, err
+		}
+		path, err := normalizeWAFRuleAssetPathForKind(item.Path, kind)
+		if err != nil {
+			return configVersionRecord{}, nil, err
+		}
+		asset, ok := byPath[path]
+		if !ok || asset.Kind != kind {
+			return configVersionRecord{}, nil, fmt.Errorf("rule asset is not editable or does not exist: %s", item.Path)
+		}
+		if _, ok := seen[path]; ok {
+			return configVersionRecord{}, nil, fmt.Errorf("duplicate rule asset in order: %s", item.Path)
+		}
+		seen[path] = struct{}{}
+		orderedEditable = append(orderedEditable, asset)
+	}
+	next := make([]wafRuleAssetVersion, 0, len(normalized))
+	next = append(next, orderedEditable...)
+	for _, asset := range normalized {
+		if asset.Kind == wafRuleAssetKindBase || asset.Kind == wafRuleAssetKindBypassExtra {
+			continue
+		}
+		next = append(next, asset)
+	}
+	if strings.TrimSpace(expectedDomainETag) == "" {
+		expectedDomainETag = rec.ETag
+	}
+	nextRec, nextAssets, err := store.writeWAFRuleAssetsVersion(expectedDomainETag, next, configVersionSourceApply, "", reason, 0)
+	if err != nil {
+		return configVersionRecord{}, nil, err
+	}
+	return nextRec, editableWAFRuleAssets(nextAssets), nil
+}
+
+func loadEditableWAFRuleAssetForKind(target string, kind string) ([]byte, string, string, bool, error) {
+	targetKind, err := normalizeEditableWAFRuleAssetKind(kind)
 	if err != nil {
 		return nil, "", "", false, err
 	}
-	targetPath = config.NormalizeBaseRuleAssetPath(targetPath)
+	targetPath, err := normalizeWAFRuleAssetPathForKind(target, targetKind)
+	if err != nil {
+		return nil, "", "", false, err
+	}
 	store := getLogsStatsStore()
 	if store == nil {
 		return nil, "", "", false, errConfigDBStoreRequired
@@ -425,7 +607,7 @@ func loadEditableWAFRuleAsset(target string) ([]byte, string, string, bool, erro
 		return nil, "", "", false, err
 	}
 	if found {
-		if asset, ok := wafRuleAssetMap(assets)[targetPath]; ok {
+		if asset, ok := wafRuleAssetByPath(assets, targetPath); ok && asset.Kind == targetKind {
 			etag := strings.TrimSpace(asset.ETag)
 			if etag == "" {
 				etag = bypassconf.ComputeETag(asset.Raw)
@@ -434,6 +616,105 @@ func loadEditableWAFRuleAsset(target string) ([]byte, string, string, bool, erro
 		}
 	}
 	return nil, "", "", false, fmt.Errorf("waf rule asset not found in active DB generation: %s", targetPath)
+}
+
+func loadEditableWAFRuleAsset(target string) ([]byte, string, string, bool, error) {
+	return loadEditableWAFRuleAssetForKind(target, wafRuleAssetKindBase)
+}
+
+func wafRuleAssetExistsForKind(target string, kind string) (string, bool, error) {
+	targetKind, err := normalizeEditableWAFRuleAssetKind(kind)
+	if err != nil {
+		return "", false, err
+	}
+	targetPath, err := normalizeWAFRuleAssetPathForKind(target, targetKind)
+	if err != nil {
+		return "", false, err
+	}
+	store := getLogsStatsStore()
+	if store == nil {
+		return targetPath, false, errConfigDBStoreRequired
+	}
+	assets, _, found, err := loadRuntimeWAFRuleAssets(store)
+	if err != nil {
+		return targetPath, false, err
+	}
+	if !found {
+		return targetPath, false, fmt.Errorf("active waf rule assets missing in db; run make crs-install before editing rule assets")
+	}
+	asset, ok := wafRuleAssetByPath(assets, targetPath)
+	return targetPath, ok && asset.Kind == targetKind, nil
+}
+
+func loadBypassExtraRuleAssetForWAF(rule string) (waf.OverrideRuleSource, bool, error) {
+	name, ok, err := managedOverrideRuleRefName(rule)
+	if err != nil || !ok {
+		return waf.OverrideRuleSource{}, false, err
+	}
+	target := managedOverrideRulePath(name)
+	raw, etag, _, _, err := loadEditableWAFRuleAssetForKind(target, wafRuleAssetKindBypassExtra)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return waf.OverrideRuleSource{}, false, nil
+		}
+		return waf.OverrideRuleSource{}, false, err
+	}
+	return waf.OverrideRuleSource{
+		Raw:  raw,
+		ETag: etag,
+		Name: name,
+	}, true, nil
+}
+
+func migrateManagedOverrideRulesToWAFRuleAssets(store *wafEventStore, rules []managedOverrideRuleVersion) error {
+	if len(rules) == 0 {
+		return nil
+	}
+	assets, rec, found, err := loadRuntimeWAFRuleAssets(store)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("active waf rule assets missing in db; run make crs-install before migrating override rules")
+	}
+	next := normalizeWAFRuleAssets(assets)
+	byPath := make(map[string]int, len(next))
+	for i, asset := range next {
+		byPath[asset.Path] = i
+	}
+	changed := false
+	for _, rule := range normalizeManagedOverrideRules(rules) {
+		target := managedOverrideRulePath(rule.Name)
+		path, err := normalizeWAFRuleAssetPathForKind(target, wafRuleAssetKindBypassExtra)
+		if err != nil {
+			return err
+		}
+		asset := wafRuleAssetVersion{
+			Path: path,
+			Kind: wafRuleAssetKindBypassExtra,
+			Raw:  append([]byte(nil), rule.Raw...),
+			ETag: strings.TrimSpace(rule.ETag),
+		}
+		if asset.ETag == "" {
+			asset.ETag = bypassconf.ComputeETag(asset.Raw)
+		}
+		if idx, ok := byPath[path]; ok {
+			if next[idx].Kind == wafRuleAssetKindBypassExtra && string(next[idx].Raw) == string(asset.Raw) && next[idx].ETag == asset.ETag {
+				continue
+			}
+			next[idx] = asset
+			changed = true
+			continue
+		}
+		byPath[path] = len(next)
+		next = append(next, asset)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	_, _, err = store.writeWAFRuleAssetsVersion(rec.ETag, next, configVersionSourceApply, "", "migrate override rules to waf rule assets", 0)
+	return err
 }
 
 func wafRuleAssetSavedAt(rec configVersionRecord, path string) string {

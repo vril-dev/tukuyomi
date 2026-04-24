@@ -35,6 +35,15 @@ type BypassRulesDTO = {
   saved_at?: string;
 };
 
+type RuleFileDTO = {
+  path?: string;
+  kind?: string;
+};
+
+type RulesResp = {
+  files?: RuleFileDTO[];
+};
+
 const exampleState: BypassRulesEditorState = {
   defaultEntries: [
     { path: "/assets/", extraRule: "" },
@@ -71,6 +80,7 @@ export default function BypassRulesPanel() {
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [structuredError, setStructuredError] = useState<string | null>(null);
+  const [extraRuleAssets, setExtraRuleAssets] = useState<string[]>([]);
 
   const totalEntries = useMemo(() => countBypassEntries(editorState), [editorState]);
   const dirty = useMemo(() => raw !== serverRaw || !!structuredError, [raw, serverRaw, structuredError]);
@@ -121,7 +131,15 @@ export default function BypassRulesPanel() {
     setLoading(true);
     setError(null);
     try {
-      const data = await apiGetJson<BypassRulesDTO>("/bypass-rules");
+      const [data, rulesData] = await Promise.all([
+        apiGetJson<BypassRulesDTO>("/bypass-rules"),
+        apiGetJson<RulesResp>("/rules"),
+      ]);
+      const extraRules = (Array.isArray(rulesData.files) ? rulesData.files : [])
+        .filter((file) => file.kind === "bypass_extra_rule" && typeof file.path === "string" && file.path.trim())
+        .map((file) => file.path as string)
+        .sort((a, b) => a.localeCompare(b));
+      setExtraRuleAssets(extraRules);
       const nextRaw = data.raw ?? "";
       const parsed = parseBypassRulesEditorDocument(nextRaw);
       setEditorBase(parsed.base);
@@ -370,11 +388,11 @@ export default function BypassRulesPanel() {
                   />
                 </Field>
                 <Field label={tx("Extra rule reference")} hint={tx("Optional DB-managed `.conf` override applied instead of a full bypass when you need a narrow override.")}>
-                  <input
-                    className={inputClass}
+                  <ExtraRuleSelect
+                    tx={tx}
+                    options={extraRuleAssets}
                     value={entry.extraRule}
-                    onChange={(event) => updateDefaultEntry(index, (current) => ({ ...current, extraRule: event.target.value }))}
-                    placeholder="override.conf"
+                    onChange={(value) => updateDefaultEntry(index, (current) => ({ ...current, extraRule: value }))}
                   />
                 </Field>
               </div>
@@ -507,13 +525,13 @@ export default function BypassRulesPanel() {
                         />
                       </Field>
                       <Field label={tx("Extra rule reference")}>
-                        <input
-                          className={inputClass}
+                        <ExtraRuleSelect
+                          tx={tx}
+                          options={extraRuleAssets}
                           value={entry.extraRule}
-                          onChange={(event) =>
-                            updateHostEntry(hostIndex, entryIndex, (current) => ({ ...current, extraRule: event.target.value }))
+                          onChange={(value) =>
+                            updateHostEntry(hostIndex, entryIndex, (current) => ({ ...current, extraRule: value }))
                           }
-                          placeholder="internal.conf"
                         />
                       </Field>
                     </div>
@@ -527,5 +545,28 @@ export default function BypassRulesPanel() {
       </SectionCard>
 
     </div>
+  );
+}
+
+function ExtraRuleSelect({
+  value,
+  options,
+  onChange,
+  tx,
+}: {
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  tx: (key: string, vars?: Record<string, string | number>) => string;
+}) {
+  const hasCurrent = !value || options.includes(value);
+  return (
+    <select className={inputClass} value={value} onChange={(event) => onChange(event.target.value)}>
+      <option value="">{tx("Full bypass")}</option>
+      {!hasCurrent ? <option value={value}>{value}</option> : null}
+      {options.map((path) => (
+        <option key={path} value={path}>{path}</option>
+      ))}
+    </select>
   );
 }

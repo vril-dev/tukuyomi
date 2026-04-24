@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -369,9 +370,6 @@ func StatusHandler(c *gin.Context) {
 }
 
 func RulesHandler(c *gin.Context) {
-	files := configuredRuleFiles()
-	result := make(map[string]string)
-	out := make([]gin.H, 0, len(files))
 	store, err := requireConfigDBStore()
 	if err != nil {
 		respondConfigDBStoreRequired(c)
@@ -386,32 +384,26 @@ func RulesHandler(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "active waf rule assets missing in db; run make crs-install before editing rule assets"})
 		return
 	}
-	assetByPath := wafRuleAssetMap(assets)
 
-	for _, path := range files {
-		normalizedPath := config.NormalizeBaseRuleAssetPath(normalizeWAFRuleAssetPath(path))
-		asset, ok := assetByPath[normalizedPath]
-		if !ok {
-			result[normalizedPath] = ""
-			out = append(out, gin.H{
-				"path":     normalizedPath,
-				"raw":      "",
-				"etag":     "",
-				"error":    "rule asset is not present in active DB generation",
-				"saved_at": wafRuleAssetSavedAt(assetRec, normalizedPath),
-			})
-			continue
-		}
+	editable := editableWAFRuleAssets(assets)
+	result := make(map[string]string, len(editable))
+	out := make([]gin.H, 0, len(editable))
+	for i, asset := range editable {
 		etag := strings.TrimSpace(asset.ETag)
 		if etag == "" {
 			etag = bypassconf.ComputeETag(asset.Raw)
 		}
-		result[normalizedPath] = string(asset.Raw)
+		if asset.Kind == wafRuleAssetKindBase {
+			result[asset.Path] = string(asset.Raw)
+		}
 		out = append(out, gin.H{
-			"path":     normalizedPath,
+			"path":     asset.Path,
+			"kind":     asset.Kind,
+			"position": i,
 			"raw":      string(asset.Raw),
 			"etag":     etag,
-			"saved_at": wafRuleAssetSavedAt(assetRec, normalizedPath),
+			"usage":    wafRuleAssetUsageLabel(asset.Kind),
+			"saved_at": wafRuleAssetSavedAt(assetRec, asset.Path),
 		})
 	}
 
@@ -423,6 +415,7 @@ func RulesHandler(c *gin.Context) {
 
 type rulesPutBody struct {
 	Path string `json:"path"`
+	Kind string `json:"kind"`
 	Raw  string `json:"raw"`
 }
 
@@ -433,13 +426,13 @@ func ValidateRules(c *gin.Context) {
 		return
 	}
 
-	target, err := ensureEditableRulePath(in.Path)
+	kind, target, err := normalizeRulesRequestTarget(in.Path, in.Kind)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := waf.ValidateWithRuleOverride(target, []byte(in.Raw)); err != nil {
+	if err := validateRuleAssetRaw(kind, target, []byte(in.Raw)); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
@@ -454,7 +447,7 @@ func PutRules(c *gin.Context) {
 		return
 	}
 
-	target, err := ensureEditableRulePath(in.Path)
+	kind, target, err := normalizeRulesRequestTarget(in.Path, in.Kind)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -464,8 +457,9 @@ func PutRules(c *gin.Context) {
 		respondConfigDBStoreRequired(c)
 		return
 	}
-	curRaw, curETag, domainETag, dbBacked, err := loadEditableWAFRuleAsset(target)
-	if err != nil {
+	curRaw, curETag, domainETag, _, err := loadEditableWAFRuleAssetForKind(target, kind)
+	existed := err == nil
+	if err != nil && !strings.Contains(err.Error(), "not found") {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -475,34 +469,158 @@ func PutRules(c *gin.Context) {
 		return
 	}
 
-	if err := waf.ValidateWithRuleOverride(target, []byte(in.Raw)); err != nil {
+	if err := validateRuleAssetRaw(kind, target, []byte(in.Raw)); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
 
-	if !dbBacked {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": errConfigDBStoreRequired.Error()})
+	rec, asset, err := writeWAFRuleAssetUpdateForKind(target, kind, []byte(in.Raw), domainETag, ruleAssetWriteReason(kind))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	rec, asset, err := writeWAFRuleAssetUpdate(target, []byte(in.Raw), domainETag, "base rule update")
+	hotReloaded := false
+	if kind == wafRuleAssetKindBase {
+		if err := waf.ReloadBaseWAF(); err != nil {
+			if existed {
+				_, _, _ = writeWAFRuleAssetUpdateForKind(target, kind, curRaw, rec.ETag, "base rule rollback after reload failure")
+			} else {
+				_, _ = deleteWAFRuleAssetForKind(target, kind, rec.ETag, "base rule create rollback after reload failure")
+			}
+			_ = waf.ReloadBaseWAF()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": fmt.Sprintf("reload failed and rollback applied: %v", err),
+			})
+			return
+		}
+		hotReloaded = true
+	} else if kind == wafRuleAssetKindBypassExtra {
+		waf.InvalidateOverrideWAF(target)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":            true,
+		"etag":          asset.ETag,
+		"kind":          kind,
+		"path":          target,
+		"hot_reloaded":  hotReloaded,
+		"reloaded_file": target,
+		"saved_at":      configVersionSavedAt(rec),
+	})
+}
+
+type rulesDeleteQuery struct {
+	Path string `form:"path"`
+	Kind string `form:"kind"`
+}
+
+func DeleteRuleAsset(c *gin.Context) {
+	var in rulesDeleteQuery
+	if err := c.ShouldBindQuery(&in); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	kind, target, err := normalizeRulesRequestTarget(in.Path, in.Kind)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if kind == wafRuleAssetKindBypassExtra {
+		if inUseBy, inUse := managedOverrideRuleInUse(target); inUse {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":  "rule asset is still referenced by bypass rules",
+				"path":   target,
+				"in_use": inUseBy,
+			})
+			return
+		}
+	}
+	curRaw, _, domainETag, _, err := loadEditableWAFRuleAssetForKind(target, kind)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	rec, err := deleteWAFRuleAssetForKind(target, kind, domainETag, ruleAssetDeleteReason(kind))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if kind == wafRuleAssetKindBase {
+		if err := waf.ReloadBaseWAF(); err != nil {
+			_, _, _ = writeWAFRuleAssetUpdateForKind(target, kind, curRaw, rec.ETag, "base rule delete rollback after reload failure")
+			_ = waf.ReloadBaseWAF()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("reload failed and rollback applied: %v", err)})
+			return
+		}
+	} else {
+		waf.InvalidateOverrideWAF(target)
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "path": target, "kind": kind, "deleted": true, "saved_at": configVersionSavedAt(rec)})
+}
+
+type rulesOrderBody struct {
+	Files  []rulesOrderItem `json:"files"`
+	Assets []rulesOrderItem `json:"assets"`
+}
+
+type rulesOrderItem struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+}
+
+func PutRuleAssetOrder(c *gin.Context) {
+	var in rulesOrderBody
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	order := in.Assets
+	if len(order) == 0 {
+		order = in.Files
+	}
+	if len(order) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "rule asset order is empty"})
+		return
+	}
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
+	}
+	current, rec, found, err := loadRuntimeWAFRuleAssets(store)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "active waf rule assets missing in db; run make crs-install before editing rule assets"})
+		return
+	}
+	previous := editableWAFRuleAssets(current)
+	nextOrder := make([]wafRuleAssetVersion, 0, len(order))
+	for _, item := range order {
+		kind, target, err := normalizeRulesRequestTarget(item.Path, item.Kind)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		nextOrder = append(nextOrder, wafRuleAssetVersion{Path: target, Kind: kind})
+	}
+	nextRec, nextAssets, err := reorderEditableWAFRuleAssets(nextOrder, rec.ETag, "rule asset order update")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	if err := waf.ReloadBaseWAF(); err != nil {
-		_, _, _ = writeWAFRuleAssetUpdate(target, curRaw, rec.ETag, "base rule rollback after reload failure")
+		_, _, _ = reorderEditableWAFRuleAssets(previous, nextRec.ETag, "rule asset order rollback after reload failure")
 		_ = waf.ReloadBaseWAF()
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("reload failed and rollback applied: %v", err),
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("reload failed and rollback applied: %v", err)})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"ok":            true,
-		"etag":          asset.ETag,
-		"hot_reloaded":  true,
-		"reloaded_file": target,
-		"saved_at":      configVersionSavedAt(rec),
+		"ok":           true,
+		"files":        ruleAssetResponseFiles(nextAssets, nextRec),
+		"hot_reloaded": true,
+		"saved_at":     configVersionSavedAt(nextRec),
 	})
 }
 
@@ -535,4 +653,79 @@ func ensureEditableRulePath(path string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("path is not editable: %s", path)
+}
+
+func normalizeRulesRequestTarget(path string, kind string) (string, string, error) {
+	normalizedKind, err := normalizeEditableWAFRuleAssetKind(kind)
+	if err != nil {
+		return "", "", err
+	}
+	target, err := normalizeWAFRuleAssetPathForKind(path, normalizedKind)
+	if err != nil {
+		return "", "", err
+	}
+	if normalizedKind == wafRuleAssetKindBase && isUnsafeLogicalRuleAssetPath(target) {
+		return "", "", fmt.Errorf("base rule asset path must stay within the rule asset namespace: %s", path)
+	}
+	return normalizedKind, target, nil
+}
+
+func isUnsafeLogicalRuleAssetPath(path string) bool {
+	path = filepath.ToSlash(filepath.Clean(strings.TrimSpace(path)))
+	return filepath.IsAbs(path) || path == ".." || strings.HasPrefix(path, "../")
+}
+
+func validateRuleAssetRaw(kind string, target string, raw []byte) error {
+	switch kind {
+	case wafRuleAssetKindBase:
+		return waf.ValidateWithRuleOverride(target, raw)
+	case wafRuleAssetKindBypassExtra:
+		return waf.ValidateStandaloneRule(target, raw)
+	default:
+		return fmt.Errorf("unsupported editable rule asset kind: %s", kind)
+	}
+}
+
+func wafRuleAssetUsageLabel(kind string) string {
+	switch kind {
+	case wafRuleAssetKindBypassExtra:
+		return "Bypass Rules extra_rule"
+	default:
+		return "Base WAF rule set"
+	}
+}
+
+func ruleAssetWriteReason(kind string) string {
+	if kind == wafRuleAssetKindBypassExtra {
+		return "bypass extra rule update"
+	}
+	return "base rule update"
+}
+
+func ruleAssetDeleteReason(kind string) string {
+	if kind == wafRuleAssetKindBypassExtra {
+		return "bypass extra rule delete"
+	}
+	return "base rule delete"
+}
+
+func ruleAssetResponseFiles(assets []wafRuleAssetVersion, rec configVersionRecord) []gin.H {
+	editable := editableWAFRuleAssets(assets)
+	out := make([]gin.H, 0, len(editable))
+	for i, asset := range editable {
+		etag := strings.TrimSpace(asset.ETag)
+		if etag == "" {
+			etag = bypassconf.ComputeETag(asset.Raw)
+		}
+		out = append(out, gin.H{
+			"path":     asset.Path,
+			"kind":     asset.Kind,
+			"position": i,
+			"raw":      string(asset.Raw),
+			"etag":     etag,
+			"usage":    wafRuleAssetUsageLabel(asset.Kind),
+			"saved_at": wafRuleAssetSavedAt(rec, asset.Path),
+		})
+	}
+	return out
 }

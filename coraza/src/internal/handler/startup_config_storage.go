@@ -395,8 +395,11 @@ func importManagedOverrideRulesStorage() error {
 	if store == nil {
 		return fmt.Errorf("db store is not initialized")
 	}
-	_, _, _, err := loadRuntimeManagedOverrideRules(store)
-	return err
+	rules, _, found, err := loadRuntimeManagedOverrideRules(store)
+	if err != nil || !found {
+		return err
+	}
+	return migrateManagedOverrideRulesToWAFRuleAssets(store, rules)
 }
 
 func importResponseCacheConfigStorage() error {

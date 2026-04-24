@@ -85,6 +85,12 @@ SecRule REQUEST_URI "@streq /api/orders/preview" "id:100001,phase:1,pass,nolog,c
 	}
 	raw, _ := json.Marshal(body)
 
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected sqlite store")
+	}
+	seedBaseWAFRuleAssetsForTest(t, store)
+
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/tukuyomi-api/override-rules", bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
@@ -102,17 +108,13 @@ SecRule REQUEST_URI "@streq /api/orders/preview" "id:100001,phase:1,pass,nolog,c
 		t.Fatalf("override file should not be written, stat err=%v", err)
 	}
 
-	store := getLogsStatsStore()
-	if store == nil {
-		t.Fatal("expected sqlite store")
-	}
-	rules, _, found, err := store.loadActiveManagedOverrideRules()
+	assets, _, found, err := store.loadActiveWAFRuleAssets()
 	if err != nil || !found {
-		t.Fatalf("load override rules from db found=%v err=%v", found, err)
+		t.Fatalf("load waf rule assets from db found=%v err=%v", found, err)
 	}
-	gotRule, ok := managedOverrideRuleMap(rules)[body.Name]
+	gotRule, ok := wafRuleAssetMap(assets)[filepath.ToSlash(target)]
 	if !ok {
-		t.Fatalf("%s not found in DB rules: %v", body.Name, rules)
+		t.Fatalf("%s not found in DB rule assets: %v", body.Name, assets)
 	}
 	if strings.TrimSpace(string(gotRule.Raw)) != strings.TrimSpace(body.Raw) {
 		t.Fatalf("saved override mismatch:\n got=%s\nwant=%s", string(gotRule.Raw), body.Raw)
@@ -268,6 +270,7 @@ func TestSyncManagedOverrideRulesStorageImportsLegacyBlobWithoutRestoringFile(t 
 	if store == nil {
 		t.Fatal("expected sqlite store")
 	}
+	seedBaseWAFRuleAssetsForTest(t, store)
 	dbRaw := []byte(`SecRuleEngine On
 
 SecRule REQUEST_URI "@streq /api/orders/preview" "id:100001,phase:1,pass,nolog,ctl:ruleRemoveById=942100"
@@ -302,6 +305,14 @@ SecRule REQUEST_URI "@streq /api/orders/preview" "id:100001,phase:1,pass,nolog,c
 	if _, _, found, err := store.GetConfigBlob(overrideRuleConfigBlobKey("orders-preview.conf")); err != nil || found {
 		t.Fatalf("legacy override blob found=%v err=%v", found, err)
 	}
+	assets, _, found, err := store.loadActiveWAFRuleAssets()
+	if err != nil || !found {
+		t.Fatalf("load active waf rule assets found=%v err=%v", found, err)
+	}
+	gotAsset, ok := wafRuleAssetMap(assets)[filepath.ToSlash(target)]
+	if !ok || gotAsset.Kind != wafRuleAssetKindBypassExtra {
+		t.Fatalf("migrated bypass extra rule asset not found: %v", assets)
+	}
 }
 
 func TestGetWAFForExtraRuleLoadsManagedOverrideFromDBWithoutFile(t *testing.T) {
@@ -326,11 +337,11 @@ func TestGetWAFForExtraRuleLoadsManagedOverrideFromDBWithoutFile(t *testing.T) {
 
 SecRule REQUEST_URI "@streq /api/orders/preview" "id:100001,phase:1,pass,nolog"
 `)
-	if _, _, err := store.writeManagedOverrideRulesVersion("", []managedOverrideRuleVersion{{
-		Name: "orders-preview.conf",
-		Raw:  dbRaw,
-	}}, configVersionSourceImport, "", "test override import", 0); err != nil {
-		t.Fatalf("write override rules: %v", err)
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{
+		{Path: config.DefaultBaseRuleAssetPath, Kind: wafRuleAssetKindBase, Raw: []byte("SecRuleEngine On\n")},
+		{Path: target, Kind: wafRuleAssetKindBypassExtra, Raw: dbRaw},
+	}, configVersionSourceImport, "", "test waf rule assets import", 0); err != nil {
+		t.Fatalf("write waf rule assets: %v", err)
 	}
 
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
@@ -353,5 +364,16 @@ func saveOverrideRulesConfigForTest() func() {
 		config.OverrideRulesDir = oldOverrideRulesDir
 		config.BypassFile = oldBypassFile
 		config.StrictOverride = oldStrict
+	}
+}
+
+func seedBaseWAFRuleAssetsForTest(t *testing.T, store *wafEventStore) {
+	t.Helper()
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{{
+		Path: config.DefaultBaseRuleAssetPath,
+		Kind: wafRuleAssetKindBase,
+		Raw:  []byte("SecRuleEngine On\n"),
+	}}, configVersionSourceImport, "", "test base waf asset import", 0); err != nil {
+		t.Fatalf("write base waf rule asset: %v", err)
 	}
 }

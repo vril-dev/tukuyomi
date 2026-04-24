@@ -107,6 +107,8 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 			config.APIBasePath+"/scheduled-tasks/rollback",
 			config.APIBasePath+"/settings/listener-admin/validate",
 			config.APIBasePath+"/request-country-db/upload",
+			config.APIBasePath+"/rules:validate",
+			config.APIBasePath+"/rules:order",
 			config.APIBasePath+"/override-rules:validate",
 			config.APIBasePath+"/proxy-backends/:backend_key/runtime-override",
 			config.APIBasePath+"/request-country-update/config/upload",
@@ -141,6 +143,8 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 	api.GET("/rules", handler.RulesHandler)
 	api.POST("/rules:validate", handler.ValidateRules)
 	api.PUT("/rules", adminMutate, handler.PutRules)
+	api.DELETE("/rules", adminMutate, handler.DeleteRuleAsset)
+	api.PUT("/rules:order", adminMutate, handler.PutRuleAssetOrder)
 	api.GET("/override-rules", handler.GetManagedOverrideRules)
 	api.POST("/override-rules:validate", handler.ValidateManagedOverrideRule)
 	api.PUT("/override-rules", adminMutate, handler.PutManagedOverrideRule)

@@ -142,6 +142,8 @@ type ListenerAdminConfig = {
   };
 };
 
+type ListenerAdminPathKey = keyof ListenerAdminConfig["paths"];
+
 type ListenerAdminRuntime = {
   request_country_configured_mode?: string;
   request_country_effective_mode?: string;
@@ -637,6 +639,23 @@ export default function SettingsPanel() {
     } finally {
       setConfigSaving(false);
     }
+  }
+
+  function renderPathField(key: ListenerAdminPathKey, label: string) {
+    return (
+      <Field key={key} label={tx(label)}>
+        <input
+          value={listenerAdminConfig.paths[key]}
+          onChange={(e) =>
+            setListenerAdminConfig((current) => ({
+              ...current,
+              paths: { ...current.paths, [key]: e.target.value },
+            }))
+          }
+          className="w-full rounded border border-neutral-200 bg-white"
+        />
+      </Field>
+    );
   }
 
   return (
@@ -1386,38 +1405,60 @@ export default function SettingsPanel() {
               {showAdvanced ? (
                 <div className="space-y-4">
                   <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-	                    {tx("Advanced paths and global support files affect the whole product. Runtime-owned JSON paths are seed/import/export locations after DB bootstrap. Validate before save and restart after changes.")}
+                    {tx("Advanced paths are grouped by runtime behavior. DB-backed runtime treats most JSON paths as seed/import inputs, not live file storage. Validate before save and restart after changes.")}
                   </div>
 
                   <div className="grid gap-4 xl:grid-cols-2">
-                    <section className="rounded border border-neutral-200 bg-neutral-50 p-4 space-y-3">
-                      <div className="text-sm font-medium">{tx("Advanced Paths")}</div>
-                      <div className="grid gap-3 sm:grid-cols-2">
-	                        <Field label={tx("Proxy Seed File")}><input value={listenerAdminConfig.paths.proxy_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, proxy_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Site Seed File")}><input value={listenerAdminConfig.paths.site_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, site_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("PHP Runtime Inventory File")}><input value={listenerAdminConfig.paths.php_runtime_inventory_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, php_runtime_inventory_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Vhost Config File")}><input value={listenerAdminConfig.paths.vhost_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, vhost_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Scheduled Task Seed File")}><input value={listenerAdminConfig.paths.scheduled_task_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, scheduled_task_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Security Audit File")}><input value={listenerAdminConfig.paths.security_audit_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, security_audit_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Security Audit Blob Dir")}><input value={listenerAdminConfig.paths.security_audit_blob_dir} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, security_audit_blob_dir: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Cache Rules File")}><input value={listenerAdminConfig.paths.cache_rules_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, cache_rules_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Cache Store File")}><input value={listenerAdminConfig.paths.cache_store_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, cache_store_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Base Rule Asset")}><input value={listenerAdminConfig.paths.rules_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, rules_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Override Rule Reference Prefix")}><input value={listenerAdminConfig.paths.override_rules_dir} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, override_rules_dir: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Upstream Runtime Seed File")}><input value={listenerAdminConfig.paths.upstream_runtime_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, upstream_runtime_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Bypass File")}><input value={listenerAdminConfig.paths.bypass_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, bypass_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Country Block File")}><input value={listenerAdminConfig.paths.country_block_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, country_block_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Rate Limit File")}><input value={listenerAdminConfig.paths.rate_limit_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, rate_limit_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Bot Defense File")}><input value={listenerAdminConfig.paths.bot_defense_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, bot_defense_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Semantic File")}><input value={listenerAdminConfig.paths.semantic_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, semantic_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Notification File")}><input value={listenerAdminConfig.paths.notification_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, notification_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("IP Reputation File")}><input value={listenerAdminConfig.paths.ip_reputation_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, ip_reputation_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Legacy WAF Log Import File")}><input value={listenerAdminConfig.paths.log_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, log_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("CRS Setup File")}><input value={listenerAdminConfig.paths.crs_setup_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, crs_setup_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("CRS Rules Dir")}><input value={listenerAdminConfig.paths.crs_rules_dir} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, crs_rules_dir: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("CRS Disabled File")}><input value={listenerAdminConfig.paths.crs_disabled_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, crs_disabled_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                      </div>
-                    </section>
+                    <div className="space-y-4">
+                      <section className="rounded border border-neutral-200 bg-neutral-50 p-4 space-y-3">
+                        <div>
+                          <div className="text-sm font-medium">{tx("Runtime File Outputs")}</div>
+                          <p className="text-xs text-neutral-500">{tx("These paths still receive runtime file output after startup.")}</p>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          {renderPathField("security_audit_file", "Security Audit File")}
+                          {renderPathField("security_audit_blob_dir", "Security Audit Blob Dir")}
+                        </div>
+                      </section>
+
+                      <section className="rounded border border-neutral-200 bg-neutral-50 p-4 space-y-3">
+                        <div>
+                          <div className="text-sm font-medium">{tx("DB Seed / Import Paths")}</div>
+                          <p className="text-xs text-neutral-500">{tx("Used when bootstrap or import needs a filesystem seed. DB remains the live source after initialization.")}</p>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          {renderPathField("proxy_config_file", "Proxy Seed File")}
+                          {renderPathField("site_config_file", "Site Seed File")}
+                          {renderPathField("php_runtime_inventory_file", "PHP Runtime Inventory Seed File")}
+                          {renderPathField("vhost_config_file", "Vhost Seed File")}
+                          {renderPathField("scheduled_task_config_file", "Scheduled Task Seed File")}
+                          {renderPathField("cache_rules_file", "Cache Rules Seed File")}
+                          {renderPathField("cache_store_file", "Cache Store Seed File")}
+                          {renderPathField("upstream_runtime_file", "Upstream Runtime Seed File")}
+                          {renderPathField("bypass_file", "Bypass Seed File")}
+                          {renderPathField("country_block_file", "Country Block Seed File")}
+                          {renderPathField("rate_limit_file", "Rate Limit Seed File")}
+                          {renderPathField("bot_defense_file", "Bot Defense Seed File")}
+                          {renderPathField("semantic_file", "Semantic Seed File")}
+                          {renderPathField("notification_file", "Notification Seed File")}
+                          {renderPathField("ip_reputation_file", "IP Reputation Seed File")}
+                          {renderPathField("crs_disabled_file", "CRS Disabled Seed File")}
+                        </div>
+                      </section>
+
+                      <section className="rounded border border-neutral-200 bg-neutral-50 p-4 space-y-3">
+                        <div>
+                          <div className="text-sm font-medium">{tx("WAF Asset References")}</div>
+                          <p className="text-xs text-neutral-500">{tx("Logical references resolved against DB-backed WAF rule assets.")}</p>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          {renderPathField("rules_file", "Base Rule Asset")}
+                          {renderPathField("override_rules_dir", "Bypass Extra Rule Reference Prefix")}
+                          {renderPathField("crs_setup_file", "CRS Setup Asset")}
+                          {renderPathField("crs_rules_dir", "CRS Rules Asset Prefix")}
+                        </div>
+                      </section>
+                    </div>
 
                     <section className="rounded border border-neutral-200 bg-neutral-50 p-4 space-y-3">
                       <div className="text-sm font-medium">{tx("Proxy Engine, CRS, Rollback, and FP Tuner")}</div>

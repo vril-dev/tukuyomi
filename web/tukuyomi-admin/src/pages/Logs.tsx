@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGetBinary, apiGetJson } from "@/lib/api";
 import { getErrorMessage, isAbortLikeError } from "@/lib/errors";
 import { useI18n, translateCurrent } from "@/lib/i18n";
@@ -6,6 +6,7 @@ import {
   extractRequestEventFields,
   formatPolicyFamilyLabel,
   formatRequestEventRoleLabel,
+  sortLogLinesNewestFirst,
   summarizeRequestEvents,
   type LogLine,
   type PolicyFamily,
@@ -397,6 +398,7 @@ export default function Logs() {
   const detailSummary = detailReqID ? summarizeRequestEvents(detailReqID, detailLines) : null;
   const normalizedCountry = normalizeCountryFilterValue(countryFilter) || "ALL";
   const reqIDActive = reqIDFilter.trim();
+  const displayLines = useMemo(() => sortLogLinesNewestFirst(data?.lines ?? []), [data?.lines]);
 
   return (
     <div className="p-4 space-y-4">
@@ -507,7 +509,8 @@ export default function Logs() {
       )}
 
       <div className="app-table-shell">
-        <table className="app-table min-w-full text-sm">
+        <div className="app-table-x-scroll">
+        <table className="app-table min-w-[1120px] w-full text-sm">
           <thead className="app-table-head">
             <tr>
               <th className="px-2 py-1 text-left">{tx("ts")}</th>
@@ -523,7 +526,7 @@ export default function Logs() {
             </tr>
           </thead>
           <tbody>
-            {data?.lines?.map((line, i) => {
+            {displayLines.map((line, i) => {
               const reqID = String(line.req_id ?? "").trim();
               const clickable = !!reqID;
               return (
@@ -545,27 +548,15 @@ export default function Logs() {
                   <td className="px-2 py-1">{line.path ?? "-"}</td>
                   <td className="px-2 py-1">
                     {reqID ? (
-                      <div className="flex items-center gap-2">
-                        <button
-                          className="font-mono underline"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void openRequestDetail(reqID);
-                          }}
-                        >
-                          {reqID}
-                        </button>
-                        <button
-                          className="text-xs text-gray-500 underline"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void navigator.clipboard.writeText(reqID);
-                          }}
-                          title={tx("Copy req_id")}
-                        >
-                          {tx("copy")}
-                        </button>
-                      </div>
+                      <button
+                        className="font-mono underline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void openRequestDetail(reqID);
+                        }}
+                      >
+                        {reqID}
+                      </button>
                     ) : (
                       "-"
                     )}
@@ -590,6 +581,7 @@ export default function Logs() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
       {data && (

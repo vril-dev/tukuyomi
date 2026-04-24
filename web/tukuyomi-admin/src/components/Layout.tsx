@@ -56,6 +56,7 @@ const baseNavGroups: NavGroup[] = [
         items: [
           { to: "/rules", label: "Rules", hint: "base and bypass extra rules" },
           { to: "/rule-sets", label: "Rule Sets", hint: "CRS toggles" },
+          { to: "/fp-tuner", label: "FP Tuner", hint: "propose and apply exclusions" },
         ],
       },
       {
@@ -68,7 +69,6 @@ const baseNavGroups: NavGroup[] = [
           { to: "/ip-reputation", label: "IP Reputation", hint: "allow/block feeds and CIDRs" },
           { to: "/bot-defense", label: "Bot Defense", hint: "ua challenge policy" },
           { to: "/semantic", label: "Semantic Security", hint: "heuristic anomaly scoring" },
-          { to: "/fp-tuner", label: "FP Tuner", hint: "propose and apply exclusions" },
         ],
       },
     ],

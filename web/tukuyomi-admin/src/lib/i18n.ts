@@ -662,7 +662,31 @@ const JA_STRINGS: Record<string, string> = {
     "DB 接続は bootstrap 専用です。現在の DSN 状態: {state}。db_driver、db_path、db_dsn は bootstrap 設定ファイルで変更し、必要に応じて migration/import を実行してから再起動してください。",
   "Advanced paths and global support files affect the whole product. Runtime-owned JSON paths are seed/import/export locations after DB bootstrap. Validate before save and restart after changes.":
     "advanced path と global support file はプロダクト全体に影響します。runtime 管理の JSON path は DB bootstrap 後は seed/import/export 用です。保存前に検証し、変更後に再起動してください。",
+  "Advanced paths are grouped by runtime behavior. DB-backed runtime treats most JSON paths as seed/import inputs, not live file storage. Validate before save and restart after changes.":
+    "advanced path は runtime behavior ごとに分類しています。DB-backed runtime では多くの JSON path は live file storage ではなく seed/import input です。保存前に検証し、変更後に再起動してください。",
+  "Runtime File Outputs": "ランタイムファイル出力",
+  "These paths still receive runtime file output after startup.": "これらの path は起動後も runtime file output の出力先です。",
+  "DB Seed / Import Paths": "DB seed / import path",
+  "Used when bootstrap or import needs a filesystem seed. DB remains the live source after initialization.":
+    "bootstrap または import が filesystem seed を必要とする場合に使います。初期化後の live source は DB です。",
+  "WAF Asset References": "WAF asset 参照",
+  "Logical references resolved against DB-backed WAF rule assets.": "DB-backed WAF rule asset に対して解決される論理参照です。",
   "Proxy Seed File": "Proxy 初期投入ファイル",
+  "PHP Runtime Inventory Seed File": "PHP runtime inventory 初期投入ファイル",
+  "Vhost Seed File": "Vhost 初期投入ファイル",
+  "Cache Rules Seed File": "Cache Rules 初期投入ファイル",
+  "Cache Store Seed File": "Cache Store 初期投入ファイル",
+  "Bypass Seed File": "Bypass 初期投入ファイル",
+  "Country Block Seed File": "Country Block 初期投入ファイル",
+  "Rate Limit Seed File": "Rate Limit 初期投入ファイル",
+  "Bot Defense Seed File": "Bot Defense 初期投入ファイル",
+  "Semantic Seed File": "Semantic 初期投入ファイル",
+  "Notification Seed File": "Notification 初期投入ファイル",
+  "IP Reputation Seed File": "IP Reputation 初期投入ファイル",
+  "CRS Disabled Seed File": "CRS disabled 初期投入ファイル",
+  "Bypass Extra Rule Reference Prefix": "Bypass extra rule 参照 prefix",
+  "CRS Setup Asset": "CRS setup asset",
+  "CRS Rules Asset Prefix": "CRS rules asset prefix",
   "Choose whether request country comes from a trusted frontend header or from the installed local country database artifact. This updates DB app_config and takes effect after restart.":
     "request country を trusted frontend header から取るか、導入済み local country database artifact から取るかを選択します。DB app_config を更新し、再起動後に反映されます。",
   "Saving updates DB app_config. Restart the process after switching modes.":

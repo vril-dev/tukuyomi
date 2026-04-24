@@ -90,13 +90,7 @@ func InitPHPRuntimeInventoryRuntime(path string, rollbackMax int) error {
 		phpRuntimeInventoryMu.Lock()
 		phpRuntimeInventoryRt = rt
 		phpRuntimeInventoryMu.Unlock()
-		if err := RefreshPHPRuntimeMaterialization(); err != nil {
-			return fmt.Errorf("materialize php runtime config: %w", err)
-		}
-		if err := ReconcilePHPRuntimeSupervisor(); err != nil {
-			return fmt.Errorf("reconcile php runtime supervisor: %w", err)
-		}
-		return nil
+		return refreshPHPRuntimeMaterializationAfterInventoryInit()
 	}
 
 	rawBytes, _, err := readFileMaybe(cfgPath)
@@ -122,6 +116,13 @@ func InitPHPRuntimeInventoryRuntime(path string, rollbackMax int) error {
 	phpRuntimeInventoryMu.Lock()
 	phpRuntimeInventoryRt = rt
 	phpRuntimeInventoryMu.Unlock()
+	return refreshPHPRuntimeMaterializationAfterInventoryInit()
+}
+
+func refreshPHPRuntimeMaterializationAfterInventoryInit() error {
+	if vhostRuntimeInstance() == nil {
+		return nil
+	}
 	if err := RefreshPHPRuntimeMaterialization(); err != nil {
 		return fmt.Errorf("materialize php runtime config: %w", err)
 	}

@@ -843,6 +843,51 @@ func TestPHPRuntimeInventoryDBLegacyImportWithoutStateAutoDiscovers(t *testing.T
 	}
 }
 
+func TestInitPHPRuntimeInventoryRuntimeDoesNotDeleteMaterializedRuntimesBeforeVhostsLoad(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	tmp := t.TempDir()
+	inventoryPath := filepath.Join(tmp, "data", "php-fpm", "inventory.json")
+	if err := os.MkdirAll(filepath.Dir(inventoryPath), 0o755); err != nil {
+		t.Fatalf("mkdir inventory dir: %v", err)
+	}
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	runtimeDir := filepath.Join(filepath.Dir(inventoryPath), "runtime", "php85")
+	sentinel := filepath.Join(runtimeDir, "php-fpm.conf")
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		t.Fatalf("mkdir runtime dir: %v", err)
+	}
+	if err := os.WriteFile(sentinel, []byte("[global]\n"), 0o600); err != nil {
+		t.Fatalf("write sentinel runtime config: %v", err)
+	}
+
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	oldInventoryPath := config.PHPRuntimeInventoryFile
+	config.PHPRuntimeInventoryFile = inventoryPath
+	t.Cleanup(func() {
+		config.PHPRuntimeInventoryFile = oldInventoryPath
+	})
+	if err := importPHPRuntimeInventoryStorage(); err != nil {
+		t.Fatalf("import php runtime inventory: %v", err)
+	}
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("materialized runtime config should remain until vhost runtime owns refresh: %v", err)
+	}
+}
+
 func resetPHPFoundationRuntimesForTest(t *testing.T) func() {
 	t.Helper()
 

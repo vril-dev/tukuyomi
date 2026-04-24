@@ -10,7 +10,7 @@ fi
 
 API_BASE="${API_BASE:-http://localhost/tukuyomi-api}"
 API_KEY="${API_KEY:-}"
-TARGET_PATH="${TARGET_PATH:-rules/tukuyomi.conf}"
+TARGET_PATH="${TARGET_PATH:-tukuyomi.conf}"
 SIMULATE="${SIMULATE:-1}"
 
 REQ_FILE="$(mktemp)"

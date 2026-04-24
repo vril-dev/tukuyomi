@@ -15,7 +15,7 @@
 
 ```json
 {
-  "target_path": "rules/tukuyomi.conf",
+  "target_path": "tukuyomi.conf",
   "event": {
     "event_id": "manual-test-001",
     "method": "GET",
@@ -66,7 +66,7 @@
     "summary": "Scoped false-positive tuning suggestion.",
     "reason": "HTTP FP tuner flow の provider-generated response.",
     "confidence": 0.84,
-    "target_path": "rules/tukuyomi.conf",
+    "target_path": "tukuyomi.conf",
     "rule_line": "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\""
   }
 }
@@ -114,7 +114,7 @@
 {
   "proposal": {
     "id": "fp-http-001",
-    "target_path": "rules/tukuyomi.conf",
+    "target_path": "tukuyomi.conf",
     "rule_line": "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\""
   },
   "simulate": true,
@@ -135,7 +135,7 @@
   "contract_version": "fp_tuner.v1",
   "simulated": true,
   "hot_reloaded": false,
-  "reloaded_file": "rules/tukuyomi.conf",
+  "reloaded_file": "tukuyomi.conf",
   "preview_etag": "W/\"sha256:...\""
 }
 ```
@@ -148,7 +148,7 @@
   "contract_version": "fp_tuner.v1",
   "etag": "W/\"sha256:...\"",
   "hot_reloaded": true,
-  "reloaded_file": "rules/tukuyomi.conf"
+  "reloaded_file": "tukuyomi.conf"
 }
 ```
 

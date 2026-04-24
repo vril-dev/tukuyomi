@@ -6,8 +6,8 @@ STAGE_ROOT="${1:?usage: scripts/stage_waf_rule_assets.sh <stage-root> [crs-versi
 CRS_VERSION="${2:-v4.23.0}"
 SEED_DIR="${ROOT_DIR}/seeds/waf/rules"
 
-mkdir -p "${STAGE_ROOT}/rules"
-cp "${SEED_DIR}/tukuyomi.conf" "${STAGE_ROOT}/rules/tukuyomi.conf"
+mkdir -p "${STAGE_ROOT}"
+cp "${SEED_DIR}/tukuyomi.conf" "${STAGE_ROOT}/tukuyomi.conf"
 
 DEST_DIR="${STAGE_ROOT}/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh" "${CRS_VERSION}"
 

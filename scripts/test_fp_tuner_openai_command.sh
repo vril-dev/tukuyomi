@@ -30,7 +30,7 @@ proposal = {
         "summary": "Mocked OpenAI provider response for bridge test.",
         "reason": "Local mock response for fp_tuner_provider_openai.sh",
         "confidence": 0.87,
-        "target_path": "rules/tukuyomi.conf",
+        "target_path": "tukuyomi.conf",
         "rule_line": "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190654,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\"",
     }
 }

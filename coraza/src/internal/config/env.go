@@ -301,7 +301,7 @@ func applyAppConfig(cfg appConfigFile) {
 
 	RulesFile = strings.TrimSpace(cfg.Paths.RulesFile)
 	if RulesFile == "" {
-		RulesFile = "rules/tukuyomi.conf"
+		RulesFile = DefaultBaseRuleAssetPath
 	}
 	OverrideRulesDir = strings.TrimSpace(cfg.Paths.OverrideRulesDir)
 	if OverrideRulesDir == "" {

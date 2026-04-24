@@ -8,7 +8,7 @@ HOST_CORAZA_PORT="${HOST_CORAZA_PORT:-19090}"
 WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-60}"
 MOCK_PROVIDER_PORT="${MOCK_PROVIDER_PORT:-18091}"
 SIMULATE="${SIMULATE:-1}"
-TARGET_PATH="${TARGET_PATH:-rules/tukuyomi.conf}"
+TARGET_PATH="${TARGET_PATH:-tukuyomi.conf}"
 API_KEY="${API_KEY:-}"
 AUTO_DOWN="${FP_TUNER_HTTP_AUTO_DOWN:-0}"
 
@@ -166,7 +166,7 @@ proposal = {
     "summary": "Stub provider response for HTTP mode testing.",
     "reason": "Local stub response used to verify send/receive/apply flow.",
     "confidence": 0.88,
-    "target_path": "rules/tukuyomi.conf",
+    "target_path": "tukuyomi.conf",
     "rule_line": "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\"",
 }
 

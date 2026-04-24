@@ -72,7 +72,7 @@ cat > "${RUNTIME_CONF_DIR}/config.json" <<'EOF'
     "trust_forwarded_for": false
   },
   "paths": {
-    "rules_file": "rules/tukuyomi.conf",
+    "rules_file": "tukuyomi.conf",
     "crs_setup_file": "rules/crs/crs-setup.conf",
     "crs_rules_dir": "rules/crs/rules",
     "crs_disabled_file": "conf/crs-disabled.conf",

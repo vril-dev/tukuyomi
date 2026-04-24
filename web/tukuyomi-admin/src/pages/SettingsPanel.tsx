@@ -298,7 +298,7 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
       security_audit_blob_dir: "audit/security-audit-blobs",
       cache_rules_file: "conf/cache-rules.json",
       cache_store_file: "conf/cache-store.json",
-      rules_file: "rules/tukuyomi.conf",
+      rules_file: "tukuyomi.conf",
       override_rules_dir: "conf/rules",
       upstream_runtime_file: "conf/upstream-runtime.json",
       bypass_file: "conf/waf-bypass.json",

@@ -147,9 +147,9 @@ def fill_proposal_defaults(proposal: Dict[str, Any], req_obj: Dict[str, Any]) ->
     rule_id = parse_int(req_input.get("rule_id"), DEFAULT_RULE_ID)
     variable = normalize_variable(req_input.get("matched_variable"))
 
-    target_path = str(req_obj.get("target_path") or proposal.get("target_path") or "rules/tukuyomi.conf").strip()
+    target_path = str(req_obj.get("target_path") or proposal.get("target_path") or "tukuyomi.conf").strip()
     if not target_path:
-        target_path = "rules/tukuyomi.conf"
+        target_path = "tukuyomi.conf"
 
     out = dict(proposal)
     if not str(out.get("id", "")).strip():

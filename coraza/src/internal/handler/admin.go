@@ -1,12 +1,8 @@
 package handler
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -376,70 +372,46 @@ func RulesHandler(c *gin.Context) {
 	files := configuredRuleFiles()
 	result := make(map[string]string)
 	out := make([]gin.H, 0, len(files))
-	assetByPath := map[string]wafRuleAssetVersion{}
-	var assetRec configVersionRecord
-	assetFound := false
-
-	if store := getLogsStatsStore(); store != nil {
-		assets, rec, found, err := loadRuntimeWAFRuleAssets(store)
-		if err != nil {
-			respondConfigBlobDBError(c, "rules db read failed", err)
-			return
-		}
-		if found {
-			assetFound = true
-			assetRec = rec
-			assetByPath = wafRuleAssetMap(assets)
-		}
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
 	}
-	for _, path := range files {
-		normalizedPath := normalizeWAFRuleAssetPath(path)
-		if assetFound {
-			asset, ok := assetByPath[normalizedPath]
-			if !ok {
-				result[path] = ""
-				out = append(out, gin.H{
-					"path":     path,
-					"raw":      "",
-					"etag":     "",
-					"error":    "rule asset is not present in active DB generation",
-					"saved_at": wafRuleAssetSavedAt(assetRec, path),
-				})
-				continue
-			}
-			etag := strings.TrimSpace(asset.ETag)
-			if etag == "" {
-				etag = bypassconf.ComputeETag(asset.Raw)
-			}
-			result[path] = string(asset.Raw)
-			out = append(out, gin.H{
-				"path":     path,
-				"raw":      string(asset.Raw),
-				"etag":     etag,
-				"saved_at": wafRuleAssetSavedAt(assetRec, path),
-			})
-			continue
-		}
+	assets, assetRec, found, err := loadRuntimeWAFRuleAssets(store)
+	if err != nil {
+		respondConfigBlobDBError(c, "rules db read failed", err)
+		return
+	}
+	if !found {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "active waf rule assets missing in db; run make crs-install before editing rule assets"})
+		return
+	}
+	assetByPath := wafRuleAssetMap(assets)
 
-		content, err := os.ReadFile(path)
-		savedAt := fileSavedAt(path)
-		if err != nil {
-			result[path] = "[読込失敗] " + err.Error()
+	for _, path := range files {
+		normalizedPath := config.NormalizeBaseRuleAssetPath(normalizeWAFRuleAssetPath(path))
+		asset, ok := assetByPath[normalizedPath]
+		if !ok {
+			result[normalizedPath] = ""
 			out = append(out, gin.H{
-				"path":     path,
+				"path":     normalizedPath,
 				"raw":      "",
 				"etag":     "",
-				"error":    err.Error(),
-				"saved_at": savedAt,
+				"error":    "rule asset is not present in active DB generation",
+				"saved_at": wafRuleAssetSavedAt(assetRec, normalizedPath),
 			})
 			continue
 		}
-		result[path] = string(content)
+		etag := strings.TrimSpace(asset.ETag)
+		if etag == "" {
+			etag = bypassconf.ComputeETag(asset.Raw)
+		}
+		result[normalizedPath] = string(asset.Raw)
 		out = append(out, gin.H{
-			"path":     path,
-			"raw":      string(content),
-			"etag":     bypassconf.ComputeETag(content),
-			"saved_at": savedAt,
+			"path":     normalizedPath,
+			"raw":      string(asset.Raw),
+			"etag":     etag,
+			"saved_at": wafRuleAssetSavedAt(assetRec, normalizedPath),
 		})
 	}
 
@@ -539,7 +511,7 @@ func configuredRuleFiles() []string {
 	out := make([]string, 0, len(parts))
 	seen := map[string]struct{}{}
 	for _, p := range parts {
-		p = strings.TrimSpace(p)
+		p = config.NormalizeBaseRuleAssetPath(p)
 		if p == "" {
 			continue
 		}
@@ -553,20 +525,14 @@ func configuredRuleFiles() []string {
 }
 
 func ensureEditableRulePath(path string) (string, error) {
-	target := filepath.Clean(strings.TrimSpace(path))
+	target := config.NormalizeBaseRuleAssetPath(path)
 	if target == "" {
 		return "", fmt.Errorf("path is empty")
 	}
 	for _, p := range configuredRuleFiles() {
-		if filepath.Clean(p) == target {
+		if config.NormalizeBaseRuleAssetPath(p) == target {
 			return p, nil
 		}
 	}
 	return "", fmt.Errorf("path is not editable: %s", path)
-}
-
-func ruleFileConfigBlobKey(path string) string {
-	cleaned := filepath.Clean(strings.TrimSpace(path))
-	sum := sha256.Sum256([]byte(cleaned))
-	return "rule_file_sha256:" + hex.EncodeToString(sum[:])
 }

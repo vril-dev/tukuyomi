@@ -1,10 +1,15 @@
 package handler
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/waf"
@@ -15,15 +20,13 @@ func TestImportWAFRuleAssetsStorage_SeedsDBRuleAssetsFromFile(t *testing.T) {
 	defer restore()
 
 	tmp := t.TempDir()
-	rulePath := filepath.Join(tmp, "rules", "tukuyomi.conf")
-	if err := os.MkdirAll(filepath.Dir(rulePath), 0o755); err != nil {
-		t.Fatalf("mkdir rules dir: %v", err)
-	}
+	rulePath := filepath.Join(tmp, "tukuyomi.conf")
 	fileRaw := "SecRuleEngine On\n"
 	if err := os.WriteFile(rulePath, []byte(fileRaw), 0o644); err != nil {
 		t.Fatalf("write rule file: %v", err)
 	}
-	config.RulesFile = rulePath
+	t.Setenv("WAF_RULE_ASSET_FS_ROOT", tmp)
+	config.RulesFile = config.DefaultBaseRuleAssetPath
 	config.CRSEnable = false
 
 	dbPath := filepath.Join(tmp, "tukuyomi.db")
@@ -46,15 +49,12 @@ func TestImportWAFRuleAssetsStorage_SeedsDBRuleAssetsFromFile(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("expected active waf rule assets found=%v err=%v", found, err)
 	}
-	got, ok := wafRuleAssetMap(assets)[normalizeWAFRuleAssetPath(rulePath)]
+	got, ok := wafRuleAssetMap(assets)[config.DefaultBaseRuleAssetPath]
 	if !ok {
-		t.Fatalf("expected rule asset for %s: %v", rulePath, assets)
+		t.Fatalf("expected rule asset for %s: %v", config.DefaultBaseRuleAssetPath, assets)
 	}
 	if strings.TrimSpace(string(got.Raw)) != strings.TrimSpace(fileRaw) {
 		t.Fatalf("seeded asset mismatch:\n got=%s\nwant=%s", string(got.Raw), fileRaw)
-	}
-	if _, _, found, err := store.GetConfigBlob(ruleFileConfigBlobKey(rulePath)); err != nil || found {
-		t.Fatalf("legacy rule blob found=%v err=%v", found, err)
 	}
 }
 
@@ -63,15 +63,13 @@ func TestSyncRuleFilesStorage_DoesNotRestoreFileAndWAFLoadsDBAsset(t *testing.T)
 	defer restore()
 
 	tmp := t.TempDir()
-	rulePath := filepath.Join(tmp, "rules", "tukuyomi.conf")
-	if err := os.MkdirAll(filepath.Dir(rulePath), 0o755); err != nil {
-		t.Fatalf("mkdir rules dir: %v", err)
-	}
+	rulePath := filepath.Join(tmp, "tukuyomi.conf")
 	fileRaw := "SecRuleEngine DetectionOnly\n"
 	if err := os.WriteFile(rulePath, []byte(fileRaw), 0o644); err != nil {
 		t.Fatalf("write rule file: %v", err)
 	}
-	config.RulesFile = rulePath
+	t.Setenv("WAF_RULE_ASSET_FS_ROOT", tmp)
+	config.RulesFile = config.DefaultBaseRuleAssetPath
 	config.CRSEnable = false
 
 	dbPath := filepath.Join(tmp, "tukuyomi.db")
@@ -88,7 +86,7 @@ func TestSyncRuleFilesStorage_DoesNotRestoreFileAndWAFLoadsDBAsset(t *testing.T)
 	}
 	dbRaw := "SecRuleEngine On\n"
 	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{{
-		Path: normalizeWAFRuleAssetPath(rulePath),
+		Path: config.DefaultBaseRuleAssetPath,
 		Kind: wafRuleAssetKindBase,
 		Raw:  []byte(dbRaw),
 	}}, configVersionSourceImport, "", "test waf asset import", 0); err != nil {
@@ -115,10 +113,10 @@ func TestSyncRuleFilesStorage_WAFLoadsCRSAssetsAndDataFromDBWithoutFiles(t *test
 	defer restore()
 
 	tmp := t.TempDir()
-	rulesRoot := filepath.Join(tmp, "rules")
-	rulePath := filepath.Join(rulesRoot, "tukuyomi.conf")
-	crsSetup := filepath.Join(rulesRoot, "crs", "crs-setup.conf")
-	crsRulesDir := filepath.Join(rulesRoot, "crs", "rules")
+	stageRoot := filepath.Join(tmp, "stage")
+	rulePath := filepath.Join(stageRoot, "tukuyomi.conf")
+	crsSetup := filepath.Join(stageRoot, "rules", "crs", "crs-setup.conf")
+	crsRulesDir := filepath.Join(stageRoot, "rules", "crs", "rules")
 	crsRule := filepath.Join(crsRulesDir, "REQUEST-901-INITIALIZATION.conf")
 	crsData := filepath.Join(crsRulesDir, "agents.data")
 	for _, dir := range []string{filepath.Dir(rulePath), filepath.Dir(crsSetup), crsRulesDir, filepath.Join(tmp, "conf")} {
@@ -140,10 +138,11 @@ func TestSyncRuleFilesStorage_WAFLoadsCRSAssetsAndDataFromDBWithoutFiles(t *test
 		t.Fatalf("write crs data: %v", err)
 	}
 
-	config.RulesFile = rulePath
+	t.Setenv("WAF_RULE_ASSET_FS_ROOT", stageRoot)
+	config.RulesFile = config.DefaultBaseRuleAssetPath
 	config.CRSEnable = true
-	config.CRSSetupFile = crsSetup
-	config.CRSRulesDir = crsRulesDir
+	config.CRSSetupFile = "rules/crs/crs-setup.conf"
+	config.CRSRulesDir = "rules/crs/rules"
 	config.CRSDisabledFile = filepath.Join(tmp, "conf", "crs-disabled.conf")
 
 	dbPath := filepath.Join(tmp, "tukuyomi.db")
@@ -157,11 +156,75 @@ func TestSyncRuleFilesStorage_WAFLoadsCRSAssetsAndDataFromDBWithoutFiles(t *test
 	if err := ImportWAFRuleAssetsStorage(); err != nil {
 		t.Fatalf("import waf rule assets: %v", err)
 	}
-	if err := os.RemoveAll(rulesRoot); err != nil {
-		t.Fatalf("remove rules root: %v", err)
+	if err := os.RemoveAll(stageRoot); err != nil {
+		t.Fatalf("remove staged rule assets: %v", err)
 	}
 	if err := waf.ReloadBaseWAF(); err != nil {
 		t.Fatalf("reload waf from DB CRS assets: %v", err)
+	}
+}
+
+func TestRulesHandlerReturnsCanonicalDBAssetPath(t *testing.T) {
+	restore := saveRulesFileConfigForTest()
+	defer restore()
+
+	gin.SetMode(gin.TestMode)
+	tmp := t.TempDir()
+	config.RulesFile = config.DefaultBaseRuleAssetPath
+	config.CRSEnable = false
+
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected sqlite store")
+	}
+	raw := []byte("SecRuleEngine On\n")
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{{
+		Path: config.DefaultBaseRuleAssetPath,
+		Kind: wafRuleAssetKindBase,
+		Raw:  raw,
+	}}, configVersionSourceImport, "", "test waf asset import", 0); err != nil {
+		t.Fatalf("write waf rule assets: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/tukuyomi-api/rules", nil)
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+
+	RulesHandler(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "rules/tukuyomi.conf") {
+		t.Fatalf("response contains legacy rule asset path: %s", rec.Body.String())
+	}
+	var out struct {
+		Rules map[string]string `json:"rules"`
+		Files []struct {
+			Path string `json:"path"`
+			Raw  string `json:"raw"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode rules response: %v", err)
+	}
+	if got := out.Rules[config.DefaultBaseRuleAssetPath]; got != string(raw) {
+		t.Fatalf("rules[%q]=%q want=%q", config.DefaultBaseRuleAssetPath, got, string(raw))
+	}
+	if len(out.Files) != 1 {
+		t.Fatalf("files len=%d want=1", len(out.Files))
+	}
+	if out.Files[0].Path != config.DefaultBaseRuleAssetPath {
+		t.Fatalf("file path=%q want=%q", out.Files[0].Path, config.DefaultBaseRuleAssetPath)
 	}
 }
 

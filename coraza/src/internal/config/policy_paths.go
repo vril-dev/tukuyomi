@@ -14,6 +14,7 @@ const (
 	DefaultCacheRulesFilePath      = "conf/cache-rules.json"
 	LegacyDefaultCacheRulesPath    = "conf/cache.conf"
 	DefaultUpstreamRuntimeFilePath = "conf/upstream-runtime.json"
+	DefaultBaseRuleAssetPath       = "tukuyomi.conf"
 )
 
 func LegacyCompatPath(configuredPath, defaultPath, legacyDefaultPath string) string {
@@ -36,6 +37,31 @@ func ResolveReadablePolicyPath(primaryPath, legacyPath string) string {
 		return legacy
 	}
 	return primary
+}
+
+func NormalizeBaseRuleAssetSpec(raw string) string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		normalized := NormalizeBaseRuleAssetPath(part)
+		if normalized == "" {
+			continue
+		}
+		out = append(out, normalized)
+	}
+	return strings.Join(out, ",")
+}
+
+func NormalizeBaseRuleAssetPath(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	clean := filepath.ToSlash(filepath.Clean(raw))
+	if clean == "." {
+		return ""
+	}
+	return clean
 }
 
 func normalizeCompatPath(path string) string {

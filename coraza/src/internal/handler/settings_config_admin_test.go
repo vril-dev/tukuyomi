@@ -337,7 +337,7 @@ func writeSettingsConfigFixture(t *testing.T) string {
     "cache_rules_file": "conf/cache-rules.json",
     "security_audit_file": "audit/security-audit.ndjson",
     "security_audit_blob_dir": "audit/security-audit-blobs",
-    "rules_file": "rules/tukuyomi.conf"
+    "rules_file": "tukuyomi.conf"
   },
   "proxy": {
     "rollback_history_size": 8,
@@ -451,7 +451,7 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 			SecurityAuditBlobDir:    "audit/security-audit-blobs",
 			CacheRulesFile:          "conf/cache-rules.json",
 			CacheStoreFile:          "conf/cache-store.json",
-			RulesFile:               "rules/tukuyomi.conf",
+			RulesFile:               "tukuyomi.conf",
 			BypassFile:              "conf/waf-bypass.json",
 			CountryBlockFile:        "conf/country-block.json",
 			RateLimitFile:           "conf/rate-limit.json",

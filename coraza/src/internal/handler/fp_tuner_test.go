@@ -392,7 +392,7 @@ func TestDecodeJSONBodyStrictSingleObject(t *testing.T) {
 		Proposal: fpTunerProposal{
 			ID:         "fp-1",
 			RuleLine:   testScopedFPTunerRuleLine("search.example.com", "https", "/search", 100004, "ARGS:q"),
-			TargetPath: "rules/tukuyomi.conf",
+			TargetPath: "tukuyomi.conf",
 		},
 	}
 	raw, _ := json.Marshal(obj)
@@ -414,7 +414,7 @@ func TestDecodeJSONBodyStrictSingleObject(t *testing.T) {
 func TestProposalHashStable(t *testing.T) {
 	p := fpTunerProposal{
 		ID:         "fp-1",
-		TargetPath: "rules/tukuyomi.conf",
+		TargetPath: "tukuyomi.conf",
 		RuleLine:   testScopedFPTunerRuleLine("search.example.com", "https", "/search", 100004, "ARGS:q"),
 	}
 	h1 := proposalHash(p)
@@ -435,7 +435,7 @@ func TestApprovalTokenLifecycle(t *testing.T) {
 
 	proposal := fpTunerProposal{
 		ID:         "fp-1",
-		TargetPath: "rules/tukuyomi.conf",
+		TargetPath: "tukuyomi.conf",
 		RuleLine:   testScopedFPTunerRuleLine("search.example.com", "https", "/search", 100004, "ARGS:q"),
 	}
 	token, err := issueFPTunerApprovalToken(proposal)
@@ -465,12 +465,12 @@ func TestApprovalTokenProposalMismatch(t *testing.T) {
 
 	p1 := fpTunerProposal{
 		ID:         "fp-1",
-		TargetPath: "rules/tukuyomi.conf",
+		TargetPath: "tukuyomi.conf",
 		RuleLine:   testScopedFPTunerRuleLine("search.example.com", "https", "/search", 100004, "ARGS:q"),
 	}
 	p2 := fpTunerProposal{
 		ID:         "fp-2",
-		TargetPath: "rules/tukuyomi.conf",
+		TargetPath: "tukuyomi.conf",
 		RuleLine:   testScopedFPTunerRuleLine("search.example.com", "https", "/users", 100004, "ARGS:q"),
 	}
 
@@ -506,7 +506,7 @@ func TestProposeFPTuningHTTPModeSanitizesProviderPayload(t *testing.T) {
 
 	restore := saveFPTunerConfigForTest()
 	defer restore()
-	config.RulesFile = "rules/tukuyomi.conf"
+	config.RulesFile = "tukuyomi.conf"
 	config.CRSEnable = false
 	config.FPTunerEndpoint = srv.URL
 	config.FPTunerAPIKey = "test-provider-key"
@@ -514,7 +514,7 @@ func TestProposeFPTuningHTTPModeSanitizesProviderPayload(t *testing.T) {
 	config.FPTunerRequireApproval = false
 
 	reqBody := `{
-		"target_path":"rules/tukuyomi.conf",
+		"target_path":"tukuyomi.conf",
 		"event":{
 			"scheme":"https",
 			"host":"search.example.com",
@@ -563,8 +563,8 @@ func TestProposeFPTuningHTTPModeSanitizesProviderPayload(t *testing.T) {
 		t.Fatal("approval.required should be false in this test")
 	}
 
-	if captured.TargetPath != "rules/tukuyomi.conf" {
-		t.Fatalf("provider target_path=%q want=rules/tukuyomi.conf", captured.TargetPath)
+	if captured.TargetPath != "tukuyomi.conf" {
+		t.Fatalf("provider target_path=%q want=tukuyomi.conf", captured.TargetPath)
 	}
 	if captured.Input.Host != "search.example.com" {
 		t.Fatalf("provider input host=%q want=search.example.com", captured.Input.Host)
@@ -615,14 +615,14 @@ func TestProposeFPTuningRejectsMismatchedTargetRuleID(t *testing.T) {
 
 	restore := saveFPTunerConfigForTest()
 	defer restore()
-	config.RulesFile = "rules/tukuyomi.conf"
+	config.RulesFile = "tukuyomi.conf"
 	config.CRSEnable = false
 	config.FPTunerEndpoint = srv.URL
 	config.FPTunerTimeout = 2 * time.Second
 	config.FPTunerRequireApproval = false
 
 	reqBody := `{
-		"target_path":"rules/tukuyomi.conf",
+		"target_path":"tukuyomi.conf",
 		"event":{
 			"scheme":"https",
 			"host":"search.example.com",
@@ -659,14 +659,14 @@ func TestProposeFPTuningRejectsMismatchedHost(t *testing.T) {
 
 	restore := saveFPTunerConfigForTest()
 	defer restore()
-	config.RulesFile = "rules/tukuyomi.conf"
+	config.RulesFile = "tukuyomi.conf"
 	config.CRSEnable = false
 	config.FPTunerEndpoint = srv.URL
 	config.FPTunerTimeout = 2 * time.Second
 	config.FPTunerRequireApproval = false
 
 	reqBody := `{
-		"target_path":"rules/tukuyomi.conf",
+		"target_path":"tukuyomi.conf",
 		"event":{
 			"scheme":"https",
 			"host":"search.example.com",
@@ -703,14 +703,14 @@ func TestProposeFPTuningRejectsMismatchedVariable(t *testing.T) {
 
 	restore := saveFPTunerConfigForTest()
 	defer restore()
-	config.RulesFile = "rules/tukuyomi.conf"
+	config.RulesFile = "tukuyomi.conf"
 	config.CRSEnable = false
 	config.FPTunerEndpoint = srv.URL
 	config.FPTunerTimeout = 2 * time.Second
 	config.FPTunerRequireApproval = false
 
 	reqBody := `{
-		"target_path":"rules/tukuyomi.conf",
+		"target_path":"tukuyomi.conf",
 		"event":{
 			"scheme":"https",
 			"host":"search.example.com",
@@ -749,7 +749,7 @@ func TestRequestFPTunerProposalHTTPStatusError(t *testing.T) {
 
 	_, err := requestFPTunerProposalHTTP(fpTunerProviderRequest{
 		Version:    "v1",
-		TargetPath: "rules/tukuyomi.conf",
+		TargetPath: "tukuyomi.conf",
 		Input: fpTunerEventInput{
 			Host:            "search.example.com",
 			Path:            "/search",
@@ -906,14 +906,14 @@ func TestProposeFPTuningBatchHTTPReturnsV2(t *testing.T) {
 
 	restore := saveFPTunerConfigForTest()
 	defer restore()
-	config.RulesFile = "rules/tukuyomi.conf"
+	config.RulesFile = "tukuyomi.conf"
 	config.CRSEnable = false
 	config.FPTunerEndpoint = srv.URL
 	config.FPTunerTimeout = 2 * time.Second
 	config.FPTunerRequireApproval = false
 
 	reqBody := `{
-		"target_path":"rules/tukuyomi.conf",
+		"target_path":"tukuyomi.conf",
 		"events":[
 			{"scheme":"https","host":"search.example.com","path":"/search","rule_id":100004,"matched_variable":"ARGS:q","matched_value":"q=test"},
 			{"scheme":"https","host":"login.example.com","path":"/login","rule_id":100005,"matched_variable":"ARGS:username","matched_value":"admin"}
@@ -979,14 +979,14 @@ func TestProposeFPTuningUnsafeProposalReturns422(t *testing.T) {
 
 	restore := saveFPTunerConfigForTest()
 	defer restore()
-	config.RulesFile = "rules/tukuyomi.conf"
+	config.RulesFile = "tukuyomi.conf"
 	config.CRSEnable = false
 	config.FPTunerEndpoint = srv.URL
 	config.FPTunerTimeout = 2 * time.Second
 	config.FPTunerRequireApproval = false
 
 	reqBody := `{
-		"target_path":"rules/tukuyomi.conf",
+		"target_path":"tukuyomi.conf",
 		"event":{"host":"search.example.com","path":"/search","rule_id":100004,"matched_variable":"ARGS:q","matched_value":"q=test"}
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/tukuyomi-api/fp-tuner/propose", strings.NewReader(reqBody))
@@ -1016,14 +1016,14 @@ func TestProposeFPTuningNoProposalReturns200(t *testing.T) {
 
 	restore := saveFPTunerConfigForTest()
 	defer restore()
-	config.RulesFile = "rules/tukuyomi.conf"
+	config.RulesFile = "tukuyomi.conf"
 	config.CRSEnable = false
 	config.FPTunerEndpoint = srv.URL
 	config.FPTunerTimeout = 2 * time.Second
 	config.FPTunerRequireApproval = true
 
 	reqBody := `{
-		"target_path":"rules/tukuyomi.conf",
+		"target_path":"tukuyomi.conf",
 		"event":{"host":"localhost:80","path":"/","query":"<script>alert(1)</script>","rule_id":941100,"matched_variable":"QUERY_STRING","matched_value":"<script>alert(1)</script>"}
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/tukuyomi-api/fp-tuner/propose", strings.NewReader(reqBody))
@@ -1077,7 +1077,7 @@ func TestGetFPTunerAuditReturnsNewestFirstAndClampsLimit(t *testing.T) {
 			Actor:        "alice@example.com",
 			ProposalID:   "fp-1",
 			ProposalHash: "hash-1",
-			TargetPath:   "rules/tukuyomi.conf",
+			TargetPath:   "tukuyomi.conf",
 			Count:        i,
 		})
 		if err != nil {

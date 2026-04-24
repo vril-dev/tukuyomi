@@ -104,28 +104,7 @@ func (s *wafEventStore) loadWAFRuleAssetsVersion(versionID int64) ([]wafRuleAsse
 }
 
 func loadRuntimeWAFRuleAssets(store *wafEventStore) ([]wafRuleAssetVersion, configVersionRecord, bool, error) {
-	assets, rec, found, err := store.loadActiveWAFRuleAssets()
-	if err != nil {
-		return nil, configVersionRecord{}, false, err
-	}
-	if found {
-		_ = deleteLegacyRuleFileBlobs(store)
-		return assets, rec, true, nil
-	}
-
-	legacy, err := legacyRuleFileAssets(store)
-	if err != nil {
-		return nil, configVersionRecord{}, false, err
-	}
-	if len(legacy) == 0 {
-		return nil, configVersionRecord{}, false, nil
-	}
-	rec, assets, err = store.writeWAFRuleAssetsVersion("", legacy, configVersionSourceImport, "", "legacy waf rule assets import", 0)
-	if err != nil {
-		return nil, configVersionRecord{}, false, err
-	}
-	_ = deleteLegacyRuleFileBlobs(store)
-	return assets, rec, true, nil
+	return store.loadActiveWAFRuleAssets()
 }
 
 func ImportWAFRuleAssetsStorage() error {
@@ -143,7 +122,6 @@ func ImportWAFRuleAssetsStorage() error {
 	if _, _, err := store.writeWAFRuleAssetsVersion("", assets, configVersionSourceImport, "", "waf rule assets seed import", 0); err != nil {
 		return fmt.Errorf("import waf rule assets: %w", err)
 	}
-	_ = deleteLegacyRuleFileBlobs(store)
 	return nil
 }
 
@@ -242,6 +220,10 @@ func readWAFRuleAssetFile(path string, kind string) (wafRuleAssetVersion, bool, 
 	if err != nil {
 		return wafRuleAssetVersion{}, false, err
 	}
+	kind = normalizeWAFRuleAssetKind(kind)
+	if kind == wafRuleAssetKindBase {
+		normalized = config.NormalizeBaseRuleAssetPath(normalized)
+	}
 	sourcePath := wafRuleAssetSourcePath(normalized)
 	raw, hadFile, err := readFileMaybe(sourcePath)
 	if err != nil {
@@ -255,7 +237,7 @@ func readWAFRuleAssetFile(path string, kind string) (wafRuleAssetVersion, bool, 
 	}
 	return wafRuleAssetVersion{
 		Path: normalized,
-		Kind: normalizeWAFRuleAssetKind(kind),
+		Kind: kind,
 		Raw:  raw,
 		ETag: bypassconf.ComputeETag(raw),
 	}, true, nil
@@ -295,8 +277,11 @@ func normalizeWAFRuleAssets(assets []wafRuleAssetVersion) []wafRuleAssetVersion 
 		if err != nil {
 			continue
 		}
-		asset.Path = path
 		asset.Kind = normalizeWAFRuleAssetKind(asset.Kind)
+		if asset.Kind == wafRuleAssetKindBase {
+			path = config.NormalizeBaseRuleAssetPath(path)
+		}
+		asset.Path = path
 		if strings.TrimSpace(asset.ETag) == "" {
 			asset.ETag = bypassconf.ComputeETag(asset.Raw)
 		}
@@ -385,48 +370,6 @@ func wafRuleAssetKindOrder(kind string) int {
 	}
 }
 
-func legacyRuleFileAssets(store *wafEventStore) ([]wafRuleAssetVersion, error) {
-	if store == nil {
-		return nil, nil
-	}
-	var assets []wafRuleAssetVersion
-	for _, path := range configuredRuleFiles() {
-		normalized := normalizeWAFRuleAssetPath(path)
-		if normalized == "" {
-			continue
-		}
-		raw, etag, found, err := store.GetConfigBlob(ruleFileConfigBlobKey(path))
-		if err != nil {
-			return nil, err
-		}
-		if !found {
-			continue
-		}
-		if strings.TrimSpace(etag) == "" {
-			etag = bypassconf.ComputeETag(raw)
-		}
-		assets = append(assets, wafRuleAssetVersion{
-			Path: normalized,
-			Kind: wafRuleAssetKindBase,
-			Raw:  raw,
-			ETag: etag,
-		})
-	}
-	return assets, nil
-}
-
-func deleteLegacyRuleFileBlobs(store *wafEventStore) error {
-	if store == nil {
-		return nil
-	}
-	for _, path := range configuredRuleFiles() {
-		if err := store.DeleteConfigBlob(ruleFileConfigBlobKey(path)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func writeWAFRuleAssetUpdate(target string, raw []byte, expectedDomainETag string, reason string) (configVersionRecord, wafRuleAssetVersion, error) {
 	store := getLogsStatsStore()
 	if store == nil {
@@ -436,6 +379,7 @@ func writeWAFRuleAssetUpdate(target string, raw []byte, expectedDomainETag strin
 	if err != nil {
 		return configVersionRecord{}, wafRuleAssetVersion{}, err
 	}
+	targetPath = config.NormalizeBaseRuleAssetPath(targetPath)
 	assets, rec, found, err := loadRuntimeWAFRuleAssets(store)
 	if err != nil {
 		return configVersionRecord{}, wafRuleAssetVersion{}, err
@@ -471,6 +415,7 @@ func loadEditableWAFRuleAsset(target string) ([]byte, string, string, bool, erro
 	if err != nil {
 		return nil, "", "", false, err
 	}
+	targetPath = config.NormalizeBaseRuleAssetPath(targetPath)
 	store := getLogsStatsStore()
 	if store == nil {
 		return nil, "", "", false, errConfigDBStoreRequired

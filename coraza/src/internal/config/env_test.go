@@ -267,7 +267,7 @@ func TestLoadAppConfigFile(t *testing.T) {
 			"proxy_config_file": "conf/proxy.json",
 			"security_audit_file": "audit/security-audit.ndjson",
 			"security_audit_blob_dir": "audit/security-audit-blobs",
-			"rules_file": "rules/tukuyomi.conf"
+			"rules_file": "tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
 		"security_audit": {
@@ -333,7 +333,7 @@ func TestLoadAppConfigFileRejectsInvalid(t *testing.T) {
 			"proxy_config_file": "conf/proxy.json",
 			"security_audit_file": "audit/security-audit.ndjson",
 			"security_audit_blob_dir": "audit/security-audit-blobs",
-			"rules_file": "rules/tukuyomi.conf"
+			"rules_file": "tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
 		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
@@ -356,7 +356,7 @@ func TestLoadAppConfigFileRejectsRemovedFileStorageBackend(t *testing.T) {
 			"proxy_config_file": "conf/proxy.json",
 			"security_audit_file": "audit/security-audit.ndjson",
 			"security_audit_blob_dir": "audit/security-audit-blobs",
-			"rules_file": "rules/tukuyomi.conf"
+			"rules_file": "tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
 		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
@@ -383,7 +383,7 @@ func TestLoadAppConfigFileAcceptsPgSQLStorageDriver(t *testing.T) {
 			"proxy_config_file": "conf/proxy.json",
 			"security_audit_file": "audit/security-audit.ndjson",
 			"security_audit_blob_dir": "audit/security-audit-blobs",
-			"rules_file": "rules/tukuyomi.conf"
+			"rules_file": "tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
 		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
@@ -410,7 +410,7 @@ func TestLoadAppConfigFileRejectsRemovedFPTunerMockMode(t *testing.T) {
 			"proxy_config_file": "conf/proxy.json",
 			"security_audit_file": "audit/security-audit.ndjson",
 			"security_audit_blob_dir": "audit/security-audit-blobs",
-			"rules_file": "rules/tukuyomi.conf"
+			"rules_file": "tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
 		"fp_tuner": {"mode": "mock", "timeout_sec": 15, "approval_ttl_sec": 600},
@@ -437,7 +437,7 @@ func TestLoadAppConfigFileRejectsInvalidProxyEngineMode(t *testing.T) {
 			"proxy_config_file": "conf/proxy.json",
 			"security_audit_file": "audit/security-audit.ndjson",
 			"security_audit_blob_dir": "audit/security-audit-blobs",
-			"rules_file": "rules/tukuyomi.conf"
+			"rules_file": "tukuyomi.conf"
 		},
 		"proxy": {
 			"rollback_history_size": 8,

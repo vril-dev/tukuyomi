@@ -301,7 +301,7 @@ func defaultAppConfigFile() appConfigFile {
 			SecurityAuditBlobDir:    "audit/security-audit-blobs",
 			CacheRulesFile:          DefaultCacheRulesFilePath,
 			CacheStoreFile:          "conf/cache-store.json",
-			RulesFile:               "rules/tukuyomi.conf",
+			RulesFile:               DefaultBaseRuleAssetPath,
 			OverrideRulesDir:        "conf/rules",
 			UpstreamRuntimeFile:     DefaultUpstreamRuntimeFilePath,
 			BypassFile:              DefaultBypassFilePath,
@@ -437,7 +437,7 @@ func normalizeAppConfigFile(cfg *appConfigFile) {
 	cfg.Paths.SecurityAuditFile = strings.TrimSpace(cfg.Paths.SecurityAuditFile)
 	cfg.Paths.SecurityAuditBlobDir = strings.TrimSpace(cfg.Paths.SecurityAuditBlobDir)
 	cfg.Paths.CacheStoreFile = strings.TrimSpace(cfg.Paths.CacheStoreFile)
-	cfg.Paths.RulesFile = strings.TrimSpace(cfg.Paths.RulesFile)
+	cfg.Paths.RulesFile = NormalizeBaseRuleAssetSpec(cfg.Paths.RulesFile)
 	cfg.Paths.OverrideRulesDir = strings.TrimSpace(cfg.Paths.OverrideRulesDir)
 	if cfg.Paths.OverrideRulesDir == "" {
 		cfg.Paths.OverrideRulesDir = "conf/rules"

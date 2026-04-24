@@ -43,7 +43,7 @@ func TestLoadAppConfigFileAcceptsServerTLSConfig(t *testing.T) {
 		},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
-			"rules_file": "rules/tukuyomi.conf"
+			"rules_file": "tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
 		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
@@ -127,7 +127,7 @@ func TestLoadAppConfigFileRejectsInvalidServerTLSConfig(t *testing.T) {
 				},
 				"paths": {
 					"proxy_config_file": "conf/proxy.json",
-					"rules_file": "rules/tukuyomi.conf"
+					"rules_file": "tukuyomi.conf"
 				},
 				"proxy": {"rollback_history_size": 8},
 				"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
@@ -176,7 +176,7 @@ func TestLoadAppConfigFileAcceptsServerTLSCompositeFallbackConfig(t *testing.T) 
 		},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
-			"rules_file": "rules/tukuyomi.conf"
+			"rules_file": "tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
 		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},

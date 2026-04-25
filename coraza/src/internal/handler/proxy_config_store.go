@@ -233,7 +233,7 @@ func (s *wafEventStore) insertProxyUpstreamsTx(tx *sql.Tx, versionID int64, upst
 			tx,
 			`INSERT INTO proxy_upstreams (
 				version_id, position, name, url, weight, enabled, http2_mode,
-				generated, generated_kind, provider_class, managed_by_vhost
+				is_generated, generated_kind, provider_class, managed_by_vhost
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			versionID,
 			i,
@@ -367,7 +367,7 @@ func (s *wafEventStore) insertProxyRouteTx(tx *sql.Tx, versionID int64, routeKin
 		tx,
 		`INSERT INTO proxy_routes (
 			version_id, route_kind, position, name, enabled_set, enabled, priority,
-			generated, match_path_type, match_path_value, action_upstream,
+			is_generated, match_path_type, match_path_value, action_upstream,
 			action_backend_pool, action_upstream_http2_mode, action_canary_upstream,
 			action_canary_upstream_http2_mode, action_canary_weight_percent,
 			action_hash_policy, action_hash_key, action_host_rewrite,
@@ -673,7 +673,7 @@ func (s *wafEventStore) loadProxyKeyValues(versionID int64, mapName string) (map
 func (s *wafEventStore) loadProxyUpstreams(versionID int64) ([]ProxyUpstream, error) {
 	rows, err := s.query(
 		`SELECT position, name, url, weight, enabled, http2_mode,
-		        generated, generated_kind, provider_class, managed_by_vhost
+		        is_generated, generated_kind, provider_class, managed_by_vhost
 		   FROM proxy_upstreams
 		  WHERE version_id = ?
 		  ORDER BY position`,
@@ -899,7 +899,7 @@ func (s *wafEventStore) loadProxyBackendPoolMembers(versionID int64, poolPositio
 
 func (s *wafEventStore) loadProxyRoutes(versionID int64) ([]ProxyRoute, error) {
 	rows, err := s.query(
-		`SELECT position, name, enabled_set, enabled, priority, generated,
+		`SELECT position, name, enabled_set, enabled, priority, is_generated,
 		        match_path_type, match_path_value, action_upstream,
 		        action_backend_pool, action_upstream_http2_mode,
 		        action_canary_upstream, action_canary_upstream_http2_mode,
@@ -952,7 +952,7 @@ func (s *wafEventStore) loadProxyRoutes(versionID int64) ([]ProxyRoute, error) {
 
 func (s *wafEventStore) loadProxyDefaultRoute(versionID int64) (*ProxyDefaultRoute, error) {
 	row := s.queryRow(
-		`SELECT position, name, enabled_set, enabled, priority, generated,
+		`SELECT position, name, enabled_set, enabled, priority, is_generated,
 		        match_path_type, match_path_value, action_upstream,
 		        action_backend_pool, action_upstream_http2_mode,
 		        action_canary_upstream, action_canary_upstream_http2_mode,

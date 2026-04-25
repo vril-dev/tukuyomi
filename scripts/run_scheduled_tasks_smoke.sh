@@ -10,6 +10,7 @@ SCHEDULED_TASKS_SMOKE_COMPOSE_PORT="${SCHEDULED_TASKS_SMOKE_COMPOSE_PORT:-19096}
 SCHEDULED_TASKS_SMOKE_PREVIEW_PORT="${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT:-19097}"
 SCHEDULED_TASKS_SMOKE_ADMIN_USERNAME="${SCHEDULED_TASKS_SMOKE_ADMIN_USERNAME:-admin}"
 SCHEDULED_TASKS_SMOKE_ADMIN_PASSWORD="${SCHEDULED_TASKS_SMOKE_ADMIN_PASSWORD:-scheduled-tasks-smoke-admin-password}"
+SCHEDULED_TASKS_SMOKE_SESSION_SECRET="${SCHEDULED_TASKS_SMOKE_SESSION_SECRET:-scheduled-tasks-smoke-session-secret}"
 
 PUID_VALUE="${PUID:-$(id -u)}"
 GUID_VALUE="${GUID:-$(id -g)}"
@@ -144,11 +145,13 @@ wait_for_task_success() {
   local db_path="$1"
   local task_name="$2"
   local task_log="$3"
+  local log_marker="$4"
   local i
 
   for i in $(seq 1 "${SCHEDULED_TASKS_SMOKE_WAIT_SECONDS}"); do
     if db_has_task_success "${db_path}" "${task_name}" && \
-      [[ -s "${task_log}" ]]; then
+      grep -F -- "stdout:${log_marker}" "${task_log}" >/dev/null 2>&1 && \
+      grep -F -- "stderr:${log_marker}" "${task_log}" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
@@ -177,6 +180,36 @@ write_task_config() {
 EOF
 }
 
+write_smoke_logger() {
+  local path="$1"
+  install -d -m 755 "$(dirname "${path}")"
+  cat >"${path}" <<'EOF'
+#!/bin/sh
+set -eu
+
+marker="${1:-}"
+if [ -z "${marker}" ]; then
+  echo "missing smoke marker" >&2
+  exit 64
+fi
+
+printf 'stdout:%s\n' "${marker}"
+printf 'stderr:%s\n' "${marker}" >&2
+EOF
+  chmod 755 "${path}"
+}
+
+write_smoke_admin_config() {
+  local conf_dir="$1"
+  jq \
+    --arg session_secret "${SCHEDULED_TASKS_SMOKE_SESSION_SECRET}" \
+    '.admin = (.admin // {})
+     | .admin.session_secret = $session_secret
+     | .admin.api_auth_disable = false' \
+    "${conf_dir}/config.json" > "${conf_dir}/config.json.tmp"
+  mv "${conf_dir}/config.json.tmp" "${conf_dir}/config.json"
+}
+
 write_minimal_runtime_seeds() {
   local conf_dir="$1"
   local php_dir="$2"
@@ -200,6 +233,7 @@ EOF
   "vhosts": []
 }
 EOF
+  write_smoke_admin_config "${conf_dir}"
   write_task_config "${conf_dir}/scheduled-tasks.json" "${task_name}" "${command}"
 }
 
@@ -220,6 +254,8 @@ stage_compose_workspace() {
   install -m 644 "${ROOT_DIR}/docker-compose.yml" "${workspace}/docker-compose.yml"
   rsync -a "${ROOT_DIR}/coraza/" "${workspace}/coraza/"
   rsync -a "${ROOT_DIR}/data/conf/" "${workspace}/data/conf/"
+  write_smoke_admin_config "${workspace}/data/conf"
+  rsync -a "${ROOT_DIR}/seeds/" "${workspace}/seeds/"
   if [[ -d "${ROOT_DIR}/data/php-fpm" ]]; then
     rsync -a "${ROOT_DIR}/data/php-fpm/" "${workspace}/data/php-fpm/"
   else
@@ -392,13 +428,14 @@ run_binary_smoke() {
   if [[ -d "${ROOT_DIR}/data/php-fpm" ]]; then
     rsync -a "${ROOT_DIR}/data/php-fpm/" "${runtime_dir}/data/php-fpm/"
   fi
-  write_minimal_runtime_seeds "${runtime_dir}/conf" "${runtime_dir}/data/php-fpm" "scheduled-task-binary-smoke" "date"
+  write_smoke_logger "${runtime_dir}/bin/scheduled-task-smoke-logger"
+  write_minimal_runtime_seeds "${runtime_dir}/conf" "${runtime_dir}/data/php-fpm" "scheduled-task-binary-smoke" "./bin/scheduled-task-smoke-logger scheduled-task-binary-smoke"
   seed_runtime_db_from_files "${runtime_dir}" "./bin/tukuyomi"
   (
     cd "${runtime_dir}"
     WAF_CONFIG_FILE="${runtime_dir}/conf/config.json" ./bin/tukuyomi run-scheduled-tasks
   )
-  wait_for_task_success "${db_path}" "scheduled-task-binary-smoke" "${task_log}" || fail "binary scheduled-task smoke did not produce expected state/log/output"
+  wait_for_task_success "${db_path}" "scheduled-task-binary-smoke" "${task_log}" "scheduled-task-binary-smoke" || fail "binary scheduled-task smoke did not produce expected state/log/output"
 }
 
 run_compose_smoke() {
@@ -412,7 +449,8 @@ run_compose_smoke() {
   container_db_path="$(resolve_container_db_path "${COMPOSE_WORKSPACE}/data/conf/config.json")"
   task_log="${COMPOSE_WORKSPACE}/data/scheduled-tasks/logs/scheduled-task-compose-smoke.log"
 
-  write_minimal_runtime_seeds "${COMPOSE_WORKSPACE}/data/conf" "${COMPOSE_WORKSPACE}/data/php-fpm" "scheduled-task-compose-smoke" "date"
+  write_smoke_logger "${COMPOSE_WORKSPACE}/data/scheduled-tasks/bin/scheduled-task-smoke-logger"
+  write_minimal_runtime_seeds "${COMPOSE_WORKSPACE}/data/conf" "${COMPOSE_WORKSPACE}/data/php-fpm" "scheduled-task-compose-smoke" "/app/data/scheduled-tasks/bin/scheduled-task-smoke-logger scheduled-task-compose-smoke"
   seed_runtime_db_from_files "${COMPOSE_WORKSPACE}/data" "../bin/tukuyomi"
 
   log "starting docker scheduled-task sidecar smoke on port ${SCHEDULED_TASKS_SMOKE_COMPOSE_PORT}"
@@ -429,7 +467,7 @@ run_compose_smoke() {
     docker compose --profile scheduled-tasks up -d --build coraza scheduled-task-runner
   )
   wait_for_http_code "200" "http://127.0.0.1:${SCHEDULED_TASKS_SMOKE_COMPOSE_PORT}/healthz" || fail "compose scheduled-task smoke runtime did not become healthy"
-  wait_for_task_success "${db_path}" "scheduled-task-compose-smoke" "${task_log}" || fail "docker scheduled-task sidecar smoke did not produce expected state/log/output"
+  wait_for_task_success "${db_path}" "scheduled-task-compose-smoke" "${task_log}" "scheduled-task-compose-smoke" || fail "docker scheduled-task sidecar smoke did not produce expected state/log/output"
   (
     cd "${COMPOSE_WORKSPACE}"
     COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT}" PUID="${PUID_VALUE}" GUID="${GUID_VALUE}" docker compose --profile scheduled-tasks down --remove-orphans >/dev/null
@@ -444,6 +482,7 @@ run_preview_smoke() {
   stage_compose_workspace "${PREVIEW_WORKSPACE}"
   db_path="$(resolve_db_path "${PREVIEW_WORKSPACE}/data/conf/config.json" "${PREVIEW_WORKSPACE}/data" 1)"
   task_log="${PREVIEW_WORKSPACE}/data/scheduled-tasks/logs/scheduled-task-preview-smoke.log"
+  write_smoke_logger "${PREVIEW_WORKSPACE}/data/scheduled-tasks/bin/scheduled-task-smoke-logger"
 
   log "starting ui-preview scheduled-task smoke on port ${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}"
   (
@@ -458,8 +497,8 @@ run_preview_smoke() {
   )
   wait_for_http_code "200" "http://127.0.0.1:${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}/healthz" || fail "ui-preview scheduled-task smoke runtime did not become healthy"
 
-  put_task_config_via_preview_api "${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}" "scheduled-task-preview-smoke" "date"
-  wait_for_task_success "${db_path}" "scheduled-task-preview-smoke" "${task_log}" || fail "preview scheduled-task smoke did not produce expected state/log/output"
+  put_task_config_via_preview_api "${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}" "scheduled-task-preview-smoke" "/app/data/scheduled-tasks/bin/scheduled-task-smoke-logger scheduled-task-preview-smoke"
+  wait_for_task_success "${db_path}" "scheduled-task-preview-smoke" "${task_log}" "scheduled-task-preview-smoke" || fail "preview scheduled-task smoke did not produce expected state/log/output"
   (
     cd "${PREVIEW_WORKSPACE}"
     COMPOSE_PROJECT_NAME="${PREVIEW_PROJECT}" bash ./scripts/ui_preview.sh down >/dev/null

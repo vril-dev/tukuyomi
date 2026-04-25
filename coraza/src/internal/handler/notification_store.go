@@ -584,8 +584,8 @@ func (m *notificationManager) httpClient(timeoutSec int) *http.Client {
 }
 
 func sendNotificationEmail(sink notificationSinkConfig, dispatch notificationDispatch) error {
-	host, _, err := strings.Cut(strings.TrimSpace(sink.SMTPAddress), ":")
-	if err || strings.TrimSpace(host) == "" {
+	host, _, found := strings.Cut(strings.TrimSpace(sink.SMTPAddress), ":")
+	if !found || strings.TrimSpace(host) == "" {
 		return fmt.Errorf("smtp_address must include host:port")
 	}
 	to := make([]string, 0, len(sink.To))

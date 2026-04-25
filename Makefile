@@ -591,10 +591,14 @@ bench-full: bench-proxy bench-waf
 gotestwaf:
 	@set -euo pipefail; \
 	backup="$$(mktemp)"; \
-	cp data/conf/proxy.json "$$backup"; \
-	trap 'cp "$$backup" data/conf/proxy.json >/dev/null 2>&1 || true; rm -f "$$backup"' EXIT; \
+	had_proxy_seed=0; \
+	if [ -f data/conf/proxy.json ]; then cp data/conf/proxy.json "$$backup"; had_proxy_seed=1; fi; \
+	trap 'if [ "$$had_proxy_seed" = "1" ]; then cp "$$backup" data/conf/proxy.json >/dev/null 2>&1 || true; else rm -f data/conf/proxy.json; fi; rm -f "$$backup"' EXIT; \
+	proxy_source="data/conf/proxy.json"; \
+	if [ ! -f "$$proxy_source" ]; then proxy_source="seeds/conf/proxy.json"; fi; \
+	mkdir -p data/conf; \
 	tmp_proxy="$$(mktemp)"; \
-	jq '.upstreams = [{"name":"gotestwaf-unreachable","url":"http://127.0.0.1:9081","weight":1,"enabled":true}]' data/conf/proxy.json > "$$tmp_proxy"; \
+	jq '.upstreams = [{"name":"gotestwaf-unreachable","url":"http://127.0.0.1:9081","weight":1,"enabled":true}]' "$$proxy_source" > "$$tmp_proxy"; \
 	mv "$$tmp_proxy" data/conf/proxy.json; \
 	HOST_CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" ./scripts/run_gotestwaf.sh
 

@@ -349,9 +349,10 @@ overload 制御は DB `app_config` の `server` 配下で調整します:
 
 ## Secret Handling
 
-- `admin.api_key_primary`、`admin.api_key_secondary`、`admin.session_secret` は managed app config に置き、browser へは出さないでください
-- browser operator は 1 回 sign in すると same-origin session cookie を受け取ります
-- CLI / 自動化は従来どおり `X-API-Key` を使えます
+- `admin.session_secret` は managed app config に置き、browser へは出さないでください
+- `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` / `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` は admin user table が空の初回 owner bootstrap にだけ使ってください
+- browser operator は username/password で sign in し、same-origin の DB-backed session cookie を受け取ります
+- CLI / 自動化は shared admin API key ではなく user ごとの personal access token を使ってください
 - `tukuyomi` の既定 posture は `admin.external_mode=api_only_external` です。remote admin API が不要なら `deny_external` にしてください
 - non-loopback listener で `admin.external_mode=full_external` を使う場合は、起動 warning だけに頼らず front-side の allowlist/auth を追加してください
 - `admin.trusted_cidrs` を public / catch-all network まで広げた場合も、埋め込み管理UI/API はその trusted source へ再露出され、起動時は warning のみです

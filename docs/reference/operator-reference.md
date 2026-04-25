@@ -162,8 +162,8 @@ routing runs.
 ### Admin Surface Basics
 
 - Keep a dedicated `admin.session_secret` server-side.
-- CLI and automation use `admin.api_key_primary` / `admin.api_key_secondary`.
-- The embedded admin UI exchanges API key access for a signed session cookie.
+- CLI and automation use per-user personal access tokens.
+- The embedded admin UI uses username/password login and DB-backed session cookies.
 - `Settings` is `Save config only`: listener/runtime/storage changes need restart.
 
 ### Host Network Hardening (L3/L4 Basics)
@@ -506,7 +506,7 @@ refreshes the load-balancer cookie itself.
 
 ```bash
 curl -sS \
-  -H "X-API-Key: ${WAF_API_KEY}" \
+  -H "Authorization: Bearer ${WAF_ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
   -X POST \
   --data '{"host":"api.example.com","path":"/servicea/users"}' \
@@ -685,7 +685,7 @@ Capabilities include:
 ### Log Retrieval
 
 ```bash
-curl -s -H "X-API-Key: <your-api-key>" \
+curl -s -H "Authorization: Bearer <your-personal-access-token>" \
      "http://<host>/tukuyomi-api/logs/read?tail=100&country=JP" | jq .
 ```
 

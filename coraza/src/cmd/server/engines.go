@@ -40,7 +40,7 @@ func applyAdminCORS(r *gin.Engine) {
 	r.Use(cors.New(cors.Config{
 		AllowOrigins: config.APICORSOrigins,
 		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders: []string{"Origin", "Content-Type", "Accept", "X-API-Key", "If-Match", "X-Tukuyomi-Actor", "X-CSRF-Token"},
+		AllowHeaders: []string{"Origin", "Content-Type", "Accept", "Authorization", "If-Match", "X-Tukuyomi-Actor", "X-CSRF-Token"},
 	}))
 }
 
@@ -61,7 +61,7 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 		config.APIBasePath,
 		handler.AdminAccessMiddleware("api"),
 		handler.AdminRateLimitMiddleware(),
-		middleware.APIKeyAuth(),
+		middleware.AdminAuth(),
 	)
 	adminMutate := handler.AdminReadOnlyMutationMiddleware()
 	api.GET("/", func(c *gin.Context) {

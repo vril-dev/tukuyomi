@@ -734,7 +734,10 @@ start_benchmark_upstream
 
 (
   cd "${ROOT_DIR}"
-  PUID="${HOST_PUID}" GUID="${HOST_GUID}" CORAZA_PORT="${HOST_CORAZA_PORT}" WAF_LISTEN_PORT="${WAF_LISTEN_PORT}" docker compose up -d --build --force-recreate coraza >/dev/null
+  PUID="${HOST_PUID}" GUID="${HOST_GUID}" CORAZA_PORT="${HOST_CORAZA_PORT}" WAF_LISTEN_PORT="${WAF_LISTEN_PORT}" \
+  TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${WAF_ADMIN_USERNAME}" \
+  TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${WAF_ADMIN_PASSWORD}" \
+  docker compose up -d --build --force-recreate coraza >/dev/null
 )
 proxy_api_wait_health 90 1
 

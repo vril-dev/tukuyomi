@@ -3,12 +3,15 @@ set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:${CORAZA_PORT:-19091}}"
 PROTECTED_HOST="${PROTECTED_HOST:-}"
-ADMIN_API_KEY="${ADMIN_API_KEY:-nextjs-example-admin-key-12345}"
+ADMIN_USERNAME="${ADMIN_USERNAME:-${TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME:-admin}}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-${TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD:-nextjs-example-admin-password}}"
 CACHE_PATH="${CACHE_PATH:-/tukuyomi-cache-smoke.txt}"
 CACHE_STORE_DIR="${CACHE_STORE_DIR:-cache/response}"
 CACHE_MAX_BYTES="${CACHE_MAX_BYTES:-1048576}"
 
 tmp_dir="$(mktemp -d)"
+admin_cookie_jar="${tmp_dir}/admin-cookie.txt"
+admin_csrf_token=""
 curl_host_args=()
 if [[ -n "${PROTECTED_HOST}" ]]; then
   curl_host_args=(-H "Host: ${PROTECTED_HOST}")
@@ -29,22 +32,48 @@ need_cmd() {
 need_cmd curl
 need_cmd python3
 
+admin_login() {
+  local login_body="${tmp_dir}/admin-login.json"
+  local login_resp="${tmp_dir}/admin-login-response.json"
+  local code
+
+  python3 - "${ADMIN_USERNAME}" "${ADMIN_PASSWORD}" >"${login_body}" <<'PY'
+import json
+import sys
+
+print(json.dumps({"username": sys.argv[1], "password": sys.argv[2]}))
+PY
+  code="$(curl -sS -o "${login_resp}" -w "%{http_code}" \
+    -c "${admin_cookie_jar}" -b "${admin_cookie_jar}" \
+    -H "Content-Type: application/json" \
+    -X POST --data-binary "@${login_body}" \
+    "${BASE_URL}/tukuyomi-api/auth/login")"
+  if [[ "${code}" != "200" ]]; then
+    echo "[nextjs-smoke][ERROR] admin login failed: ${code}" >&2
+    cat "${login_resp}" >&2 || true
+    exit 1
+  fi
+  admin_csrf_token="$(
+    awk 'NF >= 7 && $6 == "tukuyomi_admin_csrf" { token = $7 } END { if (token != "") print token }' "${admin_cookie_jar}"
+  )"
+  if [[ -z "${admin_csrf_token}" ]]; then
+    echo "[nextjs-smoke][ERROR] admin login did not issue csrf cookie" >&2
+    exit 1
+  fi
+}
+
 api_request() {
   local method="$1"
   local path="$2"
   shift 2
   curl -fsS -X "${method}" \
-    -H "X-API-Key: ${ADMIN_API_KEY}" \
+    -b "${admin_cookie_jar}" -c "${admin_cookie_jar}" \
+    -H "X-CSRF-Token: ${admin_csrf_token}" \
     "$@" \
     "${BASE_URL}${path}"
 }
 
 enable_cache_store_if_possible() {
-  if [[ -z "${ADMIN_API_KEY}" ]]; then
-    echo "[nextjs-smoke] ADMIN_API_KEY is not set; assuming internal cache store is already enabled"
-    return 0
-  fi
-
   local store_json etag put_body
   store_json="${tmp_dir}/cache-store.json"
   if ! api_request GET "/tukuyomi-api/cache-store" -o "${store_json}"; then
@@ -95,9 +124,6 @@ PY
 
 capture_cache_stats() {
   local output="$1"
-  if [[ -z "${ADMIN_API_KEY}" ]]; then
-    return 0
-  fi
   if ! api_request GET "/tukuyomi-api/cache-store" -o "${output}"; then
     echo "[nextjs-smoke][ERROR] failed to read cache-store stats" >&2
     exit 1
@@ -107,9 +133,6 @@ capture_cache_stats() {
 require_cache_stats_progress() {
   local before="$1"
   local after="$2"
-  if [[ -z "${ADMIN_API_KEY}" ]]; then
-    return 0
-  fi
   python3 - "${before}" "${after}" <<'PY'
 import json
 import pathlib
@@ -201,6 +224,7 @@ require_header() {
 }
 
 wait_for_ready
+admin_login
 enable_cache_store_if_possible
 capture_cache_stats "${tmp_dir}/cache-store-before.json"
 

@@ -10,10 +10,10 @@ info:
 servers:
   - url: /
 security: &AdminReadSecurity
-  - ApiKeyAuth: []
+  - AdminBearerAuth: []
   - AdminSessionCookie: []
 x-admin-write-security: &AdminWriteSecurity
-  - ApiKeyAuth: []
+  - AdminBearerAuth: []
   - AdminSessionCookie: []
     AdminCSRFCookie: []
     AdminCSRFHeader: []
@@ -71,12 +71,12 @@ paths:
   /tukuyomi-api/auth/login:
     post:
       tags: [auth]
-      summary: Exchange an admin API key for a signed browser session
+      summary: Exchange admin user credentials for a browser session
       description: |
-        This endpoint accepts an admin API key in the JSON body and sets
+        This endpoint accepts an admin username/email and password in the JSON body and sets
         `tukuyomi_admin_session` and `tukuyomi_admin_csrf` cookies for the browser.
-        Use this for interactive UI sign-in. CLI and automation clients may continue to
-        call protected endpoints directly with `X-API-Key`.
+        Use this for interactive UI sign-in. CLI and automation clients may use a personal
+        access token with `Authorization: Bearer`.
       security: []
       requestBody:
         required: true
@@ -1415,10 +1415,10 @@ paths:
           $ref: '#/components/responses/InternalError'
 components:
   securitySchemes:
-    ApiKeyAuth:
-      type: apiKey
-      in: header
-      name: X-API-Key
+    AdminBearerAuth:
+      type: http
+      scheme: bearer
+      description: Personal access token with the `tky_pat_` prefix.
     AdminSessionCookie:
       type: apiKey
       in: cookie
@@ -1603,9 +1603,19 @@ components:
     AdminLoginRequest:
       type: object
       properties:
-        api_key:
+        identifier:
           type: string
-      required: [api_key]
+          description: Admin username or email address.
+        username:
+          type: string
+          description: Admin username. Prefer `identifier` for new clients.
+        email:
+          type: string
+          description: Admin email address. Prefer `identifier` for new clients.
+        password:
+          type: string
+          format: password
+      required: [password]
       additionalProperties: false
     AdminLoginResponse:
       type: object

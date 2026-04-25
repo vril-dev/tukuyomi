@@ -215,16 +215,14 @@ type settingsListenerAdminConfig struct {
 }
 
 type settingsListenerAdminSecretStatus struct {
-	AdminAPIKeyPrimaryConfigured   bool   `json:"admin_api_key_primary_configured"`
-	AdminAPIKeySecondaryConfigured bool   `json:"admin_api_key_secondary_configured"`
-	AdminSessionSecretConfigured   bool   `json:"admin_session_secret_configured"`
-	StorageDBDSNConfigured         bool   `json:"storage_db_dsn_configured"`
-	SecurityAuditKeySource         string `json:"security_audit_key_source"`
-	SecurityAuditEncryptionKeyID   string `json:"security_audit_encryption_key_id"`
-	SecurityAuditEncryptionKeySet  bool   `json:"security_audit_encryption_key_configured"`
-	SecurityAuditHMACKeyID         string `json:"security_audit_hmac_key_id"`
-	SecurityAuditHMACKeySet        bool   `json:"security_audit_hmac_key_configured"`
-	FPTunerAPIKeyConfigured        bool   `json:"fp_tuner_api_key_configured"`
+	AdminSessionSecretConfigured  bool   `json:"admin_session_secret_configured"`
+	StorageDBDSNConfigured        bool   `json:"storage_db_dsn_configured"`
+	SecurityAuditKeySource        string `json:"security_audit_key_source"`
+	SecurityAuditEncryptionKeyID  string `json:"security_audit_encryption_key_id"`
+	SecurityAuditEncryptionKeySet bool   `json:"security_audit_encryption_key_configured"`
+	SecurityAuditHMACKeyID        string `json:"security_audit_hmac_key_id"`
+	SecurityAuditHMACKeySet       bool   `json:"security_audit_hmac_key_configured"`
+	FPTunerAPIKeyConfigured       bool   `json:"fp_tuner_api_key_configured"`
 }
 
 type settingsListenerAdminRuntimeStatus struct {
@@ -801,15 +799,13 @@ func normalizeSettingsWAFEngineMode(mode string) string {
 
 func buildSettingsListenerAdminSecretStatus(cfg config.AppConfigFile) settingsListenerAdminSecretStatus {
 	return settingsListenerAdminSecretStatus{
-		AdminAPIKeyPrimaryConfigured:   strings.TrimSpace(cfg.Admin.APIKeyPrimary) != "",
-		AdminAPIKeySecondaryConfigured: strings.TrimSpace(cfg.Admin.APIKeySecondary) != "",
-		AdminSessionSecretConfigured:   strings.TrimSpace(cfg.Admin.SessionSecret) != "",
-		StorageDBDSNConfigured:         strings.TrimSpace(cfg.Storage.DBDSN) != "",
-		SecurityAuditKeySource:         cfg.SecurityAudit.KeySource,
-		SecurityAuditEncryptionKeyID:   cfg.SecurityAudit.EncryptionKeyID,
-		SecurityAuditEncryptionKeySet:  strings.TrimSpace(cfg.SecurityAudit.EncryptionKey) != "",
-		SecurityAuditHMACKeyID:         cfg.SecurityAudit.HMACKeyID,
-		SecurityAuditHMACKeySet:        strings.TrimSpace(cfg.SecurityAudit.HMACKey) != "",
-		FPTunerAPIKeyConfigured:        strings.TrimSpace(cfg.FPTuner.APIKey) != "",
+		AdminSessionSecretConfigured:  strings.TrimSpace(cfg.Admin.SessionSecret) != "",
+		StorageDBDSNConfigured:        strings.TrimSpace(cfg.Storage.DBDSN) != "",
+		SecurityAuditKeySource:        cfg.SecurityAudit.KeySource,
+		SecurityAuditEncryptionKeyID:  cfg.SecurityAudit.EncryptionKeyID,
+		SecurityAuditEncryptionKeySet: strings.TrimSpace(cfg.SecurityAudit.EncryptionKey) != "",
+		SecurityAuditHMACKeyID:        cfg.SecurityAudit.HMACKeyID,
+		SecurityAuditHMACKeySet:       strings.TrimSpace(cfg.SecurityAudit.HMACKey) != "",
+		FPTunerAPIKeyConfigured:       strings.TrimSpace(cfg.FPTuner.APIKey) != "",
 	}
 }

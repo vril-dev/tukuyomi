@@ -237,9 +237,8 @@ proxy engine 選択も同じ restart-required config surface です:
 
 server-side に閉じ込める値:
 
-- `admin.api_key_primary`
-- `admin.api_key_secondary`
 - `admin.session_secret`
+- `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` / `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` を使う場合の初期 owner bootstrap credential
 - 必要なら security-audit の encryption/HMAC key
 - immutable replicated rollout を意図的に試すなら、frontend replica では `admin.read_only=true` にし、scheduled-task 実行は dedicated singleton role に切り出してください
 - `tukuyomi` の既定 posture は `admin.external_mode=api_only_external` です。remote admin API が不要なら `deny_external` を使ってください

@@ -7,7 +7,8 @@ BINARY_DEPLOYMENT_SKIP_BUILD="${BINARY_DEPLOYMENT_SKIP_BUILD:-0}"
 BINARY_DEPLOYMENT_AUTO_DOWN="${BINARY_DEPLOYMENT_AUTO_DOWN:-1}"
 BINARY_DEPLOYMENT_PROXY_PORT="${BINARY_DEPLOYMENT_PROXY_PORT:-19094}"
 BINARY_DEPLOYMENT_UPSTREAM_PORT="${BINARY_DEPLOYMENT_UPSTREAM_PORT:-18081}"
-BINARY_DEPLOYMENT_API_KEY="${BINARY_DEPLOYMENT_API_KEY:-binary-deployment-smoke-admin-key}"
+BINARY_DEPLOYMENT_ADMIN_USERNAME="${BINARY_DEPLOYMENT_ADMIN_USERNAME:-admin}"
+BINARY_DEPLOYMENT_ADMIN_PASSWORD="${BINARY_DEPLOYMENT_ADMIN_PASSWORD:-binary-deployment-smoke-admin-password}"
 BINARY_DEPLOYMENT_SESSION_SECRET="${BINARY_DEPLOYMENT_SESSION_SECRET:-binary-deployment-smoke-session-secret}"
 BINARY_DEPLOYMENT_WAIT_SECONDS="${BINARY_DEPLOYMENT_WAIT_SECONDS:-60}"
 PROTECTED_HOST="${PROTECTED_HOST:-protected.example.test}"
@@ -171,9 +172,6 @@ log "staging runtime tree at ${RUNTIME_DIR}"
 install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${RUNTIME_DIR}/bin/tukuyomi"
 install -m 755 "${ROOT_DIR}/scripts/update_country_db.sh" "${RUNTIME_DIR}/scripts/update_country_db.sh"
 rsync -a --exclude '*.bak' "${ROOT_DIR}/data/conf/" "${RUNTIME_DIR}/conf/"
-if [[ -f "${ROOT_DIR}/data/db/tukuyomi.db" ]]; then
-  rsync -a "${ROOT_DIR}/data/db/tukuyomi.db"* "${RUNTIME_DIR}/db/"
-fi
 if [[ -f "${ROOT_DIR}/data/scheduled-tasks/README.md" ]]; then
   install -m 644 "${ROOT_DIR}/data/scheduled-tasks/README.md" "${RUNTIME_DIR}/data/scheduled-tasks/README.md"
 fi
@@ -184,10 +182,8 @@ sed -i "s#/opt/tukuyomi#${RUNTIME_DIR}#g" "${ENV_FILE}"
 
 jq \
   --arg listen_addr ":${BINARY_DEPLOYMENT_PROXY_PORT}" \
-  --arg api_key "${BINARY_DEPLOYMENT_API_KEY}" \
   --arg session_secret "${BINARY_DEPLOYMENT_SESSION_SECRET}" \
   '.server.listen_addr = $listen_addr
-   | .admin.api_key_primary = $api_key
    | .admin.session_secret = $session_secret
    | .admin.api_auth_disable = false' \
   "${RUNTIME_DIR}/conf/config.json" > "${RUNTIME_DIR}/conf/config.json.tmp"
@@ -208,6 +204,8 @@ log "starting staged binary from systemd-style working directory"
   set -a
   source "${ENV_FILE}"
   set +a
+  TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${BINARY_DEPLOYMENT_ADMIN_USERNAME}" \
+  TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${BINARY_DEPLOYMENT_ADMIN_PASSWORD}" \
   ./bin/tukuyomi >"${SERVER_LOG}" 2>&1
 ) &
 SERVER_PID="$!"
@@ -221,7 +219,8 @@ log "running admin + proxy-rules smoke through staged binary"
   cd "${ROOT_DIR}"
   HOST_CORAZA_PORT="${BINARY_DEPLOYMENT_PROXY_PORT}" \
   WAF_LISTEN_PORT="${BINARY_DEPLOYMENT_PROXY_PORT}" \
-  WAF_API_KEY_PRIMARY="${BINARY_DEPLOYMENT_API_KEY}" \
+  WAF_ADMIN_USERNAME="${BINARY_DEPLOYMENT_ADMIN_USERNAME}" \
+  WAF_ADMIN_PASSWORD="${BINARY_DEPLOYMENT_ADMIN_PASSWORD}" \
   PROTECTED_HOST="${PROTECTED_HOST}" \
   PROXY_ECHO_PORT="${BINARY_DEPLOYMENT_UPSTREAM_PORT}" \
   PROXY_ECHO_URL="http://127.0.0.1:${BINARY_DEPLOYMENT_UPSTREAM_PORT}" \

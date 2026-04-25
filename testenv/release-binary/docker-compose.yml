@@ -24,6 +24,8 @@ services:
     command: ["../../../tukuyomi"]
     environment:
       - WAF_CONFIG_FILE=conf/config.json
+      - TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME=${TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME:-admin}
+      - TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD=${TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD:-release-smoke-admin-password}
     volumes:
       - ../..:/bundle
     ports:

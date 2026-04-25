@@ -53,6 +53,11 @@ func main() {
 		log.Fatalf("[CONFIG][DB][FATAL] sync failed: %v", err)
 	}
 	initRuntimeDBStoreOrFatal("[DB][INIT]")
+	if created, err := handler.EnsureAdminBootstrapOwnerFromEnv(); err != nil {
+		log.Fatalf("[ADMIN][BOOTSTRAP][FATAL] %v", err)
+	} else if created {
+		log.Printf("[ADMIN][BOOTSTRAP] created initial owner from environment")
+	}
 	applyRuntimeResourceLimits()
 	if err := handler.InitRequestCountryRuntime(); err != nil {
 		log.Fatalf("[FATAL] failed to initialize request country runtime: %v", err)

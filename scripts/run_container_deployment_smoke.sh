@@ -10,7 +10,8 @@ CONTAINER_DEPLOYMENT_CONTAINER_NAME="${CONTAINER_DEPLOYMENT_CONTAINER_NAME:-tuku
 CONTAINER_DEPLOYMENT_NETWORK="${CONTAINER_DEPLOYMENT_NETWORK:-tukuyomi-container-deployment-smoke-net}"
 CONTAINER_DEPLOYMENT_UPSTREAM_NAME="${CONTAINER_DEPLOYMENT_UPSTREAM_NAME:-tukuyomi-container-deployment-smoke-echo}"
 CONTAINER_DEPLOYMENT_UPSTREAM_PORT="${CONTAINER_DEPLOYMENT_UPSTREAM_PORT:-18080}"
-CONTAINER_DEPLOYMENT_API_KEY="${CONTAINER_DEPLOYMENT_API_KEY:-container-deployment-smoke-admin-key}"
+CONTAINER_DEPLOYMENT_ADMIN_USERNAME="${CONTAINER_DEPLOYMENT_ADMIN_USERNAME:-admin}"
+CONTAINER_DEPLOYMENT_ADMIN_PASSWORD="${CONTAINER_DEPLOYMENT_ADMIN_PASSWORD:-container-deployment-smoke-admin-password}"
 CONTAINER_DEPLOYMENT_SESSION_SECRET="${CONTAINER_DEPLOYMENT_SESSION_SECRET:-container-deployment-smoke-session-secret}"
 CONTAINER_DEPLOYMENT_WAIT_SECONDS="${CONTAINER_DEPLOYMENT_WAIT_SECONDS:-60}"
 PROTECTED_HOST="${PROTECTED_HOST:-protected.example.test}"
@@ -94,10 +95,8 @@ rsync -a "${ROOT_DIR}/seeds/" "${BUILD_CONTEXT}/seeds/"
 install -m 644 "${ROOT_DIR}/docs/build/Dockerfile.example" "${BUILD_CONTEXT}/docs/build/Dockerfile.example"
 
 jq \
-  --arg api_key "${CONTAINER_DEPLOYMENT_API_KEY}" \
   --arg session_secret "${CONTAINER_DEPLOYMENT_SESSION_SECRET}" \
-  '.admin.api_key_primary = $api_key
-   | .admin.session_secret = $session_secret
+  '.admin.session_secret = $session_secret
    | .admin.api_auth_disable = false' \
   "${BUILD_CONTEXT}/data/conf/config.json" > "${BUILD_CONTEXT}/data/conf/config.json.tmp"
 mv "${BUILD_CONTEXT}/data/conf/config.json.tmp" "${BUILD_CONTEXT}/data/conf/config.json"
@@ -123,6 +122,8 @@ docker run -d --rm \
   --name "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}" \
   --network "${CONTAINER_DEPLOYMENT_NETWORK}" \
   -p "127.0.0.1:${CONTAINER_DEPLOYMENT_RUNTIME_PORT}:9090" \
+  -e "TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME=${CONTAINER_DEPLOYMENT_ADMIN_USERNAME}" \
+  -e "TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD=${CONTAINER_DEPLOYMENT_ADMIN_PASSWORD}" \
   "${CONTAINER_DEPLOYMENT_IMAGE_NAME}" >/dev/null
 
 if ! wait_for_http_code "200" "http://127.0.0.1:${CONTAINER_DEPLOYMENT_RUNTIME_PORT}/healthz"; then
@@ -147,7 +148,8 @@ log "running admin + proxy-rules smoke through deployment container"
   WAF_LISTEN_PORT="9090" \
   WAF_API_BASEPATH="/tukuyomi-api" \
   WAF_UI_BASEPATH="/tukuyomi-ui" \
-  WAF_API_KEY_PRIMARY="${CONTAINER_DEPLOYMENT_API_KEY}" \
+  WAF_ADMIN_USERNAME="${CONTAINER_DEPLOYMENT_ADMIN_USERNAME}" \
+  WAF_ADMIN_PASSWORD="${CONTAINER_DEPLOYMENT_ADMIN_PASSWORD}" \
   PROTECTED_HOST="${PROTECTED_HOST}" \
   PROXY_ECHO_PORT="${CONTAINER_DEPLOYMENT_UPSTREAM_PORT}" \
   PROXY_ECHO_URL="http://${CONTAINER_DEPLOYMENT_UPSTREAM_NAME}:${CONTAINER_DEPLOYMENT_UPSTREAM_PORT}" \

@@ -6,7 +6,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HTTP3_SMOKE_SKIP_BUILD="${HTTP3_SMOKE_SKIP_BUILD:-0}"
 HTTP3_SMOKE_PROXY_PORT="${HTTP3_SMOKE_PROXY_PORT:-19096}"
 HTTP3_SMOKE_UPSTREAM_PORT="${HTTP3_SMOKE_UPSTREAM_PORT:-18082}"
-HTTP3_SMOKE_API_KEY="${HTTP3_SMOKE_API_KEY:-http3-public-entry-smoke-admin-key}"
+HTTP3_SMOKE_ADMIN_USERNAME="${HTTP3_SMOKE_ADMIN_USERNAME:-admin}"
+HTTP3_SMOKE_ADMIN_PASSWORD="${HTTP3_SMOKE_ADMIN_PASSWORD:-http3-public-entry-smoke-admin-password}"
 HTTP3_SMOKE_SESSION_SECRET="${HTTP3_SMOKE_SESSION_SECRET:-http3-public-entry-smoke-session-secret}"
 HTTP3_SMOKE_WAIT_SECONDS="${HTTP3_SMOKE_WAIT_SECONDS:-60}"
 PROTECTED_HOST="${PROTECTED_HOST:-protected.example.test}"
@@ -23,6 +24,7 @@ KEY_FILE=""
 HTTPS_HEADERS=""
 HTTPS_BODY=""
 STATUS_BODY=""
+ADMIN_COOKIE_JAR=""
 WAF_STAGE_ROOT=""
 
 need_cmd() {
@@ -86,6 +88,7 @@ cleanup() {
   if [[ -n "${RUNTIME_ROOT}" ]]; then
     rm -rf "${RUNTIME_ROOT}" >/dev/null 2>&1 || true
   fi
+  [[ -n "${ADMIN_COOKIE_JAR}" ]] && rm -f "${ADMIN_COOKIE_JAR}" >/dev/null 2>&1 || true
 }
 trap 'cleanup "$?"' EXIT
 
@@ -118,6 +121,7 @@ KEY_FILE="${RUNTIME_DIR}/conf/http3-smoke-key.pem"
 HTTPS_HEADERS="${RUNTIME_ROOT}/https-headers.txt"
 HTTPS_BODY="${RUNTIME_ROOT}/https-body.json"
 STATUS_BODY="${RUNTIME_ROOT}/status.json"
+ADMIN_COOKIE_JAR="${RUNTIME_ROOT}/admin-cookie.txt"
 
 log "staging runtime tree at ${RUNTIME_DIR}"
   install -d -m 755 \
@@ -148,7 +152,6 @@ log "generating temporary self-signed certificate"
 
 jq \
   --arg listen_addr ":${HTTP3_SMOKE_PROXY_PORT}" \
-  --arg api_key "${HTTP3_SMOKE_API_KEY}" \
   --arg session_secret "${HTTP3_SMOKE_SESSION_SECRET}" \
   --arg cert_file "./conf/http3-smoke-cert.pem" \
   --arg key_file "./conf/http3-smoke-key.pem" \
@@ -159,7 +162,6 @@ jq \
    | .server.tls.redirect_http = false
    | .server.http3.enabled = true
    | .server.http3.alt_svc_max_age_sec = 86400
-   | .admin.api_key_primary = $api_key
    | .admin.session_secret = $session_secret
    | .admin.api_auth_disable = false' \
   "${RUNTIME_DIR}/conf/config.json" > "${RUNTIME_DIR}/conf/config.json.tmp"
@@ -229,6 +231,8 @@ log "starting binary with built-in TLS + HTTP/3"
   set -a
   source "${ENV_FILE}"
   set +a
+  TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${HTTP3_SMOKE_ADMIN_USERNAME}" \
+  TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${HTTP3_SMOKE_ADMIN_PASSWORD}" \
   ./bin/tukuyomi >"${SERVER_LOG}" 2>&1
 ) &
 SERVER_PID="$!"
@@ -260,8 +264,17 @@ if ! jq -e \
 fi
 
 log "checking admin status reports advertised HTTP/3 runtime"
+login_payload="$(jq -n --arg username "${HTTP3_SMOKE_ADMIN_USERNAME}" --arg password "${HTTP3_SMOKE_ADMIN_PASSWORD}" '{username: $username, password: $password}')"
+login_code="$(curl -ksS -o "${RUNTIME_ROOT}/admin-login.json" -w "%{http_code}" \
+  -c "${ADMIN_COOKIE_JAR}" -b "${ADMIN_COOKIE_JAR}" \
+  -H "Content-Type: application/json" \
+  -X POST --data "${login_payload}" \
+  "https://127.0.0.1:${HTTP3_SMOKE_PROXY_PORT}/tukuyomi-api/auth/login")"
+if [[ "${login_code}" != "200" ]]; then
+  fail "admin login failed: ${login_code}"
+fi
 status_code="$(curl -ksS -o "${STATUS_BODY}" -w "%{http_code}" \
-  -H "X-API-Key: ${HTTP3_SMOKE_API_KEY}" \
+  -b "${ADMIN_COOKIE_JAR}" -c "${ADMIN_COOKIE_JAR}" \
   "https://127.0.0.1:${HTTP3_SMOKE_PROXY_PORT}/tukuyomi-api/status")"
 if [[ "${status_code}" != "200" ]]; then
   fail "status request failed: ${status_code}"

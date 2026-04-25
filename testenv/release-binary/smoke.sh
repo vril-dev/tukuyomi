@@ -4,7 +4,8 @@ set -euo pipefail
 PROTECTED_HOST="${PROTECTED_HOST:-protected.example.test}"
 PROXY_PORT="${PROXY_PORT:-19093}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:${PROXY_PORT}}"
-API_KEY="${API_KEY:-release-smoke-admin-key-123456}"
+ADMIN_USERNAME="${ADMIN_USERNAME:-${TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME:-admin}}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-${TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD:-release-smoke-admin-password}}"
 COOKIE_JAR="$(mktemp)"
 tmp_body="$(mktemp)"
 tmp_headers="$(mktemp)"
@@ -37,11 +38,11 @@ if [[ "${status:-}" != "200" ]]; then
   exit 1
 fi
 
-login_payload="$(python3 - "${API_KEY}" <<'PY'
+login_payload="$(python3 - "${ADMIN_USERNAME}" "${ADMIN_PASSWORD}" <<'PY'
 import json
 import sys
 
-print(json.dumps({"api_key": sys.argv[1]}))
+print(json.dumps({"username": sys.argv[1], "password": sys.argv[2]}))
 PY
 )"
 

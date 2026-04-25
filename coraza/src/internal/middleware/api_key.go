@@ -1,46 +1,51 @@
 package middleware
 
 import (
-	"crypto/subtle"
+	"errors"
 	"net/http"
 	"strings"
-	"time"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"tukuyomi/internal/adminauth"
 	"tukuyomi/internal/config"
 )
 
-func APIKeyAuth() gin.HandlerFunc {
+type AdminAuthResult struct {
+	Principal     adminauth.Principal
+	Mode          string
+	FallbackActor string
+}
+
+type AdminAuthResolver func(*gin.Context) (AdminAuthResult, bool, error)
+
+var (
+	adminAuthResolverMu sync.RWMutex
+	adminAuthResolver   AdminAuthResolver
+)
+
+func SetAdminAuthResolver(resolver AdminAuthResolver) {
+	adminAuthResolverMu.Lock()
+	defer adminAuthResolverMu.Unlock()
+	adminAuthResolver = resolver
+}
+
+func AdminAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if config.APIAuthDisable {
 			c.Next()
 			return
 		}
-		if config.APIKeyPrimary == "" && config.APIKeySecondary == "" {
-			c.AbortWithStatus(http.StatusUnauthorized)
-			return
-		}
 
-		key := strings.TrimSpace(c.GetHeader("X-API-Key"))
-		if HasValidAPIKey(key) {
-			c.Set("tukuyomi.admin_auth_mode", "api_key")
-			c.Next()
-			return
-		}
-
-		session, ok, err := sessionFromRequest(c)
-		if err != nil {
-			c.AbortWithStatus(http.StatusUnauthorized)
-			return
-		}
-		if ok {
-			if err := adminauth.ValidateCSRF(c.Request, session); err != nil {
+		if result, ok, err := resolveConfiguredAdminAuth(c); err != nil {
+			if errors.Is(err, adminauth.ErrCSRFRequired) || errors.Is(err, adminauth.ErrCSRFMismatch) {
 				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": err.Error()})
 				return
 			}
-			c.Set("tukuyomi.admin_auth_mode", "session")
-			c.Set("tukuyomi.admin_auth_fallback_actor", "session:browser")
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		} else if ok {
+			setAdminAuthContext(c, result)
 			c.Next()
 			return
 		}
@@ -49,33 +54,25 @@ func APIKeyAuth() gin.HandlerFunc {
 	}
 }
 
-func HasValidAPIKey(key string) bool {
-	return secureKeyMatch(strings.TrimSpace(key), config.APIKeyPrimary) || secureKeyMatch(strings.TrimSpace(key), config.APIKeySecondary)
+func resolveConfiguredAdminAuth(c *gin.Context) (AdminAuthResult, bool, error) {
+	adminAuthResolverMu.RLock()
+	resolver := adminAuthResolver
+	adminAuthResolverMu.RUnlock()
+	if resolver == nil {
+		return AdminAuthResult{}, false, nil
+	}
+	return resolver(c)
 }
 
-func sessionFromRequest(c *gin.Context) (adminauth.Session, bool, error) {
-	if c == nil || c.Request == nil {
-		return adminauth.Session{}, false, nil
+func setAdminAuthContext(c *gin.Context, result AdminAuthResult) {
+	if strings.TrimSpace(result.Mode) != "" {
+		c.Set("tukuyomi.admin_auth_mode", strings.TrimSpace(result.Mode))
 	}
-
-	cookie, err := c.Request.Cookie(adminauth.SessionCookieName)
-	if err != nil || cookie == nil || strings.TrimSpace(cookie.Value) == "" {
-		return adminauth.Session{}, false, nil
+	if strings.TrimSpace(result.FallbackActor) != "" {
+		c.Set("tukuyomi.admin_auth_fallback_actor", strings.TrimSpace(result.FallbackActor))
 	}
-
-	session, err := adminauth.Validate(config.AdminSessionSecret, cookie.Value, time.Now().UTC())
-	if err != nil {
-		return adminauth.Session{}, false, err
+	if result.Principal.Authenticated() {
+		c.Set("tukuyomi.admin_principal", result.Principal)
+		c.Set("tukuyomi.admin_actor", result.Principal.Username)
 	}
-	return session, true, nil
-}
-
-func secureKeyMatch(got, expected string) bool {
-	if got == "" || expected == "" {
-		return false
-	}
-	if len(got) != len(expected) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
 }

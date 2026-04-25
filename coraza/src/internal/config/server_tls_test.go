@@ -38,8 +38,7 @@ func TestLoadAppConfigFileAcceptsServerTLSConfig(t *testing.T) {
 		},
 		"admin": {
 			"api_base_path": "/tukuyomi-api",
-			"ui_base_path": "/tukuyomi-ui",
-			"api_key_primary": "very-strong-random-api-key-12345"
+			"ui_base_path": "/tukuyomi-ui"
 		},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
@@ -122,8 +121,7 @@ func TestLoadAppConfigFileRejectsInvalidServerTLSConfig(t *testing.T) {
 				},
 				"admin": {
 					"api_base_path": "/tukuyomi-api",
-					"ui_base_path": "/tukuyomi-ui",
-					"api_key_primary": "very-strong-random-api-key-12345"
+					"ui_base_path": "/tukuyomi-ui"
 				},
 				"paths": {
 					"proxy_config_file": "conf/proxy.json",
@@ -170,8 +168,7 @@ func TestLoadAppConfigFileAcceptsServerTLSCompositeFallbackConfig(t *testing.T) 
 		},
 		"admin": {
 			"api_base_path": "/tukuyomi-api",
-			"ui_base_path": "/tukuyomi-ui",
-			"api_key_primary": "very-strong-random-api-key-12345"
+			"ui_base_path": "/tukuyomi-ui"
 		},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",

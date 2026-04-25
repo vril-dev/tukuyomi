@@ -153,8 +153,8 @@ TLS 証明書選択は TLS handshake 時点で終わるため、route host/path 
 ### 管理面の基本
 
 - `admin.session_secret` は server-side 専用で保持
-- CLI/automation は `admin.api_key_primary` / `admin.api_key_secondary`
-- 管理UIは API key を session cookie へ交換して使う
+- CLI/automation は user ごとの personal access token を使う
+- 管理UIは username/password login と DB-backed session cookie を使う
 - `Settings` は `Save config only` で、listener/runtime/storage 系は restart が必要
 
 ### Host Network Hardening（L3/L4 基本）
@@ -493,7 +493,7 @@ last-good target set を保持します。
 
 ```bash
 curl -sS \
-  -H "X-API-Key: ${WAF_API_KEY}" \
+  -H "Authorization: Bearer ${WAF_ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
   -X POST \
   --data '{"host":"api.example.com","path":"/servicea/users"}' \
@@ -674,7 +674,7 @@ host scope の優先順は exact `host:port`、次に bare `host`、最後に `d
 ### Log Retrieval
 
 ```bash
-curl -s -H "X-API-Key: <your-api-key>" \
+curl -s -H "Authorization: Bearer <your-personal-access-token>" \
      "http://<host>/tukuyomi-api/logs/read?tail=100&country=JP" | jq .
 ```
 

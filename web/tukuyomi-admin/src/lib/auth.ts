@@ -9,7 +9,7 @@ export type AdminSessionState = {
 export type AuthContextValue = {
   session: AdminSessionState;
   loading: boolean;
-  login: (apiKey: string) => Promise<void>;
+  login: (identifier: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };

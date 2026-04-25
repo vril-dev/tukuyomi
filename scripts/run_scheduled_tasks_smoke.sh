@@ -8,7 +8,8 @@ SCHEDULED_TASKS_SMOKE_AUTO_DOWN="${SCHEDULED_TASKS_SMOKE_AUTO_DOWN:-1}"
 SCHEDULED_TASKS_SMOKE_WAIT_SECONDS="${SCHEDULED_TASKS_SMOKE_WAIT_SECONDS:-60}"
 SCHEDULED_TASKS_SMOKE_COMPOSE_PORT="${SCHEDULED_TASKS_SMOKE_COMPOSE_PORT:-19096}"
 SCHEDULED_TASKS_SMOKE_PREVIEW_PORT="${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT:-19097}"
-SCHEDULED_TASKS_SMOKE_PREVIEW_API_KEY="${SCHEDULED_TASKS_SMOKE_PREVIEW_API_KEY:-dev-only-change-this-key-please}"
+SCHEDULED_TASKS_SMOKE_ADMIN_USERNAME="${SCHEDULED_TASKS_SMOKE_ADMIN_USERNAME:-admin}"
+SCHEDULED_TASKS_SMOKE_ADMIN_PASSWORD="${SCHEDULED_TASKS_SMOKE_ADMIN_PASSWORD:-scheduled-tasks-smoke-admin-password}"
 
 PUID_VALUE="${PUID:-$(id -u)}"
 GUID_VALUE="${GUID:-$(id -g)}"
@@ -238,6 +239,10 @@ put_task_config_via_preview_api() {
   local task_name="$2"
   local command="$3"
   local base_url="http://127.0.0.1:${port}/tukuyomi-api"
+  local cookie_jar
+  local csrf_token
+  local login_json
+  local login_payload
   local get_json
   local put_body
   local put_json
@@ -245,11 +250,29 @@ put_task_config_via_preview_api() {
   local raw
   local code
 
+  cookie_jar="$(mktemp)"
+  login_json="$(mktemp)"
   get_json="$(mktemp)"
   put_body="$(mktemp)"
   put_json="$(mktemp)"
 
-  code="$(curl -sS -o "${get_json}" -w "%{http_code}" -H "X-API-Key: ${SCHEDULED_TASKS_SMOKE_PREVIEW_API_KEY}" "${base_url}/scheduled-tasks")"
+  login_payload="$(jq -n --arg username "${SCHEDULED_TASKS_SMOKE_ADMIN_USERNAME}" --arg password "${SCHEDULED_TASKS_SMOKE_ADMIN_PASSWORD}" '{username: $username, password: $password}')"
+  code="$(curl -sS -o "${login_json}" -w "%{http_code}" \
+    -c "${cookie_jar}" -b "${cookie_jar}" \
+    -H "Content-Type: application/json" \
+    -X POST --data "${login_payload}" \
+    "${base_url}/auth/login")"
+  if [[ "${code}" != "200" ]]; then
+    cat "${login_json}" >&2 || true
+    rm -f "${cookie_jar}" "${login_json}" "${get_json}" "${put_body}" "${put_json}"
+    fail "preview admin login failed with status ${code}"
+  fi
+  csrf_token="$(
+    awk 'NF >= 7 && $6 == "tukuyomi_admin_csrf" { token = $7 } END { if (token != "") print token }' "${cookie_jar}"
+  )"
+  [[ -n "${csrf_token}" ]] || fail "preview admin login did not issue csrf cookie"
+
+  code="$(curl -sS -o "${get_json}" -w "%{http_code}" -b "${cookie_jar}" -c "${cookie_jar}" "${base_url}/scheduled-tasks")"
   [[ "${code}" == "200" ]] || fail "preview scheduled-tasks GET failed with status ${code}"
   etag="$(jq -r '.etag // empty' "${get_json}")"
   [[ -n "${etag}" ]] || fail "preview scheduled-tasks GET did not return an etag"
@@ -260,8 +283,9 @@ put_task_config_via_preview_api() {
   code="$(
     curl -sS -o "${get_json}" -w "%{http_code}" \
       -X PUT \
+      -b "${cookie_jar}" -c "${cookie_jar}" \
       -H "Content-Type: application/json" \
-      -H "X-API-Key: ${SCHEDULED_TASKS_SMOKE_PREVIEW_API_KEY}" \
+      -H "X-CSRF-Token: ${csrf_token}" \
       -H "If-Match: ${etag}" \
       --data-binary "@${put_json}" \
       "${base_url}/scheduled-tasks"
@@ -270,7 +294,7 @@ put_task_config_via_preview_api() {
     cat "${get_json}" >&2
     fail "preview scheduled-tasks PUT failed with status ${code}"
   fi
-  rm -f "${get_json}" "${put_body}" "${put_json}"
+  rm -f "${cookie_jar}" "${login_json}" "${get_json}" "${put_body}" "${put_json}"
 }
 
 seed_runtime_db_from_files() {
@@ -400,6 +424,8 @@ run_compose_smoke() {
     CORAZA_PORT="${SCHEDULED_TASKS_SMOKE_COMPOSE_PORT}" \
     WAF_LISTEN_PORT="9090" \
     WAF_STORAGE_DB_PATH="${container_db_path}" \
+    TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${SCHEDULED_TASKS_SMOKE_ADMIN_USERNAME}" \
+    TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${SCHEDULED_TASKS_SMOKE_ADMIN_PASSWORD}" \
     docker compose --profile scheduled-tasks up -d --build coraza scheduled-task-runner
   )
   wait_for_http_code "200" "http://127.0.0.1:${SCHEDULED_TASKS_SMOKE_COMPOSE_PORT}/healthz" || fail "compose scheduled-task smoke runtime did not become healthy"
@@ -426,6 +452,8 @@ run_preview_smoke() {
     PUID="${PUID_VALUE}" \
     GUID="${GUID_VALUE}" \
     UI_PREVIEW_PUBLIC_ADDR=":${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}" \
+    TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${SCHEDULED_TASKS_SMOKE_ADMIN_USERNAME}" \
+    TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${SCHEDULED_TASKS_SMOKE_ADMIN_PASSWORD}" \
     bash ./scripts/ui_preview.sh up >/dev/null
   )
   wait_for_http_code "200" "http://127.0.0.1:${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}/healthz" || fail "ui-preview scheduled-task smoke runtime did not become healthy"

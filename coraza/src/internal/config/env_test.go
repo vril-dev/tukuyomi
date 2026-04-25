@@ -259,7 +259,6 @@ func TestLoadAppConfigFile(t *testing.T) {
 		"admin": {
 			"api_base_path": "/tukuyomi-api",
 			"ui_base_path": "/tukuyomi-ui",
-			"api_key_primary": "very-strong-random-api-key-12345",
 			"session_secret": "very-strong-random-session-secret-12345",
 			"session_ttl_sec": 7200
 		},
@@ -372,7 +371,7 @@ func TestLoadAppConfigFileRejectsRemovedFileStorageBackend(t *testing.T) {
 		"admin": {
 			"api_base_path": "/tukuyomi-api",
 			"ui_base_path": "/tukuyomi-ui",
-			"api_key_primary": "very-strong-random-api-key-12345"
+			"session_secret": "very-strong-random-session-secret-12345"
 		},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
@@ -403,7 +402,7 @@ func TestLoadAppConfigFileAcceptsS3PersistentStorageWithoutSecrets(t *testing.T)
 		"admin": {
 			"api_base_path": "/tukuyomi-api",
 			"ui_base_path": "/tukuyomi-ui",
-			"api_key_primary": "very-strong-random-api-key-12345"
+			"session_secret": "very-strong-random-session-secret-12345"
 		},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",

@@ -4,9 +4,11 @@ set -euo pipefail
 BASE_URL="${BASE_URL:-http://127.0.0.1:${CORAZA_PORT:-19092}}"
 PROTECTED_HOST="${PROTECTED_HOST:-wordpress.example.test}"
 USER_AGENT="${USER_AGENT:-tukuyomi-wordpress-smoke/1.0}"
-ADMIN_API_KEY="${ADMIN_API_KEY:-wordpress-example-admin-key-12345}"
+ADMIN_USERNAME="${ADMIN_USERNAME:-${TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME:-admin}}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-${TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD:-wordpress-example-admin-password}}"
 
 tmp_dir="$(mktemp -d)"
+admin_cookie_jar="${tmp_dir}/admin-cookie.txt"
 
 cleanup() {
   rm -rf "${tmp_dir}"
@@ -21,12 +23,35 @@ need_cmd() {
 }
 
 need_cmd curl
+need_cmd python3
+
+admin_login() {
+  local login_body="${tmp_dir}/admin-login.json"
+  local login_resp="${tmp_dir}/admin-login-response.json"
+  local code
+
+  python3 - "${ADMIN_USERNAME}" "${ADMIN_PASSWORD}" >"${login_body}" <<'PY'
+import json
+import sys
+
+print(json.dumps({"username": sys.argv[1], "password": sys.argv[2]}))
+PY
+  code="$(curl -sS -o "${login_resp}" -w "%{http_code}" \
+    -c "${admin_cookie_jar}" -b "${admin_cookie_jar}" \
+    -H "Content-Type: application/json" \
+    -X POST --data-binary "@${login_body}" \
+    "${BASE_URL}/tukuyomi-api/auth/login")"
+  if [[ "${code}" != "200" ]]; then
+    echo "[wordpress-smoke][ERROR] admin login failed: ${code}" >&2
+    cat "${login_resp}" >&2 || true
+    exit 1
+  fi
+}
 
 curl_common=(
   -H "Host: ${PROTECTED_HOST}"
   -H "User-Agent: ${USER_AGENT}"
 )
-api_common=("${curl_common[@]}" -H "X-API-Key: ${ADMIN_API_KEY}")
 
 for _ in $(seq 1 120); do
   status="$(curl -sS -o "${tmp_dir}/root.body" -w "%{http_code}" "${curl_common[@]}" "${BASE_URL}/" || true)"
@@ -41,7 +66,8 @@ if [[ "${status:-}" != "200" && "${status:-}" != "302" ]]; then
   exit 1
 fi
 
-status="$(curl -sS -o "${tmp_dir}/status.body" -w "%{http_code}" "${api_common[@]}" "${BASE_URL}/tukuyomi-api/status" || true)"
+admin_login
+status="$(curl -sS -o "${tmp_dir}/status.body" -w "%{http_code}" -b "${admin_cookie_jar}" -c "${admin_cookie_jar}" "${curl_common[@]}" "${BASE_URL}/tukuyomi-api/status" || true)"
 if [[ "${status}" != "200" ]]; then
   echo "[wordpress-smoke][ERROR] admin status failed: ${status}" >&2
   cat "${tmp_dir}/status.body" >&2 || true

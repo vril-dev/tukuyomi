@@ -3,12 +3,15 @@ set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:${CORAZA_PORT:-19094}}"
 PROTECTED_HOST="${PROTECTED_HOST:-static-vhost-cache.example.test}"
-ADMIN_API_KEY="${ADMIN_API_KEY:-static-vhost-cache-example-admin-key-12345}"
+ADMIN_USERNAME="${ADMIN_USERNAME:-${TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME:-admin}}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-${TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD:-static-vhost-cache-example-admin-password}}"
 CACHE_PATH="${CACHE_PATH:-/test.html}"
 CACHE_STORE_DIR="${CACHE_STORE_DIR:-cache/response}"
 CACHE_MAX_BYTES="${CACHE_MAX_BYTES:-1048576}"
 
 tmp_dir="$(mktemp -d)"
+admin_cookie_jar="${tmp_dir}/admin-cookie.txt"
+admin_csrf_token=""
 
 cleanup() {
   rm -rf "${tmp_dir}"
@@ -25,12 +28,43 @@ need_cmd() {
 need_cmd curl
 need_cmd python3
 
+admin_login() {
+  local login_body="${tmp_dir}/admin-login.json"
+  local login_resp="${tmp_dir}/admin-login-response.json"
+  local code
+
+  python3 - "${ADMIN_USERNAME}" "${ADMIN_PASSWORD}" >"${login_body}" <<'PY'
+import json
+import sys
+
+print(json.dumps({"username": sys.argv[1], "password": sys.argv[2]}))
+PY
+  code="$(curl -sS -o "${login_resp}" -w "%{http_code}" \
+    -c "${admin_cookie_jar}" -b "${admin_cookie_jar}" \
+    -H "Content-Type: application/json" \
+    -X POST --data-binary "@${login_body}" \
+    "${BASE_URL}/tukuyomi-api/auth/login")"
+  if [[ "${code}" != "200" ]]; then
+    echo "[static-vhost-cache-smoke][ERROR] admin login failed: ${code}" >&2
+    cat "${login_resp}" >&2 || true
+    exit 1
+  fi
+  admin_csrf_token="$(
+    awk 'NF >= 7 && $6 == "tukuyomi_admin_csrf" { token = $7 } END { if (token != "") print token }' "${admin_cookie_jar}"
+  )"
+  if [[ -z "${admin_csrf_token}" ]]; then
+    echo "[static-vhost-cache-smoke][ERROR] admin login did not issue csrf cookie" >&2
+    exit 1
+  fi
+}
+
 api_request() {
   local method="$1"
   local path="$2"
   shift 2
   curl -fsS -X "${method}" \
-    -H "X-API-Key: ${ADMIN_API_KEY}" \
+    -b "${admin_cookie_jar}" -c "${admin_cookie_jar}" \
+    -H "X-CSRF-Token: ${admin_csrf_token}" \
     "$@" \
     "${BASE_URL}${path}"
 }
@@ -177,6 +211,7 @@ PY
 }
 
 wait_for_ready
+admin_login
 enable_and_clear_cache_store
 cache_store_stats "${tmp_dir}/cache-store-before.json"
 

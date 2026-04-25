@@ -6,7 +6,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONTAINER_PLATFORM_SMOKE_SKIP_BUILD="${CONTAINER_PLATFORM_SMOKE_SKIP_BUILD:-0}"
 CONTAINER_PLATFORM_SMOKE_WAIT_SECONDS="${CONTAINER_PLATFORM_SMOKE_WAIT_SECONDS:-60}"
 CONTAINER_PLATFORM_SMOKE_READ_ONLY_PORT="${CONTAINER_PLATFORM_SMOKE_READ_ONLY_PORT:-19098}"
-CONTAINER_PLATFORM_SMOKE_API_KEY="${CONTAINER_PLATFORM_SMOKE_API_KEY:-container-platform-smoke-admin-key}"
+CONTAINER_PLATFORM_SMOKE_ADMIN_USERNAME="${CONTAINER_PLATFORM_SMOKE_ADMIN_USERNAME:-admin}"
+CONTAINER_PLATFORM_SMOKE_ADMIN_PASSWORD="${CONTAINER_PLATFORM_SMOKE_ADMIN_PASSWORD:-container-platform-smoke-admin-password}"
 CONTAINER_PLATFORM_SMOKE_SESSION_SECRET="${CONTAINER_PLATFORM_SMOKE_SESSION_SECRET:-container-platform-smoke-session-secret}"
 CONTAINER_PLATFORM_SMOKE_AUTO_DOWN="${CONTAINER_PLATFORM_SMOKE_AUTO_DOWN:-1}"
 
@@ -14,6 +15,8 @@ RUNTIME_ROOT=""
 RUNTIME_DIR=""
 SERVER_PID=""
 SERVER_LOG=""
+ADMIN_COOKIE_JAR=""
+ADMIN_CSRF_TOKEN=""
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -64,6 +67,7 @@ cleanup() {
   if [[ "${CONTAINER_PLATFORM_SMOKE_AUTO_DOWN}" == "1" && -n "${RUNTIME_ROOT}" ]]; then
     rm -rf "${RUNTIME_ROOT}" >/dev/null 2>&1 || true
   fi
+  [[ -n "${ADMIN_COOKIE_JAR}" ]] && rm -f "${ADMIN_COOKIE_JAR}" >/dev/null 2>&1 || true
 }
 trap 'cleanup "$?"' EXIT
 
@@ -127,10 +131,8 @@ stage_read_only_runtime() {
 
   jq \
     --arg listen_addr ":${CONTAINER_PLATFORM_SMOKE_READ_ONLY_PORT}" \
-    --arg api_key "${CONTAINER_PLATFORM_SMOKE_API_KEY}" \
     --arg session_secret "${CONTAINER_PLATFORM_SMOKE_SESSION_SECRET}" \
     '.server.listen_addr = $listen_addr
-     | .admin.api_key_primary = $api_key
      | .admin.session_secret = $session_secret
      | .admin.api_auth_disable = false
      | .admin.read_only = true' \
@@ -148,6 +150,32 @@ stage_read_only_runtime() {
   rm -rf "${stage_root}"
 }
 
+admin_login() {
+  local base_url="$1"
+  local login_json
+  local login_payload
+  local code
+
+  ADMIN_COOKIE_JAR="$(mktemp "${ROOT_DIR}/.tmp-container-platform-admin-cookie.XXXXXX.txt")"
+  login_json="$(mktemp "${ROOT_DIR}/.tmp-container-platform-login.XXXXXX.json")"
+  login_payload="$(jq -n --arg username "${CONTAINER_PLATFORM_SMOKE_ADMIN_USERNAME}" --arg password "${CONTAINER_PLATFORM_SMOKE_ADMIN_PASSWORD}" '{username: $username, password: $password}')"
+  code="$(curl -sS -o "${login_json}" -w "%{http_code}" \
+    -c "${ADMIN_COOKIE_JAR}" -b "${ADMIN_COOKIE_JAR}" \
+    -H "Content-Type: application/json" \
+    -X POST --data "${login_payload}" \
+    "${base_url}/auth/login")"
+  if [[ "${code}" != "200" ]]; then
+    cat "${login_json}" >&2 || true
+    rm -f "${login_json}"
+    fail "admin login failed with status ${code}"
+  fi
+  rm -f "${login_json}"
+  ADMIN_CSRF_TOKEN="$(
+    awk 'NF >= 7 && $6 == "tukuyomi_admin_csrf" { token = $7 } END { if (token != "") print token }' "${ADMIN_COOKIE_JAR}"
+  )"
+  [[ -n "${ADMIN_CSRF_TOKEN}" ]] || fail "admin login did not issue csrf cookie"
+}
+
 curl_json() {
   local method="$1"
   local url="$2"
@@ -155,24 +183,14 @@ curl_json() {
   local body="${4:-}"
   shift 4 || true
   local extra_args=("$@")
+  local args=(-sS -X "${method}" -b "${ADMIN_COOKIE_JAR}" -c "${ADMIN_COOKIE_JAR}" -o "${output}" -w "%{http_code}")
 
   if [[ -n "${body}" ]]; then
-    curl -sS -X "${method}" \
-      -H "X-API-Key: ${CONTAINER_PLATFORM_SMOKE_API_KEY}" \
-      -H "Content-Type: application/json" \
-      "${extra_args[@]}" \
-      --data "${body}" \
-      -o "${output}" \
-      -w "%{http_code}" \
-      "${url}"
-  else
-    curl -sS -X "${method}" \
-      -H "X-API-Key: ${CONTAINER_PLATFORM_SMOKE_API_KEY}" \
-      "${extra_args[@]}" \
-      -o "${output}" \
-      -w "%{http_code}" \
-      "${url}"
+    args+=(-H "Content-Type: application/json" -H "X-CSRF-Token: ${ADMIN_CSRF_TOKEN}" --data "${body}")
+  elif [[ "${method}" != "GET" && "${method}" != "HEAD" ]]; then
+    args+=(-H "X-CSRF-Token: ${ADMIN_CSRF_TOKEN}")
   fi
+  curl "${args[@]}" "${extra_args[@]}" "${url}"
 }
 
 run_read_only_prerequisite_smoke() {
@@ -189,6 +207,8 @@ run_read_only_prerequisite_smoke() {
   log "starting read-only admin runtime on :${CONTAINER_PLATFORM_SMOKE_READ_ONLY_PORT}"
   (
     cd "${RUNTIME_DIR}"
+    TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${CONTAINER_PLATFORM_SMOKE_ADMIN_USERNAME}" \
+    TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${CONTAINER_PLATFORM_SMOKE_ADMIN_PASSWORD}" \
     WAF_CONFIG_FILE="conf/config.json" ./bin/tukuyomi >"${SERVER_LOG}" 2>&1
   ) &
   SERVER_PID="$!"
@@ -196,6 +216,7 @@ run_read_only_prerequisite_smoke() {
   if ! wait_for_http_code "200" "http://127.0.0.1:${CONTAINER_PLATFORM_SMOKE_READ_ONLY_PORT}/healthz"; then
     fail "read-only runtime did not become healthy in time"
   fi
+  admin_login "http://127.0.0.1:${CONTAINER_PLATFORM_SMOKE_READ_ONLY_PORT}/tukuyomi-api"
 
   status_json="$(mktemp "${ROOT_DIR}/.tmp-container-platform-status.XXXXXX.json")"
   tasks_json="$(mktemp "${ROOT_DIR}/.tmp-container-platform-tasks.XXXXXX.json")"

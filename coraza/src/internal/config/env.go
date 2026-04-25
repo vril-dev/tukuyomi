@@ -91,8 +91,6 @@ var (
 	AdminTrustForwardedFor              bool
 	AdminProxyProtocolEnabled           bool
 	AdminProxyProtocolTrustedCIDRs      []string
-	APIKeyPrimary                       string
-	APIKeySecondary                     string
 	AdminSessionSecret                  string
 	AdminSessionTTL                     time.Duration
 	APIAuthDisable                      bool
@@ -380,12 +378,7 @@ func applyAppConfig(cfg appConfigFile) {
 	AdminTrustForwardedFor = cfg.Admin.TrustForwardedFor
 	AdminProxyProtocolEnabled = cfg.Admin.ProxyProtocol.Enabled
 	AdminProxyProtocolTrustedCIDRs = append([]string(nil), cfg.Admin.ProxyProtocol.TrustedCIDRs...)
-	APIKeyPrimary = strings.TrimSpace(cfg.Admin.APIKeyPrimary)
-	APIKeySecondary = strings.TrimSpace(cfg.Admin.APIKeySecondary)
 	AdminSessionSecret = strings.TrimSpace(cfg.Admin.SessionSecret)
-	if AdminSessionSecret == "" {
-		AdminSessionSecret = APIKeyPrimary
-	}
 	adminSessionTTLSec := cfg.Admin.SessionTTLSec
 	if adminSessionTTLSec < 300 || adminSessionTTLSec > 604800 {
 		adminSessionTTLSec = 28800
@@ -511,12 +504,6 @@ func enforceSecureDefaults() {
 
 	if APIAuthDisable {
 		log.Fatal("[SECURITY] admin.api_auth_disable is enabled; set admin.allow_insecure_defaults=true only for local testing")
-	}
-	if isWeakAPIKey(APIKeyPrimary) {
-		log.Fatal("[SECURITY] admin.api_key_primary is weak; set a random key with 16+ chars")
-	}
-	if APIKeySecondary != "" && isWeakAPIKey(APIKeySecondary) {
-		log.Fatal("[SECURITY] admin.api_key_secondary is weak; set a random key with 16+ chars or leave it empty")
 	}
 	if isWeakAPIKey(AdminSessionSecret) {
 		log.Fatal("[SECURITY] admin.session_secret is weak; set a random secret with 16+ chars")

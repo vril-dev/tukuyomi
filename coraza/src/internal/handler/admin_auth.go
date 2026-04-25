@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,11 +13,13 @@ import (
 
 	"tukuyomi/internal/adminauth"
 	"tukuyomi/internal/config"
-	"tukuyomi/internal/middleware"
 )
 
 type adminLoginRequest struct {
-	APIKey string `json:"api_key"`
+	Username   string `json:"username"`
+	Email      string `json:"email"`
+	Identifier string `json:"identifier"`
+	Password   string `json:"password"`
 }
 
 func RegisterAdminAuthRoutes(r *gin.Engine) {
@@ -43,36 +47,34 @@ func GetAdminSessionHandler(c *gin.Context) {
 		return
 	}
 
-	session, ok, err := readAdminSession(c)
-	if err != nil {
-		clearAdminAuthCookies(c)
-		c.JSON(http.StatusOK, gin.H{
-			"authenticated":    false,
-			"mode":             "none",
-			"csrf_header_name": adminauth.CSRFHeaderName,
-		})
-		return
-	}
-	if !ok {
-		c.JSON(http.StatusOK, gin.H{
-			"authenticated":    false,
-			"mode":             "none",
-			"csrf_header_name": adminauth.CSRFHeaderName,
-		})
-		return
+	if store := getLogsStatsStore(); store != nil {
+		if token, presented := adminSessionTokenFromRequest(c.Request); presented {
+			dbSession, dbOK, dbErr := store.loadAdminSession(token, time.Now().UTC())
+			if dbErr != nil {
+				clearAdminAuthCookies(c)
+				c.JSON(http.StatusOK, gin.H{
+					"authenticated":    false,
+					"mode":             "none",
+					"csrf_header_name": adminauth.CSRFHeaderName,
+				})
+				return
+			}
+			if dbOK {
+				csrfToken, err := store.ensureAdminSessionCSRFCookie(c, dbSession, time.Now().UTC())
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to refresh admin session"})
+					return
+				}
+				c.JSON(http.StatusOK, adminSessionResponse(dbSession, csrfToken, c))
+				return
+			}
+		}
 	}
 
-	ensureCSRFCookie(c, session)
 	c.JSON(http.StatusOK, gin.H{
-		"authenticated":     true,
-		"mode":              "session",
-		"expires_at":        session.ExpiresAt.Format(time.RFC3339),
-		"csrf_cookie_name":  adminauth.CSRFCookieName,
-		"csrf_header_name":  adminauth.CSRFHeaderName,
-		"session_cookie":    adminauth.SessionCookieName,
-		"session_ttl_secs":  int(time.Until(session.ExpiresAt).Seconds()),
-		"same_origin_only":  true,
-		"cookie_secure_now": requestIsHTTPS(c),
+		"authenticated":    false,
+		"mode":             "none",
+		"csrf_header_name": adminauth.CSRFHeaderName,
 	})
 }
 
@@ -93,19 +95,75 @@ func PostAdminLoginHandler(c *gin.Context) {
 		return
 	}
 
-	if !middleware.HasValidAPIKey(req.APIKey) {
+	if strings.TrimSpace(req.Password) == "" || adminLoginIdentifier(req) == "" {
 		clearAdminAuthCookies(c)
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid API key"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
+	postAdminPasswordLogin(c, req)
+}
 
+func PostAdminLogoutHandler(c *gin.Context) {
+	if !config.APIAuthDisable {
+		if store := getLogsStatsStore(); store != nil {
+			if token, presented := adminSessionTokenFromRequest(c.Request); presented {
+				session, ok, err := store.authenticateAdminSessionRequest(c.Request, token, time.Now().UTC())
+				if err != nil {
+					c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+					return
+				}
+				if ok {
+					if err := store.revokeAdminSession(token, time.Now().UTC()); err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke admin session"})
+						return
+					}
+					_ = session
+					clearAdminAuthCookies(c)
+					c.JSON(http.StatusOK, gin.H{"ok": true})
+					return
+				}
+			}
+		}
+	}
+	clearAdminAuthCookies(c)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func postAdminPasswordLogin(c *gin.Context, req adminLoginRequest) {
+	identifier := adminLoginIdentifier(req)
+	if identifier == "" || strings.TrimSpace(req.Password) == "" {
+		clearAdminAuthCookies(c)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+	store := getLogsStatsStore()
+	if store == nil {
+		clearAdminAuthCookies(c)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
 	now := time.Now().UTC()
-	sessionToken, csrfToken, expiresAt, err := adminauth.Issue(config.AdminSessionSecret, config.AdminSessionTTL, now)
+	principal, ok, err := store.authenticateAdminPassword(identifier, req.Password, now)
+	if err != nil {
+		clearAdminAuthCookies(c)
+		if errors.Is(err, errAdminAuthDisabledUser) || errors.Is(err, adminauth.ErrInvalidPasswordHash) || errors.Is(err, adminauth.ErrUnsupportedPasswordHash) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to authenticate admin user"})
+		return
+	}
+	if !ok {
+		clearAdminAuthCookies(c)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+	sessionToken, csrfToken, expiresAt, sessionID, err := store.createAdminSession(principal, config.AdminSessionTTL, now)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to issue admin session"})
 		return
 	}
-
+	principal.CredentialID = strconv.FormatInt(sessionID, 10)
 	adminauth.SetCookies(c.Writer, sessionToken, csrfToken, expiresAt, requestIsHTTPS(c))
 	c.JSON(http.StatusOK, gin.H{
 		"ok":               true,
@@ -114,59 +172,44 @@ func PostAdminLoginHandler(c *gin.Context) {
 		"expires_at":       expiresAt.Format(time.RFC3339),
 		"csrf_cookie_name": adminauth.CSRFCookieName,
 		"csrf_header_name": adminauth.CSRFHeaderName,
+		"user": gin.H{
+			"user_id":  principal.UserID,
+			"username": principal.Username,
+			"role":     principal.Role,
+		},
 	})
 }
 
-func PostAdminLogoutHandler(c *gin.Context) {
-	if !config.APIAuthDisable {
-		if session, ok, err := readAdminSession(c); err == nil && ok {
-			if err := adminauth.ValidateCSRF(c.Request, session); err != nil {
-				c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
-				return
-			}
+func adminLoginIdentifier(req adminLoginRequest) string {
+	for _, value := range []string{req.Identifier, req.Username, req.Email} {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
 		}
 	}
-	clearAdminAuthCookies(c)
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	return ""
 }
 
-func readAdminSession(c *gin.Context) (adminauth.Session, bool, error) {
-	if c == nil || c.Request == nil {
-		return adminauth.Session{}, false, nil
+func adminSessionResponse(session adminSessionRecord, csrfToken string, c *gin.Context) gin.H {
+	resp := gin.H{
+		"authenticated":     true,
+		"mode":              "session",
+		"expires_at":        session.ExpiresAt.Format(time.RFC3339),
+		"csrf_cookie_name":  adminauth.CSRFCookieName,
+		"csrf_header_name":  adminauth.CSRFHeaderName,
+		"session_cookie":    adminauth.SessionCookieName,
+		"session_ttl_secs":  int(time.Until(session.ExpiresAt).Seconds()),
+		"same_origin_only":  true,
+		"cookie_secure_now": requestIsHTTPS(c),
+		"user": gin.H{
+			"user_id":  session.Principal.UserID,
+			"username": session.Principal.Username,
+			"role":     session.Principal.Role,
+		},
 	}
-
-	cookie, err := c.Request.Cookie(adminauth.SessionCookieName)
-	if err != nil || cookie == nil || strings.TrimSpace(cookie.Value) == "" {
-		return adminauth.Session{}, false, nil
+	if csrfToken != "" {
+		resp["csrf_token_present"] = true
 	}
-
-	session, err := adminauth.Validate(config.AdminSessionSecret, cookie.Value, time.Now().UTC())
-	if err != nil {
-		return adminauth.Session{}, false, err
-	}
-	return session, true, nil
-}
-
-func ensureCSRFCookie(c *gin.Context, session adminauth.Session) {
-	if c == nil || c.Request == nil {
-		return
-	}
-
-	current, err := c.Request.Cookie(adminauth.CSRFCookieName)
-	if err == nil && current != nil && strings.TrimSpace(current.Value) == session.CSRFToken {
-		return
-	}
-
-	http.SetCookie(c.Writer, &http.Cookie{
-		Name:     adminauth.CSRFCookieName,
-		Value:    session.CSRFToken,
-		Path:     "/",
-		HttpOnly: false,
-		Secure:   requestIsHTTPS(c),
-		SameSite: http.SameSiteLaxMode,
-		Expires:  session.ExpiresAt.UTC(),
-		MaxAge:   int(time.Until(session.ExpiresAt.UTC()).Seconds()),
-	})
+	return resp
 }
 
 func clearAdminAuthCookies(c *gin.Context) {

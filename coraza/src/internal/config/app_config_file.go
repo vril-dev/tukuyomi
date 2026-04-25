@@ -103,8 +103,6 @@ type appAdminConfig struct {
 	APIBasePath           string                         `json:"api_base_path"`
 	UIBasePath            string                         `json:"ui_base_path"`
 	ListenAddr            string                         `json:"listen_addr"`
-	APIKeyPrimary         string                         `json:"api_key_primary"`
-	APIKeySecondary       string                         `json:"api_key_secondary"`
 	SessionSecret         string                         `json:"session_secret"`
 	SessionTTLSec         int                            `json:"session_ttl_sec"`
 	APIAuthDisable        bool                           `json:"api_auth_disable"`
@@ -318,8 +316,6 @@ func defaultAppConfigFile() appConfigFile {
 			APIBasePath:           "/tukuyomi-api",
 			UIBasePath:            "/tukuyomi-ui",
 			ListenAddr:            "",
-			APIKeyPrimary:         "dev-only-change-this-key-please",
-			APIKeySecondary:       "",
 			SessionSecret:         "",
 			SessionTTLSec:         28800,
 			APIAuthDisable:        false,
@@ -481,8 +477,6 @@ func normalizeAppConfigFile(cfg *appConfigFile) {
 	cfg.Admin.APIBasePath = strings.TrimSpace(cfg.Admin.APIBasePath)
 	cfg.Admin.UIBasePath = strings.TrimSpace(cfg.Admin.UIBasePath)
 	cfg.Admin.ListenAddr = strings.TrimSpace(cfg.Admin.ListenAddr)
-	cfg.Admin.APIKeyPrimary = strings.TrimSpace(cfg.Admin.APIKeyPrimary)
-	cfg.Admin.APIKeySecondary = strings.TrimSpace(cfg.Admin.APIKeySecondary)
 	cfg.Admin.SessionSecret = strings.TrimSpace(cfg.Admin.SessionSecret)
 	cfg.Admin.ExternalMode = strings.ToLower(strings.TrimSpace(cfg.Admin.ExternalMode))
 	for i := range cfg.Server.ProxyProtocol.TrustedCIDRs {

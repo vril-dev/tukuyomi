@@ -365,9 +365,10 @@ Keep overload controls in DB `app_config` under `server`:
 
 ## Secret Handling
 
-- keep `admin.api_key_primary`, `admin.api_key_secondary`, and `admin.session_secret` in managed app config, not in the browser
-- browser operators sign in once and receive same-origin session cookies
-- CLI / automation can continue to call `/tukuyomi-api/*` with `X-API-Key`
+- keep `admin.session_secret` in managed app config, not in the browser
+- use `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` / `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` only for first-owner bootstrap when the admin user table is empty
+- browser operators sign in with username/password and receive same-origin DB-backed session cookies
+- CLI / automation should use per-user personal access tokens, not shared admin API keys
 - default `tukuyomi` posture is `admin.external_mode=api_only_external`; move to `deny_external` if remote admin API access is unnecessary
 - if you intentionally set `admin.external_mode=full_external` on a non-loopback listener, add front-side allowlists/auth because startup will only warn, not block
 - widening `admin.trusted_cidrs` to public or catch-all networks also re-exposes the embedded admin UI/API to those sources and only triggers a warning

@@ -71,6 +71,10 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		"request_country_geoip_configs",
 		"request_country_geoip_config_editions",
 		"request_country_update_state",
+		"admin_users",
+		"admin_api_tokens",
+		"admin_sessions",
+		"admin_auth_audit",
 	} {
 		var name string
 		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
@@ -84,8 +88,8 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("query migration version: %v", err)
 	}
-	if version != 11 || dirty != 0 {
-		t.Fatalf("migration version=%d dirty=%d want version=11 dirty=0", version, dirty)
+	if version != 12 || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=12 dirty=0", version, dirty)
 	}
 	for _, column := range []string{"acme_environment", "acme_email"} {
 		var count int
@@ -94,6 +98,24 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		}
 		if count != 1 {
 			t.Fatalf("site_tls column %s count=%d want 1", column, count)
+		}
+	}
+	for _, column := range []string{"username_normalized", "password_hash", "session_version"} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('admin_users') WHERE name = ?`, column).Scan(&count); err != nil {
+			t.Fatalf("query admin_users column %s: %v", column, err)
+		}
+		if count != 1 {
+			t.Fatalf("admin_users column %s count=%d want 1", column, count)
+		}
+	}
+	for _, indexName := range []string{"uq_admin_users_username_normalized", "uq_admin_api_tokens_token_hash", "uq_admin_sessions_session_token_hash"} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?`, indexName).Scan(&count); err != nil {
+			t.Fatalf("query index %s: %v", indexName, err)
+		}
+		if count != 1 {
+			t.Fatalf("index %s count=%d want 1", indexName, count)
 		}
 	}
 }
@@ -136,8 +158,8 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteReplacesLegacyMigrationTable(t *t
 	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("query migration version: %v", err)
 	}
-	if version != 11 || dirty != 0 {
-		t.Fatalf("migration version=%d dirty=%d want version=11 dirty=0", version, dirty)
+	if version != 12 || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=12 dirty=0", version, dirty)
 	}
 
 	var legacyColumns int

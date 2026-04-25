@@ -51,6 +51,7 @@ func TestBuildPublicHandlerSingleListenerKeepsAdminRoutes(t *testing.T) {
 func TestBuildPublicHandlerSingleListenerClearsResponseCacheStore(t *testing.T) {
 	restore := saveListenerConfigForTest()
 	defer restore()
+	config.APIAuthDisable = true
 
 	t.Chdir(t.TempDir())
 	cacheStoreCfgPath := filepath.Join(t.TempDir(), "cache-store.json")
@@ -70,7 +71,6 @@ func TestBuildPublicHandlerSingleListenerClearsResponseCacheStore(t *testing.T) 
 	req := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/cache-store/clear", strings.NewReader(`{}`))
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", config.APIKeyPrimary)
 	publicHandler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -187,23 +187,17 @@ func saveListenerConfigForTest() func() {
 	prevAPIBasePath := config.APIBasePath
 	prevUIBasePath := config.UIBasePath
 	prevAPIAuthDisable := config.APIAuthDisable
-	prevAPIKeyPrimary := config.APIKeyPrimary
-	prevAPIKeySecondary := config.APIKeySecondary
 	prevAPICORSOrigins := append([]string(nil), config.APICORSOrigins...)
 
 	config.APIBasePath = "/tukuyomi-api"
 	config.UIBasePath = "/tukuyomi-ui"
 	config.APIAuthDisable = false
-	config.APIKeyPrimary = "test-admin-key-123456"
-	config.APIKeySecondary = ""
 	config.APICORSOrigins = nil
 
 	return func() {
 		config.APIBasePath = prevAPIBasePath
 		config.UIBasePath = prevUIBasePath
 		config.APIAuthDisable = prevAPIAuthDisable
-		config.APIKeyPrimary = prevAPIKeyPrimary
-		config.APIKeySecondary = prevAPIKeySecondary
 		config.APICORSOrigins = prevAPICORSOrigins
 	}
 }

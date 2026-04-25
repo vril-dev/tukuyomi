@@ -251,9 +251,8 @@ Proxy engine selection is part of the same restart-required config surface:
 
 Keep these server-side:
 
-- `admin.api_key_primary`
-- `admin.api_key_secondary`
 - `admin.session_secret`
+- initial owner bootstrap credentials, when you use `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` / `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD`
 - optional security-audit encryption and HMAC keys
 - when you intentionally prototype immutable replicated rollouts, set
   `admin.read_only=true` on the frontend replicas and move scheduled-task

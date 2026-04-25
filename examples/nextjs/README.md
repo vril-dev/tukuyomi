@@ -26,12 +26,12 @@ before the stack starts.
 
 `./smoke.sh` verifies that the app is reachable and that the internal response
 cache returns `X-Tukuyomi-Cache: MISS` followed by `HIT` for a static fixture.
-The example includes a smoke-only admin API key so the script can enable and
-clear the internal cache store before probing. Override `ADMIN_API_KEY` only
-when the example config is changed:
+The example bootstraps a smoke-only admin user so the script can enable and
+clear the internal cache store before probing. Override the credentials only
+when the example runtime was started with different bootstrap credentials:
 
 ```bash
-ADMIN_API_KEY='your-admin-api-key' ./smoke.sh
+ADMIN_USERNAME='admin' ADMIN_PASSWORD='your-admin-password' ./smoke.sh
 ```
 
 You can still run a manual WAF block check:

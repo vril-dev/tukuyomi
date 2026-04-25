@@ -307,8 +307,8 @@ func adminRateLimitKey(r *http.Request) string {
 		return "unknown"
 	}
 	parts := []string{requestRemoteIP(r)}
-	if key := strings.TrimSpace(r.Header.Get("X-API-Key")); key != "" {
-		sum := sha256.Sum256([]byte(key))
+	if authorization := strings.TrimSpace(r.Header.Get("Authorization")); authorization != "" {
+		sum := sha256.Sum256([]byte(authorization))
 		parts = append(parts, hex.EncodeToString(sum[:8]))
 	}
 	return strings.Join(parts, "|")

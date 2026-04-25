@@ -340,7 +340,6 @@ func writeSettingsConfigFixture(t *testing.T) string {
     "api_base_path": "/tukuyomi-api",
     "ui_base_path": "/tukuyomi-ui",
     "listen_addr": ":19090",
-    "api_key_primary": "very-strong-random-api-key-12345",
     "session_secret": "very-strong-random-session-secret-12345",
     "session_ttl_sec": 7200,
     "external_mode": "api_only_external",

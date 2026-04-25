@@ -53,8 +53,6 @@ cat > "${RUNTIME_CONF_DIR}/config.json" <<'EOF'
   "admin": {
     "api_base_path": "/tukuyomi-api",
     "ui_base_path": "/tukuyomi-ui",
-    "api_key_primary": "release-smoke-admin-key-123456",
-    "api_key_secondary": "",
     "session_secret": "release-smoke-session-secret-123456",
     "session_ttl_sec": 28800,
     "api_auth_disable": false,

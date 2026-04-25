@@ -93,6 +93,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - mode: file
+            db_driver: "sqlite"
+            expect_sqlite_artifact: "true"
           - mode: sqlite
             db_driver: "sqlite"
             expect_sqlite_artifact: "true"

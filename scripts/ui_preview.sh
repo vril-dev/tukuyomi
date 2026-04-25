@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PREVIEW_OVERRIDE="$ROOT_DIR/.tmp/ui-preview/docker-compose.override.yml"
-PREVIEW_BOOTSTRAP_CONFIG="conf/config.json"
+PREVIEW_SOURCE_CONFIG="${UI_PREVIEW_SOURCE_CONFIG:-conf/config.json}"
+PREVIEW_BOOTSTRAP_CONFIG="${UI_PREVIEW_CONFIG:-conf/config.ui-preview.json}"
 LEGACY_PREVIEW_SQLITE_DB_PATH="logs/coraza/tukuyomi-ui-preview.db"
 PUID_VALUE="${PUID:-$(id -u)}"
 GUID_VALUE="${GUID:-$(id -g)}"
@@ -11,19 +12,117 @@ UI_PREVIEW_PERSIST_VALUE="${UI_PREVIEW_PERSIST:-0}"
 UI_PREVIEW_PUBLIC_ADDR_VALUE="${UI_PREVIEW_PUBLIC_ADDR:-}"
 UI_PREVIEW_ADMIN_ADDR_VALUE="${UI_PREVIEW_ADMIN_ADDR:-}"
 
-preview_db_relative_path() {
-  python3 - "$ROOT_DIR" "$PREVIEW_BOOTSTRAP_CONFIG" <<'PY'
-import json
+preview_config_host_path() {
+  local config_ref="$1"
+  local label="$2"
+  python3 - "$ROOT_DIR" "$config_ref" "$label" <<'PY'
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1]).resolve()
-config_ref = str(sys.argv[2]).strip()
-if not config_ref:
-    raise SystemExit("preview bootstrap config is empty")
-config_path = pathlib.Path(config_ref)
-if not config_path.is_absolute():
-    config_path = (root / "data" / config_path).resolve(strict=False)
+ref = str(sys.argv[2]).strip()
+label = str(sys.argv[3]).strip()
+if not ref:
+    raise SystemExit(f"{label} is empty")
+path = pathlib.Path(ref)
+if path.is_absolute():
+    raise SystemExit(f"{label} must be relative to data/: {ref}")
+parts = pathlib.PurePosixPath(ref).parts
+if any(part in ("", ".", "..") for part in parts):
+    raise SystemExit(f"{label} contains unsafe path segment: {ref}")
+target = (root / "data" / pathlib.Path(*parts)).resolve(strict=False)
+data_root = (root / "data").resolve(strict=False)
+if target != data_root and data_root not in target.parents:
+    raise SystemExit(f"{label} escapes data/: {ref}")
+print(target)
+PY
+}
+
+write_preview_bootstrap_config() {
+  local source_path=""
+  local target_path=""
+  source_path="$(preview_config_host_path "$PREVIEW_SOURCE_CONFIG" "preview source config")"
+  target_path="$(preview_config_host_path "$PREVIEW_BOOTSTRAP_CONFIG" "preview bootstrap config")"
+  if [[ "$source_path" == "$target_path" ]]; then
+    echo "[ui-preview][ERROR] preview bootstrap config must differ from preview source config" >&2
+    return 1
+  fi
+  python3 - "$source_path" "$target_path" <<'PY'
+import json
+import os
+import pathlib
+import secrets
+import sys
+
+source = pathlib.Path(sys.argv[1])
+target = pathlib.Path(sys.argv[2])
+
+base = target if target.exists() else source
+with base.open("r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+if not isinstance(payload, dict):
+    raise SystemExit("preview config root must be a JSON object")
+
+admin = payload.get("admin")
+if not isinstance(admin, dict):
+    admin = {}
+    payload["admin"] = admin
+
+env_secret = os.environ.get("UI_PREVIEW_SESSION_SECRET", "").strip()
+if env_secret and len(env_secret) < 16:
+    raise SystemExit("UI_PREVIEW_SESSION_SECRET must be 16+ chars")
+
+existing_secret = str(admin.get("session_secret") or "").strip()
+if env_secret:
+    session_secret = env_secret
+elif len(existing_secret) >= 16:
+    session_secret = existing_secret
+else:
+    session_secret = secrets.token_urlsafe(48)
+
+admin["session_secret"] = session_secret
+admin["api_auth_disable"] = False
+admin["allow_insecure_defaults"] = False
+
+target.parent.mkdir(parents=True, exist_ok=True)
+tmp = target.with_name(target.name + ".tmp")
+with tmp.open("w", encoding="utf-8") as fh:
+    json.dump(payload, fh, indent=2, ensure_ascii=False)
+    fh.write("\n")
+os.replace(tmp, target)
+PY
+}
+
+remove_preview_bootstrap_config() {
+  local source_path=""
+  local target_path=""
+  source_path="$(preview_config_host_path "$PREVIEW_SOURCE_CONFIG" "preview source config")"
+  target_path="$(preview_config_host_path "$PREVIEW_BOOTSTRAP_CONFIG" "preview bootstrap config")"
+  if [[ "$source_path" != "$target_path" ]]; then
+    rm -f "$target_path"
+  fi
+}
+
+preview_db_relative_path() {
+  local bootstrap_path=""
+  local source_path=""
+  local config_path=""
+  bootstrap_path="$(preview_config_host_path "$PREVIEW_BOOTSTRAP_CONFIG" "preview bootstrap config")"
+  source_path="$(preview_config_host_path "$PREVIEW_SOURCE_CONFIG" "preview source config")"
+  if [[ -f "$bootstrap_path" ]]; then
+    config_path="$bootstrap_path"
+  elif [[ -f "$source_path" ]]; then
+    config_path="$source_path"
+  else
+    echo "[ui-preview][ERROR] preview config not found" >&2
+    return 1
+  fi
+  python3 - "$config_path" <<'PY'
+import json
+import pathlib
+import sys
+
+config_path = pathlib.Path(sys.argv[1])
 with config_path.open("r", encoding="utf-8") as fh:
     payload = json.load(fh)
 storage = payload.get("storage")
@@ -57,7 +156,6 @@ preview_db_container_path() {
 
 cleanup_legacy_preview_artifacts() {
   rm -f \
-    "$ROOT_DIR/data/conf/config.ui-preview.json" \
     "$ROOT_DIR/data/conf/proxy.ui-preview.json" \
     "$ROOT_DIR/data/conf/scheduled-tasks.ui-preview.json" \
     "$ROOT_DIR/data/php-fpm/inventory.ui-preview.json" \
@@ -218,6 +316,7 @@ cd "$ROOT_DIR"
 
 case "${1:-}" in
   up)
+    write_preview_bootstrap_config
     cleanup_legacy_preview_artifacts
     if [[ "$UI_PREVIEW_PERSIST_VALUE" != "1" ]]; then
       run_preview_compose down --remove-orphans >/dev/null 2>&1 || true
@@ -264,6 +363,7 @@ case "${1:-}" in
     cleanup_legacy_preview_artifacts
     if [[ "$UI_PREVIEW_PERSIST_VALUE" != "1" ]]; then
       reset_preview_database || true
+      remove_preview_bootstrap_config
     fi
     echo "[ui-preview] stopped"
     ;;

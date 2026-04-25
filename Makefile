@@ -472,7 +472,7 @@ ui-sync:
 
 ui-build-sync: ui-build ui-sync
 
-ui-preview-up: crs-ensure ui-build-sync
+ui-preview-up: go-build ui-build-sync
 	bash ./scripts/ui_preview.sh up
 
 ui-preview-down:

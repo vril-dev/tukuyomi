@@ -423,11 +423,11 @@ func proxyRouteTargetCandidatesFromRefWithMode(cfg ProxyRulesConfig, ref string,
 			continue
 		}
 		if !proxyUpstreamAllowedAsRouteTarget(upstream) {
-			return nil, fmt.Errorf("route target %q must reference a configured upstream name", ref)
+			return nil, fmt.Errorf("route target %q must reference a direct or generated vhost upstream name", ref)
 		}
 		return proxyRouteTargetCandidatesFromUpstream(cfg, upstream, -1, weight, http2Mode, health)
 	}
-	return nil, fmt.Errorf("route target %q must reference a configured upstream name", ref)
+	return nil, fmt.Errorf("route target %q must reference a direct or generated vhost upstream name", ref)
 }
 
 func proxyRouteTargetCandidatesFromUpstream(cfg ProxyRulesConfig, upstream ProxyUpstream, index int, weight int, http2Mode string, health *upstreamHealthMonitor) ([]proxyRouteTargetCandidate, error) {

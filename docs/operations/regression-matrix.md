@@ -140,14 +140,14 @@ It proves:
 
 - the current WAF configuration blocks enough true-positive attacks to satisfy the configured threshold
 - optional false-positive and bypass thresholds still hold
-- reports are produced under `data/logs/gotestwaf/`
+- reports are produced under `data/tmp/gotestwaf/`
 
 Use it after CRS, request-inspection, bypass, semantic, or rate-limit changes that could alter enforcement behavior.
 
 ### `make bench` / `make bench-proxy`
 
 This is the proxy transport benchmark.
-It measures the existing proxy tuning presets across the configured request count and concurrency levels, then writes Markdown and JSON artifacts under `data/logs/proxy/`.
+It measures the existing proxy tuning presets across the configured request count and concurrency levels, then writes Markdown and JSON artifacts under `data/tmp/reports/proxy/`.
 
 Use it after changing upstream transport, buffering, compression, timeout, retry, or response handling behavior.
 

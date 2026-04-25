@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net"
 	"net/http"
@@ -70,12 +71,16 @@ func proxyVhostForDecision(decision proxyRouteDecision) (VhostConfig, bool) {
 		if vhost.GeneratedTarget != "" && vhost.GeneratedTarget == decision.SelectedUpstream {
 			return vhost, true
 		}
-		if vhost.LinkedUpstreamName != "" && vhost.LinkedUpstreamName == decision.SelectedUpstream {
-			return vhost, true
-		}
 	}
 	if decision.Target == nil {
 		return VhostConfig{}, false
+	}
+	if shouldServeDirectProxyTarget(decision.Target) {
+		for _, vhost := range cfg.Vhosts {
+			if vhost.LinkedUpstreamName != "" && vhost.LinkedUpstreamName == decision.SelectedUpstream {
+				return vhost, true
+			}
+		}
 	}
 	target := decision.Target
 	if strings.EqualFold(target.Scheme, "fcgi") {
@@ -551,6 +556,14 @@ func buildDirectStatusResponse(r *http.Request, statusCode int) *http.Response {
 	}
 }
 
+func vhostLogMessage(message string) string {
+	message = strings.TrimSpace(message)
+	if len(message) <= 2048 {
+		return message
+	}
+	return message[:2048] + "...[truncated]"
+}
+
 func buildFastCGIVhostResponse(r *http.Request, target *url.URL, vhost VhostConfig, resolved vhostResolvedRequest) (*http.Response, error) {
 	if target == nil {
 		return nil, fmt.Errorf("fcgi target is required")
@@ -563,12 +576,16 @@ func buildFastCGIVhostResponse(r *http.Request, target *url.URL, vhost VhostConf
 	if err != nil {
 		return nil, fmt.Errorf("fastcgi execute: %w", err)
 	}
-	if len(stdout) == 0 && len(stderr) > 0 {
-		return nil, fmt.Errorf("fastcgi stderr: %s", strings.TrimSpace(string(stderr)))
+	if len(stderr) > 0 {
+		log.Printf("[VHOST][PHP][ERROR] fastcgi stderr vhost=%q script=%q err=%s", vhost.Name, resolved.ScriptName, vhostLogMessage(string(stderr)))
+	}
+	if len(stdout) == 0 {
+		return buildDirectStatusResponse(r, http.StatusInternalServerError), nil
 	}
 	resp, err := parseFastCGIHTTPResponse(stdout, r)
 	if err != nil {
-		return nil, fmt.Errorf("fastcgi parse: %w", err)
+		log.Printf("[VHOST][PHP][ERROR] fastcgi response parse failed vhost=%q script=%q err=%s", vhost.Name, resolved.ScriptName, vhostLogMessage(err.Error()))
+		return buildDirectStatusResponse(r, http.StatusInternalServerError), nil
 	}
 	return resp, nil
 }
@@ -709,6 +726,7 @@ func writeDirectProxyResponse(w http.ResponseWriter, r *http.Request, resp *http
 		return err
 	}
 	reqID := directProxyResponseRequestID(w, r)
+	cacheStatus := strings.TrimSpace(w.Header().Get(proxyResponseCacheHeader))
 	defer func() {
 		if resp.Body != nil {
 			_ = resp.Body.Close()
@@ -726,6 +744,9 @@ func writeDirectProxyResponse(w http.ResponseWriter, r *http.Request, resp *http
 	}
 	if reqID != "" {
 		dst.Set("X-Request-ID", reqID)
+	}
+	if cacheStatus != "" {
+		dst.Set(proxyResponseCacheHeader, cacheStatus)
 	}
 	w.WriteHeader(resp.StatusCode)
 	if r != nil && r.Method == http.MethodHead {

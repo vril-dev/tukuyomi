@@ -2,7 +2,10 @@ import { createContext, useContext } from "react";
 
 export type Locale = "en" | "ja";
 
-type TranslationVars = Record<string, string | number | boolean | null | undefined>;
+type TranslationVars = Record<
+  string,
+  string | number | boolean | null | undefined
+>;
 
 export type I18nContextValue = {
   locale: Locale;
@@ -35,15 +38,23 @@ const JA_STRINGS: Record<string, string> = {
   Security: "Security",
   Proxy: "Proxy",
   "Proxy Engine": "Proxy Engine",
-  "Proxy Engine, CRS, Rollback, and FP Tuner": "Proxy Engine、CRS、ロールバック、FP Tuner",
+  "WAF Engine": "WAF Engine",
+  "Current WAF Engine": "現在のWAF Engine",
+  "Coraza is the active WAF engine. Additional engines must be registered before this value can be changed.":
+    "現在の WAF engine は Coraza です。追加 engine は登録後にこの値を変更できます。",
+  "Proxy Engine, CRS, Rollback, and FP Tuner":
+    "Proxy Engine、CRS、ロールバック、FP Tuner",
   "Current Proxy Engine": "現在のProxy Engine",
   "tukuyomi_proxy is the built-in proxy engine. The legacy net_http bridge has been removed. Restart required after config file changes.":
     "tukuyomi_proxy は built-in の proxy engine です。legacy net_http bridge は削除済みです。config file 変更後は再起動が必要です。",
   Operations: "Operations",
+  Coraza: "Coraza",
+  "Request Controls": "リクエスト制御",
   "runtime health": "稼働状態",
   "events and traces": "イベントとトレース",
   "health, logs, alerts": "状態、ログ、通知",
   "base directives": "基本ディレクティブ",
+  "base and bypass extra rules": "base と bypass extra rule",
   "CRS toggles": "CRS切替",
   "path overrides": "パス例外",
   "country deny list": "国別拒否設定",
@@ -58,7 +69,8 @@ const JA_STRINGS: Record<string, string> = {
   "upstream and transport tuning": "upstream と transport の調整",
   "hostname ownership and tls binding": "ホスト名管理とTLS紐付け",
   "routes, cache, traffic ownership": "ルーティング、キャッシュ、配送管理",
-  "admin session, operator identity, verify manifest": "管理セッション、操作主体、verify manifest",
+  "admin session, operator identity, verify manifest":
+    "管理セッション、操作主体、verify manifest",
   "runtime helpers and access": "ランタイム補助とアクセス管理",
   "Control Room": "Control Room",
   "Coraza + CRS Security Gateway": "Coraza + CRS セキュリティゲートウェイ",
@@ -75,10 +87,12 @@ const JA_STRINGS: Record<string, string> = {
   English: "English",
   Japanese: "日本語",
   "Admin Sign In": "管理ログイン",
-  "Enter an admin API key once to create a browser session. The key stays server-side after login.":
-    "管理APIキーを一度入力してブラウザセッションを作成します。ログイン後、キーはサーバー側にのみ保持されます。",
-  "Admin API Key": "管理APIキー",
-  "paste a primary or secondary admin key": "primary または secondary の管理キーを貼り付け",
+  "Sign in with your admin user to create a browser session.":
+    "管理ユーザーでログインしてブラウザセッションを作成します。",
+  "Username or email": "ユーザー名またはメールアドレス",
+  "admin username or email": "管理ユーザー名またはメールアドレス",
+  Password: "パスワード",
+  "admin password": "管理パスワード",
   "Login failed": "ログインに失敗しました",
   "Signing in...": "ログイン中...",
   "Sign In": "ログイン",
@@ -98,14 +112,15 @@ const JA_STRINGS: Record<string, string> = {
   "Top Paths (24h)": "上位パス（24時間）",
   "Top Countries (24h)": "上位国コード（24時間）",
   "Updating WAF block stats...": "WAFブロック統計を更新しています...",
-  "Failed to load WAF block stats: {error}": "WAFブロック統計の読み込みに失敗しました: {error}",
+  "Failed to load WAF block stats: {error}":
+    "WAFブロック統計の読み込みに失敗しました: {error}",
   "API Base": "APIベース",
   "Rules File": "ルールファイル",
+  "Base Rule Asset": "ベースルールアセット",
   "CRS Enabled": "CRS有効",
   "Rate Limit Enabled": "レート制限有効",
   "Bot Defense Enabled": "Bot防御有効",
   "Semantic Mode": "セマンティックモード",
-  "DB Enabled": "DB有効",
   "DB Retention Days": "DB保持日数",
   "DB Rows (Total)": "DB行数（全体）",
   "DB Rows (WAF Block)": "DB行数（WAF block）",
@@ -115,7 +130,21 @@ const JA_STRINGS: Record<string, string> = {
   "Blocked Requests by Hour": "時間別ブロック数",
   "No data": "データなし",
   "No blocked requests in selected range": "選択期間にブロックはありません",
-  "Edit target": "編集対象",
+  "Rule asset": "ルールアセット",
+  "New rule asset": "新規ルールアセット",
+  "Base WAF rule set": "ベースWAFルールセット",
+  "Bypass Rules extra_rule": "Bypass Rules extra_rule",
+  "Manage DB-backed base WAF assets and Bypass Rules extra_rule assets in load order.":
+    "DB-backed base WAF asset と Bypass Rules extra_rule asset を読み込み順つきで管理します。",
+  Usage: "用途",
+  "Delete failed": "削除に失敗しました",
+  "Delete this rule asset?": "このルールアセットを削除しますか？",
+  "Move up": "上へ移動",
+  "Move down": "下へ移動",
+  "Path is empty": "パスが空です",
+  "At least one base rule asset is required":
+    "最低 1 つの base rule asset が必要です",
+  "Full bypass": "完全バイパス",
   Refresh: "更新",
   "Saving...": "保存中...",
   "Save & hot reload": "保存して即時反映",
@@ -141,6 +170,8 @@ const JA_STRINGS: Record<string, string> = {
   File: "ファイル",
   Path: "パス",
   "No CRS rule files found.": "CRSルールファイルが見つかりません。",
+  "Edit the DB-backed base WAF rule assets loaded into the active rule set.":
+    "active rule set に読み込まれる DB-backed base WAF rule asset を編集します。",
   Total: "総数",
   "Last saved: {time}": "最終保存: {time}",
   Loading: "Loading",
@@ -183,8 +214,6 @@ const JA_STRINGS: Record<string, string> = {
   "Add webhook": "webhook sink を追加",
   "Add webhook or email delivery targets. Disabled sinks stay in the file but do not receive notifications.":
     "webhook または email の配送先を追加します。無効な sink はファイルには残りますが通知は受け取りません。",
-  "Advanced JSON is currently invalid. The structured editor is still showing the last valid notification snapshot. Any structured edit will regenerate valid JSON from that snapshot.":
-    "現在の詳細JSONは無効です。構造化エディタには直近で有効だった notification snapshot を表示しています。構造化編集を行うと、その snapshot から有効な JSON を再生成します。",
   "Cooldown seconds": "cooldown 秒数",
   "Enable notification delivery": "通知配送を有効化",
   "Escalated threshold": "escalated 閾値",
@@ -206,8 +235,8 @@ const JA_STRINGS: Record<string, string> = {
   "SMTP username": "SMTP ユーザー名",
   "Security sources": "セキュリティ source",
   Sink: "sink",
-  "Structured edits still validate, save, and hot reload through the existing notification raw JSON API.":
-    "構造化編集でも検証、保存、hot reload は既存の notification raw JSON API を通ります。",
+  "Structured edits validate, save, and hot reload through the existing notification backend API.":
+    "構造化編集は既存の notification backend API で検証、保存、hot reload されます。",
   "Subject prefix": "件名 prefix",
   "Thresholds are evaluated over each trigger window before notifications transition state.":
     "通知 state が遷移する前に、各 trigger window 内で閾値を評価します。",
@@ -259,19 +288,22 @@ const JA_STRINGS: Record<string, string> = {
   waf: "WAF",
   "dry-run": "ドライラン",
   info: "情報",
-  "Request {reqID} - {count} events: {events}": "リクエスト {reqID} - {count} 件のイベント: {events}",
+  "Request {reqID} - {count} events: {events}":
+    "リクエスト {reqID} - {count} 件のイベント: {events}",
   "Request {reqID}": "リクエスト {reqID}",
   "not enforced": "未強制",
   none: "なし",
-  "blocked": "ブロック",
+  blocked: "ブロック",
   "rate limited": "レート制限",
   challenged: "チャレンジ",
   "allowed with findings": "所見付き許可",
   allowed: "許可",
   "Blocked by security policy": "セキュリティポリシーによりブロック",
   "Rate limited by rate_limit": "rate_limit によりレート制限",
-  "Challenge required by security policy": "セキュリティポリシーによりチャレンジが必要",
-  "Allowed, but security findings were observed": "許可されましたがセキュリティ所見が観測されました",
+  "Challenge required by security policy":
+    "セキュリティポリシーによりチャレンジが必要",
+  "Allowed, but security findings were observed":
+    "許可されましたがセキュリティ所見が観測されました",
   "Allowed with no security findings": "セキュリティ所見なしで許可",
   "{left} and {right}": "{left} と {right}",
   "not verified": "未検証",
@@ -304,61 +336,66 @@ const JA_STRINGS: Record<string, string> = {
   Name: "名前",
   URL: "URL",
   Weight: "重み",
-  "Named upstreams are the preferred route targets. A route action can point only to one of these configured names.":
-    "名前付き upstream が推奨の転送先です。route action はこれらの設定済み名のみを指定できます。",
-  "No named upstreams configured. Add upstreams before creating route targets.":
-    "名前付き upstream は未設定です。route target を作る前に upstream を追加してください。",
+  "Define direct non-vhost backend nodes here. PHP-FPM/static app backends belong in Vhosts.":
+    "ここでは vhost 以外の direct backend node を定義します。PHP-FPM/static app の backend は Vhosts 側です。",
+  "Named upstreams are direct non-vhost backends. Define PHP-FPM/static app backends in Vhosts instead.":
+    "名前付き upstream は vhost 以外の direct backend 用です。PHP-FPM/static app の backend は Vhosts で定義してください。",
+  "No named upstreams configured. Add upstreams only for direct non-vhost route targets.":
+    "名前付き upstream は未設定です。vhost 以外の direct route target が必要な場合だけ upstream を追加してください。",
   "Upstream #{index}": "upstream #{index}",
-  "Name is referenced from route action.upstream.": "この名前は route の action.upstream から参照されます。",
+  "Name is referenced from route action.upstream.":
+    "この名前は route の action.upstream から参照されます。",
   "Name is referenced from backend pools or route action.upstream.":
     "この名前は backend pool または route の action.upstream から参照されます。",
-  "Routes are evaluated in ascending priority. The first match wins, then default_route, then upstreams.":
-    "route は priority の昇順で評価されます。最初に一致した route が選ばれ、その次に default_route、最後に upstreams が使われます。",
-  "No route rules configured. Traffic falls through to `default_route` or upstreams.":
-    "route ルールは未設定です。トラフィックは `default_route` または upstreams へフォールスルーします。",
+  "Explicit routes run first, then generated Vhost/Site routes, default_route, and finally upstreams.":
+    "explicit route が先に評価され、その後 generated Vhost/Site route、default_route、最後に upstreams が使われます。",
+  "No explicit route rules configured. Traffic can still match generated Vhost/Site routes before default_route or upstreams.":
+    "explicit route は未設定です。トラフィックは default_route や upstreams の前に generated Vhost/Site route へ一致する場合があります。",
   "Used only when no route matches. If absent, upstreams are used.":
     "どの route にも一致しない時だけ使われます。未設定なら upstreams が使われます。",
-  "Configure a default route when you want a distinct fallback before upstream selection.":
-    "upstreams の選択に入る前に別の fallback を使いたい場合は default route を設定します。",
+  "Configure a default route when you want a distinct fallback after generated Vhost/Site routes and before upstream selection.":
+    "generated Vhost/Site route の後、upstreams の選択に入る前に別の fallback を使いたい場合は default route を設定します。",
   "Dry Run": "Dry Run",
   "Confirm which route would win and which final upstream URL would be used without changing live traffic.":
     "実トラフィックを変えずに、どの route が選ばれ、最終的にどの upstream URL が使われるか確認します。",
   Host: "ホスト",
-  "Optional. Leave empty to simulate host-agnostic routing.": "任意です。空のままならホスト非依存のルーティングとしてシミュレートします。",
+  "Optional. Leave empty to simulate host-agnostic routing.":
+    "任意です。空のままならホスト非依存のルーティングとしてシミュレートします。",
   Route: "ルート",
   Upstream: "upstream",
   "Final URL": "最終URL",
-  "Raw JSON": "Raw JSON",
-  "Keep using the existing raw editor for transport and low-level fields that are not part of the structured routing editor.":
-    "構造化ルーティングエディタの対象外である transport や低レベル項目は、引き続き既存の生JSONエディタで扱います。",
   "Validate Messages": "Validate Messages",
   "Probe Result": "Probe Result",
   "Recent changes": "Recent changes",
-  "Successful proxy-rules apply and rollback operations are recorded here.": "proxy-rules の適用とロールバック成功履歴をここに記録します。",
+  "Successful proxy-rules apply and rollback operations are recorded here.":
+    "proxy-rules の適用とロールバック成功履歴をここに記録します。",
   Limit: "Limit",
   "Actor filter": "Actor filter",
   "Action filter": "Action filter",
   all: "すべて",
   rollback: "ロールバック",
-  "Runtime Proxy": "Runtime Proxy",
   "Upstream Health": "Upstream Health",
-  "Dry Run Result": "Dry Run Result",
-  "Priority decides order. The first matching route wins.": "priority が評価順を決めます。最初に一致した route が採用されます。",
+  "Priority decides order. The first matching route wins.":
+    "priority が評価順を決めます。最初に一致した route が採用されます。",
   Priority: "優先度",
   Hosts: "ホスト一覧",
-  "One host per line. Leave empty to match any host.": "1 行に 1 ホスト。空なら任意ホストに一致します。",
+  "One host per line. Leave empty to match any host.":
+    "1 行に 1 ホスト。空なら任意ホストに一致します。",
   "Path match type": "パスマッチ種別",
   "Path match value": "パスマッチ値",
-  "Regex runs against request path only.": "正規表現は request path のみに対して評価します。",
-  "Exact and prefix values should start with /.": "exact と prefix の値は / で始めてください。",
+  "Regex runs against request path only.":
+    "正規表現は request path のみに対して評価します。",
+  "Exact and prefix values should start with /.":
+    "exact と prefix の値は / で始めてください。",
   exact: "exact",
   prefix: "prefix",
   regex: "regex",
   "Action upstream": "action upstream",
-  "Configured upstream name only. Route targets do not accept direct URLs or legacy generated targets.":
-    "設定済み upstream 名のみを指定します。route target で direct URL や legacy generated target は使えません。",
+  "Direct upstream name only for operator-managed routes. Vhost-owned app traffic is published from Vhosts.":
+    "operator が管理する route では direct upstream 名だけを指定します。Vhost 管理 app の通信は Vhosts から公開されます。",
   "Host rewrite": "Host 書き換え",
-  "Optional outbound Host header override.": "任意の送信先 Host ヘッダ上書きです。",
+  "Optional outbound Host header override.":
+    "任意の送信先 Host ヘッダ上書きです。",
   "Path rewrite prefix": "パス書き換え prefix",
   "Disabled for regex path routes.": "regex パス route では無効です。",
   "Optional. Example: /service-a/": "任意です。例: /service-a/",
@@ -371,10 +408,13 @@ const JA_STRINGS: Record<string, string> = {
   "Canary %": "カナリア %",
   "1-99 when canary is set.": "canary を設定した場合は 1-99 です。",
   "Hash policy": "ハッシュ方針",
-  "Optional sticky/hash routing policy for this route.": "この route 用の任意の sticky/hash ルーティング方針です。",
-  "Optional sticky/hash policy for members inside this pool.": "この pool 内の member 用の任意の sticky/hash 方針です。",
+  "Optional sticky/hash routing policy for this route.":
+    "この route 用の任意の sticky/hash ルーティング方針です。",
+  "Optional sticky/hash policy for members inside this pool.":
+    "この pool 内の member 用の任意の sticky/hash 方針です。",
   "Hash key": "ハッシュキー",
-  "Required only for header/cookie hash.": "header/cookie hash の時だけ必要です。",
+  "Required only for header/cookie hash.":
+    "header/cookie hash の時だけ必要です。",
   "Sticky session": "Sticky session",
   "Issue a signed affinity cookie so clients return to the same selectable backend in this pool.":
     "署名付き affinity Cookie を発行し、この pool 内の同じ選択可能 backend へ client を戻します。",
@@ -397,12 +437,12 @@ const JA_STRINGS: Record<string, string> = {
     "有効にすると、named upstream へ流れる request だけが backend へ X-Tukuyomi-Upstream-Name を送ります。direct URL と generated vhost target には付きません。",
   "This header is internal observability data. It is stripped from inbound requests and re-added only when a named upstream is finally selected after WAF.":
     "この header は内部 observability 用です。inbound request からは一度除去し、WAF 後に named upstream が最終選択された時だけ付け直します。",
-  "Inspect canonical backend objects used by routing. Direct named upstreams support runtime enable/drain/disable and weight overrides here; Vhost-bound configured upstreams appear as status-only objects in this slice.":
-    "routing で使われる canonical backend object を確認します。direct named upstream はここで runtime enable/drain/disable と weight override に対応し、Vhost に bind された configured upstream はこの slice では status-only で表示されます。",
-  "No direct upstreams or Vhost-bound configured upstreams are configured.":
-    "direct upstream も Vhost に bind された configured upstream も未設定です。",
-  "Add direct backends in Proxy Rules > Upstreams or link a Vhost to an upstream name, then return here for status and runtime operations.":
-    "Proxy Rules > Upstreams で direct backend を追加するか、Vhost を upstream 名へ link してから、status と runtime 操作のためにここへ戻ってください。",
+  "Inspect canonical backend objects used by routing. Direct named upstreams support runtime enable/drain/disable and weight overrides here; Vhost-generated backends appear as status-only objects in this slice.":
+    "routing で使われる canonical backend object を確認します。direct named upstream はここで runtime enable/drain/disable と weight override に対応し、Vhost-generated backend はこの slice では status-only で表示されます。",
+  "No direct upstreams or Vhost-generated backends are configured.":
+    "direct upstream も Vhost-generated backend も未設定です。",
+  "Add direct backends in Proxy Rules > Upstreams or add a Vhost, then return here for status and runtime operations.":
+    "Proxy Rules > Upstreams で direct backend を追加するか、Vhost を追加してから、status と runtime 操作のためにここへ戻ってください。",
   vhost: "vhost",
   "Runtime weight overrides are available only for direct named upstreams in this slice.":
     "この slice では runtime weight override は direct named upstream にだけ対応します。",
@@ -419,17 +459,21 @@ const JA_STRINGS: Record<string, string> = {
   "Logs removed header names only.": "削除したヘッダ名だけをログに出します。",
   "Custom remove": "追加削除",
   "Custom keep": "追加保持",
-  "One header name per line. Applies in auto, manual, and off.": "1 行に 1 ヘッダ名。auto/manual/off すべてで適用されます。",
+  "One header name per line. Applies in auto, manual, and off.":
+    "1 行に 1 ヘッダ名。auto/manual/off すべてで適用されます。",
   "One header name per line. Used only to exempt headers from auto mode's embedded list.":
     "1 行に 1 ヘッダ名。auto モードの組み込みリストから除外する時だけ使います。",
   Set: "設定",
   Add: "追加",
   Remove: "削除",
-  "One `key=value` pair per line. Replaces existing values for that key.": "1 行に 1 件の `key=value`。同じ key の既存値を置き換えます。",
-  "One `key=value` pair per line. Appends another value for that key.": "1 行に 1 件の `key=value`。同じ key に値を追加します。",
+  "One `key=value` pair per line. Replaces existing values for that key.":
+    "1 行に 1 件の `key=value`。同じ key の既存値を置き換えます。",
+  "One `key=value` pair per line. Appends another value for that key.":
+    "1 行に 1 件の `key=value`。同じ key に値を追加します。",
   "One query key per line.": "1 行に 1 query key。",
   "Remove prefixes": "prefix削除",
-  "One query-key prefix per line, for example `utm_`.": "1 行に 1 query key prefix。例: `utm_`。",
+  "One query-key prefix per line, for example `utm_`.":
+    "1 行に 1 query key prefix。例: `utm_`。",
   "One `Header: value` pair per line.": "1 行に 1 件の `Header: value`。",
   "One header name per line.": "1 行に 1 ヘッダ名。",
   "Recent Bot Decisions": "最近の Bot 判定",
@@ -444,13 +488,16 @@ const JA_STRINGS: Record<string, string> = {
   "validate failed": "検証に失敗しました",
   "save failed": "保存に失敗しました",
   "Cache store settings saved.": "キャッシュストア設定を保存しました。",
-  "Cache cleared. entries={entries} bytes={bytes}": "キャッシュを削除しました。entries={entries} bytes={bytes}",
+  "Cache cleared. entries={entries} bytes={bytes}":
+    "キャッシュを削除しました。entries={entries} bytes={bytes}",
   "clear failed": "削除に失敗しました",
-  "Saved. Hot reload applied immediately.": "保存しました。ホットリロードを即時反映しました。",
+  "Saved. Hot reload applied immediately.":
+    "保存しました。ホットリロードを即時反映しました。",
   "Raw Mode": "生編集モード",
   "Table Mode": "テーブルモード",
   "Internal Cache Store": "内部キャッシュストア",
-  "Disk-backed cache for matched `ALLOW` rules.": "一致した `ALLOW` ルール向けのディスクバックキャッシュです。",
+  "Disk-backed cache for matched `ALLOW` rules.":
+    "一致した `ALLOW` ルール向けのディスクバックキャッシュです。",
   "Store ETag": "ストア ETag",
   "Enable internal cache": "内部キャッシュを有効化",
   "Store Directory": "ストアディレクトリ",
@@ -459,8 +506,15 @@ const JA_STRINGS: Record<string, string> = {
   "Enable bounded L1 memory cache": "上限制御付き L1 メモリキャッシュを有効化",
   "Memory Max Bytes": "メモリ最大バイト数",
   "Memory Max Entries": "メモリ最大エントリ数",
+  "Current Store": "現在の保存状態",
   "Disk Entries": "ディスクエントリ数",
   "Disk Size": "ディスクサイズ",
+  "Runtime Counters": "累積カウンタ",
+  "Total Hits": "累積ヒット",
+  "Total Misses": "累積ミス",
+  "Total Stores": "累積保存数",
+  "Total Evictions": "累積追い出し数",
+  "Total Clears": "累積削除数",
   Hits: "ヒット",
   Misses: "ミス",
   Stores: "保存数",
@@ -474,7 +528,6 @@ const JA_STRINGS: Record<string, string> = {
   "Save Store": "ストアを保存",
   "Clearing...": "削除中...",
   "Clear All": "全削除",
-  "Raw edit mode": "生編集モード",
   "Add rule": "ルール追加",
   "Validating...": "検証中...",
   Kind: "種別",
@@ -500,11 +553,13 @@ const JA_STRINGS: Record<string, string> = {
   "Pick From Recent `waf_block` Logs": "最近の `waf_block` ログから選ぶ",
   "Loading...": "読み込み中...",
   "Log error": "ログエラー",
-  "No `waf_block` events found in the selected range.": "選択範囲に `waf_block` イベントは見つかりませんでした。",
+  "No `waf_block` events found in the selected range.":
+    "選択範囲に `waf_block` イベントは見つかりませんでした。",
   rule_id: "rule_id",
   matched_variable: "一致変数",
   matched_value: "一致値",
-  "Populate event input from this log line": "このログ行からイベント入力を埋める",
+  "Populate event input from this log line":
+    "このログ行からイベント入力を埋める",
   Use: "使用",
   "Proposing...": "提案中...",
   Propose: "提案",
@@ -521,7 +576,8 @@ const JA_STRINGS: Record<string, string> = {
   req_id: "req_id",
   "req-...": "req-...",
   "Clear req_id": "req_id をクリア",
-  "Download failed. Check the browser console.": "ダウンロードに失敗しました。ブラウザコンソールを確認してください。",
+  "Download failed. Check the browser console.":
+    "ダウンロードに失敗しました。ブラウザコンソールを確認してください。",
   "Download all log files": "Download all log files",
   Download: "ダウンロード",
   "Reload from latest": "Reload from latest",
@@ -568,34 +624,40 @@ const JA_STRINGS: Record<string, string> = {
   delta: "増分",
   "No extra fields.": "追加フィールドはありません。",
   "failed to load recent changes": "最近の変更の読み込みに失敗しました",
-  "probe ok: {address} latency={latency}ms timeout={timeout}ms": "疎通成功: {address} latency={latency}ms timeout={timeout}ms",
+  "probe ok: {address} latency={latency}ms timeout={timeout}ms":
+    "疎通成功: {address} latency={latency}ms timeout={timeout}ms",
   "probe ok": "疎通成功",
   "probe failed: {message}": "疎通失敗: {message}",
-  "probe ok for {upstream}: {address} latency={latency}ms timeout={timeout}ms": "疎通成功: {upstream} -> {address} latency={latency}ms timeout={timeout}ms",
+  "probe ok for {upstream}: {address} latency={latency}ms timeout={timeout}ms":
+    "疎通成功: {upstream} -> {address} latency={latency}ms timeout={timeout}ms",
   "probe ok for {upstream}": "疎通成功: {upstream}",
   "probe failed for {upstream}: {message}": "疎通失敗: {upstream}: {message}",
   "upstream name is required for probe": "疎通確認には upstream 名が必要です",
   "Review changes before apply": "Review changes before apply",
-  "Compare the current saved proxy rules with the JSON that will be applied.": "現在保存済みの proxy rules と、これから適用する JSON を比較します。",
+  "Compare the current saved proxy rules with the configuration that will be applied.":
+    "現在保存済みの proxy rules と、これから適用する設定を比較します。",
   "Review rollback target": "Review rollback target",
-  "Compare the current saved proxy rules with the snapshot that will be restored.": "現在保存済みの proxy rules と、これから復元する snapshot を比較します。",
+  "Compare the current saved proxy rules with the snapshot that will be restored.":
+    "現在保存済みの proxy rules と、これから復元する snapshot を比較します。",
   "Unsaved editor changes are not part of rollback. Rollback restores the latest saved runtime snapshot.":
     "未保存のエディタ変更はロールバック対象に含まれません。ロールバックは直近の保存済み runtime snapshot を復元します。",
   "Apply rollback": "ロールバックを適用",
   "rollback preview failed": "ロールバック preview に失敗しました",
-  "Exported {count} audit entries as JSON.": "{count} 件の監査履歴を JSON として出力しました。",
-  "Export JSON": "エクスポート",
+  "Exported {count} audit entries.": "{count} 件の監査履歴を出力しました。",
+  Export: "エクスポート",
   "Copied selected audit summary.": "選択した監査サマリをコピーしました。",
   "failed to copy audit summary": "監査サマリのコピーに失敗しました",
   "dry-run failed": "ドライランに失敗しました",
-  "Edit route-aware upstream selection, path/query rewrites, and header operations with a structured builder, then keep raw JSON for the rest of the proxy transport knobs.":
-    "route を意識した upstream 選択、path/query 書き換え、header 操作を構造化ビルダで編集し、それ以外の proxy transport 項目は生JSONのまま扱います。",
-  "Raw JSON out of sync": "raw JSON と未同期",
+  "Edit route-aware direct upstream selection, path/query rewrites, header operations, and transport knobs with structured controls.":
+    "route を意識した direct upstream 選択、path/query 書き換え、header 操作、transport 設定を構造化コントロールで編集します。",
   "Structured editor synced": "構造化エディタ同期済み",
   ETag: "ETag",
   "Structured editor warning": "構造化エディタ警告",
-  "Raw JSON is currently invalid. The structured editor is still showing the last valid routing snapshot. Any structured edit will regenerate raw JSON from that snapshot.":
-    "現在の生JSONは無効です。構造化エディタには直近で有効だった routing snapshot を表示しています。構造化編集を行うと、その snapshot から生JSONを再生成します。",
+  "Invalid proxy rules": "proxy rules が無効です",
+  "Saved proxy rules could not be represented by the structured editor. The editor is showing the last valid routing snapshot; any structured edit will generate a replacement from that snapshot.":
+    "保存済み proxy rules を構造化エディタで表現できません。エディタには直近で有効だった routing snapshot を表示しており、構造化編集を行うとその snapshot から置換設定を生成します。",
+  "No upstream health data loaded.":
+    "upstream health data はまだ読み込まれていません。",
   Probe: "疎通確認",
   "Preparing...": "Preparing...",
   Rollback: "ロールバック",
@@ -605,10 +667,12 @@ const JA_STRINGS: Record<string, string> = {
   "Saved. This browser now sends the configured operator identity on /tukuyomi-api requests.":
     "保存しました。このブラウザは今後、設定した operator identity を /tukuyomi-api へのリクエストに付けます。",
   "Operator identity cleared.": "operator identity をクリアしました。",
-  "Verified. Current admin session is valid.": "確認できました。現在の admin session は有効です。",
+  "Verified. Current admin session is valid.":
+    "確認できました。現在の admin session は有効です。",
   "Verification failed: {message}": "確認に失敗しました: {message}",
   "Verify manifest downloaded.": "verify manifest をダウンロードしました。",
-  "Verify manifest download failed: {message}": "verify manifest のダウンロードに失敗しました: {message}",
+  "Verify manifest download failed: {message}":
+    "verify manifest のダウンロードに失敗しました: {message}",
   "Validation failed: {message}": "検証に失敗しました: {message}",
   "Save failed: {message}": "保存に失敗しました: {message}",
   Load: "ロード",
@@ -622,7 +686,8 @@ const JA_STRINGS: Record<string, string> = {
   "Audit operator identity": "監査用 operator identity",
   "alice@example.com": "alice@example.com",
   "Stored in localStorage and sent as": "localStorage に保存し、設定時は",
-  "on admin API requests when set.": "として admin API リクエストへ送信します。",
+  "on admin API requests when set.":
+    "として admin API リクエストへ送信します。",
   "Verifying...": "確認中...",
   "Verify Session": "セッション確認",
   "Clear operator identity": "operator identity をクリア",
@@ -634,12 +699,92 @@ const JA_STRINGS: Record<string, string> = {
   "Health Path": "ヘルスパス",
   "Binary Path": "バイナリパス",
   "Config File": "設定ファイル",
+  "Bootstrap Config": "bootstrap 設定",
+  "Saved to DB app_config. Restart tukuyomi to apply global config changes from this panel.":
+    "DB app_config に保存しました。この画面の global 設定変更を反映するには tukuyomi を再起動してください。",
+  "Edit listener, runtime, storage policy, and observability settings stored in DB app_config. DB connection fields still come from the bootstrap config file.":
+    "DB app_config に保存される listener、runtime、storage policy、observability 設定を編集します。DB 接続項目は引き続き bootstrap 設定ファイルから読みます。",
+  "Listener, runtime, storage policy, and observability settings here are restart-required startup config. Saving updates DB app_config; db_driver, db_path, and db_dsn stay bootstrap-only in config.json.":
+    "ここにある listener、runtime、storage policy、observability は再起動が必要な startup 設定です。保存先は DB app_config です。db_driver、db_path、db_dsn は config.json の bootstrap 専用項目です。",
+  "Database storage policy and bootstrap connection status. Driver, path, and DSN are read from the bootstrap config file before DB is opened.":
+    "DB storage policy と bootstrap 接続状態です。driver、path、DSN は DB を開く前に bootstrap 設定ファイルから読みます。",
+  "DB connection is bootstrap-only. Current DSN status: {state}. Change db_driver, db_path, or db_dsn in the bootstrap config file, run migrations/import as needed, then restart.":
+    "DB 接続は bootstrap 専用です。現在の DSN 状態: {state}。db_driver、db_path、db_dsn は bootstrap 設定ファイルで変更し、必要に応じて migration/import を実行してから再起動してください。",
+  "Advanced paths and global support files affect the whole product. Runtime-owned JSON paths are seed/import/export locations after DB bootstrap. Validate before save and restart after changes.":
+    "advanced path と global support file はプロダクト全体に影響します。runtime 管理の JSON path は DB bootstrap 後は seed/import/export 用です。保存前に検証し、変更後に再起動してください。",
+  "Advanced paths are grouped by runtime behavior. DB-backed runtime treats most JSON paths as seed/import inputs, not live file storage. Validate before save and restart after changes.":
+    "advanced path は runtime behavior ごとに分類しています。DB-backed runtime では多くの JSON path は live file storage ではなく seed/import input です。保存前に検証し、変更後に再起動してください。",
+  "Persistent File Storage": "永続ファイルストレージ",
+  "Durable runtime files such as ACME account keys and certificates. Provider credentials are read from environment or platform identity, not saved here.":
+    "ACME account key や証明書などの永続 runtime file です。provider 認証情報は environment または platform identity から読み、ここには保存しません。",
+  Backend: "backend",
+  Local: "ローカル",
+  S3: "S3",
+  "Azure Blob Storage": "Azure Blob Storage",
+  "Google Cloud Storage": "Google Cloud Storage",
+  "Local Base Directory": "local base directory",
+  "Persistent Storage Backend": "永続 storage backend",
+  "Persistent Storage Local Base Directory":
+    "永続 storage local base directory",
+  "Persistent Storage S3 Bucket": "永続 storage S3 bucket",
+  "Persistent Storage S3 Region": "永続 storage S3 region",
+  "Persistent Storage S3 Endpoint": "永続 storage S3 endpoint",
+  "Persistent Storage S3 Prefix": "永続 storage S3 prefix",
+  "Persistent Storage S3 Path Style": "永続 storage S3 path-style",
+  "S3 Bucket": "S3 bucket",
+  "S3 Region": "S3 region",
+  "S3 Endpoint": "S3 endpoint",
+  "S3 Prefix": "S3 prefix",
+  "Azure Account Name": "Azure account name",
+  "Azure Container": "Azure container",
+  "Azure Endpoint": "Azure endpoint",
+  "Azure Prefix": "Azure prefix",
+  "GCS Bucket": "GCS bucket",
+  "GCS Prefix": "GCS prefix",
+  "Use S3 path-style addressing": "S3 path-style addressing を使う",
+  "Runtime File Outputs": "ランタイムファイル出力",
+  "These paths still receive runtime file output after startup.":
+    "これらの path は起動後も runtime file output の出力先です。",
+  "DB Seed / Import Paths": "DB seed / import path",
+  "Used when bootstrap or import needs a filesystem seed. DB remains the live source after initialization.":
+    "bootstrap または import が filesystem seed を必要とする場合に使います。初期化後の live source は DB です。",
+  "WAF Asset References": "WAF asset 参照",
+  "Logical references resolved against DB-backed WAF rule assets.":
+    "DB-backed WAF rule asset に対して解決される論理参照です。",
+  "Proxy Seed File": "Proxy 初期投入ファイル",
+  "PHP Runtime Inventory Seed File": "PHP runtime inventory 初期投入ファイル",
+  "Vhost Seed File": "Vhost 初期投入ファイル",
+  "Cache Rules Seed File": "Cache Rules 初期投入ファイル",
+  "Cache Store Seed File": "Cache Store 初期投入ファイル",
+  "Bypass Seed File": "Bypass 初期投入ファイル",
+  "Country Block Seed File": "Country Block 初期投入ファイル",
+  "Rate Limit Seed File": "Rate Limit 初期投入ファイル",
+  "Bot Defense Seed File": "Bot Defense 初期投入ファイル",
+  "Semantic Seed File": "Semantic 初期投入ファイル",
+  "Notification Seed File": "Notification 初期投入ファイル",
+  "IP Reputation Seed File": "IP Reputation 初期投入ファイル",
+  "CRS Disabled Seed File": "CRS disabled 初期投入ファイル",
+  "Bypass Extra Rule Reference Prefix": "Bypass extra rule 参照 prefix",
+  "CRS Setup Asset": "CRS setup asset",
+  "CRS Rules Asset Prefix": "CRS rules asset prefix",
+  "Choose whether request country comes from a trusted frontend header or from the installed local country database artifact. This updates DB app_config and takes effect after restart.":
+    "request country を trusted frontend header から取るか、導入済み local country database artifact から取るかを選択します。DB app_config を更新し、再起動後に反映されます。",
+  "Saving updates DB app_config. Restart the process after switching modes.":
+    "保存先は DB app_config です。mode 切替後は process を再起動してください。",
+  "Config Storage": "設定保存先",
+  "Seed File": "初期投入ファイル",
+  "Runtime Storage": "ランタイム保存先",
+  "Site Config Storage": "Site 設定保存先",
+  "Scheduled Task Config Storage": "Scheduled Task 設定保存先",
+  "Upstream Runtime Storage": "Upstream Runtime 保存先",
+  "Site Seed File": "Site 初期投入ファイル",
+  "Scheduled Task Seed File": "Scheduled Task 初期投入ファイル",
+  "Upstream Runtime Seed File": "Upstream Runtime 初期投入ファイル",
   "Working Directory": "作業ディレクトリ",
   "Document Root": "ドキュメントルート",
   "Listen Address": "待受アドレス",
   "External Upstream": "外部 upstream",
   "Use an absolute": "絶対",
-  "URL. Route binding stays in Proxy Rules.": "URL を使います。route binding は引き続き Proxy Rules 側です。",
   Reset: "リセット",
   "Validation passed.": "検証に成功しました。",
   "Saved. Site config applied.": "保存しました。site 設定を適用しました。",
@@ -650,30 +795,38 @@ const JA_STRINGS: Record<string, string> = {
   "Rollback depth": "ロールバック世代",
   "Working...": "処理中...",
   "Add Site": "サイト追加",
-  "No sites configured. Existing `proxy.json` routing keeps working unchanged until you add a site.":
-    "site は未設定です。site を追加するまでは既存の `proxy.json` ルーティングがそのまま動きます。",
+  "No sites configured. Existing proxy routing keeps working unchanged until you add a site.":
+    "site は未設定です。site を追加するまでは既存の proxy routing がそのまま動きます。",
   "Generated route": "生成ルート",
   "Site name": "site 名",
   "Default upstream": "default upstream",
   "TLS mode": "TLS モード",
+  "ACME environment": "ACME environment",
+  "ACME account email": "ACME account email",
+  "Define PHP-FPM vhosts here instead of creating proxy upstream rows. Each vhost owns its hostname, FastCGI port, docroot, and runtime binding.":
+    "proxy upstream 行を作らず、ここで PHP-FPM vhost を定義します。各 vhost は hostname、FastCGI port、docroot、runtime binding を持ちます。",
+  "No PHP-FPM vhosts configured. Add one to publish a host-backed PHP-FPM runtime.":
+    "PHP-FPM vhost は未設定です。host に紐づく PHP-FPM runtime を公開するには vhost を追加してください。",
   cert_file: "cert_file",
   key_file: "key_file",
   "Validation Summary": "Validation Summary",
-  "No site status yet. Use Validate or Load.": "site status はまだありません。Validate または Load を使ってください。",
+  "No site status yet. Use Validate or Load.":
+    "site status はまだありません。Validate または Load を使ってください。",
   disabled: "無効",
   route: "route",
   "cert not after": "証明書有効期限",
-  "Rendered JSON": "Rendered JSON",
   "Latest status payload": "Latest status payload",
-  "Apply and validate both use the generated JSON below.": "Apply と validate はどちらも以下の生成 JSON を使います。",
   "{label} (dry-run, non-enforcing)": "{label}（ドライラン・非強制）",
   "{label} (observed only)": "{label}（観測のみ）",
-  "Blocked by waf_block (rule {ruleID})": "waf_block によりブロック（rule {ruleID}）",
+  "Blocked by waf_block (rule {ruleID})":
+    "waf_block によりブロック（rule {ruleID}）",
   "Blocked by {event}": "{event} によりブロック",
   "Rate limited after {labels} findings": "{labels} の所見によりレート制限",
   "Challenged by {event}": "{event} によりチャレンジ",
-  "Allowed, but {labels} dry-run findings fired": "許可されましたが {labels} のドライラン所見が発火しました",
-  "Allowed, but {labels} signals fired": "許可されましたが {labels} のシグナルが発火しました",
+  "Allowed, but {labels} dry-run findings fired":
+    "許可されましたが {labels} のドライラン所見が発火しました",
+  "Allowed, but {labels} signals fired":
+    "許可されましたが {labels} のシグナルが発火しました",
   "{items}, and {last}": "{items}、{last}",
   "Manage suspicious-UA, behavioral scoring, browser telemetry, invisible device-check injection, device telemetry heuristics, first-request header fingerprint, TLS fingerprint heuristics, dry-run rollout settings, and optional repeated-strike quarantine settings in JSON (`dry_run`, `mode`, `path_prefixes`, `path_policies`, `exempt_cidrs`, `behavioral_detection`, `browser_signals`, `device_signals`, `header_signals`, `tls_signals`, `quarantine`, cookie/TTL/status).":
     "suspicious UA、behavioral scoring、browser telemetry、invisible device-check injection、device telemetry heuristics、初回リクエストの header fingerprint、TLS fingerprint heuristics、dry-run rollout 設定、任意の repeated-strike quarantine 設定を JSON で管理します（`dry_run`、`mode`、`path_prefixes`、`path_policies`、`exempt_cidrs`、`behavioral_detection`、`browser_signals`、`device_signals`、`header_signals`、`tls_signals`、`quarantine`、cookie/TTL/status）。",
@@ -686,7 +839,6 @@ const JA_STRINGS: Record<string, string> = {
   "Header signals": "ヘッダシグナル",
   "TLS signals": "TLS シグナル",
   Quarantine: "隔離",
-  "invalid raw JSON": "無効な生JSON",
   "rollback failed": "ロールバックに失敗しました",
   "Add upstream": "upstream を追加",
   "Add route": "route を追加",
@@ -697,7 +849,8 @@ const JA_STRINGS: Record<string, string> = {
   "Run dry-run": "ドライラン実行",
   "Loading recent changes...": "最近の変更を読み込み中...",
   "No config changes recorded yet.": "設定変更はまだ記録されていません。",
-  "No changes match the current filters.": "現在のフィルタに一致する変更はありません。",
+  "No changes match the current filters.":
+    "現在のフィルタに一致する変更はありません。",
   "restored at": "復元時刻",
   "Not used for default route": "デフォルトルートでは使いません",
   "any path": "任意パス",
@@ -713,19 +866,6 @@ const JA_STRINGS: Record<string, string> = {
   "Add entry": "エントリを追加",
   "Add host scope": "ホストスコープを追加",
   "Add path policy": "パス別ポリシーを追加",
-  "Advanced JSON": "詳細JSON",
-  "Advanced JSON is currently invalid. The structured editor is still showing the last valid IP reputation snapshot. Any structured edit will regenerate valid JSON from that snapshot.":
-    "現在の詳細JSONは無効です。構造化エディタには最後に有効だった IP reputation の内容を表示しています。ここで編集すると、そのスナップショットから有効な JSON を再生成します。",
-  "Advanced JSON is currently invalid. The structured editor is still showing the last valid bot-defense snapshot. Any structured edit will regenerate valid JSON from that snapshot.":
-    "現在の詳細JSONは無効です。構造化エディタには最後に有効だった bot-defense の内容を表示しています。ここで編集すると、そのスナップショットから有効な JSON を再生成します。",
-  "Advanced JSON is currently invalid. The structured editor is still showing the last valid bypass snapshot. Any structured edit will regenerate valid JSON from that snapshot.":
-    "現在の詳細JSONは無効です。構造化エディタには最後に有効だった bypass の内容を表示しています。ここで編集すると、そのスナップショットから有効な JSON を再生成します。",
-  "Advanced JSON is currently invalid. The structured editor is still showing the last valid country-block snapshot. Any structured edit will regenerate valid JSON from that snapshot.":
-    "現在の詳細JSONは無効です。構造化エディタには最後に有効だった country-block の内容を表示しています。ここで編集すると、そのスナップショットから有効な JSON を再生成します。",
-  "Advanced JSON is currently invalid. The structured editor is still showing the last valid rate-limit snapshot. Any structured edit will regenerate valid JSON from that snapshot.":
-    "現在の詳細JSONは無効です。構造化エディタには最後に有効だった rate-limit の内容を表示しています。ここで編集すると、そのスナップショットから有効な JSON を再生成します。",
-  "Advanced JSON is currently invalid. The structured editor is still showing the last valid semantic snapshot. Any structured edit will regenerate valid JSON from that snapshot.":
-    "現在の詳細JSONは無効です。構造化エディタには最後に有効だった semantic の内容を表示しています。ここで編集すると、そのスナップショットから有効な JSON を再生成します。",
   Allowlist: "許可リスト",
   "Allowlist IPs": "許可IP一覧",
   "Allowlist countries": "許可国コード一覧",
@@ -768,14 +908,11 @@ const JA_STRINGS: Record<string, string> = {
   "Device Signals": "デバイスシグナル",
   "Disable quarantine escalation": "隔離への昇格を無効化",
   "Dry run": "ドライラン",
-  "Dry run all actions in this scope": "この scope では全アクションをドライランにする",
+  "Dry run all actions in this scope":
+    "この scope では全アクションをドライランにする",
   "Dry run in some scope": "一部の scope がドライラン",
   "Dry-run override": "ドライラン上書き",
   "Dynamic penalties": "動的ペナルティ数",
-  "Edit default and host-scoped bypass entries with a structured surface, then keep advanced JSON available below.":
-    "default と host ごとの bypass entry を構造化エディタで編集しつつ、下の詳細JSONも引き続き使えます。",
-  "Edit default and per-host rate-limit policy scopes with structured forms while keeping advanced JSON fallback below.":
-    "default と host ごとの rate-limit policy scope を構造化フォームで編集しつつ、下の詳細JSON fallback も引き続き使えます。",
   "Enable IP reputation for this scope": "この scope で IP reputation を有効化",
   "Enable adaptive shrinking": "adaptive 縮小を有効化",
   "Enable bot defense for this scope": "この scope で bot defense を有効化",
@@ -792,10 +929,18 @@ const JA_STRINGS: Record<string, string> = {
   "Exempt path prefixes": "除外パスprefix",
   "Exempt paths": "除外パス",
   "Extra rule file": "追加ルールファイル",
+  "Extra rule reference": "追加ルール参照",
+  "Optional DB-managed `.conf` override applied instead of a full bypass when you need a narrow override.":
+    "限定的な override が必要な場合に、full bypass の代わりに適用する DB 管理の `.conf` 参照です。",
   "Fail open on feed errors": "フィード取得エラー時はフェイルオープン",
   "Failed to load": "読み込みに失敗しました",
   "Failed to load recent decisions": "最近の decision の読み込みに失敗しました",
   "Feed URLs": "フィードURL一覧",
+  "Legacy WAF Log Import File": "旧WAFログ取り込みファイル",
+  "Managed rule": "管理ルール",
+  "Override Rule Reference Prefix": "Override rule 参照 prefix",
+  "Enter the full command line you would normally put into cron. Stdout and stderr are captured to the task log automatically. Example: date":
+    "cron に書くコマンドラインを入力します。stdout / stderr は task log に自動保存されます。例: date",
   "Feedback Promotion": "feedback 昇格",
   "Global Settings": "全体設定",
   "Header Signals": "ヘッダシグナル",
@@ -818,8 +963,6 @@ const JA_STRINGS: Record<string, string> = {
   "Invisible max body bytes": "不可視埋め込みの最大 body bytes",
   "JWT cookie names": "JWT Cookie名",
   "JWT header names": "JWT ヘッダ名",
-  "Keep using raw JSON when needed. Structured edits and valid raw edits stay in sync.":
-    "必要に応じて raw JSON をそのまま使えます。構造化編集と有効な raw 編集は常に同期されます。",
   "Key by": "キーの単位",
   "Last refresh": "最終更新",
   "Last saved": "最終保存",
@@ -830,27 +973,35 @@ const JA_STRINGS: Record<string, string> = {
   "Log threshold": "ログ閾値",
   "Lowercase fragments matched against the request user-agent. One value per line.":
     "request の user-agent に対して小文字化して照合する断片文字列です。1 行に 1 件ずつ入力します。",
-  "Manage default and per-host IP reputation scopes with structured forms while keeping advanced JSON fallback below.":
-    "default と host ごとの IP reputation scope を構造化フォームで編集しつつ、下の詳細JSON fallback も引き続き使えます。",
-  "Manage default and per-host blocked country lists with a structured editor, then keep advanced JSON available below.":
-    "default と host ごとの blocked country list を構造化エディタで編集しつつ、下の詳細JSONも引き続き使えます。",
-  "Manage default and per-host bot-defense scopes with structured forms while keeping advanced JSON fallback and recent decision history below.":
-    "default と host ごとの bot-defense scope を構造化フォームで編集しつつ、下の詳細JSON fallback と recent decision 履歴も引き続き使えます。",
-  "Manage default and per-host semantic anomaly scopes with structured forms while keeping advanced JSON fallback below.":
-    "default と host ごとの semantic anomaly scope を構造化フォームで編集しつつ、下の詳細JSON fallback も引き続き使えます。",
+  "Manage default and per-host IP reputation scopes with structured controls.":
+    "default と host ごとの IP reputation scope を構造化コントロールで編集します。",
+  "Manage default and per-host blocked country lists with structured controls.":
+    "default と host ごとの blocked country list を構造化コントロールで編集します。",
+  "Manage default and per-host bot-defense scopes with structured controls and recent decision history.":
+    "default と host ごとの bot-defense scope と recent decision 履歴を構造化コントロールで管理します。",
+  "Manage default and per-host semantic anomaly scopes with structured controls.":
+    "default と host ごとの semantic anomaly scope を構造化コントロールで編集します。",
+  "Manage default and per-host cache policy rules with structured controls.":
+    "default と host ごとの cache policy rule を構造化コントロールで編集します。",
   "Match type": "マッチ種別",
   "Match value": "マッチ値",
   "Max inspect body bytes": "本文検査の最大 bytes",
   "Missing-cookie threshold": "Cookie 欠落閾値",
   "Mode override": "モード上書き",
   "New host scope": "新しいホストスコープ",
-  "No default bypass entries yet.": "デフォルトの bypass entry はまだありません。",
-  "No host-specific IP reputation overrides yet.": "host 固有の IP reputation override はまだありません。",
-  "No host-specific bot-defense overrides yet.": "host 固有の bot-defense override はまだありません。",
-  "No host-specific bypass overrides yet.": "host 固有の bypass override はまだありません。",
+  "No default bypass entries yet.":
+    "デフォルトの bypass entry はまだありません。",
+  "No host-specific IP reputation overrides yet.":
+    "host 固有の IP reputation override はまだありません。",
+  "No host-specific bot-defense overrides yet.":
+    "host 固有の bot-defense override はまだありません。",
+  "No host-specific bypass overrides yet.":
+    "host 固有の bypass override はまだありません。",
   "No host-specific overrides yet.": "host 固有の override はまだありません。",
-  "No host-specific rate-limit overrides yet.": "host 固有の rate-limit override はまだありません。",
-  "No host-specific semantic overrides yet.": "host 固有の semantic override はまだありません。",
+  "No host-specific rate-limit overrides yet.":
+    "host 固有の rate-limit override はまだありません。",
+  "No host-specific semantic overrides yet.":
+    "host 固有の semantic override はまだありません。",
   "No path-policy overrides yet.": "パス別ポリシー override はまだありません。",
   "No path-specific rules yet.": "パス別ルールはまだありません。",
   "One CIDR or IP per line. These clients bypass rate limiting before policy matching.":
@@ -918,9 +1069,14 @@ const JA_STRINGS: Record<string, string> = {
   "Strike window seconds": "strike 集計ウィンドウ秒数",
   "Strikes required": "必要な strike 数",
   "Structured editor conflict": "構造化エディタの競合",
-  "Structured editor has conflicting host scopes.": "構造化エディタに競合する host scope があります。",
-  "Structured edits still validate and save through the existing rate-limit raw JSON API, so hot reload behavior stays unchanged.":
-    "構造化編集でも検証と保存は既存の rate-limit raw JSON API を通るため、hot reload の挙動は変わりません。",
+  "Structured editor has conflicting host scopes.":
+    "構造化エディタに競合する host scope があります。",
+  "Edit default and host-scoped bypass entries with structured controls.":
+    "default と host scope の bypass entry を構造化コントロールで編集します。",
+  "Edit default and per-host rate-limit policy scopes with structured controls.":
+    "default と host ごとの rate-limit policy scope を構造化コントロールで編集します。",
+  "Structured edits validate, save, and hot reload through the existing rate-limit backend API.":
+    "構造化編集は既存の rate-limit backend API で検証、保存、hot reload されます。",
   "Suspicious user-agent fragments": "疑わしい user-agent 断片",
   "TLS Signals": "TLS シグナル",
   "TTL seconds": "TTL秒数",
@@ -941,7 +1097,8 @@ const JA_STRINGS: Record<string, string> = {
     "より具体的な host scope が request host に一致しない場合、これらの rate-limit 設定が適用されます。",
   "These semantic anomaly settings apply when no more specific host scope matches the request host.":
     "より具体的な host scope が request host に一致しない場合、これらの semantic anomaly 設定が適用されます。",
-  "This host scope has no entries yet.": "この host scope にはまだ entry がありません。",
+  "This host scope has no entries yet.":
+    "この host scope にはまだ entry がありません。",
   Threshold: "閾値",
   Thresholds: "閾値設定",
   "Total path policies": "パス別ポリシー数",
@@ -987,7 +1144,10 @@ export function detectInitialLocale(): Locale {
       return normalizeLocale(stored);
     }
   }
-  if (typeof globalThis.navigator !== "undefined" && globalThis.navigator.language.toLowerCase().startsWith("ja")) {
+  if (
+    typeof globalThis.navigator !== "undefined" &&
+    globalThis.navigator.language.toLowerCase().startsWith("ja")
+  ) {
     return "ja";
   }
   return DEFAULT_LOCALE;
@@ -1003,8 +1163,12 @@ function interpolate(template: string, vars?: TranslationVars) {
   });
 }
 
-export function translate(locale: Locale, key: string, vars?: TranslationVars): string {
-  const template = locale === "ja" ? JA_STRINGS[key] ?? key : key;
+export function translate(
+  locale: Locale,
+  key: string,
+  vars?: TranslationVars,
+): string {
+  const template = locale === "ja" ? (JA_STRINGS[key] ?? key) : key;
   return interpolate(template, vars);
 }
 

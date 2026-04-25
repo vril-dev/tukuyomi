@@ -7,7 +7,8 @@ BINARY_DEPLOYMENT_SKIP_BUILD="${BINARY_DEPLOYMENT_SKIP_BUILD:-0}"
 BINARY_DEPLOYMENT_AUTO_DOWN="${BINARY_DEPLOYMENT_AUTO_DOWN:-1}"
 BINARY_DEPLOYMENT_PROXY_PORT="${BINARY_DEPLOYMENT_PROXY_PORT:-19094}"
 BINARY_DEPLOYMENT_UPSTREAM_PORT="${BINARY_DEPLOYMENT_UPSTREAM_PORT:-18081}"
-BINARY_DEPLOYMENT_API_KEY="${BINARY_DEPLOYMENT_API_KEY:-binary-deployment-smoke-admin-key}"
+BINARY_DEPLOYMENT_ADMIN_USERNAME="${BINARY_DEPLOYMENT_ADMIN_USERNAME:-admin}"
+BINARY_DEPLOYMENT_ADMIN_PASSWORD="${BINARY_DEPLOYMENT_ADMIN_PASSWORD:-binary-deployment-smoke-admin-password}"
 BINARY_DEPLOYMENT_SESSION_SECRET="${BINARY_DEPLOYMENT_SESSION_SECRET:-binary-deployment-smoke-session-secret}"
 BINARY_DEPLOYMENT_WAIT_SECONDS="${BINARY_DEPLOYMENT_WAIT_SECONDS:-60}"
 PROTECTED_HOST="${PROTECTED_HOST:-protected.example.test}"
@@ -34,6 +35,56 @@ log() {
 fail() {
   echo "[binary-deployment-smoke][ERROR] $*" >&2
   exit 1
+}
+
+stage_runtime_db_if_needed() {
+  local db_path="${RUNTIME_DIR}/db/tukuyomi.db"
+  local needs_seed="1"
+  local stage_root=""
+
+  if [[ -f "${db_path}" ]]; then
+    needs_seed="$(python3 - "${db_path}" <<'PY'
+import sqlite3
+import sys
+
+path = sys.argv[1]
+try:
+    conn = sqlite3.connect(path)
+    cur = conn.cursor()
+    cur.execute("select count(*) from php_runtime_inventory")
+    count = cur.fetchone()[0]
+    print("0" if count > 0 else "1")
+except Exception:
+    print("1")
+finally:
+    try:
+        conn.close()
+    except Exception:
+        pass
+PY
+)"
+  fi
+
+  if [[ "${needs_seed}" != "1" ]]; then
+    return 0
+  fi
+
+  log "seeding staged runtime DB with preview bootstrap defaults"
+  mkdir -p "${RUNTIME_DIR}/tmp"
+  stage_root="$(mktemp -d "${RUNTIME_DIR}/tmp/waf-import.XXXXXX")"
+  (
+    cd "${RUNTIME_DIR}"
+    set -a
+    source "${ENV_FILE}"
+    set +a
+    "${ROOT_DIR}/scripts/stage_waf_rule_assets.sh" "${stage_root}"
+    ./bin/tukuyomi db-migrate
+    WAF_RULE_ASSET_FS_ROOT="${stage_root}" ./bin/tukuyomi db-import-waf-rule-assets
+    UI_PREVIEW_PUBLIC_ADDR=":${BINARY_DEPLOYMENT_PROXY_PORT}" \
+    UI_PREVIEW_ADMIN_ADDR="" \
+    ./bin/tukuyomi db-import-preview
+  )
+  rm -rf "${stage_root}"
 }
 
 wait_for_http_code() {
@@ -103,39 +154,27 @@ fi
 RUNTIME_ROOT="$(mktemp -d "${ROOT_DIR}/.tmp-binary-deployment-smoke.XXXXXX")"
 RUNTIME_DIR="${RUNTIME_ROOT}/opt/tukuyomi"
 ENV_FILE="${RUNTIME_ROOT}/etc/tukuyomi/tukuyomi.env"
-SERVER_LOG="${RUNTIME_DIR}/logs/coraza/binary-deployment-smoke.log"
+SERVER_LOG="${RUNTIME_DIR}/data/tmp/binary-deployment-smoke.log"
 UPSTREAM_LOG="${RUNTIME_ROOT}/proxy-echo.log"
 
 log "staging runtime tree at ${RUNTIME_DIR}"
-install -d -m 755 \
-  "${RUNTIME_DIR}/bin" \
-  "${RUNTIME_DIR}/conf" \
-  "${RUNTIME_DIR}/data/geoip" \
-  "${RUNTIME_DIR}/data/scheduled-tasks" \
-  "${RUNTIME_DIR}/rules" \
-  "${RUNTIME_DIR}/scripts" \
-  "${RUNTIME_DIR}/logs/coraza" \
-  "${RUNTIME_DIR}/logs/proxy" \
-  "${RUNTIME_ROOT}/etc/tukuyomi"
+  install -d -m 755 \
+    "${RUNTIME_DIR}/bin" \
+    "${RUNTIME_DIR}/conf" \
+    "${RUNTIME_DIR}/db" \
+    "${RUNTIME_DIR}/audit" \
+    "${RUNTIME_DIR}/cache/response" \
+    "${RUNTIME_DIR}/data/tmp" \
+    "${RUNTIME_DIR}/data/scheduled-tasks" \
+    "${RUNTIME_DIR}/scripts" \
+    "${RUNTIME_ROOT}/etc/tukuyomi"
 
 install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${RUNTIME_DIR}/bin/tukuyomi"
 install -m 755 "${ROOT_DIR}/scripts/update_country_db.sh" "${RUNTIME_DIR}/scripts/update_country_db.sh"
 rsync -a --exclude '*.bak' "${ROOT_DIR}/data/conf/" "${RUNTIME_DIR}/conf/"
-if [[ -f "${ROOT_DIR}/data/geoip/README.md" ]]; then
-  install -m 644 "${ROOT_DIR}/data/geoip/README.md" "${RUNTIME_DIR}/data/geoip/README.md"
-fi
 if [[ -f "${ROOT_DIR}/data/scheduled-tasks/README.md" ]]; then
   install -m 644 "${ROOT_DIR}/data/scheduled-tasks/README.md" "${RUNTIME_DIR}/data/scheduled-tasks/README.md"
 fi
-install -m 644 "${ROOT_DIR}/data/rules/tukuyomi.conf" "${RUNTIME_DIR}/rules/tukuyomi.conf"
-
-if [[ -d "${ROOT_DIR}/data/rules/crs/rules" ]]; then
-  rsync -a "${ROOT_DIR}/data/rules/crs/" "${RUNTIME_DIR}/rules/crs/"
-else
-  log "data/rules/crs missing; installing CRS into staged runtime"
-  DEST_DIR="${RUNTIME_DIR}/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh"
-fi
-
 touch "${RUNTIME_DIR}/conf/crs-disabled.conf"
 
 cp "${ROOT_DIR}/docs/build/tukuyomi.env.example" "${ENV_FILE}"
@@ -143,14 +182,14 @@ sed -i "s#/opt/tukuyomi#${RUNTIME_DIR}#g" "${ENV_FILE}"
 
 jq \
   --arg listen_addr ":${BINARY_DEPLOYMENT_PROXY_PORT}" \
-  --arg api_key "${BINARY_DEPLOYMENT_API_KEY}" \
   --arg session_secret "${BINARY_DEPLOYMENT_SESSION_SECRET}" \
   '.server.listen_addr = $listen_addr
-   | .admin.api_key_primary = $api_key
    | .admin.session_secret = $session_secret
    | .admin.api_auth_disable = false' \
   "${RUNTIME_DIR}/conf/config.json" > "${RUNTIME_DIR}/conf/config.json.tmp"
 mv "${RUNTIME_DIR}/conf/config.json.tmp" "${RUNTIME_DIR}/conf/config.json"
+
+stage_runtime_db_if_needed
 
 log "starting local proxy echo upstream on 127.0.0.1:${BINARY_DEPLOYMENT_UPSTREAM_PORT}"
 python3 "${ROOT_DIR}/scripts/proxy_echo_server.py" "${BINARY_DEPLOYMENT_UPSTREAM_PORT}" >"${UPSTREAM_LOG}" 2>&1 &
@@ -165,6 +204,8 @@ log "starting staged binary from systemd-style working directory"
   set -a
   source "${ENV_FILE}"
   set +a
+  TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${BINARY_DEPLOYMENT_ADMIN_USERNAME}" \
+  TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${BINARY_DEPLOYMENT_ADMIN_PASSWORD}" \
   ./bin/tukuyomi >"${SERVER_LOG}" 2>&1
 ) &
 SERVER_PID="$!"
@@ -178,7 +219,8 @@ log "running admin + proxy-rules smoke through staged binary"
   cd "${ROOT_DIR}"
   HOST_CORAZA_PORT="${BINARY_DEPLOYMENT_PROXY_PORT}" \
   WAF_LISTEN_PORT="${BINARY_DEPLOYMENT_PROXY_PORT}" \
-  WAF_API_KEY_PRIMARY="${BINARY_DEPLOYMENT_API_KEY}" \
+  WAF_ADMIN_USERNAME="${BINARY_DEPLOYMENT_ADMIN_USERNAME}" \
+  WAF_ADMIN_PASSWORD="${BINARY_DEPLOYMENT_ADMIN_PASSWORD}" \
   PROTECTED_HOST="${PROTECTED_HOST}" \
   PROXY_ECHO_PORT="${BINARY_DEPLOYMENT_UPSTREAM_PORT}" \
   PROXY_ECHO_URL="http://127.0.0.1:${BINARY_DEPLOYMENT_UPSTREAM_PORT}" \
@@ -186,8 +228,8 @@ log "running admin + proxy-rules smoke through staged binary"
   ./scripts/ci_proxy_admin_smoke.sh
 )
 
-if [[ ! -f "${RUNTIME_DIR}/logs/coraza/proxy-rules-audit.ndjson" ]]; then
-  fail "expected staged runtime to create logs/coraza/proxy-rules-audit.ndjson"
+if [[ ! -f "${RUNTIME_DIR}/audit/proxy-rules-audit.ndjson" ]]; then
+  fail "expected staged runtime to create audit/proxy-rules-audit.ndjson"
 fi
 
 log "OK binary deployment smoke passed"

@@ -53,8 +53,6 @@ const (
 	maxProxyDiscoveryTimeoutMS           = 10000
 	maxProxyDiscoveryTargets             = 256
 
-	proxyConfigBlobKey = "proxy_rules"
-
 	proxyHTTP2ModeDefault      = "default"
 	proxyHTTP2ModeForceAttempt = "force_attempt"
 	proxyHTTP2ModeH2C          = "h2c_prior_knowledge"
@@ -160,10 +158,9 @@ type ProxyDiscoveryConfig struct {
 }
 
 const (
-	proxyUpstreamGeneratedKindNone              = ""
-	proxyUpstreamGeneratedKindVhostTarget       = "vhost_target"
-	proxyUpstreamGeneratedKindVhostLinkedTarget = "vhost_linked_upstream"
-	proxyUpstreamGeneratedKindDiscoveredTarget  = "discovered_target"
+	proxyUpstreamGeneratedKindNone             = ""
+	proxyUpstreamGeneratedKindVhostTarget      = "vhost_target"
+	proxyUpstreamGeneratedKindDiscoveredTarget = "discovered_target"
 
 	proxyUpstreamProviderClassDirect       = "direct"
 	proxyUpstreamProviderClassVhostManaged = "vhost_managed"
@@ -212,10 +209,6 @@ type proxyRulesPreparedUpdate struct {
 	errRes       proxyErrorResponse
 }
 
-type proxyRulesValidationOptions struct {
-	skipDirectUpstreamDeleteGuard bool
-}
-
 type proxyRulesConflictError struct {
 	CurrentETag string
 }
@@ -242,6 +235,7 @@ type proxyRuntime struct {
 	transport     *dynamicProxyTransport
 	health        *upstreamHealthMonitor
 	errRes        proxyErrorResponse
+	versionID     int64
 	rollbackMax   int
 	rollbackStack []proxyRollbackEntry
 }
@@ -256,13 +250,9 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 	if path == "" {
 		return fmt.Errorf("proxy config path is required")
 	}
-	raw, err := os.ReadFile(path)
+	prepared, versionID, err := loadProxyRulesStartupPrepared(path)
 	if err != nil {
-		return fmt.Errorf("read proxy config (%s): %w", path, err)
-	}
-	prepared, err := prepareProxyRulesRaw(string(raw))
-	if err != nil {
-		return fmt.Errorf("invalid proxy config (%s): %w", path, err)
+		return err
 	}
 
 	health, err := newUpstreamHealthMonitor(prepared.effectiveCfg)
@@ -289,6 +279,7 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 		proxyEngine:   engine,
 		transport:     transport,
 		errRes:        prepared.errRes,
+		versionID:     versionID,
 		rollbackMax:   clampProxyRollbackMax(rollbackMax),
 		rollbackStack: make([]proxyRollbackEntry, 0, clampProxyRollbackMax(rollbackMax)),
 	}
@@ -302,6 +293,51 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 	emitProxyConfigApplied("proxy transport initialized", prepared.effectiveCfg)
 	emitProxyTLSInsecureWarning(prepared.effectiveCfg)
 	return nil
+}
+
+func loadProxyRulesStartupPrepared(path string) (proxyRulesPreparedUpdate, int64, error) {
+	if store := getLogsStatsStore(); store != nil {
+		cfg, rec, found, err := store.loadActiveProxyConfig()
+		if err != nil {
+			return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("read normalized proxy config from db: %w", err)
+		}
+		if found {
+			prepared, err := prepareProxyRulesRaw(mustJSON(cfg))
+			if err != nil {
+				return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("invalid normalized proxy config: %w", err)
+			}
+			prepared.etag = rec.ETag
+			return prepared, rec.VersionID, nil
+		}
+
+		dbRaw, _, found, err := store.GetConfigBlob(proxyRulesConfigBlobKey)
+		if err != nil {
+			return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("read legacy proxy_rules blob: %w", err)
+		}
+		if found {
+			prepared, err := prepareProxyRulesRaw(string(dbRaw))
+			if err != nil {
+				return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("invalid legacy proxy config: %w", err)
+			}
+			rec, err = store.writeProxyConfigVersion("", prepared.cfg, configVersionSourceImport, "", "legacy proxy import", 0)
+			if err != nil {
+				return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("import normalized proxy config: %w", err)
+			}
+			_ = store.DeleteConfigBlob(proxyRulesConfigBlobKey)
+			prepared.etag = rec.ETag
+			return prepared, rec.VersionID, nil
+		}
+		return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("normalized proxy config missing in db; run make db-import before removing seed files")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("read proxy config (%s): %w", path, err)
+	}
+	prepared, err := prepareProxyRulesRaw(string(raw))
+	if err != nil {
+		return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("invalid proxy config (%s): %w", path, err)
+	}
+	return prepared, 0, nil
 }
 
 func rewriteTukuyomiProxyRequest(in *http.Request, out *http.Request) *http.Request {
@@ -609,6 +645,10 @@ func ValidateProxyRulesRaw(raw string) (ProxyRulesConfig, error) {
 }
 
 func ApplyProxyRulesRaw(ifMatch string, raw string) (string, ProxyRulesConfig, error) {
+	return applyProxyRulesRaw(ifMatch, raw, "")
+}
+
+func applyProxyRulesRaw(ifMatch string, raw string, actor string) (string, ProxyRulesConfig, error) {
 	rt := proxyRuntimeInstance()
 	if rt == nil {
 		return "", ProxyRulesConfig{}, fmt.Errorf("proxy runtime is not initialized")
@@ -628,17 +668,23 @@ func ApplyProxyRulesRaw(ifMatch string, raw string) (string, ProxyRulesConfig, e
 	prevRaw := rt.raw
 	prevETag := rt.etag
 	prevTarget := rt.target
+	prevVersionID := rt.versionID
 
-	if err := persistProxyConfigRaw(rt.configPath, prepared.raw); err != nil {
+	nextETag, nextVersionID, err := persistProxyConfigAuthoritative(rt.configPath, rt.etag, prepared, configVersionSourceApply, actor, 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			return "", ProxyRulesConfig{}, proxyRulesConflictError{CurrentETag: rt.etag}
+		}
 		return "", ProxyRulesConfig{}, err
 	}
-	if err := upsertProxyConfigBlob([]byte(prepared.raw), prepared.etag); err != nil {
-		_ = persistProxyConfigRaw(rt.configPath, prevRaw)
-		return "", ProxyRulesConfig{}, err
-	}
+	prepared.etag = nextETag
 	if err := rt.transport.Update(prepared.effectiveCfg); err != nil {
-		_ = persistProxyConfigRaw(rt.configPath, prevRaw)
-		_ = upsertProxyConfigBlob([]byte(prevRaw), prevETag)
+		if prevPrepared, prepErr := prepareProxyRulesRaw(prevRaw); prepErr == nil {
+			if restoredETag, restoredVersionID, restoreErr := persistProxyConfigAuthoritative(rt.configPath, prepared.etag, prevPrepared, configVersionSourceRollback, actor, prevVersionID); restoreErr == nil {
+				rt.etag = restoredETag
+				rt.versionID = restoredVersionID
+			}
+		}
 		return "", ProxyRulesConfig{}, err
 	}
 
@@ -648,6 +694,7 @@ func ApplyProxyRulesRaw(ifMatch string, raw string) (string, ProxyRulesConfig, e
 	rt.effectiveCfg = prepared.effectiveCfg
 	rt.target = prepared.target
 	rt.errRes = prepared.errRes
+	rt.versionID = nextVersionID
 	setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
 	if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
@@ -655,8 +702,12 @@ func ApplyProxyRulesRaw(ifMatch string, raw string) (string, ProxyRulesConfig, e
 	}
 	if rt.health != nil {
 		if err := rt.health.Update(prepared.effectiveCfg); err != nil {
-			_ = persistProxyConfigRaw(rt.configPath, prevRaw)
-			_ = upsertProxyConfigBlob([]byte(prevRaw), prevETag)
+			if prevPrepared, prepErr := prepareProxyRulesRaw(prevRaw); prepErr == nil {
+				if restoredETag, restoredVersionID, restoreErr := persistProxyConfigAuthoritative(rt.configPath, prepared.etag, prevPrepared, configVersionSourceRollback, actor, prevVersionID); restoreErr == nil {
+					rt.etag = restoredETag
+					rt.versionID = restoredVersionID
+				}
+			}
 			return "", ProxyRulesConfig{}, err
 		}
 	}
@@ -676,6 +727,10 @@ func ApplyProxyRulesRaw(ifMatch string, raw string) (string, ProxyRulesConfig, e
 }
 
 func RollbackProxyRules() (string, ProxyRulesConfig, proxyRollbackEntry, error) {
+	return rollbackProxyRules("")
+}
+
+func rollbackProxyRules(actor string) (string, ProxyRulesConfig, proxyRollbackEntry, error) {
 	rt := proxyRuntimeInstance()
 	if rt == nil {
 		return "", ProxyRulesConfig{}, proxyRollbackEntry{}, fmt.Errorf("proxy runtime is not initialized")
@@ -697,21 +752,31 @@ func RollbackProxyRules() (string, ProxyRulesConfig, proxyRollbackEntry, error) 
 	}
 
 	prevRaw := rt.raw
-	prevETag := rt.etag
 	prevTarget := rt.target
+	prevVersionID := rt.versionID
+	restoredVersionID := int64(0)
+	if store := getLogsStatsStore(); store != nil {
+		if foundID, found, err := store.findProxyVersionIDByETag(entry.ETag); err == nil && found {
+			restoredVersionID = foundID
+		}
+	}
 
-	if err := persistProxyConfigRaw(rt.configPath, prepared.raw); err != nil {
+	nextETag, nextVersionID, err := persistProxyConfigAuthoritative(rt.configPath, rt.etag, prepared, configVersionSourceRollback, actor, restoredVersionID)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			return "", ProxyRulesConfig{}, proxyRollbackEntry{}, proxyRulesConflictError{CurrentETag: rt.etag}
+		}
 		rt.pushRollbackLocked(entry)
 		return "", ProxyRulesConfig{}, proxyRollbackEntry{}, err
 	}
-	if err := upsertProxyConfigBlob([]byte(prepared.raw), prepared.etag); err != nil {
-		_ = persistProxyConfigRaw(rt.configPath, prevRaw)
-		rt.pushRollbackLocked(entry)
-		return "", ProxyRulesConfig{}, proxyRollbackEntry{}, err
-	}
+	prepared.etag = nextETag
 	if err := rt.transport.Update(prepared.effectiveCfg); err != nil {
-		_ = persistProxyConfigRaw(rt.configPath, prevRaw)
-		_ = upsertProxyConfigBlob([]byte(prevRaw), prevETag)
+		if prevPrepared, prepErr := prepareProxyRulesRaw(prevRaw); prepErr == nil {
+			if restoredETag, restoredVersionID, restoreErr := persistProxyConfigAuthoritative(rt.configPath, prepared.etag, prevPrepared, configVersionSourceApply, actor, prevVersionID); restoreErr == nil {
+				rt.etag = restoredETag
+				rt.versionID = restoredVersionID
+			}
+		}
 		rt.pushRollbackLocked(entry)
 		return "", ProxyRulesConfig{}, proxyRollbackEntry{}, err
 	}
@@ -722,6 +787,7 @@ func RollbackProxyRules() (string, ProxyRulesConfig, proxyRollbackEntry, error) 
 	rt.effectiveCfg = prepared.effectiveCfg
 	rt.target = prepared.target
 	rt.errRes = prepared.errRes
+	rt.versionID = nextVersionID
 	setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
 	if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
@@ -729,8 +795,12 @@ func RollbackProxyRules() (string, ProxyRulesConfig, proxyRollbackEntry, error) 
 	}
 	if rt.health != nil {
 		if err := rt.health.Update(prepared.effectiveCfg); err != nil {
-			_ = persistProxyConfigRaw(rt.configPath, prevRaw)
-			_ = upsertProxyConfigBlob([]byte(prevRaw), prevETag)
+			if prevPrepared, prepErr := prepareProxyRulesRaw(prevRaw); prepErr == nil {
+				if restoredETag, restoredVersionID, restoreErr := persistProxyConfigAuthoritative(rt.configPath, prepared.etag, prevPrepared, configVersionSourceApply, actor, prevVersionID); restoreErr == nil {
+					rt.etag = restoredETag
+					rt.versionID = restoredVersionID
+				}
+			}
 			rt.pushRollbackLocked(entry)
 			return "", ProxyRulesConfig{}, proxyRollbackEntry{}, err
 		}
@@ -742,82 +812,6 @@ func RollbackProxyRules() (string, ProxyRulesConfig, proxyRollbackEntry, error) 
 		log.Printf("[PROXY][INFO] upstream changed by rollback from=%s to=%s", proxyTargetLabel(prevTarget), proxyTargetLabel(prepared.target))
 	}
 	return rt.etag, rt.cfg, entry, nil
-}
-
-func SyncProxyStorage() error {
-	rt := proxyRuntimeInstance()
-	if rt == nil {
-		return nil
-	}
-
-	rawFile, _, err := readFileMaybe(rt.configPath)
-	if err != nil {
-		return err
-	}
-	store := getLogsStatsStore()
-	if store == nil {
-		return nil
-	}
-	blobRaw, blobETag, found, err := store.GetConfigBlob(proxyConfigBlobKey)
-	if err != nil {
-		return err
-	}
-
-	if found {
-		prepared, err := prepareProxyRulesRaw(string(blobRaw))
-		if err != nil {
-			return err
-		}
-		rt.mu.Lock()
-		defer rt.mu.Unlock()
-
-		curRaw := rt.raw
-		curETag := rt.etag
-		if !bytes.Equal(rawFile, blobRaw) {
-			if err := persistProxyConfigRaw(rt.configPath, prepared.raw); err != nil {
-				return err
-			}
-		}
-		if strings.TrimSpace(blobETag) == "" {
-			blobETag = prepared.etag
-			if err := store.UpsertConfigBlob(proxyConfigBlobKey, []byte(prepared.raw), blobETag, time.Now().UTC()); err != nil {
-				return err
-			}
-		}
-		if err := rt.transport.Update(prepared.effectiveCfg); err != nil {
-			_ = persistProxyConfigRaw(rt.configPath, curRaw)
-			_ = upsertProxyConfigBlob([]byte(curRaw), curETag)
-			return err
-		}
-		rt.raw = prepared.raw
-		rt.etag = prepared.etag
-		rt.cfg = prepared.cfg
-		rt.effectiveCfg = prepared.effectiveCfg
-		rt.target = prepared.target
-		rt.errRes = prepared.errRes
-		setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
-		flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
-		if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
-			setter.SetFlushInterval(flushInterval)
-		}
-		if rt.health != nil {
-			if err := rt.health.Update(prepared.effectiveCfg); err != nil {
-				_ = persistProxyConfigRaw(rt.configPath, curRaw)
-				_ = upsertProxyConfigBlob([]byte(curRaw), curETag)
-				return err
-			}
-		}
-		return nil
-	}
-
-	if len(rawFile) == 0 {
-		return fmt.Errorf("proxy config file is empty: %s", rt.configPath)
-	}
-	prepared, err := prepareProxyRulesRaw(string(rawFile))
-	if err != nil {
-		return err
-	}
-	return store.UpsertConfigBlob(proxyConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC())
 }
 
 func ProxyProbe(raw string, upstreamName string, timeout time.Duration) (ProxyRulesConfig, string, int64, error) {
@@ -837,11 +831,10 @@ func ProxyProbe(raw string, upstreamName string, timeout time.Duration) (ProxyRu
 		_, _, cfg, _, _ = ProxyRulesSnapshot()
 		effectiveCfg = currentProxyConfig()
 	} else {
-		prepared, err := prepareProxyRulesRawWithSitesAndVhostsOptions(
+		prepared, err := prepareProxyRulesRawWithSitesAndVhosts(
 			raw,
 			currentSiteConfig(),
 			currentVhostConfig(),
-			proxyRulesValidationOptions{skipDirectUpstreamDeleteGuard: true},
 		)
 		if err != nil {
 			return ProxyRulesConfig{}, "", 0, err
@@ -863,11 +856,7 @@ func prepareProxyRulesRawWithSites(raw string, sites SiteConfigFile) (proxyRules
 }
 
 func prepareProxyRulesRawWithSitesAndVhosts(raw string, sites SiteConfigFile, vhosts VhostConfigFile) (proxyRulesPreparedUpdate, error) {
-	return prepareProxyRulesRawWithSitesAndVhostsOptions(raw, sites, vhosts, proxyRulesValidationOptions{})
-}
-
-func prepareProxyRulesRawWithSitesAndVhostsOptions(raw string, sites SiteConfigFile, vhosts VhostConfigFile, opts proxyRulesValidationOptions) (proxyRulesPreparedUpdate, error) {
-	cfg, effectiveCfg, target, errRes, err := parseProxyRulesRawWithOptions(raw, sites, vhosts, opts)
+	cfg, effectiveCfg, target, errRes, err := parseProxyRulesRaw(raw, sites, vhosts)
 	if err != nil {
 		return proxyRulesPreparedUpdate{}, err
 	}
@@ -883,10 +872,6 @@ func prepareProxyRulesRawWithSitesAndVhostsOptions(raw string, sites SiteConfigF
 }
 
 func parseProxyRulesRaw(raw string, sites SiteConfigFile, vhosts VhostConfigFile) (ProxyRulesConfig, ProxyRulesConfig, *url.URL, proxyErrorResponse, error) {
-	return parseProxyRulesRawWithOptions(raw, sites, vhosts, proxyRulesValidationOptions{})
-}
-
-func parseProxyRulesRawWithOptions(raw string, sites SiteConfigFile, vhosts VhostConfigFile, opts proxyRulesValidationOptions) (ProxyRulesConfig, ProxyRulesConfig, *url.URL, proxyErrorResponse, error) {
 	var in ProxyRulesConfig
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -896,26 +881,12 @@ func parseProxyRulesRawWithOptions(raw string, sites SiteConfigFile, vhosts Vhos
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("invalid json")
 	}
-	return normalizeAndValidateProxyRulesWithOptions(in, sites, vhosts, opts)
+	return normalizeAndValidateProxyRules(in, sites, vhosts)
 }
 
 func normalizeAndValidateProxyRules(in ProxyRulesConfig, sites SiteConfigFile, vhosts VhostConfigFile) (ProxyRulesConfig, ProxyRulesConfig, *url.URL, proxyErrorResponse, error) {
-	return normalizeAndValidateProxyRulesWithOptions(in, sites, vhosts, proxyRulesValidationOptions{})
-}
-
-func normalizeAndValidateProxyRulesWithOptions(in ProxyRulesConfig, sites SiteConfigFile, vhosts VhostConfigFile, opts proxyRulesValidationOptions) (ProxyRulesConfig, ProxyRulesConfig, *url.URL, proxyErrorResponse, error) {
 	cfg := normalizeProxyRulesConfig(in)
 	effectiveCfg := cfg
-	if !opts.skipDirectUpstreamDeleteGuard {
-		if err := validateProxyDirectUpstreamDeleteGuard(cfg.Upstreams, vhosts); err != nil {
-			return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
-		}
-	}
-	linkedBoundUpstreams, err := applyVhostLinkedUpstreamBindings(effectiveCfg.Upstreams, vhosts)
-	if err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
-	}
-	effectiveCfg.Upstreams = linkedBoundUpstreams
 	mergedUpstreams, err := mergeGeneratedVhostUpstreams(effectiveCfg.Upstreams, generatedVhostUpstreams(vhosts))
 	if err != nil {
 		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
@@ -925,7 +896,8 @@ func normalizeAndValidateProxyRulesWithOptions(in ProxyRulesConfig, sites SiteCo
 		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
 	}
 	effectiveCfg.Upstreams = mergedUpstreams
-	effectiveCfg.Routes = append(append([]ProxyRoute(nil), effectiveCfg.Routes...), siteGeneratedRoutes(sites)...)
+	effectiveCfg.Routes = append(append([]ProxyRoute(nil), effectiveCfg.Routes...), vhostGeneratedRoutes(vhosts)...)
+	effectiveCfg.Routes = append(effectiveCfg.Routes, siteGeneratedRoutes(sites)...)
 	effectiveCfg.routeOrder = sortedProxyRouteIndexes(effectiveCfg.Routes)
 
 	if effectiveCfg.DialTimeout <= 0 {
@@ -1053,49 +1025,6 @@ func normalizeAndValidateProxyRulesWithOptions(in ProxyRulesConfig, sites SiteCo
 		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
 	}
 	return cfg, effectiveCfg, target, errRes, nil
-}
-
-func validateProxyDirectUpstreamDeleteGuard(nextUpstreams []ProxyUpstream, vhosts VhostConfigFile) error {
-	if len(vhosts.Vhosts) == 0 {
-		return nil
-	}
-	_, _, currentCfg, _, _ := ProxyRulesSnapshot()
-	if len(currentCfg.Upstreams) == 0 {
-		return nil
-	}
-	currentDirect := make(map[string]struct{}, len(currentCfg.Upstreams))
-	for _, upstream := range currentCfg.Upstreams {
-		name := strings.TrimSpace(upstream.Name)
-		if name == "" || !proxyUpstreamIsDirect(upstream) {
-			continue
-		}
-		currentDirect[name] = struct{}{}
-	}
-	if len(currentDirect) == 0 {
-		return nil
-	}
-	nextDirect := make(map[string]struct{}, len(nextUpstreams))
-	for _, upstream := range nextUpstreams {
-		name := strings.TrimSpace(upstream.Name)
-		if name == "" || !proxyUpstreamIsDirect(upstream) {
-			continue
-		}
-		nextDirect[name] = struct{}{}
-	}
-	for _, vhost := range vhosts.Vhosts {
-		name := strings.TrimSpace(vhost.LinkedUpstreamName)
-		if name == "" {
-			continue
-		}
-		if _, bound := currentDirect[name]; !bound {
-			continue
-		}
-		if _, stillPresent := nextDirect[name]; stillPresent {
-			continue
-		}
-		return fmt.Errorf("upstreams removes %q while vhost %q still binds to that direct upstream", name, vhost.Name)
-	}
-	return nil
 }
 
 func normalizeProxyRulesConfig(in ProxyRulesConfig) ProxyRulesConfig {
@@ -1609,50 +1538,6 @@ func mergeGeneratedVhostUpstreams(existing []ProxyUpstream, generated []ProxyUps
 	return out, nil
 }
 
-func applyVhostLinkedUpstreamBindings(existing []ProxyUpstream, vhosts VhostConfigFile) ([]ProxyUpstream, error) {
-	if len(vhosts.Vhosts) == 0 {
-		return append([]ProxyUpstream(nil), existing...), nil
-	}
-	out := append([]ProxyUpstream(nil), existing...)
-	byName := make(map[string]int, len(out))
-	for i, upstream := range out {
-		name := strings.TrimSpace(upstream.Name)
-		if name == "" {
-			continue
-		}
-		byName[name] = i
-	}
-	boundNames := make(map[string]string, len(vhosts.Vhosts))
-	for _, vhost := range vhosts.Vhosts {
-		name := strings.TrimSpace(vhost.LinkedUpstreamName)
-		if name == "" {
-			continue
-		}
-		idx, ok := byName[name]
-		if !ok {
-			return nil, fmt.Errorf("vhost %q linked_upstream_name %q must reference a configured upstream", vhost.Name, name)
-		}
-		if owner, exists := boundNames[name]; exists && owner != vhost.Name {
-			return nil, fmt.Errorf("configured upstream %q is already bound by vhost %q", name, owner)
-		}
-		targetURL, ok, err := vhostLinkedUpstreamTargetURL(vhost, out[idx], idx)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, fmt.Errorf("vhost %q mode %q cannot bind linked upstream", vhost.Name, vhost.Mode)
-		}
-		next := out[idx]
-		next.URL = targetURL
-		next.ProviderClass = proxyUpstreamProviderClassVhostManaged
-		next.GeneratedKind = proxyUpstreamGeneratedKindVhostLinkedTarget
-		next.ManagedByVhost = vhost.Name
-		out[idx] = next
-		boundNames[name] = vhost.Name
-	}
-	return out, nil
-}
-
 func parseProxyUpstreamURL(field, raw string) (*url.URL, error) {
 	target, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
@@ -1834,7 +1719,7 @@ func resolveProxyHTTP2ValidationTarget(cfg ProxyRulesConfig, ref string, field s
 			return nil, fmt.Errorf("%s references duplicated upstream name %q", field, ref)
 		}
 		if !proxyUpstreamAllowedAsRouteTarget(upstream) {
-			return nil, fmt.Errorf("%s must reference a configured upstream name", field)
+			return nil, fmt.Errorf("%s must reference a direct or generated vhost upstream name", field)
 		}
 		if proxyUpstreamDiscoveryEnabled(upstream) {
 			return &url.URL{Scheme: upstream.Discovery.Scheme}, nil
@@ -2189,25 +2074,20 @@ func closeIdleProxyTransportSet(transports map[string]http.RoundTripper) {
 	}
 }
 
-func persistProxyConfigRaw(path string, raw string) error {
-	if strings.TrimSpace(path) == "" {
-		return fmt.Errorf("proxy config path is empty")
+func persistProxyConfigAuthoritative(path string, expectedETag string, prepared proxyRulesPreparedUpdate, source string, actor string, restoredFromVersionID int64) (string, int64, error) {
+	store, err := requireConfigDBStore()
+	if err != nil {
+		return "", 0, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+	reason := "proxy config update"
+	if strings.TrimSpace(source) == configVersionSourceRollback {
+		reason = "proxy config rollback"
 	}
-	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
-}
-
-func upsertProxyConfigBlob(raw []byte, etag string) error {
-	store := getLogsStatsStore()
-	if store == nil {
-		return nil
+	rec, err := store.writeProxyConfigVersion(expectedETag, prepared.cfg, source, actor, reason, restoredFromVersionID)
+	if err != nil {
+		return "", 0, err
 	}
-	if strings.TrimSpace(etag) == "" {
-		etag = bypassconf.ComputeETag(raw)
-	}
-	return store.UpsertConfigBlob(proxyConfigBlobKey, raw, etag, time.Now().UTC())
+	return rec.ETag, rec.VersionID, nil
 }
 
 func mustJSON(v any) string {
@@ -3034,7 +2914,7 @@ func proxyUpstreamVisibleInBackendsSurface(upstream ProxyUpstream) bool {
 	if proxyUpstreamIsDirect(upstream) {
 		return true
 	}
-	return proxyUpstreamIsVhostManaged(upstream) && upstream.GeneratedKind == proxyUpstreamGeneratedKindVhostLinkedTarget
+	return proxyUpstreamIsVhostManaged(upstream) && upstream.GeneratedKind == proxyUpstreamGeneratedKindVhostTarget
 }
 
 func proxyDisplayUpstream(cfg ProxyRulesConfig) string {

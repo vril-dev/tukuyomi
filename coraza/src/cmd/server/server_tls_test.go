@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,12 +24,41 @@ import (
 )
 
 func TestACMEHTTPRedirectServerPreservesChallengePath(t *testing.T) {
-	t.Parallel()
+	restore := setServerTLSGlobalsForTest(t)
+	defer restore()
 
-	manager := &autocert.Manager{Prompt: autocert.AcceptTOS, Cache: autocert.DirCache(t.TempDir())}
+	config.ServerTLSEnabled = true
+	tmp := t.TempDir()
+	sitesPath := filepath.Join(tmp, "sites.json")
+	raw := `{
+  "sites": [
+    {
+      "name": "proxy",
+      "hosts": ["proxy.example.com"],
+      "default_upstream": "http://proxy.internal:8080",
+      "tls": {"mode": "acme"}
+    }
+  ]
+}`
+	if err := os.WriteFile(sitesPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile(sites): %v", err)
+	}
+	if err := handler.InitSiteRuntime(sitesPath, 2); err != nil {
+		t.Fatalf("InitSiteRuntime: %v", err)
+	}
+	_, _, sites, _, _ := handler.SiteConfigSnapshot()
+	profiles := handler.EffectiveServerTLSACMEProfilesForSites(sites)
+	if len(profiles) != 1 {
+		t.Fatalf("profiles=%#v want one", profiles)
+	}
+	manager := &autocert.Manager{
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist("proxy.example.com"),
+		Cache:      autocert.DirCache(t.TempDir()),
+	}
 	runtime := &managedServerTLSRuntime{}
 	runtime.mu.Lock()
-	runtime.acmeManager = manager
+	runtime.acmeManagers = map[string]*autocert.Manager{profiles[0].Key: manager}
 	runtime.mu.Unlock()
 	srv := newDynamicHTTPRedirectServer(":8080", ":9443", runtime)
 
@@ -116,6 +146,111 @@ func TestBuildManagedServerTLSConfigPrefersSiteCertificateForMatchingSNI(t *test
 	}
 }
 
+func TestBuildManagedServerTLSConfigEnablesSiteManagedACMEWithoutGlobalFlag(t *testing.T) {
+	restore := setServerTLSGlobalsForTest(t)
+	defer restore()
+
+	config.ServerTLSEnabled = true
+	config.ServerTLSMinVersion = "tls1.2"
+	config.ServerTLSACMEEnabled = false
+	config.PersistentStorageBackend = config.PersistentStorageBackendLocal
+	config.PersistentStorageLocalBaseDir = t.TempDir()
+
+	tmp := t.TempDir()
+	sitesPath := filepath.Join(tmp, "sites.json")
+	raw := `{
+  "sites": [
+    {
+      "name": "app",
+      "hosts": ["app.example.com"],
+      "default_upstream": "http://app.internal:8080",
+      "tls": {"mode": "acme", "acme": {"environment": "staging"}}
+    }
+  ]
+}`
+	if err := os.WriteFile(sitesPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile(sites): %v", err)
+	}
+	if err := handler.InitSiteRuntime(sitesPath, 2); err != nil {
+		t.Fatalf("InitSiteRuntime: %v", err)
+	}
+
+	tlsConfig, _, err := buildManagedServerTLSConfig()
+	if err != nil {
+		t.Fatalf("buildManagedServerTLSConfig: %v", err)
+	}
+	if tlsConfig == nil || tlsConfig.GetCertificate == nil {
+		t.Fatal("expected dynamic TLS config with GetCertificate")
+	}
+	if got := handler.ServerTLSRuntimeStatusSnapshot().Source; got != "acme" {
+		t.Fatalf("server tls source=%q want acme", got)
+	}
+}
+
+func TestBuildManagedServerTLSConfigRejectsS3ACMECacheWithoutCredentials(t *testing.T) {
+	restore := setServerTLSGlobalsForTest(t)
+	defer restore()
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+
+	config.ServerTLSEnabled = true
+	config.ServerTLSMinVersion = "tls1.2"
+	config.PersistentStorageBackend = config.PersistentStorageBackendS3
+	config.PersistentStorageS3Bucket = "runtime-bucket"
+	config.PersistentStorageS3Endpoint = "http://127.0.0.1:9000"
+	config.PersistentStorageS3ForcePathStyle = true
+
+	tmp := t.TempDir()
+	sitesPath := filepath.Join(tmp, "sites.json")
+	raw := `{
+  "sites": [
+    {
+      "name": "app",
+      "hosts": ["app.example.com"],
+      "default_upstream": "http://app.internal:8080",
+      "tls": {"mode": "acme", "acme": {"environment": "staging"}}
+    }
+  ]
+}`
+	if err := os.WriteFile(sitesPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile(sites): %v", err)
+	}
+	if err := handler.InitSiteRuntime(sitesPath, 2); err != nil {
+		t.Fatalf("InitSiteRuntime: %v", err)
+	}
+
+	_, _, err := buildManagedServerTLSConfig()
+	if err == nil {
+		t.Fatal("expected missing S3 credentials error")
+	}
+	if !strings.Contains(err.Error(), "AWS_ACCESS_KEY_ID") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestServerTLSACMEProfileCacheDirSeparatesEnvironmentAndAccount(t *testing.T) {
+	prod := handler.ServerTLSACMEProfile{Environment: "production", Email: "ops@example.com"}
+	staging := handler.ServerTLSACMEProfile{Environment: "staging", Email: "ops@example.com"}
+	anonymous := handler.ServerTLSACMEProfile{Environment: "production"}
+
+	prodDir := serverTLSACMEProfileCacheDir("data/persistent", prod)
+	stagingDir := serverTLSACMEProfileCacheDir("data/persistent", staging)
+	anonymousDir := serverTLSACMEProfileCacheDir("data/persistent", anonymous)
+
+	if prodDir == stagingDir {
+		t.Fatalf("production and staging cache dirs must differ: %q", prodDir)
+	}
+	if prodDir == anonymousDir {
+		t.Fatalf("email and anonymous cache dirs must differ: %q", prodDir)
+	}
+	if !strings.Contains(prodDir, filepath.Join("data", "persistent", "acme", "production")) {
+		t.Fatalf("cache dir should live under persistent acme namespace: %q", prodDir)
+	}
+	if strings.Contains(prodDir, "ops@example.com") {
+		t.Fatalf("cache dir should not include raw email: %q", prodDir)
+	}
+}
+
 func setServerTLSGlobalsForTest(t *testing.T) func() {
 	t.Helper()
 
@@ -128,6 +263,13 @@ func setServerTLSGlobalsForTest(t *testing.T) func() {
 	prevACMEDomains := append([]string(nil), config.ServerTLSACMEDomains...)
 	prevACMECacheDir := config.ServerTLSACMECacheDir
 	prevACMEStaging := config.ServerTLSACMEStaging
+	prevPersistentStorageBackend := config.PersistentStorageBackend
+	prevPersistentStorageLocalBaseDir := config.PersistentStorageLocalBaseDir
+	prevPersistentStorageS3Bucket := config.PersistentStorageS3Bucket
+	prevPersistentStorageS3Region := config.PersistentStorageS3Region
+	prevPersistentStorageS3Endpoint := config.PersistentStorageS3Endpoint
+	prevPersistentStorageS3Prefix := config.PersistentStorageS3Prefix
+	prevPersistentStorageS3ForcePathStyle := config.PersistentStorageS3ForcePathStyle
 	prevRedirect := config.ServerTLSRedirectHTTP
 	prevRedirectAddr := config.ServerTLSHTTPRedirectAddr
 	prevListenAddr := config.ListenAddr
@@ -143,6 +285,13 @@ func setServerTLSGlobalsForTest(t *testing.T) func() {
 		config.ServerTLSACMEDomains = prevACMEDomains
 		config.ServerTLSACMECacheDir = prevACMECacheDir
 		config.ServerTLSACMEStaging = prevACMEStaging
+		config.PersistentStorageBackend = prevPersistentStorageBackend
+		config.PersistentStorageLocalBaseDir = prevPersistentStorageLocalBaseDir
+		config.PersistentStorageS3Bucket = prevPersistentStorageS3Bucket
+		config.PersistentStorageS3Region = prevPersistentStorageS3Region
+		config.PersistentStorageS3Endpoint = prevPersistentStorageS3Endpoint
+		config.PersistentStorageS3Prefix = prevPersistentStorageS3Prefix
+		config.PersistentStorageS3ForcePathStyle = prevPersistentStorageS3ForcePathStyle
 		config.ServerTLSRedirectHTTP = prevRedirect
 		config.ServerTLSHTTPRedirectAddr = prevRedirectAddr
 		config.ListenAddr = prevListenAddr

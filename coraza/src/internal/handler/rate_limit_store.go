@@ -143,13 +143,24 @@ func InitRateLimit(path string) error {
 	if target == "" {
 		return fmt.Errorf("rate limit path is empty")
 	}
-	if err := ensureRateLimitFile(target); err != nil {
-		return err
-	}
-
 	rateLimitMu.Lock()
 	rateLimitPath = target
 	rateLimitMu.Unlock()
+
+	if store := getLogsStatsStore(); store != nil {
+		raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(rateLimitConfigBlobKey), normalizeRateLimitPolicyRaw, "rate limit rules")
+		if err != nil {
+			return fmt.Errorf("read rate limit config db: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("normalized rate limit config missing in db; run make db-import before removing seed files")
+		}
+		return applyRateLimitPolicyRaw(raw)
+	}
+
+	if err := ensureRateLimitFile(target); err != nil {
+		return err
+	}
 
 	return ReloadRateLimit()
 }
@@ -849,8 +860,11 @@ func ensureRateLimitFile(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	return os.WriteFile(path, []byte(defaultRateLimitPolicyRaw()), 0o644)
+}
 
-	const defaultRaw = `{
+func defaultRateLimitPolicyRaw() string {
+	return `{
   "enabled": true,
   "allowlist_ips": [],
   "allowlist_countries": [],
@@ -900,5 +914,4 @@ func ensureRateLimitFile(path string) error {
   ]
 }
 `
-	return os.WriteFile(path, []byte(defaultRaw), 0o644)
 }

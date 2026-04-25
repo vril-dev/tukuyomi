@@ -56,6 +56,50 @@ func TestNativeHTTP1ServerRoundTripAndKeepAlive(t *testing.T) {
 	}
 }
 
+func TestNativeHTTP1ServerDrainsUnreadSmallRequestBodyBeforeKeepAlive(t *testing.T) {
+	srv, addr := nativeHTTP1StartTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Path", r.URL.Path)
+		_, _ = w.Write([]byte("ok:" + r.URL.Path))
+	}))
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+	br := bufio.NewReader(conn)
+
+	if _, err := io.WriteString(conn, "POST /clear HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"); err != nil {
+		t.Fatalf("write first request: %v", err)
+	}
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("ReadResponse first: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "ok:/clear" {
+		t.Fatalf("first status=%d body=%q", resp.StatusCode, string(body))
+	}
+
+	if _, err := io.WriteString(conn, "GET /cache-store HTTP/1.1\r\nHost: example.com\r\n\r\n"); err != nil {
+		t.Fatalf("write second request: %v", err)
+	}
+	resp, err = http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("ReadResponse second: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "ok:/cache-store" {
+		t.Fatalf("second status=%d body=%q", resp.StatusCode, string(body))
+	}
+	if got := srv.keepAliveReuses.Load(); got != 1 {
+		t.Fatalf("keepAliveReuses=%d want 1", got)
+	}
+}
+
 func TestNativeHTTP1ServerConnectionClose(t *testing.T) {
 	srv, addr := nativeHTTP1StartTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("bye"))

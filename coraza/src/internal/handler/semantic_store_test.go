@@ -606,7 +606,7 @@ func TestEvaluateSemanticWithRequestID_DisabledProviderPreservesBaseline(t *test
 	}
 }
 
-func TestSyncSemanticStorage_SeedsDBFromFileWhenMissingBlob(t *testing.T) {
+func TestImportPolicyJSONStorage_SeedsSemanticDBFromFile(t *testing.T) {
 	restore := saveSemanticStateForTest()
 	defer restore()
 
@@ -633,30 +633,34 @@ func TestSyncSemanticStorage_SeedsDBFromFileWhenMissingBlob(t *testing.T) {
 		t.Fatalf("init sqlite store: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = InitLogsStatsStoreWithBackend("file", "", "", "", 0)
+		_ = InitLogsStatsStore(false, "", 0)
 	})
 
-	if err := SyncSemanticStorage(); err != nil {
-		t.Fatalf("sync semantic storage: %v", err)
+	if err := importPolicyJSONStorage(semanticConfigBlobKey, path, normalizeSemanticPolicyRaw, "semantic seed import"); err != nil {
+		t.Fatalf("import semantic storage: %v", err)
 	}
 
 	store := getLogsStatsStore()
 	if store == nil {
 		t.Fatal("expected sqlite store")
 	}
-	gotRaw, _, found, err := store.GetConfigBlob(semanticConfigBlobKey)
+	gotRaw, _, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(semanticConfigBlobKey))
+	if err != nil || !found {
+		t.Fatalf("expected semantic normalized rows to be seeded found=%v err=%v", found, err)
+	}
+	rt, err := ValidateSemanticRaw(string(gotRaw))
 	if err != nil {
-		t.Fatalf("get config blob: %v", err)
+		t.Fatalf("seeded normalized semantic invalid: %v", err)
 	}
-	if !found {
-		t.Fatal("expected semantic config blob to be seeded")
+	if !rt.Raw.Enabled || rt.Raw.Mode != "challenge" || rt.Raw.BlockThreshold != 8 {
+		t.Fatalf("seeded semantic mismatch: %+v", rt.Raw)
 	}
-	if strings.TrimSpace(string(gotRaw)) != strings.TrimSpace(raw) {
-		t.Fatalf("seeded blob mismatch:\n got=%s\nwant=%s", string(gotRaw), raw)
+	if _, _, found, err := store.GetConfigBlob(semanticConfigBlobKey); err != nil || found {
+		t.Fatalf("legacy semantic blob found=%v err=%v", found, err)
 	}
 }
 
-func TestSyncSemanticStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
+func TestSyncSemanticStorage_ImportsLegacyBlobAndAppliesRuntime(t *testing.T) {
 	restore := saveSemanticStateForTest()
 	defer restore()
 
@@ -683,7 +687,7 @@ func TestSyncSemanticStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
 		t.Fatalf("init sqlite store: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = InitLogsStatsStoreWithBackend("file", "", "", "", 0)
+		_ = InitLogsStatsStore(false, "", 0)
 	})
 
 	store := getLogsStatsStore()
@@ -707,17 +711,12 @@ func TestSyncSemanticStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
 		t.Fatalf("sync semantic storage: %v", err)
 	}
 
-	gotFileRaw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read semantic file: %v", err)
-	}
-	if strings.TrimSpace(string(gotFileRaw)) != strings.TrimSpace(dbRaw) {
-		t.Fatalf("file should be restored from db blob:\n got=%s\nwant=%s", string(gotFileRaw), dbRaw)
-	}
-
 	cfg := GetSemanticConfig()
 	if !cfg.Enabled || cfg.Mode != "block" || cfg.BlockThreshold != 3 {
 		t.Fatalf("runtime config mismatch: enabled=%v mode=%q block_threshold=%d", cfg.Enabled, cfg.Mode, cfg.BlockThreshold)
+	}
+	if _, _, found, err := store.GetConfigBlob(semanticConfigBlobKey); err != nil || found {
+		t.Fatalf("legacy semantic blob found=%v err=%v", found, err)
 	}
 }
 

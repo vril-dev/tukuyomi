@@ -13,7 +13,10 @@ GUID ?= $(shell id -g)
 CORAZA_PORT ?= 9090
 HOST_CORAZA_PORT ?= 19090
 WAF_LISTEN_PORT ?= 9090
-WAF_API_KEY_PRIMARY ?= dev-only-change-this-key-please
+WAF_ADMIN_USERNAME ?= admin
+WAF_ADMIN_PASSWORD ?= dev-only-change-this-password-please
+TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME ?= $(WAF_ADMIN_USERNAME)
+TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD ?= $(WAF_ADMIN_PASSWORD)
 PROTECTED_HOST ?= protected.example.test
 
 BENCH_REQUESTS ?= 120
@@ -41,18 +44,35 @@ UI_EMBED_DIR := coraza/src/internal/handler/admin_ui_dist
 BIN_DIR ?= bin
 APP_NAME ?= tukuyomi
 APP_PKG ?= ./cmd/server
+DB_MIGRATE_BIN ?= $(abspath $(BIN_DIR))/$(APP_NAME)
+DB_MIGRATE_WORKDIR ?= data
+DB_MIGRATE_CONFIG ?= conf/config.json
 VERSION ?= dev
 RELEASE_DIR ?= dist/release
 RELEASE_DOCKERFILE ?= build/Dockerfile.release
 PRESET ?= minimal
 PRESET_DIR := presets/$(PRESET)
 PRESET_OVERWRITE ?= 0
+TARGET ?=
+INSTALL_TARGET ?= linux-systemd
+INSTALL_PREFIX ?= $(if $(PREFIX),$(PREFIX),/opt/tukuyomi)
+INSTALL_USER ?=
+INSTALL_GROUP ?=
+INSTALL_CREATE_USER ?= auto
+INSTALL_ENABLE_SYSTEMD ?= 1
+INSTALL_ENABLE_SCHEDULED_TASKS ?= 0
+INSTALL_DB_SEED ?= auto
+DEPLOY_TARGET ?=
+DEPLOY_RENDER_OUT_DIR ?= dist/deploy
+DEPLOY_RENDER_OVERWRITE ?= 0
+IMAGE_URI ?=
 
-export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_API_KEY_PRIMARY PROTECTED_HOST
+export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_ADMIN_USERNAME WAF_ADMIN_PASSWORD TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD PROTECTED_HOST
 
 .PHONY: \
 	help setup env-init crs-install crs-ensure \
-	go-test go-fuzz-short go-build build \
+	install deploy-render install-smoke deploy-render-smoke \
+	go-test go-fuzz-short go-build db-migrate db-import db-import-waf-rule-assets build \
 	release-linux-amd64 release-linux-arm64 release-linux-all \
 	ui-install ui-test ui-build ui-sync ui-build-sync \
 	ui-preview-up ui-preview-down ui-preview-smoke php-fpm-build php-fpm-copy php-fpm-prune php-fpm-remove php-fpm-up php-fpm-down php-fpm-reload php-fpm-test php-fpm-smoke \
@@ -65,14 +85,21 @@ export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_API_KEY_PRIMAR
 
 help:
 	@echo "Targets:"
-	@echo "  make setup                      Prepare local dev baseline (.env + CRS)"
+	@echo "  make setup                      Prepare local dev baseline (.env + DB migration + DB config/rule assets)"
 	@echo "  make env-init                   Create .env from .env.example if missing"
-	@echo "  make crs-install                Install OWASP CRS into data/rules/crs"
-	@echo "  make crs-ensure                 Install OWASP CRS only when data/rules/crs is missing"
+	@echo "  make crs-install                Run db-migrate, install OWASP CRS seed files, and import WAF rule assets into DB"
+	@echo "  make crs-ensure                 Run db-migrate, install CRS only when missing, and import WAF rule assets into DB"
+	@echo "  make install TARGET=linux-systemd Install binary runtime onto this Linux host"
+	@echo "    - optional: PREFIX=/opt/tukuyomi INSTALL_USER=<user> INSTALL_ENABLE_SCHEDULED_TASKS=1 INSTALL_DB_SEED=auto|always|never"
+	@echo "  make deploy-render TARGET=ecs|kubernetes|azure-container-apps|container-image IMAGE_URI=... Render deploy artifacts"
+	@echo "    - optional: DEPLOY_RENDER_OUT_DIR=dist/deploy DEPLOY_RENDER_OVERWRITE=1"
 	@echo ""
 	@echo "  make go-test                    Run Go tests (coraza/src)"
 	@echo "  make go-fuzz-short              Run short native HTTP/1 fuzz passes"
 	@echo "  make go-build                   Build single binary into ./bin/$(APP_NAME)"
+	@echo "  make db-migrate                 Build binary and apply configured DB schema migrations"
+	@echo "  make db-import                  Import startup seed/export files into DB"
+	@echo "  make db-import-waf-rule-assets  Import base WAF and CRS rule/data assets into DB"
 	@echo "  make build                      One-shot build (ui-build-sync + go-build)"
 	@echo "  make release-linux-amd64        Build release tarball for linux/amd64 via docker buildx"
 	@echo "  make release-linux-arm64        Build release tarball for linux/arm64 via docker buildx"
@@ -84,8 +111,8 @@ help:
 	@echo "  make ui-sync                    Sync web dist -> go:embed assets"
 	@echo "  make ui-build-sync              Build and sync embedded UI assets"
 	@echo "  make ui-preview-up              Build/sync UI and start preview runtime + scheduled-task sidecar"
-	@echo "    - optional: UI_PREVIEW_PERSIST=1 keeps preview config/state across down/up"
-	@echo "  make ui-preview-down            Stop screenshot preview runtime and remove temp config"
+	@echo "    - optional: UI_PREVIEW_PERSIST=1 keeps preview DB state across down/up"
+	@echo "  make ui-preview-down            Stop screenshot preview runtime and remove temp override"
 	@echo "  make ui-preview-smoke           Validate preview persistence, split-port publish, and loopback reject"
 	@echo "  make php-fpm-build VER=8.3      Build PHP-FPM runtime bundle under data/php-fpm/binaries/php83"
 	@echo "    - alias: RUNTIME=php83|php84|php85"
@@ -143,7 +170,7 @@ help:
 	@echo "  CORAZA_PORT=$(CORAZA_PORT) HOST_CORAZA_PORT=$(HOST_CORAZA_PORT) WAF_LISTEN_PORT=$(WAF_LISTEN_PORT)"
 	@echo "  VERSION=$(VERSION) RELEASE_DIR=$(RELEASE_DIR)"
 	@echo "  PROTECTED_HOST=$(PROTECTED_HOST)"
-	@echo "  WAF_API_KEY_PRIMARY=<api-key> BENCH_REQUESTS=$(BENCH_REQUESTS) WARMUP_REQUESTS=$(WARMUP_REQUESTS)"
+	@echo "  WAF_ADMIN_USERNAME=$(WAF_ADMIN_USERNAME) WAF_ADMIN_PASSWORD=<password> BENCH_REQUESTS=$(BENCH_REQUESTS) WARMUP_REQUESTS=$(WARMUP_REQUESTS)"
 	@echo "  BENCH_CONCURRENCY=$(BENCH_CONCURRENCY) BENCH_PATH=$(BENCH_PATH) BENCH_TIMEOUT_SEC=$(BENCH_TIMEOUT_SEC)"
 	@echo "  BENCH_MAX_FAIL_RATE_PCT=<pct> BENCH_MIN_RPS=<value> BENCH_DISABLE_RATE_LIMIT=$(BENCH_DISABLE_RATE_LIMIT)"
 	@echo "  BENCH_DISABLE_REQUEST_GUARDS=$(BENCH_DISABLE_REQUEST_GUARDS) BENCH_ACCESS_LOG_MODE=$(BENCH_ACCESS_LOG_MODE)"
@@ -164,7 +191,7 @@ preset-list:
 preset-apply:
 	@set -euo pipefail; \
 	preset_dir="$(PRESET_DIR)"; \
-	for pair in "$$preset_dir/.env:.env" "$$preset_dir/config.json:data/conf/config.json" "$$preset_dir/proxy.json:data/conf/proxy.json" "$$preset_dir/sites.json:data/conf/sites.json"; do \
+	for pair in "$$preset_dir/.env:.env" "$$preset_dir/config.json:data/conf/config.json"; do \
 		src="$${pair%%:*}"; \
 		dst="$${pair#*:}"; \
 		if [[ ! -f "$$src" ]]; then \
@@ -187,7 +214,7 @@ preset-apply:
 preset-check:
 	@set -euo pipefail; \
 	preset_dir="$(PRESET_DIR)"; \
-	for src in "$$preset_dir/.env" "$$preset_dir/config.json" "$$preset_dir/proxy.json" "$$preset_dir/sites.json"; do \
+	for src in "$$preset_dir/.env" "$$preset_dir/config.json"; do \
 		if [[ ! -f "$$src" ]]; then \
 			echo "[preset-check][ERROR] missing $$src" >&2; \
 			exit 1; \
@@ -195,42 +222,123 @@ preset-check:
 	done; \
 	docker compose --env-file "$$preset_dir/.env" config >/dev/null; \
 	python3 -m json.tool "$$preset_dir/config.json" >/dev/null; \
-	python3 -m json.tool "$$preset_dir/proxy.json" >/dev/null; \
-	python3 -m json.tool "$$preset_dir/sites.json" >/dev/null; \
-	preset_mode="$$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("admin", {}).get("external_mode", "").strip().lower())' "$$preset_dir/config.json")"; \
-	if [[ -z "$$preset_mode" ]]; then \
-		echo "[preset-check][ERROR] $$preset_dir/config.json is missing admin.external_mode" >&2; \
+	top_keys="$$(python3 -c 'import json, sys; print("\n".join(sorted(json.load(open(sys.argv[1], encoding="utf-8")).keys())))' "$$preset_dir/config.json")"; \
+	if [[ "$$top_keys" != "storage" ]]; then \
+		echo "[preset-check][ERROR] $$preset_dir/config.json must contain only the storage bootstrap block" >&2; \
 		exit 1; \
 	fi; \
-	default_mode="$$(grep -m 1 'ExternalMode:' coraza/src/internal/config/app_config_file.go | sed -E 's/.*"([^"]+)".*/\1/' | tr '[:upper:]' '[:lower:]')"; \
-	if [[ -z "$$default_mode" ]]; then \
-		echo "[preset-check][ERROR] could not read default admin.external_mode from coraza/src/internal/config/app_config_file.go" >&2; \
+	storage_keys="$$(python3 -c 'import json, sys; obj=json.load(open(sys.argv[1], encoding="utf-8")); storage=obj.get("storage"); print("\n".join(sorted(storage.keys())) if isinstance(storage, dict) else "")' "$$preset_dir/config.json")"; \
+	expected_storage_keys=$$'db_driver\ndb_dsn\ndb_path\ndb_retention_days\ndb_sync_interval_sec'; \
+	if [[ "$$storage_keys" != "$$expected_storage_keys" ]]; then \
+		echo "[preset-check][ERROR] $$preset_dir/config.json storage keys must be: db_driver, db_path, db_dsn, db_retention_days, db_sync_interval_sec" >&2; \
 		exit 1; \
 	fi; \
-	if [[ "$$preset_mode" != "$$default_mode" ]]; then \
-		echo "[preset-check][ERROR] $$preset_dir/config.json admin.external_mode=$$preset_mode does not match [proxy] default admin.external_mode=$$default_mode" >&2; \
+	db_driver="$$(python3 -c 'import json, sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["storage"]["db_driver"]).strip().lower())' "$$preset_dir/config.json")"; \
+	db_path="$$(python3 -c 'import json, sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["storage"]["db_path"]).strip())' "$$preset_dir/config.json")"; \
+	db_dsn="$$(python3 -c 'import json, sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["storage"]["db_dsn"]).strip())' "$$preset_dir/config.json")"; \
+	if [[ "$$db_driver" != "sqlite" && "$$db_driver" != "mysql" && "$$db_driver" != "pgsql" ]]; then \
+		echo "[preset-check][ERROR] $$preset_dir/config.json storage.db_driver must be sqlite, mysql, or pgsql" >&2; \
 		exit 1; \
-		fi; \
+	fi; \
+	if [[ "$$db_driver" == "sqlite" && -z "$$db_path" ]]; then \
+		echo "[preset-check][ERROR] $$preset_dir/config.json storage.db_path is required for sqlite" >&2; \
+		exit 1; \
+	fi; \
+	if [[ "$$db_driver" != "sqlite" && -z "$$db_dsn" ]]; then \
+		echo "[preset-check][ERROR] $$preset_dir/config.json storage.db_dsn is required for mysql/pgsql" >&2; \
+		exit 1; \
+	fi; \
+	if ! python3 -c 'import json, sys; storage=json.load(open(sys.argv[1], encoding="utf-8"))["storage"]; ok=type(storage["db_retention_days"]) is int and storage["db_retention_days"] >= 0 and type(storage["db_sync_interval_sec"]) is int and storage["db_sync_interval_sec"] >= 0; raise SystemExit(0 if ok else 1)' "$$preset_dir/config.json"; then \
+		echo "[preset-check][ERROR] $$preset_dir/config.json storage retention/sync values must be non-negative integers" >&2; \
+		exit 1; \
+	fi; \
 	echo "[preset-check] $(PRESET) ok"
 
 preset-check-minimal:
 	@$(MAKE) --no-print-directory preset-check PRESET=minimal
 
-crs-install:
-	./scripts/install_crs.sh
+install:
+	@TARGET="$(or $(TARGET),$(INSTALL_TARGET))" \
+	PREFIX="$(INSTALL_PREFIX)" \
+	INSTALL_USER="$(INSTALL_USER)" \
+	INSTALL_GROUP="$(INSTALL_GROUP)" \
+	INSTALL_CREATE_USER="$(INSTALL_CREATE_USER)" \
+	INSTALL_ENABLE_SYSTEMD="$(INSTALL_ENABLE_SYSTEMD)" \
+	INSTALL_ENABLE_SCHEDULED_TASKS="$(INSTALL_ENABLE_SCHEDULED_TASKS)" \
+	INSTALL_DB_SEED="$(INSTALL_DB_SEED)" \
+	./scripts/install_tukuyomi.sh
 
-crs-ensure:
+deploy-render:
+	@TARGET="$(or $(TARGET),$(DEPLOY_TARGET))" \
+	IMAGE_URI="$(IMAGE_URI)" \
+	DEPLOY_RENDER_OUT_DIR="$(DEPLOY_RENDER_OUT_DIR)" \
+	DEPLOY_RENDER_OVERWRITE="$(DEPLOY_RENDER_OVERWRITE)" \
+	./scripts/render_deploy_artifacts.sh
+
+install-smoke: build
 	@set -euo pipefail; \
-	crs_setup="data/rules/crs/crs-setup.conf"; \
-	crs_rule="$$(find data/rules/crs/rules -maxdepth 1 -type f -name '*.conf' -print -quit 2>/dev/null || true)"; \
-	if [[ ! -f "$$crs_setup" || -z "$$crs_rule" ]]; then \
-		echo "[crs-ensure] OWASP CRS is missing; running make crs-install"; \
-		$(MAKE) --no-print-directory crs-install; \
-	else \
-		echo "[crs-ensure] OWASP CRS already installed"; \
-	fi
+	tmp="$$(mktemp -d "$(ROOT_DIR)/.tmp-install-smoke.XXXXXX")"; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	TARGET=linux-systemd \
+	DESTDIR="$$tmp" \
+	PREFIX=/opt/tukuyomi \
+	INSTALL_SKIP_BUILD=1 \
+	INSTALL_ENABLE_SYSTEMD=0 \
+	INSTALL_DB_SEED=always \
+	./scripts/install_tukuyomi.sh; \
+	test -x "$$tmp/opt/tukuyomi/bin/tukuyomi"; \
+	test -f "$$tmp/opt/tukuyomi/conf/config.json"; \
+	test -d "$$tmp/opt/tukuyomi/data/persistent"; \
+	test -f "$$tmp/opt/tukuyomi/db/tukuyomi.db"; \
+	echo "[install-smoke] ok"
 
-setup: env-init crs-install
+deploy-render-smoke:
+	@set -euo pipefail; \
+	tmp="$$(mktemp -d "$(ROOT_DIR)/.tmp-deploy-render-smoke.XXXXXX")"; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	for target in ecs kubernetes azure-container-apps container-image; do \
+		TARGET="$$target" IMAGE_URI="registry.example.test/tukuyomi:smoke" DEPLOY_RENDER_OUT_DIR="$$(basename "$$tmp")" DEPLOY_RENDER_OVERWRITE=1 ./scripts/render_deploy_artifacts.sh; \
+	done; \
+	jq empty "$$tmp/ecs/task-definition.json"; \
+	jq empty "$$tmp/ecs/service.json"; \
+	test -f "$$tmp/kubernetes/single-instance.yaml"; \
+	test -f "$$tmp/azure-container-apps/single-instance.yaml"; \
+	test -x "$$tmp/container-image/build.sh"; \
+	echo "[deploy-render-smoke] ok"
+
+crs-install: db-migrate
+	@set -euo pipefail; \
+	workdir="$(DB_MIGRATE_WORKDIR)"; \
+	config_file="$${WAF_CONFIG_FILE:-$(DB_MIGRATE_CONFIG)}"; \
+	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" && -f "$(ROOT_DIR)/$$config_file" ]]; then \
+		config_file="$(ROOT_DIR)/$$config_file"; \
+	fi; \
+	stage_root="$$workdir/tmp/waf-rule-assets"; \
+	rm -rf "$$stage_root"; \
+	mkdir -p "$$stage_root"; \
+	trap 'rm -rf "$$stage_root"' EXIT; \
+	./scripts/stage_waf_rule_assets.sh "$$stage_root"; \
+	echo "[crs-install] importing WAF rule assets into DB"; \
+	cd "$$workdir"; \
+	WAF_RULE_ASSET_FS_ROOT="tmp/waf-rule-assets" WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import-waf-rule-assets
+
+crs-ensure: db-migrate
+	@set -euo pipefail; \
+	workdir="$(DB_MIGRATE_WORKDIR)"; \
+	config_file="$${WAF_CONFIG_FILE:-$(DB_MIGRATE_CONFIG)}"; \
+	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" && -f "$(ROOT_DIR)/$$config_file" ]]; then \
+		config_file="$(ROOT_DIR)/$$config_file"; \
+	fi; \
+	stage_root="$$workdir/tmp/waf-rule-assets"; \
+	rm -rf "$$stage_root"; \
+	mkdir -p "$$stage_root"; \
+	trap 'rm -rf "$$stage_root"' EXIT; \
+	./scripts/stage_waf_rule_assets.sh "$$stage_root"; \
+	echo "[crs-ensure] importing WAF rule assets into DB"; \
+	cd "$$workdir"; \
+	WAF_RULE_ASSET_FS_ROOT="tmp/waf-rule-assets" WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import-waf-rule-assets
+
+setup: env-init crs-install db-import
 
 go-test:
 	cd $(CORAZA_SRC) && $(GO) test ./...
@@ -253,6 +361,48 @@ go-build:
 	mkdir -p $(abspath $(BIN_DIR))
 	cd $(CORAZA_SRC) && $(GO) build -o "$(abspath $(BIN_DIR))/$(APP_NAME)" $(APP_PKG)
 	@echo "[go-build] built $(abspath $(BIN_DIR))/$(APP_NAME)"
+
+db-migrate: go-build
+	@set -euo pipefail; \
+	workdir="$(DB_MIGRATE_WORKDIR)"; \
+	config_file="$${WAF_CONFIG_FILE:-$(DB_MIGRATE_CONFIG)}"; \
+	if [[ ! -d "$$workdir" ]]; then \
+		echo "[db-migrate][ERROR] DB_MIGRATE_WORKDIR does not exist: $$workdir" >&2; \
+		exit 1; \
+	fi; \
+	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" && -f "$(ROOT_DIR)/$$config_file" ]]; then \
+		config_file="$(ROOT_DIR)/$$config_file"; \
+	fi; \
+	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" ]]; then \
+		echo "[db-migrate][ERROR] config not found: $$workdir/$$config_file" >&2; \
+		exit 1; \
+	fi; \
+	echo "[db-migrate] workdir=$$workdir config=$$config_file"; \
+	cd "$$workdir"; \
+	WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-migrate
+
+db-import: db-migrate
+	@set -euo pipefail; \
+	workdir="$(DB_MIGRATE_WORKDIR)"; \
+	config_file="$${WAF_CONFIG_FILE:-$(DB_MIGRATE_CONFIG)}"; \
+	seed_conf_dir="$${WAF_DB_IMPORT_SEED_CONF_DIR-$(ROOT_DIR)/seeds/conf}"; \
+	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" && -f "$(ROOT_DIR)/$$config_file" ]]; then \
+		config_file="$(ROOT_DIR)/$$config_file"; \
+	fi; \
+	echo "[db-import] workdir=$$workdir config=$$config_file seed_conf=$$seed_conf_dir"; \
+	cd "$$workdir"; \
+	WAF_DB_IMPORT_SEED_CONF_DIR="$$seed_conf_dir" WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import
+
+db-import-waf-rule-assets: db-migrate
+	@set -euo pipefail; \
+	workdir="$(DB_MIGRATE_WORKDIR)"; \
+	config_file="$${WAF_CONFIG_FILE:-$(DB_MIGRATE_CONFIG)}"; \
+	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" && -f "$(ROOT_DIR)/$$config_file" ]]; then \
+		config_file="$(ROOT_DIR)/$$config_file"; \
+	fi; \
+	echo "[db-import-waf-rule-assets] workdir=$$workdir config=$$config_file"; \
+	cd "$$workdir"; \
+	WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import-waf-rule-assets
 
 build: ui-build-sync go-build
 
@@ -322,7 +472,7 @@ ui-sync:
 
 ui-build-sync: ui-build ui-sync
 
-ui-preview-up: crs-ensure ui-build-sync
+ui-preview-up: go-build ui-build-sync
 	bash ./scripts/ui_preview.sh up
 
 ui-preview-down:
@@ -344,19 +494,19 @@ php-fpm-remove:
 	RUNTIME="$(RUNTIME)" ./scripts/php_fpm_runtime_remove.sh
 
 php-fpm-up:
-	RUNTIME="$(RUNTIME)" CORAZA_PORT="$(CORAZA_PORT)" WAF_API_KEY_PRIMARY="$(WAF_API_KEY_PRIMARY)" ./scripts/php_fpm_runtime_ctl.sh up
+	RUNTIME="$(RUNTIME)" CORAZA_PORT="$(CORAZA_PORT)" WAF_ADMIN_USERNAME="$(WAF_ADMIN_USERNAME)" WAF_ADMIN_PASSWORD="$(WAF_ADMIN_PASSWORD)" ./scripts/php_fpm_runtime_ctl.sh up
 
 php-fpm-down:
-	RUNTIME="$(RUNTIME)" CORAZA_PORT="$(CORAZA_PORT)" WAF_API_KEY_PRIMARY="$(WAF_API_KEY_PRIMARY)" ./scripts/php_fpm_runtime_ctl.sh down
+	RUNTIME="$(RUNTIME)" CORAZA_PORT="$(CORAZA_PORT)" WAF_ADMIN_USERNAME="$(WAF_ADMIN_USERNAME)" WAF_ADMIN_PASSWORD="$(WAF_ADMIN_PASSWORD)" ./scripts/php_fpm_runtime_ctl.sh down
 
 php-fpm-reload:
-	RUNTIME="$(RUNTIME)" CORAZA_PORT="$(CORAZA_PORT)" WAF_API_KEY_PRIMARY="$(WAF_API_KEY_PRIMARY)" ./scripts/php_fpm_runtime_ctl.sh reload
+	RUNTIME="$(RUNTIME)" CORAZA_PORT="$(CORAZA_PORT)" WAF_ADMIN_USERNAME="$(WAF_ADMIN_USERNAME)" WAF_ADMIN_PASSWORD="$(WAF_ADMIN_PASSWORD)" ./scripts/php_fpm_runtime_ctl.sh reload
 
 php-fpm-test:
-	cd $(CORAZA_SRC) && $(GO) test ./internal/handler -run 'Test(PHPRuntimeInventoryListsOnlyBuiltArtifacts|ApplyPHPRuntimeInventoryRawDoesNotDeadlockOnMaterializationRefresh|GetPHPRuntimesAndVhostsHandlers|ValidatePHPRuntimeInventoryRawIgnoresLegacyPHPSupportFlag|DefaultPHPRuntimeInventoryStartsEmptyUntilRuntimeIsBuilt|ValidatePHPRuntimeInventoryRawLoadsBuiltArtifactModulesAndDefaults|ValidateVhostConfigRawRequiresKnownRuntime|ValidateVhostConfigRawAcceptsKnownRuntimeWithoutSupportToggle|ApplyAndRollbackVhostConfigRaw|PHPRuntimeSupervisorStartsRestartsAndStopsRuntime|ResolvePHPRuntimeIdentityUsesConfiguredCurrentUserAndGroup|ValidatePHPRuntimeLaunchRejectsPrivilegeTransitionWithoutRoot|ValidatePHPRuntimeLaunchRejectsUnreadableDocumentRoot|ServeProxyServesStaticVhostAssets|ServeProxyRunsFastCGITryFilesAndStaticAssets|ServeProxyRunsFastCGIOverUnixSocket|ServeProxyAppliesVhostRewriteAccessAndBasicAuth|BuildPHPRuntimePoolConfigIncludesINIOverrides|ValidateVhostConfigRejectsPlaintextBasicAuthHash)'
+	cd $(CORAZA_SRC) && $(GO) test ./internal/handler -run 'Test(PHPRuntimeInventoryListsOnlyBuiltArtifacts|PHPRuntimeInventoryDBAutoDiscoveryReflectsBuiltArtifactsAfterStartup|PHPRuntimeInventoryDBExplicitEmptyDoesNotAutoDiscover|PHPRuntimeInventoryDBLegacyImportWithoutStateAutoDiscovers|PHPRuntimeInventoryDBLoadsWithoutInventoryOrManifestJSON|ApplyPHPRuntimeInventoryRawDoesNotDeadlockOnMaterializationRefresh|GetPHPRuntimesAndVhostsHandlers|ValidatePHPRuntimeInventoryRawIgnoresLegacyPHPSupportFlag|DefaultPHPRuntimeInventoryStartsEmptyUntilRuntimeIsBuilt|ValidatePHPRuntimeInventoryRawLoadsBuiltArtifactModulesAndDefaults|ValidateVhostConfigRawRequiresKnownRuntime|ValidateVhostConfigRawAcceptsKnownRuntimeWithoutSupportToggle|ApplyAndRollbackVhostConfigRaw|PHPRuntimeSupervisorStartsRestartsAndStopsRuntime|ResolvePHPRuntimeIdentityUsesConfiguredCurrentUserAndGroup|ValidatePHPRuntimeLaunchRejectsPrivilegeTransitionWithoutRoot|ValidatePHPRuntimeLaunchRejectsUnreadableDocumentRoot|ServeProxyServesStaticVhostAssets|ServeProxyRunsFastCGIOverUnixSocket|ServeProxyRunsFastCGITryFilesAndStaticAssets|ServeProxyAppliesVhostRewriteAccessAndBasicAuth|BuildPHPRuntimePoolConfigIncludesINIOverrides|ValidateVhostConfigRejectsPlaintextBasicAuthHash)'
 
 php-fpm-smoke: ui-build-sync
-	VER="$(VER)" CORAZA_PORT="$(CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" WAF_API_KEY_PRIMARY="$(WAF_API_KEY_PRIMARY)" ./scripts/run_php_fpm_smoke.sh
+	VER="$(VER)" CORAZA_PORT="$(CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" WAF_ADMIN_USERNAME="$(WAF_ADMIN_USERNAME)" WAF_ADMIN_PASSWORD="$(WAF_ADMIN_PASSWORD)" ./scripts/run_php_fpm_smoke.sh
 
 scheduled-tasks-smoke: build
 	SCHEDULED_TASKS_SMOKE_SKIP_BUILD=1 ./scripts/run_scheduled_tasks_smoke.sh
@@ -397,13 +547,14 @@ migrate-proxy-config:
 migrate-proxy-config-check:
 	./scripts/migrate_proxy_config.sh --check
 
-smoke: ui-build-sync
+smoke: db-import ui-build-sync
 	@set -euo pipefail; \
 	backup="$$(mktemp)"; \
-	cp data/conf/proxy.json "$$backup"; \
-	trap 'cp "$$backup" data/conf/proxy.json >/dev/null 2>&1 || true; rm -f "$$backup"; PUID="$(PUID)" GUID="$(GUID)" CORAZA_PORT="$(HOST_CORAZA_PORT)" docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT; \
-	PUID="$(PUID)" GUID="$(GUID)" CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" docker compose up -d --build coraza >/dev/null; \
-	HOST_CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" WAF_API_KEY_PRIMARY="$(WAF_API_KEY_PRIMARY)" PROTECTED_HOST="$(PROTECTED_HOST)" PROXY_ECHO_PORT="18080" PROXY_ECHO_URL="http://host.docker.internal:18080" ./scripts/ci_proxy_admin_smoke.sh
+	had_proxy_seed=0; \
+	if [ -f data/conf/proxy.json ]; then cp data/conf/proxy.json "$$backup"; had_proxy_seed=1; fi; \
+	trap 'if [ "$$had_proxy_seed" = "1" ]; then cp "$$backup" data/conf/proxy.json >/dev/null 2>&1 || true; fi; rm -f "$$backup"; PUID="$(PUID)" GUID="$(GUID)" CORAZA_PORT="$(HOST_CORAZA_PORT)" docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT; \
+	PUID="$(PUID)" GUID="$(GUID)" CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="$(TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME)" TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="$(TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD)" docker compose up -d --build coraza >/dev/null; \
+	HOST_CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" WAF_ADMIN_USERNAME="$(WAF_ADMIN_USERNAME)" WAF_ADMIN_PASSWORD="$(WAF_ADMIN_PASSWORD)" PROTECTED_HOST="$(PROTECTED_HOST)" PROXY_ECHO_PORT="18080" PROXY_ECHO_URL="http://host.docker.internal:18080" ./scripts/ci_proxy_admin_smoke.sh
 
 binary-deployment-smoke:
 	./scripts/run_binary_deployment_smoke.sh
@@ -430,20 +581,24 @@ smoke-extended: smoke deployment-smoke
 bench: bench-proxy
 
 bench-proxy:
-	GO="$(GO)" HOST_CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" WAF_API_KEY_PRIMARY="$(WAF_API_KEY_PRIMARY)" BENCH_REQUESTS="$(BENCH_REQUESTS)" WARMUP_REQUESTS="$(WARMUP_REQUESTS)" BENCH_CONCURRENCY="$(BENCH_CONCURRENCY)" BENCH_PATH="$(BENCH_PATH)" BENCH_TIMEOUT_SEC="$(BENCH_TIMEOUT_SEC)" BENCH_MAX_FAIL_RATE_PCT="$(BENCH_MAX_FAIL_RATE_PCT)" BENCH_MIN_RPS="$(BENCH_MIN_RPS)" BENCH_DISABLE_RATE_LIMIT="$(BENCH_DISABLE_RATE_LIMIT)" BENCH_DISABLE_REQUEST_GUARDS="$(BENCH_DISABLE_REQUEST_GUARDS)" BENCH_ACCESS_LOG_MODE="$(BENCH_ACCESS_LOG_MODE)" BENCH_CLIENT_KEEPALIVE="$(BENCH_CLIENT_KEEPALIVE)" BENCH_PROXY_MODE="$(BENCH_PROXY_MODE)" BENCH_PROXY_ENGINE="$(BENCH_PROXY_ENGINE)" BENCH_RUNNER="$(BENCH_RUNNER)" BENCH_PROFILE="$(BENCH_PROFILE)" BENCH_PROFILE_ADDR="$(BENCH_PROFILE_ADDR)" BENCH_PROFILE_SECONDS="$(BENCH_PROFILE_SECONDS)" UPSTREAM_PORT="$(UPSTREAM_PORT)" ./scripts/benchmark_proxy_tuning.sh
+	GO="$(GO)" HOST_CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" WAF_ADMIN_USERNAME="$(WAF_ADMIN_USERNAME)" WAF_ADMIN_PASSWORD="$(WAF_ADMIN_PASSWORD)" BENCH_REQUESTS="$(BENCH_REQUESTS)" WARMUP_REQUESTS="$(WARMUP_REQUESTS)" BENCH_CONCURRENCY="$(BENCH_CONCURRENCY)" BENCH_PATH="$(BENCH_PATH)" BENCH_TIMEOUT_SEC="$(BENCH_TIMEOUT_SEC)" BENCH_MAX_FAIL_RATE_PCT="$(BENCH_MAX_FAIL_RATE_PCT)" BENCH_MIN_RPS="$(BENCH_MIN_RPS)" BENCH_DISABLE_RATE_LIMIT="$(BENCH_DISABLE_RATE_LIMIT)" BENCH_DISABLE_REQUEST_GUARDS="$(BENCH_DISABLE_REQUEST_GUARDS)" BENCH_ACCESS_LOG_MODE="$(BENCH_ACCESS_LOG_MODE)" BENCH_CLIENT_KEEPALIVE="$(BENCH_CLIENT_KEEPALIVE)" BENCH_PROXY_MODE="$(BENCH_PROXY_MODE)" BENCH_PROXY_ENGINE="$(BENCH_PROXY_ENGINE)" BENCH_RUNNER="$(BENCH_RUNNER)" BENCH_PROFILE="$(BENCH_PROFILE)" BENCH_PROFILE_ADDR="$(BENCH_PROFILE_ADDR)" BENCH_PROFILE_SECONDS="$(BENCH_PROFILE_SECONDS)" UPSTREAM_PORT="$(UPSTREAM_PORT)" ./scripts/benchmark_proxy_tuning.sh
 
 bench-waf:
-	GO="$(GO)" HOST_CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" WAF_API_KEY_PRIMARY="$(WAF_API_KEY_PRIMARY)" BENCH_REQUESTS="$(BENCH_REQUESTS)" WARMUP_REQUESTS="$(WARMUP_REQUESTS)" BENCH_CONCURRENCY="$(BENCH_CONCURRENCY)" BENCH_PATH="$(BENCH_PATH)" BENCH_TIMEOUT_SEC="$(BENCH_TIMEOUT_SEC)" BENCH_MAX_FAIL_RATE_PCT="$(BENCH_MAX_FAIL_RATE_PCT)" BENCH_MIN_RPS="$(BENCH_MIN_RPS)" BENCH_DISABLE_RATE_LIMIT="$(BENCH_DISABLE_RATE_LIMIT)" BENCH_DISABLE_REQUEST_GUARDS="$(BENCH_DISABLE_REQUEST_GUARDS)" UPSTREAM_PORT="$(UPSTREAM_PORT)" ./scripts/benchmark_waf.sh
+	GO="$(GO)" HOST_CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" WAF_ADMIN_USERNAME="$(WAF_ADMIN_USERNAME)" WAF_ADMIN_PASSWORD="$(WAF_ADMIN_PASSWORD)" BENCH_REQUESTS="$(BENCH_REQUESTS)" WARMUP_REQUESTS="$(WARMUP_REQUESTS)" BENCH_CONCURRENCY="$(BENCH_CONCURRENCY)" BENCH_PATH="$(BENCH_PATH)" BENCH_TIMEOUT_SEC="$(BENCH_TIMEOUT_SEC)" BENCH_MAX_FAIL_RATE_PCT="$(BENCH_MAX_FAIL_RATE_PCT)" BENCH_MIN_RPS="$(BENCH_MIN_RPS)" BENCH_DISABLE_RATE_LIMIT="$(BENCH_DISABLE_RATE_LIMIT)" BENCH_DISABLE_REQUEST_GUARDS="$(BENCH_DISABLE_REQUEST_GUARDS)" UPSTREAM_PORT="$(UPSTREAM_PORT)" ./scripts/benchmark_waf.sh
 
 bench-full: bench-proxy bench-waf
 
 gotestwaf:
 	@set -euo pipefail; \
 	backup="$$(mktemp)"; \
-	cp data/conf/proxy.json "$$backup"; \
-	trap 'cp "$$backup" data/conf/proxy.json >/dev/null 2>&1 || true; rm -f "$$backup"' EXIT; \
+	had_proxy_seed=0; \
+	if [ -f data/conf/proxy.json ]; then cp data/conf/proxy.json "$$backup"; had_proxy_seed=1; fi; \
+	trap 'if [ "$$had_proxy_seed" = "1" ]; then cp "$$backup" data/conf/proxy.json >/dev/null 2>&1 || true; else rm -f data/conf/proxy.json; fi; rm -f "$$backup"' EXIT; \
+	proxy_source="data/conf/proxy.json"; \
+	if [ ! -f "$$proxy_source" ]; then proxy_source="seeds/conf/proxy.json"; fi; \
+	mkdir -p data/conf; \
 	tmp_proxy="$$(mktemp)"; \
-	jq '.upstreams = [{"name":"gotestwaf-unreachable","url":"http://127.0.0.1:9081","weight":1,"enabled":true}]' data/conf/proxy.json > "$$tmp_proxy"; \
+	jq '.upstreams = [{"name":"gotestwaf-unreachable","url":"http://127.0.0.1:9081","weight":1,"enabled":true}]' "$$proxy_source" > "$$tmp_proxy"; \
 	mv "$$tmp_proxy" data/conf/proxy.json; \
 	HOST_CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" ./scripts/run_gotestwaf.sh
 

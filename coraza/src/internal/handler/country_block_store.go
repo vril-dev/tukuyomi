@@ -43,15 +43,26 @@ func InitCountryBlock(path, legacy string) error {
 		return fmt.Errorf("country block path is empty")
 	}
 	legacy = strings.TrimSpace(legacy)
-	if err := ensureCountryBlockFile(target, legacy); err != nil {
-		return err
-	}
-
 	countryBlockMu.Lock()
 	countryBlockPath = target
 	countryBlockLegacyPath = legacy
 	countryBlockActivePath = ""
 	countryBlockMu.Unlock()
+
+	if store := getLogsStatsStore(); store != nil {
+		raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(countryBlockConfigBlobKey), normalizeCountryBlockPolicyRaw, "country block rules")
+		if err != nil {
+			return fmt.Errorf("read country block config db: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("normalized country block config missing in db; run make db-import before removing seed files")
+		}
+		return applyCountryBlockPolicyRaw(raw)
+	}
+
+	if err := ensureCountryBlockFile(target, legacy); err != nil {
+		return err
+	}
 
 	return ReloadCountryBlock()
 }
@@ -281,13 +292,17 @@ func ensureCountryBlockFile(path, legacy string) error {
 		return err
 	}
 	if strings.HasSuffix(strings.ToLower(path), ".json") {
-		payload, err := MarshalCountryBlockJSON(countryBlockFile{Default: countryBlockScope{BlockedCountries: []string{}}})
+		payload, err := defaultCountryBlockPolicyRaw()
 		if err != nil {
 			return err
 		}
 		return os.WriteFile(path, payload, 0o644)
 	}
 	return os.WriteFile(path, []byte("# one country code per line (JP, US, UNKNOWN)\n"), 0o644)
+}
+
+func defaultCountryBlockPolicyRaw() ([]byte, error) {
+	return MarshalCountryBlockJSON(countryBlockFile{Default: countryBlockScope{BlockedCountries: []string{}}})
 }
 
 func normalizeCountryCodes(rawCodes []string, field string) ([]string, error) {

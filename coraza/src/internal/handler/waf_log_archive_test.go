@@ -13,7 +13,6 @@ func TestWAFLogArchiveAppendThrottlesUnrotatedPrune(t *testing.T) {
 	restore := saveWAFLogArchiveConfigForTest()
 	defer restore()
 
-	config.StorageBackend = "file"
 	config.FileRotateBytes = 0
 	config.FileMaxBytes = 0
 	config.FileRetention = time.Second
@@ -53,7 +52,6 @@ func TestWAFLogArchiveAppendEncodedWritesRawJSONLine(t *testing.T) {
 	restore := saveWAFLogArchiveConfigForTest()
 	defer restore()
 
-	config.StorageBackend = "file"
 	config.FileRotateBytes = 0
 	config.FileMaxBytes = 0
 	config.FileRetention = 0
@@ -78,7 +76,6 @@ func TestWAFLogArchiveAppendEncodedBatchWritesRawJSONLines(t *testing.T) {
 	restore := saveWAFLogArchiveConfigForTest()
 	defer restore()
 
-	config.StorageBackend = "file"
 	config.FileRotateBytes = 0
 	config.FileMaxBytes = 0
 	config.FileRetention = 0
@@ -115,14 +112,12 @@ func writeOldArchiveForTest(t *testing.T, path string) string {
 }
 
 func saveWAFLogArchiveConfigForTest() func() {
-	prevStorageBackend := config.StorageBackend
 	prevFileRotateBytes := config.FileRotateBytes
 	prevFileMaxBytes := config.FileMaxBytes
 	prevFileRetention := config.FileRetention
 	prevLogFile := config.LogFile
 
 	return func() {
-		config.StorageBackend = prevStorageBackend
 		config.FileRotateBytes = prevFileRotateBytes
 		config.FileMaxBytes = prevFileMaxBytes
 		config.FileRetention = prevFileRetention

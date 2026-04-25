@@ -17,6 +17,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"tukuyomi/internal/adminauth"
+	"tukuyomi/internal/cacheconf"
 )
 
 func TestWriteDirectProxyResponsePreservesContextRequestID(t *testing.T) {
@@ -141,7 +144,112 @@ func TestServeProxyServesStaticVhostAssets(t *testing.T) {
 	}
 }
 
-func TestServeProxyServesStaticVhostAssetsViaLinkedBackendPool(t *testing.T) {
+func TestServeProxyWithCacheCachesStaticVhostAssets(t *testing.T) {
+	restore := resetPHPProxyFoundationForTest(t)
+	defer restore()
+
+	tmp := t.TempDir()
+	docroot := filepath.Join(tmp, "static")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(docroot): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docroot, "test.html"), []byte("static cache body\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(test.html): %v", err)
+	}
+
+	inventoryPath := filepath.Join(tmp, "inventory.json")
+	vhostPath := filepath.Join(tmp, "vhosts.json")
+	proxyPath := filepath.Join(tmp, "proxy.json")
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	vhosts := `{
+  "vhosts": [
+    {
+      "name": "docs",
+      "mode": "static",
+      "hostname": "docs.example.com",
+      "listen_port": 9401,
+      "document_root": "` + filepath.ToSlash(docroot) + `",
+      "generated_target": "docs-static",
+      "linked_upstream_name": "docs"
+    }
+  ]
+}`
+	if err := os.WriteFile(vhostPath, []byte(vhosts), 0o600); err != nil {
+		t.Fatalf("write vhosts: %v", err)
+	}
+	proxyRaw := `{
+  "upstreams": [
+    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+  ],
+  "default_route": {
+    "action": {
+      "upstream": "docs"
+    }
+  }
+}`
+	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o600); err != nil {
+		t.Fatalf("write proxy: %v", err)
+	}
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+	if err := InitVhostRuntime(vhostPath, 2); err != nil {
+		t.Fatalf("InitVhostRuntime: %v", err)
+	}
+	if err := InitProxyRuntime(proxyPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+
+	cacheStorePath := filepath.Join(t.TempDir(), "cache-store.json")
+	cacheStoreDir := t.TempDir()
+	if err := os.WriteFile(cacheStorePath, []byte(`{"enabled":true,"store_dir":`+strconv.Quote(cacheStoreDir)+`,"max_bytes":1048576}`), 0o600); err != nil {
+		t.Fatalf("write cache store: %v", err)
+	}
+	if err := InitResponseCacheRuntime(cacheStorePath); err != nil {
+		t.Fatalf("InitResponseCacheRuntime: %v", err)
+	}
+	previousRules := cacheconf.Get()
+	t.Cleanup(func() {
+		if previousRules != nil {
+			cacheconf.Set(previousRules)
+			return
+		}
+		emptyRules, _ := cacheconf.LoadFromString("")
+		cacheconf.Set(emptyRules)
+	})
+	rules, err := cacheconf.LoadFromString(`ALLOW prefix=/test.html methods=GET,HEAD ttl=600 vary=Accept-Encoding`)
+	if err != nil {
+		t.Fatalf("load cache rules: %v", err)
+	}
+	cacheconf.Set(rules)
+
+	for i, want := range []string{"MISS", "HIT"} {
+		req := httptest.NewRequest(http.MethodGet, "http://docs.example.com/test.html", nil)
+		req.AddCookie(&http.Cookie{Name: adminauth.SessionCookieName, Value: "admin-session"})
+		req.AddCookie(&http.Cookie{Name: adminauth.CSRFCookieName, Value: "admin-csrf"})
+		decision, err := resolveProxyRouteDecision(req, currentProxyConfig(), proxyRuntimeHealth())
+		if err != nil {
+			t.Fatalf("resolveProxyRouteDecision %d: %v", i+1, err)
+		}
+		req = req.WithContext(withProxyRouteDecision(req.Context(), decision))
+		rec := httptest.NewRecorder()
+		ServeProxyWithCacheHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d status=%d body=%s", i+1, rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get(proxyResponseCacheHeader); got != want {
+			t.Fatalf("request %d %s=%q want=%q headers=%v", i+1, proxyResponseCacheHeader, got, want, rec.Header())
+		}
+	}
+	_, _, _, stats := ResponseCacheSnapshot()
+	if stats.Stores != 1 || stats.EntryCount != 1 || stats.Hits != 1 || stats.Misses != 1 {
+		t.Fatalf("cache stats stores=%d entries=%d hits=%d misses=%d", stats.Stores, stats.EntryCount, stats.Hits, stats.Misses)
+	}
+}
+
+func TestServeProxyServesStaticVhostAssetsViaGeneratedRoute(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
 
@@ -216,8 +324,8 @@ func TestServeProxyServesStaticVhostAssetsViaLinkedBackendPool(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if decision.SelectedUpstream != "docs" {
-		t.Fatalf("selected_upstream=%q want=%q", decision.SelectedUpstream, "docs")
+	if decision.SelectedUpstream != "docs-static" {
+		t.Fatalf("selected_upstream=%q want=%q", decision.SelectedUpstream, "docs-static")
 	}
 	if !strings.Contains(rec.Body.String(), "console.log('linked');") {
 		t.Fatalf("unexpected body=%q", rec.Body.String())
@@ -657,7 +765,7 @@ func TestServeProxyStaticVhostAllowsWellKnownPaths(t *testing.T) {
 	}
 }
 
-func TestConfiguredStaticUpstreamCanBecomeImplicitPrimaryTarget(t *testing.T) {
+func TestConfiguredUpstreamDoesNotBecomeImplicitVhostTarget(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
 
@@ -692,9 +800,14 @@ func TestConfiguredStaticUpstreamCanBecomeImplicitPrimaryTarget(t *testing.T) {
 	if err := os.WriteFile(vhostPath, []byte(vhosts), 0o600); err != nil {
 		t.Fatalf("write vhosts: %v", err)
 	}
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("primary-upstream\n"))
+	}))
+	defer primary.Close()
+
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "` + primary.URL + `", "weight": 1, "enabled": true }
   ]
 }`
 	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o600); err != nil {
@@ -715,14 +828,23 @@ func TestConfiguredStaticUpstreamCanBecomeImplicitPrimaryTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveProxyRouteDecision: %v", err)
 	}
+	if decision.SelectedUpstream != "docs" {
+		t.Fatalf("selected_upstream=%q want docs", decision.SelectedUpstream)
+	}
+	if decision.Target == nil || decision.Target.String() != primary.URL {
+		t.Fatalf("target=%v want %s", decision.Target, primary.URL)
+	}
 	req = req.WithContext(withProxyRouteDecision(req.Context(), decision))
 	rec := httptest.NewRecorder()
 	ServeProxy(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "static-index") {
+	if !strings.Contains(rec.Body.String(), "primary-upstream") {
 		t.Fatalf("unexpected body=%q", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "static-index") {
+		t.Fatalf("vhost body leaked through configured upstream: %q", rec.Body.String())
 	}
 }
 
@@ -831,6 +953,106 @@ func TestServeProxyRunsFastCGITryFilesAndStaticAssets(t *testing.T) {
 	}
 }
 
+func TestServeProxyReturnsGeneric500ForFastCGIStderrOnly(t *testing.T) {
+	restore := resetPHPProxyFoundationForTest(t)
+	defer restore()
+
+	tmp := t.TempDir()
+	docroot := filepath.Join(tmp, "php-app", "public")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(docroot): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docroot, "index.php"), []byte("<?php syntax error"), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.php): %v", err)
+	}
+
+	listener, address := startTestFastCGIServerFunc(t, "tcp", "127.0.0.1:0", func(conn net.Conn) {
+		defer conn.Close()
+		if _, _, err := readTestFastCGIRequest(conn); err != nil {
+			panic(fmt.Sprintf("readTestFastCGIRequest: %v", err))
+		}
+		stderr := "PHP Parse error: syntax error, unexpected token in /app/index.php on line 1"
+		if err := writeFastCGIRecord(conn, fcgiStderr, fcgiRequestID, []byte(stderr)); err != nil {
+			panic(fmt.Sprintf("write stderr: %v", err))
+		}
+		if err := writeFastCGIRecord(conn, fcgiStderr, fcgiRequestID, nil); err != nil {
+			panic(fmt.Sprintf("write stderr eof: %v", err))
+		}
+		if err := writeFastCGIRecord(conn, fcgiEndRequest, fcgiRequestID, make([]byte, 8)); err != nil {
+			panic(fmt.Sprintf("write end request: %v", err))
+		}
+	})
+	defer listener.Close()
+	_, portText, _ := net.SplitHostPort(address)
+	port, _ := strconv.Atoi(portText)
+
+	inventoryPath := filepath.Join(tmp, "inventory.json")
+	vhostPath := filepath.Join(tmp, "vhosts.json")
+	proxyPath := filepath.Join(tmp, "proxy.json")
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	vhosts := `{
+  "vhosts": [
+    {
+      "name": "app",
+      "mode": "php-fpm",
+      "hostname": "app.example.com",
+      "listen_port": ` + strconv.Itoa(port) + `,
+      "document_root": "` + filepath.ToSlash(docroot) + `",
+      "generated_target": "app-php",
+      "linked_upstream_name": "app",
+      "runtime_id": "php82"
+    }
+  ]
+}`
+	if err := os.WriteFile(vhostPath, []byte(vhosts), 0o600); err != nil {
+		t.Fatalf("write vhosts: %v", err)
+	}
+	proxyRaw := `{
+  "upstreams": [
+    { "name": "app", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+  ],
+  "default_route": {
+    "action": {
+      "upstream": "app"
+    }
+  }
+}`
+	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o600); err != nil {
+		t.Fatalf("write proxy: %v", err)
+	}
+	writeTestPHPRuntimeArtifact(t, inventoryPath, "php82", testPHPRuntimeArtifactOptions{
+		DisplayName: "PHP 8.2",
+		Version:     "PHP 8.2.99 (fpm-fcgi)",
+		Modules:     []string{"mbstring", "redis"},
+	})
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+	if err := InitVhostRuntime(vhostPath, 2); err != nil {
+		t.Fatalf("InitVhostRuntime: %v", err)
+	}
+	if err := InitProxyRuntime(proxyPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/index.php", nil)
+	decision, err := resolveProxyRouteDecision(req, currentProxyConfig(), proxyRuntimeHealth())
+	if err != nil {
+		t.Fatalf("resolveProxyRouteDecision: %v", err)
+	}
+	req = req.WithContext(withProxyRouteDecision(req.Context(), decision))
+	rec := httptest.NewRecorder()
+	ServeProxy(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d want=500 body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "PHP Parse error") {
+		t.Fatalf("client body leaked php stderr: %q", rec.Body.String())
+	}
+}
+
 func TestServeProxyRunsFastCGIOverUnixSocket(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
@@ -880,6 +1102,17 @@ func TestServeProxyRunsFastCGIOverUnixSocket(t *testing.T) {
       "enabled": true
     }
   ],
+  "routes": [
+    {
+      "name": "app-direct",
+      "match": {
+        "hosts": ["app.example.com"]
+      },
+      "action": {
+        "upstream": "app"
+      }
+    }
+  ],
   "default_route": {
     "action": {
       "upstream": "app"
@@ -922,6 +1155,10 @@ func TestServeProxyRunsFastCGIOverUnixSocket(t *testing.T) {
 }
 
 func startTestFastCGIServer(t *testing.T, network string, address string) (net.Listener, string) {
+	return startTestFastCGIServerFunc(t, network, address, handleTestFastCGIConn)
+}
+
+func startTestFastCGIServerFunc(t *testing.T, network string, address string, handler func(net.Conn)) (net.Listener, string) {
 	t.Helper()
 	if network == "unix" {
 		_ = os.Remove(address)
@@ -949,7 +1186,7 @@ func startTestFastCGIServer(t *testing.T, network string, address string) (net.L
 				}
 				return
 			}
-			go handleTestFastCGIConn(conn)
+			go handler(conn)
 		}
 	}()
 	t.Cleanup(func() {

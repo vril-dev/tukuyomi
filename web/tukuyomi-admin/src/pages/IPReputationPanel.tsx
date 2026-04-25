@@ -112,7 +112,6 @@ export default function IPReputationPanel() {
   const [messages, setMessages] = useState<string[]>([]);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [rawError, setRawError] = useState<string | null>(null);
   const [structuredError, setStructuredError] = useState<string | null>(null);
 
   const anyEnabled = useMemo(
@@ -120,7 +119,6 @@ export default function IPReputationPanel() {
     [editorState.enabled, editorState.hosts],
   );
   const dirty = useMemo(() => raw !== serverRaw || !!structuredError, [raw, serverRaw, structuredError]);
-  const lineCount = useMemo(() => (raw ? raw.split(/\n/).length : 0), [raw]);
 
   const applyStructuredState = useCallback(
     (next: IPReputationEditorState, nextHostBases = hostBases) => {
@@ -128,7 +126,6 @@ export default function IPReputationPanel() {
       setHostBases(nextHostBases);
       try {
         setRaw(serializeIPReputationEditor(editorBase, next, defaultBase, nextHostBases));
-        setRawError(null);
         setStructuredError(null);
       } catch (e: unknown) {
         setValid(null);
@@ -151,7 +148,6 @@ export default function IPReputationPanel() {
       setEditorState(next);
       setHostBases(nextHostBases);
       setRaw(serializeIPReputationEditor(base, next, nextDefaultBase, nextHostBases));
-      setRawError(null);
       setStructuredError(null);
     },
     [],
@@ -187,7 +183,6 @@ export default function IPReputationPanel() {
       setValid(null);
       setMessages([]);
       setLastSavedAt(parseSavedAt(data.saved_at));
-      setRawError(null);
       setStructuredError(null);
       applyRuntimeStatus(data);
     } catch (e: unknown) {
@@ -247,7 +242,6 @@ export default function IPReputationPanel() {
       setRaw(raw);
       setServerRaw(raw);
       setEtag(js.etag ?? null);
-      setRawError(null);
       setStructuredError(null);
       setLastSavedAt(parseSavedAt(js.saved_at));
       applyRuntimeStatus({ status: js.status, saved_at: js.saved_at });
@@ -265,13 +259,13 @@ export default function IPReputationPanel() {
         return;
       }
       e.preventDefault();
-      if (!saving && !readOnly && !rawError && !structuredError) {
+      if (!saving && !readOnly && !structuredError) {
         void doSave();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [doSave, rawError, readOnly, saving, structuredError]);
+  }, [doSave, readOnly, saving, structuredError]);
 
   const statusBadge = useMemo(() => {
     if (loading) {
@@ -301,40 +295,21 @@ export default function IPReputationPanel() {
     [applyStructuredState, editorState, hostBases],
   );
 
-  const handleRawChange = useCallback(
-    (nextRaw: string) => {
-      setRaw(nextRaw);
-      try {
-        const parsed = parseIPReputationEditorDocument(nextRaw);
-        setEditorBase(parsed.base);
-        setDefaultBase(parsed.defaultBase);
-        setHostBases(parsed.hostBases);
-        setEditorState(parsed.state);
-        setRawError(null);
-        setStructuredError(null);
-      } catch (e: unknown) {
-        setRawError(getErrorMessage(e, tx("Invalid")));
-        setStructuredError(null);
-      }
-    },
-    [tx],
-  );
-
   return (
     <div className="w-full p-4 space-y-4">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("IP Reputation")}</h1>
           <p className="text-sm text-neutral-500">
-            {tx("Manage default and per-host IP reputation scopes with structured forms while keeping advanced JSON fallback below.")}
+            {tx("Manage default and per-host IP reputation scopes with structured controls.")}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           {statusBadge}
           {anyEnabled ? <Badge color="green">{tx("Enabled")}</Badge> : <Badge color="gray">{tx("Disabled")}</Badge>}
           {editorState.failOpen ? <Badge color="amber">{tx("Default fail open")}</Badge> : <Badge color="red">{tx("Default fail closed")}</Badge>}
-          <Badge color={rawError || structuredError ? "red" : "green"}>
-            {structuredError ? tx("Structured editor conflict") : rawError ? tx("Raw JSON out of sync") : tx("Structured editor synced")}
+          <Badge color={structuredError ? "red" : "green"}>
+            {structuredError ? tx("Structured editor conflict") : tx("Structured editor synced")}
           </Badge>
           {dirty ? <Badge color="amber">{tx("Unsaved")}</Badge> : null}
           {etag ? <MonoTag label="ETag" value={etag} /> : null}
@@ -342,11 +317,6 @@ export default function IPReputationPanel() {
       </header>
 
       {error ? <Alert kind="error" title={tx("Error")} message={error} onClose={() => setError(null)} closeLabel={tx("Close")} /> : null}
-      {rawError ? (
-        <NoticeBar tone="warn">
-          {tx("Advanced JSON is currently invalid. The structured editor is still showing the last valid IP reputation snapshot. Any structured edit will regenerate valid JSON from that snapshot.")}
-        </NoticeBar>
-      ) : null}
       {structuredError ? <NoticeBar tone="warn">{structuredError}</NoticeBar> : null}
 
       <SectionCard
@@ -366,7 +336,7 @@ export default function IPReputationPanel() {
             <ActionButton onClick={() => void load()} disabled={loading}>
               {tx("Refresh")}
             </ActionButton>
-            <PrimaryButton onClick={() => void doSave()} disabled={readOnly || loading || saving || !dirty || !!rawError || !!structuredError}>
+            <PrimaryButton onClick={() => void doSave()} disabled={readOnly || loading || saving || !dirty || !!structuredError}>
               {saving ? tx("Saving...") : tx("Save & hot reload")}
             </PrimaryButton>
           </div>
@@ -479,26 +449,6 @@ export default function IPReputationPanel() {
         </div>
       </SectionCard>
 
-      <SectionCard title={tx("Advanced JSON")} subtitle={tx("Keep using raw JSON when needed. Structured edits and valid raw edits stay in sync.")}>
-        <textarea
-          className="w-full h-[380px] p-3 border rounded-xl font-mono text-sm leading-5 outline-none focus:ring-2 focus:ring-black/20"
-          value={raw}
-          onChange={(event) => handleRawChange(event.target.value)}
-          spellCheck={false}
-        />
-        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-500">
-          <div className="flex items-center gap-3 flex-wrap">
-            <span>{tx("Lines")}: {lineCount}</span>
-            <span>{tx("Feeds")}: {editorState.feedURLs.length}</span>
-            <span>{tx("Host scopes")}: {editorState.hosts.length}</span>
-            {lastSavedAt ? <span>{tx("Last saved: {time}", { time: new Date(lastSavedAt).toLocaleString(locale === "ja" ? "ja-JP" : "en-US") })}</span> : null}
-          </div>
-          <div className="flex items-center gap-2">
-            <span>{tx("Mode")}: {anyEnabled ? tx("Enabled") : tx("Disabled")}</span>
-            <span>{tx("Default block status")}: {editorState.blockStatusCode}</span>
-          </div>
-        </div>
-      </SectionCard>
     </div>
   );
 }

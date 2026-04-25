@@ -54,37 +54,39 @@ func TestPrepareProxyRulesRawWithSitesAndVhostsAddsGeneratedPHPTargets(t *testin
 	if upstream.ManagedByVhost != "app" {
 		t.Fatalf("generated target managed_by_vhost=%q want=app", upstream.ManagedByVhost)
 	}
-	linked, ok := findProxyUpstreamByName(prepared.effectiveCfg.Upstreams, "app")
+	configured, ok := findProxyUpstreamByName(prepared.effectiveCfg.Upstreams, "app")
 	if !ok {
-		t.Fatal("linked upstream binding not found in effective config")
+		t.Fatal("configured upstream not found in effective config")
 	}
-	if linked.URL != "fcgi://127.0.0.1:9081" {
-		t.Fatalf("linked upstream url=%q want=%q", linked.URL, "fcgi://127.0.0.1:9081")
+	if configured.URL != "http://127.0.0.1:8080" {
+		t.Fatalf("configured upstream url=%q want=%q", configured.URL, "http://127.0.0.1:8080")
 	}
-	if linked.GeneratedKind != proxyUpstreamGeneratedKindVhostLinkedTarget {
-		t.Fatalf("linked target kind=%q want=%q", linked.GeneratedKind, proxyUpstreamGeneratedKindVhostLinkedTarget)
+	if configured.GeneratedKind != "" {
+		t.Fatalf("configured upstream generated kind=%q want empty", configured.GeneratedKind)
 	}
-	if linked.ProviderClass != proxyUpstreamProviderClassVhostManaged {
-		t.Fatalf("linked target provider_class=%q want=%q", linked.ProviderClass, proxyUpstreamProviderClassVhostManaged)
+	if configured.ProviderClass != proxyUpstreamProviderClassDirect {
+		t.Fatalf("configured upstream provider_class=%q want=%q", configured.ProviderClass, proxyUpstreamProviderClassDirect)
 	}
-	if linked.ManagedByVhost != "app" {
-		t.Fatalf("linked target managed_by_vhost=%q want=app", linked.ManagedByVhost)
+	if route, ok := findProxyRouteByName(prepared.effectiveCfg.Routes, "vhost:app"); !ok {
+		t.Fatal("generated vhost route not found in effective config")
+	} else if route.Action.Upstream != "app-php" {
+		t.Fatalf("generated vhost route upstream=%q want app-php", route.Action.Upstream)
 	}
 	if prepared.target == nil {
 		t.Fatal("prepared target should not be nil")
 	}
-	if prepared.target.String() != "fcgi://127.0.0.1:9081" {
-		t.Fatalf("prepared target=%q want=%q", prepared.target.String(), "fcgi://127.0.0.1:9081")
+	if prepared.target.String() != "http://127.0.0.1:8080" {
+		t.Fatalf("prepared target=%q want=%q", prepared.target.String(), "http://127.0.0.1:8080")
 	}
 }
 
-func TestPrepareProxyRulesRawWithSitesAndVhostsRejectsMissingConfiguredLinkedUpstream(t *testing.T) {
+func TestPrepareProxyRulesRawWithSitesAndVhostsAllowsVhostWithoutConfiguredLinkedUpstream(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
 
 	raw := mustJSON(normalizeProxyRulesConfig(ProxyRulesConfig{}))
 
-	_, err := prepareProxyRulesRawWithSitesAndVhosts(raw, SiteConfigFile{}, VhostConfigFile{
+	prepared, err := prepareProxyRulesRawWithSitesAndVhosts(raw, SiteConfigFile{}, VhostConfigFile{
 		Vhosts: []VhostConfig{
 			{
 				Name:               "app",
@@ -98,12 +100,20 @@ func TestPrepareProxyRulesRawWithSitesAndVhostsRejectsMissingConfiguredLinkedUps
 			},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), `vhost "app" linked_upstream_name "app" must reference a configured upstream`) {
-		t.Fatalf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatalf("prepareProxyRulesRawWithSitesAndVhosts: %v", err)
+	}
+	if _, ok := findProxyUpstreamByName(prepared.effectiveCfg.Upstreams, "app"); ok {
+		t.Fatal("linked_upstream_name should not synthesize or require a configured upstream")
+	}
+	if route, ok := findProxyRouteByName(prepared.effectiveCfg.Routes, "vhost:app"); !ok {
+		t.Fatal("generated vhost route not found")
+	} else if route.Action.Upstream != "app-php" {
+		t.Fatalf("generated vhost route upstream=%q want app-php", route.Action.Upstream)
 	}
 }
 
-func TestPrepareProxyRulesRawWithSitesAndVhostsAllowsLinkedUpstreamNameBoundToConfiguredUpstream(t *testing.T) {
+func TestPrepareProxyRulesRawWithSitesAndVhostsKeepsConfiguredUpstreamDirect(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
 
@@ -141,16 +151,16 @@ func TestPrepareProxyRulesRawWithSitesAndVhostsAllowsLinkedUpstreamNameBoundToCo
 	}
 	upstream, ok := findProxyUpstreamByName(prepared.effectiveCfg.Upstreams, "app")
 	if !ok {
-		t.Fatal("configured upstream missing after bind")
+		t.Fatal("configured upstream missing")
 	}
-	if upstream.ProviderClass != proxyUpstreamProviderClassVhostManaged {
-		t.Fatalf("configured upstream provider_class=%q want=%q", upstream.ProviderClass, proxyUpstreamProviderClassVhostManaged)
+	if upstream.ProviderClass != proxyUpstreamProviderClassDirect {
+		t.Fatalf("configured upstream provider_class=%q want=%q", upstream.ProviderClass, proxyUpstreamProviderClassDirect)
 	}
-	if upstream.ManagedByVhost != "app" {
-		t.Fatalf("configured upstream managed_by_vhost=%q want=app", upstream.ManagedByVhost)
+	if upstream.ManagedByVhost != "" {
+		t.Fatalf("configured upstream managed_by_vhost=%q want empty", upstream.ManagedByVhost)
 	}
-	if upstream.URL != "fcgi://127.0.0.1:9081" {
-		t.Fatalf("configured upstream url=%q want=%q", upstream.URL, "fcgi://127.0.0.1:9081")
+	if upstream.URL != "http://127.0.0.1:8080" {
+		t.Fatalf("configured upstream url=%q want=%q", upstream.URL, "http://127.0.0.1:8080")
 	}
 }
 
@@ -182,6 +192,10 @@ func TestApplyAndRollbackVhostConfigRawMaterializesRuntimeFiles(t *testing.T) {
 		Version:     "PHP 8.2.99 (fpm-fcgi)",
 		Modules:     []string{"mbstring", "redis"},
 	})
+	initConfigDBStoreForTest(t)
+	inventoryCfg := importPHPRuntimeInventoryDBForTest(t, defaultPHPRuntimeInventoryRaw, inventoryPath)
+	importVhostRuntimeDBForTest(t, defaultVhostConfigRaw, inventoryCfg)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
 		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
 	}
@@ -257,6 +271,23 @@ func TestApplyAndRollbackVhostConfigRawMaterializesRuntimeFiles(t *testing.T) {
 	}
 }
 
+func TestRefreshPHPRuntimeMaterializationDoesNotCreateDefaultRuntimeDirForEmptyVhosts(t *testing.T) {
+	restore := resetPHPProxyFoundationForTest(t)
+	defer restore()
+
+	t.Chdir(t.TempDir())
+
+	if err := refreshPHPRuntimeMaterializationWithConfig(PHPRuntimeInventoryFile{}, VhostConfigFile{}); err != nil {
+		t.Fatalf("refreshPHPRuntimeMaterializationWithConfig: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join("data", "php-fpm", "runtime")); !os.IsNotExist(err) {
+		t.Fatalf("empty vhost materialization should not create default runtime dir, stat err=%v", err)
+	}
+	if snapshot := PHPRuntimeMaterializationSnapshot(); len(snapshot) != 0 {
+		t.Fatalf("materialized runtime count=%d want 0", len(snapshot))
+	}
+}
+
 func TestApplyVhostConfigRawRefreshesProxyGeneratedTargets(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
@@ -302,6 +333,10 @@ func TestApplyVhostConfigRawRefreshesProxyGeneratedTargets(t *testing.T) {
 		Version:     "PHP 8.2.99 (fpm-fcgi)",
 		Modules:     []string{"mbstring", "redis"},
 	})
+	initConfigDBStoreForTest(t)
+	inventoryCfg := importPHPRuntimeInventoryDBForTest(t, initialInventory, inventoryPath)
+	importVhostRuntimeDBForTest(t, initialVhosts, inventoryCfg)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
 		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
 	}
@@ -313,9 +348,9 @@ func TestApplyVhostConfigRawRefreshesProxyGeneratedTargets(t *testing.T) {
 	}
 
 	cfg := currentProxyConfig()
-	upstream, ok := findProxyUpstreamByName(cfg.Upstreams, "app")
+	upstream, ok := findProxyUpstreamByName(cfg.Upstreams, "app-php")
 	if !ok {
-		t.Fatal("linked upstream missing from current proxy config")
+		t.Fatal("generated vhost upstream missing from current proxy config")
 	}
 	if upstream.URL != "fcgi://127.0.0.1:9081" {
 		t.Fatalf("upstream url=%q want=%q", upstream.URL, "fcgi://127.0.0.1:9081")
@@ -341,16 +376,16 @@ func TestApplyVhostConfigRawRefreshesProxyGeneratedTargets(t *testing.T) {
 	}
 
 	cfg = currentProxyConfig()
-	upstream, ok = findProxyUpstreamByName(cfg.Upstreams, "app")
+	upstream, ok = findProxyUpstreamByName(cfg.Upstreams, "app-php")
 	if !ok {
-		t.Fatal("linked upstream missing from current proxy config after refresh")
+		t.Fatal("generated vhost upstream missing from current proxy config after refresh")
 	}
 	if upstream.URL != "fcgi://127.0.0.1:9082" {
 		t.Fatalf("refreshed upstream url=%q want=%q", upstream.URL, "fcgi://127.0.0.1:9082")
 	}
 }
 
-func TestApplyVhostConfigRawRejectsLinkedUpstreamRenameWhileProxyReferencesOldAlias(t *testing.T) {
+func TestApplyVhostConfigRawIgnoresLinkedUpstreamRenameForRouting(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
 
@@ -395,6 +430,10 @@ func TestApplyVhostConfigRawRejectsLinkedUpstreamRenameWhileProxyReferencesOldAl
 		Version:     "PHP 8.2.99 (fpm-fcgi)",
 		Modules:     []string{"mbstring", "redis"},
 	})
+	initConfigDBStoreForTest(t)
+	inventoryCfg := importPHPRuntimeInventoryDBForTest(t, initialInventory, inventoryPath)
+	importVhostRuntimeDBForTest(t, initialVhosts, inventoryCfg)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
 		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
 	}
@@ -420,12 +459,25 @@ func TestApplyVhostConfigRawRejectsLinkedUpstreamRenameWhileProxyReferencesOldAl
     }
   ]
 }`
-	if _, _, err := ApplyVhostConfigRaw(etag, updatedVhosts); err == nil || !strings.Contains(err.Error(), `vhost "app" linked_upstream_name "app-next" must reference a configured upstream`) {
-		t.Fatalf("unexpected error: %v", err)
+	if _, _, err := ApplyVhostConfigRaw(etag, updatedVhosts); err != nil {
+		t.Fatalf("ApplyVhostConfigRaw: %v", err)
+	}
+	cfg := currentProxyConfig()
+	upstream, ok := findProxyUpstreamByName(cfg.Upstreams, "app")
+	if !ok {
+		t.Fatal("configured upstream app missing")
+	}
+	if upstream.URL != "http://127.0.0.1:8080" || upstream.ProviderClass != proxyUpstreamProviderClassDirect {
+		t.Fatalf("configured upstream app changed unexpectedly: %#v", upstream)
+	}
+	if route, ok := findProxyRouteByName(cfg.Routes, "vhost:app"); !ok {
+		t.Fatal("generated vhost route missing")
+	} else if route.Action.Upstream != "app-php" {
+		t.Fatalf("generated vhost route upstream=%q want app-php", route.Action.Upstream)
 	}
 }
 
-func TestApplyVhostConfigRawRebindsConfiguredLinkedUpstreamWhenAlternateConfiguredUpstreamExists(t *testing.T) {
+func TestApplyVhostConfigRawKeepsAlternateConfiguredUpstreamDirect(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
 
@@ -472,6 +524,10 @@ func TestApplyVhostConfigRawRebindsConfiguredLinkedUpstreamWhenAlternateConfigur
 		Version:     "PHP 8.2.99 (fpm-fcgi)",
 		Modules:     []string{"mbstring", "redis"},
 	})
+	initConfigDBStoreForTest(t)
+	inventoryCfg := importPHPRuntimeInventoryDBForTest(t, initialInventory, inventoryPath)
+	importVhostRuntimeDBForTest(t, initialVhosts, inventoryCfg)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
 		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
 	}
@@ -514,13 +570,13 @@ func TestApplyVhostConfigRawRebindsConfiguredLinkedUpstreamWhenAlternateConfigur
 	}
 	next, ok := findProxyUpstreamByName(cfg.Upstreams, "app-next")
 	if !ok {
-		t.Fatal("new configured linked upstream missing after relink")
+		t.Fatal("alternate configured upstream missing")
 	}
-	if next.ProviderClass != proxyUpstreamProviderClassVhostManaged {
-		t.Fatalf("provider_class=%q want=%q", next.ProviderClass, proxyUpstreamProviderClassVhostManaged)
+	if next.ProviderClass != proxyUpstreamProviderClassDirect {
+		t.Fatalf("provider_class=%q want=%q", next.ProviderClass, proxyUpstreamProviderClassDirect)
 	}
-	if next.ManagedByVhost != "app" {
-		t.Fatalf("managed_by_vhost=%q want=app", next.ManagedByVhost)
+	if next.ManagedByVhost != "" {
+		t.Fatalf("managed_by_vhost=%q want empty", next.ManagedByVhost)
 	}
 }
 
@@ -569,6 +625,10 @@ func TestApplyVhostConfigRawRestoresConfiguredUpstreamWhenDeletingVhost(t *testi
 		Version:     "PHP 8.2.99 (fpm-fcgi)",
 		Modules:     []string{"mbstring", "redis"},
 	})
+	initConfigDBStoreForTest(t)
+	inventoryCfg := importPHPRuntimeInventoryDBForTest(t, initialInventory, inventoryPath)
+	importVhostRuntimeDBForTest(t, initialVhosts, inventoryCfg)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
 		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
 	}
@@ -596,7 +656,7 @@ func TestApplyVhostConfigRawRestoresConfiguredUpstreamWhenDeletingVhost(t *testi
 	}
 }
 
-func TestValidateProxyRulesRawRejectsDeletingDirectUpstreamBoundByVhost(t *testing.T) {
+func TestValidateProxyRulesRawAllowsDeletingDirectUpstreamReferencedOnlyByLegacyLinkedName(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
 
@@ -659,8 +719,8 @@ func TestValidateProxyRulesRawRejectsDeletingDirectUpstreamBoundByVhost(t *testi
 			Action: ProxyRouteAction{Upstream: "primary"},
 		},
 	}))
-	if _, err := ValidateProxyRulesRaw(nextRaw); err == nil || !strings.Contains(err.Error(), `upstreams removes "app" while vhost "app" still binds to that direct upstream`) {
-		t.Fatalf("unexpected error: %v", err)
+	if _, err := ValidateProxyRulesRaw(nextRaw); err != nil {
+		t.Fatalf("ValidateProxyRulesRaw: %v", err)
 	}
 }
 
@@ -699,4 +759,13 @@ func findProxyUpstreamByName(in []ProxyUpstream, name string) (ProxyUpstream, bo
 		}
 	}
 	return ProxyUpstream{}, false
+}
+
+func findProxyRouteByName(in []ProxyRoute, name string) (ProxyRoute, bool) {
+	for _, route := range in {
+		if route.Name == name {
+			return route, true
+		}
+	}
+	return ProxyRoute{}, false
 }

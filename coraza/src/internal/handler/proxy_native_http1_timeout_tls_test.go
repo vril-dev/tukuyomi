@@ -215,7 +215,7 @@ func TestNativeHTTP1TLSHandshakeTimeoutAndH2ALPNRefusal(t *testing.T) {
 		t.Fatal("stalled TLS handshake stayed readable")
 	}
 	_ = raw.Close()
-	if got := srv.tlsHandshakeFailures.Load(); got == 0 {
+	if got := waitNativeHTTP1TLSHandshakeFailures(srv, time.Second); got == 0 {
 		t.Fatal("tlsHandshakeFailures was not incremented")
 	}
 
@@ -410,4 +410,18 @@ func (c *atomicCounter) Load() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.n
+}
+
+func waitNativeHTTP1TLSHandshakeFailures(srv *nativeHTTP1Server, wait time.Duration) uint64 {
+	if srv == nil {
+		return 0
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		got := srv.tlsHandshakeFailures.Load()
+		if got > 0 || time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(time.Millisecond)
+	}
 }

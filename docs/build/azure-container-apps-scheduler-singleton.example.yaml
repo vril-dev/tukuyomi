@@ -38,8 +38,10 @@ properties:
             mountPath: /app/conf
           - volumeName: proxy-scheduled-tasks
             mountPath: /app/data/scheduled-tasks
-          - volumeName: proxy-logs
-            mountPath: /app/logs
+          - volumeName: proxy-audit
+            mountPath: /app/audit
+          - volumeName: proxy-persistent
+            mountPath: /app/data/persistent
           - volumeName: proxy-php-fpm
             mountPath: /app/data/php-fpm
     scale:
@@ -52,9 +54,12 @@ properties:
       - name: proxy-scheduled-tasks
         storageType: AzureFile
         storageName: proxyscheduledtasks
-      - name: proxy-logs
+      - name: proxy-audit
         storageType: AzureFile
-        storageName: proxylogs
+        storageName: proxyaudit
+      - name: proxy-persistent
+        storageType: AzureFile
+        storageName: proxypersistent
       - name: proxy-php-fpm
         storageType: AzureFile
         storageName: proxyphpfpm

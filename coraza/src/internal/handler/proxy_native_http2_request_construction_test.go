@@ -204,6 +204,7 @@ func nativeHTTP2CaptureRequestServerURL(t *testing.T) (string, <-chan nativeHTTP
 		fields := append([]hpack.HeaderField(nil), mh.Fields...)
 		captures <- nativeHTTP2RequestCapture{StreamID: mh.StreamID, Fields: fields}
 		nativeHTTP2RawWriteHeaders(t, fr, mh.StreamID, true, hpack.HeaderField{Name: ":status", Value: "204"})
+		nativeHTTP2RawHoldUntilClientSettles(conn, fr)
 	}()
 	return "http://" + ln.Addr().String() + "/", captures
 }

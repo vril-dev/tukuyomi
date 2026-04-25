@@ -1,0 +1,27 @@
+{
+  "default": {
+    "enabled": false,
+    "mode": "off",
+    "provider": {
+      "enabled": false,
+      "name": "builtin_attack_family",
+      "timeout_ms": 25
+    },
+    "exempt_path_prefixes": [
+      "/tukuyomi-api",
+      "/tukuyomi-ui",
+      "/health",
+      "/healthz",
+      "/metrics",
+      "/favicon.ico",
+      "/_next/",
+      "/assets/",
+      "/static/"
+    ],
+    "log_threshold": 7,
+    "challenge_threshold": 10,
+    "block_threshold": 13,
+    "max_inspect_body": 8192
+  },
+  "hosts": {}
+}

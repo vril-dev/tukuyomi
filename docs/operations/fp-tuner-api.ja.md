@@ -15,7 +15,7 @@
 
 ```json
 {
-  "target_path": "rules/tukuyomi.conf",
+  "target_path": "tukuyomi.conf",
   "event": {
     "event_id": "manual-test-001",
     "method": "GET",
@@ -32,7 +32,7 @@
 ```
 
 注意:
-- `event` は optional です。省略した場合、server は `waf-events.ndjson` から最新の `waf_block` event を探します。
+- `event` は optional です。省略した場合、server は DB `waf_events` から最新の `waf_block` event を探します。
 - unknown field は reject されます。
 - provider は、安全な scoped Coraza exclusion proposal 1件、または明示的な `no_proposal` を返す前提です。
 
@@ -66,7 +66,7 @@
     "summary": "Scoped false-positive tuning suggestion.",
     "reason": "HTTP FP tuner flow の provider-generated response.",
     "confidence": 0.84,
-    "target_path": "rules/tukuyomi.conf",
+    "target_path": "tukuyomi.conf",
     "rule_line": "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\""
   }
 }
@@ -114,7 +114,7 @@
 {
   "proposal": {
     "id": "fp-http-001",
-    "target_path": "rules/tukuyomi.conf",
+    "target_path": "tukuyomi.conf",
     "rule_line": "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\""
   },
   "simulate": true,
@@ -135,7 +135,7 @@
   "contract_version": "fp_tuner.v1",
   "simulated": true,
   "hot_reloaded": false,
-  "reloaded_file": "rules/tukuyomi.conf",
+  "reloaded_file": "tukuyomi.conf",
   "preview_etag": "W/\"sha256:...\""
 }
 ```
@@ -148,7 +148,7 @@
   "contract_version": "fp_tuner.v1",
   "etag": "W/\"sha256:...\"",
   "hot_reloaded": true,
-  "reloaded_file": "rules/tukuyomi.conf"
+  "reloaded_file": "tukuyomi.conf"
 }
 ```
 
@@ -161,14 +161,14 @@
 - `http:80` / `https:443` では、host scope に `^example\.com(:80)?$` や `^example\.com(:443)?$` のような narrow な optional-default-port regex を使うことがあります。
 - masked category には bearer/jwt-like token、email、IPv4、common secret query key が含まれます。
 - apply で受け付けるのは scoped exclusion format だけです。
-- propose / apply action は `WAF_FP_TUNER_AUDIT_FILE`（default `logs/coraza/fp-tuner-audit.ndjson`）へ追記されます。
+- propose / apply action は `WAF_FP_TUNER_AUDIT_FILE`（default `audit/fp-tuner-audit.ndjson`）へ追記されます。
 - audit path は runtime UID/GID（`PUID` / `GUID`）で書き込めるようにしてください。
 
 ## Related Env Vars
 
 - `WAF_FP_TUNER_REQUIRE_APPROVAL`（default `true`）
 - `WAF_FP_TUNER_APPROVAL_TTL_SEC`（default `600`）
-- `WAF_FP_TUNER_AUDIT_FILE`（default `logs/coraza/fp-tuner-audit.ndjson`）
+- `WAF_FP_TUNER_AUDIT_FILE`（default `audit/fp-tuner-audit.ndjson`）
 
 ## Local HTTP Mode Contract Test
 

@@ -32,6 +32,67 @@ For reproducible release artifacts, use:
 make release-linux-all VERSION=v0.8.0
 ```
 
+## One-Shot Install
+
+For a direct Linux host install, this builds the binary, creates the runtime
+tree, runs DB migration, imports WAF/CRS assets, seeds a first DB, and installs
+systemd units:
+
+```bash
+make install TARGET=linux-systemd
+```
+
+Common overrides:
+
+```bash
+make install TARGET=linux-systemd \
+  PREFIX=/opt/tukuyomi \
+  INSTALL_ENABLE_SCHEDULED_TASKS=1 \
+  INSTALL_DB_SEED=auto
+```
+
+Behavior:
+
+- `PREFIX` defaults to `/opt/tukuyomi`
+- when `PREFIX` is under the invoking user's home directory,
+  `INSTALL_CREATE_USER=auto` uses that user as the runtime user and skips
+  `useradd`
+- a home-directory runtime tree is owned by that login user and primary group
+- for system paths such as `/opt/tukuyomi`, the default creates or reuses the
+  `tukuyomi` system user/group
+- for service-account installs on system paths, the deployment root, `bin/`,
+  `scripts/`, and `conf/` stay root-managed, while `db/`, `audit/`, `cache/`,
+  and `data/` are writable by the runtime user
+- existing `config.json` and `/etc/tukuyomi/tukuyomi.env` are preserved by default
+- host install uses `sudo` only for privileged filesystem/systemd operations, so
+  the build can run as the invoking user
+- newly created `/etc/tukuyomi/tukuyomi.env` and systemd units are rendered for
+  the selected `PREFIX`
+- `conf/config.json` is root-owned `0640` with read access granted only through
+  the service group
+- `/etc/tukuyomi/tukuyomi.env` stays root-owned `0640` because it is expected to
+  carry secrets
+- `INSTALL_DB_SEED=auto` runs `db-import` only when the SQLite DB is not present yet
+- the first DB seed creates a default upstream named `primary`; update it to
+  the real backend endpoint before exposing the proxy to traffic
+- rerunning against an existing DB migrates schema and refreshes WAF/CRS assets
+- for an empty MySQL / PostgreSQL DB, set `INSTALL_DB_SEED=always` explicitly
+- the scheduled-task timer is enabled only with `INSTALL_ENABLE_SCHEDULED_TASKS=1`
+- staging / smoke flows can use `DESTDIR=<tmp> INSTALL_ENABLE_SYSTEMD=0`
+
+To run explicitly as the login user:
+
+```bash
+make install TARGET=linux-systemd \
+  PREFIX="$HOME/tukuyomi" \
+  INSTALL_USER="$(id -un)" \
+  INSTALL_GROUP="$(id -gn)" \
+  INSTALL_CREATE_USER=0
+```
+
+For ECS / Kubernetes / Azure Container Apps, render deployment artifacts rather
+than mutating the host. See [container-deployment.md](container-deployment.md).
+
 ## Runtime Layout
 
 The binary expects a working directory that contains:
@@ -39,16 +100,21 @@ The binary expects a working directory that contains:
 ```text
 /opt/tukuyomi/bin/tukuyomi
 /opt/tukuyomi/conf/
-/opt/tukuyomi/rules/
-/opt/tukuyomi/logs/
+/opt/tukuyomi/db/
+/opt/tukuyomi/audit/
+/opt/tukuyomi/cache/
+/opt/tukuyomi/data/persistent/
+/opt/tukuyomi/data/tmp/
 ```
 
-Minimum runtime files:
+Bundle-provided bootstrap/examples:
 
 - `conf/config.json`
-- `conf/proxy.json`
-- `conf/sites.json`
-- `conf/cache-store.json`
+- `conf/crs-disabled.conf`
+- `scripts/update_country_db.sh`
+
+Optional operator-supplied seed/import files before the first DB import:
+
 - `conf/cache-rules.json`
 - `conf/waf-bypass.json`
 - `conf/waf-bypass.sample.json`
@@ -58,27 +124,31 @@ Minimum runtime files:
 - `conf/semantic.json`
 - `conf/notifications.json`
 - `conf/ip-reputation.json`
-- `rules/tukuyomi.conf`
-- `rules/crs/crs-setup.conf`
-- `rules/crs/rules/*.conf`
+- `conf/scheduled-tasks.json`
+- `conf/upstream-runtime.json`
+- staged WAF/CRS import material under `data/tmp/...` via `make crs-install`
 
-Additional files when you also want PHP-FPM `/options` and `/vhosts`:
+These seed an empty DB or support import/export workflows. Once the matching
+normalized DB domain exists, runtime loads normalized domains directly from DB
+and does not require those files to be restored. After import, production
+startup only requires `conf/config.json` for DB bootstrap plus the DB rows.
+
+Additional PHP-FPM files used before first DB import:
 
 - `data/php-fpm/binaries/<runtime_id>/`
 - `data/php-fpm/inventory.json`
 - `data/php-fpm/vhosts.json`
 
-Additional files when you want `/scheduled-tasks`:
+After import, the executable bundle remains required when using bundled PHP-FPM,
+but `inventory.json`, `vhosts.json`, `runtime.json`, and `modules.json` are not
+runtime authority.
 
-- `conf/scheduled-tasks.json`
+Additional files when you want `/scheduled-tasks` execution state:
 
-Additional files when you want managed bypass override rules:
-
-- `conf/rules/*.conf`
+- `data/scheduled-tasks/`
 
 Additional files when you want managed GeoIP country updates:
 
-- `data/geoip/`
 - `scripts/update_country_db.sh`
 
 Install example:
@@ -87,52 +157,79 @@ Install example:
 sudo install -d -m 755 \
   /opt/tukuyomi/bin \
   /opt/tukuyomi/conf \
-  /opt/tukuyomi/data/geoip \
-  /opt/tukuyomi/rules \
-  /opt/tukuyomi/scripts \
-  /opt/tukuyomi/logs/coraza \
-  /opt/tukuyomi/logs/proxy
+  /opt/tukuyomi/db \
+  /opt/tukuyomi/audit \
+  /opt/tukuyomi/cache/response \
+  /opt/tukuyomi/data/persistent \
+  /opt/tukuyomi/data/tmp \
+  /opt/tukuyomi/seeds/conf \
+  /opt/tukuyomi/scripts
 
 sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
+sudo cp -R seeds/conf/. /opt/tukuyomi/seeds/conf/
 
-for f in config.json proxy.json sites.json scheduled-tasks.json cache-store.json cache-rules.json waf-bypass.json waf-bypass.sample.json country-block.json rate-limit.json bot-defense.json semantic.json notifications.json ip-reputation.json; do
-  sudo install -m 644 "data/conf/${f}" "/opt/tukuyomi/conf/${f}"
-done
+sudo install -o root -g tukuyomi -m 640 data/conf/config.json /opt/tukuyomi/conf/config.json
 
-if [[ -d data/conf/rules ]]; then
-  sudo install -d -m 755 /opt/tukuyomi/conf/rules
-  for f in data/conf/rules/*; do
-    [[ -f "${f}" ]] || continue
-    sudo install -m 644 "${f}" "/opt/tukuyomi/conf/rules/$(basename "${f}")"
-  done
-fi
-
-if [[ -f data/geoip/README.md ]]; then
-  sudo install -m 644 data/geoip/README.md /opt/tukuyomi/data/geoip/README.md
-fi
-
-sudo install -m 644 data/rules/tukuyomi.conf /opt/tukuyomi/rules/tukuyomi.conf
-sudo install -d -m 755 /opt/tukuyomi/rules/crs
-sudo DEST_DIR=/opt/tukuyomi/rules/crs ./scripts/install_crs.sh
-sudo touch /opt/tukuyomi/conf/crs-disabled.conf
+sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disabled.conf
 ```
 
 Notes:
 
 - do not copy `data/conf/*.bak` into production
-- `config.json` is the main server-side config contract for `tukuyomi`
-- render or mount `config.json` from your secret manager or config-management layer in production
-- the embedded `Settings` page edits the same `conf/config.json` surface for global product settings, but that flow is `Save config only`; restart the service after listener/runtime/storage/observability changes
+- `config.json` is the DB connection bootstrap; release samples keep only the `storage` block
+- `conf/proxy.json` is optional seed/import/export material for DB `proxy_rules`
+- `conf/sites.json` is optional seed/import/export material for DB `sites`
+- the public release bundle ships `conf/config.json` and bundled empty-DB runtime seeds under `seeds/conf/`
+- when configured files such as `conf/proxy.json` or policy JSON are absent, `make db-import` reads `seeds/conf/` before falling back to built-in compatibility defaults
+- `make crs-install` stages the default base WAF rule seed from `seeds/waf/rules/tukuyomi.conf` and imports it into DB
+- CRS files are temporary import material for DB `waf_rule_assets`; `make crs-install` stages them under `data/tmp` and cleans up
+- `sites.json`, `scheduled-tasks.json`, `upstream-runtime.json`, policy JSON,
+  cache-rules JSON, WAF bypass JSON, and PHP-FPM JSON manifests are DB
+  seed/export artifacts after DB bootstrap
+- render or mount `config.json` from your secret manager or config-management layer in production for `storage.db_driver`, `storage.db_path`, and `storage.db_dsn`
+- run `make db-migrate`, then `make crs-install` to install/import WAF rule assets, then `make db-import` for the remaining seed material before first start. `db-import` does not re-import WAF rule assets
+- the embedded `Settings` page edits DB `app_config`; restart the service after listener/runtime/storage policy/observability changes
 - the public release bundle ships a companion `bin/geoipupdate` binary for `Options -> GeoIP Update -> Update now`
 - `GEOIPUPDATE_BIN` remains available if you want to override the bundled updater path
 - the official managed-country refresh wrapper is `./scripts/update_country_db.sh`
-- `data/geoip/country.mmdb`, `data/geoip/GeoIP.conf`, and `data/geoip/update-status.json` are operator-managed runtime artifacts; do not bake them into generic release bundles
-- managed bypass override rules live under `conf/rules/*.conf`; they are edited from `Rules -> Override Rules` and are loaded only when `waf-bypass.json` references them via `extra_rule`
-- the release bundle ships `conf/rules/search-endpoint.conf` as a harmless standalone sample
-- the paired sample reference is `conf/waf-bypass.sample.json`
+- managed GeoIP country DB, `GeoIP.conf`, and update status are DB-backed; do not ship a `data/geoip` fallback directory
+- managed bypass override rules are DB `override_rules`; do not ship a `conf/rules` fallback directory
+- WAF/access events are written to DB `waf_events`; `paths.log_file` is only a legacy import source when you intentionally ingest an old `waf-events.ndjson`
+- `extra_rule` values remain logical compatibility references to DB-managed override rules
 
-Proxy engine selection is also a restart-required `conf/config.json` setting:
+## Persistent Byte Storage
+
+Runtime artifacts that must remain durable as files/objects, rather than DB
+rows, are managed by `persistent_storage`. The current primary user is
+site-managed ACME: account keys, challenge tokens, and certificate cache.
+
+The default backend is local:
+
+```json
+{
+  "persistent_storage": {
+    "backend": "local",
+    "local": {
+      "base_dir": "data/persistent"
+    }
+  }
+}
+```
+
+- on single-node on-prem / VPS deployments, include `/opt/tukuyomi/data/persistent` in backups
+- for scale-out or node replacement, use the S3 backend or an operator-managed shared mount instead of node-local storage
+- the S3 backend stores only non-secret bucket / region / endpoint / prefix settings in DB `app_config`
+- pass `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` through env or platform secret injection
+- Azure Blob Storage and Google Cloud Storage fail closed until their provider adapters are implemented; they do not silently fall back to local
+
+Configure site-managed ACME per site on the `Sites` page by selecting
+`tls.mode=acme`. `production` / `staging` selects the Let's Encrypt production
+or staging CA, and account email is optional. ACME HTTP-01 needs
+`server.tls.redirect_http=true` with `server.tls.http_redirect_addr=:80`, or
+equivalent port 80 forwarding.
+
+Proxy engine selection is a restart-required DB `app_config` setting:
 
 ```json
 {
@@ -207,10 +304,20 @@ make php-fpm-build RUNTIME=php85
 sudo make php-fpm-copy RUNTIME=php85 DEST=/srv/tukuyomi
 ```
 
+When `make install PREFIX="$HOME/tukuyomi"` installed into the login user's
+home directory, copy to the same deployment root. This normally does not require
+`sudo`.
+
+```bash
+make php-fpm-build RUNTIME=php85
+make php-fpm-copy RUNTIME=php85 DEST="$HOME/tukuyomi"
+```
+
 Notes:
 
-- `php-fpm-copy` syncs `data/php-fpm/binaries/<runtime_id>/` into the binary deployment tree and creates `inventory.json` / `vhosts.json` if they are absent
-- remove an unneeded staged runtime bundle with `sudo make php-fpm-prune RUNTIME=php85`; it checks staged `vhosts.json` references and the runtime pid before deleting `binaries/<runtime_id>` and `runtime/<runtime_id>`
+- `php-fpm-copy` syncs `data/php-fpm/binaries/<runtime_id>/` into the binary deployment tree; import inventory/module metadata with `make db-import` before removing PHP-FPM JSON manifests
+- after staging, refresh Options Runtime Inventory or restart `tukuyomi` when needed
+- remove an unneeded staged runtime bundle with `sudo make php-fpm-prune RUNTIME=php85`; it checks DB vhost references and the runtime pid before deleting `binaries/<runtime_id>` and `runtime/<runtime_id>`
 - `data/php-fpm/runtime/` is not copied; `tukuyomi` generates it later from vhost definitions
 - Docker is needed only for `php-fpm-build`; runtime execution does not depend on Docker after the bundle is staged
 - PHP, base image libraries, and PECL extension security updates remain operator-managed: rebuild and restage the bundle when you need those updates
@@ -237,9 +344,16 @@ Optional security-audit key overrides:
 - `WAF_SECURITY_AUDIT_HMAC_KEY`
 - `WAF_SECURITY_AUDIT_HMAC_KEY_ID`
 
+S3 credentials required only when `persistent_storage.backend=s3`:
+
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_SESSION_TOKEN`
+- `AWS_REGION` / `AWS_DEFAULT_REGION`
+
 ## Overload Tuning
 
-Keep overload controls in `conf/config.json` under `server`:
+Keep overload controls in DB `app_config` under `server`:
 
 - `max_concurrent_requests` is the process-wide guard.
 - `max_concurrent_proxy_requests` is the data-plane guard.
@@ -251,9 +365,10 @@ Keep overload controls in `conf/config.json` under `server`:
 
 ## Secret Handling
 
-- keep `admin.api_key_primary`, `admin.api_key_secondary`, and `admin.session_secret` in `conf/config.json`, not in the browser
-- browser operators sign in once and receive same-origin session cookies
-- CLI / automation can continue to call `/tukuyomi-api/*` with `X-API-Key`
+- keep `admin.session_secret` in managed app config, not in the browser
+- use `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` / `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` only for first-owner bootstrap when the admin user table is empty
+- browser operators sign in with username/password and receive same-origin DB-backed session cookies
+- CLI / automation should use per-user personal access tokens, not shared admin API keys
 - default `tukuyomi` posture is `admin.external_mode=api_only_external`; move to `deny_external` if remote admin API access is unnecessary
 - if you intentionally set `admin.external_mode=full_external` on a non-loopback listener, add front-side allowlists/auth because startup will only warn, not block
 - widening `admin.trusted_cidrs` to public or catch-all networks also re-exposes the embedded admin UI/API to those sources and only triggers a warning
@@ -304,7 +419,7 @@ sudo systemctl enable --now tukuyomi.socket
 sudo systemctl enable --now tukuyomi.service
 ```
 
-Only enable socket units that match your `conf/config.json`. `ListenStream` /
+Only enable socket units that match effective DB `app_config`. `ListenStream` /
 `ListenDatagram` must match `server.listen_addr`, `admin.listen_addr`,
 `server.tls.http_redirect_addr`, and the HTTP/3 UDP port. The process validates
 the inherited socket address and fails closed on mismatch.
@@ -331,7 +446,7 @@ replacement.
 
 ## Notes
 
-- the sample unit uses `WorkingDirectory=/opt/tukuyomi`, so relative `conf/`, `rules/`, and `logs/` paths keep working
+- the sample unit uses `WorkingDirectory=/opt/tukuyomi`; relative `conf/`, `audit/`, and `data/tmp/` paths stay inside the deployment root
 - `server.graceful_shutdown_timeout_sec` defaults to `30`; set it higher if you intentionally keep long-lived WebSocket sessions during deploys
 - the scheduled-task service uses the same working directory and env file, so `run-scheduled-tasks` sees the same `conf/` and `data/scheduled-tasks/` tree as the main service
 - the sample unit includes `CAP_NET_BIND_SERVICE`, so direct binds such as `server.listen_addr=:443` and `server.tls.http_redirect_addr=:80` work under `User=tukuyomi`

@@ -15,7 +15,7 @@ This document defines the current API contract for Coraza false-positive exclusi
 
 ```json
 {
-  "target_path": "rules/tukuyomi.conf",
+  "target_path": "tukuyomi.conf",
   "event": {
     "event_id": "manual-test-001",
     "method": "GET",
@@ -32,7 +32,7 @@ This document defines the current API contract for Coraza false-positive exclusi
 ```
 
 Notes:
-- `event` is optional. If omitted, server tries latest `waf_block` event from `waf-events.ndjson`.
+- `event` is optional. If omitted, server tries the latest `waf_block` event from DB `waf_events`.
 - Unknown fields are rejected.
 - The provider is expected to either return one safe scoped Coraza exclusion proposal or an explicit `no_proposal`.
 
@@ -66,7 +66,7 @@ Notes:
     "summary": "Scoped false-positive tuning suggestion.",
     "reason": "Provider-generated response for HTTP FP tuner flow.",
     "confidence": 0.84,
-    "target_path": "rules/tukuyomi.conf",
+    "target_path": "tukuyomi.conf",
     "rule_line": "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\""
   }
 }
@@ -114,7 +114,7 @@ Notes:
 {
   "proposal": {
     "id": "fp-http-001",
-    "target_path": "rules/tukuyomi.conf",
+    "target_path": "tukuyomi.conf",
     "rule_line": "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\""
   },
   "simulate": true,
@@ -135,7 +135,7 @@ Notes:
   "contract_version": "fp_tuner.v1",
   "simulated": true,
   "hot_reloaded": false,
-  "reloaded_file": "rules/tukuyomi.conf",
+  "reloaded_file": "tukuyomi.conf",
   "preview_etag": "W/\"sha256:...\""
 }
 ```
@@ -148,7 +148,7 @@ Notes:
   "contract_version": "fp_tuner.v1",
   "etag": "W/\"sha256:...\"",
   "hot_reloaded": true,
-  "reloaded_file": "rules/tukuyomi.conf"
+  "reloaded_file": "tukuyomi.conf"
 }
 ```
 
@@ -161,14 +161,14 @@ Notes:
 - For `http:80` and `https:443`, host scope may use a narrow optional-default-port regex such as `^example\.com(:80)?$` or `^example\.com(:443)?$`.
 - Masked categories include bearer/jwt-like tokens, email, IPv4, and common secret query keys.
 - Only scoped exclusion format is accepted for apply.
-- Propose/apply actions are appended to `WAF_FP_TUNER_AUDIT_FILE` (default `logs/coraza/fp-tuner-audit.ndjson`).
+- Propose/apply actions are appended to `WAF_FP_TUNER_AUDIT_FILE` (default `audit/fp-tuner-audit.ndjson`).
 - Ensure the audit path is writable by the runtime UID/GID (`PUID`/`GUID`).
 
 ## Related Env Vars
 
 - `WAF_FP_TUNER_REQUIRE_APPROVAL` (`true` by default)
 - `WAF_FP_TUNER_APPROVAL_TTL_SEC` (default `600`)
-- `WAF_FP_TUNER_AUDIT_FILE` (default `logs/coraza/fp-tuner-audit.ndjson`)
+- `WAF_FP_TUNER_AUDIT_FILE` (default `audit/fp-tuner-audit.ndjson`)
 
 ## Local HTTP Mode Contract Test
 

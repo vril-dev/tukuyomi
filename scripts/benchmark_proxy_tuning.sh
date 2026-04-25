@@ -25,8 +25,8 @@ BENCH_PROFILE="${BENCH_PROFILE:-0}"
 BENCH_PROFILE_ADDR="${BENCH_PROFILE_ADDR:-127.0.0.1:6060}"
 BENCH_PROFILE_SECONDS="${BENCH_PROFILE_SECONDS:-10}"
 UPSTREAM_PORT="${UPSTREAM_PORT:-}"
-OUTPUT_FILE="${OUTPUT_FILE:-data/logs/proxy/proxy-benchmark-summary.md}"
-OUTPUT_JSON_FILE="${OUTPUT_JSON_FILE:-data/logs/proxy/proxy-benchmark-summary.json}"
+OUTPUT_FILE="${OUTPUT_FILE:-data/tmp/reports/proxy/proxy-benchmark-summary.md}"
+OUTPUT_JSON_FILE="${OUTPUT_JSON_FILE:-data/tmp/reports/proxy/proxy-benchmark-summary.json}"
 
 benchmark_failed=0
 bench_ip_counter=10
@@ -851,7 +851,10 @@ start_proxy_runtime() {
       fi
       (
         cd "${ROOT_DIR}"
-        CORAZA_PORT="${HOST_CORAZA_PORT}" WAF_LISTEN_PORT="${WAF_LISTEN_PORT}" TUKUYOMI_PPROF_ADDR="${compose_pprof_addr}" docker compose up -d --build --force-recreate coraza >/dev/null
+        CORAZA_PORT="${HOST_CORAZA_PORT}" WAF_LISTEN_PORT="${WAF_LISTEN_PORT}" \
+        TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${WAF_ADMIN_USERNAME}" \
+        TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${WAF_ADMIN_PASSWORD}" \
+        TUKUYOMI_PPROF_ADDR="${compose_pprof_addr}" docker compose up -d --build --force-recreate coraza >/dev/null
       )
       ;;
     local)
@@ -866,7 +869,10 @@ start_proxy_runtime() {
       )
       (
         cd "${ROOT_DIR}/data"
-        WAF_CONFIG_FILE="conf/config.json" TUKUYOMI_PPROF_ADDR="${pprof_env}" "${server_bin}"
+        WAF_CONFIG_FILE="conf/config.json" \
+        TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${WAF_ADMIN_USERNAME}" \
+        TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${WAF_ADMIN_PASSWORD}" \
+        TUKUYOMI_PPROF_ADDR="${pprof_env}" "${server_bin}"
       ) >"${server_log_file}" 2>&1 &
       server_pid="$!"
       ;;

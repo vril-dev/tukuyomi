@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	defaultFPTunerAuditFile = "/app/logs/coraza/fp-tuner-audit.ndjson"
+	defaultFPTunerAuditFile = "audit/fp-tuner-audit.ndjson"
 )
 
 type fpTunerAuditEntry struct {

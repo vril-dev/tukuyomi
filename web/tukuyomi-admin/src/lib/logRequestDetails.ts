@@ -164,6 +164,24 @@ export function filterLogLinesByReqID(lines: LogLine[], reqID: string): LogLine[
   return lines.filter((line) => String(line.req_id ?? "").trim() === normalized);
 }
 
+export function sortLogLinesNewestFirst(lines: LogLine[]): LogLine[] {
+  return lines
+    .map((line, index) => ({ line, index, ts: parseTimestamp(line.ts) }))
+    .sort((left, right) => {
+      if (left.ts != null && right.ts != null && left.ts !== right.ts) {
+        return right.ts - left.ts;
+      }
+      if (left.ts != null && right.ts == null) {
+        return -1;
+      }
+      if (right.ts != null && left.ts == null) {
+        return 1;
+      }
+      return right.index - left.index;
+    })
+    .map((entry) => entry.line);
+}
+
 export function summarizeRequestEvents(reqID: string, lines: LogLine[]): RequestDetailSummary {
   const normalizedReqID = reqID.trim();
   const orderedLines = sortRequestLines(lines);

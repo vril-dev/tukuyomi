@@ -39,6 +39,9 @@ type ListenerAdminConfig = {
       min_version: string;
       redirect_http: boolean;
       http_redirect_addr: string;
+      acme: {
+        cache_dir: string;
+      };
     };
     http3: {
       enabled: boolean;
@@ -76,7 +79,6 @@ type ListenerAdminConfig = {
     };
   };
   storage: {
-    backend: string;
     db_driver: string;
     db_path: string;
     db_retention_days: number;
@@ -85,19 +87,43 @@ type ListenerAdminConfig = {
     file_max_bytes: number;
     file_retention_days: number;
   };
-    paths: {
-      proxy_config_file: string;
-      site_config_file: string;
-      php_runtime_inventory_file: string;
-      vhost_config_file: string;
-      scheduled_task_config_file: string;
-      security_audit_file: string;
-      security_audit_blob_dir: string;
-      cache_store_file: string;
-      rules_file: string;
-      override_rules_dir: string;
-      upstream_runtime_file: string;
-      bypass_file: string;
+  persistent_storage: {
+    backend: string;
+    local: {
+      base_dir: string;
+    };
+    s3: {
+      bucket: string;
+      region: string;
+      endpoint: string;
+      prefix: string;
+      force_path_style: boolean;
+    };
+    azure_blob: {
+      account_name: string;
+      container: string;
+      endpoint: string;
+      prefix: string;
+    };
+    gcs: {
+      bucket: string;
+      prefix: string;
+    };
+  };
+  paths: {
+    proxy_config_file: string;
+    site_config_file: string;
+    php_runtime_inventory_file: string;
+    vhost_config_file: string;
+    scheduled_task_config_file: string;
+    security_audit_file: string;
+    security_audit_blob_dir: string;
+    cache_rules_file: string;
+    cache_store_file: string;
+    rules_file: string;
+    override_rules_dir: string;
+    upstream_runtime_file: string;
+    bypass_file: string;
     country_block_file: string;
     rate_limit_file: string;
     bot_defense_file: string;
@@ -111,6 +137,11 @@ type ListenerAdminConfig = {
   };
   proxy: {
     rollback_history_size: number;
+    engine: {
+      mode: string;
+    };
+  };
+  waf: {
     engine: {
       mode: string;
     };
@@ -136,6 +167,8 @@ type ListenerAdminConfig = {
     };
   };
 };
+
+type ListenerAdminPathKey = keyof ListenerAdminConfig["paths"];
 
 type ListenerAdminRuntime = {
   request_country_configured_mode?: string;
@@ -180,8 +213,7 @@ type ListenerAdminRuntime = {
   server_max_queued_proxy_requests?: number;
   server_queued_proxy_request_timeout_ms?: number;
   proxy_engine_mode?: string;
-  storage_backend?: string;
-  storage_db_enabled?: boolean;
+  waf_engine_mode?: string;
   storage_db_driver?: string;
   storage_db_path?: string;
   storage_db_retention_days?: number;
@@ -189,6 +221,13 @@ type ListenerAdminRuntime = {
   storage_file_rotate_bytes?: number;
   storage_file_max_bytes?: number;
   storage_file_retention_days?: number;
+  persistent_storage_backend?: string;
+  persistent_storage_local_base_dir?: string;
+  persistent_storage_s3_bucket?: string;
+  persistent_storage_s3_region?: string;
+  persistent_storage_s3_endpoint?: string;
+  persistent_storage_s3_prefix?: string;
+  persistent_storage_s3_force_path_style?: boolean;
   tracing_enabled?: boolean;
   tracing_service_name?: string;
   tracing_otlp_endpoint?: string;
@@ -206,8 +245,6 @@ type ListenerAdminResponse = {
 };
 
 type SecretStatus = {
-  admin_api_key_primary_configured?: boolean;
-  admin_api_key_secondary_configured?: boolean;
   admin_session_secret_configured?: boolean;
   storage_db_dsn_configured?: boolean;
   security_audit_key_source?: string;
@@ -245,6 +282,9 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
         min_version: "tls1.2",
         redirect_http: false,
         http_redirect_addr: "",
+        acme: {
+          cache_dir: "",
+        },
       },
       http3: {
         enabled: false,
@@ -282,14 +322,36 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
       },
     },
     storage: {
-      backend: "file",
       db_driver: "sqlite",
-      db_path: "logs/coraza/tukuyomi.db",
+      db_path: "db/tukuyomi.db",
       db_retention_days: 30,
       db_sync_interval_sec: 0,
       file_rotate_bytes: 8 * 1024 * 1024,
       file_max_bytes: 256 * 1024 * 1024,
       file_retention_days: 7,
+    },
+    persistent_storage: {
+      backend: "local",
+      local: {
+        base_dir: "data/persistent",
+      },
+      s3: {
+        bucket: "",
+        region: "",
+        endpoint: "",
+        prefix: "",
+        force_path_style: false,
+      },
+      azure_blob: {
+        account_name: "",
+        container: "",
+        endpoint: "",
+        prefix: "",
+      },
+      gcs: {
+        bucket: "",
+        prefix: "",
+      },
     },
     paths: {
       proxy_config_file: "conf/proxy.json",
@@ -297,10 +359,11 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
       php_runtime_inventory_file: "data/php-fpm/inventory.json",
       vhost_config_file: "data/php-fpm/vhosts.json",
       scheduled_task_config_file: "conf/scheduled-tasks.json",
-      security_audit_file: "logs/coraza/security-audit.ndjson",
-      security_audit_blob_dir: "logs/coraza/security-audit-blobs",
+      security_audit_file: "audit/security-audit.ndjson",
+      security_audit_blob_dir: "audit/security-audit-blobs",
+      cache_rules_file: "conf/cache-rules.json",
       cache_store_file: "conf/cache-store.json",
-      rules_file: "rules/tukuyomi.conf",
+      rules_file: "tukuyomi.conf",
       override_rules_dir: "conf/rules",
       upstream_runtime_file: "conf/upstream-runtime.json",
       bypass_file: "conf/waf-bypass.json",
@@ -321,6 +384,11 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
         mode: "tukuyomi_proxy",
       },
     },
+    waf: {
+      engine: {
+        mode: "coraza",
+      },
+    },
     crs: {
       enable: true,
     },
@@ -330,7 +398,7 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
       timeout_sec: 15,
       require_approval: true,
       approval_ttl_sec: 600,
-      audit_file: "logs/coraza/fp-tuner-audit.ndjson",
+      audit_file: "audit/fp-tuner-audit.ndjson",
     },
     observability: {
       tracing: {
@@ -344,11 +412,15 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
   };
 }
 
-function cloneListenerAdminConfig(value: ListenerAdminConfig): ListenerAdminConfig {
+function cloneListenerAdminConfig(
+  value: ListenerAdminConfig,
+): ListenerAdminConfig {
   return JSON.parse(JSON.stringify(value)) as ListenerAdminConfig;
 }
 
-function normalizeListenerAdminConfig(value: Partial<ListenerAdminConfig> | null | undefined): ListenerAdminConfig {
+function normalizeListenerAdminConfig(
+  value: Partial<ListenerAdminConfig> | null | undefined,
+): ListenerAdminConfig {
   const base = createEmptyListenerAdminConfig();
   if (!value) return base;
   return {
@@ -360,11 +432,19 @@ function normalizeListenerAdminConfig(value: Partial<ListenerAdminConfig> | null
       proxy_protocol: {
         ...base.server.proxy_protocol,
         ...value.server?.proxy_protocol,
-        trusted_cidrs: Array.isArray(value.server?.proxy_protocol?.trusted_cidrs) ? [...value.server.proxy_protocol.trusted_cidrs] : [],
+        trusted_cidrs: Array.isArray(
+          value.server?.proxy_protocol?.trusted_cidrs,
+        )
+          ? [...value.server.proxy_protocol.trusted_cidrs]
+          : [],
       },
       tls: {
         ...base.server.tls,
         ...value.server?.tls,
+        acme: {
+          ...base.server.tls.acme,
+          ...value.server?.tls?.acme,
+        },
       },
       http3: {
         ...base.server.http3,
@@ -386,12 +466,18 @@ function normalizeListenerAdminConfig(value: Partial<ListenerAdminConfig> | null
     admin: {
       ...base.admin,
       ...value.admin,
-      trusted_cidrs: Array.isArray(value.admin?.trusted_cidrs) ? [...value.admin.trusted_cidrs] : [],
-      cors_allowed_origins: Array.isArray(value.admin?.cors_allowed_origins) ? [...value.admin.cors_allowed_origins] : [],
+      trusted_cidrs: Array.isArray(value.admin?.trusted_cidrs)
+        ? [...value.admin.trusted_cidrs]
+        : [],
+      cors_allowed_origins: Array.isArray(value.admin?.cors_allowed_origins)
+        ? [...value.admin.cors_allowed_origins]
+        : [],
       proxy_protocol: {
         ...base.admin.proxy_protocol,
         ...value.admin?.proxy_protocol,
-        trusted_cidrs: Array.isArray(value.admin?.proxy_protocol?.trusted_cidrs) ? [...value.admin.proxy_protocol.trusted_cidrs] : [],
+        trusted_cidrs: Array.isArray(value.admin?.proxy_protocol?.trusted_cidrs)
+          ? [...value.admin.proxy_protocol.trusted_cidrs]
+          : [],
       },
       rate_limit: {
         ...base.admin.rate_limit,
@@ -401,6 +487,26 @@ function normalizeListenerAdminConfig(value: Partial<ListenerAdminConfig> | null
     storage: {
       ...base.storage,
       ...value.storage,
+    },
+    persistent_storage: {
+      ...base.persistent_storage,
+      ...value.persistent_storage,
+      local: {
+        ...base.persistent_storage.local,
+        ...value.persistent_storage?.local,
+      },
+      s3: {
+        ...base.persistent_storage.s3,
+        ...value.persistent_storage?.s3,
+      },
+      azure_blob: {
+        ...base.persistent_storage.azure_blob,
+        ...value.persistent_storage?.azure_blob,
+      },
+      gcs: {
+        ...base.persistent_storage.gcs,
+        ...value.persistent_storage?.gcs,
+      },
     },
     paths: {
       ...base.paths,
@@ -412,6 +518,14 @@ function normalizeListenerAdminConfig(value: Partial<ListenerAdminConfig> | null
       engine: {
         ...base.proxy.engine,
         ...value.proxy?.engine,
+      },
+    },
+    waf: {
+      ...base.waf,
+      ...value.waf,
+      engine: {
+        ...base.waf.engine,
+        ...value.waf?.engine,
       },
     },
     crs: {
@@ -446,8 +560,6 @@ function multilineToStringList(value: string) {
 
 function createEmptySecretStatus(): SecretStatus {
   return {
-    admin_api_key_primary_configured: false,
-    admin_api_key_secondary_configured: false,
     admin_session_secret_configured: false,
     storage_db_dsn_configured: false,
     security_audit_key_source: "config",
@@ -461,7 +573,9 @@ function createEmptySecretStatus(): SecretStatus {
 
 export default function SettingsPanel() {
   const { tx } = useI18n();
-  const [operatorIdentityInput, setOperatorIdentityInput] = useState(() => getOperatorIdentity());
+  const [operatorIdentityInput, setOperatorIdentityInput] = useState(() =>
+    getOperatorIdentity(),
+  );
   const [helperNotice, setHelperNotice] = useState("");
   const [helperError, setHelperError] = useState("");
   const [checking, setChecking] = useState(false);
@@ -471,9 +585,14 @@ export default function SettingsPanel() {
   const [etag, setETag] = useState("");
   const [configFile, setConfigFile] = useState("");
   const [restartRequired, setRestartRequired] = useState(true);
-  const [listenerAdminConfig, setListenerAdminConfig] = useState<ListenerAdminConfig>(createEmptyListenerAdminConfig());
-  const [serverConfig, setServerConfig] = useState<ListenerAdminConfig>(createEmptyListenerAdminConfig());
-  const [secretStatus, setSecretStatus] = useState<SecretStatus>(createEmptySecretStatus());
+  const [listenerAdminConfig, setListenerAdminConfig] =
+    useState<ListenerAdminConfig>(createEmptyListenerAdminConfig());
+  const [serverConfig, setServerConfig] = useState<ListenerAdminConfig>(
+    createEmptyListenerAdminConfig(),
+  );
+  const [secretStatus, setSecretStatus] = useState<SecretStatus>(
+    createEmptySecretStatus(),
+  );
   const [runtime, setRuntime] = useState<ListenerAdminRuntime | null>(null);
   const [configNotice, setConfigNotice] = useState("");
   const [configError, setConfigError] = useState("");
@@ -499,8 +618,12 @@ export default function SettingsPanel() {
     setConfigLoading(true);
     setConfigError("");
     try {
-      const data = await apiGetJson<ListenerAdminResponse>("/settings/listener-admin");
-      const next = cloneListenerAdminConfig(normalizeListenerAdminConfig(data.config));
+      const data = await apiGetJson<ListenerAdminResponse>(
+        "/settings/listener-admin",
+      );
+      const next = cloneListenerAdminConfig(
+        normalizeListenerAdminConfig(data.config),
+      );
       setListenerAdminConfig(next);
       setServerConfig(cloneListenerAdminConfig(next));
       setSecretStatus(data.secrets ?? createEmptySecretStatus());
@@ -525,7 +648,11 @@ export default function SettingsPanel() {
     e.preventDefault();
     setOperatorIdentity(operatorIdentityInput);
     setHelperError("");
-    setHelperNotice(tx("Saved. This browser now sends the configured operator identity on /tukuyomi-api requests."));
+    setHelperNotice(
+      tx(
+        "Saved. This browser now sends the configured operator identity on /tukuyomi-api requests.",
+      ),
+    );
   }
 
   function onClearOperatorIdentity() {
@@ -570,7 +697,9 @@ export default function SettingsPanel() {
       setHelperNotice(tx("Verify manifest downloaded."));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      setHelperError(tx("Verify manifest download failed: {message}", { message }));
+      setHelperError(
+        tx("Verify manifest download failed: {message}", { message }),
+      );
     } finally {
       setManifestDownloading(false);
     }
@@ -581,13 +710,22 @@ export default function SettingsPanel() {
     setConfigError("");
     setConfigNotice("");
     try {
-      const data = await apiPostJson<ListenerAdminResponse>("/settings/listener-admin/validate", {
-        config: listenerAdminConfig,
-      });
-      const next = cloneListenerAdminConfig(normalizeListenerAdminConfig(data.config ?? listenerAdminConfig));
+      const data = await apiPostJson<ListenerAdminResponse>(
+        "/settings/listener-admin/validate",
+        {
+          config: listenerAdminConfig,
+        },
+      );
+      const next = cloneListenerAdminConfig(
+        normalizeListenerAdminConfig(data.config ?? listenerAdminConfig),
+      );
       setListenerAdminConfig(next);
       setSecretStatus(data.secrets ?? createEmptySecretStatus());
-      setConfigNotice(tx("Validation passed. Global config changes here still require restart after save."));
+      setConfigNotice(
+        tx(
+          "Validation passed. Global config changes here still require restart after save.",
+        ),
+      );
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setConfigError(message);
@@ -606,14 +744,20 @@ export default function SettingsPanel() {
         { config: listenerAdminConfig },
         { headers: { "If-Match": etag } },
       );
-      const next = cloneListenerAdminConfig(normalizeListenerAdminConfig(data.config ?? listenerAdminConfig));
+      const next = cloneListenerAdminConfig(
+        normalizeListenerAdminConfig(data.config ?? listenerAdminConfig),
+      );
       setListenerAdminConfig(next);
       setServerConfig(cloneListenerAdminConfig(next));
       setSecretStatus(data.secrets ?? createEmptySecretStatus());
       setETag(data.etag ?? "");
       setRestartRequired(data.restart_required !== false);
       setRuntime(data.runtime ?? null);
-      setConfigNotice(tx("Saved to config.json. Restart tukuyomi to apply global config changes from this panel."));
+      setConfigNotice(
+        tx(
+          "Saved to DB app_config. Restart tukuyomi to apply global config changes from this panel.",
+        ),
+      );
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setConfigError(message);
@@ -622,80 +766,146 @@ export default function SettingsPanel() {
     }
   }
 
+  function renderPathField(key: ListenerAdminPathKey, label: string) {
+    return (
+      <Field key={key} label={tx(label)}>
+        <input
+          value={listenerAdminConfig.paths[key]}
+          onChange={(e) =>
+            setListenerAdminConfig((current) => ({
+              ...current,
+              paths: { ...current.paths, [key]: e.target.value },
+            }))
+          }
+          className="w-full rounded border border-neutral-200 bg-white"
+        />
+      </Field>
+    );
+  }
+
   return (
     <div className="w-full p-4 space-y-4">
       <header className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold">{tx("Settings")}</h1>
         <div className="flex items-center gap-2">
-          <span className={`px-2 py-0.5 text-xs rounded ${session.authenticated ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
-            {tx("session")} {session.authenticated ? tx("active") : tx("missing")}
+          <span
+            className={`px-2 py-0.5 text-xs rounded ${session.authenticated ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}
+          >
+            {tx("session")}{" "}
+            {session.authenticated ? tx("active") : tx("missing")}
           </span>
-          <span className={`px-2 py-0.5 text-xs rounded ${hasOperatorIdentity ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-700"}`}>
-            {tx("actor")} {hasOperatorIdentity ? tx("configured") : tx("not set")}
+          <span
+            className={`px-2 py-0.5 text-xs rounded ${hasOperatorIdentity ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-700"}`}
+          >
+            {tx("actor")}{" "}
+            {hasOperatorIdentity ? tx("configured") : tx("not set")}
           </span>
         </div>
       </header>
 
       <section className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <div className="text-sm font-medium">{tx("Global Product Config")}</div>
-              <p className="text-xs text-neutral-500">
-              {tx("Edit listener, runtime, storage, and observability settings from conf/config.json. These changes are saved immediately, but runtime behavior updates only after process restart.")}
-              </p>
+          <div>
+            <div className="text-sm font-medium">
+              {tx("Global Product Config")}
             </div>
+            <p className="text-xs text-neutral-500">
+              {tx(
+                "Edit listener, runtime, storage policy, and observability settings stored in DB app_config. DB connection fields still come from the bootstrap config file.",
+              )}
+            </p>
+          </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-            <span className="rounded bg-neutral-100 px-2 py-1">ETag {etag || "-"}</span>
-            <span className="rounded bg-neutral-100 px-2 py-1">{tx("Config File")}: {configFile || "-"}</span>
-            <span className={`rounded px-2 py-1 ${restartRequired ? "bg-amber-100 text-amber-900" : "bg-green-100 text-green-800"}`}>
-              {restartRequired ? tx("Restart required") : tx("No restart required")}
+            <span className="rounded bg-neutral-100 px-2 py-1">
+              ETag {etag || "-"}
+            </span>
+            <span className="rounded bg-neutral-100 px-2 py-1">
+              {tx("Bootstrap Config")}: {configFile || "-"}
+            </span>
+            <span
+              className={`rounded px-2 py-1 ${restartRequired ? "bg-amber-100 text-amber-900" : "bg-green-100 text-green-800"}`}
+            >
+              {restartRequired
+                ? tx("Restart required")
+                : tx("No restart required")}
             </span>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => void loadSettingsConfig()} disabled={configLoading || configSaving}>
+          <button
+            type="button"
+            onClick={() => void loadSettingsConfig()}
+            disabled={configLoading || configSaving}
+          >
             {tx("Load")}
           </button>
-          <button type="button" onClick={() => void onValidateConfig()} disabled={configLoading || configSaving}>
+          <button
+            type="button"
+            onClick={() => void onValidateConfig()}
+            disabled={configLoading || configSaving}
+          >
             {configSaving ? tx("Working...") : tx("Validate")}
           </button>
-          <button type="button" onClick={() => void onSaveConfig()} disabled={readOnly || configLoading || configSaving || !etag || !dirty}>
+          <button
+            type="button"
+            onClick={() => void onSaveConfig()}
+            disabled={
+              readOnly || configLoading || configSaving || !etag || !dirty
+            }
+          >
             {tx("Save config only")}
           </button>
         </div>
 
         {configNotice ? (
-          <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900">{configNotice}</div>
+          <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900">
+            {configNotice}
+          </div>
         ) : null}
         {configError ? (
-          <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">{configError}</div>
+          <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">
+            {configError}
+          </div>
         ) : null}
 
         <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          {tx("Listener, runtime, storage, and observability settings here are startup config. Saving updates config.json only. Restart the process after saving.")}
+          {tx(
+            "Listener, runtime, storage policy, and observability settings here are restart-required startup config. Saving updates DB app_config; db_driver, db_path, and db_dsn stay bootstrap-only in config.json.",
+          )}
         </div>
 
         {configLoading ? (
-          <div className="text-xs text-neutral-500">{tx("Loading settings config...")}</div>
+          <div className="text-xs text-neutral-500">
+            {tx("Loading settings config...")}
+          </div>
         ) : (
           <>
             <div className="grid gap-4 xl:grid-cols-2">
               <section className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
                 <div>
-                  <div className="text-sm font-medium">{tx("Listener & Network")}</div>
+                  <div className="text-sm font-medium">
+                    {tx("Listener & Network")}
+                  </div>
                   <p className="text-xs text-neutral-500">
-                    {tx("Public listener, TLS, HTTP redirect, HTTP/3, and overload controls for the main proxy listener.")}
+                    {tx(
+                      "Public listener, TLS, HTTP redirect, HTTP/3, and overload controls for the main proxy listener.",
+                    )}
                   </p>
                 </div>
 
                 <Field label={tx("Public Listen Address")}>
                   <input
                     value={listenerAdminConfig.server.listen_addr}
-                    onChange={(e) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: { ...current.server, listen_addr: e.target.value },
-                    }))}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          listen_addr: e.target.value,
+                        },
+                      }))
+                    }
                     className="w-full rounded border border-neutral-200 bg-white"
                     placeholder=":9090"
                   />
@@ -705,35 +915,48 @@ export default function SettingsPanel() {
                   <input
                     type="checkbox"
                     checked={listenerAdminConfig.server.proxy_protocol.enabled}
-                    onChange={(e) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: {
-                        ...current.server,
-                        proxy_protocol: { ...current.server.proxy_protocol, enabled: e.target.checked },
-                      },
-                    }))}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          proxy_protocol: {
+                            ...current.server.proxy_protocol,
+                            enabled: e.target.checked,
+                          },
+                        },
+                      }))
+                    }
                   />
                   {tx("Enable PROXY Protocol on the public listener")}
                 </label>
 
                 <Field label={tx("Trusted PROXY Peers CIDRs (one per line)")}>
                   <textarea
-                    value={stringListToMultiline(listenerAdminConfig.server.proxy_protocol.trusted_cidrs)}
-                    onChange={(e) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: {
-                        ...current.server,
-                        proxy_protocol: {
-                          ...current.server.proxy_protocol,
-                          trusted_cidrs: multilineToStringList(e.target.value),
+                    value={stringListToMultiline(
+                      listenerAdminConfig.server.proxy_protocol.trusted_cidrs,
+                    )}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          proxy_protocol: {
+                            ...current.server.proxy_protocol,
+                            trusted_cidrs: multilineToStringList(
+                              e.target.value,
+                            ),
+                          },
                         },
-                      },
-                    }))}
+                      }))
+                    }
                     className="w-full rounded border border-neutral-200 bg-white"
                     rows={4}
                   />
                   <div className="mt-1 text-xs text-neutral-500">
-                    {tx("Trusted peers may supply HAProxy PROXY headers. The public HTTP redirect listener follows this same trust list.")}
+                    {tx(
+                      "Trusted peers may supply HAProxy PROXY headers. The public HTTP redirect listener follows this same trust list.",
+                    )}
                   </div>
                 </Field>
 
@@ -741,53 +964,79 @@ export default function SettingsPanel() {
                   <NumberField
                     label={tx("Read Timeout Seconds")}
                     value={listenerAdminConfig.server.read_timeout_sec}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: { ...current.server, read_timeout_sec: value },
-                    }))}
-                    hint={tx("Total inbound read budget for the request line, headers, and request body. Use this to bound slow body uploads.")}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: { ...current.server, read_timeout_sec: value },
+                      }))
+                    }
+                    hint={tx(
+                      "Total inbound read budget for the request line, headers, and request body. Use this to bound slow body uploads.",
+                    )}
                   />
                   <NumberField
                     label={tx("Read Header Timeout Seconds")}
                     value={listenerAdminConfig.server.read_header_timeout_sec}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: { ...current.server, read_header_timeout_sec: value },
-                    }))}
-                    hint={tx("Header-only budget before the body starts. This does not replace the total read timeout above.")}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          read_header_timeout_sec: value,
+                        },
+                      }))
+                    }
+                    hint={tx(
+                      "Header-only budget before the body starts. This does not replace the total read timeout above.",
+                    )}
                   />
                   <NumberField
                     label={tx("Write Timeout Seconds")}
                     value={listenerAdminConfig.server.write_timeout_sec}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: { ...current.server, write_timeout_sec: value },
-                    }))}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: { ...current.server, write_timeout_sec: value },
+                      }))
+                    }
                   />
                   <NumberField
                     label={tx("Idle Timeout Seconds")}
                     value={listenerAdminConfig.server.idle_timeout_sec}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: { ...current.server, idle_timeout_sec: value },
-                    }))}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: { ...current.server, idle_timeout_sec: value },
+                      }))
+                    }
                   />
                   <NumberField
                     label={tx("Graceful Shutdown Timeout Seconds")}
-                    value={listenerAdminConfig.server.graceful_shutdown_timeout_sec}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: { ...current.server, graceful_shutdown_timeout_sec: value },
-                    }))}
-                    hint={tx("Maximum drain time for SIGTERM, SIGINT, SIGHUP, and socket-activated service replacement before force close.")}
+                    value={
+                      listenerAdminConfig.server.graceful_shutdown_timeout_sec
+                    }
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          graceful_shutdown_timeout_sec: value,
+                        },
+                      }))
+                    }
+                    hint={tx(
+                      "Maximum drain time for SIGTERM, SIGINT, SIGHUP, and socket-activated service replacement before force close.",
+                    )}
                   />
                   <NumberField
                     label={tx("Max Header Bytes")}
                     value={listenerAdminConfig.server.max_header_bytes}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: { ...current.server, max_header_bytes: value },
-                    }))}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: { ...current.server, max_header_bytes: value },
+                      }))
+                    }
                   />
                 </div>
 
@@ -795,13 +1044,18 @@ export default function SettingsPanel() {
                   <input
                     type="checkbox"
                     checked={listenerAdminConfig.server.tls.enabled}
-                    onChange={(e) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: {
-                        ...current.server,
-                        tls: { ...current.server.tls, enabled: e.target.checked },
-                      },
-                    }))}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          tls: {
+                            ...current.server.tls,
+                            enabled: e.target.checked,
+                          },
+                        },
+                      }))
+                    }
                   />
                   {tx("Enable built-in TLS on the public listener")}
                 </label>
@@ -810,13 +1064,18 @@ export default function SettingsPanel() {
                   <Field label={tx("TLS Certificate File")}>
                     <input
                       value={listenerAdminConfig.server.tls.cert_file}
-                      onChange={(e) => setListenerAdminConfig((current) => ({
-                        ...current,
-                        server: {
-                          ...current.server,
-                          tls: { ...current.server.tls, cert_file: e.target.value },
-                        },
-                      }))}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          server: {
+                            ...current.server,
+                            tls: {
+                              ...current.server.tls,
+                              cert_file: e.target.value,
+                            },
+                          },
+                        }))
+                      }
                       className="w-full rounded border border-neutral-200 bg-white"
                       placeholder="/etc/tukuyomi/tls/fullchain.pem"
                     />
@@ -824,13 +1083,18 @@ export default function SettingsPanel() {
                   <Field label={tx("TLS Key File")}>
                     <input
                       value={listenerAdminConfig.server.tls.key_file}
-                      onChange={(e) => setListenerAdminConfig((current) => ({
-                        ...current,
-                        server: {
-                          ...current.server,
-                          tls: { ...current.server.tls, key_file: e.target.value },
-                        },
-                      }))}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          server: {
+                            ...current.server,
+                            tls: {
+                              ...current.server.tls,
+                              key_file: e.target.value,
+                            },
+                          },
+                        }))
+                      }
                       className="w-full rounded border border-neutral-200 bg-white"
                       placeholder="/etc/tukuyomi/tls/privkey.pem"
                     />
@@ -838,13 +1102,18 @@ export default function SettingsPanel() {
                   <Field label={tx("TLS Min Version")}>
                     <select
                       value={listenerAdminConfig.server.tls.min_version}
-                      onChange={(e) => setListenerAdminConfig((current) => ({
-                        ...current,
-                        server: {
-                          ...current.server,
-                          tls: { ...current.server.tls, min_version: e.target.value },
-                        },
-                      }))}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          server: {
+                            ...current.server,
+                            tls: {
+                              ...current.server.tls,
+                              min_version: e.target.value,
+                            },
+                          },
+                        }))
+                      }
                       className="w-full rounded border border-neutral-200 bg-white"
                     >
                       <option value="tls1.2">tls1.2</option>
@@ -854,13 +1123,18 @@ export default function SettingsPanel() {
                   <Field label={tx("HTTP Redirect Address")}>
                     <input
                       value={listenerAdminConfig.server.tls.http_redirect_addr}
-                      onChange={(e) => setListenerAdminConfig((current) => ({
-                        ...current,
-                        server: {
-                          ...current.server,
-                          tls: { ...current.server.tls, http_redirect_addr: e.target.value },
-                        },
-                      }))}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          server: {
+                            ...current.server,
+                            tls: {
+                              ...current.server.tls,
+                              http_redirect_addr: e.target.value,
+                            },
+                          },
+                        }))
+                      }
                       className="w-full rounded border border-neutral-200 bg-white"
                       placeholder=":80"
                     />
@@ -871,13 +1145,18 @@ export default function SettingsPanel() {
                   <input
                     type="checkbox"
                     checked={listenerAdminConfig.server.tls.redirect_http}
-                    onChange={(e) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: {
-                        ...current.server,
-                        tls: { ...current.server.tls, redirect_http: e.target.checked },
-                      },
-                    }))}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          tls: {
+                            ...current.server.tls,
+                            redirect_http: e.target.checked,
+                          },
+                        },
+                      }))
+                    }
                   />
                   {tx("Redirect plain HTTP to HTTPS")}
                 </label>
@@ -886,13 +1165,18 @@ export default function SettingsPanel() {
                   <input
                     type="checkbox"
                     checked={listenerAdminConfig.server.http3.enabled}
-                    onChange={(e) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: {
-                        ...current.server,
-                        http3: { ...current.server.http3, enabled: e.target.checked },
-                      },
-                    }))}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          http3: {
+                            ...current.server.http3,
+                            enabled: e.target.checked,
+                          },
+                        },
+                      }))
+                    }
                   />
                   {tx("Enable HTTP/3 on the public listener")}
                 </label>
@@ -900,13 +1184,18 @@ export default function SettingsPanel() {
                 <NumberField
                   label={tx("HTTP/3 Alt-Svc Max Age Seconds")}
                   value={listenerAdminConfig.server.http3.alt_svc_max_age_sec}
-                  onChange={(value) => setListenerAdminConfig((current) => ({
-                    ...current,
-                    server: {
-                      ...current.server,
-                      http3: { ...current.server.http3, alt_svc_max_age_sec: value },
-                    },
-                  }))}
+                  onChange={(value) =>
+                    setListenerAdminConfig((current) => ({
+                      ...current,
+                      server: {
+                        ...current.server,
+                        http3: {
+                          ...current.server.http3,
+                          alt_svc_max_age_sec: value,
+                        },
+                      },
+                    }))
+                  }
                 />
               </section>
 
@@ -914,7 +1203,9 @@ export default function SettingsPanel() {
                 <div>
                   <div className="text-sm font-medium">{tx("Admin")}</div>
                   <p className="text-xs text-neutral-500">
-                    {tx("Admin path layout, optional split listener address, external exposure policy, trusted CIDRs, read-only mode, and admin rate limits. Built-in admin TLS is not provided in this slice; use a trusted network or front-proxy TLS termination when admin.listen_addr is set.")}
+                    {tx(
+                      "Admin path layout, optional split listener address, external exposure policy, trusted CIDRs, read-only mode, and admin rate limits. Built-in admin TLS is not provided in this slice; use a trusted network or front-proxy TLS termination when admin.listen_addr is set.",
+                    )}
                   </p>
                 </div>
 
@@ -922,10 +1213,15 @@ export default function SettingsPanel() {
                   <Field label={tx("API Base Path")}>
                     <input
                       value={listenerAdminConfig.admin.api_base_path}
-                      onChange={(e) => setListenerAdminConfig((current) => ({
-                        ...current,
-                        admin: { ...current.admin, api_base_path: e.target.value },
-                      }))}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          admin: {
+                            ...current.admin,
+                            api_base_path: e.target.value,
+                          },
+                        }))
+                      }
                       className="w-full rounded border border-neutral-200 bg-white"
                       placeholder="/tukuyomi-api"
                     />
@@ -933,10 +1229,15 @@ export default function SettingsPanel() {
                   <Field label={tx("UI Base Path")}>
                     <input
                       value={listenerAdminConfig.admin.ui_base_path}
-                      onChange={(e) => setListenerAdminConfig((current) => ({
-                        ...current,
-                        admin: { ...current.admin, ui_base_path: e.target.value },
-                      }))}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          admin: {
+                            ...current.admin,
+                            ui_base_path: e.target.value,
+                          },
+                        }))
+                      }
                       className="w-full rounded border border-neutral-200 bg-white"
                       placeholder="/tukuyomi-ui"
                     />
@@ -944,15 +1245,22 @@ export default function SettingsPanel() {
                   <Field label={tx("Admin Listen Address")}>
                     <input
                       value={listenerAdminConfig.admin.listen_addr}
-                      onChange={(e) => setListenerAdminConfig((current) => ({
-                        ...current,
-                        admin: { ...current.admin, listen_addr: e.target.value },
-                      }))}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          admin: {
+                            ...current.admin,
+                            listen_addr: e.target.value,
+                          },
+                        }))
+                      }
                       className="w-full rounded border border-neutral-200 bg-white"
                       placeholder=":9091"
                     />
                     <div className="mt-1 text-xs text-neutral-500">
-                      {tx("Leave empty to share the public listener. When set, admin UI/API move to a separate plain-HTTP listener and no longer ride on the public proxy listener.")}
+                      {tx(
+                        "Leave empty to share the public listener. When set, admin UI/API move to a separate plain-HTTP listener and no longer ride on the public proxy listener.",
+                      )}
                     </div>
                   </Field>
                 </div>
@@ -961,45 +1269,65 @@ export default function SettingsPanel() {
                   <input
                     type="checkbox"
                     checked={listenerAdminConfig.admin.proxy_protocol.enabled}
-                    onChange={(e) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      admin: {
-                        ...current.admin,
-                        proxy_protocol: { ...current.admin.proxy_protocol, enabled: e.target.checked },
-                      },
-                    }))}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        admin: {
+                          ...current.admin,
+                          proxy_protocol: {
+                            ...current.admin.proxy_protocol,
+                            enabled: e.target.checked,
+                          },
+                        },
+                      }))
+                    }
                   />
                   {tx("Enable PROXY Protocol on the admin listener")}
                 </label>
 
-                <Field label={tx("Admin Trusted PROXY Peers CIDRs (one per line)")}>
+                <Field
+                  label={tx("Admin Trusted PROXY Peers CIDRs (one per line)")}
+                >
                   <textarea
-                    value={stringListToMultiline(listenerAdminConfig.admin.proxy_protocol.trusted_cidrs)}
-                    onChange={(e) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      admin: {
-                        ...current.admin,
-                        proxy_protocol: {
-                          ...current.admin.proxy_protocol,
-                          trusted_cidrs: multilineToStringList(e.target.value),
+                    value={stringListToMultiline(
+                      listenerAdminConfig.admin.proxy_protocol.trusted_cidrs,
+                    )}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        admin: {
+                          ...current.admin,
+                          proxy_protocol: {
+                            ...current.admin.proxy_protocol,
+                            trusted_cidrs: multilineToStringList(
+                              e.target.value,
+                            ),
+                          },
                         },
-                      },
-                    }))}
+                      }))
+                    }
                     className="w-full rounded border border-neutral-200 bg-white"
                     rows={4}
                   />
                   <div className="mt-1 text-xs text-neutral-500">
-                    {tx("Only available when Admin Listen Address is set. Trusted peers may supply HAProxy PROXY headers to the split admin listener.")}
+                    {tx(
+                      "Only available when Admin Listen Address is set. Trusted peers may supply HAProxy PROXY headers to the split admin listener.",
+                    )}
                   </div>
                 </Field>
 
                 <Field label={tx("External Mode")}>
                   <select
                     value={listenerAdminConfig.admin.external_mode}
-                    onChange={(e) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      admin: { ...current.admin, external_mode: e.target.value },
-                    }))}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        admin: {
+                          ...current.admin,
+                          external_mode: e.target.value,
+                        },
+                      }))
+                    }
                     className="w-full rounded border border-neutral-200 bg-white"
                   >
                     <option value="deny_external">deny_external</option>
@@ -1013,10 +1341,15 @@ export default function SettingsPanel() {
                     <input
                       type="checkbox"
                       checked={listenerAdminConfig.admin.trust_forwarded_for}
-                      onChange={(e) => setListenerAdminConfig((current) => ({
-                        ...current,
-                        admin: { ...current.admin, trust_forwarded_for: e.target.checked },
-                      }))}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          admin: {
+                            ...current.admin,
+                            trust_forwarded_for: e.target.checked,
+                          },
+                        }))
+                      }
                     />
                     {tx("Trust Forwarded For")}
                   </label>
@@ -1024,10 +1357,15 @@ export default function SettingsPanel() {
                     <input
                       type="checkbox"
                       checked={listenerAdminConfig.admin.read_only}
-                      onChange={(e) => setListenerAdminConfig((current) => ({
-                        ...current,
-                        admin: { ...current.admin, read_only: e.target.checked },
-                      }))}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          admin: {
+                            ...current.admin,
+                            read_only: e.target.checked,
+                          },
+                        }))
+                      }
                     />
                     {tx("Admin read only")}
                   </label>
@@ -1035,11 +1373,18 @@ export default function SettingsPanel() {
 
                 <Field label={tx("Trusted CIDRs (one per line)")}>
                   <textarea
-                    value={stringListToMultiline(listenerAdminConfig.admin.trusted_cidrs)}
-                    onChange={(e) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      admin: { ...current.admin, trusted_cidrs: multilineToStringList(e.target.value) },
-                    }))}
+                    value={stringListToMultiline(
+                      listenerAdminConfig.admin.trusted_cidrs,
+                    )}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        admin: {
+                          ...current.admin,
+                          trusted_cidrs: multilineToStringList(e.target.value),
+                        },
+                      }))
+                    }
                     className="w-full rounded border border-neutral-200 bg-white"
                     rows={5}
                   />
@@ -1047,11 +1392,20 @@ export default function SettingsPanel() {
 
                 <Field label={tx("CORS Allowed Origins (one per line)")}>
                   <textarea
-                    value={stringListToMultiline(listenerAdminConfig.admin.cors_allowed_origins)}
-                    onChange={(e) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      admin: { ...current.admin, cors_allowed_origins: multilineToStringList(e.target.value) },
-                    }))}
+                    value={stringListToMultiline(
+                      listenerAdminConfig.admin.cors_allowed_origins,
+                    )}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        admin: {
+                          ...current.admin,
+                          cors_allowed_origins: multilineToStringList(
+                            e.target.value,
+                          ),
+                        },
+                      }))
+                    }
                     className="w-full rounded border border-neutral-200 bg-white"
                     rows={4}
                   />
@@ -1061,13 +1415,18 @@ export default function SettingsPanel() {
                   <input
                     type="checkbox"
                     checked={listenerAdminConfig.admin.rate_limit.enabled}
-                    onChange={(e) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      admin: {
-                        ...current.admin,
-                        rate_limit: { ...current.admin.rate_limit, enabled: e.target.checked },
-                      },
-                    }))}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        admin: {
+                          ...current.admin,
+                          rate_limit: {
+                            ...current.admin.rate_limit,
+                            enabled: e.target.checked,
+                          },
+                        },
+                      }))
+                    }
                   />
                   {tx("Enable admin rate limit")}
                 </label>
@@ -1076,46 +1435,68 @@ export default function SettingsPanel() {
                   <NumberField
                     label={tx("Rate Limit RPS")}
                     value={listenerAdminConfig.admin.rate_limit.rps}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      admin: {
-                        ...current.admin,
-                        rate_limit: { ...current.admin.rate_limit, rps: value },
-                      },
-                    }))}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        admin: {
+                          ...current.admin,
+                          rate_limit: {
+                            ...current.admin.rate_limit,
+                            rps: value,
+                          },
+                        },
+                      }))
+                    }
                   />
                   <NumberField
                     label={tx("Rate Limit Burst")}
                     value={listenerAdminConfig.admin.rate_limit.burst}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      admin: {
-                        ...current.admin,
-                        rate_limit: { ...current.admin.rate_limit, burst: value },
-                      },
-                    }))}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        admin: {
+                          ...current.admin,
+                          rate_limit: {
+                            ...current.admin.rate_limit,
+                            burst: value,
+                          },
+                        },
+                      }))
+                    }
                   />
                   <NumberField
                     label={tx("Rate Limit Status Code")}
                     value={listenerAdminConfig.admin.rate_limit.status_code}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      admin: {
-                        ...current.admin,
-                        rate_limit: { ...current.admin.rate_limit, status_code: value },
-                      },
-                    }))}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        admin: {
+                          ...current.admin,
+                          rate_limit: {
+                            ...current.admin.rate_limit,
+                            status_code: value,
+                          },
+                        },
+                      }))
+                    }
                   />
                   <NumberField
                     label={tx("Retry After Seconds")}
-                    value={listenerAdminConfig.admin.rate_limit.retry_after_seconds}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      admin: {
-                        ...current.admin,
-                        rate_limit: { ...current.admin.rate_limit, retry_after_seconds: value },
-                      },
-                    }))}
+                    value={
+                      listenerAdminConfig.admin.rate_limit.retry_after_seconds
+                    }
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        admin: {
+                          ...current.admin,
+                          rate_limit: {
+                            ...current.admin.rate_limit,
+                            retry_after_seconds: value,
+                          },
+                        },
+                      }))
+                    }
                   />
                 </div>
               </section>
@@ -1126,7 +1507,9 @@ export default function SettingsPanel() {
                 <div>
                   <div className="text-sm font-medium">{tx("Runtime")}</div>
                   <p className="text-xs text-neutral-500">
-                    {tx("Process resource limits plus request queue and overload controls loaded at startup.")}
+                    {tx(
+                      "Process resource limits plus request queue and overload controls loaded at startup.",
+                    )}
                   </p>
                 </div>
 
@@ -1134,66 +1517,104 @@ export default function SettingsPanel() {
                   <NumberField
                     label={tx("GOMAXPROCS")}
                     value={listenerAdminConfig.runtime.gomaxprocs}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      runtime: { ...current.runtime, gomaxprocs: value },
-                    }))}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        runtime: { ...current.runtime, gomaxprocs: value },
+                      }))
+                    }
                   />
                   <NumberField
                     label={tx("Memory Limit MB")}
                     value={listenerAdminConfig.runtime.memory_limit_mb}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      runtime: { ...current.runtime, memory_limit_mb: value },
-                    }))}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        runtime: { ...current.runtime, memory_limit_mb: value },
+                      }))
+                    }
                   />
                   <NumberField
                     label={tx("Max Concurrent Requests")}
                     value={listenerAdminConfig.server.max_concurrent_requests}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: { ...current.server, max_concurrent_requests: value },
-                    }))}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          max_concurrent_requests: value,
+                        },
+                      }))
+                    }
                   />
                   <NumberField
                     label={tx("Max Queued Requests")}
                     value={listenerAdminConfig.server.max_queued_requests}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: { ...current.server, max_queued_requests: value },
-                    }))}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          max_queued_requests: value,
+                        },
+                      }))
+                    }
                   />
                   <NumberField
                     label={tx("Queued Request Timeout MS")}
                     value={listenerAdminConfig.server.queued_request_timeout_ms}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: { ...current.server, queued_request_timeout_ms: value },
-                    }))}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          queued_request_timeout_ms: value,
+                        },
+                      }))
+                    }
                   />
                   <NumberField
                     label={tx("Max Concurrent Proxy Requests")}
-                    value={listenerAdminConfig.server.max_concurrent_proxy_requests}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: { ...current.server, max_concurrent_proxy_requests: value },
-                    }))}
+                    value={
+                      listenerAdminConfig.server.max_concurrent_proxy_requests
+                    }
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          max_concurrent_proxy_requests: value,
+                        },
+                      }))
+                    }
                   />
                   <NumberField
                     label={tx("Max Queued Proxy Requests")}
                     value={listenerAdminConfig.server.max_queued_proxy_requests}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: { ...current.server, max_queued_proxy_requests: value },
-                    }))}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          max_queued_proxy_requests: value,
+                        },
+                      }))
+                    }
                   />
                   <NumberField
                     label={tx("Queued Proxy Request Timeout MS")}
-                    value={listenerAdminConfig.server.queued_proxy_request_timeout_ms}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      server: { ...current.server, queued_proxy_request_timeout_ms: value },
-                    }))}
+                    value={
+                      listenerAdminConfig.server.queued_proxy_request_timeout_ms
+                    }
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          queued_proxy_request_timeout_ms: value,
+                        },
+                      }))
+                    }
                   />
                 </div>
               </section>
@@ -1202,95 +1623,352 @@ export default function SettingsPanel() {
                 <div>
                   <div className="text-sm font-medium">{tx("Storage")}</div>
                   <p className="text-xs text-neutral-500">
-                    {tx("Persistence backend, database sync, and file retention settings for runtime state and audits.")}
+                    {tx(
+                      "Database storage policy and bootstrap connection status. Driver, path, and DSN are read from the bootstrap config file before DB is opened.",
+                    )}
                   </p>
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label={tx("Storage Backend")}>
-                    <select
-                      value={listenerAdminConfig.storage.backend}
-                      onChange={(e) => setListenerAdminConfig((current) => ({
-                        ...current,
-                        storage: { ...current.storage, backend: e.target.value },
-                      }))}
-                      className="w-full rounded border border-neutral-200 bg-white"
-                    >
-                      <option value="file">file</option>
-                      <option value="db">db</option>
-                    </select>
-                  </Field>
                   <Field label={tx("DB Driver")}>
                     <select
                       value={listenerAdminConfig.storage.db_driver}
-                      onChange={(e) => setListenerAdminConfig((current) => ({
-                        ...current,
-                        storage: { ...current.storage, db_driver: e.target.value },
-                      }))}
-                      className="w-full rounded border border-neutral-200 bg-white"
+                      disabled
+                      className="w-full rounded border border-neutral-200 bg-neutral-100 text-neutral-600"
                     >
                       <option value="sqlite">sqlite</option>
                       <option value="mysql">mysql</option>
+                      <option value="pgsql">pgsql</option>
                     </select>
                   </Field>
                   <Field label={tx("DB Path")}>
                     <input
                       value={listenerAdminConfig.storage.db_path}
-                      onChange={(e) => setListenerAdminConfig((current) => ({
-                        ...current,
-                        storage: { ...current.storage, db_path: e.target.value },
-                      }))}
-                      className="w-full rounded border border-neutral-200 bg-white"
-                      placeholder="logs/coraza/tukuyomi.db"
+                      readOnly
+                      className="w-full rounded border border-neutral-200 bg-neutral-100 text-neutral-600"
+                      placeholder="db/tukuyomi.db"
                     />
                   </Field>
                   <NumberField
                     label={tx("DB Retention Days")}
                     value={listenerAdminConfig.storage.db_retention_days}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      storage: { ...current.storage, db_retention_days: value },
-                    }))}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        storage: {
+                          ...current.storage,
+                          db_retention_days: value,
+                        },
+                      }))
+                    }
                   />
                   <NumberField
                     label={tx("DB Sync Interval Seconds")}
                     value={listenerAdminConfig.storage.db_sync_interval_sec}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      storage: { ...current.storage, db_sync_interval_sec: value },
-                    }))}
-                  />
-                  <NumberField
-                    label={tx("File Rotate Bytes")}
-                    value={listenerAdminConfig.storage.file_rotate_bytes}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      storage: { ...current.storage, file_rotate_bytes: value },
-                    }))}
-                  />
-                  <NumberField
-                    label={tx("File Max Bytes")}
-                    value={listenerAdminConfig.storage.file_max_bytes}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      storage: { ...current.storage, file_max_bytes: value },
-                    }))}
-                  />
-                  <NumberField
-                    label={tx("File Retention Days")}
-                    value={listenerAdminConfig.storage.file_retention_days}
-                    onChange={(value) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      storage: { ...current.storage, file_retention_days: value },
-                    }))}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        storage: {
+                          ...current.storage,
+                          db_sync_interval_sec: value,
+                        },
+                      }))
+                    }
                   />
                 </div>
 
                 <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                  {tx("DB DSN is treated as secret-backed config in this slice. Current status: {state}. Manage the literal value outside this panel for now.", {
-                    state: secretStatus.storage_db_dsn_configured ? tx("configured") : tx("not configured"),
-                  })}
+                  {tx(
+                    "DB connection is bootstrap-only. Current DSN status: {state}. Change db_driver, db_path, or db_dsn in the bootstrap config file, run migrations/import as needed, then restart.",
+                    {
+                      state: secretStatus.storage_db_dsn_configured
+                        ? tx("configured")
+                        : tx("not configured"),
+                    },
+                  )}
                 </div>
+              </section>
+
+              <section className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
+                <div>
+                  <div className="text-sm font-medium">
+                    {tx("Persistent File Storage")}
+                  </div>
+                  <p className="text-xs text-neutral-500">
+                    {tx(
+                      "Durable runtime files such as ACME account keys and certificates. Provider credentials are read from environment or platform identity, not saved here.",
+                    )}
+                  </p>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label={tx("Backend")}>
+                    <select
+                      value={listenerAdminConfig.persistent_storage.backend}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          persistent_storage: {
+                            ...current.persistent_storage,
+                            backend: e.target.value,
+                          },
+                        }))
+                      }
+                      className="w-full rounded border border-neutral-200 bg-white"
+                    >
+                      <option value="local">{tx("Local")}</option>
+                      <option value="s3">{tx("S3")}</option>
+                      <option value="azure_blob">
+                        {tx("Azure Blob Storage")}
+                      </option>
+                      <option value="gcs">{tx("Google Cloud Storage")}</option>
+                    </select>
+                  </Field>
+                  <Field label={tx("Local Base Directory")}>
+                    <input
+                      value={
+                        listenerAdminConfig.persistent_storage.local.base_dir
+                      }
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          persistent_storage: {
+                            ...current.persistent_storage,
+                            local: {
+                              ...current.persistent_storage.local,
+                              base_dir: e.target.value,
+                            },
+                          },
+                        }))
+                      }
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="data/persistent"
+                    />
+                  </Field>
+                  <Field label={tx("S3 Bucket")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.s3.bucket}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          persistent_storage: {
+                            ...current.persistent_storage,
+                            s3: {
+                              ...current.persistent_storage.s3,
+                              bucket: e.target.value,
+                            },
+                          },
+                        }))
+                      }
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="tukuyomi-runtime"
+                    />
+                  </Field>
+                  <Field label={tx("S3 Region")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.s3.region}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          persistent_storage: {
+                            ...current.persistent_storage,
+                            s3: {
+                              ...current.persistent_storage.s3,
+                              region: e.target.value,
+                            },
+                          },
+                        }))
+                      }
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="ap-northeast-1"
+                    />
+                  </Field>
+                  <Field label={tx("S3 Endpoint")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.s3.endpoint}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          persistent_storage: {
+                            ...current.persistent_storage,
+                            s3: {
+                              ...current.persistent_storage.s3,
+                              endpoint: e.target.value,
+                            },
+                          },
+                        }))
+                      }
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="https://s3.example.com"
+                    />
+                  </Field>
+                  <Field label={tx("S3 Prefix")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.s3.prefix}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          persistent_storage: {
+                            ...current.persistent_storage,
+                            s3: {
+                              ...current.persistent_storage.s3,
+                              prefix: e.target.value,
+                            },
+                          },
+                        }))
+                      }
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="prod"
+                    />
+                  </Field>
+                  <Field label={tx("Azure Account Name")}>
+                    <input
+                      value={
+                        listenerAdminConfig.persistent_storage.azure_blob
+                          .account_name
+                      }
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          persistent_storage: {
+                            ...current.persistent_storage,
+                            azure_blob: {
+                              ...current.persistent_storage.azure_blob,
+                              account_name: e.target.value,
+                            },
+                          },
+                        }))
+                      }
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="tukuyomistorage"
+                    />
+                  </Field>
+                  <Field label={tx("Azure Container")}>
+                    <input
+                      value={
+                        listenerAdminConfig.persistent_storage.azure_blob
+                          .container
+                      }
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          persistent_storage: {
+                            ...current.persistent_storage,
+                            azure_blob: {
+                              ...current.persistent_storage.azure_blob,
+                              container: e.target.value,
+                            },
+                          },
+                        }))
+                      }
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="runtime"
+                    />
+                  </Field>
+                  <Field label={tx("Azure Endpoint")}>
+                    <input
+                      value={
+                        listenerAdminConfig.persistent_storage.azure_blob
+                          .endpoint
+                      }
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          persistent_storage: {
+                            ...current.persistent_storage,
+                            azure_blob: {
+                              ...current.persistent_storage.azure_blob,
+                              endpoint: e.target.value,
+                            },
+                          },
+                        }))
+                      }
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="https://account.blob.core.windows.net"
+                    />
+                  </Field>
+                  <Field label={tx("Azure Prefix")}>
+                    <input
+                      value={
+                        listenerAdminConfig.persistent_storage.azure_blob.prefix
+                      }
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          persistent_storage: {
+                            ...current.persistent_storage,
+                            azure_blob: {
+                              ...current.persistent_storage.azure_blob,
+                              prefix: e.target.value,
+                            },
+                          },
+                        }))
+                      }
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="prod"
+                    />
+                  </Field>
+                  <Field label={tx("GCS Bucket")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.gcs.bucket}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          persistent_storage: {
+                            ...current.persistent_storage,
+                            gcs: {
+                              ...current.persistent_storage.gcs,
+                              bucket: e.target.value,
+                            },
+                          },
+                        }))
+                      }
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="tukuyomi-runtime"
+                    />
+                  </Field>
+                  <Field label={tx("GCS Prefix")}>
+                    <input
+                      value={listenerAdminConfig.persistent_storage.gcs.prefix}
+                      onChange={(e) =>
+                        setListenerAdminConfig((current) => ({
+                          ...current,
+                          persistent_storage: {
+                            ...current.persistent_storage,
+                            gcs: {
+                              ...current.persistent_storage.gcs,
+                              prefix: e.target.value,
+                            },
+                          },
+                        }))
+                      }
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      placeholder="prod"
+                    />
+                  </Field>
+                </div>
+
+                <label className="flex items-center gap-2 text-xs text-neutral-700">
+                  <input
+                    type="checkbox"
+                    checked={
+                      listenerAdminConfig.persistent_storage.s3.force_path_style
+                    }
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        persistent_storage: {
+                          ...current.persistent_storage,
+                          s3: {
+                            ...current.persistent_storage.s3,
+                            force_path_style: e.target.checked,
+                          },
+                        },
+                      }))
+                    }
+                  />
+                  {tx("Use S3 path-style addressing")}
+                </label>
               </section>
             </div>
 
@@ -1298,7 +1976,9 @@ export default function SettingsPanel() {
               <div>
                 <div className="text-sm font-medium">{tx("Observability")}</div>
                 <p className="text-xs text-neutral-500">
-                  {tx("Tracing exporter settings loaded at startup. When tracing is enabled, service name and OTLP endpoint are required.")}
+                  {tx(
+                    "Tracing exporter settings loaded at startup. When tracing is enabled, service name and OTLP endpoint are required.",
+                  )}
                 </p>
               </div>
 
@@ -1306,13 +1986,18 @@ export default function SettingsPanel() {
                 <input
                   type="checkbox"
                   checked={listenerAdminConfig.observability.tracing.enabled}
-                  onChange={(e) => setListenerAdminConfig((current) => ({
-                    ...current,
-                    observability: {
-                      ...current.observability,
-                      tracing: { ...current.observability.tracing, enabled: e.target.checked },
-                    },
-                  }))}
+                  onChange={(e) =>
+                    setListenerAdminConfig((current) => ({
+                      ...current,
+                      observability: {
+                        ...current.observability,
+                        tracing: {
+                          ...current.observability.tracing,
+                          enabled: e.target.checked,
+                        },
+                      },
+                    }))
+                  }
                 />
                 {tx("Enable tracing")}
               </label>
@@ -1320,28 +2005,42 @@ export default function SettingsPanel() {
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field label={tx("Tracing Service Name")}>
                   <input
-                    value={listenerAdminConfig.observability.tracing.service_name}
-                    onChange={(e) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      observability: {
-                        ...current.observability,
-                        tracing: { ...current.observability.tracing, service_name: e.target.value },
-                      },
-                    }))}
+                    value={
+                      listenerAdminConfig.observability.tracing.service_name
+                    }
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        observability: {
+                          ...current.observability,
+                          tracing: {
+                            ...current.observability.tracing,
+                            service_name: e.target.value,
+                          },
+                        },
+                      }))
+                    }
                     className="w-full rounded border border-neutral-200 bg-white"
                     placeholder="tukuyomi"
                   />
                 </Field>
                 <Field label={tx("OTLP Endpoint")}>
                   <input
-                    value={listenerAdminConfig.observability.tracing.otlp_endpoint}
-                    onChange={(e) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      observability: {
-                        ...current.observability,
-                        tracing: { ...current.observability.tracing, otlp_endpoint: e.target.value },
-                      },
-                    }))}
+                    value={
+                      listenerAdminConfig.observability.tracing.otlp_endpoint
+                    }
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        observability: {
+                          ...current.observability,
+                          tracing: {
+                            ...current.observability.tracing,
+                            otlp_endpoint: e.target.value,
+                          },
+                        },
+                      }))
+                    }
                     className="w-full rounded border border-neutral-200 bg-white"
                     placeholder="http://otel-collector:4318"
                   />
@@ -1349,25 +2048,35 @@ export default function SettingsPanel() {
                 <FloatField
                   label={tx("Tracing Sample Ratio")}
                   value={listenerAdminConfig.observability.tracing.sample_ratio}
-                  onChange={(value) => setListenerAdminConfig((current) => ({
-                    ...current,
-                    observability: {
-                      ...current.observability,
-                      tracing: { ...current.observability.tracing, sample_ratio: value },
-                    },
-                  }))}
+                  onChange={(value) =>
+                    setListenerAdminConfig((current) => ({
+                      ...current,
+                      observability: {
+                        ...current.observability,
+                        tracing: {
+                          ...current.observability.tracing,
+                          sample_ratio: value,
+                        },
+                      },
+                    }))
+                  }
                 />
                 <label className="flex items-center gap-2 text-xs text-neutral-700">
                   <input
                     type="checkbox"
                     checked={listenerAdminConfig.observability.tracing.insecure}
-                    onChange={(e) => setListenerAdminConfig((current) => ({
-                      ...current,
-                      observability: {
-                        ...current.observability,
-                        tracing: { ...current.observability.tracing, insecure: e.target.checked },
-                      },
-                    }))}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        observability: {
+                          ...current.observability,
+                          tracing: {
+                            ...current.observability.tracing,
+                            insecure: e.target.checked,
+                          },
+                        },
+                      }))
+                    }
                   />
                   {tx("Use insecure OTLP transport")}
                 </label>
@@ -1376,105 +2085,374 @@ export default function SettingsPanel() {
 
             <section className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
               <div>
-                <div className="text-sm font-medium">{tx("Secret-backed Values")}</div>
+                <div className="text-sm font-medium">
+                  {tx("Secret-backed Values")}
+                </div>
                 <p className="text-xs text-neutral-500">
-                  {tx("Sensitive fields are not exposed here as plain text. This panel shows whether they are configured and any safe key identifiers we can disclose.")}
+                  {tx(
+                    "Sensitive fields are not exposed here as plain text. This panel shows whether they are configured and any safe key identifiers we can disclose.",
+                  )}
                 </p>
               </div>
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 text-sm">
-                <SecretMetric label={tx("Admin API Key Primary")} configured={secretStatus.admin_api_key_primary_configured} />
-                <SecretMetric label={tx("Admin API Key Secondary")} configured={secretStatus.admin_api_key_secondary_configured} />
-                <SecretMetric label={tx("Admin Session Secret")} configured={secretStatus.admin_session_secret_configured} />
-                <SecretMetric label={tx("Storage DB DSN")} configured={secretStatus.storage_db_dsn_configured} />
-                <SecretMetric label={tx("FP Tuner API Key")} configured={secretStatus.fp_tuner_api_key_configured} />
-                <RuntimeMetric label={tx("Security Audit Key Source")} value={secretStatus.security_audit_key_source} />
-                <RuntimeMetric label={tx("Security Audit Encryption Key ID")} value={secretStatus.security_audit_encryption_key_id} />
-                <SecretMetric label={tx("Security Audit Encryption Key")} configured={secretStatus.security_audit_encryption_key_configured} />
-                <RuntimeMetric label={tx("Security Audit HMAC Key ID")} value={secretStatus.security_audit_hmac_key_id} />
-                <SecretMetric label={tx("Security Audit HMAC Key")} configured={secretStatus.security_audit_hmac_key_configured} />
+                <SecretMetric
+                  label={tx("Admin Session Secret")}
+                  configured={secretStatus.admin_session_secret_configured}
+                />
+                <SecretMetric
+                  label={tx("Storage DB DSN")}
+                  configured={secretStatus.storage_db_dsn_configured}
+                />
+                <SecretMetric
+                  label={tx("FP Tuner API Key")}
+                  configured={secretStatus.fp_tuner_api_key_configured}
+                />
+                <RuntimeMetric
+                  label={tx("Security Audit Key Source")}
+                  value={secretStatus.security_audit_key_source}
+                />
+                <RuntimeMetric
+                  label={tx("Security Audit Encryption Key ID")}
+                  value={secretStatus.security_audit_encryption_key_id}
+                />
+                <SecretMetric
+                  label={tx("Security Audit Encryption Key")}
+                  configured={
+                    secretStatus.security_audit_encryption_key_configured
+                  }
+                />
+                <RuntimeMetric
+                  label={tx("Security Audit HMAC Key ID")}
+                  value={secretStatus.security_audit_hmac_key_id}
+                />
+                <SecretMetric
+                  label={tx("Security Audit HMAC Key")}
+                  configured={secretStatus.security_audit_hmac_key_configured}
+                />
               </div>
             </section>
 
             <section className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <div className="text-sm font-medium">{tx("Advanced Config")}</div>
+                  <div className="text-sm font-medium">
+                    {tx("Advanced Config")}
+                  </div>
                   <p className="text-xs text-neutral-500">
-                    {tx("Paths, fp-tuner, rollback history, and CRS defaults are advanced operator settings. Expand only when you intend to edit dangerous product-wide values.")}
+                    {tx(
+                      "Paths, fp-tuner, rollback history, and CRS defaults are advanced operator settings. Expand only when you intend to edit dangerous product-wide values.",
+                    )}
                   </p>
                 </div>
-                <button type="button" onClick={() => setShowAdvanced((current) => !current)}>
-                  {showAdvanced ? tx("Hide advanced config") : tx("Show advanced config")}
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced((current) => !current)}
+                >
+                  {showAdvanced
+                    ? tx("Hide advanced config")
+                    : tx("Show advanced config")}
                 </button>
               </div>
 
               {showAdvanced ? (
                 <div className="space-y-4">
                   <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                    {tx("Advanced paths and global support files affect the whole product. Validate before save and restart after changes.")}
+                    {tx(
+                      "Advanced paths are grouped by runtime behavior. DB-backed runtime treats most JSON paths as seed/import inputs, not live file storage. Validate before save and restart after changes.",
+                    )}
                   </div>
 
                   <div className="grid gap-4 xl:grid-cols-2">
-                    <section className="rounded border border-neutral-200 bg-neutral-50 p-4 space-y-3">
-                      <div className="text-sm font-medium">{tx("Advanced Paths")}</div>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <Field label={tx("Proxy Config File")}><input value={listenerAdminConfig.paths.proxy_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, proxy_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Site Config File")}><input value={listenerAdminConfig.paths.site_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, site_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("PHP Runtime Inventory File")}><input value={listenerAdminConfig.paths.php_runtime_inventory_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, php_runtime_inventory_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Vhost Config File")}><input value={listenerAdminConfig.paths.vhost_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, vhost_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Scheduled Task Config File")}><input value={listenerAdminConfig.paths.scheduled_task_config_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, scheduled_task_config_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Security Audit File")}><input value={listenerAdminConfig.paths.security_audit_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, security_audit_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Security Audit Blob Dir")}><input value={listenerAdminConfig.paths.security_audit_blob_dir} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, security_audit_blob_dir: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Cache Store File")}><input value={listenerAdminConfig.paths.cache_store_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, cache_store_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Rules File")}><input value={listenerAdminConfig.paths.rules_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, rules_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Override Rules Dir")}><input value={listenerAdminConfig.paths.override_rules_dir} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, override_rules_dir: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Upstream Runtime File")}><input value={listenerAdminConfig.paths.upstream_runtime_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, upstream_runtime_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Bypass File")}><input value={listenerAdminConfig.paths.bypass_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, bypass_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Country Block File")}><input value={listenerAdminConfig.paths.country_block_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, country_block_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Rate Limit File")}><input value={listenerAdminConfig.paths.rate_limit_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, rate_limit_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Bot Defense File")}><input value={listenerAdminConfig.paths.bot_defense_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, bot_defense_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Semantic File")}><input value={listenerAdminConfig.paths.semantic_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, semantic_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Notification File")}><input value={listenerAdminConfig.paths.notification_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, notification_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("IP Reputation File")}><input value={listenerAdminConfig.paths.ip_reputation_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, ip_reputation_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("Log File")}><input value={listenerAdminConfig.paths.log_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, log_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("CRS Setup File")}><input value={listenerAdminConfig.paths.crs_setup_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, crs_setup_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("CRS Rules Dir")}><input value={listenerAdminConfig.paths.crs_rules_dir} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, crs_rules_dir: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("CRS Disabled File")}><input value={listenerAdminConfig.paths.crs_disabled_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, paths: { ...current.paths, crs_disabled_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                      </div>
-                    </section>
+                    <div className="space-y-4">
+                      <section className="rounded border border-neutral-200 bg-neutral-50 p-4 space-y-3">
+                        <div>
+                          <div className="text-sm font-medium">
+                            {tx("Runtime File Outputs")}
+                          </div>
+                          <p className="text-xs text-neutral-500">
+                            {tx(
+                              "These paths still receive runtime file output after startup.",
+                            )}
+                          </p>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          {renderPathField(
+                            "security_audit_file",
+                            "Security Audit File",
+                          )}
+                          {renderPathField(
+                            "security_audit_blob_dir",
+                            "Security Audit Blob Dir",
+                          )}
+                        </div>
+                      </section>
+
+                      <section className="rounded border border-neutral-200 bg-neutral-50 p-4 space-y-3">
+                        <div>
+                          <div className="text-sm font-medium">
+                            {tx("DB Seed / Import Paths")}
+                          </div>
+                          <p className="text-xs text-neutral-500">
+                            {tx(
+                              "Used when bootstrap or import needs a filesystem seed. DB remains the live source after initialization.",
+                            )}
+                          </p>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          {renderPathField(
+                            "proxy_config_file",
+                            "Proxy Seed File",
+                          )}
+                          {renderPathField(
+                            "site_config_file",
+                            "Site Seed File",
+                          )}
+                          {renderPathField(
+                            "php_runtime_inventory_file",
+                            "PHP Runtime Inventory Seed File",
+                          )}
+                          {renderPathField(
+                            "vhost_config_file",
+                            "Vhost Seed File",
+                          )}
+                          {renderPathField(
+                            "scheduled_task_config_file",
+                            "Scheduled Task Seed File",
+                          )}
+                          {renderPathField(
+                            "cache_rules_file",
+                            "Cache Rules Seed File",
+                          )}
+                          {renderPathField(
+                            "cache_store_file",
+                            "Cache Store Seed File",
+                          )}
+                          {renderPathField(
+                            "upstream_runtime_file",
+                            "Upstream Runtime Seed File",
+                          )}
+                          {renderPathField("bypass_file", "Bypass Seed File")}
+                          {renderPathField(
+                            "country_block_file",
+                            "Country Block Seed File",
+                          )}
+                          {renderPathField(
+                            "rate_limit_file",
+                            "Rate Limit Seed File",
+                          )}
+                          {renderPathField(
+                            "bot_defense_file",
+                            "Bot Defense Seed File",
+                          )}
+                          {renderPathField(
+                            "semantic_file",
+                            "Semantic Seed File",
+                          )}
+                          {renderPathField(
+                            "notification_file",
+                            "Notification Seed File",
+                          )}
+                          {renderPathField(
+                            "ip_reputation_file",
+                            "IP Reputation Seed File",
+                          )}
+                          {renderPathField(
+                            "crs_disabled_file",
+                            "CRS Disabled Seed File",
+                          )}
+                        </div>
+                      </section>
+
+                      <section className="rounded border border-neutral-200 bg-neutral-50 p-4 space-y-3">
+                        <div>
+                          <div className="text-sm font-medium">
+                            {tx("WAF Asset References")}
+                          </div>
+                          <p className="text-xs text-neutral-500">
+                            {tx(
+                              "Logical references resolved against DB-backed WAF rule assets.",
+                            )}
+                          </p>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          {renderPathField("rules_file", "Base Rule Asset")}
+                          {renderPathField(
+                            "override_rules_dir",
+                            "Bypass Extra Rule Reference Prefix",
+                          )}
+                          {renderPathField("crs_setup_file", "CRS Setup Asset")}
+                          {renderPathField(
+                            "crs_rules_dir",
+                            "CRS Rules Asset Prefix",
+                          )}
+                        </div>
+                      </section>
+                    </div>
 
                     <section className="rounded border border-neutral-200 bg-neutral-50 p-4 space-y-3">
-                      <div className="text-sm font-medium">{tx("Proxy Engine, CRS, Rollback, and FP Tuner")}</div>
+                      <div className="text-sm font-medium">
+                        {tx("Proxy Engine, CRS, Rollback, and FP Tuner")}
+                      </div>
                       <div className="grid gap-3 sm:grid-cols-2">
                         <Field label={tx("Proxy Engine")}>
                           <input
-                            value={listenerAdminConfig.proxy.engine.mode || "tukuyomi_proxy"}
+                            value={
+                              listenerAdminConfig.proxy.engine.mode ||
+                              "tukuyomi_proxy"
+                            }
                             readOnly
                             className="w-full rounded border border-neutral-200 bg-neutral-100 text-neutral-700"
                           />
                           <p className="mt-1 text-[11px] text-neutral-500">
-                            {tx("tukuyomi_proxy is the built-in proxy engine. The legacy net_http bridge has been removed. Restart required after config file changes.")}
+                            {tx(
+                              "tukuyomi_proxy is the built-in proxy engine. The legacy net_http bridge has been removed. Restart required after config file changes.",
+                            )}
                           </p>
                         </Field>
-                        <NumberField label={tx("Proxy Rollback History Size")} value={listenerAdminConfig.proxy.rollback_history_size} onChange={(value) => setListenerAdminConfig((current) => ({ ...current, proxy: { ...current.proxy, rollback_history_size: value } }))} />
+                        <Field label={tx("WAF Engine")}>
+                          <input
+                            value={
+                              listenerAdminConfig.waf.engine.mode || "coraza"
+                            }
+                            readOnly
+                            className="w-full rounded border border-neutral-200 bg-neutral-100 text-neutral-700"
+                          />
+                          <p className="mt-1 text-[11px] text-neutral-500">
+                            {tx(
+                              "Coraza is the active WAF engine. Additional engines must be registered before this value can be changed.",
+                            )}
+                          </p>
+                        </Field>
+                        <NumberField
+                          label={tx("Proxy Rollback History Size")}
+                          value={
+                            listenerAdminConfig.proxy.rollback_history_size
+                          }
+                          onChange={(value) =>
+                            setListenerAdminConfig((current) => ({
+                              ...current,
+                              proxy: {
+                                ...current.proxy,
+                                rollback_history_size: value,
+                              },
+                            }))
+                          }
+                        />
                         <label className="flex items-center gap-2 text-xs text-neutral-700">
-                          <input type="checkbox" checked={listenerAdminConfig.crs.enable} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, crs: { ...current.crs, enable: e.target.checked } }))} />
+                          <input
+                            type="checkbox"
+                            checked={listenerAdminConfig.crs.enable}
+                            onChange={(e) =>
+                              setListenerAdminConfig((current) => ({
+                                ...current,
+                                crs: {
+                                  ...current.crs,
+                                  enable: e.target.checked,
+                                },
+                              }))
+                            }
+                          />
                           {tx("Enable CRS by default")}
                         </label>
-                        <Field label={tx("FP Tuner Endpoint")}><input value={listenerAdminConfig.fp_tuner.endpoint} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, fp_tuner: { ...current.fp_tuner, endpoint: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <Field label={tx("FP Tuner Model")}><input value={listenerAdminConfig.fp_tuner.model} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, fp_tuner: { ...current.fp_tuner, model: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <NumberField label={tx("FP Tuner Timeout Seconds")} value={listenerAdminConfig.fp_tuner.timeout_sec} onChange={(value) => setListenerAdminConfig((current) => ({ ...current, fp_tuner: { ...current.fp_tuner, timeout_sec: value } }))} />
-                        <Field label={tx("FP Tuner Audit File")}><input value={listenerAdminConfig.fp_tuner.audit_file} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, fp_tuner: { ...current.fp_tuner, audit_file: e.target.value } }))} className="w-full rounded border border-neutral-200 bg-white" /></Field>
-                        <NumberField label={tx("FP Tuner Approval TTL Seconds")} value={listenerAdminConfig.fp_tuner.approval_ttl_sec} onChange={(value) => setListenerAdminConfig((current) => ({ ...current, fp_tuner: { ...current.fp_tuner, approval_ttl_sec: value } }))} />
+                        <Field label={tx("FP Tuner Endpoint")}>
+                          <input
+                            value={listenerAdminConfig.fp_tuner.endpoint}
+                            onChange={(e) =>
+                              setListenerAdminConfig((current) => ({
+                                ...current,
+                                fp_tuner: {
+                                  ...current.fp_tuner,
+                                  endpoint: e.target.value,
+                                },
+                              }))
+                            }
+                            className="w-full rounded border border-neutral-200 bg-white"
+                          />
+                        </Field>
+                        <Field label={tx("FP Tuner Model")}>
+                          <input
+                            value={listenerAdminConfig.fp_tuner.model}
+                            onChange={(e) =>
+                              setListenerAdminConfig((current) => ({
+                                ...current,
+                                fp_tuner: {
+                                  ...current.fp_tuner,
+                                  model: e.target.value,
+                                },
+                              }))
+                            }
+                            className="w-full rounded border border-neutral-200 bg-white"
+                          />
+                        </Field>
+                        <NumberField
+                          label={tx("FP Tuner Timeout Seconds")}
+                          value={listenerAdminConfig.fp_tuner.timeout_sec}
+                          onChange={(value) =>
+                            setListenerAdminConfig((current) => ({
+                              ...current,
+                              fp_tuner: {
+                                ...current.fp_tuner,
+                                timeout_sec: value,
+                              },
+                            }))
+                          }
+                        />
+                        <Field label={tx("FP Tuner Audit File")}>
+                          <input
+                            value={listenerAdminConfig.fp_tuner.audit_file}
+                            onChange={(e) =>
+                              setListenerAdminConfig((current) => ({
+                                ...current,
+                                fp_tuner: {
+                                  ...current.fp_tuner,
+                                  audit_file: e.target.value,
+                                },
+                              }))
+                            }
+                            className="w-full rounded border border-neutral-200 bg-white"
+                          />
+                        </Field>
+                        <NumberField
+                          label={tx("FP Tuner Approval TTL Seconds")}
+                          value={listenerAdminConfig.fp_tuner.approval_ttl_sec}
+                          onChange={(value) =>
+                            setListenerAdminConfig((current) => ({
+                              ...current,
+                              fp_tuner: {
+                                ...current.fp_tuner,
+                                approval_ttl_sec: value,
+                              },
+                            }))
+                          }
+                        />
                         <label className="flex items-center gap-2 text-xs text-neutral-700">
-                          <input type="checkbox" checked={listenerAdminConfig.fp_tuner.require_approval} onChange={(e) => setListenerAdminConfig((current) => ({ ...current, fp_tuner: { ...current.fp_tuner, require_approval: e.target.checked } }))} />
+                          <input
+                            type="checkbox"
+                            checked={
+                              listenerAdminConfig.fp_tuner.require_approval
+                            }
+                            onChange={(e) =>
+                              setListenerAdminConfig((current) => ({
+                                ...current,
+                                fp_tuner: {
+                                  ...current.fp_tuner,
+                                  require_approval: e.target.checked,
+                                },
+                              }))
+                            }
+                          />
                           {tx("Require FP Tuner approval")}
                         </label>
                       </div>
                       <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                        {tx("FP Tuner API key is currently {state}. Manage the literal key outside this panel.", {
-                          state: secretStatus.fp_tuner_api_key_configured ? tx("configured") : tx("not configured"),
-                        })}
+                        {tx(
+                          "FP Tuner API key is currently {state}. Manage the literal key outside this panel.",
+                          {
+                            state: secretStatus.fp_tuner_api_key_configured
+                              ? tx("configured")
+                              : tx("not configured"),
+                          },
+                        )}
                       </div>
                     </section>
                   </div>
@@ -1485,44 +2463,128 @@ export default function SettingsPanel() {
             {runtime ? (
               <section className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-sm font-medium">{tx("Current Runtime Snapshot")}</div>
-                  <span className="text-xs text-neutral-500">{tx("Loaded by the running process before restart")}</span>
+                  <div className="text-sm font-medium">
+                    {tx("Current Runtime Snapshot")}
+                  </div>
+                  <span className="text-xs text-neutral-500">
+                    {tx("Loaded by the running process before restart")}
+                  </span>
                 </div>
                 {driftItems.length > 0 ? (
                   <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                    {tx("Configured values differ from the current runtime until restart: {items}", {
-                      items: driftItems.join(", "),
-                    })}
+                    {tx(
+                      "Configured values differ from the current runtime until restart: {items}",
+                      {
+                        items: driftItems.join(", "),
+                      },
+                    )}
                   </div>
                 ) : null}
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 text-sm">
-                  <RuntimeMetric label={tx("Current Listen Address")} value={runtime.listen_addr} />
-                  <RuntimeMetric label={tx("Current API Base Path")} value={runtime.api_base_path} />
-                  <RuntimeMetric label={tx("Current UI Base Path")} value={runtime.ui_base_path} />
-                  <RuntimeMetric label={tx("Current Admin Listen Address")} value={runtime.admin_listen_addr} />
-                  <RuntimeMetric label={tx("Current Public PROXY Protocol")} value={String(runtime.server_proxy_protocol_enabled ?? "-")} />
-                  <RuntimeMetric label={tx("Current Admin PROXY Protocol")} value={String(runtime.admin_proxy_protocol_enabled ?? "-")} />
-                  <RuntimeMetric label={tx("Current TLS")} value={String(runtime.server_tls_enabled ?? "-")} />
-                  <RuntimeMetric label={tx("Current TLS Source")} value={runtime.server_tls_source} />
-                  <RuntimeMetric label={tx("Current HTTP/3 Advertised")} value={String(runtime.server_http3_advertised ?? "-")} />
-                  <RuntimeMetric label={tx("Current GOMAXPROCS")} value={runtime.runtime_gomaxprocs} />
-                  <RuntimeMetric label={tx("Current Memory Limit MB")} value={runtime.runtime_memory_limit_mb} />
-                  <RuntimeMetric label={tx("Current Graceful Shutdown Timeout Seconds")} value={runtime.server_graceful_shutdown_timeout_sec} />
-                  <RuntimeMetric label={tx("Current Max Concurrent Requests")} value={runtime.server_max_concurrent_requests} />
-                  <RuntimeMetric label={tx("Current Max Queued Requests")} value={runtime.server_max_queued_requests} />
-                  <RuntimeMetric label={tx("Current Max Concurrent Proxy")} value={runtime.server_max_concurrent_proxy_requests} />
-                  <RuntimeMetric label={tx("Current Max Queued Proxy")} value={runtime.server_max_queued_proxy_requests} />
-                  <RuntimeMetric label={tx("Current Proxy Engine")} value={runtime.proxy_engine_mode} />
-                  <RuntimeMetric label={tx("Current External Mode")} value={runtime.admin_external_mode} />
-                  <RuntimeMetric label={tx("Current Read Only")} value={String(runtime.admin_read_only ?? "-")} />
-                  <RuntimeMetric label={tx("Current Admin Rate Limit")} value={String(runtime.admin_rate_limit_enabled ?? "-")} />
-                  <RuntimeMetric label={tx("Current Storage Backend")} value={runtime.storage_backend} />
-                  <RuntimeMetric label={tx("Current DB Enabled")} value={String(runtime.storage_db_enabled ?? "-")} />
-                  <RuntimeMetric label={tx("Current DB Driver")} value={runtime.storage_db_driver} />
-                  <RuntimeMetric label={tx("Current DB Path")} value={runtime.storage_db_path} />
-                  <RuntimeMetric label={tx("Current Tracing")} value={String(runtime.tracing_enabled ?? "-")} />
-                  <RuntimeMetric label={tx("Current Tracing Service")} value={runtime.tracing_service_name} />
-                  <RuntimeMetric label={tx("Current OTLP Endpoint")} value={runtime.tracing_otlp_endpoint} />
+                  <RuntimeMetric
+                    label={tx("Current Listen Address")}
+                    value={runtime.listen_addr}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current API Base Path")}
+                    value={runtime.api_base_path}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current UI Base Path")}
+                    value={runtime.ui_base_path}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Admin Listen Address")}
+                    value={runtime.admin_listen_addr}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Public PROXY Protocol")}
+                    value={String(runtime.server_proxy_protocol_enabled ?? "-")}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Admin PROXY Protocol")}
+                    value={String(runtime.admin_proxy_protocol_enabled ?? "-")}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current TLS")}
+                    value={String(runtime.server_tls_enabled ?? "-")}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current TLS Source")}
+                    value={runtime.server_tls_source}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current HTTP/3 Advertised")}
+                    value={String(runtime.server_http3_advertised ?? "-")}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current GOMAXPROCS")}
+                    value={runtime.runtime_gomaxprocs}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Memory Limit MB")}
+                    value={runtime.runtime_memory_limit_mb}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Graceful Shutdown Timeout Seconds")}
+                    value={runtime.server_graceful_shutdown_timeout_sec}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Max Concurrent Requests")}
+                    value={runtime.server_max_concurrent_requests}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Max Queued Requests")}
+                    value={runtime.server_max_queued_requests}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Max Concurrent Proxy")}
+                    value={runtime.server_max_concurrent_proxy_requests}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Max Queued Proxy")}
+                    value={runtime.server_max_queued_proxy_requests}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Proxy Engine")}
+                    value={runtime.proxy_engine_mode}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current WAF Engine")}
+                    value={runtime.waf_engine_mode}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current External Mode")}
+                    value={runtime.admin_external_mode}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Read Only")}
+                    value={String(runtime.admin_read_only ?? "-")}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Admin Rate Limit")}
+                    value={String(runtime.admin_rate_limit_enabled ?? "-")}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current DB Driver")}
+                    value={runtime.storage_db_driver}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current DB Path")}
+                    value={runtime.storage_db_path}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Tracing")}
+                    value={String(runtime.tracing_enabled ?? "-")}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Tracing Service")}
+                    value={runtime.tracing_service_name}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current OTLP Endpoint")}
+                    value={runtime.tracing_otlp_endpoint}
+                  />
                 </div>
               </section>
             ) : null}
@@ -1532,13 +2594,23 @@ export default function SettingsPanel() {
 
       <section className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
         <div className="space-y-2">
-          <div className="text-sm font-medium">{tx("Verification Manifest")}</div>
+          <div className="text-sm font-medium">
+            {tx("Verification Manifest")}
+          </div>
           <p className="text-sm text-neutral-600">
-            {tx("Export the current verify manifest scaffold for external WAF test runners before running browser and attack scenarios.")}
+            {tx(
+              "Export the current verify manifest scaffold for external WAF test runners before running browser and attack scenarios.",
+            )}
           </p>
           <div className="flex flex-wrap items-center gap-2">
-            <button type="button" onClick={onDownloadManifest} disabled={manifestDownloading}>
-              {manifestDownloading ? tx("Downloading...") : tx("Download Verify Manifest")}
+            <button
+              type="button"
+              onClick={onDownloadManifest}
+              disabled={manifestDownloading}
+            >
+              {manifestDownloading
+                ? tx("Downloading...")
+                : tx("Download Verify Manifest")}
             </button>
           </div>
         </div>
@@ -1546,12 +2618,17 @@ export default function SettingsPanel() {
         <hr className="border-neutral-200" />
 
         <p className="text-sm text-neutral-600">
-          {tx("Browser access now uses a signed admin session cookie. Sign in once on the login page, then use this panel to manage optional operator identity metadata and verify the current session.")}
+          {tx(
+            "Browser access now uses a signed admin session cookie. Sign in once on the login page, then use this panel to manage optional operator identity metadata and verify the current session.",
+          )}
         </p>
 
         <form onSubmit={onSaveOperatorIdentity} className="space-y-3">
           <div className="space-y-1">
-            <label className="block text-xs text-neutral-600" htmlFor="operator-identity-input">
+            <label
+              className="block text-xs text-neutral-600"
+              htmlFor="operator-identity-input"
+            >
               {tx("Audit operator identity")}
             </label>
             <input
@@ -1563,13 +2640,19 @@ export default function SettingsPanel() {
               placeholder={tx("alice@example.com")}
             />
             <p className="text-xs text-neutral-500">
-              {tx("Stored in localStorage and sent as")} <code>X-Tukuyomi-Actor</code> {tx("on admin API requests when set.")}
+              {tx("Stored in localStorage and sent as")}{" "}
+              <code>X-Tukuyomi-Actor</code>{" "}
+              {tx("on admin API requests when set.")}
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <button type="submit">{tx("Save")}</button>
-            <button type="button" onClick={onVerify} disabled={checking || !session.authenticated}>
+            <button
+              type="button"
+              onClick={onVerify}
+              disabled={checking || !session.authenticated}
+            >
               {checking ? tx("Verifying...") : tx("Verify Session")}
             </button>
             <button type="button" onClick={onClearOperatorIdentity}>
@@ -1579,10 +2662,14 @@ export default function SettingsPanel() {
         </form>
 
         {helperNotice ? (
-          <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900">{helperNotice}</div>
+          <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900">
+            {helperNotice}
+          </div>
         ) : null}
         {helperError ? (
-          <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">{helperError}</div>
+          <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">
+            {helperError}
+          </div>
         ) : null}
       </section>
     </div>
@@ -1617,7 +2704,9 @@ function NumberField({
         onChange={(e) => onChange(Number(e.target.value || "0"))}
         className="w-full rounded border border-neutral-200 bg-white"
       />
-      {hint ? <div className="mt-1 text-xs text-neutral-500">{hint}</div> : null}
+      {hint ? (
+        <div className="mt-1 text-xs text-neutral-500">{hint}</div>
+      ) : null}
     </Field>
   );
 }
@@ -1646,11 +2735,19 @@ function FloatField({
   );
 }
 
-function SecretMetric({ label, configured }: { label: string; configured: boolean | undefined }) {
+function SecretMetric({
+  label,
+  configured,
+}: {
+  label: string;
+  configured: boolean | undefined;
+}) {
   return (
     <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2">
       <div className="text-xs text-neutral-500">{label}</div>
-      <div className="mt-1 font-mono text-sm">{configured ? "configured" : "not configured"}</div>
+      <div className="mt-1 font-mono text-sm">
+        {configured ? "configured" : "not configured"}
+      </div>
     </div>
   );
 }

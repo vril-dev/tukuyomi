@@ -3,8 +3,7 @@ package handler
 import (
 	"strings"
 
-	corazaTypes "github.com/corazawaf/coraza/v3/types"
-	corazaVariables "github.com/corazawaf/coraza/v3/types/variables"
+	"tukuyomi/internal/waf"
 )
 
 type wafPrimaryMatch struct {
@@ -12,17 +11,14 @@ type wafPrimaryMatch struct {
 	Value    string
 }
 
-func selectPrimaryWAFMatch(matches []corazaTypes.MatchedRule, interruptionRuleID int) (wafPrimaryMatch, bool) {
+func selectPrimaryWAFMatch(matches []waf.Match, interruptionRuleID int) (wafPrimaryMatch, bool) {
 	best := wafPrimaryMatch{}
 	bestScore := -1
 	found := false
 
 	for _, matched := range matches {
-		if matched == nil {
-			continue
-		}
 		isInterruptionRule := interruptionRuleID > 0 && matchedRuleID(matched) == interruptionRuleID
-		for _, md := range matched.MatchedDatas() {
+		for _, md := range matched.MatchedData {
 			primary, ok := normalizePrimaryWAFMatch(md)
 			if !ok {
 				continue
@@ -42,21 +38,14 @@ func selectPrimaryWAFMatch(matches []corazaTypes.MatchedRule, interruptionRuleID
 	return wafPrimaryMatch{}, false
 }
 
-func normalizePrimaryWAFMatch(md corazaTypes.MatchData) (wafPrimaryMatch, bool) {
-	if md == nil {
-		return wafPrimaryMatch{}, false
-	}
-
-	variable := ""
-	if variableRef := md.Variable(); variableRef != corazaVariables.Unknown {
-		variable = strings.TrimSpace(variableRef.Name())
-	}
-	key := strings.TrimSpace(md.Key())
+func normalizePrimaryWAFMatch(md waf.MatchData) (wafPrimaryMatch, bool) {
+	variable := strings.TrimSpace(md.Variable)
+	key := strings.TrimSpace(md.Key)
 	if variable != "" && key != "" {
 		variable += ":" + key
 	}
 
-	value := clampText(strings.TrimSpace(md.Value()), maxDBMatchedValueBytes)
+	value := clampText(strings.TrimSpace(md.Value), maxDBMatchedValueBytes)
 	if variable == "" && value == "" {
 		return wafPrimaryMatch{}, false
 	}
@@ -66,15 +55,8 @@ func normalizePrimaryWAFMatch(md corazaTypes.MatchData) (wafPrimaryMatch, bool) 
 	}, true
 }
 
-func matchedRuleID(matched corazaTypes.MatchedRule) int {
-	if matched == nil {
-		return 0
-	}
-	rule := matched.Rule()
-	if rule == nil {
-		return 0
-	}
-	return rule.ID()
+func matchedRuleID(matched waf.Match) int {
+	return matched.RuleID
 }
 
 func scorePrimaryWAFMatch(match wafPrimaryMatch, isInterruptionRule bool) int {

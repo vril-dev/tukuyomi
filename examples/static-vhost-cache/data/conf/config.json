@@ -1,0 +1,12 @@
+{
+  "storage": {
+    "db_driver": "sqlite",
+    "db_path": "db/tukuyomi.db",
+    "db_dsn": "",
+    "db_retention_days": 30,
+    "db_sync_interval_sec": 0
+  },
+  "admin": {
+    "session_secret": "static-vhost-cache-example-session-secret-12345"
+  }
+}

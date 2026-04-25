@@ -1120,8 +1120,8 @@ func currentVerifyManifestBaseURL(routing verifyManifestRoutingSummary) string {
 	if host := currentVerifyManifestRouteHost(routing); host != "" {
 		return scheme + "://" + host
 	}
-	if len(config.ServerTLSACMEDomains) > 0 && strings.TrimSpace(config.ServerTLSACMEDomains[0]) != "" {
-		return scheme + "://" + strings.TrimSpace(config.ServerTLSACMEDomains[0])
+	if domains := EffectiveServerTLSACMEDomains(); len(domains) > 0 && strings.TrimSpace(domains[0]) != "" {
+		return scheme + "://" + strings.TrimSpace(domains[0])
 	}
 	return scheme + "://" + normalizeVerifyManifestListenHostPort(config.ListenAddr, scheme)
 }

@@ -1,79 +1,12 @@
 {
-  "server": {
-    "listen_addr": ":9090",
-    "read_timeout_sec": 30,
-    "read_header_timeout_sec": 5,
-    "write_timeout_sec": 0,
-    "idle_timeout_sec": 120,
-    "max_header_bytes": 1048576,
-    "max_concurrent_requests": 0,
-    "max_queued_requests": 0,
-    "queued_request_timeout_ms": 0,
-    "max_concurrent_proxy_requests": 0,
-    "max_queued_proxy_requests": 32,
-    "queued_proxy_request_timeout_ms": 100,
-    "http3": {
-      "enabled": false,
-      "alt_svc_max_age_sec": 86400
-    }
-  },
-  "runtime": {
-    "gomaxprocs": 0,
-    "memory_limit_mb": 0
-  },
-  "admin": {
-    "api_base_path": "/tukuyomi-api",
-    "ui_base_path": "/tukuyomi-ui",
-    "external_mode": "api_only_external",
-    "api_key_primary": "dev-only-change-this-key-please",
-    "api_key_secondary": "",
-    "session_secret": "dev-only-change-this-session-secret-please",
-    "session_ttl_sec": 28800,
-    "api_auth_disable": false,
-    "cors_allowed_origins": [],
-    "strict_override": false,
-    "allow_insecure_defaults": false
-  },
-  "paths": {
-    "proxy_config_file": "conf/proxy.json",
-    "site_config_file": "conf/sites.json",
-    "rules_file": "rules/tukuyomi.conf",
-    "bypass_file": "conf/waf-bypass.json",
-    "country_block_file": "conf/country-block.json",
-    "rate_limit_file": "conf/rate-limit.json",
-    "bot_defense_file": "conf/bot-defense.json",
-    "semantic_file": "conf/semantic.json",
-    "log_file": "",
-    "crs_setup_file": "rules/crs-setup-high-paranoia.conf",
-    "crs_rules_dir": "rules/crs/rules",
-    "crs_disabled_file": "conf/crs-disabled.conf"
-  },
-  "proxy": {
-    "rollback_history_size": 8,
-    "engine": {
-      "mode": "tukuyomi_proxy"
-    }
-  },
-  "crs": {
-    "enable": true
-  },
-  "fp_tuner": {
-    "mode": "mock",
-    "endpoint": "",
-    "api_key": "",
-    "model": "",
-    "timeout_sec": 15,
-    "mock_response_file": "conf/fp-tuner-mock-response.json",
-    "require_approval": true,
-    "approval_ttl_sec": 600,
-    "audit_file": "logs/coraza/fp-tuner-audit.ndjson"
-  },
   "storage": {
-    "backend": "file",
     "db_driver": "sqlite",
+    "db_path": "db/tukuyomi.db",
     "db_dsn": "",
-    "db_path": "logs/coraza/tukuyomi.db",
     "db_retention_days": 30,
     "db_sync_interval_sec": 0
+  },
+  "admin": {
+    "session_secret": "wordpress-example-session-secret-12345"
   }
 }

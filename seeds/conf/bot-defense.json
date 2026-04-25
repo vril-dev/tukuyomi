@@ -1,0 +1,22 @@
+{
+  "default": {
+    "enabled": false,
+    "dry_run": false,
+    "mode": "suspicious",
+    "path_prefixes": ["/"],
+    "path_policies": [],
+    "exempt_cidrs": [
+      "127.0.0.1/32",
+      "::1/128",
+      "10.0.0.0/8",
+      "172.16.0.0/12",
+      "192.168.0.0/16",
+      "fc00::/7"
+    ],
+    "challenge_cookie_name": "__tukuyomi_bot_ok",
+    "challenge_secret": "",
+    "challenge_ttl_seconds": 21600,
+    "challenge_status_code": 429
+  },
+  "hosts": {}
+}

@@ -214,6 +214,7 @@ export default function OptionsPanel() {
   }
 
   async function onRunCountryUpdate() {
+    const previousAttempt = requestCountryUpdate?.last_attempt || "";
     setUpdatingNow(true);
     setUpdateError("");
     setUpdateNotice("");
@@ -224,12 +225,24 @@ export default function OptionsPanel() {
       setRequestCountryDB(db);
       setUpdateNotice(tx("Country DB update completed."));
     } catch (err: unknown) {
-      setUpdateError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
       try {
         const next = await apiGetJson<RequestCountryUpdateStatus>("/request-country-update");
         setRequestCountryUpdate(next);
+        if (next.last_result === "success" && next.last_attempt && next.last_attempt !== previousAttempt && !next.last_error) {
+          try {
+            const db = await apiGetJson<RequestCountryDBStatus>("/request-country-db");
+            setRequestCountryDB(db);
+          } catch {
+            //
+          }
+          setUpdateNotice(tx("Country DB update completed."));
+          setUpdateError("");
+          return;
+        }
+        setUpdateError(next.last_error || message);
       } catch {
-        //
+        setUpdateError(message);
       }
     } finally {
       setUpdatingNow(false);
@@ -284,12 +297,12 @@ export default function OptionsPanel() {
           <div className="space-y-3">
             <div>
               <h3 className="text-sm font-semibold">{tx("Country DB")}</h3>
-              <p className="text-sm text-neutral-500">{tx("Upload a managed .mmdb country database artifact here. Switch the runtime country resolution mode below after the artifact is ready.")}</p>
+              <p className="text-sm text-neutral-500">{tx("Upload the managed .mmdb country database here. In DB mode the artifact is stored in runtime DB authority, not as a persistent file.")}</p>
             </div>
             <div className="grid gap-3 md:grid-cols-2 text-sm">
               <div>
-                <div className="text-xs text-neutral-500">{tx("Managed Path")}</div>
-                <code className="break-all">{requestCountryDB?.managed_path || "data/geoip/country.mmdb"}</code>
+                <div className="text-xs text-neutral-500">{tx("Storage")}</div>
+                <code className="break-all">{requestCountryDB?.managed_path || "db:request_country_mmdb_asset"}</code>
               </div>
               <div>
                 <div className="text-xs text-neutral-500">{tx("Installed")}</div>
@@ -334,12 +347,12 @@ export default function OptionsPanel() {
           <div className="border-t border-neutral-200 pt-4 space-y-3">
             <div>
               <h3 className="text-sm font-semibold">{tx("GeoIP Update")}</h3>
-              <p className="text-sm text-neutral-500">{tx("Upload a managed GeoIP.conf here, then run Update now manually or call the same updater command from Scheduled Tasks.")}</p>
+              <p className="text-sm text-neutral-500">{tx("Upload the managed GeoIP.conf here, then run Update now manually or from Scheduled Tasks. In DB mode the config and update state are stored in DB authority.")}</p>
             </div>
             <div className="grid gap-3 md:grid-cols-2 text-sm">
               <div>
-                <div className="text-xs text-neutral-500">{tx("Managed Config Path")}</div>
-                <code className="break-all">{requestCountryUpdate?.managed_config_path || "data/geoip/GeoIP.conf"}</code>
+                <div className="text-xs text-neutral-500">{tx("Config Storage")}</div>
+                <code className="break-all">{requestCountryUpdate?.managed_config_path || "db:request_country_geoip_config"}</code>
               </div>
               <div>
                 <div className="text-xs text-neutral-500">{tx("Updater Available")}</div>
@@ -408,7 +421,7 @@ export default function OptionsPanel() {
             <div>
               <h3 className="text-sm font-semibold">{tx("Country Resolution Mode")}</h3>
               <p className="text-sm text-neutral-500">
-                {tx("Choose whether request country comes from a trusted frontend header or from the installed local country database artifact. This updates config.json only and takes effect after restart.")}
+                {tx("Choose whether request country comes from a trusted frontend header or from the installed local country database artifact. This updates DB app_config and takes effect after restart.")}
               </p>
             </div>
             <div className="grid gap-3 text-sm">
@@ -439,7 +452,7 @@ export default function OptionsPanel() {
               </button>
             </div>
             <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-              {tx("Saving updates config.json only. Restart the process after switching modes.")}
+              {tx("Saving updates DB app_config. Restart the process after switching modes.")}
             </div>
             {modeNotice ? <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900">{modeNotice}</div> : null}
             {modeError ? <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">{modeError}</div> : null}
@@ -448,7 +461,7 @@ export default function OptionsPanel() {
 
       <div className="rounded-xl border border-neutral-200 p-4 space-y-3">
         <h2 className="text-sm font-semibold">{tx("Runtime Inventory")}</h2>
-        <p className="text-sm text-neutral-500">{tx("Runtime entries are read-only here. This panel is for visibility, readiness, and generated target status.")}</p>
+        <p className="text-sm text-neutral-500">{tx("Runtime entries are read-only here. This panel is for visibility, readiness, and process status.")}</p>
         {availableRuntimeCount === 0 ? (
           <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
             {tx("No built runtimes are available yet. Build a runtime bundle first, then return here to confirm readiness.")}
@@ -532,11 +545,6 @@ export default function OptionsPanel() {
                     )}
                   </div>
 
-                  {materializedEntry?.generated_targets?.length ? (
-                    <div className="text-xs text-neutral-600">
-                      {tx("Generated targets")}: {materializedEntry.generated_targets.join(", ")}
-                    </div>
-                  ) : null}
                   {process?.last_error ? (
                     <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                       {process.last_error}

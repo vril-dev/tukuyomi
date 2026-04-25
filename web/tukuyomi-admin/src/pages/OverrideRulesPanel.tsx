@@ -264,7 +264,7 @@ export default function OverrideRulesPanel() {
                     <div>
                         <h1 className="text-xl font-semibold">Override Rules</h1>
                         <p className="text-sm text-neutral-500">
-                            Managed bypass `extra_rule` files live under <code className="px-1 bg-neutral-100 rounded">{overrideDir}</code>.
+                            Managed bypass `extra_rule` bodies are stored in DB. Accepted references are <code className="px-1 bg-neutral-100 rounded">name.conf</code> or <code className="px-1 bg-neutral-100 rounded">{overrideDir}/name.conf</code>.
                         </p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -281,7 +281,7 @@ export default function OverrideRulesPanel() {
                 )}
 
                 <div className="flex flex-wrap items-center gap-2">
-                    <label className="text-sm text-neutral-600">Managed file</label>
+                    <label className="text-sm text-neutral-600">{tx("Managed rule")}</label>
                     <select
                         className="border rounded px-2 py-1 text-sm min-w-[260px]"
                         value={selectedOverrideName}
@@ -364,7 +364,7 @@ export default function OverrideRulesPanel() {
                             className="w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono"
                         />
                         <div className="text-xs text-neutral-500">
-                            Runtime path: <code className="px-1 bg-neutral-100 rounded">{overrideName.trim() ? `${overrideDir}/${overrideName.trim()}` : `${overrideDir}/<name>.conf`}</code>
+                            DB asset reference: <code className="px-1 bg-neutral-100 rounded">{overrideName.trim() ? `${overrideDir}/${overrideName.trim()}` : `${overrideDir}/<name>.conf`}</code>
                         </div>
                         {overrideLoadError && (
                             <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">
@@ -372,10 +372,7 @@ export default function OverrideRulesPanel() {
                             </div>
                         )}
                         <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
-                            `extra_rule` swaps the request onto this standalone override rule file instead of the base WAF rule set.
-                        </div>
-                        <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
-                            A bundled sample ships as <code className="px-1 bg-white rounded">{`${overrideDir}/search-endpoint.conf`}</code>.
+                            `extra_rule` swaps the request onto this standalone DB-managed override rule instead of the base WAF rule set.
                         </div>
                     </div>
                     <textarea

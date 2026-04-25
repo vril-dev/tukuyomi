@@ -22,13 +22,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"tukuyomi/internal/adminauth"
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/cacheconf"
 )
 
 const (
 	responseCacheConfigBlobKey           = "cache_store"
-	defaultResponseCacheStoreDir         = "logs/coraza/cache"
+	defaultResponseCacheStoreDir         = "cache/response"
 	defaultResponseCacheMaxBytes         = int64(2 * 1024 * 1024 * 1024)
 	defaultResponseCacheMemoryMaxBytes   = int64(256 * 1024 * 1024)
 	defaultResponseCacheMemoryMaxEntries = 4096
@@ -185,28 +186,48 @@ func InitResponseCacheRuntime(path string) error {
 	if path == "" {
 		return fmt.Errorf("cache store config path is required")
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("read cache store config (%s): %w", path, err)
-		}
-		cfg := normalizeResponseCacheConfig(responseCacheConfig{})
-		encoded, err := marshalResponseCacheConfig(cfg)
+	var raw []byte
+	var dbETag string
+	if store := getLogsStatsStore(); store != nil {
+		dbRaw, rec, found, err := loadRuntimeResponseCacheConfig(store)
 		if err != nil {
-			return err
+			return fmt.Errorf("read response cache config from db: %w", err)
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return err
+		if !found {
+			return fmt.Errorf("normalized response cache config missing in db; run make db-import before removing seed files")
 		}
-		if err := bypassconf.AtomicWriteWithBackup(path, encoded); err != nil {
-			return err
+		raw = dbRaw
+		dbETag = rec.ETag
+	}
+	if len(raw) == 0 {
+		fileRaw, err := os.ReadFile(path)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return fmt.Errorf("read cache store config (%s): %w", path, err)
+			}
+			cfg := normalizeResponseCacheConfig(responseCacheConfig{})
+			encoded, err := marshalResponseCacheConfig(cfg)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return err
+			}
+			if err := bypassconf.AtomicWriteWithBackup(path, encoded); err != nil {
+				return err
+			}
+			raw = encoded
+		} else {
+			raw = fileRaw
 		}
-		raw = encoded
 	}
 
 	prepared, err := prepareResponseCacheRaw(string(raw))
 	if err != nil {
 		return fmt.Errorf("invalid cache store config (%s): %w", path, err)
+	}
+	if dbETag == "" {
+		dbETag = prepared.etag
 	}
 	store, err := newProxyResponseCacheStore(prepared.cfg)
 	if err != nil {
@@ -217,7 +238,7 @@ func InitResponseCacheRuntime(path string) error {
 	responseCacheRt = &responseCacheRuntime{
 		configPath: path,
 		raw:        prepared.raw,
-		etag:       prepared.etag,
+		etag:       dbETag,
 		cfg:        prepared.cfg,
 		store:      store,
 	}
@@ -278,47 +299,44 @@ func ApplyResponseCacheRaw(ifMatch string, raw string) (string, responseCacheCon
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 
-	if ifMatch = strings.TrimSpace(ifMatch); ifMatch != "" && ifMatch != rt.etag {
+	if ifMatch = strings.TrimSpace(ifMatch); ifMatch != "" && ifMatch != rt.etag && ifMatch != bypassconf.ComputeETag([]byte(rt.raw)) {
 		return "", responseCacheConfig{}, responseCacheConfigConflictError{CurrentETag: rt.etag}
 	}
 
-	prevRaw := rt.raw
 	prevETag := rt.etag
-	prevCfg := rt.cfg
 	prevStats := proxyResponseCacheStats{}
 	if rt.store != nil {
 		prevStats = rt.store.Snapshot()
 	}
 
-	if err := persistResponseCacheConfigRaw(rt.configPath, prepared.raw); err != nil {
+	store, err := requireConfigDBStore()
+	if err != nil {
 		return "", responseCacheConfig{}, err
 	}
-	if store := getLogsStatsStore(); store != nil {
-		if err := store.UpsertConfigBlob(responseCacheConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
-			_ = persistResponseCacheConfigRaw(rt.configPath, prevRaw)
-			return "", responseCacheConfig{}, err
-		}
-	}
-	if rt.store == nil {
-		rt.store, err = newProxyResponseCacheStore(prepared.cfg)
-		if err != nil {
-			_ = persistResponseCacheConfigRaw(rt.configPath, prevRaw)
-			return "", responseCacheConfig{}, err
-		}
-	} else if err := rt.store.Reconfigure(prepared.cfg); err != nil {
-		_ = persistResponseCacheConfigRaw(rt.configPath, prevRaw)
-		_ = rt.store.Reconfigure(prevCfg)
+	candidateStore, err := newProxyResponseCacheStore(prepared.cfg)
+	if err != nil {
 		return "", responseCacheConfig{}, err
 	}
+	expectedETag := responseCacheExpectedETag(ifMatch, rt.raw, rt.etag)
+	rec, cfg, err := store.writeResponseCacheConfigVersion(expectedETag, prepared.cfg, configVersionSourceApply, "", "response cache config update", 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			return "", responseCacheConfig{}, responseCacheConfigConflictError{CurrentETag: policyConfigConflictETag(store, responseCacheConfigBlobKey)}
+		}
+		return "", responseCacheConfig{}, err
+	}
+	prepared.cfg = cfg
+	rt.store = candidateStore
+	nextETag := rec.ETag
 
 	rt.raw = prepared.raw
-	rt.etag = prepared.etag
+	rt.etag = nextETag
 	rt.cfg = prepared.cfg
 
 	if prevStats.StoreDir != "" && prevStats.StoreDir != prepared.cfg.StoreDir {
 		log.Printf("[CACHE] switched internal cache dir from %s to %s", prevStats.StoreDir, prepared.cfg.StoreDir)
 	}
-	if prevETag != prepared.etag {
+	if prevETag != nextETag {
 		log.Printf("[CACHE] internal cache config applied enabled=%t store_dir=%s max_bytes=%d", prepared.cfg.Enabled, prepared.cfg.StoreDir, prepared.cfg.MaxBytes)
 	}
 
@@ -347,21 +365,31 @@ func SyncResponseCacheStoreStorage() error {
 	if path == "" {
 		return nil
 	}
-	return syncConfigBlobFilePath(configBlobSyncOptions{
-		ConfigKey: responseCacheConfigBlobKey,
-		Path:      path,
-		ValidateRaw: func(raw string) error {
-			_, err := ValidateResponseCacheRaw(raw)
+	if store := getLogsStatsStore(); store != nil {
+		raw, rec, found, err := loadRuntimeResponseCacheConfig(store)
+		if err != nil || !found {
 			return err
-		},
-		WriteRaw:         bypassconf.AtomicWriteWithBackup,
-		ComputeETag:      bypassconf.ComputeETag,
-		SkipWriteIfEqual: true,
-		Reload: func() error {
-			_, _, err := ApplyResponseCacheRaw("", string(mustReadFile(path)))
+		}
+		prepared, err := prepareResponseCacheRaw(string(raw))
+		if err != nil {
 			return err
-		},
-	})
+		}
+		rt.mu.Lock()
+		defer rt.mu.Unlock()
+		if rt.store == nil {
+			rt.store, err = newProxyResponseCacheStore(prepared.cfg)
+			if err != nil {
+				return err
+			}
+		} else if err := rt.store.Reconfigure(prepared.cfg); err != nil {
+			return err
+		}
+		rt.raw = prepared.raw
+		rt.etag = rec.ETag
+		rt.cfg = prepared.cfg
+		return nil
+	}
+	return nil
 }
 
 func GetResponseCacheStore(c *gin.Context) {
@@ -416,6 +444,9 @@ func PutResponseCacheStore(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": conflictErr.CurrentETag})
 			return
 		}
+		if respondIfConfigDBStoreRequired(c, err) {
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
@@ -442,6 +473,7 @@ func ServeProxyWithCacheHTTP(w http.ResponseWriter, r *http.Request) {
 	if w == nil || r == nil {
 		return
 	}
+	stripAdminAuthCookiesFromProxyRequest(r)
 	rt := currentResponseCacheRuntime()
 	if rt == nil {
 		ServeProxy(w, r)
@@ -469,12 +501,24 @@ func ServeProxyWithCacheHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := proxyResponseCacheKey(r, proxyEffectiveResponseCacheVary(rule.Vary))
+	vary := proxyEffectiveResponseCacheVary(rule.Vary)
+	key := proxyResponseCacheKey(r, vary)
 	if cached, ok := store.Load(key); ok {
 		if err := writeProxyCachedResponse(w, r, cached.Entry, cached.Body); err == nil {
 			return
 		}
 		store.removeByKey(key)
+	}
+	storeKey := key
+	if r.Method == http.MethodHead {
+		headKey := proxyResponseCacheKeyForMethod(r, vary, http.MethodHead)
+		if cached, ok := store.Load(headKey); ok {
+			if err := writeProxyCachedResponse(w, r, cached.Entry, cached.Body); err == nil {
+				return
+			}
+			store.removeByKey(headKey)
+		}
+		storeKey = headKey
 	}
 
 	tmpFile, tmpPath, err := store.NewTempBodyFile()
@@ -495,7 +539,7 @@ func ServeProxyWithCacheHTTP(w http.ResponseWriter, r *http.Request) {
 	bodySize := cw.bodySize
 	_ = cw.closeTemp()
 
-	if cw.tmpErr != nil || r.Method != http.MethodGet || !shouldStoreProxyResponse(statusCode, headerSnapshot) {
+	if cw.tmpErr != nil || !shouldStoreProxyResponseMethod(r.Method, bodySize) || !shouldStoreProxyResponse(statusCode, headerSnapshot) {
 		store.DiscardTemp(tmpPath)
 		return
 	}
@@ -504,7 +548,7 @@ func ServeProxyWithCacheHTTP(w http.ResponseWriter, r *http.Request) {
 	if ttl <= 0 {
 		ttl = 600
 	}
-	if err := store.Store(key, ttl, statusCode, headerSnapshot, tmpPath, bodySize); err != nil {
+	if err := store.Store(storeKey, ttl, statusCode, headerSnapshot, tmpPath, bodySize); err != nil {
 		store.DiscardTemp(tmpPath)
 	}
 }
@@ -590,10 +634,6 @@ func marshalResponseCacheConfig(cfg responseCacheConfig) ([]byte, error) {
 		return nil, err
 	}
 	return append(raw, '\n'), nil
-}
-
-func persistResponseCacheConfigRaw(path, raw string) error {
-	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
 }
 
 func mustReadFile(path string) []byte {
@@ -851,9 +891,16 @@ func (s *proxyResponseCacheStore) Clear() (proxyResponseCacheClearResult, error)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	result := proxyResponseCacheClearResult{ClearedEntries: len(s.entries), ClearedBytes: s.currentBytes}
+	removed := make(map[string]struct{}, len(s.entries)*2)
 	for _, entry := range s.entries {
-		_ = os.Remove(entry.BodyPath)
-		_ = os.Remove(proxyResponseCacheMetaPath(entry.BodyPath))
+		removeProxyResponseCacheFile(entry.BodyPath, removed)
+		removeProxyResponseCacheFile(proxyResponseCacheMetaPath(entry.BodyPath), removed)
+	}
+	if diskResult, err := clearProxyResponseCacheDirFiles(s.dir, removed); err != nil {
+		return result, err
+	} else {
+		result.ClearedEntries += diskResult.ClearedEntries
+		result.ClearedBytes += diskResult.ClearedBytes
 	}
 	s.entries = make(map[string]*proxyResponseCacheEntry)
 	s.lru.Init()
@@ -866,6 +913,95 @@ func (s *proxyResponseCacheStore) Clear() (proxyResponseCacheClearResult, error)
 		}
 	}
 	return result, nil
+}
+
+func removeProxyResponseCacheFile(path string, removed map[string]struct{}) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	if removed != nil {
+		if _, ok := removed[path]; ok {
+			return
+		}
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return
+	}
+	if removed != nil {
+		removed[path] = struct{}{}
+	}
+}
+
+func clearProxyResponseCacheDirFiles(dir string, removed map[string]struct{}) (proxyResponseCacheClearResult, error) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return proxyResponseCacheClearResult{}, nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return proxyResponseCacheClearResult{}, nil
+		}
+		return proxyResponseCacheClearResult{}, err
+	}
+	var result proxyResponseCacheClearResult
+	for _, entry := range entries {
+		if entry.IsDir() || !isProxyResponseCacheOwnedFile(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if removed != nil {
+			if _, ok := removed[path]; ok {
+				continue
+			}
+		}
+		info, statErr := entry.Info()
+		if statErr != nil && !os.IsNotExist(statErr) {
+			return result, statErr
+		}
+		if err := os.Remove(path); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return result, err
+		}
+		if removed != nil {
+			removed[path] = struct{}{}
+		}
+		if strings.HasSuffix(entry.Name(), ".body") {
+			result.ClearedEntries++
+		}
+		if statErr == nil {
+			result.ClearedBytes += info.Size()
+		}
+	}
+	return result, nil
+}
+
+func isProxyResponseCacheOwnedFile(name string) bool {
+	if strings.HasPrefix(name, ".tukuyomi-cache-body-") || strings.HasPrefix(name, ".tukuyomi-cache-meta-") {
+		return true
+	}
+	for _, suffix := range []string{".body", ".json"} {
+		base, ok := strings.CutSuffix(name, suffix)
+		if ok {
+			return isProxyResponseCacheHashName(base)
+		}
+	}
+	return false
+}
+
+func isProxyResponseCacheHashName(name string) bool {
+	if len(name) != sha256.Size*2 {
+		return false
+	}
+	for _, r := range name {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *proxyResponseCacheStore) removeByKey(key string) {
@@ -1132,11 +1268,57 @@ func shouldBypassProxyResponseCache(r *http.Request) bool {
 	if strings.TrimSpace(r.Header.Get("Cookie")) != "" {
 		return true
 	}
+	if hasProxyResponseCacheConditionalRequestHeader(r.Header) {
+		return true
+	}
 	cacheControl := strings.ToLower(strings.Join(r.Header.Values("Cache-Control"), ","))
 	if strings.Contains(cacheControl, "no-cache") || strings.Contains(cacheControl, "no-store") {
 		return true
 	}
 	return strings.EqualFold(strings.TrimSpace(r.Header.Get("Pragma")), "no-cache")
+}
+
+func stripAdminAuthCookiesFromProxyRequest(r *http.Request) {
+	if r == nil || len(r.Header.Values("Cookie")) == 0 {
+		return
+	}
+	kept := make([]string, 0)
+	changed := false
+	for _, raw := range r.Header.Values("Cookie") {
+		for _, part := range strings.Split(raw, ";") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			name, _, ok := strings.Cut(part, "=")
+			if !ok {
+				name = part
+			}
+			switch strings.TrimSpace(name) {
+			case adminauth.SessionCookieName, adminauth.CSRFCookieName:
+				changed = true
+				continue
+			default:
+				kept = append(kept, part)
+			}
+		}
+	}
+	if !changed {
+		return
+	}
+	r.Header.Del("Cookie")
+	if len(kept) > 0 {
+		r.Header.Set("Cookie", strings.Join(kept, "; "))
+	}
+}
+
+func hasProxyResponseCacheConditionalRequestHeader(header http.Header) bool {
+	for _, name := range []string{"If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since", "If-Range"} {
+		if strings.TrimSpace(header.Get(name)) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldStoreProxyResponse(status int, header http.Header) bool {
@@ -1155,11 +1337,26 @@ func shouldStoreProxyResponse(status int, header http.Header) bool {
 	return strings.TrimSpace(header.Get("Vary")) != "*"
 }
 
+func shouldStoreProxyResponseMethod(method string, bodySize int64) bool {
+	switch method {
+	case http.MethodGet:
+		return true
+	case http.MethodHead:
+		return bodySize == 0
+	default:
+		return false
+	}
+}
+
 func proxyResponseCacheKey(r *http.Request, vary []string) string {
 	method := r.Method
 	if method == http.MethodHead {
 		method = http.MethodGet
 	}
+	return proxyResponseCacheKeyForMethod(r, vary, method)
+}
+
+func proxyResponseCacheKeyForMethod(r *http.Request, vary []string, method string) string {
 	var b strings.Builder
 	b.WriteString(method)
 	b.WriteByte('\n')

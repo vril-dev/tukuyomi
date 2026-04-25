@@ -26,15 +26,22 @@ services:
       dockerfile: Dockerfile
     environment:
       - WAF_CONFIG_FILE=${WAF_CONFIG_FILE:-conf/config.json}
+      - WAF_STORAGE_DB_DRIVER=${WAF_STORAGE_DB_DRIVER:-}
+      - WAF_STORAGE_DB_DSN=${WAF_STORAGE_DB_DSN:-}
+      - WAF_STORAGE_DB_PATH=${WAF_STORAGE_DB_PATH:-data/db/tukuyomi.db}
+      - WAF_STORAGE_DB_RETENTION_DAYS=${WAF_STORAGE_DB_RETENTION_DAYS:-}
+      - WAF_STORAGE_DB_SYNC_INTERVAL_SEC=${WAF_STORAGE_DB_SYNC_INTERVAL_SEC:-}
+      - TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME=${TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME:-}
+      - TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD=${TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD:-}
+      - TUKUYOMI_ADMIN_BOOTSTRAP_EMAIL=${TUKUYOMI_ADMIN_BOOTSTRAP_EMAIL:-}
       - TUKUYOMI_PPROF_ADDR=${TUKUYOMI_PPROF_ADDR:-}
     volumes:
-      - ./data/rules:/app/rules
+      - ./data:/app/data
+      - ./data/cache:/app/cache
       - ./data/conf:/app/conf
-      - ./data/geoip:/app/data/geoip
       - ./data/scheduled-tasks:/app/data/scheduled-tasks
       - ./data/php-fpm:/app/data/php-fpm
       - ./data/vhosts:/app/data/vhosts
-      - ./data/logs:/app/logs
       - ./scripts:/app/scripts:ro
     ports:
       - "${CORAZA_PORT:-9090}:${WAF_LISTEN_PORT:-9090}"
@@ -55,14 +62,21 @@ services:
       dockerfile: Dockerfile
     environment:
       - WAF_CONFIG_FILE=${WAF_CONFIG_FILE:-conf/config.json}
+      - WAF_STORAGE_DB_DRIVER=${WAF_STORAGE_DB_DRIVER:-}
+      - WAF_STORAGE_DB_DSN=${WAF_STORAGE_DB_DSN:-}
+      - WAF_STORAGE_DB_PATH=${WAF_STORAGE_DB_PATH:-data/db/tukuyomi.db}
+      - WAF_STORAGE_DB_RETENTION_DAYS=${WAF_STORAGE_DB_RETENTION_DAYS:-}
+      - WAF_STORAGE_DB_SYNC_INTERVAL_SEC=${WAF_STORAGE_DB_SYNC_INTERVAL_SEC:-}
+      - TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME=${TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME:-}
+      - TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD=${TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD:-}
+      - TUKUYOMI_ADMIN_BOOTSTRAP_EMAIL=${TUKUYOMI_ADMIN_BOOTSTRAP_EMAIL:-}
     volumes:
-      - ./data/rules:/app/rules
+      - ./data:/app/data
+      - ./data/cache:/app/cache
       - ./data/conf:/app/conf
-      - ./data/geoip:/app/data/geoip
       - ./data/scheduled-tasks:/app/data/scheduled-tasks
       - ./data/php-fpm:/app/data/php-fpm
       - ./data/vhosts:/app/data/vhosts
-      - ./data/logs:/app/logs
     command:
       - /bin/sh
       - -lc
@@ -97,7 +111,7 @@ services:
       - --reportName=gotestwaf-report
       - --noEmailReport
     volumes:
-      - ./data/logs/gotestwaf:/app/reports
+      - ./data/tmp/gotestwaf:/app/reports
     restart: "no"
 
 volumes:

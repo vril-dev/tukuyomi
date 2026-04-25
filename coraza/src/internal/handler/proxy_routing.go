@@ -572,10 +572,10 @@ func validateProxyBackendPool(pool ProxyBackendPool, namedUpstreams map[string]P
 	for i, member := range pool.Members {
 		upstream, ok := namedUpstreams[member]
 		if !ok {
-			return fmt.Errorf("%s.members[%d] must reference a configured upstream name", field, i)
+			return fmt.Errorf("%s.members[%d] must reference a direct or generated vhost upstream name", field, i)
 		}
 		if !proxyUpstreamAllowedInBackendPool(upstream) {
-			return fmt.Errorf("%s.members[%d] must reference a configured upstream name", field, i)
+			return fmt.Errorf("%s.members[%d] must reference a direct or generated vhost upstream name", field, i)
 		}
 		if upstreamNameCounts[member] > 1 {
 			return fmt.Errorf("%s.members[%d] references duplicated upstream name %q", field, i, member)
@@ -591,7 +591,7 @@ func proxyUpstreamAllowedInBackendPool(upstream ProxyUpstream) bool {
 	if proxyUpstreamIsDirect(upstream) {
 		return true
 	}
-	return proxyUpstreamIsVhostManaged(upstream) && upstream.GeneratedKind == proxyUpstreamGeneratedKindVhostLinkedTarget
+	return proxyUpstreamIsVhostManaged(upstream) && upstream.GeneratedKind == proxyUpstreamGeneratedKindVhostTarget
 }
 
 func proxyUpstreamAllowedAsRouteTarget(upstream ProxyUpstream) bool {
@@ -761,10 +761,10 @@ func validateProxyRouteAction(action ProxyRouteAction, cfg ProxyRulesConfig, nam
 	if upstream != "" {
 		up, ok := namedUpstreams[upstream]
 		if !ok {
-			return fmt.Errorf("%s.upstream must reference a configured upstream name", field)
+			return fmt.Errorf("%s.upstream must reference a direct or generated vhost upstream name", field)
 		}
 		if !proxyUpstreamAllowedAsRouteTarget(up) {
-			return fmt.Errorf("%s.upstream must reference a configured upstream name", field)
+			return fmt.Errorf("%s.upstream must reference a direct or generated vhost upstream name", field)
 		}
 		if nameCounts[upstream] > 1 {
 			return fmt.Errorf("%s.upstream references duplicated upstream name %q", field, upstream)
@@ -785,10 +785,10 @@ func validateProxyRouteAction(action ProxyRouteAction, cfg ProxyRulesConfig, nam
 		}
 		up, ok := namedUpstreams[canaryUpstream]
 		if !ok {
-			return fmt.Errorf("%s.canary_upstream must reference a configured upstream name", field)
+			return fmt.Errorf("%s.canary_upstream must reference a direct or generated vhost upstream name", field)
 		}
 		if !proxyUpstreamAllowedAsRouteTarget(up) {
-			return fmt.Errorf("%s.canary_upstream must reference a configured upstream name", field)
+			return fmt.Errorf("%s.canary_upstream must reference a direct or generated vhost upstream name", field)
 		}
 		if nameCounts[canaryUpstream] > 1 {
 			return fmt.Errorf("%s.canary_upstream references duplicated upstream name %q", field, canaryUpstream)
@@ -1432,7 +1432,7 @@ func resolveProxyRouteTarget(cfg ProxyRulesConfig, ref string, health *upstreamH
 				continue
 			}
 			if !proxyUpstreamAllowedAsRouteTarget(upstream) {
-				return nil, "", "", "", fmt.Errorf("route target %q must reference a configured upstream name", ref)
+				return nil, "", "", "", fmt.Errorf("route target %q must reference a direct or generated vhost upstream name", ref)
 			}
 			if proxyUpstreamDiscoveryEnabled(upstream) {
 				if health == nil {
@@ -1452,7 +1452,7 @@ func resolveProxyRouteTarget(cfg ProxyRulesConfig, ref string, health *upstreamH
 			}
 			return target, upstream.Name, target.String(), "", nil
 		}
-		return nil, "", "", "", fmt.Errorf("route target %q must reference a configured upstream name", ref)
+		return nil, "", "", "", fmt.Errorf("route target %q must reference a direct or generated vhost upstream name", ref)
 	}
 
 	if health != nil {

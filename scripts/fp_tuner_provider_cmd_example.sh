@@ -71,7 +71,7 @@ if ! [[ "${matched_variable}" =~ ^[A-Za-z0-9_.:!]+$ ]]; then
   matched_variable="ARGS:q"
 fi
 
-target_path="$(jq -r '.target_path // "rules/tukuyomi.conf"' <<<"${payload}")"
+target_path="$(jq -r '.target_path // "tukuyomi.conf"' <<<"${payload}")"
 summary="$(jq -r '.input.matched_value // "" | if length > 0 then "Candidate false positive from input sample." else "Candidate false positive event." end' <<<"${payload}")"
 
 jq -n \

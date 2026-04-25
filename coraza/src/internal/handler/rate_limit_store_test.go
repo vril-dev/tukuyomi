@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -379,7 +378,7 @@ func TestEvaluateRateLimit_IsolatesCountersAcrossHostScopes(t *testing.T) {
 	}
 }
 
-func TestSyncRateLimitStorage_SeedsDBFromFileWhenMissingBlob(t *testing.T) {
+func TestImportPolicyJSONStorage_SeedsRateLimitDBFromFile(t *testing.T) {
 	restore := saveRateLimitStateForTest()
 	defer restore()
 
@@ -398,30 +397,34 @@ func TestSyncRateLimitStorage_SeedsDBFromFileWhenMissingBlob(t *testing.T) {
 		t.Fatalf("init sqlite store: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = InitLogsStatsStoreWithBackend("file", "", "", "", 0)
+		_ = InitLogsStatsStore(false, "", 0)
 	})
 
-	if err := SyncRateLimitStorage(); err != nil {
-		t.Fatalf("sync rate-limit storage: %v", err)
+	if err := importPolicyJSONStorage(rateLimitConfigBlobKey, path, normalizeRateLimitPolicyRaw, "rate limit seed import"); err != nil {
+		t.Fatalf("import rate-limit storage: %v", err)
 	}
 
 	store := getLogsStatsStore()
 	if store == nil {
 		t.Fatal("expected sqlite store")
 	}
-	gotRaw, _, found, err := store.GetConfigBlob(rateLimitConfigBlobKey)
+	gotRaw, _, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(rateLimitConfigBlobKey))
+	if err != nil || !found {
+		t.Fatalf("expected rate-limit normalized rows to be seeded found=%v err=%v", found, err)
+	}
+	rt, err := ValidateRateLimitRaw(string(gotRaw))
 	if err != nil {
-		t.Fatalf("get config blob: %v", err)
+		t.Fatalf("seeded normalized rate-limit invalid: %v", err)
 	}
-	if !found {
-		t.Fatal("expected rate-limit config blob to be seeded")
+	if rt.Raw.Default.DefaultPolicy.Limit != 77 {
+		t.Fatalf("seeded rate-limit limit=%d want=77", rt.Raw.Default.DefaultPolicy.Limit)
 	}
-	if strings.TrimSpace(string(gotRaw)) != strings.TrimSpace(raw) {
-		t.Fatalf("seeded blob mismatch:\n got=%s\nwant=%s", string(gotRaw), raw)
+	if _, _, found, err := store.GetConfigBlob(rateLimitConfigBlobKey); err != nil || found {
+		t.Fatalf("legacy rate-limit blob found=%v err=%v", found, err)
 	}
 }
 
-func TestSyncRateLimitStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
+func TestSyncRateLimitStorage_ImportsLegacyBlobAndAppliesRuntime(t *testing.T) {
 	restore := saveRateLimitStateForTest()
 	defer restore()
 
@@ -440,7 +443,7 @@ func TestSyncRateLimitStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
 		t.Fatalf("init sqlite store: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = InitLogsStatsStoreWithBackend("file", "", "", "", 0)
+		_ = InitLogsStatsStore(false, "", 0)
 	})
 
 	store := getLogsStatsStore()
@@ -456,17 +459,12 @@ func TestSyncRateLimitStorage_RestoresFileAndRuntimeFromDB(t *testing.T) {
 		t.Fatalf("sync rate-limit storage: %v", err)
 	}
 
-	gotFileRaw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read rate-limit file: %v", err)
-	}
-	if strings.TrimSpace(string(gotFileRaw)) != strings.TrimSpace(dbRaw) {
-		t.Fatalf("file should be restored from db blob:\n got=%s\nwant=%s", string(gotFileRaw), dbRaw)
-	}
-
 	cfg := GetRateLimitConfig()
 	if cfg.Default.DefaultPolicy.Limit != 9 {
 		t.Fatalf("runtime default_policy.limit=%d want=9", cfg.Default.DefaultPolicy.Limit)
+	}
+	if _, _, found, err := store.GetConfigBlob(rateLimitConfigBlobKey); err != nil || found {
+		t.Fatalf("legacy rate-limit blob found=%v err=%v", found, err)
 	}
 }
 

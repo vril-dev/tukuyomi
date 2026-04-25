@@ -209,12 +209,24 @@ func InitNotifications(path string) error {
 	if target == "" {
 		return fmt.Errorf("notification path is empty")
 	}
-	if err := ensureNotificationFile(target); err != nil {
-		return err
-	}
 	notificationMu.Lock()
 	notificationPath = target
 	notificationMu.Unlock()
+
+	if store := getLogsStatsStore(); store != nil {
+		raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(notificationConfigBlobKey), normalizeNotificationPolicyRaw, "notification rules")
+		if err != nil {
+			return fmt.Errorf("read notification config db: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("normalized notification config missing in db; run make db-import before removing seed files")
+		}
+		return applyNotificationPolicyRaw(raw)
+	}
+
+	if err := ensureNotificationFile(target); err != nil {
+		return err
+	}
 	return ReloadNotifications()
 }
 
@@ -572,8 +584,8 @@ func (m *notificationManager) httpClient(timeoutSec int) *http.Client {
 }
 
 func sendNotificationEmail(sink notificationSinkConfig, dispatch notificationDispatch) error {
-	host, _, err := strings.Cut(strings.TrimSpace(sink.SMTPAddress), ":")
-	if err || strings.TrimSpace(host) == "" {
+	host, _, found := strings.Cut(strings.TrimSpace(sink.SMTPAddress), ":")
+	if !found || strings.TrimSpace(host) == "" {
 		return fmt.Errorf("smtp_address must include host:port")
 	}
 	to := make([]string, 0, len(sink.To))
@@ -839,7 +851,11 @@ func ensureNotificationFile(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	const defaultRaw = `{
+	return os.WriteFile(path, []byte(defaultNotificationPolicyRaw()), 0o644)
+}
+
+func defaultNotificationPolicyRaw() string {
+	return `{
   "enabled": false,
   "cooldown_seconds": 900,
   "sinks": [
@@ -880,7 +896,6 @@ func ensureNotificationFile(path string) error {
   }
 }
 `
-	return os.WriteFile(path, []byte(defaultRaw), 0o644)
 }
 
 func observeNotificationSummary(summary *notificationWindowSummary, obs notificationObservation) {

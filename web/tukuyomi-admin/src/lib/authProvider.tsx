@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
-import { AuthContext, defaultSession, type AdminSessionState, type AuthContextValue } from "@/lib/auth";
-import { AUTH_REQUIRED_EVENT, APIUnauthorizedError, apiGetJson, apiPostJson } from "@/lib/api";
+import {
+  AuthContext,
+  defaultSession,
+  type AdminSessionState,
+  type AuthContextValue,
+} from "@/lib/auth";
+import {
+  AUTH_REQUIRED_EVENT,
+  APIUnauthorizedError,
+  apiGetJson,
+  apiPostJson,
+} from "@/lib/api";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<AdminSessionState>(defaultSession);
@@ -44,10 +54,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const login = useCallback(async (apiKey: string) => {
+  const login = useCallback(async (identifier: string, password: string) => {
     setLoading(true);
     try {
-      const next = await apiPostJson<AdminSessionState>("/auth/login", { api_key: apiKey });
+      const next = await apiPostJson<AdminSessionState>("/auth/login", {
+        identifier,
+        password,
+      });
       setSession({
         authenticated: !!next.authenticated,
         mode: next.mode || "session",

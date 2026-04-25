@@ -8,12 +8,10 @@ import {
   EmptyState,
   Field,
   MonoTag,
-  NoticeBar,
   PrimaryButton,
   SectionCard,
   StatBox,
   inputClass,
-  textareaClass,
 } from "@/components/EditorChrome";
 import { useAdminRuntime } from "@/lib/adminRuntime";
 import { apiGetJson, apiPostJson, apiPutJson } from "@/lib/api";
@@ -121,7 +119,7 @@ const exampleState: CacheRulesEditorState = {
 
 const defaultStoreConfig: CacheStoreConfig = {
   enabled: true,
-  store_dir: "logs/coraza/cache",
+  store_dir: "cache/response",
   max_bytes: 2 * 1024 * 1024 * 1024,
   memory_enabled: false,
   memory_max_bytes: 256 * 1024 * 1024,
@@ -134,7 +132,6 @@ export default function CacheRulePanel() {
   const [editorState, setEditorState] = useState<CacheRulesEditorState>(createEmptyCacheRulesEditorState);
   const [raw, setRaw] = useState("");
   const [serverRaw, setServerRaw] = useState("");
-  const [rawMode, setRawMode] = useState(false);
   const [etag, setEtag] = useState<string | null>(null);
   const [storeEtag, setStoreEtag] = useState<string | null>(null);
   const [storeConfig, setStoreConfig] = useState<CacheStoreConfig>(defaultStoreConfig);
@@ -149,22 +146,32 @@ export default function CacheRulePanel() {
   const [messagesTone, setMessagesTone] = useState<"success" | "error">("success");
   const [storeNotice, setStoreNotice] = useState<{ tone: "success" | "error"; messages: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [rawError, setRawError] = useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [serverStoreSig, setServerStoreSig] = useState("");
 
   const totalRules = useMemo(() => countCacheRules(editorState), [editorState]);
   const hostScopeCount = editorState.hosts.length;
-  const dirty = useMemo(() => raw !== serverRaw || !!rawError, [raw, rawError, serverRaw]);
-  const lineCount = useMemo(() => (raw ? raw.split(/\n/).length : 0), [raw]);
+  const dirty = useMemo(() => raw !== serverRaw, [raw, serverRaw]);
   const storeSig = useMemo(() => JSON.stringify(storeConfig), [storeConfig]);
   const storeDirty = storeSig !== serverStoreSig;
 
   const applyStructuredState = useCallback((next: CacheRulesEditorState) => {
     setEditorState(next);
     setRaw(serializeCacheRulesEditor(next));
-    setRawError(null);
   }, []);
+
+  const applyStoreData = useCallback((storeData: CacheStoreDTO) => {
+    const nextStore = storeData.store ?? defaultStoreConfig;
+    setStoreEtag(storeData.etag ?? null);
+    setStoreConfig(nextStore);
+    setStoreStats(storeData.stats ?? {});
+    setServerStoreSig(JSON.stringify(nextStore));
+  }, []);
+
+  const refreshStore = useCallback(async () => {
+    const storeData = await apiGetJson<CacheStoreDTO>("/cache-store");
+    applyStoreData(storeData);
+  }, [applyStoreData]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -176,27 +183,22 @@ export default function CacheRulePanel() {
       ]);
       const nextRaw = rulesData.raw ?? serializeCacheRulesEditor(createEmptyCacheRulesEditorState());
       const nextState = parseCacheRulesEditorDocument(nextRaw);
-      const nextStore = storeData.store ?? defaultStoreConfig;
       setEditorState(nextState);
       setRaw(nextRaw);
       setServerRaw(nextRaw);
       setEtag(rulesData.etag ?? null);
-      setStoreEtag(storeData.etag ?? null);
-      setStoreConfig(nextStore);
-      setStoreStats(storeData.stats ?? {});
-      setServerStoreSig(JSON.stringify(nextStore));
+      applyStoreData(storeData);
       setLastSavedAt(parseSavedAt(rulesData.saved_at));
       setValid(null);
       setMessages([]);
       setMessagesTone("success");
       setStoreNotice(null);
-      setRawError(null);
     } catch (e: unknown) {
       setError(getErrorMessage(e, tx("Failed to load")));
     } finally {
       setLoading(false);
     }
-  }, [tx]);
+  }, [applyStoreData, tx]);
 
   useEffect(() => {
     void load();
@@ -207,13 +209,12 @@ export default function CacheRulePanel() {
     if (debounceRef.current) {
       window.clearTimeout(debounceRef.current);
     }
-    if (loading || rawError) {
+    if (loading) {
       return;
     }
     debounceRef.current = window.setTimeout(async () => {
       try {
-        const body = rawMode ? { rawMode: true, raw } : { rawMode: false, rules: toCacheRulesFile(editorState) };
-        const js = await apiPostJson<ValidateResp>("/cache-rules:validate", body);
+        const js = await apiPostJson<ValidateResp>("/cache-rules:validate", { rawMode: false, rules: toCacheRulesFile(editorState) });
         setValid(!!js.ok);
         setMessagesTone(js.ok ? "success" : "error");
         setMessages(Array.isArray(js.messages) ? js.messages : []);
@@ -228,14 +229,13 @@ export default function CacheRulePanel() {
         window.clearTimeout(debounceRef.current);
       }
     };
-  }, [editorState, loading, raw, rawError, rawMode, tx]);
+  }, [editorState, loading, tx]);
 
   const validate = useCallback(async () => {
     setValidating(true);
     setMessages([]);
     try {
-      const body = rawMode ? { rawMode: true, raw } : { rawMode: false, rules: toCacheRulesFile(editorState) };
-      const js = await apiPostJson<ValidateResp>("/cache-rules:validate", body);
+      const js = await apiPostJson<ValidateResp>("/cache-rules:validate", { rawMode: false, rules: toCacheRulesFile(editorState) });
       setValid(!!js.ok);
       const nextMessages = Array.isArray(js.messages) && js.messages.length > 0 ? js.messages : js.ok ? [tx("Validation passed.")] : [tx("Validation failed.")];
       setMessagesTone(js.ok ? "success" : "error");
@@ -248,14 +248,13 @@ export default function CacheRulePanel() {
     } finally {
       setValidating(false);
     }
-  }, [editorState, raw, rawMode, tx]);
+  }, [editorState, tx]);
 
   const save = useCallback(async () => {
     setSaving(true);
     setMessages([]);
     try {
-      const body = rawMode ? { rawMode: true, raw } : { rawMode: false, rules: toCacheRulesFile(editorState) };
-      const js = await apiPutJson<SaveResp>("/cache-rules", body, {
+      const js = await apiPutJson<SaveResp>("/cache-rules", { rawMode: false, rules: toCacheRulesFile(editorState) }, {
         headers: etag ? { "If-Match": etag } : {},
       });
       if (!js.ok) {
@@ -272,10 +271,11 @@ export default function CacheRulePanel() {
     } finally {
       setSaving(false);
     }
-  }, [editorState, etag, load, raw, rawMode, tx]);
+  }, [editorState, etag, load, tx]);
 
   const saveStore = useCallback(async () => {
     setSavingStore(true);
+    setError(null);
     setStoreNotice(null);
     try {
       const js = await apiPutJson<{ ok: boolean; etag?: string }>("/cache-store", storeConfig, {
@@ -285,17 +285,18 @@ export default function CacheRulePanel() {
         throw new Error(tx("save failed"));
       }
       setStoreEtag(js.etag ?? null);
-      await load();
+      await refreshStore();
       setStoreNotice({ tone: "success", messages: [tx("Cache store settings saved.")] });
     } catch (e: unknown) {
       setStoreNotice({ tone: "error", messages: [getErrorMessage(e, tx("save failed"))] });
     } finally {
       setSavingStore(false);
     }
-  }, [load, storeConfig, storeEtag, tx]);
+  }, [refreshStore, storeConfig, storeEtag, tx]);
 
   const clearStore = useCallback(async () => {
     setClearingStore(true);
+    setError(null);
     setStoreNotice(null);
     try {
       const js = await apiPostJson<{ ok: boolean; clear?: { cleared_entries?: number; cleared_bytes?: number } }>("/cache-store/clear", {});
@@ -309,14 +310,14 @@ export default function CacheRulePanel() {
           }),
         ],
       };
-      await load();
+      await refreshStore();
       setStoreNotice(nextStoreNotice);
     } catch (e: unknown) {
       setStoreNotice({ tone: "error", messages: [getErrorMessage(e, tx("clear failed"))] });
     } finally {
       setClearingStore(false);
     }
-  }, [load, tx]);
+  }, [refreshStore, tx]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -325,13 +326,13 @@ export default function CacheRulePanel() {
         return;
       }
       e.preventDefault();
-      if (!saving && !readOnly && !rawError) {
+      if (!saving && !readOnly) {
         void save();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rawError, readOnly, save, saving]);
+  }, [readOnly, save, saving]);
 
   const statusBadge = useMemo(() => {
     if (loading) {
@@ -342,19 +343,6 @@ export default function CacheRulePanel() {
     }
     return valid ? <Badge color="green">{tx("Valid")}</Badge> : <Badge color="red">{tx("Invalid")}</Badge>;
   }, [loading, tx, valid]);
-
-  const handleRawChange = useCallback(
-    (nextRaw: string) => {
-      setRaw(nextRaw);
-      try {
-        setEditorState(parseCacheRulesEditorDocument(nextRaw));
-        setRawError(null);
-      } catch (e: unknown) {
-        setRawError(getErrorMessage(e, tx("Invalid")));
-      }
-    },
-    [tx],
-  );
 
   const updateDefaultRule = useCallback(
     (index: number, next: CacheRuleDraft) => {
@@ -382,34 +370,37 @@ export default function CacheRulePanel() {
         <div>
           <h1 className="text-xl font-semibold">{tx("Cache Rules")}</h1>
           <p className="text-sm text-neutral-500">
-            {tx("Manage default and per-host cache policy rules, then keep advanced JSON or legacy text edits available below.")}
+            {tx("Manage default and per-host cache policy rules with structured controls.")}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           {statusBadge}
-          <Badge color={rawError ? "red" : "green"}>{rawError ? tx("Raw editor out of sync") : tx("Structured editor synced")}</Badge>
+          <Badge color="green">{tx("Structured editor synced")}</Badge>
           {dirty ? <Badge color="amber">{tx("Unsaved")}</Badge> : null}
           {etag ? <MonoTag label="ETag" value={etag} /> : null}
         </div>
       </header>
 
       {error ? <Alert kind="error" title={tx("Error")} message={error} closeLabel={tx("Close")} onClose={() => setError(null)} /> : null}
-      {rawError ? (
-        <NoticeBar tone="warn">
-          {tx("Advanced editor content is invalid. The structured editor is still showing the last valid cache-rule snapshot. Any structured edit will regenerate canonical JSON from that snapshot.")}
-        </NoticeBar>
-      ) : null}
 
       <SectionCard
         title={tx("Internal Cache Store")}
         subtitle={tx("Disk-backed cache for matched ALLOW rules.")}
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {storeDirty ? <Badge color="amber">{tx("Unsaved")}</Badge> : null}
             {storeEtag ? <MonoTag label={tx("Store ETag")} value={storeEtag} /> : null}
+            <ActionButton onClick={() => void clearStore()} disabled={readOnly || loading || clearingStore}>
+              {clearingStore ? tx("Clearing...") : tx("Clear All")}
+            </ActionButton>
+            <ActionButton onClick={() => void saveStore()} disabled={readOnly || loading || savingStore || !storeDirty}>
+              {savingStore ? tx("Saving...") : tx("Save Store")}
+            </ActionButton>
           </div>
         }
       >
+        <ActionResultNotice tone={storeNotice?.tone || "success"} messages={storeNotice?.messages} />
+
         <div className="grid gap-3 md:grid-cols-3">
           <Field label={tx("Enabled")}>
             <label className="inline-flex items-center gap-2 rounded-xl border px-3 py-2">
@@ -482,33 +473,30 @@ export default function CacheRulePanel() {
           </Field>
         </div>
 
-        <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6 text-sm">
-          <StatBox label={tx("Disk Entries")} value={String(storeStats.entry_count ?? 0)} />
-          <StatBox label={tx("Disk Size")} value={String(storeStats.size_bytes ?? 0)} />
-          <StatBox label={tx("Hits")} value={String(storeStats.hits_total ?? 0)} />
-          <StatBox label={tx("Misses")} value={String(storeStats.misses_total ?? 0)} />
-          <StatBox label={tx("Stores")} value={String(storeStats.stores_total ?? 0)} />
-          <StatBox label={tx("Evictions")} value={String(storeStats.evictions_total ?? 0)} />
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold uppercase text-neutral-500">{tx("Current Store")}</h3>
+          <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-5 text-sm">
+            <StatBox label={tx("Disk Entries")} value={String(storeStats.entry_count ?? 0)} />
+            <StatBox label={tx("Disk Size")} value={String(storeStats.size_bytes ?? 0)} />
+            <StatBox label={tx("L1 Enabled")} value={String(storeStats.memory_enabled ?? false)} />
+            <StatBox label={tx("L1 Entries")} value={String(storeStats.memory_entry_count ?? 0)} />
+            <StatBox label={tx("L1 Size")} value={String(storeStats.memory_size_bytes ?? 0)} />
+          </div>
         </div>
 
-        <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6 text-sm">
-          <StatBox label={tx("L1 Enabled")} value={String(storeStats.memory_enabled ?? false)} />
-          <StatBox label={tx("L1 Entries")} value={String(storeStats.memory_entry_count ?? 0)} />
-          <StatBox label={tx("L1 Size")} value={String(storeStats.memory_size_bytes ?? 0)} />
-          <StatBox label={tx("L1 Hits")} value={String(storeStats.memory_hits_total ?? 0)} />
-          <StatBox label={tx("L1 Misses")} value={String(storeStats.memory_misses_total ?? 0)} />
-          <StatBox label={tx("L1 Evictions")} value={String(storeStats.memory_evictions_total ?? 0)} />
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold uppercase text-neutral-500">{tx("Runtime Counters")}</h3>
+          <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6 text-sm">
+            <StatBox label={tx("Total Hits")} value={String(storeStats.hits_total ?? 0)} />
+            <StatBox label={tx("Total Misses")} value={String(storeStats.misses_total ?? 0)} />
+            <StatBox label={tx("Total Stores")} value={String(storeStats.stores_total ?? 0)} />
+            <StatBox label={tx("Total Evictions")} value={String(storeStats.evictions_total ?? 0)} />
+            <StatBox label={tx("Total Clears")} value={String(storeStats.clears_total ?? 0)} />
+            <StatBox label={tx("L1 Hits")} value={String(storeStats.memory_hits_total ?? 0)} />
+            <StatBox label={tx("L1 Misses")} value={String(storeStats.memory_misses_total ?? 0)} />
+            <StatBox label={tx("L1 Evictions")} value={String(storeStats.memory_evictions_total ?? 0)} />
+          </div>
         </div>
-
-        <div className="flex items-center gap-2">
-          <ActionButton onClick={() => void saveStore()} disabled={readOnly || loading || savingStore || !storeDirty}>
-            {savingStore ? tx("Saving...") : tx("Save Store")}
-          </ActionButton>
-          <ActionButton onClick={() => void clearStore()} disabled={readOnly || loading || clearingStore}>
-            {clearingStore ? tx("Clearing...") : tx("Clear All")}
-          </ActionButton>
-        </div>
-        <ActionResultNotice tone={storeNotice?.tone || "success"} messages={storeNotice?.messages} />
       </SectionCard>
 
       <SectionCard
@@ -516,10 +504,6 @@ export default function CacheRulePanel() {
         subtitle={tx("Host-specific cache scopes replace the default scope for matching host requests.")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <label className="inline-flex items-center gap-2 text-sm text-neutral-600">
-              <input type="checkbox" checked={rawMode} onChange={(e) => setRawMode(e.target.checked)} />
-              {tx("Raw edit mode")}
-            </label>
             <ActionButton onClick={() => applyStructuredState(exampleState)} disabled={readOnly || loading || saving}>
               {tx("Insert example")}
             </ActionButton>
@@ -529,69 +513,67 @@ export default function CacheRulePanel() {
             <ActionButton onClick={() => void validate()} disabled={loading || saving || validating}>
               {validating ? tx("Validating...") : tx("Validate")}
             </ActionButton>
-            <PrimaryButton onClick={() => void save()} disabled={readOnly || loading || saving || !!rawError || !dirty}>
+            <PrimaryButton onClick={() => void save()} disabled={readOnly || loading || saving || !dirty}>
               {saving ? tx("Saving...") : tx("Save & hot reload")}
             </PrimaryButton>
           </div>
         }
       >
         <ActionResultNotice tone={messagesTone} messages={messages} />
-        {!rawMode ? (
-          <>
-            <SectionCard
-              title={tx("Default Scope")}
-              subtitle={tx("Applied when no host-specific cache scope matches the request host.")}
-              actions={
-                <ActionButton
-                  onClick={() =>
-                    applyStructuredState({
-                      ...editorState,
-                      defaultRules: [...editorState.defaultRules, createDefaultCacheRule(editorState.defaultRules.length + 1)],
-                    })
-                  }
-                  disabled={readOnly || loading || saving}
-                >
-                  {tx("Add rule")}
-                </ActionButton>
+        <SectionCard
+          title={tx("Default Scope")}
+          subtitle={tx("Applied when no host-specific cache scope matches the request host.")}
+          actions={
+            <ActionButton
+              onClick={() =>
+                applyStructuredState({
+                  ...editorState,
+                  defaultRules: [...editorState.defaultRules, createDefaultCacheRule(editorState.defaultRules.length + 1)],
+                })
               }
+              disabled={readOnly || loading || saving}
             >
-              <CacheRulesTable
-                rules={editorState.defaultRules}
-                readOnly={readOnly}
-                tx={tx}
-                onChange={updateDefaultRule}
-                onDelete={(index) =>
-                  applyStructuredState({
-                    ...editorState,
-                    defaultRules: editorState.defaultRules.filter((_, currentIndex) => currentIndex !== index),
-                  })
-                }
-              />
-            </SectionCard>
+              {tx("Add rule")}
+            </ActionButton>
+          }
+        >
+          <CacheRulesTable
+            rules={editorState.defaultRules}
+            readOnly={readOnly}
+            tx={tx}
+            onChange={updateDefaultRule}
+            onDelete={(index) =>
+              applyStructuredState({
+                ...editorState,
+                defaultRules: editorState.defaultRules.filter((_, currentIndex) => currentIndex !== index),
+              })
+            }
+          />
+        </SectionCard>
 
-            <SectionCard
-              title={tx("Host Scopes")}
-              subtitle={tx("Exact host[:port] and host-specific cache rules replace the default scope for matching requests.")}
-              actions={
-                <ActionButton
-                  onClick={() =>
-                    applyStructuredState({
-                      ...editorState,
-                      hosts: [...editorState.hosts, createEmptyCacheRuleHostScope(editorState.hosts.length + 1)],
-                    })
-                  }
-                  disabled={readOnly || loading || saving}
-                >
-                  {tx("Add host scope")}
-                </ActionButton>
+        <SectionCard
+          title={tx("Host Scopes")}
+          subtitle={tx("Exact host[:port] and host-specific cache rules replace the default scope for matching requests.")}
+          actions={
+            <ActionButton
+              onClick={() =>
+                applyStructuredState({
+                  ...editorState,
+                  hosts: [...editorState.hosts, createEmptyCacheRuleHostScope(editorState.hosts.length + 1)],
+                })
               }
+              disabled={readOnly || loading || saving}
             >
+              {tx("Add host scope")}
+            </ActionButton>
+          }
+        >
               {editorState.hosts.length === 0 ? (
                 <EmptyState>{tx("No host scopes yet. Add one when a host needs cache rules that differ from the default scope.")}</EmptyState>
               ) : (
                 <div className="space-y-4">
                   {editorState.hosts.map((scope, index) => (
-                    <section key={`${scope.host}:${index}`} className="rounded-xl border border-neutral-200 p-4 space-y-3">
+                    <section key={`host-scope-${index}`} className="rounded-xl border border-neutral-200 p-4 space-y-3">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <Field label={tx("Host")} hint={tx("Exact host or host:port. Default ports collapse to the host-only scope.")}>
                           <input
@@ -648,24 +630,12 @@ export default function CacheRulePanel() {
                   ))}
                 </div>
               )}
-            </SectionCard>
-          </>
-        ) : (
-          <Field label={tx("Advanced JSON or legacy text")}>
-            <textarea
-              className={`${textareaClass} min-h-[440px]`}
-              value={raw}
-              onChange={(e) => handleRawChange(e.target.value)}
-              spellCheck={false}
-            />
-          </Field>
-        )}
+        </SectionCard>
 
         <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-500">
           <div className="flex flex-wrap items-center gap-3">
             <span>{tx("Rules")}: {totalRules}</span>
             <span>{tx("Host scopes")}: {hostScopeCount}</span>
-            <span>{tx("Raw lines")}: {lineCount}</span>
             {lastSavedAt ? <span>{tx("Last saved: {time}", { time: new Date(lastSavedAt).toLocaleString(locale === "ja" ? "ja-JP" : "en-US") })}</span> : null}
           </div>
         </div>

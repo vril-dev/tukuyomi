@@ -11,7 +11,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
 )
 
@@ -21,6 +20,7 @@ func TestGetSettingsListenerAdmin(t *testing.T) {
 	cfgPath := writeSettingsConfigFixture(t)
 	restore := saveConfigFilePathForTest(t, cfgPath)
 	defer restore()
+	initSettingsDBStoreForTest(t)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/tukuyomi-api/settings/listener-admin", nil)
@@ -70,6 +70,7 @@ func TestValidateSettingsListenerAdminRejectsInvalid(t *testing.T) {
 	cfgPath := writeSettingsConfigFixture(t)
 	restore := saveConfigFilePathForTest(t, cfgPath)
 	defer restore()
+	initSettingsDBStoreForTest(t)
 
 	body := settingsListenerAdminPutBody{
 		Config: settingsListenerAdminConfig{
@@ -105,12 +106,15 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	cfgPath := writeSettingsConfigFixture(t)
 	restore := saveConfigFilePathForTest(t, cfgPath)
 	defer restore()
+	initSettingsDBStoreForTest(t)
 
-	currentRaw, _, err := readFileMaybe(cfgPath)
+	currentRaw, etag, _, err := loadSettingsAppConfig()
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
-	etag := bypassconf.ComputeETag(currentRaw)
+	if etag == "" || currentRaw == "" {
+		t.Fatalf("settings seed missing etag/raw")
+	}
 
 	next := createEmptySettingsTestConfig()
 	next.Server.ListenAddr = ":443"
@@ -126,22 +130,33 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	next.Admin.TrustForwardedFor = true
 	next.Storage.Backend = "db"
 	next.Storage.DBDriver = "mysql"
-	next.Storage.DBPath = "logs/coraza/custom.db"
+	next.Storage.DBPath = "db/custom.db"
 	next.Storage.DBRetentionDays = 90
 	next.Storage.DBSyncIntervalSec = 30
 	next.Storage.FileRotateBytes = 1024
 	next.Storage.FileMaxBytes = 4096
 	next.Storage.FileRetentionDays = 21
+	next.Persistent.Backend = config.PersistentStorageBackendLocal
+	next.Persistent.Local.BaseDir = "data/shared-persistent"
+	next.Persistent.S3.Bucket = "runtime-bucket"
+	next.Persistent.S3.Region = "ap-northeast-1"
+	next.Persistent.S3.Prefix = "prod/"
+	next.Persistent.AzureBlob.AccountName = "tukuyomitest"
+	next.Persistent.AzureBlob.Container = "runtime"
+	next.Persistent.AzureBlob.Prefix = "/prod"
+	next.Persistent.GCS.Bucket = "runtime-gcs"
+	next.Persistent.GCS.Prefix = "prod"
 	next.Paths.ScheduledTaskConfigFile = "conf/tasks.custom.json"
 	next.Proxy.RollbackHistorySize = 12
 	next.Proxy.Engine.Mode = config.ProxyEngineModeTukuyomiProxy
+	next.WAF.Engine.Mode = config.WAFEngineModeCoraza
 	next.CRS.Enable = false
 	next.FPTuner.Endpoint = "https://fp.example.test/api"
 	next.FPTuner.Model = "gpt-test"
 	next.FPTuner.TimeoutSec = 20
 	next.FPTuner.RequireApproval = false
 	next.FPTuner.ApprovalTTLSec = 1200
-	next.FPTuner.AuditFile = "logs/coraza/fp-custom.ndjson"
+	next.FPTuner.AuditFile = "audit/fp-custom.ndjson"
 	next.Observability.Tracing.Enabled = true
 	next.Observability.Tracing.ServiceName = "tukuyomi-test"
 	next.Observability.Tracing.OTLPEndpoint = "http://otel-collector:4318"
@@ -164,7 +179,7 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	saved, err := config.LoadAppConfigFile(cfgPath)
+	saved, err := loadSettingsAppConfigOnly()
 	if err != nil {
 		t.Fatalf("reload saved config: %v", err)
 	}
@@ -198,11 +213,23 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	if !saved.Admin.TrustForwardedFor {
 		t.Fatal("expected trust_forwarded_for to be saved")
 	}
-	if saved.Storage.Backend != "db" || saved.Storage.DBDriver != "mysql" {
-		t.Fatalf("saved storage backend/driver=%q/%q want=db/mysql", saved.Storage.Backend, saved.Storage.DBDriver)
+	if saved.Storage.Backend != "" || saved.Storage.DBDriver != "sqlite" {
+		t.Fatalf("saved deprecated backend/driver=%q/%q want empty/sqlite bootstrap", saved.Storage.Backend, saved.Storage.DBDriver)
+	}
+	if saved.Storage.DBPath != "db/tukuyomi.db" {
+		t.Fatalf("saved db_path=%q want bootstrap default", saved.Storage.DBPath)
 	}
 	if saved.Storage.DBDSN != "fixture-db-dsn-secret" {
 		t.Fatalf("db_dsn should be preserved, got %q", saved.Storage.DBDSN)
+	}
+	if saved.Persistent.Backend != config.PersistentStorageBackendLocal {
+		t.Fatalf("persistent_storage.backend=%q want local", saved.Persistent.Backend)
+	}
+	if saved.Persistent.Local.BaseDir != "data/shared-persistent" {
+		t.Fatalf("persistent_storage.local.base_dir=%q want data/shared-persistent", saved.Persistent.Local.BaseDir)
+	}
+	if saved.Persistent.S3.Bucket != "runtime-bucket" || saved.Persistent.S3.Prefix != "prod" {
+		t.Fatalf("persistent_storage.s3=%+v want bucket/runtime prefix prod", saved.Persistent.S3)
 	}
 	if !saved.Observability.Tracing.Enabled {
 		t.Fatal("expected tracing enabled after save")
@@ -218,6 +245,9 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	}
 	if saved.Proxy.Engine.Mode != config.ProxyEngineModeTukuyomiProxy {
 		t.Fatalf("saved proxy.engine.mode=%q want=%q", saved.Proxy.Engine.Mode, config.ProxyEngineModeTukuyomiProxy)
+	}
+	if saved.WAF.Engine.Mode != config.WAFEngineModeCoraza {
+		t.Fatalf("saved waf.engine.mode=%q want=%q", saved.WAF.Engine.Mode, config.WAFEngineModeCoraza)
 	}
 	if saved.CRS.Enable {
 		t.Fatal("expected crs.enable=false after save")
@@ -236,6 +266,53 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	}
 	if saved.Admin.SessionSecret != "very-strong-random-session-secret-12345" {
 		t.Fatalf("session secret should be preserved, got %q", saved.Admin.SessionSecret)
+	}
+}
+
+func TestLoadSettingsAppConfigUsesNormalizedDBAndPreservesBootstrapDBConnection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cfgPath := writeSettingsConfigFixture(t)
+	restore := saveConfigFilePathForTest(t, cfgPath)
+	defer restore()
+	initSettingsDBStoreForTest(t)
+
+	dbCfg, err := config.LoadAppConfigFile(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadAppConfigFile: %v", err)
+	}
+	dbCfg.Server.ListenAddr = ":28090"
+	dbCfg.Storage.DBDriver = "mysql"
+	dbCfg.Storage.DBPath = "db/wrong.db"
+	dbCfg.Storage.DBDSN = "wrong-db-dsn"
+	store := getLogsStatsStore()
+	_, bootstrapCfg, err := loadBootstrapAppConfig()
+	if err != nil {
+		t.Fatalf("load bootstrap: %v", err)
+	}
+	if _, _, err := store.writeAppConfigVersion("", dbCfg, bootstrapCfg, configVersionSourceApply, "", "test app update", 0); err != nil {
+		t.Fatalf("write normalized app_config: %v", err)
+	}
+
+	loaded, err := loadSettingsAppConfigOnly()
+	if err != nil {
+		t.Fatalf("loadSettingsAppConfigOnly: %v", err)
+	}
+	if loaded.Server.ListenAddr != ":28090" {
+		t.Fatalf("listen_addr=%q want normalized DB value", loaded.Server.ListenAddr)
+	}
+	if loaded.Storage.DBDriver != "sqlite" {
+		t.Fatalf("db_driver=%q want bootstrap sqlite", loaded.Storage.DBDriver)
+	}
+	if loaded.Storage.DBPath != "db/tukuyomi.db" {
+		t.Fatalf("db_path=%q want bootstrap default", loaded.Storage.DBPath)
+	}
+	if loaded.Storage.DBDSN != "fixture-db-dsn-secret" {
+		t.Fatalf("db_dsn=%q want bootstrap secret", loaded.Storage.DBDSN)
+	}
+	_, _, found, err := store.GetConfigBlob(appConfigBlobKey)
+	if err != nil || found {
+		t.Fatalf("legacy app_config blob found=%v err=%v", found, err)
 	}
 }
 
@@ -263,7 +340,6 @@ func writeSettingsConfigFixture(t *testing.T) string {
     "api_base_path": "/tukuyomi-api",
     "ui_base_path": "/tukuyomi-ui",
     "listen_addr": ":19090",
-    "api_key_primary": "very-strong-random-api-key-12345",
     "session_secret": "very-strong-random-session-secret-12345",
     "session_ttl_sec": 7200,
     "external_mode": "api_only_external",
@@ -280,9 +356,10 @@ func writeSettingsConfigFixture(t *testing.T) string {
   },
   "paths": {
     "proxy_config_file": "conf/proxy.json",
-    "security_audit_file": "logs/coraza/security-audit.ndjson",
-    "security_audit_blob_dir": "logs/coraza/security-audit-blobs",
-    "rules_file": "rules/tukuyomi.conf"
+    "cache_rules_file": "conf/cache-rules.json",
+    "security_audit_file": "audit/security-audit.ndjson",
+    "security_audit_blob_dir": "audit/security-audit-blobs",
+    "rules_file": "tukuyomi.conf"
   },
   "proxy": {
     "rollback_history_size": 8,
@@ -295,7 +372,7 @@ func writeSettingsConfigFixture(t *testing.T) string {
     "hmac_key_id": "sig-test"
   },
   "fp_tuner": {"api_key": "fp-secret-token", "timeout_sec": 15, "approval_ttl_sec": 600},
-  "storage": {"backend": "file", "db_driver": "sqlite", "db_dsn": "fixture-db-dsn-secret"}
+  "storage": {"db_driver": "sqlite", "db_dsn": "fixture-db-dsn-secret"}
 }`
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write fixture config: %v", err)
@@ -309,6 +386,20 @@ func saveConfigFilePathForTest(t *testing.T, path string) func() {
 	config.ConfigFile = path
 	return func() {
 		config.ConfigFile = prev
+	}
+}
+
+func initSettingsDBStoreForTest(t *testing.T) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "settings-store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+	if _, _, _, err := loadAppConfigStorage(true); err != nil {
+		t.Fatalf("seed app_config storage: %v", err)
 	}
 }
 
@@ -335,6 +426,9 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 				MinVersion:       "tls1.2",
 				RedirectHTTP:     false,
 				HTTPRedirectAddr: "",
+				ACME: settingsListenerAdminServerTLSACMEConfig{
+					CacheDir: "",
+				},
 			},
 			HTTP3: settingsListenerAdminServerHTTP3Config{
 				Enabled:         false,
@@ -363,14 +457,20 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 			},
 		},
 		Storage: settingsListenerAdminStorageConfig{
-			Backend:           "file",
+			Backend:           "",
 			DBDriver:          "sqlite",
-			DBPath:            "logs/coraza/tukuyomi.db",
+			DBPath:            "db/tukuyomi.db",
 			DBRetentionDays:   30,
 			DBSyncIntervalSec: 0,
 			FileRotateBytes:   8 * 1024 * 1024,
 			FileMaxBytes:      256 * 1024 * 1024,
 			FileRetentionDays: 7,
+		},
+		Persistent: settingsListenerAdminPersistentStorageConfig{
+			Backend: config.PersistentStorageBackendLocal,
+			Local: settingsListenerAdminPersistentStorageLocalConfig{
+				BaseDir: config.DefaultPersistentStorageLocalDir,
+			},
 		},
 		Paths: settingsListenerAdminPathsConfig{
 			ProxyConfigFile:         "conf/proxy.json",
@@ -378,10 +478,11 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 			PHPRuntimeInventoryFile: "data/php-fpm/inventory.json",
 			VhostConfigFile:         "data/php-fpm/vhosts.json",
 			ScheduledTaskConfigFile: "conf/scheduled-tasks.json",
-			SecurityAuditFile:       "logs/coraza/security-audit.ndjson",
-			SecurityAuditBlobDir:    "logs/coraza/security-audit-blobs",
+			SecurityAuditFile:       "audit/security-audit.ndjson",
+			SecurityAuditBlobDir:    "audit/security-audit-blobs",
+			CacheRulesFile:          "conf/cache-rules.json",
 			CacheStoreFile:          "conf/cache-store.json",
-			RulesFile:               "rules/tukuyomi.conf",
+			RulesFile:               "tukuyomi.conf",
 			BypassFile:              "conf/waf-bypass.json",
 			CountryBlockFile:        "conf/country-block.json",
 			RateLimitFile:           "conf/rate-limit.json",
@@ -400,6 +501,11 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 				Mode: config.ProxyEngineModeTukuyomiProxy,
 			},
 		},
+		WAF: settingsListenerAdminWAFConfig{
+			Engine: settingsListenerAdminWAFEngineConfig{
+				Mode: config.WAFEngineModeCoraza,
+			},
+		},
 		CRS: settingsListenerAdminCRSConfig{
 			Enable: true,
 		},
@@ -409,7 +515,7 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 			TimeoutSec:      15,
 			RequireApproval: true,
 			ApprovalTTLSec:  600,
-			AuditFile:       "logs/coraza/fp-tuner-audit.ndjson",
+			AuditFile:       "audit/fp-tuner-audit.ndjson",
 		},
 		Observability: settingsListenerAdminObservabilityConfig{
 			Tracing: settingsListenerAdminTracingConfig{

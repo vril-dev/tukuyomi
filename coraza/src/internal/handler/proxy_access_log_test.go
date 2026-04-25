@@ -16,8 +16,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-
-	"tukuyomi/internal/config"
 )
 
 func boolValue(v any) bool {
@@ -41,6 +39,7 @@ func (w testProxyStatusWriter) Size() int {
 
 func TestProxyHandlerEmitsAccessLogWithBodyByteCounts(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	initConfigDBStoreForTest(t)
 
 	var observedUpstreamName string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -57,13 +56,6 @@ func TestProxyHandlerEmitsAccessLogWithBodyByteCounts(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	logPath := filepath.Join(t.TempDir(), "waf-events.ndjson")
-	oldLogPath := config.LogFile
-	config.LogFile = logPath
-	defer func() {
-		config.LogFile = oldLogPath
-	}()
-
 	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
 	raw := `{
   "upstreams": [
@@ -75,6 +67,7 @@ func TestProxyHandlerEmitsAccessLogWithBodyByteCounts(t *testing.T) {
 	if err := os.WriteFile(proxyCfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
 	}
+	importProxyRuntimeDBForTest(t, raw)
 	if err := InitProxyRuntime(proxyCfgPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
@@ -101,7 +94,7 @@ func TestProxyHandlerEmitsAccessLogWithBodyByteCounts(t *testing.T) {
 		t.Fatalf("%s=%q want=primary", proxyObservabilityUpstreamNameHeader, observedUpstreamName)
 	}
 
-	events := readProxyLogEvents(t, logPath)
+	events := readProxyLogEvents(t)
 	evt := findLastProxyLogEvent(t, events, "proxy_access")
 	if got := intValue(evt["status"]); got != http.StatusCreated {
 		t.Fatalf("proxy_access status=%d want=%d", got, http.StatusCreated)
@@ -142,12 +135,10 @@ func TestProxyHandlerEmitsAccessLogWithBodyByteCounts(t *testing.T) {
 }
 
 func TestEmitProxyAccessLogMinimalSkipsExpandedFields(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "waf-events.ndjson")
-	oldLogPath := config.LogFile
-	config.LogFile = logPath
+	initConfigDBStoreForTest(t)
+
 	setRuntimeProxyAccessLogMode(proxyAccessLogModeMinimal)
 	t.Cleanup(func() {
-		config.LogFile = oldLogPath
 		setRuntimeProxyAccessLogMode(proxyAccessLogModeFull)
 	})
 
@@ -170,7 +161,7 @@ func TestEmitProxyAccessLogMinimalSkipsExpandedFields(t *testing.T) {
 	rec := httptest.NewRecorder()
 	emitProxyAccessLog(req, testProxyStatusWriter{ResponseWriter: rec, status: http.StatusAccepted}, "req-1", "198.51.100.10", "JP")
 
-	events := readProxyLogEvents(t, logPath)
+	events := readProxyLogEvents(t)
 	evt := findLastProxyLogEvent(t, events, "proxy_access")
 	if got := intValue(evt["status"]); got != http.StatusAccepted {
 		t.Fatalf("proxy_access status=%d want=%d", got, http.StatusAccepted)
@@ -184,12 +175,10 @@ func TestEmitProxyAccessLogMinimalSkipsExpandedFields(t *testing.T) {
 }
 
 func TestEmitProxyAccessLogOffSkipsAccessEvent(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "waf-events.ndjson")
-	oldLogPath := config.LogFile
-	config.LogFile = logPath
+	initConfigDBStoreForTest(t)
+
 	setRuntimeProxyAccessLogMode(proxyAccessLogModeOff)
 	t.Cleanup(func() {
-		config.LogFile = oldLogPath
 		setRuntimeProxyAccessLogMode(proxyAccessLogModeFull)
 	})
 
@@ -201,15 +190,15 @@ func TestEmitProxyAccessLogOffSkipsAccessEvent(t *testing.T) {
 	if err := FlushProxyAccessLogAsync(ctx); err != nil {
 		t.Fatalf("flush proxy access log: %v", err)
 	}
-	if raw, err := os.ReadFile(logPath); err == nil && len(bytes.TrimSpace(raw)) > 0 {
-		t.Fatalf("access_log_mode=off wrote log: %s", string(raw))
-	} else if err != nil && !os.IsNotExist(err) {
-		t.Fatalf("read log file: %v", err)
+	events := readProxyLogEvents(t)
+	if got := countProxyLogEvents(events, "proxy_access"); got != 0 {
+		t.Fatalf("access_log_mode=off wrote %d proxy_access events: %#v", got, events)
 	}
 }
 
 func TestProxyHandlerDisabledEmitUpstreamNameHeaderStripsSpoofedHeader(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	initConfigDBStoreForTest(t)
 
 	var observedUpstreamName string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -218,13 +207,6 @@ func TestProxyHandlerDisabledEmitUpstreamNameHeaderStripsSpoofedHeader(t *testin
 		_, _ = w.Write([]byte("pong"))
 	}))
 	defer upstream.Close()
-
-	logPath := filepath.Join(t.TempDir(), "waf-events.ndjson")
-	oldLogPath := config.LogFile
-	config.LogFile = logPath
-	defer func() {
-		config.LogFile = oldLogPath
-	}()
 
 	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
 	raw := `{
@@ -245,6 +227,7 @@ func TestProxyHandlerDisabledEmitUpstreamNameHeaderStripsSpoofedHeader(t *testin
 	if err := os.WriteFile(proxyCfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
 	}
+	importProxyRuntimeDBForTest(t, raw)
 	if err := InitProxyRuntime(proxyCfgPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
@@ -274,13 +257,8 @@ func TestProxyHandlerDisabledEmitUpstreamNameHeaderStripsSpoofedHeader(t *testin
 
 func TestProxyHandlerCountryBlockLogOmitsSelectedTargetFields(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	initConfigDBStoreForTest(t)
 
-	logPath := filepath.Join(t.TempDir(), "waf-events.ndjson")
-	oldLogPath := config.LogFile
-	config.LogFile = logPath
-	defer func() {
-		config.LogFile = oldLogPath
-	}()
 	prevCountry := GetCountryBlockFile()
 	t.Cleanup(func() {
 		restoreDir := t.TempDir()
@@ -292,6 +270,7 @@ func TestProxyHandlerCountryBlockLogOmitsSelectedTargetFields(t *testing.T) {
 		if err := os.WriteFile(restorePath, raw, 0o600); err != nil {
 			t.Fatalf("write restored country block: %v", err)
 		}
+		importCountryBlockDBForTest(t, string(raw))
 		if err := InitCountryBlock(restorePath, ""); err != nil {
 			t.Fatalf("restore country block: %v", err)
 		}
@@ -306,6 +285,11 @@ func TestProxyHandlerCountryBlockLogOmitsSelectedTargetFields(t *testing.T) {
 }`), 0o600); err != nil {
 		t.Fatalf("write country-block.json: %v", err)
 	}
+	importCountryBlockDBForTest(t, `{
+  "default": {
+    "blocked_countries": ["JP"]
+  }
+}`)
 	if err := InitCountryBlock(countryPath, ""); err != nil {
 		t.Fatalf("InitCountryBlock: %v", err)
 	}
@@ -334,6 +318,7 @@ func TestProxyHandlerCountryBlockLogOmitsSelectedTargetFields(t *testing.T) {
 	if err := os.WriteFile(proxyCfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
 	}
+	importProxyRuntimeDBForTest(t, raw)
 	if err := InitProxyRuntime(proxyCfgPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
@@ -358,7 +343,7 @@ func TestProxyHandlerCountryBlockLogOmitsSelectedTargetFields(t *testing.T) {
 		t.Fatalf("status=%d want=%d", res.StatusCode, http.StatusForbidden)
 	}
 
-	events := readProxyLogEvents(t, logPath)
+	events := readProxyLogEvents(t)
 	routeEvt := findLastProxyLogEvent(t, events, "proxy_route")
 	if got := anyToString(routeEvt["selected_route"]); got != "service-a" {
 		t.Fatalf("proxy_route selected_route=%q want=service-a", got)
@@ -393,6 +378,7 @@ func TestProxyHandlerCountryBlockLogOmitsSelectedTargetFields(t *testing.T) {
 
 func TestProxyHandlerEmitsErrorLogWithBodyByteCounts(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	initConfigDBStoreForTest(t)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -400,13 +386,6 @@ func TestProxyHandlerEmitsErrorLogWithBodyByteCounts(t *testing.T) {
 	}
 	addr := ln.Addr().String()
 	_ = ln.Close()
-
-	logPath := filepath.Join(t.TempDir(), "waf-events.ndjson")
-	oldLogPath := config.LogFile
-	config.LogFile = logPath
-	defer func() {
-		config.LogFile = oldLogPath
-	}()
 
 	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
 	raw := `{
@@ -418,6 +397,7 @@ func TestProxyHandlerEmitsErrorLogWithBodyByteCounts(t *testing.T) {
 	if err := os.WriteFile(proxyCfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
 	}
+	importProxyRuntimeDBForTest(t, raw)
 	if err := InitProxyRuntime(proxyCfgPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
@@ -440,7 +420,7 @@ func TestProxyHandlerEmitsErrorLogWithBodyByteCounts(t *testing.T) {
 		t.Fatalf("status=%d want=%d", res.StatusCode, http.StatusBadGateway)
 	}
 
-	events := readProxyLogEvents(t, logPath)
+	events := readProxyLogEvents(t)
 	errEvt := findLastProxyLogEvent(t, events, "proxy_error")
 	if got := intValue(errEvt["request_body_bytes"]); got != len("abc") {
 		t.Fatalf("proxy_error request_body_bytes=%d want=%d", got, len("abc"))
@@ -457,6 +437,7 @@ func TestProxyHandlerEmitsErrorLogWithBodyByteCounts(t *testing.T) {
 
 func TestStatusHandlerIncludesProxyUpstreamKeepAlive(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	initConfigDBStoreForTest(t)
 
 	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
 	raw := `{
@@ -468,6 +449,7 @@ func TestStatusHandlerIncludesProxyUpstreamKeepAlive(t *testing.T) {
 	if err := os.WriteFile(proxyCfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
 	}
+	importProxyRuntimeDBForTest(t, raw)
 	if err := InitProxyRuntime(proxyCfgPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
@@ -496,7 +478,7 @@ func TestStatusHandlerIncludesProxyUpstreamKeepAlive(t *testing.T) {
 	}
 }
 
-func readProxyLogEvents(t *testing.T, path string) []map[string]any {
+func readProxyLogEvents(t *testing.T) []map[string]any {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -505,24 +487,30 @@ func readProxyLogEvents(t *testing.T, path string) []map[string]any {
 		t.Fatalf("flush proxy access log: %v", err)
 	}
 
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read log file: %v", err)
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected sqlite store")
 	}
-	lines := bytesSplitKeep(raw, '\n')
+	lines, _, _, _, err := store.ReadWAFLogs("", 1000, nil, "", "")
+	if err != nil {
+		t.Fatalf("read db logs: %v", err)
+	}
 	out := make([]map[string]any, 0, len(lines))
 	for _, line := range lines {
-		line = trimLastNewline(line)
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		var evt map[string]any
-		if err := json.Unmarshal(line, &evt); err != nil {
-			t.Fatalf("decode log line %q: %v", string(line), err)
-		}
+		evt := map[string]any(line)
 		out = append(out, evt)
 	}
 	return out
+}
+
+func countProxyLogEvents(events []map[string]any, want string) int {
+	count := 0
+	for _, evt := range events {
+		if anyToString(evt["event"]) == want {
+			count++
+		}
+	}
+	return count
 }
 
 func findLastProxyLogEvent(t *testing.T, events []map[string]any, want string) map[string]any {

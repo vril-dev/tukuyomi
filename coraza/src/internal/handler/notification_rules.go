@@ -1,11 +1,10 @@
 package handler
 
 import (
+	"errors"
 	"io"
-	"log"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -32,20 +31,19 @@ func GetNotificationRules(c *gin.Context) {
 	raw, _ := os.ReadFile(path)
 	savedAt := fileSavedAt(path)
 	if store := getLogsStatsStore(); store != nil {
-		dbRaw, dbETag, found, err := store.GetConfigBlob(notificationConfigBlobKey)
+		dbRaw, rec, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(notificationConfigBlobKey), normalizeNotificationPolicyRaw, "notification rules")
 		if err != nil {
-			log.Printf("[NOTIFY][DB][WARN] get config blob failed: %v", err)
+			respondConfigBlobDBError(c, "notification db read failed", err)
+			return
 		} else if found {
 			rt, parseErr := ValidateNotificationRaw(string(dbRaw))
 			if parseErr != nil {
-				log.Printf("[NOTIFY][DB][WARN] cached blob parse failed (fallback=file): %v", parseErr)
+				respondConfigBlobDBError(c, "notification db rows parse failed", parseErr)
+				return
 			} else {
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = bypassconf.ComputeETag(dbRaw)
-				}
-				savedAt = configBlobSavedAt(store, notificationConfigBlobKey)
+				savedAt = configVersionSavedAt(rec)
 				c.JSON(http.StatusOK, gin.H{
-					"etag":          dbETag,
+					"etag":          rec.ETag,
 					"raw":           string(dbRaw),
 					"enabled":       rt.Raw.Enabled,
 					"sinks":         len(rt.Raw.Sinks),
@@ -54,10 +52,6 @@ func GetNotificationRules(c *gin.Context) {
 					"saved_at":      savedAt,
 				})
 				return
-			}
-		} else if len(raw) > 0 {
-			if err := store.UpsertConfigBlob(notificationConfigBlobKey, raw, bypassconf.ComputeETag(raw), time.Now().UTC()); err != nil {
-				log.Printf("[NOTIFY][DB][WARN] seed config blob failed: %v", err)
 			}
 		}
 	}
@@ -99,32 +93,9 @@ func ValidateNotificationRules(c *gin.Context) {
 }
 
 func PutNotificationRules(c *gin.Context) {
-	path := GetNotificationsPath()
-	store := getLogsStatsStore()
-
-	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(path)
-	curETag := bypassconf.ComputeETag(curRaw)
-	if store != nil {
-		dbRaw, dbETag, found, err := store.GetConfigBlob(notificationConfigBlobKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		if found {
-			if _, parseErr := ValidateNotificationRaw(string(dbRaw)); parseErr == nil {
-				curRaw = dbRaw
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = bypassconf.ComputeETag(dbRaw)
-				}
-				curETag = dbETag
-			} else {
-				log.Printf("[NOTIFY][DB][WARN] cached blob parse failed for conflict check (fallback=file): %v", parseErr)
-			}
-		}
-	}
-	if ifMatch != "" && ifMatch != curETag {
-		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
 		return
 	}
 
@@ -138,38 +109,38 @@ func PutNotificationRules(c *gin.Context) {
 		return
 	}
 
-	if err := bypassconf.AtomicWriteWithBackup(path, []byte(in.Raw)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	normalizedRaw, err := normalizeNotificationPolicyRaw(in.Raw)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
-	if err := ReloadNotifications(); err != nil {
-		_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
-		_ = ReloadNotifications()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	spec := mustPolicyJSONSpec(notificationConfigBlobKey)
+	currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeNotificationPolicyRaw, "notification rules")
+	if err != nil {
+		respondConfigBlobDBError(c, "notification db seed failed", err)
 		return
 	}
-
-	now := time.Now().UTC()
-	newETag := bypassconf.ComputeETag([]byte(in.Raw))
-	if store != nil {
-		if err := store.UpsertConfigBlob(notificationConfigBlobKey, []byte(in.Raw), newETag, now); err != nil {
-			_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
-			_ = ReloadNotifications()
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":    "notification db sync failed and rollback applied",
-				"db_error": err.Error(),
-			})
+	expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
+	rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "notification rules update", 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, notificationConfigBlobKey)})
 			return
 		}
+		respondConfigBlobDBError(c, "notification db update failed", err)
+		return
 	}
-
+	if err := applyNotificationPolicyRaw(normalizedRaw); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"ok":            true,
-		"etag":          newETag,
+		"etag":          rec.ETag,
 		"enabled":       rt.Raw.Enabled,
 		"sinks":         len(rt.Raw.Sinks),
 		"enabled_sinks": countEnabledNotificationSinks(rt.Raw.Sinks),
-		"saved_at":      now.Format(time.RFC3339Nano),
+		"saved_at":      rec.ActivatedAt.Format(time.RFC3339Nano),
 	})
 }
 
@@ -189,14 +160,13 @@ func TestNotificationRules(c *gin.Context) {
 }
 
 func SyncNotificationStorage() error {
-	return syncConfigBlobFilePath(configBlobSyncOptions{
-		ConfigKey: notificationConfigBlobKey,
-		Path:      GetNotificationsPath(),
-		ValidateRaw: func(raw string) error {
-			_, err := ValidateNotificationRaw(raw)
-			return err
-		},
-		Reload:           ReloadNotifications,
-		SkipWriteIfEqual: true,
-	})
+	store := getLogsStatsStore()
+	if store == nil {
+		return nil
+	}
+	raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(notificationConfigBlobKey), normalizeNotificationPolicyRaw, "notification rules")
+	if err != nil || !found {
+		return err
+	}
+	return applyNotificationPolicyRaw(raw)
 }

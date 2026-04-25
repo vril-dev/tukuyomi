@@ -70,12 +70,6 @@ func validateAppServerTLSConfig(server appServerConfig) error {
 		return nil
 	}
 	if tlsCfg.ACME.Enabled {
-		if strings.TrimSpace(tlsCfg.ACME.Email) == "" {
-			return fmt.Errorf("server.tls.acme.email is required when server.tls.acme.enabled=true")
-		}
-		if strings.TrimSpace(tlsCfg.ACME.CacheDir) == "" {
-			return fmt.Errorf("server.tls.acme.cache_dir is required when server.tls.acme.enabled=true")
-		}
 		if (tlsCfg.CertFile == "") != (tlsCfg.KeyFile == "") {
 			return fmt.Errorf("server.tls.cert_file and server.tls.key_file must be set together when server.tls.enabled=true")
 		}

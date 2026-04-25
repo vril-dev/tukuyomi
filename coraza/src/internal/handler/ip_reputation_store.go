@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -112,12 +113,24 @@ func InitIPReputation(path string) error {
 	if target == "" {
 		return fmt.Errorf("ip reputation path is empty")
 	}
-	if err := ensureIPReputationFile(target); err != nil {
-		return err
-	}
 	ipReputationMu.Lock()
 	ipReputationPath = target
 	ipReputationMu.Unlock()
+
+	if store := getLogsStatsStore(); store != nil {
+		raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(ipReputationConfigBlobKey), normalizeIPReputationPolicyRaw, "ip reputation rules")
+		if err != nil {
+			return fmt.Errorf("read ip reputation config db: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("normalized ip reputation config missing in db; run make db-import before removing seed files")
+		}
+		return applyIPReputationPolicyRaw(raw)
+	}
+
+	if err := ensureIPReputationFile(target); err != nil {
+		return err
+	}
 	return ReloadIPReputation()
 }
 
@@ -285,22 +298,26 @@ func GetIPReputation(c *gin.Context) {
 	raw, _ := os.ReadFile(path)
 	savedAt := fileSavedAt(path)
 	if store := getLogsStatsStore(); store != nil {
-		dbRaw, dbETag, found, err := store.GetConfigBlob(ipReputationConfigBlobKey)
-		if err == nil && found {
-			if rt, parseErr := ValidateIPReputationRaw(string(dbRaw)); parseErr == nil {
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = bypassconf.ComputeETag(dbRaw)
-				}
-				savedAt = configBlobSavedAt(store, ipReputationConfigBlobKey)
-				c.JSON(http.StatusOK, gin.H{
-					"etag":     dbETag,
-					"raw":      string(dbRaw),
-					"config":   rt.Raw,
-					"status":   IPReputationStatus(),
-					"saved_at": savedAt,
-				})
+		dbRaw, rec, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(ipReputationConfigBlobKey), normalizeIPReputationPolicyRaw, "ip reputation rules")
+		if err != nil {
+			respondConfigBlobDBError(c, "ip-reputation db read failed", err)
+			return
+		}
+		if found {
+			rt, parseErr := ValidateIPReputationRaw(string(dbRaw))
+			if parseErr != nil {
+				respondConfigBlobDBError(c, "ip-reputation db rows parse failed", parseErr)
 				return
 			}
+			savedAt = configVersionSavedAt(rec)
+			c.JSON(http.StatusOK, gin.H{
+				"etag":     rec.ETag,
+				"raw":      string(dbRaw),
+				"config":   rt.Raw,
+				"status":   IPReputationStatus(),
+				"saved_at": savedAt,
+			})
+			return
 		}
 	}
 	var cfg ipReputationFile
@@ -333,25 +350,9 @@ func ValidateIPReputation(c *gin.Context) {
 }
 
 func PutIPReputation(c *gin.Context) {
-	path := GetIPReputationPath()
-	store := getLogsStatsStore()
-	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(path)
-	curETag := bypassconf.ComputeETag(curRaw)
-	if store != nil {
-		dbRaw, dbETag, found, err := store.GetConfigBlob(ipReputationConfigBlobKey)
-		if err == nil && found {
-			if _, parseErr := ValidateIPReputationRaw(string(dbRaw)); parseErr == nil {
-				curRaw = dbRaw
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = bypassconf.ComputeETag(dbRaw)
-				}
-				curETag = dbETag
-			}
-		}
-	}
-	if ifMatch != "" && ifMatch != curETag {
-		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
 		return
 	}
 
@@ -366,38 +367,44 @@ func PutIPReputation(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
-	if err := bypassconf.AtomicWriteWithBackup(path, []byte(in.Raw)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	normalizedRaw, err := normalizeIPReputationPolicyRaw(in.Raw)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
-	if err := ReloadIPReputation(); err != nil {
-		_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
-		_ = ReloadIPReputation()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	spec := mustPolicyJSONSpec(ipReputationConfigBlobKey)
+	currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeIPReputationPolicyRaw, "ip reputation rules")
+	if err != nil {
+		respondConfigBlobDBError(c, "ip-reputation db seed failed", err)
 		return
 	}
-	newETag := bypassconf.ComputeETag([]byte(in.Raw))
-	now := time.Now().UTC()
-	if store != nil {
-		if err := store.UpsertConfigBlob(ipReputationConfigBlobKey, []byte(in.Raw), newETag, now); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
+	rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "ip reputation rules update", 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, ipReputationConfigBlobKey)})
 			return
 		}
+		respondConfigBlobDBError(c, "ip-reputation db update failed", err)
+		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": newETag, "status": IPReputationStatus(), "saved_at": now.Format(time.RFC3339Nano)})
+	if err := applyIPReputationPolicyRaw(normalizedRaw); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": rec.ETag, "status": IPReputationStatus(), "saved_at": rec.ActivatedAt.Format(time.RFC3339Nano)})
 }
 
 func SyncIPReputationStorage() error {
-	return syncConfigBlobFilePath(configBlobSyncOptions{
-		ConfigKey: ipReputationConfigBlobKey,
-		Path:      GetIPReputationPath(),
-		ValidateRaw: func(raw string) error {
-			_, err := ValidateIPReputationRaw(raw)
-			return err
-		},
-		Reload:           ReloadIPReputation,
-		SkipWriteIfEqual: true,
-	})
+	store := getLogsStatsStore()
+	if store == nil {
+		return nil
+	}
+	raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(ipReputationConfigBlobKey), normalizeIPReputationPolicyRaw, "ip reputation rules")
+	if err != nil || !found {
+		return err
+	}
+	return applyIPReputationPolicyRaw(raw)
 }
 
 func GetIPReputationPath() string {
@@ -419,7 +426,11 @@ func ensureIPReputationFile(path string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	defaultRaw := mustJSON(ipReputationConfig{
+	return bypassconf.AtomicWriteWithBackup(path, []byte(defaultIPReputationScopeRaw()))
+}
+
+func defaultIPReputationScopeConfig() ipReputationConfig {
+	return ipReputationConfig{
 		Enabled:            false,
 		FeedURLs:           nil,
 		Allowlist:          nil,
@@ -428,8 +439,15 @@ func ensureIPReputationFile(path string) error {
 		RequestTimeoutSec:  int(defaultIPReputationRequestTimeout / time.Second),
 		BlockStatusCode:    http.StatusForbidden,
 		FailOpen:           true,
-	})
-	return bypassconf.AtomicWriteWithBackup(path, []byte(defaultRaw))
+	}
+}
+
+func defaultIPReputationScopeRaw() string {
+	return mustJSON(defaultIPReputationScopeConfig())
+}
+
+func defaultIPReputationPolicyRaw() string {
+	return mustJSON(ipReputationFile{Default: defaultIPReputationScopeConfig()})
 }
 
 func normalizeAndValidateIPReputationConfig(in ipReputationConfig) (ipReputationConfig, error) {
@@ -782,6 +800,19 @@ func (s *ipReputationStore) isBlockedAt(ipStr string, now time.Time) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.feedDecisionUnavailableLocked() {
+		if containsIPPrefix(s.configAllow, ip) {
+			return false
+		}
+		s.cleanupDynamicLocked(now)
+		if until, ok := s.dynamicBlock[ip.Unmap().String()]; ok && now.Before(until) {
+			return true
+		}
+		if s.failOpen {
+			return containsIPPrefix(s.staticBlock, ip)
+		}
+		return true
+	}
 	if containsIPPrefix(s.effectiveAllow, ip) {
 		return false
 	}
@@ -831,7 +862,11 @@ func (s *ipReputationStore) ApplyPenalty(ipStr string, ttl time.Duration, now ti
 	ip = ip.Unmap()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if containsIPPrefix(s.effectiveAllow, ip) {
+	if s.feedDecisionUnavailableLocked() {
+		if containsIPPrefix(s.configAllow, ip) {
+			return false
+		}
+	} else if containsIPPrefix(s.effectiveAllow, ip) {
 		return false
 	}
 	s.cleanupDynamicLocked(now)
@@ -880,6 +915,9 @@ func (s *ipReputationStore) refresh(ctx context.Context) error {
 	if successFeeds == 0 && len(errs) > 0 {
 		s.lastRefreshErr = strings.Join(errs, "; ")
 		s.lastRefreshAt = time.Now().UTC()
+		s.feedAllow = nil
+		s.feedBlock = nil
+		s.recomputeLocked()
 		if s.failOpen {
 			return fmt.Errorf("%s", s.lastRefreshErr)
 		}
@@ -985,6 +1023,10 @@ func (s *ipReputationStore) recomputeLocked() {
 	mergedBlock := dedupeIPPrefixes(append(append([]netip.Prefix(nil), s.staticBlock...), s.feedBlock...))
 	s.effectiveAllow = mergedAllow
 	s.activeBlock = applyIPAllowlist(mergedBlock, mergedAllow)
+}
+
+func (s *ipReputationStore) feedDecisionUnavailableLocked() bool {
+	return s != nil && s.enabled && len(s.feedURLs) > 0 && strings.TrimSpace(s.lastRefreshErr) != ""
 }
 
 func (s *ipReputationStore) cleanupDynamicLocked(now time.Time) {

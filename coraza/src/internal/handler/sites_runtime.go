@@ -4,11 +4,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
-	"os"
-	"path/filepath"
+	"net/mail"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +17,13 @@ import (
 	"tukuyomi/internal/config"
 )
 
-const defaultSiteConfigRaw = "{\n  \"sites\": []\n}\n"
+const (
+	defaultSiteConfigRaw = "{\n  \"sites\": []\n}\n"
+	siteConfigBlobKey    = "sites"
+
+	siteTLSACMEEnvironmentProduction = "production"
+	siteTLSACMEEnvironmentStaging    = "staging"
+)
 
 type SiteConfigFile struct {
 	Sites []SiteConfig `json:"sites,omitempty"`
@@ -32,9 +38,15 @@ type SiteConfig struct {
 }
 
 type SiteTLSConfig struct {
-	Mode     string `json:"mode"`
-	CertFile string `json:"cert_file,omitempty"`
-	KeyFile  string `json:"key_file,omitempty"`
+	Mode     string            `json:"mode"`
+	CertFile string            `json:"cert_file,omitempty"`
+	KeyFile  string            `json:"key_file,omitempty"`
+	ACME     SiteTLSACMEConfig `json:"acme,omitempty"`
+}
+
+type SiteTLSACMEConfig struct {
+	Environment string `json:"environment,omitempty"`
+	Email       string `json:"email,omitempty"`
 }
 
 type SiteRuntimeStatus struct {
@@ -46,6 +58,7 @@ type SiteRuntimeStatus struct {
 	TLSStatus       string   `json:"tls_status"`
 	TLSWarning      string   `json:"tls_warning,omitempty"`
 	TLSCertNotAfter string   `json:"tls_cert_not_after,omitempty"`
+	TLSACMEEnv      string   `json:"tls_acme_environment,omitempty"`
 	GeneratedRoute  string   `json:"generated_route,omitempty"`
 }
 
@@ -53,24 +66,34 @@ type siteTLSBinding struct {
 	Name        string
 	Hosts       []string
 	Mode        string
+	ACMEProfile string
 	Certificate *tls.Certificate
 	NotAfter    string
 }
 
+type ServerTLSACMEProfile struct {
+	Key         string
+	Environment string
+	Email       string
+	Domains     []string
+}
+
 type sitePreparedConfig struct {
-	cfg      SiteConfigFile
-	raw      string
-	etag     string
-	statuses []SiteRuntimeStatus
-	bindings []siteTLSBinding
+	cfg       SiteConfigFile
+	raw       string
+	etag      string
+	versionID int64
+	statuses  []SiteRuntimeStatus
+	bindings  []siteTLSBinding
 }
 
 type siteRuntimeSnapshot struct {
-	raw      string
-	etag     string
-	cfg      SiteConfigFile
-	statuses []SiteRuntimeStatus
-	bindings []siteTLSBinding
+	raw       string
+	etag      string
+	versionID int64
+	cfg       SiteConfigFile
+	statuses  []SiteRuntimeStatus
+	bindings  []siteTLSBinding
 }
 
 type siteRuntime struct {
@@ -78,6 +101,7 @@ type siteRuntime struct {
 	configPath    string
 	raw           string
 	etag          string
+	versionID     int64
 	cfg           SiteConfigFile
 	statuses      []SiteRuntimeStatus
 	bindings      []siteTLSBinding
@@ -88,6 +112,7 @@ type siteRuntime struct {
 type siteBindingMatch struct {
 	Name        string
 	Mode        string
+	ACMEProfile string
 	Certificate *tls.Certificate
 	NotAfter    string
 }
@@ -102,22 +127,15 @@ func InitSiteRuntime(path string, rollbackMax int) error {
 	if cfgPath == "" {
 		cfgPath = "conf/sites.json"
 	}
-	rawBytes, _, err := readFileMaybe(cfgPath)
+	prepared, err := loadSitePreparedConfig(cfgPath)
 	if err != nil {
-		return fmt.Errorf("read sites config (%s): %w", cfgPath, err)
-	}
-	raw := string(rawBytes)
-	if strings.TrimSpace(raw) == "" {
-		raw = defaultSiteConfigRaw
-	}
-	prepared, err := prepareSiteConfigRaw(raw)
-	if err != nil {
-		return fmt.Errorf("invalid sites config (%s): %w", cfgPath, err)
+		return fmt.Errorf("initialize sites config (%s): %w", cfgPath, err)
 	}
 	rt := &siteRuntime{
 		configPath:    cfgPath,
 		raw:           prepared.raw,
 		etag:          prepared.etag,
+		versionID:     prepared.versionID,
 		cfg:           prepared.cfg,
 		statuses:      cloneSiteRuntimeStatuses(prepared.statuses),
 		bindings:      cloneSiteTLSBindings(prepared.bindings),
@@ -128,6 +146,75 @@ func InitSiteRuntime(path string, rollbackMax int) error {
 	siteRt = rt
 	siteRuntimeMu.Unlock()
 	return nil
+}
+
+func siteConfigStorageLabel() string {
+	if getLogsStatsStore() != nil {
+		return "db:" + siteConfigBlobKey
+	}
+	path := strings.TrimSpace(config.SiteConfigFile)
+	if path == "" {
+		return "memory"
+	}
+	return path
+}
+
+func loadSitePreparedConfig(path string) (sitePreparedConfig, error) {
+	store := getLogsStatsStore()
+	if store != nil {
+		cfg, rec, found, err := store.loadActiveSiteConfig()
+		if err != nil {
+			return sitePreparedConfig{}, err
+		}
+		if found {
+			prepared, err := prepareSiteConfigRaw(mustJSON(cfg))
+			if err != nil {
+				return sitePreparedConfig{}, err
+			}
+			prepared.etag = rec.ETag
+			prepared.versionID = rec.VersionID
+			return prepared, nil
+		}
+		if dbRaw, _, legacyFound, err := store.GetConfigBlob(siteConfigBlobKey); err != nil {
+			return sitePreparedConfig{}, err
+		} else if legacyFound {
+			prepared, err := prepareSiteConfigRaw(string(dbRaw))
+			if err != nil {
+				return sitePreparedConfig{}, err
+			}
+			rec, err := store.writeSiteConfigVersion("", prepared.cfg, configVersionSourceImport, "", "legacy sites import", 0)
+			if err != nil {
+				return sitePreparedConfig{}, err
+			}
+			_ = store.DeleteConfigBlob(siteConfigBlobKey)
+			prepared.etag = rec.ETag
+			prepared.versionID = rec.VersionID
+			return prepared, nil
+		}
+		return sitePreparedConfig{}, fmt.Errorf("normalized sites config missing in db; run make db-import before removing seed files")
+	}
+
+	rawBytes, _, err := readFileMaybe(path)
+	if err != nil {
+		return sitePreparedConfig{}, err
+	}
+	raw := string(rawBytes)
+	if strings.TrimSpace(raw) == "" {
+		raw = defaultSiteConfigRaw
+	}
+	prepared, err := prepareSiteConfigRaw(raw)
+	if err != nil {
+		return sitePreparedConfig{}, err
+	}
+	if store != nil {
+		rec, err := store.writeSiteConfigVersion("", prepared.cfg, configVersionSourceImport, "", "sites file import", 0)
+		if err != nil {
+			return sitePreparedConfig{}, err
+		}
+		prepared.etag = rec.ETag
+		prepared.versionID = rec.VersionID
+	}
+	return prepared, nil
 }
 
 func siteRuntimeInstance() *siteRuntime {
@@ -189,22 +276,35 @@ func ApplySiteConfigRaw(ifMatch string, raw string) (string, SiteConfigFile, []S
 
 	prevRaw := rt.raw
 	prevETag := rt.etag
+	prevVersionID := rt.versionID
 	if _, err := prepareProxyRulesRawWithSites(currentProxyRawConfigRaw(), prepared.cfg); err != nil {
 		return "", SiteConfigFile{}, nil, err
 	}
-	if err := persistSiteConfigRaw(rt.configPath, prepared.raw); err != nil {
+	nextETag, nextVersionID, err := persistSiteConfigAuthoritative(rt.configPath, rt.etag, prepared, configVersionSourceApply, 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			return "", SiteConfigFile{}, nil, proxyRulesConflictError{CurrentETag: rt.etag}
+		}
 		return "", SiteConfigFile{}, nil, err
 	}
+	prepared.etag = nextETag
+	prepared.versionID = nextVersionID
 	prev := rt.snapshotLocked()
 	rt.applyPreparedLocked(prepared)
 	if err := reloadProxyRuntimeWithSites(prepared.cfg); err != nil {
 		rt.restoreLocked(prev)
-		_ = persistSiteConfigRaw(rt.configPath, prevRaw)
+		if restoredETag, restoredVersionID, restoreErr := persistSiteConfigAuthoritative(rt.configPath, prepared.etag, sitePreparedConfig{raw: prevRaw, etag: prevETag, cfg: prev.cfg}, configVersionSourceRollback, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
 		return "", SiteConfigFile{}, nil, err
 	}
 	if err := ReloadServerTLSRuntimeForSites(prepared.cfg, prepared.statuses); err != nil {
 		rt.restoreLocked(prev)
-		_ = persistSiteConfigRaw(rt.configPath, prevRaw)
+		if restoredETag, restoredVersionID, restoreErr := persistSiteConfigAuthoritative(rt.configPath, prepared.etag, sitePreparedConfig{raw: prevRaw, etag: prevETag, cfg: prev.cfg}, configVersionSourceRollback, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
 		if restoreErr := reloadProxyRuntimeWithSites(prev.cfg); restoreErr != nil {
 			log.Printf("[TLS][WARN] failed to restore proxy runtime after tls reload error: %v", restoreErr)
 		}
@@ -244,25 +344,45 @@ func RollbackSiteConfig() (string, SiteConfigFile, []SiteRuntimeStatus, proxyRol
 	}
 
 	prevRaw := rt.raw
+	prevETag := rt.etag
+	prevVersionID := rt.versionID
 	if _, err := prepareProxyRulesRawWithSites(currentProxyRawConfigRaw(), prepared.cfg); err != nil {
 		rt.pushRollbackLocked(entry)
 		return "", SiteConfigFile{}, nil, proxyRollbackEntry{}, err
 	}
-	if err := persistSiteConfigRaw(rt.configPath, prepared.raw); err != nil {
+	restoredVersionID := int64(0)
+	if store := getLogsStatsStore(); store != nil {
+		if foundID, found, err := store.findConfigVersionIDByETag(siteConfigDomain, entry.ETag); err == nil && found {
+			restoredVersionID = foundID
+		}
+	}
+	nextETag, nextVersionID, err := persistSiteConfigAuthoritative(rt.configPath, rt.etag, prepared, configVersionSourceRollback, restoredVersionID)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			return "", SiteConfigFile{}, nil, proxyRollbackEntry{}, proxyRulesConflictError{CurrentETag: rt.etag}
+		}
 		rt.pushRollbackLocked(entry)
 		return "", SiteConfigFile{}, nil, proxyRollbackEntry{}, err
 	}
+	prepared.etag = nextETag
+	prepared.versionID = nextVersionID
 	prev := rt.snapshotLocked()
 	rt.applyPreparedLocked(prepared)
 	if err := reloadProxyRuntimeWithSites(prepared.cfg); err != nil {
 		rt.restoreLocked(prev)
-		_ = persistSiteConfigRaw(rt.configPath, prevRaw)
+		if restoredETag, restoredVersionID, restoreErr := persistSiteConfigAuthoritative(rt.configPath, prepared.etag, sitePreparedConfig{raw: prevRaw, etag: prevETag, cfg: prev.cfg}, configVersionSourceApply, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
 		rt.pushRollbackLocked(entry)
 		return "", SiteConfigFile{}, nil, proxyRollbackEntry{}, err
 	}
 	if err := ReloadServerTLSRuntimeForSites(prepared.cfg, prepared.statuses); err != nil {
 		rt.restoreLocked(prev)
-		_ = persistSiteConfigRaw(rt.configPath, prevRaw)
+		if restoredETag, restoredVersionID, restoreErr := persistSiteConfigAuthoritative(rt.configPath, prepared.etag, sitePreparedConfig{raw: prevRaw, etag: prevETag, cfg: prev.cfg}, configVersionSourceApply, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
 		if restoreErr := reloadProxyRuntimeWithSites(prev.cfg); restoreErr != nil {
 			log.Printf("[TLS][WARN] failed to restore proxy runtime after tls reload error: %v", restoreErr)
 		}
@@ -274,6 +394,57 @@ func RollbackSiteConfig() (string, SiteConfigFile, []SiteRuntimeStatus, proxyRol
 	}
 
 	return rt.etag, rt.cfg, cloneSiteRuntimeStatuses(rt.statuses), entry, nil
+}
+
+func SyncSiteStorage() error {
+	store := getLogsStatsStore()
+	rt := siteRuntimeInstance()
+	if store == nil || rt == nil {
+		return nil
+	}
+	cfg, rec, found, err := store.loadActiveSiteConfig()
+	if err != nil {
+		return err
+	}
+	if !found {
+		rt.mu.RLock()
+		cfg := cloneSiteConfigFile(rt.cfg)
+		rt.mu.RUnlock()
+		_, err := store.writeSiteConfigVersion("", cfg, configVersionSourceImport, "", "sites runtime import", 0)
+		return err
+	}
+	prepared, err := prepareSiteConfigRaw(mustJSON(cfg))
+	if err != nil {
+		return err
+	}
+	prepared.etag = rec.ETag
+	prepared.versionID = rec.VersionID
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if prepared.etag == rt.etag {
+		return nil
+	}
+	if _, err := prepareProxyRulesRawWithSites(currentProxyRawConfigRaw(), prepared.cfg); err != nil {
+		return err
+	}
+	prev := rt.snapshotLocked()
+	rt.applyPreparedLocked(prepared)
+	if err := reloadProxyRuntimeWithSites(prepared.cfg); err != nil {
+		rt.restoreLocked(prev)
+		return err
+	}
+	if err := ReloadServerTLSRuntimeForSites(prepared.cfg, prepared.statuses); err != nil {
+		rt.restoreLocked(prev)
+		if restoreErr := reloadProxyRuntimeWithSites(prev.cfg); restoreErr != nil {
+			log.Printf("[TLS][WARN] failed to restore proxy runtime after site db sync error: %v", restoreErr)
+		}
+		if restoreErr := ReloadServerTLSRuntimeForSites(prev.cfg, prev.statuses); restoreErr != nil {
+			log.Printf("[TLS][WARN] failed to restore tls runtime after site db sync error: %v", restoreErr)
+		}
+		return err
+	}
+	return nil
 }
 
 func currentSiteConfig() SiteConfigFile {
@@ -319,6 +490,7 @@ func SiteBindingForHost(host string) siteBindingMatch {
 			return siteBindingMatch{
 				Name:        binding.Name,
 				Mode:        binding.Mode,
+				ACMEProfile: binding.ACMEProfile,
 				Certificate: binding.Certificate,
 				NotAfter:    binding.NotAfter,
 			}
@@ -464,6 +636,9 @@ func normalizeAndValidateSiteConfig(in SiteConfigFile) (SiteConfigFile, []SiteRu
 		status.TLSStatus = "covered"
 		status.TLSWarning = warning
 		status.TLSCertNotAfter = binding.NotAfter
+		if site.TLS.Mode == "acme" {
+			status.TLSACMEEnv = site.TLS.ACME.Environment
+		}
 		statuses = append(statuses, status)
 		bindings = append(bindings, binding)
 	}
@@ -493,6 +668,11 @@ func normalizeSiteConfigFile(in SiteConfigFile) SiteConfigFile {
 		next.TLS.Mode = normalizeSiteTLSMode(next.TLS.Mode)
 		next.TLS.CertFile = strings.TrimSpace(next.TLS.CertFile)
 		next.TLS.KeyFile = strings.TrimSpace(next.TLS.KeyFile)
+		next.TLS.ACME.Environment = normalizeSiteTLSACMEEnvironment(next.TLS.ACME.Environment)
+		next.TLS.ACME.Email = strings.TrimSpace(next.TLS.ACME.Email)
+		if next.TLS.Mode != "acme" {
+			next.TLS.ACME = SiteTLSACMEConfig{}
+		}
 		out.Sites = append(out.Sites, next)
 	}
 	return out
@@ -526,6 +706,17 @@ func normalizeSiteTLSMode(v string) string {
 		return "manual"
 	case "acme":
 		return "acme"
+	default:
+		return strings.ToLower(strings.TrimSpace(v))
+	}
+}
+
+func normalizeSiteTLSACMEEnvironment(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "prod", "production":
+		return siteTLSACMEEnvironmentProduction
+	case "stage", "staging":
+		return siteTLSACMEEnvironmentStaging
 	default:
 		return strings.ToLower(strings.TrimSpace(v))
 	}
@@ -567,13 +758,17 @@ func validateSiteTLSBinding(index int, site SiteConfig, cfg SiteConfigFile) (sit
 		if siteHasWildcardHost(site.Hosts) {
 			return siteTLSBinding{}, "", fmt.Errorf("sites[%d].tls.mode=acme supports exact hosts only", index)
 		}
-		if !config.ServerTLSACMEEnabled {
-			return siteTLSBinding{}, "", fmt.Errorf("sites[%d].tls.mode=acme requires server.tls.acme.enabled=true", index)
+		if site.TLS.ACME.Environment != siteTLSACMEEnvironmentProduction && site.TLS.ACME.Environment != siteTLSACMEEnvironmentStaging {
+			return siteTLSBinding{}, "", fmt.Errorf("sites[%d].tls.acme.environment must be production or staging", index)
+		}
+		if err := validateSiteTLSACMEEmail(site.TLS.ACME.Email); err != nil {
+			return siteTLSBinding{}, "", fmt.Errorf("sites[%d].tls.acme.email %w", index, err)
 		}
 		return siteTLSBinding{
-			Name:  site.Name,
-			Hosts: append([]string(nil), site.Hosts...),
-			Mode:  site.TLS.Mode,
+			Name:        site.Name,
+			Hosts:       append([]string(nil), site.Hosts...),
+			Mode:        site.TLS.Mode,
+			ACMEProfile: siteTLSACMEProfileKey(site.TLS.ACME.Environment, site.TLS.ACME.Email),
 		}, "", nil
 	case "legacy":
 		notAfter, warning, err := validateLegacySiteCoverage(site.Hosts, cfg)
@@ -592,21 +787,6 @@ func validateSiteTLSBinding(index int, site SiteConfig, cfg SiteConfigFile) (sit
 }
 
 func validateLegacySiteCoverage(hosts []string, sites SiteConfigFile) (string, string, error) {
-	if config.ServerTLSACMEEnabled {
-		acmeHosts := map[string]struct{}{}
-		for _, host := range EffectiveServerTLSACMEDomainsForSites(sites) {
-			acmeHosts[host] = struct{}{}
-		}
-		for _, host := range hosts {
-			if strings.HasPrefix(host, "*.") {
-				return "", "", fmt.Errorf("wildcard host %q is not covered by legacy ACME", host)
-			}
-			if _, ok := acmeHosts[host]; !ok {
-				return "", "", fmt.Errorf("host %q is not covered by legacy ACME domains", host)
-			}
-		}
-		return "", "coverage follows ACME issuance", nil
-	}
 	if config.ServerTLSCertFile == "" || config.ServerTLSKeyFile == "" {
 		return "", "", fmt.Errorf("legacy listener certificate is not configured")
 	}
@@ -627,24 +807,11 @@ func EffectiveServerTLSACMEDomains() []string {
 }
 
 func EffectiveServerTLSACMEDomainsForSites(sites SiteConfigFile) []string {
-	domains := make([]string, 0, len(config.ServerTLSACMEDomains))
+	profiles := EffectiveServerTLSACMEProfilesForSites(sites)
+	var domains []string
 	seen := map[string]struct{}{}
-	for _, host := range config.ServerTLSACMEDomains {
-		next := normalizeProxyHostPattern(host)
-		if next == "" {
-			continue
-		}
-		if _, ok := seen[next]; ok {
-			continue
-		}
-		seen[next] = struct{}{}
-		domains = append(domains, next)
-	}
-	for _, site := range sites.Sites {
-		if !siteEnabled(site.Enabled) || site.TLS.Mode != "acme" {
-			continue
-		}
-		for _, host := range site.Hosts {
+	for _, profile := range profiles {
+		for _, host := range profile.Domains {
 			if _, ok := seen[host]; ok {
 				continue
 			}
@@ -655,19 +822,85 @@ func EffectiveServerTLSACMEDomainsForSites(sites SiteConfigFile) []string {
 	return domains
 }
 
+func EffectiveServerTLSACMEProfilesForSites(sites SiteConfigFile) []ServerTLSACMEProfile {
+	profiles := make([]ServerTLSACMEProfile, 0)
+	seenProfiles := map[string]int{}
+	seenDomains := map[string]struct{}{}
+	for _, site := range sites.Sites {
+		if !siteEnabled(site.Enabled) || site.TLS.Mode != "acme" {
+			continue
+		}
+		environment := normalizeSiteTLSACMEEnvironment(site.TLS.ACME.Environment)
+		email := strings.TrimSpace(site.TLS.ACME.Email)
+		key := siteTLSACMEProfileKey(environment, email)
+		profileIndex, ok := seenProfiles[key]
+		if !ok {
+			profileIndex = len(profiles)
+			seenProfiles[key] = profileIndex
+			profiles = append(profiles, ServerTLSACMEProfile{
+				Key:         key,
+				Environment: environment,
+				Email:       email,
+			})
+		}
+		for _, host := range site.Hosts {
+			host = normalizeProxyHostPattern(host)
+			if host == "" {
+				continue
+			}
+			if _, ok := seenDomains[host]; ok {
+				continue
+			}
+			seenDomains[host] = struct{}{}
+			profiles[profileIndex].Domains = append(profiles[profileIndex].Domains, host)
+		}
+	}
+	return profiles
+}
+
+func siteACMEUsesStaging(sites SiteConfigFile) bool {
+	for _, profile := range EffectiveServerTLSACMEProfilesForSites(sites) {
+		if profile.Environment == siteTLSACMEEnvironmentStaging {
+			return true
+		}
+	}
+	return false
+}
+
+func siteTLSACMEProfileKey(environment string, email string) string {
+	return normalizeSiteTLSACMEEnvironment(environment) + "\x00" + strings.ToLower(strings.TrimSpace(email))
+}
+
+func validateSiteTLSACMEEmail(email string) error {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return nil
+	}
+	if len(email) > 254 {
+		return fmt.Errorf("must be at most 254 bytes")
+	}
+	addr, err := mail.ParseAddress(email)
+	if err != nil || addr == nil || addr.Name != "" || addr.Address != email {
+		return fmt.Errorf("must be an email address or empty")
+	}
+	return nil
+}
+
 func (rt *siteRuntime) snapshotLocked() siteRuntimeSnapshot {
 	return siteRuntimeSnapshot{
-		raw:      rt.raw,
-		etag:     rt.etag,
-		cfg:      cloneSiteConfigFile(rt.cfg),
-		statuses: cloneSiteRuntimeStatuses(rt.statuses),
-		bindings: cloneSiteTLSBindings(rt.bindings),
+		raw:       rt.raw,
+		etag:      rt.etag,
+		versionID: rt.versionID,
+		cfg:       cloneSiteConfigFile(rt.cfg),
+		statuses:  cloneSiteRuntimeStatuses(rt.statuses),
+		bindings:  cloneSiteTLSBindings(rt.bindings),
 	}
 }
 
 func (rt *siteRuntime) applyPreparedLocked(prepared sitePreparedConfig) {
 	rt.raw = prepared.raw
 	rt.etag = prepared.etag
+	rt.versionID = prepared.versionID
 	rt.cfg = cloneSiteConfigFile(prepared.cfg)
 	rt.statuses = cloneSiteRuntimeStatuses(prepared.statuses)
 	rt.bindings = cloneSiteTLSBindings(prepared.bindings)
@@ -676,6 +909,7 @@ func (rt *siteRuntime) applyPreparedLocked(prepared sitePreparedConfig) {
 func (rt *siteRuntime) restoreLocked(snapshot siteRuntimeSnapshot) {
 	rt.raw = snapshot.raw
 	rt.etag = snapshot.etag
+	rt.versionID = snapshot.versionID
 	rt.cfg = cloneSiteConfigFile(snapshot.cfg)
 	rt.statuses = cloneSiteRuntimeStatuses(snapshot.statuses)
 	rt.bindings = cloneSiteTLSBindings(snapshot.bindings)
@@ -845,14 +1079,16 @@ func (rt *siteRuntime) pushRollbackLocked(entry proxyRollbackEntry) {
 	}
 }
 
-func persistSiteConfigRaw(path string, raw string) error {
-	if strings.TrimSpace(path) == "" {
-		return fmt.Errorf("sites config path is empty")
+func persistSiteConfigAuthoritative(path string, expectedETag string, prepared sitePreparedConfig, source string, restoredFromVersionID int64) (string, int64, error) {
+	store, err := requireConfigDBStore()
+	if err != nil {
+		return "", 0, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+	rec, err := store.writeSiteConfigVersion(expectedETag, prepared.cfg, source, "", "sites config update", restoredFromVersionID)
+	if err != nil {
+		return "", 0, err
 	}
-	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
+	return rec.ETag, rec.VersionID, nil
 }
 
 func currentProxyRawConfigRaw() string {

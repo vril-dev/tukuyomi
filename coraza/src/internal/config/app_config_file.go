@@ -5,27 +5,38 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"strings"
 )
 
 const (
-	ProxyEngineModeTukuyomiProxy = "tukuyomi_proxy"
-	DefaultProxyEngineMode       = ProxyEngineModeTukuyomiProxy
+	ProxyEngineModeTukuyomiProxy      = "tukuyomi_proxy"
+	DefaultProxyEngineMode            = ProxyEngineModeTukuyomiProxy
+	WAFEngineModeCoraza               = "coraza"
+	DefaultWAFEngineMode              = WAFEngineModeCoraza
+	PersistentStorageBackendLocal     = "local"
+	PersistentStorageBackendS3        = "s3"
+	PersistentStorageBackendAzureBlob = "azure_blob"
+	PersistentStorageBackendGCS       = "gcs"
+	DefaultPersistentStorageBackend   = PersistentStorageBackendLocal
+	DefaultPersistentStorageLocalDir  = "data/persistent"
 )
 
 type appConfigFile struct {
-	Server        appServerConfig        `json:"server"`
-	Runtime       appRuntimeConfig       `json:"runtime"`
-	RequestMeta   appRequestMetaConfig   `json:"request_metadata"`
-	Admin         appAdminConfig         `json:"admin"`
-	Paths         appPathsConfig         `json:"paths"`
-	Proxy         appProxyConfig         `json:"proxy"`
-	SecurityAudit appSecurityAuditConfig `json:"security_audit"`
-	CRS           appCRSConfig           `json:"crs"`
-	FPTuner       appFPTunerConfig       `json:"fp_tuner"`
-	Storage       appStorageConfig       `json:"storage"`
-	Observability appObservabilityConfig `json:"observability"`
+	Server        appServerConfig            `json:"server"`
+	Runtime       appRuntimeConfig           `json:"runtime"`
+	RequestMeta   appRequestMetaConfig       `json:"request_metadata"`
+	Admin         appAdminConfig             `json:"admin"`
+	Paths         appPathsConfig             `json:"paths"`
+	Proxy         appProxyConfig             `json:"proxy"`
+	WAF           appWAFConfig               `json:"waf"`
+	SecurityAudit appSecurityAuditConfig     `json:"security_audit"`
+	CRS           appCRSConfig               `json:"crs"`
+	FPTuner       appFPTunerConfig           `json:"fp_tuner"`
+	Storage       appStorageConfig           `json:"storage"`
+	Persistent    appPersistentStorageConfig `json:"persistent_storage"`
+	Observability appObservabilityConfig     `json:"observability"`
 }
 
 type appServerConfig struct {
@@ -92,8 +103,6 @@ type appAdminConfig struct {
 	APIBasePath           string                         `json:"api_base_path"`
 	UIBasePath            string                         `json:"ui_base_path"`
 	ListenAddr            string                         `json:"listen_addr"`
-	APIKeyPrimary         string                         `json:"api_key_primary"`
-	APIKeySecondary       string                         `json:"api_key_secondary"`
 	SessionSecret         string                         `json:"session_secret"`
 	SessionTTLSec         int                            `json:"session_ttl_sec"`
 	APIAuthDisable        bool                           `json:"api_auth_disable"`
@@ -124,6 +133,7 @@ type appPathsConfig struct {
 	ScheduledTaskConfigFile string `json:"scheduled_task_config_file"`
 	SecurityAuditFile       string `json:"security_audit_file"`
 	SecurityAuditBlobDir    string `json:"security_audit_blob_dir"`
+	CacheRulesFile          string `json:"cache_rules_file"`
 	CacheStoreFile          string `json:"cache_store_file"`
 	RulesFile               string `json:"rules_file"`
 	OverrideRulesDir        string `json:"override_rules_dir"`
@@ -148,6 +158,14 @@ type appProxyConfig struct {
 }
 
 type appProxyEngineConfig struct {
+	Mode string `json:"mode"`
+}
+
+type appWAFConfig struct {
+	Engine appWAFEngineConfig `json:"engine"`
+}
+
+type appWAFEngineConfig struct {
 	Mode string `json:"mode"`
 }
 
@@ -183,7 +201,9 @@ type appFPTunerConfig struct {
 }
 
 type appStorageConfig struct {
-	Backend           string `json:"backend"`
+	// Deprecated: runtime storage is DB-only. Empty or "db" is accepted;
+	// "file" is rejected during validation.
+	Backend           string `json:"backend,omitempty"`
 	DBDriver          string `json:"db_driver"`
 	DBDSN             string `json:"db_dsn"`
 	DBPath            string `json:"db_path"`
@@ -192,6 +212,38 @@ type appStorageConfig struct {
 	FileRotateBytes   int64  `json:"file_rotate_bytes"`
 	FileMaxBytes      int64  `json:"file_max_bytes"`
 	FileRetentionDays int    `json:"file_retention_days"`
+}
+
+type appPersistentStorageConfig struct {
+	Backend   string                              `json:"backend"`
+	Local     appPersistentStorageLocalConfig     `json:"local"`
+	S3        appPersistentStorageS3Config        `json:"s3"`
+	AzureBlob appPersistentStorageAzureBlobConfig `json:"azure_blob"`
+	GCS       appPersistentStorageGCSConfig       `json:"gcs"`
+}
+
+type appPersistentStorageLocalConfig struct {
+	BaseDir string `json:"base_dir"`
+}
+
+type appPersistentStorageS3Config struct {
+	Bucket         string `json:"bucket"`
+	Region         string `json:"region"`
+	Endpoint       string `json:"endpoint"`
+	Prefix         string `json:"prefix"`
+	ForcePathStyle bool   `json:"force_path_style"`
+}
+
+type appPersistentStorageAzureBlobConfig struct {
+	AccountName string `json:"account_name"`
+	Container   string `json:"container"`
+	Endpoint    string `json:"endpoint"`
+	Prefix      string `json:"prefix"`
+}
+
+type appPersistentStorageGCSConfig struct {
+	Bucket string `json:"bucket"`
+	Prefix string `json:"prefix"`
 }
 
 type appObservabilityConfig struct {
@@ -242,7 +294,7 @@ func defaultAppConfigFile() appConfigFile {
 					Enabled:  false,
 					Email:    "",
 					Domains:  nil,
-					CacheDir: "/var/lib/tukuyomi/acme",
+					CacheDir: "",
 					Staging:  false,
 				},
 			},
@@ -264,8 +316,6 @@ func defaultAppConfigFile() appConfigFile {
 			APIBasePath:           "/tukuyomi-api",
 			UIBasePath:            "/tukuyomi-ui",
 			ListenAddr:            "",
-			APIKeyPrimary:         "dev-only-change-this-key-please",
-			APIKeySecondary:       "",
 			SessionSecret:         "",
 			SessionTTLSec:         28800,
 			APIAuthDisable:        false,
@@ -294,10 +344,11 @@ func defaultAppConfigFile() appConfigFile {
 			PHPRuntimeInventoryFile: "data/php-fpm/inventory.json",
 			VhostConfigFile:         "data/php-fpm/vhosts.json",
 			ScheduledTaskConfigFile: "conf/scheduled-tasks.json",
-			SecurityAuditFile:       "logs/coraza/security-audit.ndjson",
-			SecurityAuditBlobDir:    "logs/coraza/security-audit-blobs",
+			SecurityAuditFile:       "audit/security-audit.ndjson",
+			SecurityAuditBlobDir:    "audit/security-audit-blobs",
+			CacheRulesFile:          DefaultCacheRulesFilePath,
 			CacheStoreFile:          "conf/cache-store.json",
-			RulesFile:               "rules/tukuyomi.conf",
+			RulesFile:               DefaultBaseRuleAssetPath,
 			OverrideRulesDir:        "conf/rules",
 			UpstreamRuntimeFile:     DefaultUpstreamRuntimeFilePath,
 			BypassFile:              DefaultBypassFilePath,
@@ -314,9 +365,14 @@ func defaultAppConfigFile() appConfigFile {
 		},
 		Proxy: appProxyConfig{
 			RollbackHistorySize: 8,
-			AuditFile:           "/app/logs/coraza/proxy-rules-audit.ndjson",
+			AuditFile:           "audit/proxy-rules-audit.ndjson",
 			Engine: appProxyEngineConfig{
 				Mode: DefaultProxyEngineMode,
+			},
+		},
+		WAF: appWAFConfig{
+			Engine: appWAFEngineConfig{
+				Mode: DefaultWAFEngineMode,
 			},
 		},
 		SecurityAudit: appSecurityAuditConfig{
@@ -343,18 +399,41 @@ func defaultAppConfigFile() appConfigFile {
 			TimeoutSec:      15,
 			RequireApproval: true,
 			ApprovalTTLSec:  600,
-			AuditFile:       "logs/coraza/fp-tuner-audit.ndjson",
+			AuditFile:       "audit/fp-tuner-audit.ndjson",
 		},
 		Storage: appStorageConfig{
-			Backend:           "file",
+			Backend:           "",
 			DBDriver:          "sqlite",
 			DBDSN:             "",
-			DBPath:            "logs/coraza/tukuyomi.db",
+			DBPath:            "db/tukuyomi.db",
 			DBRetentionDays:   30,
 			DBSyncIntervalSec: 0,
 			FileRotateBytes:   8 * 1024 * 1024,
 			FileMaxBytes:      256 * 1024 * 1024,
 			FileRetentionDays: 7,
+		},
+		Persistent: appPersistentStorageConfig{
+			Backend: DefaultPersistentStorageBackend,
+			Local: appPersistentStorageLocalConfig{
+				BaseDir: DefaultPersistentStorageLocalDir,
+			},
+			S3: appPersistentStorageS3Config{
+				Bucket:         "",
+				Region:         "",
+				Endpoint:       "",
+				Prefix:         "",
+				ForcePathStyle: false,
+			},
+			AzureBlob: appPersistentStorageAzureBlobConfig{
+				AccountName: "",
+				Container:   "",
+				Endpoint:    "",
+				Prefix:      "",
+			},
+			GCS: appPersistentStorageGCSConfig{
+				Bucket: "",
+				Prefix: "",
+			},
 		},
 		Observability: appObservabilityConfig{
 			RequestLog: appRequestLogConfig{
@@ -398,8 +477,6 @@ func normalizeAppConfigFile(cfg *appConfigFile) {
 	cfg.Admin.APIBasePath = strings.TrimSpace(cfg.Admin.APIBasePath)
 	cfg.Admin.UIBasePath = strings.TrimSpace(cfg.Admin.UIBasePath)
 	cfg.Admin.ListenAddr = strings.TrimSpace(cfg.Admin.ListenAddr)
-	cfg.Admin.APIKeyPrimary = strings.TrimSpace(cfg.Admin.APIKeyPrimary)
-	cfg.Admin.APIKeySecondary = strings.TrimSpace(cfg.Admin.APIKeySecondary)
 	cfg.Admin.SessionSecret = strings.TrimSpace(cfg.Admin.SessionSecret)
 	cfg.Admin.ExternalMode = strings.ToLower(strings.TrimSpace(cfg.Admin.ExternalMode))
 	for i := range cfg.Server.ProxyProtocol.TrustedCIDRs {
@@ -413,6 +490,7 @@ func normalizeAppConfigFile(cfg *appConfigFile) {
 	cfg.FPTuner.APIKey = strings.TrimSpace(cfg.FPTuner.APIKey)
 	cfg.FPTuner.Model = strings.TrimSpace(cfg.FPTuner.Model)
 	cfg.Proxy.Engine.Mode = normalizeAppProxyEngineMode(cfg.Proxy.Engine.Mode)
+	cfg.WAF.Engine.Mode = normalizeAppWAFEngineMode(cfg.WAF.Engine.Mode)
 	cfg.SecurityAudit.CaptureMode = strings.ToLower(strings.TrimSpace(cfg.SecurityAudit.CaptureMode))
 	cfg.SecurityAudit.KeySource = strings.ToLower(strings.TrimSpace(cfg.SecurityAudit.KeySource))
 	cfg.SecurityAudit.EncryptionKey = strings.TrimSpace(cfg.SecurityAudit.EncryptionKey)
@@ -433,7 +511,7 @@ func normalizeAppConfigFile(cfg *appConfigFile) {
 	cfg.Paths.SecurityAuditFile = strings.TrimSpace(cfg.Paths.SecurityAuditFile)
 	cfg.Paths.SecurityAuditBlobDir = strings.TrimSpace(cfg.Paths.SecurityAuditBlobDir)
 	cfg.Paths.CacheStoreFile = strings.TrimSpace(cfg.Paths.CacheStoreFile)
-	cfg.Paths.RulesFile = strings.TrimSpace(cfg.Paths.RulesFile)
+	cfg.Paths.RulesFile = NormalizeBaseRuleAssetSpec(cfg.Paths.RulesFile)
 	cfg.Paths.OverrideRulesDir = strings.TrimSpace(cfg.Paths.OverrideRulesDir)
 	if cfg.Paths.OverrideRulesDir == "" {
 		cfg.Paths.OverrideRulesDir = "conf/rules"
@@ -457,8 +535,34 @@ func normalizeAppConfigFile(cfg *appConfigFile) {
 	cfg.Storage.DBDriver = strings.ToLower(strings.TrimSpace(cfg.Storage.DBDriver))
 	cfg.Storage.DBDSN = strings.TrimSpace(cfg.Storage.DBDSN)
 	cfg.Storage.DBPath = strings.TrimSpace(cfg.Storage.DBPath)
+	normalizePersistentStorageConfig(&cfg.Persistent)
 	cfg.Observability.Tracing.ServiceName = strings.TrimSpace(cfg.Observability.Tracing.ServiceName)
 	cfg.Observability.Tracing.OTLPEndpoint = strings.TrimSpace(cfg.Observability.Tracing.OTLPEndpoint)
+}
+
+func normalizePersistentStorageConfig(cfg *appPersistentStorageConfig) {
+	cfg.Backend = strings.ToLower(strings.TrimSpace(cfg.Backend))
+	if cfg.Backend == "" {
+		cfg.Backend = DefaultPersistentStorageBackend
+	}
+	cfg.Local.BaseDir = strings.TrimSpace(cfg.Local.BaseDir)
+	if cfg.Local.BaseDir == "" {
+		cfg.Local.BaseDir = DefaultPersistentStorageLocalDir
+	}
+	cfg.S3.Bucket = strings.TrimSpace(cfg.S3.Bucket)
+	cfg.S3.Region = strings.TrimSpace(cfg.S3.Region)
+	cfg.S3.Endpoint = strings.TrimSpace(cfg.S3.Endpoint)
+	cfg.S3.Prefix = normalizePersistentStoragePrefix(cfg.S3.Prefix)
+	cfg.AzureBlob.AccountName = strings.TrimSpace(cfg.AzureBlob.AccountName)
+	cfg.AzureBlob.Container = strings.TrimSpace(cfg.AzureBlob.Container)
+	cfg.AzureBlob.Endpoint = strings.TrimSpace(cfg.AzureBlob.Endpoint)
+	cfg.AzureBlob.Prefix = normalizePersistentStoragePrefix(cfg.AzureBlob.Prefix)
+	cfg.GCS.Bucket = strings.TrimSpace(cfg.GCS.Bucket)
+	cfg.GCS.Prefix = normalizePersistentStoragePrefix(cfg.GCS.Prefix)
+}
+
+func normalizePersistentStoragePrefix(prefix string) string {
+	return strings.Trim(strings.TrimSpace(prefix), "/")
 }
 
 func validateAppConfigFile(cfg appConfigFile) error {
@@ -548,6 +652,9 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	if cfg.Paths.SecurityAuditBlobDir == "" {
 		return fmt.Errorf("paths.security_audit_blob_dir is required")
 	}
+	if cfg.Paths.CacheRulesFile == "" {
+		return fmt.Errorf("paths.cache_rules_file is required")
+	}
 	if cfg.Paths.CacheStoreFile == "" {
 		return fmt.Errorf("paths.cache_store_file is required")
 	}
@@ -567,6 +674,11 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	case ProxyEngineModeTukuyomiProxy:
 	default:
 		return fmt.Errorf("proxy.engine.mode must be %s", ProxyEngineModeTukuyomiProxy)
+	}
+	switch cfg.WAF.Engine.Mode {
+	case WAFEngineModeCoraza:
+	default:
+		return fmt.Errorf("waf.engine.mode must be %s", WAFEngineModeCoraza)
 	}
 	switch cfg.SecurityAudit.CaptureMode {
 	case "", "off", "enforced_only", "security_events", "all_security_findings":
@@ -609,11 +721,15 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	if cfg.Runtime.GOMAXPROCS < 0 || cfg.Runtime.MemoryLimitMB < 0 {
 		return fmt.Errorf("runtime resource limits must be >= 0")
 	}
-	if cfg.Storage.Backend != "file" && cfg.Storage.Backend != "db" {
-		return fmt.Errorf("storage.backend must be one of: file, db")
+	switch cfg.Storage.Backend {
+	case "", "db":
+	case "file":
+		return fmt.Errorf("storage.backend=file has been removed; use storage.db_driver=sqlite, mysql, or pgsql")
+	default:
+		return fmt.Errorf("storage.backend must be empty or db")
 	}
-	if cfg.Storage.DBDriver != "sqlite" && cfg.Storage.DBDriver != "mysql" {
-		return fmt.Errorf("storage.db_driver must be one of: sqlite, mysql")
+	if cfg.Storage.DBDriver != "sqlite" && cfg.Storage.DBDriver != "mysql" && cfg.Storage.DBDriver != "pgsql" {
+		return fmt.Errorf("storage.db_driver must be one of: sqlite, mysql, pgsql")
 	}
 	if cfg.Storage.DBRetentionDays < 0 {
 		return fmt.Errorf("storage.db_retention_days must be >= 0")
@@ -623,6 +739,9 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	}
 	if cfg.Storage.FileRotateBytes < 0 || cfg.Storage.FileMaxBytes < 0 || cfg.Storage.FileRetentionDays < 0 {
 		return fmt.Errorf("storage.file_* values must be >= 0")
+	}
+	if err := validatePersistentStorageConfig(cfg.Persistent); err != nil {
+		return err
 	}
 	fpMode := strings.ToLower(strings.TrimSpace(cfg.FPTuner.Mode))
 	if fpMode == "mock" {
@@ -651,10 +770,92 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	return nil
 }
 
+func validatePersistentStorageConfig(cfg appPersistentStorageConfig) error {
+	switch cfg.Backend {
+	case PersistentStorageBackendLocal:
+		if strings.TrimSpace(cfg.Local.BaseDir) == "" {
+			return fmt.Errorf("persistent_storage.local.base_dir is required when persistent_storage.backend=local")
+		}
+	case PersistentStorageBackendS3:
+		if strings.TrimSpace(cfg.S3.Bucket) == "" {
+			return fmt.Errorf("persistent_storage.s3.bucket is required when persistent_storage.backend=s3")
+		}
+		if strings.ContainsAny(cfg.S3.Bucket, "/\x00") {
+			return fmt.Errorf("persistent_storage.s3.bucket contains invalid characters")
+		}
+		if err := validatePersistentStorageEndpoint("persistent_storage.s3.endpoint", cfg.S3.Endpoint); err != nil {
+			return err
+		}
+	case PersistentStorageBackendAzureBlob:
+		if strings.TrimSpace(cfg.AzureBlob.AccountName) == "" {
+			return fmt.Errorf("persistent_storage.azure_blob.account_name is required when persistent_storage.backend=azure_blob")
+		}
+		if strings.TrimSpace(cfg.AzureBlob.Container) == "" {
+			return fmt.Errorf("persistent_storage.azure_blob.container is required when persistent_storage.backend=azure_blob")
+		}
+		return fmt.Errorf("persistent_storage.backend=azure_blob is not available in this build; use local until the Azure Blob adapter and ACME issuance coordinator are implemented")
+	case PersistentStorageBackendGCS:
+		if strings.TrimSpace(cfg.GCS.Bucket) == "" {
+			return fmt.Errorf("persistent_storage.gcs.bucket is required when persistent_storage.backend=gcs")
+		}
+		return fmt.Errorf("persistent_storage.backend=gcs is not available in this build; use local until the GCS adapter and ACME issuance coordinator are implemented")
+	default:
+		return fmt.Errorf("persistent_storage.backend must be one of: local, s3, azure_blob, gcs")
+	}
+	if err := validatePersistentStoragePrefix("persistent_storage.s3.prefix", cfg.S3.Prefix); err != nil {
+		return err
+	}
+	if err := validatePersistentStoragePrefix("persistent_storage.azure_blob.prefix", cfg.AzureBlob.Prefix); err != nil {
+		return err
+	}
+	if err := validatePersistentStoragePrefix("persistent_storage.gcs.prefix", cfg.GCS.Prefix); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validatePersistentStoragePrefix(field string, prefix string) error {
+	if strings.Contains(prefix, "\x00") {
+		return fmt.Errorf("%s contains invalid NUL byte", field)
+	}
+	for _, part := range strings.Split(prefix, "/") {
+		if part == "." || part == ".." {
+			return fmt.Errorf("%s must not contain relative path segments", field)
+		}
+	}
+	return nil
+}
+
+func validatePersistentStorageEndpoint(field string, endpoint string) error {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return nil
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("%s invalid: %w", field, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("%s must start with http:// or https://", field)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("%s host is required", field)
+	}
+	return nil
+}
+
 func normalizeAppProxyEngineMode(mode string) string {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" {
 		return DefaultProxyEngineMode
+	}
+	return mode
+}
+
+func normalizeAppWAFEngineMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		return DefaultWAFEngineMode
 	}
 	return mode
 }

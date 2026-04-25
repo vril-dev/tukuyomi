@@ -12,11 +12,24 @@ cd examples/wordpress
 docker compose up -d --build
 ```
 
+`./setup.sh` は stack 起動前に built-in の `wordpress` import profile から
+runtime DB を seed します。
+
 - WordPress URL: `http://localhost:${CORAZA_PORT:-19092}`
 - Coraza API: `http://localhost:${CORAZA_PORT:-19092}/tukuyomi-api/status`
 
 ## Notes
 
-- `data/conf/config.json` は `paths.crs_setup_file=rules/crs-setup-high-paranoia.conf` を使います。
+- `./setup.sh` が high-paranoia CRS setup を DB import される CRS setup asset として配置します。
 - `tx.blocking_paranoia_level` と `tx.detection_paranoia_level` は `2` に設定しています。
 - login endpoint `/wp-login.php` にはより strict な rate limit を適用しています。
+
+## Smoke tests
+
+```bash
+./smoke.sh
+```
+
+`./smoke.sh` は WordPress の到達性、admin status endpoint、XSS probe が WAF により
+`403` で block されることを確認します。
+status check には、この example に含まれる smoke 用 admin API key を使います。

@@ -29,7 +29,6 @@ func TestAdminAuditActorPrefersOperatorIdentity(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Tukuyomi-Actor", "alice@example.com")
-	req.Header.Set("X-API-Key", "secret")
 	c.Request = req
 
 	if got := adminAuditActor(c); got != "alice@example.com" {
@@ -37,16 +36,15 @@ func TestAdminAuditActorPrefersOperatorIdentity(t *testing.T) {
 	}
 }
 
-func TestAdminAuditActorFallsBackToHashedAPIKey(t *testing.T) {
+func TestAdminAuditActorFallsBackToUnknown(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-API-Key", "secret")
 	c.Request = req
 
-	if got := adminAuditActor(c); got != "api-key:sha256:2bb80d537b1d" {
+	if got := adminAuditActor(c); got != "unknown" {
 		t.Fatalf("actor=%q", got)
 	}
 }

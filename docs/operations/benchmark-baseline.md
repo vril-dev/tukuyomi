@@ -129,21 +129,21 @@ If you want to compare two branches, use the same host, concurrency levels, and 
 | `BENCH_MIN_RPS` | unset | Optional minimum RPS gate per row |
 | `WAF_BENCH_SCENARIOS` | `allow,block-xss` | Comma-separated WAF scenarios for `make bench-waf` |
 | `UPSTREAM_PORT` | auto | Temporary upstream port; leave unset to avoid local port collisions |
-| `OUTPUT_FILE` | `data/logs/proxy/proxy-benchmark-summary.md` | Human-facing Markdown summary output |
-| `OUTPUT_JSON_FILE` | `data/logs/proxy/proxy-benchmark-summary.json` | Machine-readable JSON output |
+| `OUTPUT_FILE` | `data/tmp/reports/proxy/proxy-benchmark-summary.md` | Human-facing Markdown summary output |
+| `OUTPUT_JSON_FILE` | `data/tmp/reports/proxy/proxy-benchmark-summary.json` | Machine-readable JSON output |
 
 ## Source of truth output
 
 Proxy benchmark source of truth:
 
-- Markdown summary: `data/logs/proxy/proxy-benchmark-summary.md`
-- Machine-readable JSON: `data/logs/proxy/proxy-benchmark-summary.json`
-- Optional raw profiles: `data/logs/proxy/proxy-benchmark-*.pprof`
+- Markdown summary: `data/tmp/reports/proxy/proxy-benchmark-summary.md`
+- Machine-readable JSON: `data/tmp/reports/proxy/proxy-benchmark-summary.json`
+- Optional raw profiles: `data/tmp/reports/proxy/proxy-benchmark-*.pprof`
 
 WAF benchmark source of truth:
 
-- Markdown summary: `data/logs/proxy/waf-benchmark-summary.md`
-- Machine-readable JSON: `data/logs/proxy/waf-benchmark-summary.json`
+- Markdown summary: `data/tmp/reports/proxy/waf-benchmark-summary.md`
+- Machine-readable JSON: `data/tmp/reports/proxy/waf-benchmark-summary.json`
 
 These files are the source of truth for:
 

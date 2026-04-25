@@ -1,13 +1,8 @@
 package handler
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -39,6 +34,7 @@ func StatusHandler(c *gin.Context) {
 	requestCountryStatus := RequestCountryRuntimeStatusSnapshot()
 	_, _, phpRuntimeInventory, phpRuntimeRollbackDepth := PHPRuntimeInventorySnapshot()
 	_, _, vhostCfg, vhostRollbackDepth := VhostConfigSnapshot()
+	vhostRuntimeStatus := VhostRuntimeStatusSnapshot()
 	phpRuntimeMaterialized := PHPRuntimeMaterializationSnapshot()
 	phpRuntimeProcesses := PHPRuntimeProcessSnapshot()
 	adminListenerEnabled := strings.TrimSpace(config.AdminListenAddr) != ""
@@ -158,6 +154,7 @@ func StatusHandler(c *gin.Context) {
 		"api_base":                                            config.APIBasePath,
 		"ui_path":                                             config.UIBasePath,
 		"site_config_file":                                    config.SiteConfigFile,
+		"site_config_storage":                                 siteConfigStorageLabel(),
 		"site_count":                                          len(siteStatuses),
 		"site_enabled_count":                                  countEnabledSiteStatuses(siteStatuses),
 		"sites":                                               siteStatuses,
@@ -173,6 +170,10 @@ func StatusHandler(c *gin.Context) {
 		"vhost_static_count":                                  countVhostsByMode(vhostCfg, "static"),
 		"vhost_php_fpm_count":                                 countVhostsByMode(vhostCfg, "php-fpm"),
 		"vhost_rollback_depth":                                vhostRollbackDepth,
+		"vhost_degraded":                                      vhostRuntimeStatus.Degraded,
+		"vhost_last_error":                                    vhostRuntimeStatus.LastError,
+		"scheduled_task_config_storage":                       scheduledTaskConfigStorageLabel(currentScheduledTaskConfigPath()),
+		"upstream_runtime_storage":                            upstreamRuntimeStorageLabel(),
 		"security_audit":                                      securityAuditStatus,
 		"security_audit_enabled":                              securityAuditStatus.Enabled,
 		"security_audit_capture_mode":                         securityAuditStatus.CaptureMode,
@@ -247,9 +248,9 @@ func StatusHandler(c *gin.Context) {
 		"server_tls_http_redirect_addr":                       config.ServerTLSHTTPRedirectAddr,
 		"server_tls_cert_not_after":                           serverTLSStatus.CertNotAfter,
 		"server_tls_last_error":                               serverTLSStatus.LastError,
-		"server_tls_acme_enabled":                             config.ServerTLSACMEEnabled,
-		"server_tls_acme_domains":                             config.ServerTLSACMEDomains,
-		"server_tls_acme_staging":                             config.ServerTLSACMEStaging,
+		"server_tls_acme_enabled":                             serverTLSStatus.Source == "acme" || serverTLSStatus.Source == "composite",
+		"server_tls_acme_domains":                             EffectiveServerTLSACMEDomains(),
+		"server_tls_acme_staging":                             siteACMEUsesStaging(currentSiteConfig()),
 		"server_tls_acme_success_total":                       serverTLSStatus.ACMESuccessTotal,
 		"server_tls_acme_failure_total":                       serverTLSStatus.ACMEFailureTotal,
 		"server_http3_enabled":                                config.ServerHTTP3Enabled,
@@ -261,6 +262,7 @@ func StatusHandler(c *gin.Context) {
 		"runtime_memory_limit_mb":                             config.RuntimeMemoryLimitMB,
 		"proxy_config_file":                                   config.ProxyConfigFile,
 		"proxy_engine_mode":                                   normalizeProxyEngineMode(config.ProxyEngineMode),
+		"waf_engine_mode":                                     normalizeSettingsWAFEngineMode(config.WAFEngineMode),
 		"proxy_etag":                                          proxyETag,
 		"proxy_dial_timeout":                                  proxyCfg.DialTimeout,
 		"proxy_response_header_timeout":                       proxyCfg.ResponseHeaderTimeout,
@@ -351,14 +353,12 @@ func StatusHandler(c *gin.Context) {
 		"crs_setup_file":                                      config.CRSSetupFile,
 		"crs_rules_dir":                                       config.CRSRulesDir,
 		"crs_disabled_file":                                   config.CRSDisabledFile,
-		"storage_backend":                                     config.StorageBackend,
-		"db_enabled":                                          config.DBEnabled,
 		"db_driver":                                           config.DBDriver,
 		"db_dsn_configured":                                   strings.TrimSpace(config.DBDSN) != "",
 		"db_path":                                             config.DBPath,
 		"db_retention_days":                                   config.DBRetentionDays,
 		"db_sync_interval_sec":                                int(config.DBSyncInterval / time.Second),
-		"db_sync_loop_enabled":                                config.DBEnabled && config.DBSyncInterval > 0,
+		"db_sync_loop_enabled":                                config.DBSyncInterval > 0,
 		"db_total_rows":                                       dbTotalRows,
 		"db_waf_block_rows":                                   dbWAFBlockRows,
 		"db_size_bytes":                                       dbSizeBytes,
@@ -371,57 +371,40 @@ func StatusHandler(c *gin.Context) {
 }
 
 func RulesHandler(c *gin.Context) {
-	files := configuredRuleFiles()
-	result := make(map[string]string)
-	out := make([]gin.H, 0, len(files))
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
+	}
+	assets, assetRec, found, err := loadRuntimeWAFRuleAssets(store)
+	if err != nil {
+		respondConfigBlobDBError(c, "rules db read failed", err)
+		return
+	}
+	if !found {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "active waf rule assets missing in db; run make crs-install before editing rule assets"})
+		return
+	}
 
-	for _, path := range files {
-		content, err := os.ReadFile(path)
-		savedAt := fileSavedAt(path)
-		if store := getLogsStatsStore(); store != nil {
-			key := ruleFileConfigBlobKey(path)
-			dbRaw, dbETag, found, dbErr := store.GetConfigBlob(key)
-			if dbErr != nil {
-				log.Printf("[RULES][DB][WARN] get config blob failed (path=%s): %v", path, dbErr)
-			} else if found {
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = bypassconf.ComputeETag(dbRaw)
-					if err := store.UpsertConfigBlob(key, dbRaw, dbETag, time.Now().UTC()); err != nil {
-						log.Printf("[RULES][DB][WARN] normalize etag failed (path=%s): %v", path, err)
-					}
-				}
-				result[path] = string(dbRaw)
-				savedAt = configBlobSavedAt(store, key)
-				out = append(out, gin.H{
-					"path":     path,
-					"raw":      string(dbRaw),
-					"etag":     dbETag,
-					"saved_at": savedAt,
-				})
-				continue
-			} else if err == nil && len(content) > 0 {
-				if err := store.UpsertConfigBlob(key, content, bypassconf.ComputeETag(content), time.Now().UTC()); err != nil {
-					log.Printf("[RULES][DB][WARN] seed config blob failed (path=%s): %v", path, err)
-				}
-			}
+	editable := editableWAFRuleAssets(assets)
+	result := make(map[string]string, len(editable))
+	out := make([]gin.H, 0, len(editable))
+	for i, asset := range editable {
+		etag := strings.TrimSpace(asset.ETag)
+		if etag == "" {
+			etag = bypassconf.ComputeETag(asset.Raw)
 		}
-		if err != nil {
-			result[path] = "[読込失敗] " + err.Error()
-			out = append(out, gin.H{
-				"path":     path,
-				"raw":      "",
-				"etag":     "",
-				"error":    err.Error(),
-				"saved_at": savedAt,
-			})
-			continue
+		if asset.Kind == wafRuleAssetKindBase {
+			result[asset.Path] = string(asset.Raw)
 		}
-		result[path] = string(content)
 		out = append(out, gin.H{
-			"path":     path,
-			"raw":      string(content),
-			"etag":     bypassconf.ComputeETag(content),
-			"saved_at": savedAt,
+			"path":     asset.Path,
+			"kind":     asset.Kind,
+			"position": i,
+			"raw":      string(asset.Raw),
+			"etag":     etag,
+			"usage":    wafRuleAssetUsageLabel(asset.Kind),
+			"saved_at": wafRuleAssetSavedAt(assetRec, asset.Path),
 		})
 	}
 
@@ -433,6 +416,7 @@ func RulesHandler(c *gin.Context) {
 
 type rulesPutBody struct {
 	Path string `json:"path"`
+	Kind string `json:"kind"`
 	Raw  string `json:"raw"`
 }
 
@@ -443,13 +427,13 @@ func ValidateRules(c *gin.Context) {
 		return
 	}
 
-	target, err := ensureEditableRulePath(in.Path)
+	kind, target, err := normalizeRulesRequestTarget(in.Path, in.Kind)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := waf.ValidateWithRuleOverride(target, []byte(in.Raw)); err != nil {
+	if err := validateRuleAssetRaw(kind, target, []byte(in.Raw)); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
@@ -464,34 +448,21 @@ func PutRules(c *gin.Context) {
 		return
 	}
 
-	target, err := ensureEditableRulePath(in.Path)
+	kind, target, err := normalizeRulesRequestTarget(in.Path, in.Kind)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	store := getLogsStatsStore()
-	curRaw, hadFile, err := readFileMaybe(target)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	if _, err := requireConfigDBStore(); err != nil {
+		respondConfigDBStoreRequired(c)
 		return
 	}
-
-	curETag := bypassconf.ComputeETag(curRaw)
-	if store != nil {
-		key := ruleFileConfigBlobKey(target)
-		dbRaw, dbETag, found, getErr := store.GetConfigBlob(key)
-		if getErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": getErr.Error()})
-			return
-		}
-		if found {
-			curRaw = dbRaw
-			if strings.TrimSpace(dbETag) == "" {
-				dbETag = bypassconf.ComputeETag(dbRaw)
-			}
-			curETag = dbETag
-		}
+	curRaw, curETag, domainETag, _, err := loadEditableWAFRuleAssetForKind(target, kind)
+	existed := err == nil
+	if err != nil && !strings.Contains(err.Error(), "not found") {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 
 	if ifMatch := c.GetHeader("If-Match"); ifMatch != "" && ifMatch != curETag {
@@ -499,51 +470,158 @@ func PutRules(c *gin.Context) {
 		return
 	}
 
-	if err := waf.ValidateWithRuleOverride(target, []byte(in.Raw)); err != nil {
+	if err := validateRuleAssetRaw(kind, target, []byte(in.Raw)); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
 
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+	rec, asset, err := writeWAFRuleAssetUpdateForKind(target, kind, []byte(in.Raw), domainETag, ruleAssetWriteReason(kind))
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if err := bypassconf.AtomicWriteWithBackup(target, []byte(in.Raw)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	if err := waf.ReloadBaseWAF(); err != nil {
-		_ = rollbackRuleFile(target, hadFile, curRaw)
-		_ = waf.ReloadBaseWAF()
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("reload failed and rollback applied: %v", err),
-		})
-		return
-	}
-
-	newETag := bypassconf.ComputeETag([]byte(in.Raw))
-	now := time.Now().UTC()
-	if store != nil {
-		key := ruleFileConfigBlobKey(target)
-		if err := store.UpsertConfigBlob(key, []byte(in.Raw), newETag, now); err != nil {
-			rollbackErr := rollbackRuleFile(target, hadFile, curRaw)
-			_ = waf.ReloadBaseWAF()
-			msg := fmt.Sprintf("db sync failed and rollback applied: %v", err)
-			if rollbackErr != nil {
-				msg = fmt.Sprintf("%s (rollback error: %v)", msg, rollbackErr)
+	hotReloaded := false
+	if kind == wafRuleAssetKindBase {
+		if err := waf.ReloadBaseWAF(); err != nil {
+			if existed {
+				_, _, _ = writeWAFRuleAssetUpdateForKind(target, kind, curRaw, rec.ETag, "base rule rollback after reload failure")
+			} else {
+				_, _ = deleteWAFRuleAssetForKind(target, kind, rec.ETag, "base rule create rollback after reload failure")
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": msg})
+			_ = waf.ReloadBaseWAF()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": fmt.Sprintf("reload failed and rollback applied: %v", err),
+			})
+			return
+		}
+		hotReloaded = true
+	} else if kind == wafRuleAssetKindBypassExtra {
+		waf.InvalidateOverrideWAF(target)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":            true,
+		"etag":          asset.ETag,
+		"kind":          kind,
+		"path":          target,
+		"hot_reloaded":  hotReloaded,
+		"reloaded_file": target,
+		"saved_at":      configVersionSavedAt(rec),
+	})
+}
+
+type rulesDeleteQuery struct {
+	Path string `form:"path"`
+	Kind string `form:"kind"`
+}
+
+func DeleteRuleAsset(c *gin.Context) {
+	var in rulesDeleteQuery
+	if err := c.ShouldBindQuery(&in); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	kind, target, err := normalizeRulesRequestTarget(in.Path, in.Kind)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if kind == wafRuleAssetKindBypassExtra {
+		if inUseBy, inUse := managedOverrideRuleInUse(target); inUse {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":  "rule asset is still referenced by bypass rules",
+				"path":   target,
+				"in_use": inUseBy,
+			})
 			return
 		}
 	}
+	curRaw, _, domainETag, _, err := loadEditableWAFRuleAssetForKind(target, kind)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	rec, err := deleteWAFRuleAssetForKind(target, kind, domainETag, ruleAssetDeleteReason(kind))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if kind == wafRuleAssetKindBase {
+		if err := waf.ReloadBaseWAF(); err != nil {
+			_, _, _ = writeWAFRuleAssetUpdateForKind(target, kind, curRaw, rec.ETag, "base rule delete rollback after reload failure")
+			_ = waf.ReloadBaseWAF()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("reload failed and rollback applied: %v", err)})
+			return
+		}
+	} else {
+		waf.InvalidateOverrideWAF(target)
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "path": target, "kind": kind, "deleted": true, "saved_at": configVersionSavedAt(rec)})
+}
 
+type rulesOrderBody struct {
+	Files  []rulesOrderItem `json:"files"`
+	Assets []rulesOrderItem `json:"assets"`
+}
+
+type rulesOrderItem struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+}
+
+func PutRuleAssetOrder(c *gin.Context) {
+	var in rulesOrderBody
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	order := in.Assets
+	if len(order) == 0 {
+		order = in.Files
+	}
+	if len(order) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "rule asset order is empty"})
+		return
+	}
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
+	}
+	current, rec, found, err := loadRuntimeWAFRuleAssets(store)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "active waf rule assets missing in db; run make crs-install before editing rule assets"})
+		return
+	}
+	previous := editableWAFRuleAssets(current)
+	nextOrder := make([]wafRuleAssetVersion, 0, len(order))
+	for _, item := range order {
+		kind, target, err := normalizeRulesRequestTarget(item.Path, item.Kind)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		nextOrder = append(nextOrder, wafRuleAssetVersion{Path: target, Kind: kind})
+	}
+	nextRec, nextAssets, err := reorderEditableWAFRuleAssets(nextOrder, rec.ETag, "rule asset order update")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if err := waf.ReloadBaseWAF(); err != nil {
+		_, _, _ = reorderEditableWAFRuleAssets(previous, nextRec.ETag, "rule asset order rollback after reload failure")
+		_ = waf.ReloadBaseWAF()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("reload failed and rollback applied: %v", err)})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"ok":            true,
-		"etag":          newETag,
-		"hot_reloaded":  true,
-		"reloaded_file": target,
-		"saved_at":      now.Format(time.RFC3339Nano),
+		"ok":           true,
+		"files":        ruleAssetResponseFiles(nextAssets, nextRec),
+		"hot_reloaded": true,
+		"saved_at":     configVersionSavedAt(nextRec),
 	})
 }
 
@@ -552,7 +630,7 @@ func configuredRuleFiles() []string {
 	out := make([]string, 0, len(parts))
 	seen := map[string]struct{}{}
 	for _, p := range parts {
-		p = strings.TrimSpace(p)
+		p = config.NormalizeBaseRuleAssetPath(p)
 		if p == "" {
 			continue
 		}
@@ -566,87 +644,89 @@ func configuredRuleFiles() []string {
 }
 
 func ensureEditableRulePath(path string) (string, error) {
-	target := filepath.Clean(strings.TrimSpace(path))
+	target := config.NormalizeBaseRuleAssetPath(path)
 	if target == "" {
 		return "", fmt.Errorf("path is empty")
 	}
 	for _, p := range configuredRuleFiles() {
-		if filepath.Clean(p) == target {
+		if config.NormalizeBaseRuleAssetPath(p) == target {
 			return p, nil
 		}
 	}
 	return "", fmt.Errorf("path is not editable: %s", path)
 }
 
-func ruleFileConfigBlobKey(path string) string {
-	cleaned := filepath.Clean(strings.TrimSpace(path))
-	sum := sha256.Sum256([]byte(cleaned))
-	return "rule_file_sha256:" + hex.EncodeToString(sum[:])
+func normalizeRulesRequestTarget(path string, kind string) (string, string, error) {
+	normalizedKind, err := normalizeEditableWAFRuleAssetKind(kind)
+	if err != nil {
+		return "", "", err
+	}
+	target, err := normalizeWAFRuleAssetPathForKind(path, normalizedKind)
+	if err != nil {
+		return "", "", err
+	}
+	if normalizedKind == wafRuleAssetKindBase && isUnsafeLogicalRuleAssetPath(target) {
+		return "", "", fmt.Errorf("base rule asset path must stay within the rule asset namespace: %s", path)
+	}
+	return normalizedKind, target, nil
 }
 
-func SyncRuleFilesStorage() error {
-	store := getLogsStatsStore()
-	if store == nil {
-		return nil
-	}
-
-	changed := false
-	for _, path := range configuredRuleFiles() {
-		if strings.TrimSpace(path) == "" {
-			continue
-		}
-
-		fileRaw, hadFile, err := readFileMaybe(path)
-		if err != nil {
-			return err
-		}
-		key := ruleFileConfigBlobKey(path)
-		dbRaw, dbETag, found, err := store.GetConfigBlob(key)
-		if err != nil {
-			return err
-		}
-
-		if found {
-			if !hadFile || !bytes.Equal(fileRaw, dbRaw) {
-				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-					return err
-				}
-				if err := bypassconf.AtomicWriteWithBackup(path, dbRaw); err != nil {
-					return err
-				}
-				changed = true
-			}
-			if strings.TrimSpace(dbETag) == "" {
-				dbETag = bypassconf.ComputeETag(dbRaw)
-				if err := store.UpsertConfigBlob(key, dbRaw, dbETag, time.Now().UTC()); err != nil {
-					return err
-				}
-			}
-			continue
-		}
-
-		if !hadFile || len(fileRaw) == 0 {
-			continue
-		}
-		if err := store.UpsertConfigBlob(key, fileRaw, bypassconf.ComputeETag(fileRaw), time.Now().UTC()); err != nil {
-			return err
-		}
-	}
-
-	if changed && waf.GetBaseWAF() != nil {
-		if err := waf.ReloadBaseWAF(); err != nil {
-			return fmt.Errorf("reload base waf after rule sync: %w", err)
-		}
-	}
-	return nil
+func isUnsafeLogicalRuleAssetPath(path string) bool {
+	path = filepath.ToSlash(filepath.Clean(strings.TrimSpace(path)))
+	return filepath.IsAbs(path) || path == ".." || strings.HasPrefix(path, "../")
 }
 
-func rollbackRuleFile(path string, hadFile bool, raw []byte) error {
-	if hadFile {
-		return bypassconf.AtomicWriteWithBackup(path, raw)
+func validateRuleAssetRaw(kind string, target string, raw []byte) error {
+	switch kind {
+	case wafRuleAssetKindBase:
+		return waf.ValidateWithRuleOverride(target, raw)
+	case wafRuleAssetKindBypassExtra:
+		return waf.ValidateStandaloneRule(target, raw)
+	default:
+		return fmt.Errorf("unsupported editable rule asset kind: %s", kind)
 	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
+}
+
+func wafRuleAssetUsageLabel(kind string) string {
+	switch kind {
+	case wafRuleAssetKindBypassExtra:
+		return "Bypass Rules extra_rule"
+	default:
+		return "Base WAF rule set"
 	}
-	return nil
+}
+
+func ruleAssetWriteReason(kind string) string {
+	if kind == wafRuleAssetKindBypassExtra {
+		return "bypass extra rule update"
+	}
+	return "base rule update"
+}
+
+func ruleAssetDeleteReason(kind string) string {
+	if kind == wafRuleAssetKindBypassExtra {
+		return "bypass extra rule delete"
+	}
+	return "base rule delete"
+}
+
+func ruleAssetResponseFiles(assets []wafRuleAssetVersion, rec configVersionRecord) []gin.H {
+	editable := editableWAFRuleAssets(assets)
+	out := make([]gin.H, 0, len(editable))
+	for i, asset := range editable {
+		etag := strings.TrimSpace(asset.ETag)
+		if etag == "" {
+			etag = bypassconf.ComputeETag(asset.Raw)
+		}
+		out = append(out, gin.H{
+			"path":     asset.Path,
+			"kind":     asset.Kind,
+			"position": i,
+			"raw":      string(asset.Raw),
+			"etag":     etag,
+			"usage":    wafRuleAssetUsageLabel(asset.Kind),
+			"saved_at": wafRuleAssetSavedAt(rec, asset.Path),
+		})
+	}
+	return out
 }

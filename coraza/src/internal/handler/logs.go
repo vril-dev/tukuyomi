@@ -23,10 +23,10 @@ import (
 )
 
 var (
-	logDirCoraza = "logs/coraza"
+	logDirWAF = "logs/waf"
 
 	logFiles = map[string]string{
-		"waf": filepath.Join(logDirCoraza, "waf-events.ndjson"),
+		"waf": filepath.Join(logDirWAF, "waf-events.ndjson"),
 	}
 
 	readChunkSize   = int64(64 * 1024)
@@ -100,6 +100,14 @@ func LogsRead(c *gin.Context) {
 		return
 	}
 	path = resolveLogPath(src, path)
+	var store *wafEventStore
+	if src == "waf" {
+		store = getLogsStatsStore()
+		if store == nil {
+			respondConfigDBStoreRequired(c)
+			return
+		}
+	}
 
 	tail := clampInt(mustAtoiDefault(c.Query("tail"), 30), 1, maxLinesPerRead)
 	dir := c.DefaultQuery("dir", "")
@@ -117,11 +125,7 @@ func LogsRead(c *gin.Context) {
 			err   error
 		)
 		if src == "waf" {
-			if store := getLogsStatsStore(); store != nil {
-				lines, err = store.ReadWAFRequestLogs(path, reqIDFilter, countryFilter)
-			} else {
-				lines, err = readByRequestID(path, reqIDFilter, countryFilter)
-			}
+			lines, err = store.ReadWAFRequestLogs(path, reqIDFilter, countryFilter)
 		} else {
 			lines, err = readByRequestID(path, reqIDFilter, countryFilter)
 		}
@@ -157,11 +161,7 @@ func LogsRead(c *gin.Context) {
 		err              error
 	)
 	if src == "waf" {
-		if store := getLogsStatsStore(); store != nil {
-			lines, nextCur, hasPrev, hasNext, err = store.ReadWAFLogs(path, tail, cursor, dir, countryFilter)
-		} else {
-			lines, nextCur, hasPrev, hasNext, err = readByLine(path, tail, cursor, dir)
-		}
+		lines, nextCur, hasPrev, hasNext, err = store.ReadWAFLogs(path, tail, cursor, dir, countryFilter)
 	} else {
 		lines, nextCur, hasPrev, hasNext, err = readByLine(path, tail, cursor, dir)
 	}
@@ -205,6 +205,14 @@ func LogsDownload(c *gin.Context) {
 		return
 	}
 	path = resolveLogPath(src, path)
+	var store *wafEventStore
+	if src == "waf" {
+		store = getLogsStatsStore()
+		if store == nil {
+			respondConfigDBStoreRequired(c)
+			return
+		}
+	}
 
 	fromStr := c.Query("from")
 	toStr := c.Query("to")
@@ -244,12 +252,10 @@ func LogsDownload(c *gin.Context) {
 	defer gw.Close()
 
 	if src == "waf" {
-		if store := getLogsStatsStore(); store != nil {
-			if err := store.DownloadWAFLogs(path, gw, from, to, countryFilter); err != nil {
-				c.Status(http.StatusInternalServerError)
-			}
-			return
+		if err := store.DownloadWAFLogs(path, gw, from, to, countryFilter); err != nil {
+			c.Status(http.StatusInternalServerError)
 		}
+		return
 	}
 
 	f, err := os.Open(path)
@@ -292,120 +298,16 @@ func LogsStats(c *gin.Context) {
 
 	rangeHours := clampInt(mustAtoiDefault(c.Query("hours"), defaultStatsRangeHours), 1, maxStatsRangeHours)
 	now := time.Now().UTC()
-	if store := getLogsStatsStore(); store != nil {
-		resp, err := store.BuildLogsStats(path, rangeHours, now)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, resp)
+	store := getLogsStatsStore()
+	if store == nil {
+		respondConfigDBStoreRequired(c)
 		return
 	}
-
-	scan := clampInt(mustAtoiDefault(c.Query("scan"), defaultStatsScanLines), 1, maxStatsScanLines)
-	seriesStart, seriesEnd := statsHourlyRange(now, rangeHours)
-
-	lines, _, _, _, err := readByLine(path, scan, nil, "")
+	resp, err := store.BuildLogsStats(path, rangeHours, now)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			c.JSON(http.StatusOK, logsStatsResp{
-				GeneratedAt:  now.Format(time.RFC3339Nano),
-				ScannedLines: 0,
-				RangeHours:   rangeHours,
-				WAFBlock: wafBlockStats{
-					TopRuleIDs24h:   []statsBucket{},
-					TopPaths24h:     []statsBucket{},
-					TopCountries24h: []statsBucket{},
-					SeriesHourly:    buildHourlySeries(seriesStart, seriesEnd, map[int64]int{}),
-				},
-			})
-			return
-		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	since1h := now.Add(-1 * time.Hour)
-	since24h := now.Add(-24 * time.Hour)
-
-	ruleCounts24h := map[string]int{}
-	pathCounts24h := map[string]int{}
-	countryCounts24h := map[string]int{}
-	seriesCounts := map[int64]int{}
-
-	stats := wafBlockStats{
-		TopRuleIDs24h:   []statsBucket{},
-		TopPaths24h:     []statsBucket{},
-		TopCountries24h: []statsBucket{},
-		SeriesHourly:    []statsSeriesPoint{},
-	}
-	var oldestScannedTS time.Time
-	var newestScannedTS time.Time
-	haveScannedTS := false
-
-	for _, line := range lines {
-		if strings.TrimSpace(logFieldString(line["event"])) != "waf_block" {
-			continue
-		}
-
-		stats.TotalInScan++
-
-		ts, ok := parseLogTS(line["ts"])
-		if !ok {
-			continue
-		}
-		ts = ts.UTC()
-		if !haveScannedTS || ts.Before(oldestScannedTS) {
-			oldestScannedTS = ts
-		}
-		if !haveScannedTS || ts.After(newestScannedTS) {
-			newestScannedTS = ts
-		}
-		haveScannedTS = true
-
-		if !ts.Before(since1h) {
-			stats.Last1h++
-		}
-		if ts.Before(since24h) {
-			if !ts.Before(seriesStart) && ts.Before(seriesEnd) {
-				hourBucket := ts.Truncate(time.Hour).Unix()
-				seriesCounts[hourBucket]++
-			}
-			continue
-		}
-
-		stats.Last24h++
-
-		ruleID := normalizeStatsRuleID(line["rule_id"])
-		pathKey := normalizeStatsPath(line["path"])
-		country := normalizeCountryFromAny(line["country"])
-
-		ruleCounts24h[ruleID]++
-		pathCounts24h[pathKey]++
-		countryCounts24h[country]++
-
-		if !ts.Before(seriesStart) && ts.Before(seriesEnd) {
-			hourBucket := ts.Truncate(time.Hour).Unix()
-			seriesCounts[hourBucket]++
-		}
-	}
-
-	stats.TopRuleIDs24h = topBuckets(ruleCounts24h, statsTopN)
-	stats.TopPaths24h = topBuckets(pathCounts24h, statsTopN)
-	stats.TopCountries24h = topBuckets(countryCounts24h, statsTopN)
-	stats.SeriesHourly = buildHourlySeries(seriesStart, seriesEnd, seriesCounts)
-
-	resp := logsStatsResp{
-		GeneratedAt:  now.Format(time.RFC3339Nano),
-		ScannedLines: len(lines),
-		RangeHours:   rangeHours,
-		WAFBlock:     stats,
-	}
-	if haveScannedTS {
-		resp.OldestScannedTS = oldestScannedTS.Format(time.RFC3339Nano)
-		resp.NewestScannedTS = newestScannedTS.Format(time.RFC3339Nano)
-	}
-
 	c.JSON(http.StatusOK, resp)
 }
 

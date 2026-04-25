@@ -141,6 +141,59 @@ func TestBuildProxyBackendStatesAppliesRuntimeOverrides(t *testing.T) {
 	}
 }
 
+func TestBuildProxyBackendStatesLoadsRuntimeOverridesFromDB(t *testing.T) {
+	tmp := t.TempDir()
+	store := initConfigDBStoreForTest(t)
+
+	oldPath := config.UpstreamRuntimeFile
+	config.UpstreamRuntimeFile = filepath.Join(tmp, "conf", "upstream-runtime.json")
+	defer func() {
+		config.UpstreamRuntimeFile = oldPath
+	}()
+
+	primaryKey := proxyBackendLookupKey("primary", "http://127.0.0.1:8080")
+	overrideRaw := fmt.Sprintf(`{
+  "version": "v1",
+	"backends": {
+    %q: {
+      "admin_state": "disabled",
+      "weight_override": 5
+    }
+  }
+}
+`, primaryKey)
+	runtimeFile, err := ParseUpstreamRuntimeRaw(overrideRaw)
+	if err != nil {
+		t.Fatalf("ParseUpstreamRuntimeRaw: %v", err)
+	}
+	if _, _, err := store.writeUpstreamRuntimeConfigVersion("", runtimeFile, nil, configVersionSourceImport, "", "test upstream runtime import", 0); err != nil {
+		t.Fatalf("writeUpstreamRuntimeConfigVersion: %v", err)
+	}
+
+	cfg := mustValidateProxyRulesRaw(t, `{
+  "upstreams": [
+    { "name": "primary", "url": "http://127.0.0.1:8080", "weight": 2, "enabled": true }
+  ]
+}`)
+
+	backends, err := buildProxyBackendStates(cfg, nil)
+	if err != nil {
+		t.Fatalf("buildProxyBackendStates: %v", err)
+	}
+	if len(backends) != 1 {
+		t.Fatalf("len(backends)=%d want=1", len(backends))
+	}
+	if got := backends[0].AdminState; got != upstreamAdminStateDisabled {
+		t.Fatalf("admin_state=%q want=%q", got, upstreamAdminStateDisabled)
+	}
+	if backends[0].WeightOverride == nil || *backends[0].WeightOverride != 5 {
+		t.Fatalf("weight_override=%v want=5", backends[0].WeightOverride)
+	}
+	if _, err := os.Stat(config.UpstreamRuntimeFile); !os.IsNotExist(err) {
+		t.Fatalf("upstream runtime file should not be restored, stat err=%v", err)
+	}
+}
+
 func TestOrderProxyRouteCandidatesSkipsDrainingManagedBackend(t *testing.T) {
 	tmp := t.TempDir()
 	oldPath := config.UpstreamRuntimeFile

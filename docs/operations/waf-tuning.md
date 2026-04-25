@@ -7,7 +7,7 @@ This document describes practical operating steps to safely reduce false positiv
 ## 1. Collect Evidence First
 
 1. Retrieve logs through the admin API and identify the `rule_id` and `path`.
-2. Trace the `req_id` in `interesting.ndjson` under `logs/proxy/` and narrow the client conditions (IP/UA/query).
+2. Trace the same `req_id` through `/tukuyomi-api/logs/read?src=waf&req_id=<id>` and narrow the client conditions (IP/UA/query).
 3. Always keep a reproducible HTTP request (curl or E2E).
 
 ## 2. Narrow the Impact Scope
@@ -20,11 +20,11 @@ This document describes practical operating steps to safely reduce false positiv
 
 Recommended order:
 
-1. Add a path-specific special rule to `data/conf/waf-bypass.json`.
-2. If needed, create a dedicated `*.conf` and disable the target rule narrowly with `ctl:ruleRemoveById`.
+1. Set an `extra_rule` only on the affected path in `Bypass Rules`.
+2. If needed, create a dedicated `*.conf` asset in `Rules` with usage `Bypass Rules extra_rule` and disable the target rule narrowly with `ctl:ruleRemoveById`.
 3. Use a broader path bypass only as a last resort (time-boxed, and roll it back later).
 
-`waf-bypass.json` example:
+Bypass Rules JSON example:
 
 ```json
 {
@@ -34,7 +34,7 @@ Recommended order:
   "hosts": {
     "example.com": {
       "entries": [
-        { "path": "/search", "extra_rule": "conf/rules/search-endpoint.conf" }
+        { "path": "/search", "extra_rule": "orders-preview.conf" }
       ]
     }
   }
@@ -43,7 +43,7 @@ Recommended order:
 
 Host scope precedence is exact `host:port`, then bare `host`, then `default`. A host-specific scope replaces the default scope; it does not merge with it.
 
-`search-endpoint.conf` example:
+`orders-preview.conf` managed from `Rules`:
 
 ```conf
 SecRuleEngine On
@@ -54,7 +54,7 @@ SecRule ARGS:q "@rx (?i)(<script|union([[:space:]]+all)?[[:space:]]+select|bench
 
 ## 4. Review CRS Settings
 
-1. Check the Paranoia Level in `data/rules/crs/crs-setup.conf`.
+1. Check the Paranoia Level through the DB-backed CRS setup asset imported from `rules/crs/crs-setup.conf`.
 2. Start from `PL1` during initial rollout and raise it gradually.
 3. Confirm that the anomaly threshold has not been lowered too aggressively.
 

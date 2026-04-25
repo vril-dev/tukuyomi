@@ -103,7 +103,7 @@ const defaultEvent: EventInput = {
   matched_value: "",
 };
 
-const defaultTargetPath = "rules/tukuyomi.conf";
+const defaultTargetPath = "tukuyomi.conf";
 
 export default function FPTunerPanel() {
   const { locale, tx } = useI18n();
@@ -333,7 +333,7 @@ export default function FPTunerPanel() {
               className="mt-1 w-full border rounded px-2 py-1"
               value={targetPath}
               onChange={(e) => setTargetPath(e.target.value)}
-              placeholder="rules/tukuyomi.conf"
+              placeholder="tukuyomi.conf"
             />
           </label>
 

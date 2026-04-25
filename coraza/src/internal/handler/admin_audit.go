@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -52,12 +51,7 @@ func adminAuditActor(c *gin.Context) string {
 	if actor := strings.TrimSpace(c.GetString("tukuyomi.admin_auth_fallback_actor")); actor != "" {
 		return actor
 	}
-	key := strings.TrimSpace(c.GetHeader("X-API-Key"))
-	if key == "" {
-		return "api-key:none"
-	}
-	sum := sha256.Sum256([]byte(key))
-	return fmt.Sprintf("api-key:sha256:%x", sum[:6])
+	return "unknown"
 }
 
 func appendAdminAudit(path string, writeErrorEvent string, entry any) {

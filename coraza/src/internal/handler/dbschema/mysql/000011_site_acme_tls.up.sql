@@ -1,0 +1,4 @@
+ALTER TABLE site_tls
+    ADD COLUMN acme_environment VARCHAR(32) NOT NULL DEFAULT '',
+    ADD COLUMN acme_email VARCHAR(254) NOT NULL DEFAULT '';
+

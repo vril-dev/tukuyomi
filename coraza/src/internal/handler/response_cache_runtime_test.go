@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"tukuyomi/internal/adminauth"
 	"tukuyomi/internal/cacheconf"
 )
 
@@ -19,8 +22,13 @@ func TestServeProxyWithCacheHitAndClear(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var upstreamRequests atomic.Int32
+	upstreamCookie := make(chan string, 1)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamRequests.Add(1)
+		select {
+		case upstreamCookie <- r.Header.Get("Cookie"):
+		default:
+		}
 		w.Header().Set("Content-Type", "text/plain")
 		w.Header().Set("Server", "upstream")
 		w.Header().Set("X-Powered-By", "php")
@@ -67,6 +75,8 @@ func TestServeProxyWithCacheHitAndClear(t *testing.T) {
 
 	req1, _ := http.NewRequest(http.MethodGet, srv.URL+"/static/app.js", nil)
 	req1.Header.Set("Accept-Encoding", "gzip")
+	req1.AddCookie(&http.Cookie{Name: adminauth.SessionCookieName, Value: "admin-session"})
+	req1.AddCookie(&http.Cookie{Name: adminauth.CSRFCookieName, Value: "admin-csrf"})
 	res1, err := http.DefaultClient.Do(req1)
 	if err != nil {
 		t.Fatalf("first request failed: %v", err)
@@ -84,9 +94,19 @@ func TestServeProxyWithCacheHitAndClear(t *testing.T) {
 	if got := res1.Header.Get("X-Internal-Leak"); got != "" {
 		t.Fatalf("unexpected first custom removed header: %q", got)
 	}
+	select {
+	case got := <-upstreamCookie:
+		if got != "" {
+			t.Fatalf("unexpected admin cookie forwarded upstream: %q", got)
+		}
+	default:
+		t.Fatal("expected upstream cookie observation")
+	}
 
 	req2, _ := http.NewRequest(http.MethodGet, srv.URL+"/static/app.js", nil)
 	req2.Header.Set("Accept-Encoding", "gzip")
+	req2.AddCookie(&http.Cookie{Name: adminauth.SessionCookieName, Value: "admin-session"})
+	req2.AddCookie(&http.Cookie{Name: adminauth.CSRFCookieName, Value: "admin-csrf"})
 	res2, err := http.DefaultClient.Do(req2)
 	if err != nil {
 		t.Fatalf("second request failed: %v", err)
@@ -128,6 +148,244 @@ func TestServeProxyWithCacheHitAndClear(t *testing.T) {
 	}
 	if got := upstreamRequests.Load(); got != 2 {
 		t.Fatalf("unexpected upstream count after clear: %d", got)
+	}
+}
+
+func TestClearResponseCacheRemovesDiskFilesWhenDisabled(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+
+	cacheDir := filepath.Join("cache", "response")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	cacheKey := strings.Repeat("a", sha256.Size*2)
+	bodyPath := filepath.Join(cacheDir, cacheKey+".body")
+	metaPath := filepath.Join(cacheDir, cacheKey+".json")
+	keepPath := filepath.Join(cacheDir, ".gitignore")
+	foreignJSONPath := filepath.Join(cacheDir, "operator-note.json")
+	if err := os.WriteFile(bodyPath, []byte("cached body"), 0o600); err != nil {
+		t.Fatalf("write body: %v", err)
+	}
+	if err := os.WriteFile(metaPath, []byte(`{"not":"loaded"}`), 0o600); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
+	if err := os.WriteFile(keepPath, []byte("*\n"), 0o600); err != nil {
+		t.Fatalf("write keep file: %v", err)
+	}
+	if err := os.WriteFile(foreignJSONPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write foreign json: %v", err)
+	}
+
+	cacheStoreCfgPath := filepath.Join(t.TempDir(), "cache-store.json")
+	if err := os.WriteFile(cacheStoreCfgPath, []byte(`{"enabled":false,"store_dir":"cache/response","max_bytes":1048576}`), 0o600); err != nil {
+		t.Fatalf("write cache store config: %v", err)
+	}
+	if err := InitResponseCacheRuntime(cacheStoreCfgPath); err != nil {
+		t.Fatalf("init response cache runtime: %v", err)
+	}
+
+	clearResult, err := ClearResponseCache()
+	if err != nil {
+		t.Fatalf("clear cache: %v", err)
+	}
+	if clearResult.ClearedEntries != 1 {
+		t.Fatalf("cleared entries=%d want 1", clearResult.ClearedEntries)
+	}
+	for _, path := range []string{bodyPath, metaPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("cache file %s still exists or stat failed: %v", path, err)
+		}
+	}
+	for _, path := range []string{keepPath, foreignJSONPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("non-cache file should remain: %s: %v", path, err)
+		}
+	}
+}
+
+func TestServeProxyWithCacheStoresHeadWithoutPoisoningGet(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var headRequests atomic.Int32
+	var getRequests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=0, must-revalidate")
+		w.Header().Set("X-Accel-Expires", "600")
+		switch r.Method {
+		case http.MethodHead:
+			headRequests.Add(1)
+			return
+		default:
+			getRequests.Add(1)
+			_, _ = w.Write([]byte("get body"))
+		}
+	}))
+	defer upstream.Close()
+
+	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
+	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}]}`), 0o600); err != nil {
+		t.Fatalf("write proxy config: %v", err)
+	}
+	if err := InitProxyRuntime(proxyCfgPath, 8); err != nil {
+		t.Fatalf("init proxy runtime: %v", err)
+	}
+
+	cacheStoreDir := t.TempDir()
+	cacheStoreCfgPath := filepath.Join(t.TempDir(), "cache-store.json")
+	if err := os.WriteFile(cacheStoreCfgPath, []byte(`{"enabled":true,"store_dir":`+strconv.Quote(cacheStoreDir)+`,"max_bytes":1048576}`), 0o600); err != nil {
+		t.Fatalf("write cache store config: %v", err)
+	}
+	if err := InitResponseCacheRuntime(cacheStoreCfgPath); err != nil {
+		t.Fatalf("init response cache runtime: %v", err)
+	}
+
+	rs, err := cacheconf.LoadFromString(`ALLOW exact=/test.html methods=GET,HEAD ttl=60 vary=Accept-Encoding`)
+	if err != nil {
+		t.Fatalf("load cache rules: %v", err)
+	}
+	cacheconf.Set(rs)
+
+	r := gin.New()
+	r.NoRoute(ProxyHandler)
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	head1, _ := http.NewRequest(http.MethodHead, srv.URL+"/test.html", nil)
+	res1, err := http.DefaultClient.Do(head1)
+	if err != nil {
+		t.Fatalf("first HEAD failed: %v", err)
+	}
+	_ = res1.Body.Close()
+	if got := res1.Header.Get(proxyResponseCacheHeader); got != "MISS" {
+		t.Fatalf("first HEAD cache header=%q want MISS", got)
+	}
+
+	head2, _ := http.NewRequest(http.MethodHead, srv.URL+"/test.html", nil)
+	res2, err := http.DefaultClient.Do(head2)
+	if err != nil {
+		t.Fatalf("second HEAD failed: %v", err)
+	}
+	_ = res2.Body.Close()
+	if got := res2.Header.Get(proxyResponseCacheHeader); got != "HIT" {
+		t.Fatalf("second HEAD cache header=%q want HIT", got)
+	}
+	if got := headRequests.Load(); got != 1 {
+		t.Fatalf("HEAD upstream requests=%d want 1", got)
+	}
+
+	res3, err := http.Get(srv.URL + "/test.html")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	body3, _ := io.ReadAll(res3.Body)
+	_ = res3.Body.Close()
+	if got := res3.Header.Get(proxyResponseCacheHeader); got != "MISS" {
+		t.Fatalf("GET cache header after HEAD-only cache=%q want MISS", got)
+	}
+	if string(body3) != "get body" {
+		t.Fatalf("GET body=%q want get body", string(body3))
+	}
+	if got := getRequests.Load(); got != 1 {
+		t.Fatalf("GET upstream requests=%d want 1", got)
+	}
+
+	head3, _ := http.NewRequest(http.MethodHead, srv.URL+"/test.html", nil)
+	res4, err := http.DefaultClient.Do(head3)
+	if err != nil {
+		t.Fatalf("third HEAD failed: %v", err)
+	}
+	_ = res4.Body.Close()
+	if got := res4.Header.Get(proxyResponseCacheHeader); got != "HIT" {
+		t.Fatalf("third HEAD cache header=%q want HIT", got)
+	}
+	if got := headRequests.Load(); got != 1 {
+		t.Fatalf("HEAD upstream requests after GET cache=%d want 1", got)
+	}
+}
+
+func TestServeProxyWithCacheBypassesConditionalRequestWithoutMiss(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `W/"cache-validator"`)
+		if strings.TrimSpace(r.Header.Get("If-None-Match")) != "" {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		_, _ = w.Write([]byte("conditional body"))
+	}))
+	defer upstream.Close()
+
+	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
+	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}]}`), 0o600); err != nil {
+		t.Fatalf("write proxy config: %v", err)
+	}
+	if err := InitProxyRuntime(proxyCfgPath, 8); err != nil {
+		t.Fatalf("init proxy runtime: %v", err)
+	}
+
+	cacheStoreDir := t.TempDir()
+	cacheStoreCfgPath := filepath.Join(t.TempDir(), "cache-store.json")
+	if err := os.WriteFile(cacheStoreCfgPath, []byte(`{"enabled":true,"store_dir":`+strconv.Quote(cacheStoreDir)+`,"max_bytes":1048576}`), 0o600); err != nil {
+		t.Fatalf("write cache store config: %v", err)
+	}
+	if err := InitResponseCacheRuntime(cacheStoreCfgPath); err != nil {
+		t.Fatalf("init response cache runtime: %v", err)
+	}
+
+	rs, err := cacheconf.LoadFromString(`ALLOW prefix=/static methods=GET,HEAD ttl=60 vary=Accept-Encoding`)
+	if err != nil {
+		t.Fatalf("load cache rules: %v", err)
+	}
+	cacheconf.Set(rs)
+
+	r := gin.New()
+	r.NoRoute(ProxyHandler)
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/static/app.js", nil)
+	req.Header.Set("If-None-Match", `W/"cache-validator"`)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("conditional request failed: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusNotModified {
+		t.Fatalf("status=%d want 304", res.StatusCode)
+	}
+	if got := res.Header.Get(proxyResponseCacheHeader); got != "" {
+		t.Fatalf("cache header=%q want empty", got)
+	}
+	_, _, _, stats := ResponseCacheSnapshot()
+	if stats.Misses != 0 || stats.Stores != 0 || stats.Hits != 0 || stats.EntryCount != 0 {
+		t.Fatalf("conditional request should bypass stats, got misses=%d stores=%d hits=%d entries=%d", stats.Misses, stats.Stores, stats.Hits, stats.EntryCount)
+	}
+}
+
+func TestProxyCacheCookieBypassIgnoresOnlyAdminCookies(t *testing.T) {
+	adminOnly := httptest.NewRequest(http.MethodGet, "http://example.test/static/app.js", nil)
+	adminOnly.AddCookie(&http.Cookie{Name: adminauth.SessionCookieName, Value: "admin-session"})
+	adminOnly.AddCookie(&http.Cookie{Name: adminauth.CSRFCookieName, Value: "admin-csrf"})
+	stripAdminAuthCookiesFromProxyRequest(adminOnly)
+	if got := adminOnly.Header.Get("Cookie"); got != "" {
+		t.Fatalf("admin cookie header after strip=%q want empty", got)
+	}
+	if shouldBypassProxyResponseCache(adminOnly) {
+		t.Fatal("admin-only cookies should not force response cache bypass")
+	}
+
+	appCookie := httptest.NewRequest(http.MethodGet, "http://example.test/static/app.js", nil)
+	appCookie.AddCookie(&http.Cookie{Name: adminauth.SessionCookieName, Value: "admin-session"})
+	appCookie.AddCookie(&http.Cookie{Name: "app_session", Value: "user-session"})
+	stripAdminAuthCookiesFromProxyRequest(appCookie)
+	if got := appCookie.Header.Get("Cookie"); got != "app_session=user-session" {
+		t.Fatalf("application cookie header after strip=%q want app_session=user-session", got)
+	}
+	if !shouldBypassProxyResponseCache(appCookie) {
+		t.Fatal("application cookies must still force response cache bypass")
 	}
 }
 

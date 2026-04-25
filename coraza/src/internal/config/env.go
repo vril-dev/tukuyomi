@@ -22,11 +22,13 @@ var (
 	SecurityAuditFile                   string
 	SecurityAuditBlobDir                string
 	CacheStoreFile                      string
+	CacheRulesFile                      string
 	UIBasePath                          string
 	UpstreamRuntimeFile                 string
 	ProxyRollbackMax                    int
 	ProxyAuditFile                      string
 	ProxyEngineMode                     string
+	WAFEngineMode                       string
 	SecurityAuditEnabled                bool
 	SecurityAuditCaptureMode            string
 	SecurityAuditCaptureHeaders         bool
@@ -89,8 +91,6 @@ var (
 	AdminTrustForwardedFor              bool
 	AdminProxyProtocolEnabled           bool
 	AdminProxyProtocolTrustedCIDRs      []string
-	APIKeyPrimary                       string
-	APIKeySecondary                     string
 	AdminSessionSecret                  string
 	AdminSessionTTL                     time.Duration
 	APIAuthDisable                      bool
@@ -115,8 +115,6 @@ var (
 	FPTunerApprovalTTL     time.Duration
 	FPTunerAuditFile       string
 
-	StorageBackend  string
-	DBEnabled       bool
 	DBDriver        string
 	DBDSN           string
 	DBPath          string
@@ -125,6 +123,20 @@ var (
 	FileRotateBytes int64
 	FileMaxBytes    int64
 	FileRetention   time.Duration
+
+	PersistentStorageBackend          string
+	PersistentStorageLocalBaseDir     string
+	PersistentStorageS3Bucket         string
+	PersistentStorageS3Region         string
+	PersistentStorageS3Endpoint       string
+	PersistentStorageS3Prefix         string
+	PersistentStorageS3ForcePathStyle bool
+	PersistentStorageAzureAccountName string
+	PersistentStorageAzureContainer   string
+	PersistentStorageAzureEndpoint    string
+	PersistentStorageAzurePrefix      string
+	PersistentStorageGCSBucket        string
+	PersistentStorageGCSPrefix        string
 
 	TracingEnabled      bool
 	TracingServiceName  string
@@ -182,11 +194,15 @@ func applyAppConfig(cfg appConfigFile) {
 	}
 	SecurityAuditFile = strings.TrimSpace(cfg.Paths.SecurityAuditFile)
 	if SecurityAuditFile == "" {
-		SecurityAuditFile = "logs/coraza/security-audit.ndjson"
+		SecurityAuditFile = "audit/security-audit.ndjson"
 	}
 	SecurityAuditBlobDir = strings.TrimSpace(cfg.Paths.SecurityAuditBlobDir)
 	if SecurityAuditBlobDir == "" {
-		SecurityAuditBlobDir = "logs/coraza/security-audit-blobs"
+		SecurityAuditBlobDir = "audit/security-audit-blobs"
+	}
+	CacheRulesFile = strings.TrimSpace(cfg.Paths.CacheRulesFile)
+	if CacheRulesFile == "" {
+		CacheRulesFile = DefaultCacheRulesFilePath
 	}
 	CacheStoreFile = strings.TrimSpace(cfg.Paths.CacheStoreFile)
 	if CacheStoreFile == "" {
@@ -200,11 +216,12 @@ func applyAppConfig(cfg appConfigFile) {
 	ProxyRollbackMax = parseProxyRollbackHistorySize(strconv.Itoa(cfg.Proxy.RollbackHistorySize))
 	ProxyAuditFile = strings.TrimSpace(cfg.Proxy.AuditFile)
 	ProxyEngineMode = normalizeAppProxyEngineMode(cfg.Proxy.Engine.Mode)
+	WAFEngineMode = normalizeAppWAFEngineMode(cfg.WAF.Engine.Mode)
 	if override := strings.TrimSpace(os.Getenv("WAF_PROXY_AUDIT_FILE")); override != "" {
 		ProxyAuditFile = override
 	}
 	if ProxyAuditFile == "" {
-		ProxyAuditFile = "/app/logs/coraza/proxy-rules-audit.ndjson"
+		ProxyAuditFile = "audit/proxy-rules-audit.ndjson"
 	}
 	SecurityAuditEnabled = cfg.SecurityAudit.Enabled
 	SecurityAuditCaptureMode = strings.ToLower(strings.TrimSpace(cfg.SecurityAudit.CaptureMode))
@@ -298,7 +315,7 @@ func applyAppConfig(cfg appConfigFile) {
 
 	RulesFile = strings.TrimSpace(cfg.Paths.RulesFile)
 	if RulesFile == "" {
-		RulesFile = "rules/tukuyomi.conf"
+		RulesFile = DefaultBaseRuleAssetPath
 	}
 	OverrideRulesDir = strings.TrimSpace(cfg.Paths.OverrideRulesDir)
 	if OverrideRulesDir == "" {
@@ -361,12 +378,7 @@ func applyAppConfig(cfg appConfigFile) {
 	AdminTrustForwardedFor = cfg.Admin.TrustForwardedFor
 	AdminProxyProtocolEnabled = cfg.Admin.ProxyProtocol.Enabled
 	AdminProxyProtocolTrustedCIDRs = append([]string(nil), cfg.Admin.ProxyProtocol.TrustedCIDRs...)
-	APIKeyPrimary = strings.TrimSpace(cfg.Admin.APIKeyPrimary)
-	APIKeySecondary = strings.TrimSpace(cfg.Admin.APIKeySecondary)
 	AdminSessionSecret = strings.TrimSpace(cfg.Admin.SessionSecret)
-	if AdminSessionSecret == "" {
-		AdminSessionSecret = APIKeyPrimary
-	}
 	adminSessionTTLSec := cfg.Admin.SessionTTLSec
 	if adminSessionTTLSec < 300 || adminSessionTTLSec > 604800 {
 		adminSessionTTLSec = 28800
@@ -417,18 +429,28 @@ func applyAppConfig(cfg appConfigFile) {
 	FPTunerApprovalTTL = time.Duration(approvalTTLSec) * time.Second
 	FPTunerAuditFile = strings.TrimSpace(cfg.FPTuner.AuditFile)
 	if FPTunerAuditFile == "" {
-		FPTunerAuditFile = "logs/coraza/fp-tuner-audit.ndjson"
+		FPTunerAuditFile = "audit/fp-tuner-audit.ndjson"
 	}
 
-	StorageBackend = parseStorageBackend(cfg.Storage.Backend, false)
-	DBEnabled = StorageBackend == "db"
 	DBDriver = parseDBDriver(cfg.Storage.DBDriver)
+	if override := strings.TrimSpace(os.Getenv("WAF_STORAGE_DB_DRIVER")); override != "" {
+		DBDriver = parseDBDriver(override)
+	}
 	DBDSN = strings.TrimSpace(cfg.Storage.DBDSN)
+	if override := strings.TrimSpace(os.Getenv("WAF_STORAGE_DB_DSN")); override != "" {
+		DBDSN = override
+	}
 	DBPath = strings.TrimSpace(cfg.Storage.DBPath)
+	if override := strings.TrimSpace(os.Getenv("WAF_STORAGE_DB_PATH")); override != "" {
+		DBPath = override
+	}
 	if DBPath == "" {
-		DBPath = "logs/coraza/tukuyomi.db"
+		DBPath = "db/tukuyomi.db"
 	}
 	DBRetentionDays = cfg.Storage.DBRetentionDays
+	if override := strings.TrimSpace(os.Getenv("WAF_STORAGE_DB_RETENTION_DAYS")); override != "" {
+		DBRetentionDays = parseIntDefault(override, DBRetentionDays)
+	}
 	if DBRetentionDays < 0 {
 		DBRetentionDays = 0
 	}
@@ -436,10 +458,33 @@ func applyAppConfig(cfg appConfigFile) {
 		DBRetentionDays = 3650
 	}
 	dbSyncSec := parseDBSyncIntervalSec(strconv.Itoa(cfg.Storage.DBSyncIntervalSec))
+	if override := strings.TrimSpace(os.Getenv("WAF_STORAGE_DB_SYNC_INTERVAL_SEC")); override != "" {
+		dbSyncSec = parseDBSyncIntervalSec(override)
+	}
 	DBSyncInterval = time.Duration(dbSyncSec) * time.Second
 	FileRotateBytes = cfg.Storage.FileRotateBytes
 	FileMaxBytes = cfg.Storage.FileMaxBytes
 	FileRetention = time.Duration(cfg.Storage.FileRetentionDays) * 24 * time.Hour
+
+	PersistentStorageBackend = strings.ToLower(strings.TrimSpace(cfg.Persistent.Backend))
+	if PersistentStorageBackend == "" {
+		PersistentStorageBackend = DefaultPersistentStorageBackend
+	}
+	PersistentStorageLocalBaseDir = strings.TrimSpace(cfg.Persistent.Local.BaseDir)
+	if PersistentStorageLocalBaseDir == "" {
+		PersistentStorageLocalBaseDir = DefaultPersistentStorageLocalDir
+	}
+	PersistentStorageS3Bucket = strings.TrimSpace(cfg.Persistent.S3.Bucket)
+	PersistentStorageS3Region = strings.TrimSpace(cfg.Persistent.S3.Region)
+	PersistentStorageS3Endpoint = strings.TrimSpace(cfg.Persistent.S3.Endpoint)
+	PersistentStorageS3Prefix = strings.Trim(strings.TrimSpace(cfg.Persistent.S3.Prefix), "/")
+	PersistentStorageS3ForcePathStyle = cfg.Persistent.S3.ForcePathStyle
+	PersistentStorageAzureAccountName = strings.TrimSpace(cfg.Persistent.AzureBlob.AccountName)
+	PersistentStorageAzureContainer = strings.TrimSpace(cfg.Persistent.AzureBlob.Container)
+	PersistentStorageAzureEndpoint = strings.TrimSpace(cfg.Persistent.AzureBlob.Endpoint)
+	PersistentStorageAzurePrefix = strings.Trim(strings.TrimSpace(cfg.Persistent.AzureBlob.Prefix), "/")
+	PersistentStorageGCSBucket = strings.TrimSpace(cfg.Persistent.GCS.Bucket)
+	PersistentStorageGCSPrefix = strings.Trim(strings.TrimSpace(cfg.Persistent.GCS.Prefix), "/")
 
 	AllowInsecureDefaults = cfg.Admin.AllowInsecureDefaults
 
@@ -459,12 +504,6 @@ func enforceSecureDefaults() {
 
 	if APIAuthDisable {
 		log.Fatal("[SECURITY] admin.api_auth_disable is enabled; set admin.allow_insecure_defaults=true only for local testing")
-	}
-	if isWeakAPIKey(APIKeyPrimary) {
-		log.Fatal("[SECURITY] admin.api_key_primary is weak; set a random key with 16+ chars")
-	}
-	if APIKeySecondary != "" && isWeakAPIKey(APIKeySecondary) {
-		log.Fatal("[SECURITY] admin.api_key_secondary is weak; set a random key with 16+ chars or leave it empty")
 	}
 	if isWeakAPIKey(AdminSessionSecret) {
 		log.Fatal("[SECURITY] admin.session_secret is weak; set a random secret with 16+ chars")
@@ -606,28 +645,12 @@ func parseIntDefault(v string, d int) int {
 	return n
 }
 
-func parseStorageBackend(v string, legacyDBEnabled bool) string {
-	s := strings.ToLower(strings.TrimSpace(v))
-	switch s {
-	case "file", "db":
-		return s
-	case "":
-		if legacyDBEnabled {
-			return "db"
-		}
-		return "file"
-	default:
-		log.Printf("[CONFIG][WARN] unsupported storage.backend=%q, fallback=file", s)
-		return "file"
-	}
-}
-
 func parseDBDriver(v string) string {
 	s := strings.ToLower(strings.TrimSpace(v))
 	switch s {
 	case "":
 		return "sqlite"
-	case "sqlite", "mysql":
+	case "sqlite", "mysql", "pgsql":
 		return s
 	default:
 		log.Printf("[CONFIG][WARN] unsupported storage.db_driver=%q, fallback=sqlite", s)

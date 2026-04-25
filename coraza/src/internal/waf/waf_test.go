@@ -48,7 +48,7 @@ func TestComposeInitialRuleFiles_WithCRS(t *testing.T) {
 	mustWrite(t, setup, "")
 	mustWrite(t, filepath.Join(rulesDir, "REQUEST-901-INITIALIZATION.conf"), "")
 
-	got, err := composeInitialRuleFiles("rules/tukuyomi.conf", true, setup, rulesDir, filepath.Join(dir, "crs-disabled.conf"))
+	got, err := composeInitialRuleFiles("tukuyomi.conf", true, setup, rulesDir, filepath.Join(dir, "crs-disabled.conf"))
 	if err != nil {
 		t.Fatalf("composeInitialRuleFiles() error = %v", err)
 	}
@@ -56,7 +56,7 @@ func TestComposeInitialRuleFiles_WithCRS(t *testing.T) {
 	want := []string{
 		setup,
 		filepath.Join(rulesDir, "REQUEST-901-INITIALIZATION.conf"),
-		"rules/tukuyomi.conf",
+		"tukuyomi.conf",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("composeInitialRuleFiles() = %v, want %v", got, want)
@@ -64,18 +64,18 @@ func TestComposeInitialRuleFiles_WithCRS(t *testing.T) {
 }
 
 func TestComposeInitialRuleFiles_WithoutCRS(t *testing.T) {
-	got, err := composeInitialRuleFiles("rules/tukuyomi.conf", false, "", "", filepath.Join(t.TempDir(), "crs-disabled.conf"))
+	got, err := composeInitialRuleFiles("tukuyomi.conf", false, "", "", filepath.Join(t.TempDir(), "crs-disabled.conf"))
 	if err != nil {
 		t.Fatalf("composeInitialRuleFiles() error = %v", err)
 	}
-	want := []string{"rules/tukuyomi.conf"}
+	want := []string{"tukuyomi.conf"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("composeInitialRuleFiles() = %v, want %v", got, want)
 	}
 }
 
 func TestComposeInitialRuleFiles_MissingCRS(t *testing.T) {
-	_, err := composeInitialRuleFiles("rules/tukuyomi.conf", true, "missing-setup.conf", "missing-dir", filepath.Join(t.TempDir(), "crs-disabled.conf"))
+	_, err := composeInitialRuleFiles("tukuyomi.conf", true, "missing-setup.conf", "missing-dir", filepath.Join(t.TempDir(), "crs-disabled.conf"))
 	if err == nil {
 		t.Fatal("expected error when CRS is enabled and files are missing")
 	}
@@ -94,7 +94,7 @@ func TestComposeInitialRuleFiles_WithCRSDisabledFile(t *testing.T) {
 	mustWrite(t, filepath.Join(rulesDir, "REQUEST-920-PROTOCOL-ENFORCEMENT.conf"), "")
 	mustWrite(t, disabledFile, "REQUEST-920-PROTOCOL-ENFORCEMENT.conf\n")
 
-	got, err := composeInitialRuleFiles("rules/tukuyomi.conf", true, setup, rulesDir, disabledFile)
+	got, err := composeInitialRuleFiles("tukuyomi.conf", true, setup, rulesDir, disabledFile)
 	if err != nil {
 		t.Fatalf("composeInitialRuleFiles() error = %v", err)
 	}
@@ -102,7 +102,7 @@ func TestComposeInitialRuleFiles_WithCRSDisabledFile(t *testing.T) {
 	want := []string{
 		setup,
 		filepath.Join(rulesDir, "REQUEST-901-INITIALIZATION.conf"),
-		"rules/tukuyomi.conf",
+		"tukuyomi.conf",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("composeInitialRuleFiles() = %v, want %v", got, want)

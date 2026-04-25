@@ -1,0 +1,3 @@
+ALTER TABLE site_tls ADD COLUMN acme_environment TEXT NOT NULL DEFAULT '';
+ALTER TABLE site_tls ADD COLUMN acme_email TEXT NOT NULL DEFAULT '';
+

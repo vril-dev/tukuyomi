@@ -9,63 +9,45 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 API_BASE="${API_BASE:-http://localhost/tukuyomi-api}"
-API_KEY="${API_KEY:-}"
-TARGET_PATH="${TARGET_PATH:-rules/tukuyomi.conf}"
+ADMIN_BEARER_TOKEN="${ADMIN_BEARER_TOKEN:-}"
+WAF_ADMIN_USERNAME="${WAF_ADMIN_USERNAME:-${TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME:-admin}}"
+WAF_ADMIN_PASSWORD="${WAF_ADMIN_PASSWORD:-${TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD:-dev-only-change-this-password-please}}"
+TARGET_PATH="${TARGET_PATH:-tukuyomi.conf}"
 SIMULATE="${SIMULATE:-1}"
 
 REQ_FILE="$(mktemp)"
 RESP_FILE="$(mktemp)"
+LOGIN_RESP_FILE="$(mktemp)"
+COOKIE_JAR="$(mktemp)"
+CSRF_TOKEN=""
 cleanup() {
-  rm -f "$REQ_FILE" "$RESP_FILE"
+  rm -f "$REQ_FILE" "$RESP_FILE" "$LOGIN_RESP_FILE" "$COOKIE_JAR"
 }
 trap cleanup EXIT
 
-read_env_value() {
-  local env_file="$1"
-  local key="$2"
-  if [[ ! -f "${env_file}" ]]; then
-    return 0
+auth_args=()
+if [[ -n "${ADMIN_BEARER_TOKEN}" ]]; then
+  auth_args=(-H "Authorization: Bearer ${ADMIN_BEARER_TOKEN}")
+else
+  login_payload="$(jq -n --arg username "${WAF_ADMIN_USERNAME}" --arg password "${WAF_ADMIN_PASSWORD}" '{username: $username, password: $password}')"
+  login_code="$(curl -sS -o "${LOGIN_RESP_FILE}" -w "%{http_code}" \
+    -c "${COOKIE_JAR}" -b "${COOKIE_JAR}" \
+    -H "Content-Type: application/json" \
+    -X POST --data "${login_payload}" \
+    "${API_BASE}/auth/login")"
+  if [[ "${login_code}" != "200" ]]; then
+    echo "[fp-tuner-mock] admin login failed: ${login_code}" >&2
+    cat "${LOGIN_RESP_FILE}" >&2 || true
+    exit 1
   fi
-  awk -F= -v key="${key}" '
-    $0 ~ "^[[:space:]]*" key "=" {
-      val = $0
-      sub("^[[:space:]]*" key "=", "", val)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
-      if (val ~ /^".*"$/ || val ~ /^'\''.*'\''$/) {
-        val = substr(val, 2, length(val)-2)
-      }
-      print val
-      exit
-    }
-  ' "${env_file}"
-}
-
-resolve_host_config_path() {
-  local container_path="$1"
-  local normalized="${container_path#./}"
-  if [[ "${normalized}" == /* ]]; then
-    printf '%s\n' "${normalized}"
-    return 0
-  fi
-  if [[ "${normalized}" == data/* ]]; then
-    printf '%s/%s\n' "${ROOT_DIR}" "${normalized}"
-    return 0
-  fi
-  printf '%s/data/%s\n' "${ROOT_DIR}" "${normalized}"
-}
-
-if [[ -z "${API_KEY}" ]]; then
-  config_container_path="${WAF_CONFIG_FILE:-}"
-  if [[ -z "${config_container_path}" ]]; then
-    config_container_path="$(read_env_value "${ROOT_DIR}/.env" "WAF_CONFIG_FILE")"
-  fi
-  if [[ -z "${config_container_path}" ]]; then
-    config_container_path="conf/config.json"
-  fi
-  config_host_path="$(resolve_host_config_path "${config_container_path}")"
-  if [[ -f "${config_host_path}" ]]; then
-    API_KEY="$(jq -r '.admin.api_key_primary // empty' "${config_host_path}")"
-  fi
+  CSRF_TOKEN="$(
+    awk 'NF >= 7 && $6 == "tukuyomi_admin_csrf" { token = $7 } END { if (token != "") print token }' "${COOKIE_JAR}"
+  )"
+  [[ -n "${CSRF_TOKEN}" ]] || {
+    echo "[fp-tuner-mock] admin login did not issue csrf cookie" >&2
+    exit 1
+  }
+  auth_args=(-b "${COOKIE_JAR}" -c "${COOKIE_JAR}" -H "X-CSRF-Token: ${CSRF_TOKEN}")
 fi
 
 cat >"$REQ_FILE" <<JSON
@@ -84,12 +66,9 @@ cat >"$REQ_FILE" <<JSON
 JSON
 
 headers=(-H "Content-Type: application/json")
-if [[ -n "$API_KEY" ]]; then
-  headers+=(-H "X-API-Key: $API_KEY")
-fi
 
 echo "==> Propose"
-curl -fsS "${headers[@]}" \
+curl -fsS "${auth_args[@]}" "${headers[@]}" \
   -X POST "$API_BASE/fp-tuner/propose" \
   --data @"$REQ_FILE" | tee "$RESP_FILE"
 
@@ -102,7 +81,7 @@ apply_payload="$(jq -c --argjson simulate "$([[ "$SIMULATE" == "1" ]] && echo tr
     simulate: $simulate,
     approval_token: (.approval.token // "")
   }' "$RESP_FILE")"
-curl -fsS "${headers[@]}" \
+curl -fsS "${auth_args[@]}" "${headers[@]}" \
   -X POST "$API_BASE/fp-tuner/apply" \
   --data "$apply_payload"
 echo

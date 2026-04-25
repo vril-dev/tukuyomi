@@ -19,11 +19,13 @@ services:
 
   proxy:
     image: debian:bookworm-slim
-    working_dir: /bundle
+    working_dir: /bundle/testenv/release-binary/runtime
     user: "${PUID:-1000}:${GUID:-1000}"
-    command: ["./tukuyomi"]
+    command: ["../../../tukuyomi"]
     environment:
-      - WAF_CONFIG_FILE=/bundle/testenv/release-binary/proxy-config.json
+      - WAF_CONFIG_FILE=conf/config.json
+      - TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME=${TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME:-admin}
+      - TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD=${TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD:-release-smoke-admin-password}
     volumes:
       - ../..:/bundle
     ports:

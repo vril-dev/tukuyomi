@@ -2,164 +2,265 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PREVIEW_CONFIG="$ROOT_DIR/data/conf/config.ui-preview.json"
-PREVIEW_PROXY="$ROOT_DIR/data/conf/proxy.ui-preview.json"
-PREVIEW_SCHEDULED_TASKS="$ROOT_DIR/data/conf/scheduled-tasks.ui-preview.json"
-PREVIEW_INVENTORY="$ROOT_DIR/data/php-fpm/inventory.ui-preview.json"
-PREVIEW_VHOSTS="$ROOT_DIR/data/php-fpm/vhosts.ui-preview.json"
-PREVIEW_OVERRIDE="$ROOT_DIR/data/conf/docker-compose.ui-preview.override.yml"
-PREVIEW_CONFIG_BASENAME="$(basename "$PREVIEW_CONFIG")"
+PREVIEW_OVERRIDE="$ROOT_DIR/.tmp/ui-preview/docker-compose.override.yml"
+PREVIEW_SOURCE_CONFIG="${UI_PREVIEW_SOURCE_CONFIG:-conf/config.json}"
+PREVIEW_BOOTSTRAP_CONFIG="${UI_PREVIEW_CONFIG:-conf/config.ui-preview.json}"
+LEGACY_PREVIEW_SQLITE_DB_PATH="logs/coraza/tukuyomi-ui-preview.db"
 PUID_VALUE="${PUID:-$(id -u)}"
 GUID_VALUE="${GUID:-$(id -g)}"
 UI_PREVIEW_PERSIST_VALUE="${UI_PREVIEW_PERSIST:-0}"
+UI_PREVIEW_PUBLIC_ADDR_VALUE="${UI_PREVIEW_PUBLIC_ADDR:-}"
+UI_PREVIEW_ADMIN_ADDR_VALUE="${UI_PREVIEW_ADMIN_ADDR:-}"
 
-write_preview_proxy() {
-  cat >"$PREVIEW_PROXY" <<'EOF'
-{}
-EOF
+preview_config_host_path() {
+  local config_ref="$1"
+  local label="$2"
+  python3 - "$ROOT_DIR" "$config_ref" "$label" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+ref = str(sys.argv[2]).strip()
+label = str(sys.argv[3]).strip()
+if not ref:
+    raise SystemExit(f"{label} is empty")
+path = pathlib.Path(ref)
+if path.is_absolute():
+    raise SystemExit(f"{label} must be relative to data/: {ref}")
+parts = pathlib.PurePosixPath(ref).parts
+if any(part in ("", ".", "..") for part in parts):
+    raise SystemExit(f"{label} contains unsafe path segment: {ref}")
+target = (root / "data" / pathlib.Path(*parts)).resolve(strict=False)
+data_root = (root / "data").resolve(strict=False)
+if target != data_root and data_root not in target.parents:
+    raise SystemExit(f"{label} escapes data/: {ref}")
+print(target)
+PY
 }
 
-write_preview_scheduled_tasks() {
-  cat >"$PREVIEW_SCHEDULED_TASKS" <<'EOF'
-{
-  "tasks": []
-}
-EOF
+write_preview_bootstrap_config() {
+  local source_path=""
+  local target_path=""
+  source_path="$(preview_config_host_path "$PREVIEW_SOURCE_CONFIG" "preview source config")"
+  target_path="$(preview_config_host_path "$PREVIEW_BOOTSTRAP_CONFIG" "preview bootstrap config")"
+  if [[ "$source_path" == "$target_path" ]]; then
+    echo "[ui-preview][ERROR] preview bootstrap config must differ from preview source config" >&2
+    return 1
+  fi
+  python3 - "$source_path" "$target_path" <<'PY'
+import json
+import os
+import pathlib
+import secrets
+import sys
+
+source = pathlib.Path(sys.argv[1])
+target = pathlib.Path(sys.argv[2])
+
+base = target if target.exists() else source
+with base.open("r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+if not isinstance(payload, dict):
+    raise SystemExit("preview config root must be a JSON object")
+
+admin = payload.get("admin")
+if not isinstance(admin, dict):
+    admin = {}
+    payload["admin"] = admin
+
+env_secret = os.environ.get("UI_PREVIEW_SESSION_SECRET", "").strip()
+if env_secret and len(env_secret) < 16:
+    raise SystemExit("UI_PREVIEW_SESSION_SECRET must be 16+ chars")
+
+existing_secret = str(admin.get("session_secret") or "").strip()
+if env_secret:
+    session_secret = env_secret
+elif len(existing_secret) >= 16:
+    session_secret = existing_secret
+else:
+    session_secret = secrets.token_urlsafe(48)
+
+admin["session_secret"] = session_secret
+admin["api_auth_disable"] = False
+admin["allow_insecure_defaults"] = False
+
+target.parent.mkdir(parents=True, exist_ok=True)
+tmp = target.with_name(target.name + ".tmp")
+with tmp.open("w", encoding="utf-8") as fh:
+    json.dump(payload, fh, indent=2, ensure_ascii=False)
+    fh.write("\n")
+os.replace(tmp, target)
+PY
 }
 
-write_preview_inventory() {
-  cat >"$PREVIEW_INVENTORY" <<'EOF'
-{}
-EOF
+remove_preview_bootstrap_config() {
+  local source_path=""
+  local target_path=""
+  source_path="$(preview_config_host_path "$PREVIEW_SOURCE_CONFIG" "preview source config")"
+  target_path="$(preview_config_host_path "$PREVIEW_BOOTSTRAP_CONFIG" "preview bootstrap config")"
+  if [[ "$source_path" != "$target_path" ]]; then
+    rm -f "$target_path"
+  fi
 }
 
-write_preview_vhosts() {
-  cat >"$PREVIEW_VHOSTS" <<'EOF'
-{
-  "vhosts": []
-}
-EOF
-}
-
-write_preview_config() {
-  mkdir -p "$(dirname "$PREVIEW_CONFIG")" "$(dirname "$PREVIEW_PROXY")" "$(dirname "$PREVIEW_INVENTORY")"
-  python3 - "$ROOT_DIR/data/conf/config.json" "$PREVIEW_CONFIG" <<'PY'
+preview_db_relative_path() {
+  local bootstrap_path=""
+  local source_path=""
+  local config_path=""
+  bootstrap_path="$(preview_config_host_path "$PREVIEW_BOOTSTRAP_CONFIG" "preview bootstrap config")"
+  source_path="$(preview_config_host_path "$PREVIEW_SOURCE_CONFIG" "preview source config")"
+  if [[ -f "$bootstrap_path" ]]; then
+    config_path="$bootstrap_path"
+  elif [[ -f "$source_path" ]]; then
+    config_path="$source_path"
+  else
+    echo "[ui-preview][ERROR] preview config not found" >&2
+    return 1
+  fi
+  python3 - "$config_path" <<'PY'
 import json
 import pathlib
 import sys
 
-src = pathlib.Path(sys.argv[1])
-dst = pathlib.Path(sys.argv[2])
-cfg = json.loads(src.read_text(encoding="utf-8"))
-paths = cfg.setdefault("paths", {})
-paths["proxy_config_file"] = "conf/proxy.ui-preview.json"
-paths["scheduled_task_config_file"] = "conf/scheduled-tasks.ui-preview.json"
-paths["php_runtime_inventory_file"] = "data/php-fpm/inventory.ui-preview.json"
-paths["vhost_config_file"] = "data/php-fpm/vhosts.ui-preview.json"
-dst.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+config_path = pathlib.Path(sys.argv[1])
+with config_path.open("r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+storage = payload.get("storage")
+db_path = ""
+if isinstance(storage, dict):
+    raw = storage.get("db_path")
+    if raw is not None:
+        db_path = str(raw).strip()
+if not db_path:
+    db_path = "db/tukuyomi.db"
+if db_path.startswith("/"):
+    raise SystemExit(f"preview storage.db_path must be relative: {db_path}")
+parts = pathlib.PurePosixPath(db_path).parts
+if any(part in ("", ".", "..") for part in parts):
+    raise SystemExit(f"preview storage.db_path contains unsafe path segment: {db_path}")
+if len(parts) == 0:
+    raise SystemExit("preview storage.db_path is empty")
+parent = pathlib.PurePosixPath(*parts[:-1]) if len(parts) > 1 else pathlib.PurePosixPath(".")
+preview_path = pathlib.PurePosixPath(parent, "tukuyomi-ui-preview.db")
+if str(preview_path) in ("", "."):
+    raise SystemExit(f"preview db path is invalid: {preview_path}")
+print(preview_path.as_posix())
 PY
 }
 
-reset_preview_files() {
-  write_preview_proxy
-  write_preview_scheduled_tasks
-  write_preview_inventory
-  write_preview_vhosts
-  write_preview_config
+preview_db_container_path() {
+  local preview_db_rel=""
+  preview_db_rel="$(preview_db_relative_path)"
+  printf 'data/%s\n' "$preview_db_rel"
 }
 
-ensure_preview_files() {
-  mkdir -p "$(dirname "$PREVIEW_CONFIG")" "$(dirname "$PREVIEW_PROXY")" "$(dirname "$PREVIEW_INVENTORY")"
-  if [[ "$UI_PREVIEW_PERSIST_VALUE" == "1" ]]; then
-    [[ -f "$PREVIEW_PROXY" ]] || write_preview_proxy
-    [[ -f "$PREVIEW_SCHEDULED_TASKS" ]] || write_preview_scheduled_tasks
-    [[ -f "$PREVIEW_INVENTORY" ]] || write_preview_inventory
-    [[ -f "$PREVIEW_VHOSTS" ]] || write_preview_vhosts
-    [[ -f "$PREVIEW_CONFIG" ]] || write_preview_config
-    return
+cleanup_legacy_preview_artifacts() {
+  rm -f \
+    "$ROOT_DIR/data/conf/proxy.ui-preview.json" \
+    "$ROOT_DIR/data/conf/scheduled-tasks.ui-preview.json" \
+    "$ROOT_DIR/data/php-fpm/inventory.ui-preview.json" \
+    "$ROOT_DIR/data/php-fpm/vhosts.ui-preview.json" \
+    "$ROOT_DIR/data/php-fpm/vhosts.ui-preview.json".*.bak
+  local preview_db_rel=""
+  preview_db_rel="$(preview_db_relative_path)"
+  if [[ "$preview_db_rel" != "$LEGACY_PREVIEW_SQLITE_DB_PATH" ]]; then
+    rm -f \
+      "$ROOT_DIR/data/$LEGACY_PREVIEW_SQLITE_DB_PATH" \
+      "$ROOT_DIR/data/$LEGACY_PREVIEW_SQLITE_DB_PATH-wal" \
+      "$ROOT_DIR/data/$LEGACY_PREVIEW_SQLITE_DB_PATH-shm"
   fi
-  reset_preview_files
+}
+
+preview_db_host_paths() {
+  local preview_db_rel=""
+  preview_db_rel="$(preview_db_relative_path)"
+  python3 - "$ROOT_DIR" "$preview_db_rel" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+db_path = str(sys.argv[2]).strip()
+if not db_path:
+    raise SystemExit("preview storage.db_path is empty")
+if db_path.startswith("/"):
+    raise SystemExit(f"preview storage.db_path must be relative: {db_path}")
+parts = pathlib.PurePosixPath(db_path).parts
+if any(part in ("", ".", "..") for part in parts):
+    raise SystemExit(f"preview storage.db_path contains unsafe path segment: {db_path}")
+target = (root / "data" / pathlib.Path(*parts)).resolve(strict=False)
+allowed = (root / "data").resolve(strict=False)
+if target != allowed and allowed not in target.parents:
+    raise SystemExit(f"preview storage.db_path escapes data/: {db_path}")
+print(target)
+print(str(target) + "-wal")
+print(str(target) + "-shm")
+PY
+}
+
+reset_preview_database() {
+  local db_paths=()
+  mapfile -t db_paths < <(preview_db_host_paths)
+  if [[ "${#db_paths[@]}" -eq 0 ]]; then
+    echo "[ui-preview][ERROR] failed to resolve preview database path" >&2
+    return 1
+  fi
+  mkdir -p "$(dirname "${db_paths[0]}")"
+  rm -f "${db_paths[@]}"
+}
+
+preview_database_exists() {
+  local db_paths=()
+  mapfile -t db_paths < <(preview_db_host_paths)
+  [[ "${#db_paths[@]}" -gt 0 && -f "${db_paths[0]}" ]]
+}
+
+ensure_preview_runtime_dirs() {
+  mkdir -p "$ROOT_DIR/data/persistent" "$ROOT_DIR/data/cache/response" "$ROOT_DIR/data/tmp"
+}
+
+run_preview_command() {
+  local command="$1"
+  shift || true
+  local bin="$ROOT_DIR/bin/tukuyomi"
+  local preview_db_rel=""
+  if [[ ! -x "$bin" ]]; then
+    echo "[ui-preview][ERROR] missing executable: $bin" >&2
+    return 1
+  fi
+  preview_db_rel="$(preview_db_relative_path)"
+  (
+    cd "$ROOT_DIR/data"
+    WAF_CONFIG_FILE="$PREVIEW_BOOTSTRAP_CONFIG" \
+    WAF_STORAGE_DB_DRIVER="sqlite" \
+    WAF_STORAGE_DB_DSN="" \
+    WAF_STORAGE_DB_PATH="$preview_db_rel" \
+    UI_PREVIEW_PUBLIC_ADDR="$UI_PREVIEW_PUBLIC_ADDR_VALUE" \
+    UI_PREVIEW_ADMIN_ADDR="$UI_PREVIEW_ADMIN_ADDR_VALUE" \
+      "$bin" "$command" "$@"
+  )
+}
+
+seed_preview_database() {
+  local stage_root=""
+  ensure_preview_runtime_dirs
+  stage_root="$(mktemp -d "$ROOT_DIR/data/tmp/preview-crs-import.XXXXXX")"
+  trap 'rm -rf "$stage_root"' RETURN
+  "$ROOT_DIR/scripts/stage_waf_rule_assets.sh" "$stage_root"
+  run_preview_command db-migrate
+  WAF_RULE_ASSET_FS_ROOT="$stage_root" run_preview_command db-import-waf-rule-assets
+  run_preview_command db-import-preview
+}
+
+upgrade_preview_database() {
+  run_preview_command db-migrate
 }
 
 load_preview_topology() {
   local assignments
   assignments="$(
-    python3 - "$PREVIEW_CONFIG" <<'PY'
-import ipaddress
-import json
-import pathlib
-import sys
-
-cfg = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-
-def parse_listen(value: str):
-    value = str(value or "").strip()
-    if not value:
-        return None
-    host = ""
-    port = ""
-    if value.startswith(":"):
-        port = value[1:]
-    elif value.startswith("["):
-        idx = value.find("]")
-        if idx == -1 or idx + 1 >= len(value) or value[idx + 1] != ":":
-            raise ValueError(f"unsupported listener address: {value}")
-        host = value[1:idx]
-        port = value[idx + 2:]
-    else:
-        if ":" not in value:
-            raise ValueError(f"listener address must include host:port or :port: {value}")
-        host, port = value.rsplit(":", 1)
-    if not port.isdigit():
-        raise ValueError(f"listener address port must be numeric: {value}")
-    port_num = int(port)
-    if port_num < 1 or port_num > 65535:
-        raise ValueError(f"listener address port must be between 1 and 65535: {value}")
-    host = host.strip()
-    if host:
-        normalized = host.lower()
-        if normalized == "localhost":
-            raise ValueError(f"preview listener {value} uses loopback host {host}; use :{port_num} or 0.0.0.0:{port_num} instead")
-        try:
-            ip = ipaddress.ip_address(host)
-        except ValueError:
-            ip = None
-        if ip is not None and ip.is_loopback:
-            raise ValueError(f"preview listener {value} uses loopback host {host}; use :{port_num} or 0.0.0.0:{port_num} instead")
-    return {"host": host, "port": port_num, "raw": value}
-
-server = parse_listen(cfg.get("server", {}).get("listen_addr", ""))
-if not server:
-    raise ValueError("preview config server.listen_addr is required")
-admin = parse_listen(cfg.get("admin", {}).get("listen_addr", ""))
-api_base_path = str(cfg.get("admin", {}).get("api_base_path", "/tukuyomi-api")).strip() or "/tukuyomi-api"
-ui_base_path = str(cfg.get("admin", {}).get("ui_base_path", "/tukuyomi-ui")).strip() or "/tukuyomi-ui"
-split = admin is not None
-health = admin["port"] if split else server["port"]
-
-print(f"WAF_LISTEN_PORT={server['port']}")
-print(f"CORAZA_PORT={server['port']}")
-print(f"WAF_HEALTHCHECK_PORT={health}")
-print(f"UI_PREVIEW_PUBLIC_PORT={server['port']}")
-print(f"UI_PREVIEW_PUBLIC_URL=http://127.0.0.1:{server['port']}")
-print(f"UI_PREVIEW_SPLIT_ADMIN={'1' if split else '0'}")
-print(f"UI_PREVIEW_ADMIN_API_PATH={api_base_path}")
-print(f"UI_PREVIEW_ADMIN_UI_PATH={ui_base_path}")
-if split:
-    print(f"WAF_ADMIN_LISTEN_PORT={admin['port']}")
-    print(f"CORAZA_ADMIN_PORT={admin['port']}")
-    print(f"UI_PREVIEW_ADMIN_PORT={admin['port']}")
-    print(f"UI_PREVIEW_ADMIN_UI_URL=http://127.0.0.1:{admin['port']}{ui_base_path}")
-    print(f"UI_PREVIEW_ADMIN_API_URL=http://127.0.0.1:{admin['port']}{api_base_path}")
-else:
-    print("WAF_ADMIN_LISTEN_PORT=")
-    print("CORAZA_ADMIN_PORT=")
-    print("UI_PREVIEW_ADMIN_PORT=")
-    print(f"UI_PREVIEW_ADMIN_UI_URL=http://127.0.0.1:{server['port']}{ui_base_path}")
-    print(f"UI_PREVIEW_ADMIN_API_URL=http://127.0.0.1:{server['port']}{api_base_path}")
-PY
+    run_preview_command preview-print-topology
   )" || {
-    echo "[ui-preview][ERROR] failed to derive preview topology from ${PREVIEW_CONFIG}" >&2
+    echo "[ui-preview][ERROR] failed to derive preview topology" >&2
     return 1
   }
   eval "$assignments"
@@ -170,6 +271,7 @@ write_preview_override() {
   if [[ "${UI_PREVIEW_SPLIT_ADMIN:-0}" != "1" ]]; then
     return
   fi
+  mkdir -p "$(dirname "$PREVIEW_OVERRIDE")"
   cat >"$PREVIEW_OVERRIDE" <<EOF
 services:
   coraza:
@@ -181,22 +283,32 @@ EOF
 run_preview_compose() {
   local action="$1"
   shift || true
+  local preview_db_rel=""
+  local preview_db_container=""
+  preview_db_rel="$(preview_db_relative_path)"
+  preview_db_container="$(preview_db_container_path)"
   if [[ -f "$PREVIEW_OVERRIDE" ]]; then
     PUID="$PUID_VALUE" GUID="$GUID_VALUE" \
-    WAF_CONFIG_FILE="conf/$PREVIEW_CONFIG_BASENAME" \
-    WAF_LISTEN_PORT="$WAF_LISTEN_PORT" \
-    WAF_HEALTHCHECK_PORT="$WAF_HEALTHCHECK_PORT" \
-    CORAZA_PORT="$CORAZA_PORT" \
+    WAF_CONFIG_FILE="$PREVIEW_BOOTSTRAP_CONFIG" \
+    WAF_STORAGE_DB_DRIVER="sqlite" \
+    WAF_STORAGE_DB_DSN="" \
+    WAF_STORAGE_DB_PATH="$preview_db_container" \
+    WAF_LISTEN_PORT="${WAF_LISTEN_PORT:-9090}" \
+    WAF_HEALTHCHECK_PORT="${WAF_HEALTHCHECK_PORT:-9090}" \
+    CORAZA_PORT="${CORAZA_PORT:-9090}" \
     WAF_ADMIN_LISTEN_PORT="${WAF_ADMIN_LISTEN_PORT:-}" \
     CORAZA_ADMIN_PORT="${CORAZA_ADMIN_PORT:-}" \
       docker compose -f "$ROOT_DIR/docker-compose.yml" -f "$PREVIEW_OVERRIDE" --profile scheduled-tasks "$action" "$@"
     return
   fi
   PUID="$PUID_VALUE" GUID="$GUID_VALUE" \
-  WAF_CONFIG_FILE="conf/$PREVIEW_CONFIG_BASENAME" \
-  WAF_LISTEN_PORT="$WAF_LISTEN_PORT" \
-  WAF_HEALTHCHECK_PORT="$WAF_HEALTHCHECK_PORT" \
-  CORAZA_PORT="$CORAZA_PORT" \
+  WAF_CONFIG_FILE="$PREVIEW_BOOTSTRAP_CONFIG" \
+  WAF_STORAGE_DB_DRIVER="sqlite" \
+  WAF_STORAGE_DB_DSN="" \
+  WAF_STORAGE_DB_PATH="$preview_db_container" \
+  WAF_LISTEN_PORT="${WAF_LISTEN_PORT:-9090}" \
+  WAF_HEALTHCHECK_PORT="${WAF_HEALTHCHECK_PORT:-9090}" \
+  CORAZA_PORT="${CORAZA_PORT:-9090}" \
     docker compose --profile scheduled-tasks "$action" "$@"
 }
 
@@ -204,23 +316,34 @@ cd "$ROOT_DIR"
 
 case "${1:-}" in
   up)
-    ensure_preview_files
+    write_preview_bootstrap_config
+    cleanup_legacy_preview_artifacts
+    if [[ "$UI_PREVIEW_PERSIST_VALUE" != "1" ]]; then
+      run_preview_compose down --remove-orphans >/dev/null 2>&1 || true
+      reset_preview_database
+      seed_preview_database
+    elif preview_database_exists; then
+      upgrade_preview_database
+    else
+      seed_preview_database
+    fi
     load_preview_topology
     write_preview_override
+    ensure_preview_runtime_dirs
     run_preview_compose up -d --build coraza scheduled-task-runner
     echo "[ui-preview] public: ${UI_PREVIEW_PUBLIC_URL}"
     echo "[ui-preview] admin ui: ${UI_PREVIEW_ADMIN_UI_URL}"
     echo "[ui-preview] admin api: ${UI_PREVIEW_ADMIN_API_URL}"
     echo "[ui-preview] scheduled-task runner is started by ui-preview-up"
     if [[ "$UI_PREVIEW_PERSIST_VALUE" == "1" ]]; then
-      echo "[ui-preview] UI_PREVIEW_PERSIST=1 keeps preview config/state files across down/up"
+      echo "[ui-preview] UI_PREVIEW_PERSIST=1 keeps preview DB state across down/up"
     else
-      echo "[ui-preview] scheduled-task edits stay in conf/scheduled-tasks.ui-preview.json"
-      echo "[ui-preview] preview scheduled tasks reset to tasks: [] on each ui-preview-up"
+      echo "[ui-preview] preview SQLite DB resets on each ui-preview-up"
     fi
     ;;
   down)
-    if [[ -f "$PREVIEW_CONFIG" ]]; then
+    cleanup_legacy_preview_artifacts
+    if preview_database_exists; then
       if load_preview_topology; then
         :
       else
@@ -237,8 +360,10 @@ case "${1:-}" in
     fi
     run_preview_compose down --remove-orphans >/dev/null 2>&1 || true
     rm -f "$PREVIEW_OVERRIDE"
+    cleanup_legacy_preview_artifacts
     if [[ "$UI_PREVIEW_PERSIST_VALUE" != "1" ]]; then
-      rm -f "$PREVIEW_CONFIG" "$PREVIEW_PROXY" "$PREVIEW_SCHEDULED_TASKS" "$PREVIEW_INVENTORY" "$PREVIEW_VHOSTS"
+      reset_preview_database || true
+      remove_preview_bootstrap_config
     fi
     echo "[ui-preview] stopped"
     ;;

@@ -5,8 +5,9 @@ lived inline in `README.md`.
 
 ## Runtime Configuration
 
-Use `.env` only for Docker/runtime wiring. Application behavior belongs in
-`data/conf/config.json`.
+Use `.env` only for Docker/runtime wiring. `data/conf/config.json` is the DB
+connection bootstrap; after DB opens, application, proxy, runtime, and policy
+behavior are loaded from normalized DB tables.
 
 ### Docker / Local MySQL (Optional)
 
@@ -19,7 +20,11 @@ Use `.env` only for Docker/runtime wiring. Application behavior belongs in
 | `MYSQL_ROOT_PASSWORD` | `tukuyomi-root` | Root password for the local MySQL container. |
 | `MYSQL_TZ` | `UTC` | Container timezone. |
 
-### `data/conf/config.json`
+### `data/conf/config.json` / DB `app_config`
+
+`data/conf/config.json` must provide `storage.db_driver`, `storage.db_path`, and
+`storage.db_dsn` before DB can be opened. The rest of the product-wide config is
+stored in DB `app_config` after bootstrap/import.
 
 Main blocks:
 
@@ -29,9 +34,9 @@ Main blocks:
 | `runtime` | Go runtime caps such as `gomaxprocs` and `memory_limit_mb` |
 | `admin` | UI/API paths, session behavior, external exposure policy, trusted CIDRs, admin rate limit |
 | `paths` | File locations for rules, bypass, country, rate, bot, semantic, CRS, sites, scheduled tasks, and artifacts |
-| `proxy` | Rollback history limits and route-runtime behavior |
+| `proxy` | Rollback history limits and process-wide proxy engine behavior |
 | `crs` | CRS enable flag |
-| `storage` | `file` / `db` backend selection, DB connection, retention, sync interval |
+| `storage` | DB-only runtime store (`sqlite`, `mysql`, `pgsql`), retention, sync interval, log file rotation limits |
 | `fp_tuner` | External provider endpoint, approval, timeout, and audit controls |
 | `request_metadata` | Metadata resolution source such as `header` or `mmdb` for country resolution |
 | `observability` | OTLP tracing configuration |
@@ -104,8 +109,52 @@ Notes:
 - `server.http3.enabled=true` requires built-in TLS termination.
 - HTTP/3 uses the same numeric port as `server.listen_addr`, but over UDP.
 - `server.tls.redirect_http=true` starts a second plain HTTP listener that redirects to HTTPS.
-- ACME can be enabled with `server.tls.acme.*`.
-- `paths.site_config_file` defaults to `conf/sites.json`.
+- ACME auto TLS is selected per site with `tls.mode=acme`; ACME account keys, challenge tokens, and certificate cache are stored below the `acme/` namespace in `persistent_storage`.
+- ACME HTTP-01 requires port 80 to reach `server.tls.http_redirect_addr`. Select Let's Encrypt `staging` or `production` per site through the ACME environment.
+- `paths.site_config_file` defaults to `conf/sites.json`; in DB-backed runtime this is the empty-DB seed/export path, not the live source of truth.
+
+### Persistent File Storage
+
+`persistent_storage` places runtime artifacts that must remain durable as bytes
+instead of DB rows, starting with the ACME cache.
+
+```json
+{
+  "persistent_storage": {
+    "backend": "local",
+    "local": {
+      "base_dir": "data/persistent"
+    }
+  }
+}
+```
+
+- `local` is for single-node installs or an operator-provided shared mount.
+- S3 config contains only non-secret placement fields such as bucket, region, endpoint, and prefix. Use `force_path_style=true` for S3-compatible endpoints such as MinIO.
+- API keys, secret keys, client secrets, tokens, and connection strings are not stored in JSON or DB app config. AWS/Azure/GCP credentials must come from env, managed identity, Workload Identity, ADC, or equivalent platform mechanisms.
+- The S3 backend reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`, and `AWS_REGION` / `AWS_DEFAULT_REGION` from runtime env.
+- Azure Blob Storage and Google Cloud Storage still fail closed until provider adapters are implemented. They do not silently fall back to local disk.
+
+S3-compatible backend example:
+
+```json
+{
+  "persistent_storage": {
+    "backend": "s3",
+    "s3": {
+      "bucket": "tukuyomi-runtime",
+      "region": "us-east-1",
+      "endpoint": "http://minio:9000",
+      "prefix": "prod",
+      "force_path_style": true
+    }
+  }
+}
+```
+
+The MinIO integration test is skipped in normal regression. To run it, create a
+bucket and set `TUKUYOMI_MINIO_S3_ENDPOINT`, `TUKUYOMI_MINIO_S3_BUCKET`,
+`AWS_ACCESS_KEY_ID`, and `AWS_SECRET_ACCESS_KEY`.
 
 TLS certificate selection happens during the TLS handshake, before host/path
 routing runs.
@@ -113,8 +162,8 @@ routing runs.
 ### Admin Surface Basics
 
 - Keep a dedicated `admin.session_secret` server-side.
-- CLI and automation use `admin.api_key_primary` / `admin.api_key_secondary`.
-- The embedded admin UI exchanges API key access for a signed session cookie.
+- CLI and automation use per-user personal access tokens.
+- The embedded admin UI uses username/password login and DB-backed session cookies.
 - `Settings` is `Save config only`: listener/runtime/storage changes need restart.
 
 ### Host Network Hardening (L3/L4 Basics)
@@ -156,24 +205,26 @@ Main screens:
 | `/status` | Runtime status, config snapshot, listener topology, health/runtime disclosure |
 | `/logs` | WAF/security logs and detail lookups |
 | `/rules` / `/rule-sets` | Base rule editing and CRS toggles |
-| `/bypass` / `/country-block` / `/rate-limit` | File-backed policy editing |
+| `/bypass` / `/country-block` / `/rate-limit` | DB-synced policy editing |
 | `/ip-reputation` / `/bot-defense` / `/semantic` | Request-time security controls |
 | `/notifications` | Aggregate alerting config and runtime status |
 | `/cache` | Cache rules and internal cache store controls |
-| `/proxy-rules` | Structured route/upstream/default-route editor with validate/probe/dry-run/apply/rollback |
-| `/backends` | Canonical backend object inventory. Direct named upstreams support runtime enable/drain/disable and weight override; vhost-bound configured upstreams are status-only in this slice |
+| `/proxy-rules` | Structured direct upstream/backend-pool/route editor for non-vhost traffic, with validate/probe/dry-run/apply/rollback |
+| `/backends` | Canonical backend object inventory. Direct named upstreams support runtime enable/drain/disable and weight override; vhost-generated backends are status-only |
 | `/sites` | Site ownership and TLS binding |
 | `/options` | Runtime inventory, optional artifacts, GeoIP/Country DB management |
-| `/vhosts` | Static / `php-fpm` vhost definitions, internal generated targets, and required configured-upstream bindings |
+| `/vhosts` | Static / `php-fpm` vhost host, docroot, runtime, and generated-route ownership |
 | `/scheduled-tasks` | Command-based cron task definitions and run status |
-| `/settings` | Product-wide `conf/config.json` editor for restart-required settings |
+| `/settings` | Product-wide DB `app_config` editor for restart-required settings |
 
 UI samples live under `docs/images/ui-samples/`.
 
 ### Startup
 
 ```bash
-make setup
+make env-init
+make db-migrate
+make crs-install
 make compose-up
 ```
 
@@ -223,15 +274,16 @@ Routing model:
 - `routes[]` are evaluated in ascending `priority` order with first-match semantics.
 - Selection order is:
   1. explicit `routes[]`
-  2. generated host fallback routes from `conf/sites.json`
-  3. `default_route`
-  4. `upstreams[]`
+  2. generated vhost host routes
+  3. generated host fallback routes from the DB `sites` domain
+  4. `default_route`
+  5. `upstreams[]`
 - Host matching supports exact host and `*.example.com` wildcard host.
 - Path matching supports `exact`, `prefix`, and `regex`.
-- `upstreams[]` is the named backend node catalog. A row can use either a static `url` or `discovery`, never both.
+- `upstreams[]` is the direct non-vhost backend node catalog. A row can use either a static `url` or `discovery`, never both.
 - `backend_pools[]` groups named upstream members into route-scoped balancing sets.
 - `action.backend_pool` is the standard route binding for balancing.
-- `action.upstream` accepts configured upstream names only.
+- `action.upstream` can reference a direct upstream name or a server-generated vhost upstream name. Normal vhost traffic is published through the `/vhosts` generated host route.
 - `action.canary_upstream` and `action.canary_weight_percent` provide route-level canary.
 - `action.host_rewrite`, `action.path_rewrite.prefix`, and `action.query_rewrite` rewrite outbound traffic.
 - `action.request_headers` and `action.response_headers` allow bounded header manipulation.
@@ -241,15 +293,15 @@ Routing model:
   2. `Backend Pools`
   3. `Routes` / `Default route`
 - Each `Upstreams` row has its own `Probe` action so connectivity checks target one configured upstream at a time.
-- `Vhosts` must define `linked_upstream_name` so route bindings and backend-pool members can reference a Vhost through the same upstream-name namespace.
-- `linked_upstream_name` must already exist in `Proxy Rules > Upstreams`; Vhosts do not create managed aliases here.
-- `generated_target` remains an internal compatibility field for vhost materialization. Normal route/pool binding should use `linked_upstream_name`.
-- A direct upstream currently bound by a Vhost cannot be removed from `Proxy Rules > Upstreams` until the Vhost is relinked.
+- `Vhosts` publish generated host routes and generated vhost backends in the effective runtime.
+- `Vhosts` do not rewrite configured upstream URLs. A configured `primary` remains the URL shown in `Proxy Rules > Upstreams`.
+- `generated_target` is server-owned vhost materialization state and is not normal operator input.
+- PHP-FPM/static application connection settings belong in `Vhosts`, not in `Proxy Rules > Upstreams`.
 
 ### Proxy Engine
 
-`conf/config.json` exposes the process-wide proxy engine under `proxy.engine.mode`.
-Only Tukuyomi's native proxy engine is supported. Changing this file requires a process restart.
+DB `app_config` exposes the process-wide proxy engine under `proxy.engine.mode`.
+Only Tukuyomi's native proxy engine is supported. Changing it requires a process restart.
 
 ```json
 {
@@ -269,17 +321,17 @@ Only Tukuyomi's native proxy engine is supported. Changing this file requires a 
 
 ### Runtime Backend Operations
 
-- `data/conf/upstream-runtime.json` stores opt-in runtime overrides for materialized backend keys from `Proxy Rules > Upstreams`.
+- The normalized `upstream_runtime` DB domain stores opt-in runtime overrides for backend keys materialized from direct upstreams and DNS discovery; `data/conf/upstream-runtime.json` is only an empty-DB seed/export path.
 - `Backends` lists canonical backend objects, not backend pools.
 - `Backends` is the runtime operations panel for:
   - `enabled`
   - `draining`
   - `disabled`
   - positive `weight_override`
-- No override means configured behavior from `data/conf/proxy.json`.
+- No override means configured behavior from DB `proxy_rules`; `data/conf/proxy.json` is only seed/import/export material.
 - Runtime operations apply to static direct upstreams and DNS-discovered materialized targets.
-- Configured upstreams bound by Vhosts are routable and pool-addressable, and `Backends` exposes them as status-only canonical objects.
-- Direct route URLs, generated `static`, and generated `php-fpm` targets are not included.
+- Vhost-generated backends are exposed in `Backends` as status-only canonical objects.
+- Direct route URLs and vhost-generated backends are not runtime operation targets.
 - `draining`, `disabled`, and `unhealthy` backends are excluded from new target selection.
 - `proxy_access` logs now expose the selected backend runtime state via:
   - `selected_upstream_admin_state`
@@ -454,7 +506,7 @@ refreshes the load-balancer cookie itself.
 
 ```bash
 curl -sS \
-  -H "X-API-Key: ${WAF_API_KEY}" \
+  -H "Authorization: Bearer ${WAF_ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
   -X POST \
   --data '{"host":"api.example.com","path":"/servicea/users"}' \
@@ -521,15 +573,14 @@ Main endpoint groups:
   "hosts": {
     "example.com": {
       "entries": [
-        { "path": "/search", "extra_rule": "conf/rules/search-endpoint.conf" }
+        { "path": "/search", "extra_rule": "orders-preview.conf" }
       ]
     }
   }
 }
 ```
 
-Managed `extra_rule` files belong under `conf/rules/*.conf` and are edited from the `Override Rules` page. They are not added to the base WAF rule set at startup; they are loaded only when a bypass entry references them.
-See `conf/waf-bypass.sample.json` for the bundled sample that references `conf/rules/search-endpoint.conf`.
+Managed `extra_rule` bodies are stored in DB `override_rules` and edited from the `Rules` page with usage set to `Bypass Rules extra_rule`. There is no `conf/rules` filesystem fallback. They are not added to the base WAF rule set at startup; they are loaded only when a bypass entry references their logical `extra_rule` name.
 Host scope precedence is exact `host:port`, then bare `host`, then `default`. Host-specific entries replace the default scope; they do not merge with it.
 
 ### Country Block
@@ -541,7 +592,7 @@ Host scope precedence is exact `host:port`, then bare `host`, then `default`. Ho
 - matched countries are blocked with `403` before WAF inspection
 - country resolution is now handled by `request_metadata_resolvers`
 - `header` mode trusts `X-Country-Code`
-- `mmdb` mode resolves from installed `country.mmdb`
+- `mmdb` mode resolves from the DB-managed country MMDB asset loaded into runtime
 - host scope precedence is exact `host:port`, then bare `host`, then `default`
 
 ### Rate Limit
@@ -578,7 +629,7 @@ Key ideas:
 ### Observability
 
 - `/metrics` exposes TLS, upstream HA, rate limit, semantic, and request-security counters
-- file backend rotation is controlled by `storage.file_rotate_bytes`, `storage.file_max_bytes`, `storage.file_retention_days`
+- WAF/access events are DB-backed. Security audit remains a separate file/evidence stream; file rotation settings apply to file-backed audit/legacy log streams.
 - optional OTLP tracing is configured under `observability.tracing`
 
 ### Notifications
@@ -624,8 +675,8 @@ Capabilities include:
 
 ### Rules / CRS Editing
 
-- `/rules` edits active base rule files
-- `/rule-sets` toggles CRS files under `rules/crs/rules/*.conf`
+- `/rules` edits active DB-backed base WAF rule assets
+- `/rule-sets` toggles DB-backed CRS assets under logical `rules/crs/rules/*.conf` names
 - successful saves hot-reload WAF
 - failed reloads auto-rollback
 
@@ -634,14 +685,17 @@ Capabilities include:
 ### Log Retrieval
 
 ```bash
-curl -s -H "X-API-Key: <your-api-key>" \
+curl -s -H "Authorization: Bearer <your-personal-access-token>" \
      "http://<host>/tukuyomi-api/logs/read?tail=100&country=JP" | jq .
 ```
 
 ### Cache Feature
 
-Cache config is stored in `data/conf/cache-rules.json`. Internal cache store settings
-live in `data/conf/cache-store.json`.
+Cache rules and internal cache store settings are versioned in DB tables.
+`data/conf/cache-rules.json` remains seed/import material for an empty DB.
+Internal cache store settings seed from DB defaults when the normalized row is
+missing, and `data/conf/cache-store.json` is only relevant for explicit no-DB
+fallback runs.
 
 Example:
 

@@ -16,18 +16,20 @@ This document covers the `/scheduled-tasks` workflow for command-line jobs manag
 
 ## Data Layout
 
-Persisted config lives in `conf/scheduled-tasks.json`.
+Persisted task definitions live in the normalized `scheduled_tasks` DB domain.
+`conf/scheduled-tasks.json` is an empty-DB seed/export file, not the runtime
+source of truth after bootstrap.
 
-Generated runtime state lives under `data/scheduled-tasks/`.
+Last-run status snapshots live in the `scheduled_task_runtime_state` DB table.
 
-- `state.json`
-  - last-run status snapshots
+Generated runtime artifacts still live under `data/scheduled-tasks/`.
+
 - `locks/`
   - per-task lock files
 - `logs/`
   - per-task logs
 
-The default path wiring is controlled from `data/conf/config.json`:
+The default path wiring is controlled by effective DB `app_config` defaults:
 
 - `paths.scheduled_task_config_file`
 
@@ -38,8 +40,10 @@ Each task stores a cron-style full command line.
 Example:
 
 ```text
-date >> /app/logs/scheduled-task.log
+date
 ```
+
+Stdout and stderr are captured automatically into `data/scheduled-tasks/logs/`.
 
 This keeps the scheduled-task model simple:
 
@@ -78,10 +82,12 @@ The external scheduler should invoke:
 That command:
 
 - loads `conf/config.json`
-- reads `conf/scheduled-tasks.json`
+- opens the configured DB store
+- reads the normalized `scheduled_tasks` DB domain directly, seeding from `conf/scheduled-tasks.json` only when the domain is missing
 - executes only jobs whose cron expression matches the current minute
 - runs each task through `/bin/sh -lc`
-- records state/logs under `data/scheduled-tasks/`
+- records task status in `scheduled_task_runtime_state`
+- records lock/log artifacts under `data/scheduled-tasks/`
 
 It does not start a cron daemon. Run it from your platform scheduler.
 
@@ -165,20 +171,20 @@ make ui-preview-up
 make ui-preview-down
 ```
 
-Preview uses `conf/scheduled-tasks.ui-preview.json`, so edits made through the preview UI do not mutate the normal `conf/scheduled-tasks.json`.
+Preview keeps its own isolated DB-backed scheduled-task config, so edits made through the preview UI do not mutate the normal runtime config.
 
-By default, `ui-preview-up` rewrites that preview config to `{"tasks":[]}` on each start, so previously saved preview tasks do not keep running by accident.
+By default, `ui-preview-up` recreates the isolated preview SQLite DB on each start, so previously saved preview tasks and DB rows do not keep running by accident.
 
-If you want preview edits to survive `down/up`, opt into retained preview files:
+If you want preview edits to survive `down/up`, opt into retained preview DB state:
 
 ```bash
 UI_PREVIEW_PERSIST=1 make ui-preview-up
 UI_PREVIEW_PERSIST=1 make ui-preview-down
 ```
 
-When `UI_PREVIEW_PERSIST=1` is set, preview keeps its own `conf/config.ui-preview.json` too. That means you can save listener changes in `Settings`, then confirm them with `ui-preview-down/up` without losing the preview config.
+When `UI_PREVIEW_PERSIST=1` is set, preview keeps its own preview SQLite DB. That means you can save listener changes in `Settings`, then confirm them with `ui-preview-down/up` without losing the preview state stored in DB.
 
-Split preview listeners are supported as long as the preview config uses host-reachable binds such as `:80` and `:9090`. Do not use `localhost:80`, `127.0.0.1:80`, or `[::1]:9090` in preview config; `ui-preview-up` rejects loopback binds because they do not match Docker-published ports.
+Split preview listeners are supported as long as the preview listener settings use host-reachable binds such as `:80` and `:9090`. Do not use `localhost:80`, `127.0.0.1:80`, or `[::1]:9090` in preview listener settings; `ui-preview-up` rejects loopback binds because they do not match Docker-published ports.
 
 For a repeatable local regression run across binary, Docker sidecar, and preview-sidecar paths, use:
 
@@ -227,6 +233,6 @@ Container image command:
 
 Operator flow:
 
-1. Upload `GeoIP.conf` from `Options -> GeoIP Update`.
+1. Upload `GeoIP.conf` from `Options -> GeoIP Update`. In DB mode it is stored in runtime DB authority.
 2. Run `Update now` once and confirm success.
 3. Add a scheduled task that runs one of the commands above for your deployment shape.

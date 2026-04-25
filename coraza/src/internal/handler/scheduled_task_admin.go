@@ -66,6 +66,9 @@ func PutScheduledTasks(c *gin.Context) {
 			})
 			return
 		}
+		if respondIfConfigDBStoreRequired(c, err) {
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{
 			"ok":       false,
 			"error":    err.Error(),
@@ -88,6 +91,9 @@ func RollbackScheduledTasks(c *gin.Context) {
 	if err != nil {
 		if strings.Contains(err.Error(), "no rollback snapshot") {
 			c.JSON(http.StatusConflict, gin.H{"error": "no rollback snapshot available"})
+			return
+		}
+		if respondIfConfigDBStoreRequired(c, err) {
 			return
 		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{

@@ -92,31 +92,50 @@ func generatedVhostUpstreams(cfg VhostConfigFile) []ProxyUpstream {
 	return out
 }
 
-func vhostLinkedUpstreamTargetURL(vhost VhostConfig, upstream ProxyUpstream, upstreamIndex int) (string, bool, error) {
-	switch normalizeVhostMode(vhost.Mode) {
-	case "php-fpm":
-		raw := strings.TrimSpace(upstream.URL)
-		if raw != "" {
-			target, err := parseProxyUpstreamURL(fmt.Sprintf("upstreams[%d].url", upstreamIndex), raw)
-			if err != nil {
-				return "", false, err
-			}
-			if strings.EqualFold(strings.TrimSpace(target.Scheme), "fcgi") {
-				return target.String(), true, nil
-			}
+func vhostGeneratedRoutes(cfg VhostConfigFile) []ProxyRoute {
+	out := make([]ProxyRoute, 0, len(cfg.Vhosts))
+	for _, vhost := range cfg.Vhosts {
+		host := strings.TrimSpace(vhost.Hostname)
+		target := strings.TrimSpace(vhost.GeneratedTarget)
+		if host == "" || target == "" {
+			continue
 		}
-		return fmt.Sprintf("fcgi://127.0.0.1:%d", vhost.ListenPort), true, nil
-	case "static":
-		return fmt.Sprintf("static://%s", vhost.GeneratedTarget), true, nil
-	default:
-		return "", false, nil
+		switch normalizeVhostMode(vhost.Mode) {
+		case "php-fpm", "static":
+		default:
+			continue
+		}
+		out = append(out, ProxyRoute{
+			Name:      "vhost:" + strings.TrimSpace(vhost.Name),
+			Priority:  0,
+			Generated: true,
+			Match: ProxyRouteMatch{
+				Hosts: []string{host},
+			},
+			Action: ProxyRouteAction{
+				Upstream: target,
+			},
+		})
 	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func refreshPHPRuntimeMaterializationWithConfig(inventory PHPRuntimeInventoryFile, vhosts VhostConfigFile) error {
 	desired, rootDir, err := buildPHPRuntimeMaterializations(inventory, vhosts)
 	if err != nil {
 		return err
+	}
+	if len(desired) == 0 {
+		if err := os.RemoveAll(rootDir); err != nil {
+			return err
+		}
+		phpRuntimeMaterializationMu.Lock()
+		phpRuntimeMaterialized = map[string]PHPRuntimeMaterializedStatus{}
+		phpRuntimeMaterializationMu.Unlock()
+		return nil
 	}
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return err

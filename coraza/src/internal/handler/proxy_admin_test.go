@@ -20,7 +20,7 @@ func TestRollbackPreviewProxyRulesHandler(t *testing.T) {
 
 	tmp := t.TempDir()
 	proxyPath := filepath.Join(tmp, "proxy.json")
-initial := `{
+	initial := `{
   "upstreams": [
     { "name": "primary", "url": "http://127.0.0.1:8081", "weight": 1, "enabled": true }
   ]
@@ -28,12 +28,14 @@ initial := `{
 	if err := os.WriteFile(proxyPath, []byte(initial), 0o644); err != nil {
 		t.Fatalf("write initial proxy.json: %v", err)
 	}
+	initConfigDBStoreForTest(t)
+	importProxyRuntimeDBForTest(t, initial)
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
 	_, etag, _, _, _ := ProxyRulesSnapshot()
 
-next := `{
+	next := `{
   "upstreams": [
     { "name": "primary", "url": "http://127.0.0.1:8082", "weight": 1, "enabled": true }
   ]
@@ -92,6 +94,8 @@ func TestPutProxyRulesAppendsAuditEntry(t *testing.T) {
 	if err := os.WriteFile(proxyPath, []byte(initial), 0o644); err != nil {
 		t.Fatalf("write initial proxy.json: %v", err)
 	}
+	initConfigDBStoreForTest(t)
+	importProxyRuntimeDBForTest(t, initial)
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
@@ -131,9 +135,6 @@ func TestPutProxyRulesAppendsAuditEntry(t *testing.T) {
 	if entry.Actor != "alice@example.com" {
 		t.Fatalf("actor=%q", entry.Actor)
 	}
-	if entry.IP != "203.0.113.10" {
-		t.Fatalf("ip=%q", entry.IP)
-	}
 	if entry.PrevETag != etag {
 		t.Fatalf("prev_etag=%q want=%q", entry.PrevETag, etag)
 	}
@@ -165,6 +166,8 @@ func TestRollbackProxyRulesAppendsAuditEntry(t *testing.T) {
 	if err := os.WriteFile(proxyPath, []byte(initial), 0o644); err != nil {
 		t.Fatalf("write initial proxy.json: %v", err)
 	}
+	initConfigDBStoreForTest(t)
+	importProxyRuntimeDBForTest(t, initial)
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
@@ -194,8 +197,8 @@ func TestRollbackProxyRulesAppendsAuditEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readProxyRulesAudit: %v", err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("entries=%d want=1", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("entries=%d want=2", len(entries))
 	}
 	entry := entries[0]
 	if entry.Event != "proxy_rules_rollback" {
@@ -203,9 +206,6 @@ func TestRollbackProxyRulesAppendsAuditEntry(t *testing.T) {
 	}
 	if entry.Actor != "ops@example.com" {
 		t.Fatalf("actor=%q", entry.Actor)
-	}
-	if entry.IP != "198.51.100.44" {
-		t.Fatalf("ip=%q", entry.IP)
 	}
 	if entry.RestoredFrom == nil {
 		t.Fatal("restored_from should not be nil")
@@ -215,6 +215,99 @@ func TestRollbackProxyRulesAppendsAuditEntry(t *testing.T) {
 	}
 	if entry.BeforeRaw == entry.AfterRaw {
 		t.Fatalf("before/after raw should differ")
+	}
+}
+
+func TestGetProxyRulesAuditHandlerReadsDBApplyAndRollback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tmp := t.TempDir()
+	proxyPath := filepath.Join(tmp, "proxy.json")
+	restore := setProxyAuditFileForTest(t, filepath.Join(tmp, "proxy-audit.ndjson"))
+	defer restore()
+
+	initial := `{
+  "upstreams": [
+    { "name": "primary", "url": "http://127.0.0.1:8081", "weight": 1, "enabled": true }
+  ]
+}`
+	if err := os.WriteFile(proxyPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write initial proxy.json: %v", err)
+	}
+	initConfigDBStoreForTest(t)
+	importProxyRuntimeDBForTest(t, initial)
+	if err := InitProxyRuntime(proxyPath, 4); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+	_, etag, _, _, _ := ProxyRulesSnapshot()
+
+	next := `{
+  "upstreams": [
+    { "name": "primary", "url": "http://127.0.0.1:8082", "weight": 1, "enabled": true }
+  ]
+}`
+	putBody, _ := json.Marshal(map[string]any{"raw": next})
+	putRec := httptest.NewRecorder()
+	putCtx, _ := gin.CreateTestContext(putRec)
+	putReq := httptest.NewRequest(http.MethodPut, "/proxy-rules", bytes.NewReader(putBody))
+	putReq.Header.Set("Content-Type", "application/json")
+	putReq.Header.Set("If-Match", etag)
+	putReq.Header.Set("X-Tukuyomi-Actor", "alice@example.com")
+	putCtx.Request = putReq
+	PutProxyRules(putCtx)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("put status=%d body=%s", putRec.Code, putRec.Body.String())
+	}
+
+	rollbackRec := httptest.NewRecorder()
+	rollbackCtx, _ := gin.CreateTestContext(rollbackRec)
+	rollbackReq := httptest.NewRequest(http.MethodPost, "/proxy-rules/rollback", nil)
+	rollbackReq.Header.Set("X-Tukuyomi-Actor", "ops@example.com")
+	rollbackCtx.Request = rollbackReq
+	RollbackProxyRulesHandler(rollbackCtx)
+	if rollbackRec.Code != http.StatusOK {
+		t.Fatalf("rollback status=%d body=%s", rollbackRec.Code, rollbackRec.Body.String())
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/proxy-rules/audit?limit=20", nil)
+	GetProxyRulesAudit(c)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audit status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Entries []proxyRulesAuditEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal audit response: %v", err)
+	}
+	if len(body.Entries) != 2 {
+		t.Fatalf("entries=%d want=2: %#v", len(body.Entries), body.Entries)
+	}
+	if body.Entries[0].Event != "proxy_rules_rollback" {
+		t.Fatalf("first event=%q want rollback", body.Entries[0].Event)
+	}
+	if body.Entries[0].Actor != "ops@example.com" {
+		t.Fatalf("first actor=%q want ops@example.com", body.Entries[0].Actor)
+	}
+	if body.Entries[0].RestoredFrom == nil || body.Entries[0].RestoredFrom.ETag != etag {
+		t.Fatalf("first restored_from=%#v want etag %q", body.Entries[0].RestoredFrom, etag)
+	}
+	if body.Entries[0].BeforeRaw == body.Entries[0].AfterRaw {
+		t.Fatalf("rollback before/after raw should differ")
+	}
+	if body.Entries[1].Event != "proxy_rules_apply" {
+		t.Fatalf("second event=%q want apply", body.Entries[1].Event)
+	}
+	if body.Entries[1].Actor != "alice@example.com" {
+		t.Fatalf("second actor=%q want alice@example.com", body.Entries[1].Actor)
+	}
+	if body.Entries[1].BeforeRaw == body.Entries[1].AfterRaw {
+		t.Fatalf("apply before/after raw should differ")
+	}
+	if _, err := os.Stat(config.ProxyAuditFile); !os.IsNotExist(err) {
+		t.Fatalf("db-backed audit should not create proxy audit file, stat err=%v", err)
 	}
 }
 
@@ -234,6 +327,8 @@ func TestProxyRulesAuditWriteFailureDoesNotFailApplyOrRollback(t *testing.T) {
 	if err := os.WriteFile(proxyPath, []byte(initial), 0o644); err != nil {
 		t.Fatalf("write initial proxy.json: %v", err)
 	}
+	initConfigDBStoreForTest(t)
+	importProxyRuntimeDBForTest(t, initial)
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}

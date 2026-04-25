@@ -8,14 +8,18 @@ HOST_CORAZA_PORT="${HOST_CORAZA_PORT:-19090}"
 WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-60}"
 MOCK_PROVIDER_PORT="${MOCK_PROVIDER_PORT:-18091}"
 SIMULATE="${SIMULATE:-1}"
-TARGET_PATH="${TARGET_PATH:-rules/tukuyomi.conf}"
-API_KEY="${API_KEY:-}"
+TARGET_PATH="${TARGET_PATH:-tukuyomi.conf}"
+WAF_ADMIN_USERNAME="${WAF_ADMIN_USERNAME:-${TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME:-admin}}"
+WAF_ADMIN_PASSWORD="${WAF_ADMIN_PASSWORD:-${TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD:-dev-only-change-this-password-please}}"
 AUTO_DOWN="${FP_TUNER_HTTP_AUTO_DOWN:-0}"
 
 REQ_FILE="$(mktemp)"
 PROPOSE_RESP_FILE="$(mktemp)"
 PROVIDER_LOG="$(mktemp)"
+ADMIN_LOGIN_RESP="$(mktemp)"
+ADMIN_COOKIE_JAR="$(mktemp)"
 PROVIDER_PID=""
+ADMIN_CSRF_TOKEN=""
 COMPOSE_ARGS=(--project-directory "${ROOT_DIR}")
 CONFIG_ENV_FILE="${ROOT_DIR}/.env"
 HOST_CONFIG_FILE=""
@@ -32,6 +36,8 @@ require_cmd() {
 compose() {
   PUID="${HOST_PUID}" GUID="${HOST_GUID}" CORAZA_PORT="${HOST_CORAZA_PORT}" \
   WAF_CONFIG_FILE="${TEMP_CONFIG_CONTAINER_PATH}" \
+  TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${WAF_ADMIN_USERNAME}" \
+  TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${WAF_ADMIN_PASSWORD}" \
   docker compose "${COMPOSE_ARGS[@]}" "$@"
 }
 
@@ -86,10 +92,6 @@ prepare_fp_tuner_http_config() {
     exit 1
   fi
 
-  if [[ -z "${API_KEY}" ]]; then
-    API_KEY="$(jq -r '.admin.api_key_primary // empty' "${HOST_CONFIG_FILE}")"
-  fi
-
   config_dir="$(dirname "${config_container_path}")"
   config_base="$(basename "${config_container_path}")"
   if [[ "${config_base}" == *.json ]]; then
@@ -120,12 +122,36 @@ wait_for_coraza() {
   return 1
 }
 
+login_admin_session() {
+  local payload
+  local code
+
+  payload="$(jq -n --arg username "${WAF_ADMIN_USERNAME}" --arg password "${WAF_ADMIN_PASSWORD}" '{username: $username, password: $password}')"
+  code="$(curl -sS -o "${ADMIN_LOGIN_RESP}" -w "%{http_code}" \
+    -c "${ADMIN_COOKIE_JAR}" -b "${ADMIN_COOKIE_JAR}" \
+    -H "Content-Type: application/json" \
+    -X POST --data "${payload}" \
+    "http://localhost:${HOST_CORAZA_PORT}/tukuyomi-api/auth/login")"
+  if [[ "${code}" != "200" ]]; then
+    echo "[fp-tuner-http] admin login failed: ${code}" >&2
+    cat "${ADMIN_LOGIN_RESP}" >&2 || true
+    exit 1
+  fi
+  ADMIN_CSRF_TOKEN="$(
+    awk 'NF >= 7 && $6 == "tukuyomi_admin_csrf" { token = $7 } END { if (token != "") print token }' "${ADMIN_COOKIE_JAR}"
+  )"
+  if [[ -z "${ADMIN_CSRF_TOKEN}" ]]; then
+    echo "[fp-tuner-http] admin login did not issue csrf cookie" >&2
+    exit 1
+  fi
+}
+
 cleanup() {
   if [[ -n "${PROVIDER_PID}" ]]; then
     kill "${PROVIDER_PID}" >/dev/null 2>&1 || true
     wait "${PROVIDER_PID}" >/dev/null 2>&1 || true
   fi
-  rm -f "${REQ_FILE}" "${PROPOSE_RESP_FILE}" "${PROVIDER_LOG}"
+  rm -f "${REQ_FILE}" "${PROPOSE_RESP_FILE}" "${PROVIDER_LOG}" "${ADMIN_LOGIN_RESP}" "${ADMIN_COOKIE_JAR}"
   if [[ -n "${HOST_TEMP_CONFIG_FILE}" ]]; then
     rm -f "${HOST_TEMP_CONFIG_FILE}"
   fi
@@ -166,7 +192,7 @@ proposal = {
     "summary": "Stub provider response for HTTP mode testing.",
     "reason": "Local stub response used to verify send/receive/apply flow.",
     "confidence": 0.88,
-    "target_path": "rules/tukuyomi.conf",
+    "target_path": "tukuyomi.conf",
     "rule_line": "SecRule REQUEST_HEADERS:Host \"@rx ^search\\.example\\.com(:443)?$\" \"id:190123,phase:1,pass,nolog,chain,msg:'tukuyomi fp_tuner scoped exclusion'\"\nSecRule REQUEST_URI \"@beginsWith /search\" \"ctl:ruleRemoveTargetById=100004;ARGS:q\"",
 }
 
@@ -206,6 +232,8 @@ if ! wait_for_coraza; then
   exit 1
 fi
 
+login_admin_session
+
 cat >"${REQ_FILE}" <<JSON
 {
   "target_path": "${TARGET_PATH}",
@@ -225,12 +253,10 @@ cat >"${REQ_FILE}" <<JSON
 JSON
 
 headers=(-H "Content-Type: application/json")
-if [[ -n "${API_KEY}" ]]; then
-  headers+=(-H "X-API-Key: ${API_KEY}")
-fi
+auth_args=(-b "${ADMIN_COOKIE_JAR}" -c "${ADMIN_COOKIE_JAR}" -H "X-CSRF-Token: ${ADMIN_CSRF_TOKEN}")
 
 echo "==> Propose (http mode)"
-curl -fsS "${headers[@]}" \
+curl -fsS "${auth_args[@]}" "${headers[@]}" \
   -X POST "http://localhost:${HOST_CORAZA_PORT}/tukuyomi-api/fp-tuner/propose" \
   --data @"${REQ_FILE}" | tee "${PROPOSE_RESP_FILE}"
 echo
@@ -279,7 +305,7 @@ apply_payload="$(jq -c --argjson simulate "$([[ "${SIMULATE}" == "1" ]] && echo 
     simulate: $simulate,
     approval_token: (.approval.token // "")
   }' "${PROPOSE_RESP_FILE}")"
-curl -fsS "${headers[@]}" \
+curl -fsS "${auth_args[@]}" "${headers[@]}" \
   -X POST "http://localhost:${HOST_CORAZA_PORT}/tukuyomi-api/fp-tuner/apply" \
   --data "${apply_payload}"
 echo

@@ -1,8 +1,6 @@
 package handler
 
 import (
-	_ "embed"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -20,23 +18,11 @@ const (
 	proxyResponseHeaderSanitizeSourceURL = "https://owasp.org/www-project-secure-headers/ci/headers_remove.json"
 )
 
-// Embedded from the OWASP Secure Headers Project removal catalog.
-// Refresh by replacing this vendored file from proxyResponseHeaderSanitizeSourceURL
-// and rerunning the handler test suite before commit.
-//
-//go:embed proxy_response_header_sanitize_owasp_headers_remove.json
-var proxyResponseHeaderSanitizeCatalogRaw []byte
-
 type ProxyResponseHeaderSanitizeConfig struct {
 	Mode         string   `json:"mode,omitempty"`
 	CustomRemove []string `json:"custom_remove,omitempty"`
 	CustomKeep   []string `json:"custom_keep,omitempty"`
 	DebugLog     bool     `json:"debug_log,omitempty"`
-}
-
-type proxyResponseHeaderSanitizeCatalog struct {
-	LastUpdateUTC string   `json:"last_update_utc"`
-	Headers       []string `json:"headers"`
 }
 
 type proxyResponseHeaderSanitizeCatalogData struct {
@@ -77,7 +63,6 @@ type proxyResponseHeaderFilterResult struct {
 }
 
 var (
-	proxyResponseHeaderSanitizeCatalogDataValue = mustLoadProxyResponseHeaderSanitizeCatalog()
 	proxyResponseCacheRestrictedResponseHeaders = proxyResponseHeaderNameSet(
 		"Connection",
 		"Proxy-Connection",
@@ -95,22 +80,6 @@ var (
 		"X-WAF-RuleIDs",
 	)
 )
-
-func mustLoadProxyResponseHeaderSanitizeCatalog() proxyResponseHeaderSanitizeCatalogData {
-	var payload proxyResponseHeaderSanitizeCatalog
-	if err := json.Unmarshal(proxyResponseHeaderSanitizeCatalogRaw, &payload); err != nil {
-		panic(fmt.Sprintf("decode embedded response header sanitize catalog: %v", err))
-	}
-	payload.Headers = normalizeProxyResponseHeaderSanitizeNameList(payload.Headers)
-	if err := validateProxyResponseHeaderSanitizeNames(payload.Headers, "embedded response header sanitize catalog"); err != nil {
-		panic(err.Error())
-	}
-	return proxyResponseHeaderSanitizeCatalogData{
-		LastUpdateUTC: strings.TrimSpace(payload.LastUpdateUTC),
-		Headers:       payload.Headers,
-		HeaderSet:     proxyResponseHeaderNameSet(payload.Headers...),
-	}
-}
 
 func normalizeProxyResponseHeaderSanitizeConfig(in ProxyResponseHeaderSanitizeConfig) ProxyResponseHeaderSanitizeConfig {
 	out := in

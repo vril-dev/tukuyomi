@@ -32,6 +32,58 @@ make go-build
 make release-linux-all VERSION=v0.8.0
 ```
 
+## One-shot install
+
+Linux host へ直接入れる場合は、次で build、runtime tree 作成、DB migrate、
+WAF/CRS asset import、初回 DB seed、systemd unit 配置まで実行できます。
+
+```bash
+make install TARGET=linux-systemd
+```
+
+主な override:
+
+```bash
+make install TARGET=linux-systemd \
+  PREFIX=/opt/tukuyomi \
+  INSTALL_ENABLE_SCHEDULED_TASKS=1 \
+  INSTALL_DB_SEED=auto
+```
+
+挙動:
+
+- `PREFIX` 既定は `/opt/tukuyomi`
+- `PREFIX` が実行ユーザの home 配下の場合、`INSTALL_CREATE_USER=auto` は実行ユーザを runtime user にし、`useradd` は実行しません
+- home 配下へ install した runtime tree は、その login user / primary group 所有になります
+- `/opt/tukuyomi` など system path の場合、既定では `tukuyomi` system user/group を作成または再利用します
+- system path の service account 運用では、deployment root と `bin/`, `scripts/`, `conf/` は root 管理、`db/`, `audit/`, `cache/`, `data/` は runtime user 書き込み可になります
+- `config.json` と `/etc/tukuyomi/tukuyomi.env` は既存 file を既定で上書きしません
+- host install の権限が必要な操作だけ `sudo` を使います。build は通常 user のまま実行できます
+- 初回作成する `/etc/tukuyomi/tukuyomi.env` と systemd unit は `PREFIX` に合わせて render されます
+- `conf/config.json` は root-owned `0640` とし、service group に読み取りだけ渡します
+- `/etc/tukuyomi/tukuyomi.env` は secret を含める前提で root-owned `0640` のまま保持します
+- `INSTALL_DB_SEED=auto` は SQLite DB がまだ無い初回だけ `db-import` を実行します
+- 初回 DB seed では `primary` という default upstream が作成されます。proxy に
+  traffic を流す前に、実際の backend endpoint へ調整してください
+- 既存 DB がある再実行時は DB migrate と WAF/CRS asset refresh を行います
+- MySQL / PostgreSQL の空 DB を初期投入する場合は `INSTALL_DB_SEED=always` を明示してください
+- scheduled task timer は `INSTALL_ENABLE_SCHEDULED_TASKS=1` の時だけ有効化します
+- smoke / package staging 用に `DESTDIR=<tmp> INSTALL_ENABLE_SYSTEMD=0` が使えます
+
+login user で明示的に動かす場合:
+
+```bash
+make install TARGET=linux-systemd \
+  PREFIX="$HOME/tukuyomi" \
+  INSTALL_USER="$(id -un)" \
+  INSTALL_GROUP="$(id -gn)" \
+  INSTALL_CREATE_USER=0
+```
+
+ECS / Kubernetes / Azure Container Apps 向けは host install ではなく
+`make deploy-render` を使います。詳しくは
+[container-deployment.ja.md](container-deployment.ja.md) を参照してください。
+
 ## 実行レイアウト
 
 バイナリは、作業ディレクトリ配下に次を前提とします。
@@ -39,16 +91,21 @@ make release-linux-all VERSION=v0.8.0
 ```text
 /opt/tukuyomi/bin/tukuyomi
 /opt/tukuyomi/conf/
-/opt/tukuyomi/rules/
-/opt/tukuyomi/logs/
+/opt/tukuyomi/db/
+/opt/tukuyomi/audit/
+/opt/tukuyomi/cache/
+/opt/tukuyomi/data/persistent/
+/opt/tukuyomi/data/tmp/
 ```
 
-最低限必要な runtime file:
+bundle 同梱の bootstrap/example:
 
 - `conf/config.json`
-- `conf/proxy.json`
-- `conf/sites.json`
-- `conf/cache-store.json`
+- `conf/crs-disabled.conf`
+- `scripts/update_country_db.sh`
+
+初回 DB import 前に operator が必要に応じて配置する seed/import file:
+
 - `conf/cache-rules.json`
 - `conf/waf-bypass.json`
 - `conf/waf-bypass.sample.json`
@@ -58,27 +115,30 @@ make release-linux-all VERSION=v0.8.0
 - `conf/semantic.json`
 - `conf/notifications.json`
 - `conf/ip-reputation.json`
-- `rules/tukuyomi.conf`
-- `rules/crs/crs-setup.conf`
-- `rules/crs/rules/*.conf`
+- `conf/scheduled-tasks.json`
+- `conf/upstream-runtime.json`
+- `make crs-install` で `data/tmp/...` 配下へ stage する WAF/CRS import material
 
-PHP-FPM の `/options` と `/vhosts` も使う場合の追加物:
+これらは空 DB の初期投入、または import/export 用です。対応する normalized DB row が存在する後は
+runtime は normalized domain を DB から直接読み込み、file の復元を起動条件にしません。
+import 後の本番起動で必要なのは DB bootstrap 用の `conf/config.json` と DB row です。
+
+初回 DB import 前に使う PHP-FPM 追加物:
 
 - `data/php-fpm/binaries/<runtime_id>/`
 - `data/php-fpm/inventory.json`
 - `data/php-fpm/vhosts.json`
 
-`/scheduled-tasks` も使う場合の追加物:
+import 後、bundled PHP-FPM を使う場合は executable bundle 自体は必要ですが、
+`inventory.json`、`vhosts.json`、`runtime.json`、`modules.json` は runtime
+authority ではありません。
 
-- `conf/scheduled-tasks.json`
+`/scheduled-tasks` 実行状態も使う場合の追加物:
 
-managed bypass override rule も使う場合の追加物:
-
-- `conf/rules/*.conf`
+- `data/scheduled-tasks/`
 
 managed GeoIP country update も使う場合の追加物:
 
-- `data/geoip/`
 - `scripts/update_country_db.sh`
 
 配置例:
@@ -87,52 +147,77 @@ managed GeoIP country update も使う場合の追加物:
 sudo install -d -m 755 \
   /opt/tukuyomi/bin \
   /opt/tukuyomi/conf \
-  /opt/tukuyomi/data/geoip \
-  /opt/tukuyomi/rules \
-  /opt/tukuyomi/scripts \
-  /opt/tukuyomi/logs/coraza \
-  /opt/tukuyomi/logs/proxy
+  /opt/tukuyomi/db \
+  /opt/tukuyomi/audit \
+  /opt/tukuyomi/cache/response \
+  /opt/tukuyomi/data/persistent \
+  /opt/tukuyomi/data/tmp \
+  /opt/tukuyomi/seeds/conf \
+  /opt/tukuyomi/scripts
 
 sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
+sudo cp -R seeds/conf/. /opt/tukuyomi/seeds/conf/
 
-for f in config.json proxy.json sites.json scheduled-tasks.json cache-store.json cache-rules.json waf-bypass.json waf-bypass.sample.json country-block.json rate-limit.json bot-defense.json semantic.json notifications.json ip-reputation.json; do
-  sudo install -m 644 "data/conf/${f}" "/opt/tukuyomi/conf/${f}"
-done
+sudo install -o root -g tukuyomi -m 640 data/conf/config.json /opt/tukuyomi/conf/config.json
 
-if [[ -d data/conf/rules ]]; then
-  sudo install -d -m 755 /opt/tukuyomi/conf/rules
-  for f in data/conf/rules/*; do
-    [[ -f "${f}" ]] || continue
-    sudo install -m 644 "${f}" "/opt/tukuyomi/conf/rules/$(basename "${f}")"
-  done
-fi
-
-if [[ -f data/geoip/README.md ]]; then
-  sudo install -m 644 data/geoip/README.md /opt/tukuyomi/data/geoip/README.md
-fi
-
-sudo install -m 644 data/rules/tukuyomi.conf /opt/tukuyomi/rules/tukuyomi.conf
-sudo install -d -m 755 /opt/tukuyomi/rules/crs
-sudo DEST_DIR=/opt/tukuyomi/rules/crs ./scripts/install_crs.sh
-sudo touch /opt/tukuyomi/conf/crs-disabled.conf
+sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disabled.conf
 ```
 
 注意:
 
 - `data/conf/*.bak` は本番へ持っていかないでください
-- `tukuyomi` の server-side 設定の主契約は `conf/config.json` です
-- 本番では `config.json` を secret manager / config management から render / mount してください
-- embedded `Settings` 画面も同じ `conf/config.json` を global settings として編集しますが、この導線は `Save config only` です。listener/runtime/storage/observability 系の変更後は service を restart してください
+- `config.json` は DB 接続 bootstrap です。release sample は `storage` block だけを保持します
+- `conf/proxy.json` は DB `proxy_rules` の任意 seed/import/export material です
+- `conf/sites.json` は DB `sites` の任意 seed/import/export material です
+- public release bundle は `conf/config.json` と、空 DB 向け runtime seed の `seeds/conf/` を同梱します
+- `conf/proxy.json` や policy JSON など configured file が無い場合、`make db-import` は `seeds/conf/` を読んでから built-in 互換 default に fallback します
+- 既定の base WAF rule seed は `make crs-install` が `seeds/waf/rules/tukuyomi.conf` から一時 stage して DB へ import します
+- CRS file は DB `waf_rule_assets` 向けの一時 import material であり、`make crs-install` が `data/tmp` で staging と cleanup を行います
+- `sites.json`、`scheduled-tasks.json`、`upstream-runtime.json`、policy JSON、
+  cache-rules JSON、WAF bypass JSON、PHP-FPM JSON manifest は DB bootstrap
+  後は DB seed/export artifact です
+- 本番では `storage.db_driver`、`storage.db_path`、`storage.db_dsn` 用に `config.json` を secret manager / config management から render / mount してください
+- 初回起動前に `make db-migrate`、`make crs-install` の順で WAF rule asset を install/import し、その後残りの seed material 用に `make db-import` を実行します。`db-import` は WAF rule asset を再 import しません
+- embedded `Settings` 画面は DB `app_config` を編集します。listener/runtime/storage policy/observability 系の変更後は service を restart してください
 - public release bundle には `Options -> GeoIP Update -> Update now` 用の companion `bin/geoipupdate` が同梱されます
 - `GEOIPUPDATE_BIN` を使えば bundled updater path を override できます
 - managed country refresh 用の official wrapper は `./scripts/update_country_db.sh` です
-- `data/geoip/country.mmdb`, `data/geoip/GeoIP.conf`, `data/geoip/update-status.json` は operator-managed runtime artifact なので、generic な release bundle へ bake しないでください
-- managed bypass override rule は `conf/rules/*.conf` 配下に置き、`Rules -> Override Rules` から編集します。これは `waf-bypass.json` の `extra_rule` で参照された時だけ load されます
-- release bundle には harmless な standalone sample として `conf/rules/search-endpoint.conf` も含まれます
-- その参照例として `conf/waf-bypass.sample.json` も同梱します
+- managed GeoIP country DB、`GeoIP.conf`、update status は DB-backed です。`data/geoip` fallback directory は配備しません
+- managed bypass override rule は DB `override_rules` です。`conf/rules` fallback directory は配備しません
+- WAF/access event は DB `waf_events` へ直接書き込みます。`paths.log_file` は古い `waf-events.ndjson` を明示的に取り込む場合だけの legacy import source です
+- `extra_rule` の値は DB-managed override rule への logical compatibility reference として残ります
 
-proxy engine 選択も restart-required な `conf/config.json` 設定です:
+## 永続 byte storage
+
+DB ではなく file/object として保持する runtime artifact は `persistent_storage` で管理します。
+現在の主用途は site-managed ACME の account key、challenge token、証明書 cache です。
+
+default は local backend です:
+
+```json
+{
+  "persistent_storage": {
+    "backend": "local",
+    "local": {
+      "base_dir": "data/persistent"
+    }
+  }
+}
+```
+
+- single-node のオンプレ / VPS では `/opt/tukuyomi/data/persistent` を backup 対象にしてください
+- scale-out や node replacement 前提では、local backend ではなく S3 backend か共有 mount を使ってください
+- S3 backend では bucket / region / endpoint / prefix などの非秘密情報だけを DB `app_config` に保存します
+- `AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`、`AWS_SESSION_TOKEN` は env / platform secret injection で渡します
+- Azure Blob Storage / Google Cloud Storage は provider adapter が入るまで fail closed し、local へ暗黙 fallback しません
+
+site-managed ACME は `Sites` 画面で site ごとに `tls.mode=acme` を選びます。
+`production` / `staging` は Let's Encrypt の本番 CA / staging CA の選択で、account email は任意です。
+HTTP-01 challenge を使うため、`server.tls.redirect_http=true` と
+`server.tls.http_redirect_addr=:80`、または同等の port 80 forwarding を用意してください。
+
+proxy engine 選択は restart-required な DB `app_config` 設定です:
 
 ```json
 {
@@ -204,10 +289,19 @@ make php-fpm-build RUNTIME=php85
 sudo make php-fpm-copy RUNTIME=php85 DEST=/srv/tukuyomi
 ```
 
+`make install PREFIX="$HOME/tukuyomi"` などで login user の home 配下へ入れた場合は、
+copy も同じ配備先を指定します。この場合は通常 `sudo` は不要です。
+
+```bash
+make php-fpm-build RUNTIME=php85
+make php-fpm-copy RUNTIME=php85 DEST="$HOME/tukuyomi"
+```
+
 補足:
 
-- `php-fpm-copy` は `data/php-fpm/binaries/<runtime_id>/` を binary 配備ツリーへ同期し、`inventory.json` / `vhosts.json` が無ければ初期ファイルを作成します
-- 不要になった staged runtime bundle は `sudo make php-fpm-prune RUNTIME=php85` で削除できます。`vhosts.json` 参照と実行中 pid を確認してから `binaries/<runtime_id>` と `runtime/<runtime_id>` を消します
+- `php-fpm-copy` は `data/php-fpm/binaries/<runtime_id>/` を binary 配備ツリーへ同期します。PHP-FPM JSON manifest を削除する前に `make db-import` で inventory/module metadata を import してください
+- 配置後は Options の Runtime Inventory で Refresh するか、必要に応じて `tukuyomi` を restart してください
+- 不要になった staged runtime bundle は `sudo make php-fpm-prune RUNTIME=php85` で削除できます。DB vhost 参照と実行中 pid を確認してから `binaries/<runtime_id>` と `runtime/<runtime_id>` を消します
 - `data/php-fpm/runtime/` はコピー対象ではなく、`tukuyomi` 起動後に vhost 定義から生成されます
 - Docker が必要なのは `php-fpm-build` の build 時だけです。bundle 配置後の `tukuyomi` 実行時には Docker は不要です
 - PHP / base image library / PECL extension の security update は bundle を rebuild して再配置する必要があります
@@ -234,9 +328,16 @@ template:
 - `WAF_SECURITY_AUDIT_HMAC_KEY`
 - `WAF_SECURITY_AUDIT_HMAC_KEY_ID`
 
+`persistent_storage.backend=s3` の場合だけ必要な S3 credential:
+
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_SESSION_TOKEN`
+- `AWS_REGION` / `AWS_DEFAULT_REGION`
+
 ## Overload Tuning
 
-overload 制御は `conf/config.json` の `server` 配下で調整します:
+overload 制御は DB `app_config` の `server` 配下で調整します:
 
 - `max_concurrent_requests` は process-wide guard です。
 - `max_concurrent_proxy_requests` は data-plane guard です。
@@ -248,9 +349,10 @@ overload 制御は `conf/config.json` の `server` 配下で調整します:
 
 ## Secret Handling
 
-- `admin.api_key_primary`、`admin.api_key_secondary`、`admin.session_secret` は `conf/config.json` に置き、browser へは出さないでください
-- browser operator は 1 回 sign in すると same-origin session cookie を受け取ります
-- CLI / 自動化は従来どおり `X-API-Key` を使えます
+- `admin.session_secret` は managed app config に置き、browser へは出さないでください
+- `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` / `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` は admin user table が空の初回 owner bootstrap にだけ使ってください
+- browser operator は username/password で sign in し、same-origin の DB-backed session cookie を受け取ります
+- CLI / 自動化は shared admin API key ではなく user ごとの personal access token を使ってください
 - `tukuyomi` の既定 posture は `admin.external_mode=api_only_external` です。remote admin API が不要なら `deny_external` にしてください
 - non-loopback listener で `admin.external_mode=full_external` を使う場合は、起動 warning だけに頼らず front-side の allowlist/auth を追加してください
 - `admin.trusted_cidrs` を public / catch-all network まで広げた場合も、埋め込み管理UI/API はその trusted source へ再露出され、起動時は warning のみです
@@ -301,7 +403,7 @@ sudo systemctl enable --now tukuyomi.socket
 sudo systemctl enable --now tukuyomi.service
 ```
 
-有効化する socket unit は `conf/config.json` と一致するものだけにしてください。
+有効化する socket unit は effective DB `app_config` と一致するものだけにしてください。
 `ListenStream` / `ListenDatagram` は `server.listen_addr`, `admin.listen_addr`,
 `server.tls.http_redirect_addr`, HTTP/3 UDP port と一致する必要があります。
 process は inherited socket address を検証し、不一致なら fail closed します。
@@ -328,7 +430,7 @@ HTTP/3 UDP socket handoff は対応しますが、既存 QUIC connection は pro
 
 ## Notes
 
-- sample unit は `WorkingDirectory=/opt/tukuyomi` を使うので、相対 `conf/`, `rules/`, `logs/` がそのまま機能します
+- sample unit は `WorkingDirectory=/opt/tukuyomi` を使うので、相対 `conf/`, `audit/`, `data/tmp/` は deployment root 内に収まります
 - `server.graceful_shutdown_timeout_sec` の既定値は `30` です。deploy 中も WebSocket を長く維持する運用なら値を引き上げてください
 - scheduled-task service も同じ working directory と env file を使うので、`run-scheduled-tasks` から main service と同じ `conf/` / `data/scheduled-tasks/` を見られます
 - sample unit は `CAP_NET_BIND_SERVICE` を付けるので、`server.listen_addr=:443` や `server.tls.http_redirect_addr=:80` の direct bind に対応します

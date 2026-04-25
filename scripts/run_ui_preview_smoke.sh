@@ -31,6 +31,34 @@ fail() {
   exit 1
 }
 
+preview_db_rel_path() {
+  python3 - "${WORKSPACE}" <<'PY'
+import json
+import pathlib
+import sys
+
+workspace = pathlib.Path(sys.argv[1]).resolve()
+config_path = workspace / "data" / "conf" / "config.json"
+with config_path.open("r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+storage = payload.get("storage")
+db_path = ""
+if isinstance(storage, dict):
+    raw = storage.get("db_path")
+    if raw is not None:
+        db_path = str(raw).strip()
+if not db_path:
+    db_path = "db/tukuyomi.db"
+if db_path.startswith("/"):
+    raise SystemExit(f"preview storage.db_path must be relative: {db_path}")
+parts = pathlib.PurePosixPath(db_path).parts
+if any(part in ("", ".", "..") for part in parts):
+    raise SystemExit(f"preview storage.db_path contains unsafe path segment: {db_path}")
+parent = pathlib.PurePosixPath(*parts[:-1]) if len(parts) > 1 else pathlib.PurePosixPath(".")
+print(pathlib.PurePosixPath(parent, "tukuyomi-ui-preview.db").as_posix())
+PY
+}
+
 wait_for_http_code() {
   local expected_code="$1"
   local url="$2"
@@ -50,115 +78,104 @@ wait_for_http_code() {
 
 preview_up() {
   local persist="${1:-0}"
+  local public_addr="${2:-}"
+  local admin_addr="${3:-}"
   (
     cd "${WORKSPACE}"
     COMPOSE_PROJECT_NAME="${UI_PREVIEW_SMOKE_PROJECT}" \
     PUID="${PUID_VALUE}" \
     GUID="${GUID_VALUE}" \
     UI_PREVIEW_PERSIST="${persist}" \
+    UI_PREVIEW_PUBLIC_ADDR="${public_addr}" \
+    UI_PREVIEW_ADMIN_ADDR="${admin_addr}" \
     bash ./scripts/ui_preview.sh up
   )
 }
 
 preview_down() {
   local persist="${1:-0}"
+  local public_addr="${2:-}"
+  local admin_addr="${3:-}"
   (
     cd "${WORKSPACE}"
     COMPOSE_PROJECT_NAME="${UI_PREVIEW_SMOKE_PROJECT}" \
     PUID="${PUID_VALUE}" \
     GUID="${GUID_VALUE}" \
     UI_PREVIEW_PERSIST="${persist}" \
+    UI_PREVIEW_PUBLIC_ADDR="${public_addr}" \
+    UI_PREVIEW_ADMIN_ADDR="${admin_addr}" \
     bash ./scripts/ui_preview.sh down >/dev/null 2>&1 || true
   )
 }
 
-write_base_config() {
-  local public_addr="$1"
-  local admin_addr="$2"
-  python3 - "${WORKSPACE}/data/conf/config.json" "${public_addr}" "${admin_addr}" <<'PY'
-import json
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-public_addr = sys.argv[2]
-admin_addr = sys.argv[3]
-cfg = json.loads(path.read_text(encoding="utf-8"))
-cfg.setdefault("server", {})["listen_addr"] = public_addr
-cfg.setdefault("admin", {})["listen_addr"] = admin_addr
-path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
-PY
+write_minimal_config() {
+  cat >"${WORKSPACE}/data/conf/config.json" <<EOF
+{
+  "storage": {
+    "db_driver": "sqlite",
+    "db_path": "db/tukuyomi.db",
+    "db_dsn": "",
+    "db_retention_days": 30,
+    "db_sync_interval_sec": 0
+  }
+}
+EOF
 }
 
-write_preview_config() {
-  local public_addr="$1"
-  local admin_addr="$2"
-  python3 - "${WORKSPACE}/data/conf/config.json" "${WORKSPACE}/data/conf/config.ui-preview.json" "${public_addr}" "${admin_addr}" <<'PY'
-import json
-import pathlib
-import sys
+write_stale_preview_db() {
+  local db_path="${WORKSPACE}/data/$(preview_db_rel_path)"
 
-src = pathlib.Path(sys.argv[1])
-dst = pathlib.Path(sys.argv[2])
-public_addr = sys.argv[3]
-admin_addr = sys.argv[4]
-cfg = json.loads(src.read_text(encoding="utf-8"))
-cfg.setdefault("server", {})["listen_addr"] = public_addr
-cfg.setdefault("admin", {})["listen_addr"] = admin_addr
-paths = cfg.setdefault("paths", {})
-paths["proxy_config_file"] = "conf/proxy.ui-preview.json"
-paths["scheduled_task_config_file"] = "conf/scheduled-tasks.ui-preview.json"
-paths["php_runtime_inventory_file"] = "data/php-fpm/inventory.ui-preview.json"
-paths["vhost_config_file"] = "data/php-fpm/vhosts.ui-preview.json"
-dst.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
-PY
+  mkdir -p "$(dirname "${db_path}")"
+  printf 'not a sqlite database\n' >"${db_path}"
+  printf 'stale wal\n' >"${db_path}-wal"
+  printf 'stale shm\n' >"${db_path}-shm"
 }
 
-write_preview_scheduled_tasks() {
-  local task_name="$1"
-  python3 - "${WORKSPACE}/data/conf/scheduled-tasks.ui-preview.json" "${task_name}" <<'PY'
-import json
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-task_name = sys.argv[2]
-payload = {
-    "tasks": [
-        {
-            "name": task_name,
-            "enabled": True,
-            "schedule": "* * * * *",
-            "timezone": "UTC",
-            "command": "date >> /app/logs/ui-preview-smoke-command.log",
-            "timeout_sec": 300,
-        }
-    ]
-}
-path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-PY
+assert_no_preview_seed_files() {
+  local paths=(
+    "${WORKSPACE}/data/conf/config.ui-preview.json"
+    "${WORKSPACE}/data/conf/proxy.ui-preview.json"
+    "${WORKSPACE}/data/conf/scheduled-tasks.ui-preview.json"
+    "${WORKSPACE}/data/php-fpm/inventory.ui-preview.json"
+    "${WORKSPACE}/data/php-fpm/vhosts.ui-preview.json"
+  )
+  local path
+  for path in "${paths[@]}"; do
+    [[ ! -f "${path}" ]] || fail "preview seed file should not exist: ${path}"
+  done
 }
 
-assert_task_count() {
-  local path="$1"
-  local expected="$2"
-  local actual
+assert_preview_db_removed() {
+  local db_path="${WORKSPACE}/data/$(preview_db_rel_path)"
 
-  actual="$(jq '.tasks | length' "${path}")"
-  if [[ "${actual}" != "${expected}" ]]; then
-    fail "expected ${path} to contain ${expected} tasks, got ${actual}"
-  fi
+  [[ ! -f "${db_path}" ]] || fail "preview DB should be removed: ${db_path}"
+  [[ ! -f "${db_path}-wal" ]] || fail "preview DB WAL should be removed: ${db_path}-wal"
+  [[ ! -f "${db_path}-shm" ]] || fail "preview DB SHM should be removed: ${db_path}-shm"
+}
+
+assert_preview_db_exists() {
+  local db_path="${WORKSPACE}/data/$(preview_db_rel_path)"
+  [[ -f "${db_path}" ]] || fail "preview DB should exist: ${db_path}"
+}
+
+remove_preview_db() {
+  local db_path="${WORKSPACE}/data/$(preview_db_rel_path)"
+  rm -f "${db_path}" "${db_path}-wal" "${db_path}-shm"
 }
 
 stage_workspace() {
   install -d -m 755 \
-    "${WORKSPACE}" \
-    "${WORKSPACE}/data" \
+	    "${WORKSPACE}" \
+	    "${WORKSPACE}/bin" \
+	    "${WORKSPACE}/data/persistent" \
+	    "${WORKSPACE}/data/cache/response" \
+	    "${WORKSPACE}/data" \
     "${WORKSPACE}/scripts"
+  install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${WORKSPACE}/bin/tukuyomi"
   install -m 644 "${ROOT_DIR}/docker-compose.yml" "${WORKSPACE}/docker-compose.yml"
   rsync -a "${ROOT_DIR}/coraza/" "${WORKSPACE}/coraza/"
   rsync -a "${ROOT_DIR}/data/conf/" "${WORKSPACE}/data/conf/"
-  rsync -a "${ROOT_DIR}/data/rules/" "${WORKSPACE}/data/rules/"
+  rsync -a "${ROOT_DIR}/seeds/" "${WORKSPACE}/seeds/"
   rsync -a "${ROOT_DIR}/scripts/" "${WORKSPACE}/scripts/"
   if [[ -d "${ROOT_DIR}/data/php-fpm" ]]; then
     rsync -a "${ROOT_DIR}/data/php-fpm/" "${WORKSPACE}/data/php-fpm/"
@@ -169,11 +186,6 @@ stage_workspace() {
     rsync -a "${ROOT_DIR}/data/vhosts/" "${WORKSPACE}/data/vhosts/"
   else
     install -d -m 755 "${WORKSPACE}/data/vhosts"
-  fi
-  if [[ -d "${ROOT_DIR}/data/logs" ]]; then
-    rsync -a "${ROOT_DIR}/data/logs/" "${WORKSPACE}/data/logs/"
-  else
-    install -d -m 755 "${WORKSPACE}/data/logs"
   fi
   install -d -m 755 "${WORKSPACE}/data/scheduled-tasks"
 }
@@ -188,8 +200,8 @@ cleanup() {
         COMPOSE_PROJECT_NAME="${UI_PREVIEW_SMOKE_PROJECT}" docker compose logs coraza scheduled-task-runner 2>/dev/null || true
       ) >&2
     fi
-    preview_down 1
-    preview_down 0
+    preview_down 1 || true
+    preview_down 0 || true
   fi
 
   if [[ "${UI_PREVIEW_SMOKE_AUTO_DOWN}" == "1" && -n "${WORKSPACE}" ]]; then
@@ -200,7 +212,6 @@ trap 'cleanup "$?"' EXIT
 
 need_cmd curl
 need_cmd docker
-need_cmd jq
 need_cmd make
 need_cmd python3
 need_cmd rsync
@@ -215,56 +226,46 @@ fi
 
 WORKSPACE="$(mktemp -d "${ROOT_DIR}/.tmp-ui-preview-smoke.XXXXXX")"
 stage_workspace
+write_minimal_config
 
 log "verifying default reset/remove behavior without UI_PREVIEW_PERSIST"
-write_base_config ":${UI_PREVIEW_SMOKE_SINGLE_PORT}" ""
-write_preview_scheduled_tasks "ui-preview-reset-smoke"
-preview_up 0 >/dev/null
+write_stale_preview_db
+preview_up 0 ":${UI_PREVIEW_SMOKE_SINGLE_PORT}" "" >/dev/null
 wait_for_http_code "200" "http://127.0.0.1:${UI_PREVIEW_SMOKE_SINGLE_PORT}/healthz" || fail "single-listener ui-preview did not become healthy"
-assert_task_count "${WORKSPACE}/data/conf/scheduled-tasks.ui-preview.json" "0"
-preview_down 0
-[[ ! -f "${WORKSPACE}/data/conf/config.ui-preview.json" ]] || fail "config.ui-preview.json should be removed without UI_PREVIEW_PERSIST"
-[[ ! -f "${WORKSPACE}/data/conf/scheduled-tasks.ui-preview.json" ]] || fail "scheduled-tasks.ui-preview.json should be removed without UI_PREVIEW_PERSIST"
+assert_no_preview_seed_files
+preview_down 0 ":${UI_PREVIEW_SMOKE_SINGLE_PORT}" ""
+assert_no_preview_seed_files
+assert_preview_db_removed
 
 log "verifying UI_PREVIEW_PERSIST=1 with split public/admin ports"
-write_preview_config ":${UI_PREVIEW_SMOKE_PUBLIC_PORT}" ":${UI_PREVIEW_SMOKE_ADMIN_PORT}"
-cat >"${WORKSPACE}/data/conf/proxy.ui-preview.json" <<'EOF'
-{}
-EOF
-write_preview_scheduled_tasks "ui-preview-persist-smoke"
-cat >"${WORKSPACE}/data/php-fpm/inventory.ui-preview.json" <<'EOF'
-{}
-EOF
-cat >"${WORKSPACE}/data/php-fpm/vhosts.ui-preview.json" <<'EOF'
-{
-  "vhosts": []
-}
-EOF
-preview_up 1 >/dev/null
+preview_up 1 ":${UI_PREVIEW_SMOKE_PUBLIC_PORT}" ":${UI_PREVIEW_SMOKE_ADMIN_PORT}" >/dev/null
 wait_for_http_code "200" "http://127.0.0.1:${UI_PREVIEW_SMOKE_PUBLIC_PORT}/healthz" || fail "split public listener did not become healthy"
 wait_for_http_code "200" "http://127.0.0.1:${UI_PREVIEW_SMOKE_ADMIN_PORT}/healthz" || fail "split admin listener did not become healthy"
 [[ "$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1:${UI_PREVIEW_SMOKE_PUBLIC_PORT}/tukuyomi-ui" || true)" == "404" ]] || fail "public preview listener should not serve admin UI path in split mode"
 [[ "$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1:${UI_PREVIEW_SMOKE_ADMIN_PORT}/tukuyomi-ui" || true)" == "200" ]] || fail "admin preview listener should serve admin UI path in split mode"
-preview_down 1
-[[ -f "${WORKSPACE}/data/conf/config.ui-preview.json" ]] || fail "config.ui-preview.json should persist with UI_PREVIEW_PERSIST=1"
-[[ -f "${WORKSPACE}/data/conf/scheduled-tasks.ui-preview.json" ]] || fail "scheduled-tasks.ui-preview.json should persist with UI_PREVIEW_PERSIST=1"
-assert_task_count "${WORKSPACE}/data/conf/scheduled-tasks.ui-preview.json" "1"
+assert_no_preview_seed_files
+preview_down 1 ":${UI_PREVIEW_SMOKE_PUBLIC_PORT}" ":${UI_PREVIEW_SMOKE_ADMIN_PORT}"
+assert_no_preview_seed_files
+assert_preview_db_exists
 
-log "verifying split preview can come back up from preserved files"
-preview_up 1 >/dev/null
+log "verifying split preview can come back up from persisted DB without preview env files"
+preview_up 1 "" "" >/dev/null
 wait_for_http_code "200" "http://127.0.0.1:${UI_PREVIEW_SMOKE_PUBLIC_PORT}/healthz" || fail "preserved split public listener did not come back healthy"
 wait_for_http_code "200" "http://127.0.0.1:${UI_PREVIEW_SMOKE_ADMIN_PORT}/healthz" || fail "preserved split admin listener did not come back healthy"
-preview_down 1
+preview_down 1 "" ""
+assert_no_preview_seed_files
 
 log "verifying loopback listener bind is rejected with a clear message"
-write_preview_config "localhost:${UI_PREVIEW_SMOKE_PUBLIC_PORT}" ":${UI_PREVIEW_SMOKE_ADMIN_PORT}"
+remove_preview_db
 set +e
 loopback_output="$(
   cd "${WORKSPACE}" && \
   COMPOSE_PROJECT_NAME="${UI_PREVIEW_SMOKE_PROJECT}" \
   PUID="${PUID_VALUE}" \
   GUID="${GUID_VALUE}" \
-  UI_PREVIEW_PERSIST="1" \
+  UI_PREVIEW_PERSIST="0" \
+  UI_PREVIEW_PUBLIC_ADDR="localhost:${UI_PREVIEW_SMOKE_PUBLIC_PORT}" \
+  UI_PREVIEW_ADMIN_ADDR=":${UI_PREVIEW_SMOKE_ADMIN_PORT}" \
   bash ./scripts/ui_preview.sh up 2>&1
 )"
 loopback_status="$?"

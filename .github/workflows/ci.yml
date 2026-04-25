@@ -94,15 +94,17 @@ jobs:
       matrix:
         include:
           - mode: file
-            storage_backend: "file"
             db_driver: "sqlite"
-            expect_sqlite_artifact: "false"
+            expect_sqlite_artifact: "true"
           - mode: sqlite
-            storage_backend: "db"
             db_driver: "sqlite"
             expect_sqlite_artifact: "true"
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.0"
+          cache-dependency-path: coraza/src/go.sum
 
       - name: Prepare env file
         run: cp .env.example .env
@@ -112,22 +114,23 @@ jobs:
 
       - name: Configure app config for matrix
         env:
-          STORAGE_BACKEND: ${{ matrix.storage_backend }}
           DB_DRIVER: ${{ matrix.db_driver }}
         run: |
           set -euo pipefail
           tmp="$(mktemp)"
-          jq --arg backend "${STORAGE_BACKEND}" --arg driver "${DB_DRIVER}" '
+          jq --arg driver "${DB_DRIVER}" '
             .server.listen_addr = ":9090" |
-            .storage.backend = $backend |
             .storage.db_driver = $driver |
-            .storage.db_retention_days = 30
+            .storage.db_retention_days = 30 |
+            .admin = (.admin // {}) |
+            .admin.session_secret = "ci-session-secret-1-1-0-release"
           ' data/conf/config.json > "${tmp}"
           mv "${tmp}" data/conf/config.json
 
           # Keep the baseline upstream unreachable; route/admin smoke injects its
           # own reachable upstream later, while GoTestWAF keeps historical scoring.
           tmp_proxy="$(mktemp)"
+          mkdir -p data/conf
           jq '
             .upstreams = [
               {
@@ -137,13 +140,21 @@ jobs:
                 "enabled": true
               }
             ]
-          ' data/conf/proxy.json > "${tmp_proxy}"
+          ' seeds/conf/proxy.json > "${tmp_proxy}"
           mv "${tmp_proxy}" data/conf/proxy.json
+
+      - name: Import startup config and WAF assets into DB
+        run: |
+          make db-import
+          make crs-install
 
       - name: Coraza smoke check
         env:
           WAF_LISTEN_PORT: "9090"
           WAF_API_KEY_PRIMARY: "dev-only-change-this-key-please"
+          TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME: "admin"
+          TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD: "dev-only-change-this-password-please"
+          TUKUYOMI_ADMIN_BOOTSTRAP_EMAIL: "admin@example.test"
         run: |
           set -euo pipefail
           cleanup() {
@@ -201,17 +212,17 @@ jobs:
       - name: Validate SQLite DB artifact
         if: matrix.expect_sqlite_artifact == 'true'
         run: |
-          if [[ ! -s data/logs/coraza/tukuyomi.db ]]; then
+          if [[ ! -s data/db/tukuyomi.db ]]; then
             echo "expected sqlite db file was not generated" >&2
-            ls -la data/logs/coraza || true
+            ls -la data/db || true
             exit 1
           fi
 
       - name: Publish GoTestWAF summary
         if: always()
         run: |
-          if [[ -f data/logs/gotestwaf/gotestwaf-report-summary.md ]]; then
-            cat data/logs/gotestwaf/gotestwaf-report-summary.md >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f data/tmp/gotestwaf/gotestwaf-report-summary.md ]]; then
+            cat data/tmp/gotestwaf/gotestwaf-report-summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload GoTestWAF artifacts
@@ -220,8 +231,8 @@ jobs:
         with:
           name: gotestwaf-report-${{ matrix.mode }}
           path: |
-            data/logs/gotestwaf/gotestwaf-report.json
-            data/logs/gotestwaf/gotestwaf-report-summary.txt
-            data/logs/gotestwaf/gotestwaf-report-summary.md
-            data/logs/coraza/tukuyomi.db
+            data/tmp/gotestwaf/gotestwaf-report.json
+            data/tmp/gotestwaf/gotestwaf-report-summary.txt
+            data/tmp/gotestwaf/gotestwaf-report-summary.md
+            data/db/tukuyomi.db
           if-no-files-found: warn

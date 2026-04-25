@@ -1,0 +1,27 @@
+{
+  "default": {
+    "rules": [
+      {
+        "kind": "DENY",
+        "match": {
+          "type": "prefix",
+          "value": "/tukuyomi-api/"
+        },
+        "methods": ["GET", "HEAD"],
+        "ttl": 600,
+        "vary": []
+      },
+      {
+        "kind": "ALLOW",
+        "match": {
+          "type": "prefix",
+          "value": "/test.html"
+        },
+        "methods": ["GET", "HEAD"],
+        "ttl": 600,
+        "vary": ["Accept-Encoding"]
+      }
+    ]
+  },
+  "hosts": {}
+}

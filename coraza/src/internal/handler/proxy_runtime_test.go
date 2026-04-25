@@ -227,6 +227,8 @@ func TestProxyRulesApplyAndRollback(t *testing.T) {
 	if err := os.WriteFile(proxyPath, []byte(initial), 0o644); err != nil {
 		t.Fatalf("write initial proxy.json: %v", err)
 	}
+	initConfigDBStoreForTest(t)
+	importProxyRuntimeDBForTest(t, initial)
 
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
@@ -295,6 +297,115 @@ func TestProxyRulesApplyAndRollback(t *testing.T) {
 	}
 	if _, err := ProxyRollbackPreview(); err == nil {
 		t.Fatal("expected empty rollback preview after rollback consumed only snapshot")
+	}
+}
+
+func TestProxyRulesApplyAndRollbackPersistNormalizedDB(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	}()
+
+	proxyPath := filepath.Join(tmp, "proxy.json")
+	initial := `{
+  "upstreams": [
+    { "name": "primary", "url": "http://127.0.0.1:8081", "weight": 1, "enabled": true }
+  ]
+}`
+	if err := os.WriteFile(proxyPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write initial proxy.json: %v", err)
+	}
+	importProxyRuntimeDBForTest(t, initial)
+	if err := InitProxyRuntime(proxyPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+	active, rec, found, err := getLogsStatsStore().loadActiveProxyConfig()
+	if err != nil {
+		t.Fatalf("loadActiveProxyConfig: %v", err)
+	}
+	if !found {
+		t.Fatal("normalized proxy config should be imported before startup")
+	}
+	if rec.Generation != 1 {
+		t.Fatalf("generation=%d want 1", rec.Generation)
+	}
+	if len(active.Upstreams) != 1 || !strings.Contains(active.Upstreams[0].URL, "8081") {
+		t.Fatalf("active upstreams after seed=%#v want 8081", active.Upstreams)
+	}
+	_, etag, _, _, _ := ProxyRulesSnapshot()
+	next := strings.Replace(initial, "127.0.0.1:8081", "127.0.0.1:8082", 1)
+	if _, _, err := ApplyProxyRulesRaw(etag, next); err != nil {
+		t.Fatalf("ApplyProxyRulesRaw: %v", err)
+	}
+	active, rec, found, err = getLogsStatsStore().loadActiveProxyConfig()
+	if err != nil {
+		t.Fatalf("loadActiveProxyConfig after apply: %v", err)
+	}
+	if !found {
+		t.Fatal("normalized proxy config should exist after apply")
+	}
+	if rec.Generation != 2 {
+		t.Fatalf("generation=%d want 2", rec.Generation)
+	}
+	if len(active.Upstreams) != 1 || !strings.Contains(active.Upstreams[0].URL, "8082") {
+		t.Fatalf("active upstreams after apply=%#v want 8082", active.Upstreams)
+	}
+	if _, _, _, err := RollbackProxyRules(); err != nil {
+		t.Fatalf("RollbackProxyRules: %v", err)
+	}
+	active, rec, found, err = getLogsStatsStore().loadActiveProxyConfig()
+	if err != nil {
+		t.Fatalf("loadActiveProxyConfig after rollback: %v", err)
+	}
+	if !found {
+		t.Fatal("normalized proxy config should exist after rollback")
+	}
+	if rec.Generation != 3 {
+		t.Fatalf("generation=%d want 3", rec.Generation)
+	}
+	if rec.RestoredFromVersionID == 0 {
+		t.Fatal("rollback generation should record restored_from_version_id")
+	}
+	if len(active.Upstreams) != 1 || !strings.Contains(active.Upstreams[0].URL, "8081") {
+		t.Fatalf("active upstreams after rollback=%#v want 8081", active.Upstreams)
+	}
+}
+
+func TestInitProxyRuntimeUsesDBBlobBeforeSeedFile(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	}()
+
+	proxyPath := filepath.Join(tmp, "proxy.json")
+	fileRaw := `{"upstreams":[{"name":"file","url":"http://127.0.0.1:8081","weight":1,"enabled":true}]}`
+	dbRaw := `{"upstreams":[{"name":"db","url":"http://127.0.0.1:8082","weight":1,"enabled":true}]}`
+	if err := os.WriteFile(proxyPath, []byte(fileRaw), 0o644); err != nil {
+		t.Fatalf("write proxy seed: %v", err)
+	}
+	prepared, err := prepareProxyRulesRaw(dbRaw)
+	if err != nil {
+		t.Fatalf("prepare db raw: %v", err)
+	}
+	if err := getLogsStatsStore().UpsertConfigBlob(proxyRulesConfigBlobKey, []byte(prepared.raw), prepared.etag, time.Now().UTC()); err != nil {
+		t.Fatalf("upsert proxy_rules: %v", err)
+	}
+	seedUpstreamRuntimeDBForTest(t, prepared.cfg)
+
+	if err := InitProxyRuntime(proxyPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+	_, _, cfg, _, _ := ProxyRulesSnapshot()
+	if len(cfg.Upstreams) != 1 || cfg.Upstreams[0].Name != "db" {
+		t.Fatalf("upstreams=%#v want db blob", cfg.Upstreams)
 	}
 }
 
@@ -508,7 +619,7 @@ func TestProxyProbeSupportsFCGIUnixSocketTargets(t *testing.T) {
 	}
 }
 
-func TestPrepareProxyRulesRawForProbeSkipsDirectUpstreamDeleteGuard(t *testing.T) {
+func TestPrepareProxyRulesRawDoesNotBindConfiguredUpstreamToVhost(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
 
@@ -542,12 +653,23 @@ func TestPrepareProxyRulesRawForProbeSkipsDirectUpstreamDeleteGuard(t *testing.T
 	}
 
 	nextRaw := `{}`
-	if _, err := prepareProxyRulesRawWithSitesAndVhosts(nextRaw, SiteConfigFile{}, vhosts); err == nil || !strings.Contains(err.Error(), `upstreams removes "app" while vhost "app" still binds to that direct upstream`) {
-		t.Fatalf("expected delete guard error, got %v", err)
+	prepared, err := prepareProxyRulesRawWithSitesAndVhosts(nextRaw, SiteConfigFile{}, vhosts)
+	if err != nil {
+		t.Fatalf("prepareProxyRulesRawWithSitesAndVhosts: %v", err)
 	}
-	if _, err := prepareProxyRulesRawWithSitesAndVhostsOptions(nextRaw, SiteConfigFile{}, vhosts, proxyRulesValidationOptions{skipDirectUpstreamDeleteGuard: true}); err == nil || !strings.Contains(err.Error(), `linked_upstream_name "app" must reference a configured upstream`) {
-		t.Fatalf("probe prepare should skip delete guard but keep upstream binding validation, got %v", err)
+	if _, ok := findProxyUpstreamByName(prepared.effectiveCfg.Upstreams, "app"); ok {
+		t.Fatal("configured upstream app should not be synthesized from linked_upstream_name")
 	}
+	for _, route := range prepared.effectiveCfg.Routes {
+		if route.Name != "vhost:app" {
+			continue
+		}
+		if route.Action.Upstream != "vhost-1" {
+			t.Fatalf("generated vhost route upstream=%q want vhost-1", route.Action.Upstream)
+		}
+		return
+	}
+	t.Fatal("generated vhost route missing")
 }
 
 func TestBuildProxyTransportUsesH2CPriorKnowledge(t *testing.T) {

@@ -7,7 +7,7 @@
 ## 1. まず証跡を取る
 
 1. 管理APIでログを取得し、`rule_id` と `path` を確認する。
-2. `interesting.ndjson`（`logs/proxy/`）で `req_id` を追跡し、クライアント条件（IP/UA/クエリ）を絞る。
+2. 同じ `req_id` を `/tukuyomi-api/logs/read?src=waf&req_id=<id>` で追跡し、クライアント条件（IP/UA/クエリ）を絞る。
 3. 再現可能なHTTPリクエスト（curlやE2E）を必ず残す。
 
 ## 2. 影響範囲を切り分ける
@@ -20,11 +20,11 @@
 
 推奨順序:
 
-1. `data/conf/waf-bypass.json` に対象パスのみの「特別ルール」を設定する。
-2. 必要なら専用 `*.conf` を用意し、対象Ruleを `ctl:ruleRemoveById` で限定無効化する。
+1. `Bypass Rules` で対象パスだけに `extra_rule` を指定する。
+2. 必要なら `Rules` で用途 `Bypass Rules extra_rule` の専用 `*.conf` asset を用意し、対象Ruleを `ctl:ruleRemoveById` で限定無効化する。
 3. 最終手段として広いパスのバイパスを使う（期限付きで実施し、後で戻す）。
 
-`waf-bypass.json` 例:
+Bypass Rules の JSON 例:
 
 ```json
 {
@@ -34,7 +34,7 @@
   "hosts": {
     "example.com": {
       "entries": [
-        { "path": "/search", "extra_rule": "conf/rules/search-endpoint.conf" }
+        { "path": "/search", "extra_rule": "orders-preview.conf" }
       ]
     }
   }
@@ -43,7 +43,7 @@
 
 host scope の優先順は exact `host:port`、次に bare `host`、最後に `default` です。host-specific scope は default を merge せず置き換えます。
 
-`search-endpoint.conf` 例:
+`Rules` で管理する `orders-preview.conf` 例:
 
 ```conf
 SecRuleEngine On
@@ -54,7 +54,7 @@ SecRule ARGS:q "@rx (?i)(<script|union([[:space:]]+all)?[[:space:]]+select|bench
 
 ## 4. CRS設定の見直し
 
-1. `data/rules/crs/crs-setup.conf` の Paranoia Level を確認する。
+1. `rules/crs/crs-setup.conf` から import された DB-backed CRS setup asset の Paranoia Level を確認する。
 2. 初期導入時は `PL1` から開始し、段階的に上げる。
 3. anomaly threshold を下げ過ぎていないか確認する。
 

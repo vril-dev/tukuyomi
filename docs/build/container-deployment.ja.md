@@ -21,9 +21,9 @@ container platform 向けの support は 3 段階で整理します。
 - internal な `scheduled-task-runner` sidecar が 1 個
 - 次の writable path を共有する
   - `/app/conf`
-  - request country resolution で managed `.mmdb` を使うなら `/app/data/geoip`
   - `/app/data/scheduled-tasks`
-  - `/app/logs`
+  - `/app/audit`
+  - local `persistent_storage` を使うなら `/app/data/persistent`
   - bundled runtime を使うなら `/app/data/php-fpm`
 - admin の live mutation を許可する
 
@@ -71,7 +71,7 @@ container platform では、今の official topology を次で固定します。
 ## public/admin listener 分離
 
 public proxy listener を `:80` / `:443` に置きつつ、admin UI/API を別の
-high port に分けたい場合は `conf/config.json` の `admin.listen_addr` を
+high port に分けたい場合は DB `app_config` の `admin.listen_addr` を
 設定します。
 
 sample:
@@ -117,9 +117,9 @@ dedicated scheduler role:
 - public ingress を持たない
 - frontend と同じ source of truth として次を mount する
   - `/app/conf`
-  - `/app/data/geoip`
   - `/app/data/scheduled-tasks`
-  - `/app/logs`
+  - `/app/audit`
+  - local `persistent_storage` を使うなら `/app/data/persistent`
   - bundled runtime を使うなら `/app/data/php-fpm`
 
 これは distributed mutable runtime support を意味しません。frontend を
@@ -154,34 +154,68 @@ docker build -f docs/build/Dockerfile.example -t tukuyomi:deploy .
 
 この方法では Admin UI build、Go build、runtime config copy、CRS install まで image build 内で完結します。
 
+## Deployment artifact render
+
+cloud/container platform 向けは `make install` ではなく、manifest を生成して
+review してから各 platform の apply flow へ渡します。
+
+```bash
+make deploy-render TARGET=container-image IMAGE_URI=registry.example.com/tukuyomi:1.1.0
+make deploy-render TARGET=ecs IMAGE_URI=registry.example.com/tukuyomi:1.1.0
+make deploy-render TARGET=kubernetes IMAGE_URI=registry.example.com/tukuyomi:1.1.0
+make deploy-render TARGET=azure-container-apps IMAGE_URI=registry.example.com/tukuyomi:1.1.0
+```
+
+出力先は既定で `dist/deploy/<target>/` です。
+
+- `container-image` は deployment Dockerfile と local build helper を生成します。registry push はしません
+- `ecs` は single-instance task/service と replicated scheduler 用 artifact を生成します。AWS API は呼びません
+- `kubernetes` は single-instance と dedicated scheduler 用 YAML を生成します。`kubectl apply` はしません
+- `azure-container-apps` は single-instance と scheduler singleton YAML を生成します。Azure API は呼びません
+- 既存 output を置き換える場合は `DEPLOY_RENDER_OVERWRITE=1` を指定します
+
 ## 共有 writable path
 
 official な mutable single-instance path で最低限必要な writable path:
 
 - `/app/conf`
-- `/app/data/geoip`
 - `/app/data/scheduled-tasks`
-- `/app/logs`
+- `/app/audit`
+- `/app/data/persistent`（`persistent_storage.backend=local` の場合）
 
 ephemeral local state を許容しないなら、これらを platform 側で mount してください。
 
 `/options`、`/vhosts`、または scheduled PHP CLI job で bundled PHP runtime も使う場合は、`/app/data/php-fpm` も mount してください。
+internal response cache store を node replacement 後も残したい場合は、`cache_store.store_dir`
+に合わせて `/app/cache/response` なども mount してください。これは cache であり、
+DB/runtime authority ではありません。
 
-`/app/rules` は image bake のままでも構いません。runtime で rule file を変えたい時だけ mount してください。
+WAF/CRS import material は `/app/data/tmp` 配下へ stage し、DB `waf_rule_assets`
+へ import します。runtime は mounted rules directory ではなく DB の active WAF/CRS asset を読みます。
 
 ## Config と Secret
 
-`tukuyomi` は多数の env ではなく、主に `conf/config.json` で動くプロダクトです。
+`tukuyomi` は `conf/config.json` を DB 接続 bootstrap に使い、その後の
+operator-managed な app/proxy 設定は normalized DB table から読みます。
 
 典型的な本番パターン:
 
-- `conf/config.json` は secret manager / config management から render
-- `conf/proxy.json`、`conf/sites.json`、`conf/scheduled-tasks.json`、各種 policy file は mount または bake
+- `conf/config.json` は `storage.db_driver`、`storage.db_path`、`storage.db_dsn` 用に secret manager / config management から render
+- `seeds/conf/` を空 DB 向け同梱 seed set として mount または bake します。`conf/proxy.json` や各種 policy file など configured file がある場合はそちらが優先されます
+- 初回起動前に `make db-migrate`、`make crs-install` の順で WAF rule asset を install/import し、その後残りの seed material 用に `make db-import` を実行します。`db-import` は WAF rule asset を再 import しません
+- `conf/sites.json`、`conf/scheduled-tasks.json`、`conf/upstream-runtime.json` は空 DB の seed/export file として扱います。bootstrap 後の正は normalized DB row です
 - runtime env injection は主に次だけ
   - `WAF_CONFIG_FILE`
   - `WAF_PROXY_AUDIT_FILE`
+  - `persistent_storage.backend=s3` の場合だけ `AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`、`AWS_SESSION_TOKEN`、`AWS_REGION` / `AWS_DEFAULT_REGION`
   - `security_audit.key_source=env` を使う場合の security-audit key override
-- embedded `Settings` 画面も同じ `conf/config.json` を global settings として編集しますが、こちらも `Save config only` 前提です。listener/runtime/storage/observability 系の変更を反映するには container を recreate/restart してください
+- embedded `Settings` 画面は DB `app_config` を編集します。listener/runtime/storage policy/observability 系の変更を反映するには container を recreate/restart してください
+
+site-managed ACME は `Sites` 画面で site ごとに `tls.mode=acme` を選択します。
+ACME cache は `persistent_storage` の `acme/` namespace に保存します。single-instance で
+local backend を使うなら `/app/data/persistent` を mount し、replicated / node replacement
+前提なら S3 backend または共有 mount を使ってください。Azure Blob Storage / Google Cloud
+Storage backend は provider adapter が入るまで fail closed します。
 
 proxy engine 選択も同じ restart-required config surface です:
 
@@ -203,17 +237,15 @@ proxy engine 選択も同じ restart-required config surface です:
 
 server-side に閉じ込める値:
 
-- `admin.api_key_primary`
-- `admin.api_key_secondary`
 - `admin.session_secret`
+- `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` / `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` を使う場合の初期 owner bootstrap credential
 - 必要なら security-audit の encryption/HMAC key
 - immutable replicated rollout を意図的に試すなら、frontend replica では `admin.read_only=true` にし、scheduled-task 実行は dedicated singleton role に切り出してください
 - `tukuyomi` の既定 posture は `admin.external_mode=api_only_external` です。remote admin API が不要なら `deny_external` を使ってください
 - non-loopback listener で `full_external` に上書きする場合は、front-side の allowlist/auth を必須として扱ってください
 - `admin.trusted_cidrs` を public / catch-all network まで広げた場合も、埋め込み管理UI/API はその trusted source へ再露出され、起動時は warning のみです
-- managed bypass override rule は `/app/conf/rules/*.conf` 配下に置き、`Rules -> Override Rules` から編集します。`waf-bypass.json` からは `extra_rule` として参照します
-- container image と release bundle には harmless な standalone sample として `/app/conf/rules/search-endpoint.conf` も含まれます
-- その参照例として `/app/conf/waf-bypass.sample.json` も含まれます
+- base WAF と CRS asset は import 後 DB `waf_rule_assets` です。image-baked file は seed material であり runtime authority ではありません
+- managed bypass override rule は DB `override_rules` です。`extra_rule` の値は logical compatibility reference として残ります
 
 ## Platform 別の対応
 
@@ -245,7 +277,8 @@ sample では次を別 EFS mount として分けています。
 
 - `/app/conf`
 - `/app/data/scheduled-tasks`
-- `/app/logs`
+- `/app/audit`
+- `/app/data/persistent`
 - `/app/data/php-fpm`
 
 task-definition sample では `admin.listen_addr` 用に `9091/tcp` も宣言しています。
@@ -281,7 +314,8 @@ sample では次を別 PVC として分けています。
 
 - `tukuyomi-conf`
 - `tukuyomi-scheduled-tasks`
-- `tukuyomi-logs`
+- `tukuyomi-audit`
+- `tukuyomi-persistent`
 - `tukuyomi-php-fpm`
 
 sample には次も含めています。
@@ -319,7 +353,8 @@ sample では Container Apps environment 側に次の Azure Files storage 定義
 
 - `proxyconf`
 - `proxyscheduledtasks`
-- `proxylogs`
+- `proxyaudit`
+- `proxypersistent`
 - `proxyphpfpm`
 
 Azure Container Apps sample は引き続き primary ingress を 1 つだけ持ちます。
@@ -352,7 +387,7 @@ cloud では通常:
 
 `client -> ALB/nginx/ingress -> tukuyomi container -> app container/service`
 
-前段がある場合は、`conf/config.json` の trusted proxy range をその前段だけに絞ってください。
+前段がある場合は、DB `app_config` の trusted proxy range をその前段だけに絞ってください。
 
 `tukuyomi` 自体を direct public entrypoint にして built-in HTTP/3 を有効にする場合は、listener port の TCP/UDP を両方開けてください。
 
@@ -360,7 +395,7 @@ cloud では通常:
 
 - 埋め込み Admin UI は image build 時に生成され、runtime では build しません
 - `scripts/install_crs.sh` は image build 時でも startup 時でも実行できます
-- runtime で policy file を変更したい場合は、`/app/conf` と `/app/rules` を mount してください
+- runtime で policy file を変更したい場合は `/app/conf` を mount してください。WAF/CRS asset は `/app/data/tmp` staging から DB へ import します
 - repository 同梱の `docker-compose.yml` には、`scheduled-tasks` profile 配下で `scheduled-task-runner` sidecar が入ります
 - 現在の sidecar 実装は明示的です。image 内の proxy binary を `run-scheduled-tasks` 付きで呼び、次の minute 境界まで sleep します
 - failure policy も明示的です。`run-scheduled-tasks` が non-zero を返したら sidecar も non-zero で終了し、fault を握り潰さずに container restart policy へ渡します
@@ -394,8 +429,8 @@ docker compose \
 
 - `make ui-preview-up` では preview 専用の scheduler sidecar も一緒に起動します
 - 既定の preview は毎回初期化されます
-  - `ui-preview-up` のたびに `conf/scheduled-tasks.ui-preview.json` は `{"tasks":[]}` へ初期化され、古い preview task は引き継ぎません
-- preview 用 config/state を保持したい時はこれです
+  - `ui-preview-up` のたびに preview 専用 SQLite DB を作り直すため、古い preview task、listener 変更、DB row は引き継ぎません
+- preview 用 DB state を保持したい時はこれです
 
 ```bash
 UI_PREVIEW_PERSIST=1 make ui-preview-up
@@ -403,36 +438,30 @@ UI_PREVIEW_PERSIST=1 make ui-preview-down
 ```
 
 - `UI_PREVIEW_PERSIST=1` では次を保持します
-  - `conf/config.ui-preview.json`
-  - `conf/proxy.ui-preview.json`
-  - `conf/scheduled-tasks.ui-preview.json`
-  - `data/php-fpm/inventory.ui-preview.json`
-  - `data/php-fpm/vhosts.ui-preview.json`
-- `ui-preview-up` は `conf/config.ui-preview.json` から publish port を導出します
+  - `data/<dirname(storage.db_path)>/tukuyomi-ui-preview.db`
+  - 例えば `storage.db_path` が `db/tukuyomi.db` なら preview DB は `data/db/tukuyomi-ui-preview.db` です
+- `ui-preview-up` は preview DB に保存された active preview `app_config` から publish port を導出します
+  - 初回起動時だけ `conf/config.json` と `UI_PREVIEW_PUBLIC_ADDR` / `UI_PREVIEW_ADMIN_ADDR` override を土台にします
   - single listener なら public listener port を publish
   - split listener なら public/admin の両方を publish
   - healthcheck は split 時は admin listener を優先
-- split preview 設定例:
+- split preview の bootstrap 例:
 
-```json
-{
-  "server": {
-    "listen_addr": ":80"
-  },
-  "admin": {
-    "listen_addr": ":9090"
-  }
-}
+```bash
+UI_PREVIEW_PERSIST=1 \
+UI_PREVIEW_PUBLIC_ADDR=:80 \
+UI_PREVIEW_ADMIN_ADDR=:9090 \
+make ui-preview-up
 ```
 
 - この場合の確認先はこうです
   - public proxy: `http://127.0.0.1:80`
   - admin UI: `http://127.0.0.1:9090/tukuyomi-ui`
   - admin API: `http://127.0.0.1:9090/tukuyomi-api`
-- preview config で `localhost:80`, `127.0.0.1:80`, `[::1]:9090` のような loopback bind は使わないでください
+- preview listener 設定で `localhost:80`, `127.0.0.1:80`, `[::1]:9090` のような loopback bind は使わないでください
   - container 内 loopback bind と host publish が噛み合わないため、preview は明示エラーで止めます
 - `Settings` から listener を保存した後に preview で反映を確認する時は、`UI_PREVIEW_PERSIST=1 make ui-preview-down && UI_PREVIEW_PERSIST=1 make ui-preview-up` を使ってください
-  - `docker compose restart` では changed port publish は作り直されません
+  - listener 変更自体は preview DB に残りますが、`docker compose restart` では changed port publish は作り直されません
 - scheduler fault は sidecar の exit/restart と container logs で追います。恒久 fault は restart churn として見える想定です
 - scheduled task の command line が `/app/data/php-fpm/binaries/php85/php` のような bundled PHP path を指す場合は、その scheduler container に `/app/data/php-fpm` も mount してください
 - platform health endpoint は `/healthz` on `9090` です

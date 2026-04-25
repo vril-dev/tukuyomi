@@ -37,7 +37,8 @@ review では、同じ host 上で既存の local benchmark harness を使い、
 ```bash
 HOST_CORAZA_PORT=19090 \
 WAF_LISTEN_PORT=9090 \
-WAF_API_KEY_PRIMARY=dev-only-change-this-key-please \
+WAF_ADMIN_USERNAME=admin \
+WAF_ADMIN_PASSWORD=dev-only-change-this-password-please \
 BENCH_REQUESTS=120 \
 WARMUP_REQUESTS=20 \
 BENCH_CONCURRENCY=1,20 \

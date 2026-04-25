@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -8,12 +9,11 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-
-	"tukuyomi/internal/bypassconf"
 )
 
 type proxyBackendsStatusResponse struct {
 	Path      string                  `json:"path"`
+	Storage   string                  `json:"storage,omitempty"`
 	ETag      string                  `json:"etag"`
 	Strategy  string                  `json:"strategy,omitempty"`
 	Backends  []upstreamBackendStatus `json:"backends"`
@@ -95,7 +95,14 @@ func PutProxyBackendRuntimeOverride(c *gin.Context) {
 	}
 	file.Backends[backendKey] = override
 
-	if err := persistAndRefreshUpstreamRuntimeOverrides(cfg, currentRaw, file); err != nil {
+	if err := persistAndRefreshUpstreamRuntimeOverrides(cfg, currentRaw, currentETag, file); err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": currentETag})
+			return
+		}
+		if respondIfConfigDBStoreRequired(c, err) {
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
@@ -140,7 +147,14 @@ func DeleteProxyBackendRuntimeOverride(c *gin.Context) {
 	if len(file.Backends) > 0 {
 		delete(file.Backends, backendKey)
 	}
-	if err := persistAndRefreshUpstreamRuntimeOverrides(cfg, currentRaw, file); err != nil {
+	if err := persistAndRefreshUpstreamRuntimeOverrides(cfg, currentRaw, currentETag, file); err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": currentETag})
+			return
+		}
+		if respondIfConfigDBStoreRequired(c, err) {
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
@@ -176,11 +190,23 @@ func buildProxyBackendsStatusResponse() (proxyBackendsStatusResponse, error) {
 	})
 	return proxyBackendsStatusResponse{
 		Path:      managedUpstreamRuntimePath(),
+		Storage:   upstreamRuntimeStorageLabel(),
 		ETag:      etag,
 		Strategy:  strings.TrimSpace(cfg.LoadBalancingStrategy),
 		Backends:  backends,
 		UpdatedAt: updatedAt,
 	}, nil
+}
+
+func upstreamRuntimeStorageLabel() string {
+	if getLogsStatsStore() != nil {
+		return "db:" + upstreamRuntimeConfigBlobKey
+	}
+	path := strings.TrimSpace(managedUpstreamRuntimePath())
+	if path == "" {
+		return "memory"
+	}
+	return path
 }
 
 func buildProxyBackendsSurfaceStatuses(cfg ProxyRulesConfig, healthBackends []upstreamBackendStatus) ([]upstreamBackendStatus, string) {
@@ -276,16 +302,13 @@ func proxyBackendRuntimeOpsSupported(cfg ProxyRulesConfig, key string) bool {
 	return ok
 }
 
-func persistAndRefreshUpstreamRuntimeOverrides(cfg ProxyRulesConfig, previousRaw string, file upstreamRuntimeFile) error {
-	_, _, _, err := persistUpstreamRuntimeFile(cfg, file)
+func persistAndRefreshUpstreamRuntimeOverrides(cfg ProxyRulesConfig, previousRaw string, previousETag string, file upstreamRuntimeFile) error {
+	_, _, _, err := persistUpstreamRuntimeFile(cfg, file, previousETag)
 	if err != nil {
 		return err
 	}
 	if err := refreshProxyBackendRuntimeOverrides(); err != nil {
-		path := managedUpstreamRuntimePath()
-		if strings.TrimSpace(path) != "" {
-			_ = bypassconf.AtomicWriteWithBackup(path, []byte(previousRaw))
-		}
+		_ = persistUpstreamRuntimeRaw(previousRaw)
 		_ = refreshProxyBackendRuntimeOverrides()
 		return err
 	}

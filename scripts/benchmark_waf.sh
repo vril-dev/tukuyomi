@@ -18,8 +18,8 @@ BENCH_DISABLE_RATE_LIMIT="${BENCH_DISABLE_RATE_LIMIT:-1}"
 BENCH_DISABLE_REQUEST_GUARDS="${BENCH_DISABLE_REQUEST_GUARDS:-1}"
 WAF_BENCH_SCENARIOS="${WAF_BENCH_SCENARIOS:-allow,block-xss}"
 UPSTREAM_PORT="${UPSTREAM_PORT:-}"
-OUTPUT_FILE="${OUTPUT_FILE:-data/logs/proxy/waf-benchmark-summary.md}"
-OUTPUT_JSON_FILE="${OUTPUT_JSON_FILE:-data/logs/proxy/waf-benchmark-summary.json}"
+OUTPUT_FILE="${OUTPUT_FILE:-data/tmp/reports/proxy/waf-benchmark-summary.md}"
+OUTPUT_JSON_FILE="${OUTPUT_JSON_FILE:-data/tmp/reports/proxy/waf-benchmark-summary.json}"
 HOST_PUID="${PUID:-$(id -u)}"
 HOST_GUID="${GUID:-$(id -g)}"
 
@@ -48,6 +48,7 @@ need_cmd docker
 need_cmd curl
 need_cmd jq
 need_cmd ab
+need_cmd make
 need_cmd "${GO_BIN}"
 
 validate_uint_at_least() {
@@ -722,10 +723,8 @@ if [[ "${BENCH_DISABLE_REQUEST_GUARDS}" == "1" ]]; then
   disable_request_guard_files_for_benchmark
 fi
 
-if [[ -z "$(find "${ROOT_DIR}/data/rules/crs/rules" -maxdepth 1 -name '*.conf' -print -quit 2>/dev/null)" ]]; then
-  echo "[waf-bench] CRS rules are missing. Installing defaults."
-  "${ROOT_DIR}/scripts/install_crs.sh"
-fi
+echo "[waf-bench] ensuring DB-backed WAF rule assets"
+(cd "${ROOT_DIR}" && make crs-install)
 
 json_rows_file="${tmp_dir}/waf_benchmark_rows.jsonl"
 mkdir -p "$(dirname "${OUTPUT_FILE}")" "$(dirname "${OUTPUT_JSON_FILE}")"
@@ -735,7 +734,10 @@ start_benchmark_upstream
 
 (
   cd "${ROOT_DIR}"
-  PUID="${HOST_PUID}" GUID="${HOST_GUID}" CORAZA_PORT="${HOST_CORAZA_PORT}" WAF_LISTEN_PORT="${WAF_LISTEN_PORT}" docker compose up -d --build --force-recreate coraza >/dev/null
+  PUID="${HOST_PUID}" GUID="${HOST_GUID}" CORAZA_PORT="${HOST_CORAZA_PORT}" WAF_LISTEN_PORT="${WAF_LISTEN_PORT}" \
+  TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${WAF_ADMIN_USERNAME}" \
+  TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${WAF_ADMIN_PASSWORD}" \
+  docker compose up -d --build --force-recreate coraza >/dev/null
 )
 proxy_api_wait_health 90 1
 

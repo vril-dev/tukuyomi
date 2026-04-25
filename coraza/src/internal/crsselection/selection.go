@@ -11,7 +11,15 @@ import (
 )
 
 func NormalizeName(name string) string {
-	return filepath.Base(strings.TrimSpace(name))
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	base := filepath.Base(name)
+	if base == "." {
+		return ""
+	}
+	return base
 }
 
 func ParseDisabled(raw string) map[string]struct{} {

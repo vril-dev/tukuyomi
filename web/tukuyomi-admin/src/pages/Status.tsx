@@ -205,16 +205,18 @@ export default function Status() {
                 <Metric label={tx("Admin PROXY Protocol")} value={String(data.admin_listener_proxy_protocol_enabled ?? "-")} />
                 <Metric label={tx("Public TLS Enabled")} value={String(data.public_listener_tls_enabled ?? data.server_tls_enabled ?? "-")} />
                 <Metric label={tx("API Base")} value={String(data.api_base ?? "-")} />
+                <Metric label={tx("Site Config Storage")} value={String(data.site_config_storage ?? "-")} />
+                <Metric label={tx("Scheduled Task Config Storage")} value={String(data.scheduled_task_config_storage ?? "-")} />
+                <Metric label={tx("Upstream Runtime Storage")} value={String(data.upstream_runtime_storage ?? "-")} />
                 <Metric label={tx("Country Resolution Mode")} value={String(data.request_country_effective_mode ?? "-")} />
                 <Metric label={tx("Country DB Loaded")} value={String(data.request_country_loaded ?? "-")} />
                 <Metric label={tx("Country DB Path")} value={String(data.request_country_managed_path ?? "-")} />
-                <Metric label={tx("Rules File")} value={String(data.rules_file ?? "-")} />
+                <Metric label={tx("Base Rule Asset")} value={String(data.rules_file ?? "-")} />
                 <Metric label={tx("Proxy Upstream KeepAlive (sec)")} value={String(data.proxy_upstream_keepalive_sec ?? "-")} />
                 <Metric label={tx("CRS Enabled")} value={String(data.crs_enabled ?? "-")} />
                 <Metric label={tx("Rate Limit Enabled")} value={String(data.rate_limit_enabled ?? "-")} />
                 <Metric label={tx("Bot Defense Enabled")} value={String(data.bot_defense_enabled ?? "-")} />
                 <Metric label={tx("Semantic Mode")} value={String(data.semantic_mode ?? "-")} />
-                <Metric label={tx("DB Enabled")} value={String(data.db_enabled ?? "-")} />
                 <Metric label={tx("DB Retention Days")} value={String(data.db_retention_days ?? "-")} />
                 <Metric label={tx("DB Rows (Total)")} value={dbRows != null ? formatCount(dbRows) : "-"} />
                 <Metric label={tx("DB Rows (WAF Block)")} value={dbWAFBlockRows != null ? formatCount(dbWAFBlockRows) : "-"} />

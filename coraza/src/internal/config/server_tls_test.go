@@ -38,16 +38,15 @@ func TestLoadAppConfigFileAcceptsServerTLSConfig(t *testing.T) {
 		},
 		"admin": {
 			"api_base_path": "/tukuyomi-api",
-			"ui_base_path": "/tukuyomi-ui",
-			"api_key_primary": "very-strong-random-api-key-12345"
+			"ui_base_path": "/tukuyomi-ui"
 		},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
-			"rules_file": "rules/tukuyomi.conf"
+			"rules_file": "tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
 		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
-		"storage": {"backend": "file", "db_driver": "sqlite"}
+		"storage": {"db_driver": "sqlite"}
 	}`
 	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -122,16 +121,15 @@ func TestLoadAppConfigFileRejectsInvalidServerTLSConfig(t *testing.T) {
 				},
 				"admin": {
 					"api_base_path": "/tukuyomi-api",
-					"ui_base_path": "/tukuyomi-ui",
-					"api_key_primary": "very-strong-random-api-key-12345"
+					"ui_base_path": "/tukuyomi-ui"
 				},
 				"paths": {
 					"proxy_config_file": "conf/proxy.json",
-					"rules_file": "rules/tukuyomi.conf"
+					"rules_file": "tukuyomi.conf"
 				},
 				"proxy": {"rollback_history_size": 8},
 				"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
-				"storage": {"backend": "file", "db_driver": "sqlite"}
+				"storage": {"db_driver": "sqlite"}
 			}`
 			if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
 				t.Fatalf("write config: %v", err)
@@ -161,26 +159,24 @@ func TestLoadAppConfigFileAcceptsServerTLSCompositeFallbackConfig(t *testing.T) 
 				"cert_file": ` + jsonString(certFile) + `,
 				"key_file": ` + jsonString(keyFile) + `,
 				"min_version": "1.2",
-				"acme": {
-					"enabled": true,
-					"email": "ops@example.com",
-					"domains": ["proxy.example.com"],
-					"cache_dir": "/tmp/acme"
-				}
+					"acme": {
+						"enabled": true,
+						"domains": ["proxy.example.com"],
+						"cache_dir": "/tmp/acme"
+					}
 			}
 		},
 		"admin": {
 			"api_base_path": "/tukuyomi-api",
-			"ui_base_path": "/tukuyomi-ui",
-			"api_key_primary": "very-strong-random-api-key-12345"
+			"ui_base_path": "/tukuyomi-ui"
 		},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
-			"rules_file": "rules/tukuyomi.conf"
+			"rules_file": "tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
 		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
-		"storage": {"backend": "file", "db_driver": "sqlite"}
+		"storage": {"db_driver": "sqlite"}
 	}`
 	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)

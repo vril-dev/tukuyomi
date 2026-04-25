@@ -23,11 +23,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	corazaTypes "github.com/corazawaf/coraza/v3/types"
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/observability"
+	"tukuyomi/internal/waf"
 )
 
 const (
@@ -771,23 +771,6 @@ func (t *securityAuditTrail) recordRateLimit(decision rateLimitDecision, semanti
 	})
 }
 
-func wafRulePhaseLabel(phase corazaTypes.RulePhase) string {
-	switch phase {
-	case corazaTypes.PhaseRequestHeaders:
-		return "request_headers"
-	case corazaTypes.PhaseRequestBody:
-		return "request_body"
-	case corazaTypes.PhaseResponseHeaders:
-		return "response_headers"
-	case corazaTypes.PhaseResponseBody:
-		return "response_body"
-	case corazaTypes.PhaseLogging:
-		return "logging"
-	default:
-		return "unknown"
-	}
-}
-
 func copyStringSlice(in []string) []string {
 	if len(in) == 0 {
 		return nil
@@ -795,50 +778,49 @@ func copyStringSlice(in []string) []string {
 	return append([]string(nil), in...)
 }
 
-func (t *securityAuditTrail) recordWAFMatches(matches []corazaTypes.MatchedRule) []int {
+func (t *securityAuditTrail) recordWAFMatches(matches []waf.Match) []int {
 	if t == nil || len(matches) == 0 {
 		return nil
 	}
 	steps := make([]int, 0, len(matches))
 	for _, matched := range matches {
-		if matched == nil {
+		if matched.RuleID <= 0 {
 			continue
 		}
-		rule := matched.Rule()
 		metadata := map[string]any{
-			"phase":              wafRulePhaseLabel(rule.Phase()),
-			"disruptive":         matched.Disruptive(),
-			"matched_data_count": len(matched.MatchedDatas()),
+			"phase":              matched.Phase,
+			"disruptive":         matched.Disruptive,
+			"matched_data_count": len(matched.MatchedData),
 		}
-		if file := strings.TrimSpace(rule.File()); file != "" {
+		if file := strings.TrimSpace(matched.File); file != "" {
 			metadata["rule_file"] = file
 		}
-		if line := rule.Line(); line > 0 {
+		if line := matched.Line; line > 0 {
 			metadata["rule_line"] = line
 		}
-		if revision := strings.TrimSpace(rule.Revision()); revision != "" {
+		if revision := strings.TrimSpace(matched.Revision); revision != "" {
 			metadata["revision"] = revision
 		}
-		if version := strings.TrimSpace(rule.Version()); version != "" {
+		if version := strings.TrimSpace(matched.Version); version != "" {
 			metadata["version"] = version
 		}
-		if severity := strings.TrimSpace(rule.Severity().String()); severity != "" {
+		if severity := strings.TrimSpace(matched.Severity); severity != "" {
 			metadata["severity"] = severity
 		}
-		if maturity := rule.Maturity(); maturity > 0 {
+		if maturity := matched.Maturity; maturity > 0 {
 			metadata["maturity"] = maturity
 		}
-		if accuracy := rule.Accuracy(); accuracy > 0 {
+		if accuracy := matched.Accuracy; accuracy > 0 {
 			metadata["accuracy"] = accuracy
 		}
-		if operator := strings.TrimSpace(rule.Operator()); operator != "" {
+		if operator := strings.TrimSpace(matched.Operator); operator != "" {
 			metadata["operator"] = operator
 		}
-		if tags := copyStringSlice(rule.Tags()); len(tags) > 0 {
+		if tags := copyStringSlice(matched.Tags); len(tags) > 0 {
 			metadata["tags"] = tags
 		}
 		action := "observe"
-		if matched.Disruptive() {
+		if matched.Disruptive {
 			action = "block"
 		}
 		step := t.addNode(securityAuditDecisionNode{
@@ -846,7 +828,7 @@ func (t *securityAuditTrail) recordWAFMatches(matches []corazaTypes.MatchedRule)
 			PolicyFamily:    "waf",
 			Matched:         true,
 			SourceEvent:     "waf_rule_match",
-			RuleID:          strconv.Itoa(rule.ID()),
+			RuleID:          strconv.Itoa(matched.RuleID),
 			ActionCandidate: action,
 			ActionEffective: action,
 			Metadata:        metadata,

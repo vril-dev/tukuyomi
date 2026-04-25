@@ -135,14 +135,14 @@ Admin UI や deployment guide は見ません。以下を保証します。
 
 - 現行 WAF 設定が true-positive 攻撃をしきい値以上 block できる
 - 必要なら false-positive / bypass のしきい値も維持できる
-- `data/logs/gotestwaf/` にレポートが出る
+- `data/tmp/gotestwaf/` にレポートが出る
 
 CRS、request-inspection、bypass、semantic、rate-limit の変更で enforcement に影響が出る時に使います。
 
 ### `make bench` / `make bench-proxy`
 
 proxy transport benchmark です。
-既存の proxy tuning preset を、設定した request 数と concurrency で測定し、`data/logs/proxy/` に Markdown / JSON artifact を出します。
+既存の proxy tuning preset を、設定した request 数と concurrency で測定し、`data/tmp/reports/proxy/` に Markdown / JSON artifact を出します。
 
 upstream transport、buffering、compression、timeout、retry、response handling を触った後に使います。
 

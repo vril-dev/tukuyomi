@@ -111,8 +111,8 @@ func ProbeProxyRules(c *gin.Context) {
 			"proxy": cfg,
 			"probe": gin.H{
 				"upstream_name": upstreamName,
-				"address":    address,
-				"timeout_ms": timeout.Milliseconds(),
+				"address":       address,
+				"timeout_ms":    timeout.Milliseconds(),
 			},
 			"messages": []string{err.Error()},
 		})
@@ -123,9 +123,9 @@ func ProbeProxyRules(c *gin.Context) {
 		"proxy": cfg,
 		"probe": gin.H{
 			"upstream_name": upstreamName,
-			"address":    address,
-			"latency_ms": latencyMS,
-			"timeout_ms": timeout.Milliseconds(),
+			"address":       address,
+			"latency_ms":    latencyMS,
+			"timeout_ms":    timeout.Milliseconds(),
 		},
 	})
 }
@@ -197,11 +197,14 @@ func PutProxyRules(c *gin.Context) {
 		return
 	}
 
-	etag, cfg, err := ApplyProxyRulesRaw(ifMatch, in.Raw)
+	etag, cfg, err := applyProxyRulesRaw(ifMatch, in.Raw, adminAuditActor(c))
 	if err != nil {
 		var conflict proxyRulesConflictError
 		if asProxyRulesConflict(err, &conflict) {
 			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": conflict.CurrentETag})
+			return
+		}
+		if respondIfConfigDBStoreRequired(c, err) {
 			return
 		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
@@ -223,10 +226,13 @@ func PutProxyRules(c *gin.Context) {
 
 func RollbackProxyRulesHandler(c *gin.Context) {
 	prevRaw, prevETag, _, _, _ := ProxyRulesSnapshot()
-	etag, cfg, restored, err := RollbackProxyRules()
+	etag, cfg, restored, err := rollbackProxyRules(adminAuditActor(c))
 	if err != nil {
 		if strings.Contains(err.Error(), "no rollback snapshot") {
 			c.JSON(http.StatusConflict, gin.H{"error": "no rollback snapshot"})
+			return
+		}
+		if respondIfConfigDBStoreRequired(c, err) {
 			return
 		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})

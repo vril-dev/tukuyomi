@@ -3,7 +3,6 @@ package handler
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -39,31 +38,26 @@ func GetBypassRules(c *gin.Context) {
 	displayRaw := string(raw)
 	savedAt := fileSavedAt(path)
 	if store := getLogsStatsStore(); store != nil {
-		dbRaw, dbETag, found, err := store.GetConfigBlob(bypassConfigBlobKey)
+		dbRaw, rec, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(bypassConfigBlobKey), normalizeBypassPolicyRaw, "bypass rules")
 		if err != nil {
-			log.Printf("[BYPASS][DB][WARN] get config blob failed: %v", err)
+			respondConfigBlobDBError(c, "bypass db read failed", err)
+			return
 		} else if found {
 			file, parseErr := bypassconf.Parse(string(dbRaw))
 			if parseErr != nil {
-				log.Printf("[BYPASS][DB][WARN] cached blob parse failed (fallback=file): %v", parseErr)
+				respondConfigBlobDBError(c, "bypass db rows parse failed", parseErr)
+				return
 			} else {
 				if normalized, err := bypassconf.MarshalJSON(file); err == nil {
 					displayRaw = string(normalized)
 				}
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = bypassconf.ComputeETag(dbRaw)
-				}
-				savedAt = configBlobSavedAt(store, bypassConfigBlobKey)
+				savedAt = configVersionSavedAt(rec)
 				c.JSON(http.StatusOK, gin.H{
-					"etag":     dbETag,
+					"etag":     rec.ETag,
 					"raw":      displayRaw,
 					"saved_at": savedAt,
 				})
 				return
-			}
-		} else if len(raw) > 0 {
-			if err := store.UpsertConfigBlob(bypassConfigBlobKey, raw, bypassconf.ComputeETag(raw), time.Now().UTC()); err != nil {
-				log.Printf("[BYPASS][DB][WARN] seed config blob failed: %v", err)
 			}
 		}
 	}
@@ -95,36 +89,9 @@ func ValidateBypassRules(c *gin.Context) {
 }
 
 func PutBypassRules(c *gin.Context) {
-	path := config.BypassFile
-	currentPath := bypassconf.GetActivePath()
-	if strings.TrimSpace(currentPath) == "" {
-		currentPath = path
-	}
-	store := getLogsStatsStore()
-
-	ifMatch := c.GetHeader("If-Match")
-	curRaw, _ := os.ReadFile(currentPath)
-	curETag := bypassconf.ComputeETag(curRaw)
-	if store != nil {
-		dbRaw, dbETag, found, err := store.GetConfigBlob(bypassConfigBlobKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		if found {
-			if _, parseErr := validateRaw(string(dbRaw)); parseErr == nil {
-				curRaw = dbRaw
-				if strings.TrimSpace(dbETag) == "" {
-					dbETag = bypassconf.ComputeETag(dbRaw)
-				}
-				curETag = dbETag
-			} else {
-				log.Printf("[BYPASS][DB][WARN] cached blob parse failed for conflict check (fallback=file): %v", parseErr)
-			}
-		}
-	}
-	if ifMatch != "" && ifMatch != curETag {
-		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": curETag})
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
 		return
 	}
 
@@ -145,45 +112,39 @@ func PutBypassRules(c *gin.Context) {
 		return
 	}
 
-	if err := bypassconf.AtomicWriteWithBackup(path, normalizedRaw); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	spec := mustPolicyJSONSpec(bypassConfigBlobKey)
+	currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeBypassPolicyRaw, "bypass rules")
+	if err != nil {
+		respondConfigBlobDBError(c, "bypass db seed failed", err)
 		return
 	}
-	if err := bypassconf.Reload(); err != nil {
-		_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
-		_ = bypassconf.Reload()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	now := time.Now().UTC()
-	newETag := bypassconf.ComputeETag(normalizedRaw)
-	if store != nil {
-		if err := store.UpsertConfigBlob(bypassConfigBlobKey, normalizedRaw, newETag, now); err != nil {
-			_ = bypassconf.AtomicWriteWithBackup(path, curRaw)
-			_ = bypassconf.Reload()
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":    "bypass db sync failed and rollback applied",
-				"db_error": err.Error(),
-			})
+	expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
+	rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "bypass rules update", 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, bypassConfigBlobKey)})
 			return
 		}
+		respondConfigBlobDBError(c, "bypass db update failed", err)
+		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": newETag, "raw": string(normalizedRaw), "saved_at": now.Format(time.RFC3339Nano)})
+	if err := applyBypassPolicyRaw(normalizedRaw); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": rec.ETag, "raw": string(normalizedRaw), "saved_at": rec.ActivatedAt.Format(time.RFC3339Nano)})
 }
 
 func SyncBypassStorage() error {
-	return syncConfigBlobFilePath(configBlobSyncOptions{
-		ConfigKey: bypassConfigBlobKey,
-		Path:      config.BypassFile,
-		ValidateRaw: func(raw string) error {
-			_, err := validateRaw(raw)
-			return err
-		},
-		Reload:           bypassconf.Reload,
-		SkipWriteIfEqual: true,
-	})
+	store := getLogsStatsStore()
+	if store == nil {
+		return nil
+	}
+	raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(bypassConfigBlobKey), normalizeBypassPolicyRaw, "bypass rules")
+	if err != nil || !found {
+		return err
+	}
+	return applyBypassPolicyRaw(raw)
 }
 
 func validateRaw(s string) (int, error) {
@@ -195,11 +156,15 @@ func validateRaw(s string) (int, error) {
 		if e.ExtraRule == "" {
 			continue
 		}
-		if _, statErr := os.Stat(e.ExtraRule); statErr != nil {
-			if errors.Is(statErr, os.ErrNotExist) && !config.StrictOverride {
-				continue
+		target, found, err := wafRuleAssetExistsForKind(e.ExtraRule, wafRuleAssetKindBypassExtra)
+		if err != nil {
+			return 0, fmt.Errorf("extra rule lookup failed: %s: %w", e.ExtraRule, err)
+		}
+		if !found {
+			if target == "" {
+				target = e.ExtraRule
 			}
-			return 0, fmt.Errorf("extra rule not found: %s", e.ExtraRule)
+			return 0, fmt.Errorf("extra rule not found in DB-managed rule assets: %s", target)
 		}
 	}
 

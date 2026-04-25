@@ -66,8 +66,10 @@ spec:
               mountPath: /app/conf
             - name: proxy-scheduled-tasks
               mountPath: /app/data/scheduled-tasks
-            - name: proxy-logs
-              mountPath: /app/logs
+            - name: proxy-audit
+              mountPath: /app/audit
+            - name: proxy-persistent
+              mountPath: /app/data/persistent
             - name: proxy-php-fpm
               mountPath: /app/data/php-fpm
         - name: scheduled-task-runner
@@ -101,8 +103,10 @@ spec:
               mountPath: /app/conf
             - name: proxy-scheduled-tasks
               mountPath: /app/data/scheduled-tasks
-            - name: proxy-logs
-              mountPath: /app/logs
+            - name: proxy-audit
+              mountPath: /app/audit
+            - name: proxy-persistent
+              mountPath: /app/data/persistent
             - name: proxy-php-fpm
               mountPath: /app/data/php-fpm
       volumes:
@@ -112,9 +116,12 @@ spec:
         - name: proxy-scheduled-tasks
           persistentVolumeClaim:
             claimName: tukuyomi-scheduled-tasks
-        - name: proxy-logs
+        - name: proxy-audit
           persistentVolumeClaim:
-            claimName: tukuyomi-logs
+            claimName: tukuyomi-audit
+        - name: proxy-persistent
+          persistentVolumeClaim:
+            claimName: tukuyomi-persistent
         - name: proxy-php-fpm
           persistentVolumeClaim:
             claimName: tukuyomi-php-fpm

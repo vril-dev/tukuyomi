@@ -4,6 +4,7 @@ import {
   extractRequestEventFields,
   filterLogLinesByReqID,
   formatRequestEventRoleLabel,
+  sortLogLinesNewestFirst,
   summarizeRequestEvents,
   type LogLine,
 } from "./logRequestDetails.js";
@@ -18,6 +19,21 @@ test("filterLogLinesByReqID matches trimmed request IDs", () => {
   assert.deepEqual(
     filterLogLinesByReqID(lines, " req-1 ").map((line) => line.event),
     ["waf_block", "bot_challenge"]
+  );
+});
+
+test("sortLogLinesNewestFirst orders newest first and keeps invalid timestamps last", () => {
+  const lines: LogLine[] = [
+    { ts: "2026-04-01T00:01:00Z", event: "old" },
+    { ts: "not-a-time", event: "invalid" },
+    { ts: "2026-04-01T00:02:00Z", event: "same-first" },
+    { ts: "2026-04-01T00:03:00Z", event: "newest" },
+    { ts: "2026-04-01T00:02:00Z", event: "same-second" },
+  ];
+
+  assert.deepEqual(
+    sortLogLinesNewestFirst(lines).map((line) => line.event),
+    ["newest", "same-second", "same-first", "old", "invalid"]
   );
 });
 

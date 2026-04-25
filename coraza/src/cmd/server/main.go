@@ -23,6 +23,21 @@ import (
 func main() {
 	if len(os.Args) > 1 {
 		switch strings.TrimSpace(os.Args[1]) {
+		case "db-migrate":
+			runDBMigrateCommand()
+			return
+		case "db-import":
+			runDBImportCommand()
+			return
+		case "db-import-preview":
+			runDBImportPreviewCommand()
+			return
+		case "db-import-waf-rule-assets":
+			runDBImportWAFRuleAssetsCommand()
+			return
+		case "preview-print-topology":
+			runPreviewPrintTopologyCommand()
+			return
 		case "run-scheduled-tasks":
 			runScheduledTasksCommand()
 			return
@@ -33,15 +48,17 @@ func main() {
 	}
 
 	config.LoadEnv()
-	if config.RuntimeGOMAXPROCS > 0 {
-		prev := runtime.GOMAXPROCS(config.RuntimeGOMAXPROCS)
-		log.Printf("[RUNTIME] GOMAXPROCS set to %d (previous=%d)", config.RuntimeGOMAXPROCS, prev)
+	initRuntimeDBStoreOrFatal("[DB][BOOTSTRAP]")
+	if err := handler.SyncAppConfigStorage(); err != nil {
+		log.Fatalf("[CONFIG][DB][FATAL] sync failed: %v", err)
 	}
-	if config.RuntimeMemoryLimitMB > 0 {
-		limitBytes := int64(config.RuntimeMemoryLimitMB) * 1024 * 1024
-		prev := debug.SetMemoryLimit(limitBytes)
-		log.Printf("[RUNTIME] memory limit set to %d MB (previous=%d MB)", config.RuntimeMemoryLimitMB, prev/(1024*1024))
+	initRuntimeDBStoreOrFatal("[DB][INIT]")
+	if created, err := handler.EnsureAdminBootstrapOwnerFromEnv(); err != nil {
+		log.Fatalf("[ADMIN][BOOTSTRAP][FATAL] %v", err)
+	} else if created {
+		log.Printf("[ADMIN][BOOTSTRAP] created initial owner from environment")
 	}
+	applyRuntimeResourceLimits()
 	if err := handler.InitRequestCountryRuntime(); err != nil {
 		log.Fatalf("[FATAL] failed to initialize request country runtime: %v", err)
 	}
@@ -52,7 +69,11 @@ func main() {
 		log.Fatalf("[FATAL] failed to initialize scheduled task runtime: %v", err)
 	}
 	if err := handler.InitVhostRuntime(config.VhostConfigFile, config.ProxyRollbackMax); err != nil {
-		log.Fatalf("[FATAL] failed to initialize vhost runtime: %v", err)
+		if handler.IsVhostStartupConfigError(err) {
+			log.Printf("[VHOST][WARN] vhost runtime degraded at startup: %v", err)
+		} else {
+			log.Fatalf("[FATAL] failed to initialize vhost runtime: %v", err)
+		}
 	}
 	if err := handler.InitPHPRuntimeSupervisor(); err != nil {
 		log.Fatalf("[FATAL] failed to initialize php runtime supervisor: %v", err)
@@ -66,47 +87,31 @@ func main() {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := handler.ShutdownProxyAccessLogAsync(ctx); err != nil {
-			log.Printf("[PROXY][WARN] shutdown async access log writer: %v", err)
+		if err := handler.ShutdownWAFEventAsync(ctx); err != nil {
+			log.Printf("[WAF_EVENT][WARN] shutdown async event writer: %v", err)
 		}
 	}()
-	if err := handler.InitLogsStatsStoreWithBackend(
-		config.StorageBackend,
-		config.DBDriver,
-		config.DBPath,
-		config.DBDSN,
-		config.DBRetentionDays,
-	); err != nil {
-		log.Printf("[DB][INIT][WARN] failed to initialize db store (fallback=file): %v", err)
-	} else if config.DBEnabled {
-		log.Printf("[DB][INIT] db store enabled (backend=%s driver=%s path=%s retention_days=%d)", config.StorageBackend, config.DBDriver, config.DBPath, config.DBRetentionDays)
-	} else {
-		log.Printf("[DB][INIT] storage backend=%s", config.StorageBackend)
-	}
 	if err := handler.InitSecurityAuditRuntime(); err != nil {
 		log.Fatalf("[SECURITY_AUDIT][FATAL] failed to initialize runtime: %v", err)
 	}
-	if err := handler.SyncProxyStorage(); err != nil {
-		log.Printf("[PROXY][DB][WARN] sync failed (fallback=file): %v", err)
-	}
 	if err := handler.SyncRuleFilesStorage(); err != nil {
-		log.Printf("[RULES][DB][WARN] sync failed (fallback=file): %v", err)
+		log.Fatalf("[RULES][DB][FATAL] sync failed: %v", err)
 	}
 	if err := handler.SyncManagedOverrideRulesStorage(); err != nil {
-		log.Printf("[OVERRIDE_RULES][DB][WARN] sync failed (fallback=file): %v", err)
+		log.Fatalf("[OVERRIDE_RULES][DB][FATAL] sync failed: %v", err)
 	}
 	waf.InitWAF()
 	if err := handler.SyncCRSDisabledStorage(); err != nil {
-		log.Printf("[CRS][DB][WARN] sync failed (fallback=file): %v", err)
+		log.Fatalf("[CRS][DB][FATAL] sync failed: %v", err)
 	}
 	if err := handler.SyncBypassStorage(); err != nil {
-		log.Printf("[BYPASS][DB][WARN] sync failed (fallback=file): %v", err)
+		log.Fatalf("[BYPASS][DB][FATAL] sync failed: %v", err)
 	}
 	if err := handler.InitCountryBlock(config.CountryBlockFile, config.LegacyCompatPath(config.CountryBlockFile, config.DefaultCountryBlockFilePath, config.LegacyDefaultCountryBlockPath)); err != nil {
 		log.Printf("[COUNTRY_BLOCK][INIT][ERR] %v (path=%s)", err, config.CountryBlockFile)
 	} else {
 		if err := handler.SyncCountryBlockStorage(); err != nil {
-			log.Printf("[COUNTRY_BLOCK][DB][WARN] sync failed (fallback=file): %v", err)
+			log.Fatalf("[COUNTRY_BLOCK][DB][FATAL] sync failed: %v", err)
 		}
 		log.Printf("[COUNTRY_BLOCK][INIT] configured=%s active=%s countries=%d", config.CountryBlockFile, handler.GetCountryBlockActivePath(), len(handler.GetBlockedCountries()))
 	}
@@ -114,7 +119,7 @@ func main() {
 		log.Printf("[RATE_LIMIT][INIT][ERR] %v (path=%s)", err, config.RateLimitFile)
 	} else {
 		if err := handler.SyncRateLimitStorage(); err != nil {
-			log.Printf("[RATE_LIMIT][DB][WARN] sync failed (fallback=file): %v", err)
+			log.Fatalf("[RATE_LIMIT][DB][FATAL] sync failed: %v", err)
 		}
 		log.Printf("[RATE_LIMIT][INIT] loaded")
 	}
@@ -122,7 +127,7 @@ func main() {
 		log.Printf("[BOT_DEFENSE][INIT][ERR] %v (path=%s)", err, config.BotDefenseFile)
 	} else {
 		if err := handler.SyncBotDefenseStorage(); err != nil {
-			log.Printf("[BOT_DEFENSE][DB][WARN] sync failed (fallback=file): %v", err)
+			log.Fatalf("[BOT_DEFENSE][DB][FATAL] sync failed: %v", err)
 		}
 		log.Printf("[BOT_DEFENSE][INIT] loaded")
 	}
@@ -130,7 +135,7 @@ func main() {
 		log.Printf("[SEMANTIC][INIT][ERR] %v (path=%s)", err, config.SemanticFile)
 	} else {
 		if err := handler.SyncSemanticStorage(); err != nil {
-			log.Printf("[SEMANTIC][DB][WARN] sync failed (fallback=file): %v", err)
+			log.Fatalf("[SEMANTIC][DB][FATAL] sync failed: %v", err)
 		}
 		log.Printf("[SEMANTIC][INIT] loaded")
 	}
@@ -139,7 +144,7 @@ func main() {
 		log.Printf("[NOTIFY][INIT][ERR] %v (path=%s)", err, config.NotificationFile)
 	} else {
 		if err := handler.SyncNotificationStorage(); err != nil {
-			log.Printf("[NOTIFY][DB][WARN] sync failed (fallback=file): %v", err)
+			log.Fatalf("[NOTIFY][DB][FATAL] sync failed: %v", err)
 		}
 		log.Printf("[NOTIFY][INIT] loaded")
 	}
@@ -147,7 +152,7 @@ func main() {
 		log.Printf("[IP_REPUTATION][INIT][ERR] %v (path=%s)", err, config.IPReputationFile)
 	} else {
 		if err := handler.SyncIPReputationStorage(); err != nil {
-			log.Printf("[IP_REPUTATION][DB][WARN] sync failed (fallback=file): %v", err)
+			log.Fatalf("[IP_REPUTATION][DB][FATAL] sync failed: %v", err)
 		}
 		log.Printf("[IP_REPUTATION][INIT] loaded")
 	}
@@ -233,25 +238,30 @@ func main() {
 		log.Fatalf("[CACHE][FATAL] failed to initialize response cache runtime: %v", err)
 	}
 	if err := handler.SyncResponseCacheStoreStorage(); err != nil {
-		log.Printf("[CACHE][DB][WARN] sync failed (fallback=file): %v", err)
+		log.Fatalf("[CACHE][DB][FATAL] sync failed: %v", err)
 	}
 
-	const cacheConfPath = config.DefaultCacheRulesFilePath
-	const legacyCacheConfPath = config.LegacyDefaultCacheRulesPath
 	if err := handler.SyncCacheRulesStorage(); err != nil {
-		log.Printf("[CACHE][DB][WARN] sync failed (fallback=file): %v", err)
+		log.Fatalf("[CACHE][DB][FATAL] sync failed: %v", err)
 	}
-	if config.DBEnabled && config.DBSyncInterval > 0 {
+	if config.DBSyncInterval > 0 {
 		handler.StartStorageSyncLoop(config.DBSyncInterval)
 		log.Printf("[DB][SYNC] periodic sync loop enabled interval=%s", config.DBSyncInterval)
 	}
-	stopWatch, err := cacheconf.Watch(cacheConfPath, legacyCacheConfPath, func(rs *cacheconf.Ruleset) {
-		//
-	})
-	if err != nil {
-		log.Printf("[CACHE] watch disabled: %v", err)
-	} else {
-		defer stopWatch()
+	if !handler.DBStorageActive() {
+		cacheConfPath := strings.TrimSpace(config.CacheRulesFile)
+		if cacheConfPath == "" {
+			cacheConfPath = config.DefaultCacheRulesFilePath
+		}
+		legacyCacheConfPath := config.LegacyCompatPath(cacheConfPath, config.DefaultCacheRulesFilePath, config.LegacyDefaultCacheRulesPath)
+		stopWatch, err := cacheconf.Watch(cacheConfPath, legacyCacheConfPath, func(rs *cacheconf.Ruleset) {
+			//
+		})
+		if err != nil {
+			log.Printf("[CACHE] watch disabled: %v", err)
+		} else {
+			defer stopWatch()
+		}
 	}
 
 	splitAdminListener := strings.TrimSpace(config.AdminListenAddr) != ""
@@ -363,7 +373,7 @@ func main() {
 		log.Printf("[SERVER] tls enabled source=%s cert_file=%s acme_domains=%s min_version=%s redirect_http=%t redirect_addr=%s",
 			handler.ServerTLSRuntimeStatusSnapshot().Source,
 			config.ServerTLSCertFile,
-			strings.Join(config.ServerTLSACMEDomains, ","),
+			strings.Join(handler.EffectiveServerTLSACMEDomains(), ","),
 			config.ServerTLSMinVersion,
 			config.ServerTLSRedirectHTTP,
 			config.ServerTLSHTTPRedirectAddr,
@@ -418,14 +428,54 @@ func main() {
 
 func runUpdateCountryDBCommand() {
 	config.LoadEnv()
+	initRuntimeDBStoreOrFatal("[COUNTRY_DB][DB]")
+	if err := handler.SyncAppConfigStorage(); err != nil {
+		log.Fatalf("[COUNTRY_DB][CONFIG][FATAL] sync failed: %v", err)
+	}
 	if err := handler.RunManagedRequestCountryUpdateNow(context.Background()); err != nil {
 		log.Fatalf("[FATAL] update-country-db failed: %v", err)
 	}
 	log.Printf("[COUNTRY_DB] update completed")
 }
 
+func runDBMigrateCommand() {
+	config.LoadEnv()
+	if err := handler.MigrateLogsStatsStoreWithBackend(
+		"db",
+		config.DBDriver,
+		config.DBPath,
+		config.DBDSN,
+	); err != nil {
+		log.Fatalf("[DB][MIGRATE][FATAL] %v", err)
+	}
+	log.Printf("[DB][MIGRATE] completed (driver=%s path=%s)", config.DBDriver, config.DBPath)
+}
+
+func runDBImportCommand() {
+	config.LoadEnv()
+	initRuntimeDBStoreOrFatal("[DB][IMPORT]")
+	if err := handler.ImportStartupConfigStorage(); err != nil {
+		log.Fatalf("[DB][IMPORT][FATAL] %v", err)
+	}
+	log.Printf("[DB][IMPORT] completed")
+}
+
+func runDBImportWAFRuleAssetsCommand() {
+	config.LoadEnv()
+	initRuntimeDBStoreOrFatal("[DB][IMPORT][WAF_RULE_ASSETS]")
+	if err := handler.ImportWAFRuleAssetsStorage(); err != nil {
+		log.Fatalf("[DB][IMPORT][WAF_RULE_ASSETS][FATAL] %v", err)
+	}
+	log.Printf("[DB][IMPORT][WAF_RULE_ASSETS] completed")
+}
+
 func runScheduledTasksCommand() {
 	config.LoadEnv()
+	initRuntimeDBStoreOrFatal("[SCHEDULE][DB][BOOTSTRAP]")
+	if err := handler.SyncAppConfigStorage(); err != nil {
+		log.Fatalf("[SCHEDULE][CONFIG][FATAL] sync failed: %v", err)
+	}
+	initRuntimeDBStoreOrFatal("[SCHEDULE][DB]")
 	if err := handler.InitPHPRuntimeInventoryRuntime(config.PHPRuntimeInventoryFile, config.ProxyRollbackMax); err != nil {
 		log.Fatalf("[SCHEDULE][FATAL] initialize php runtime inventory: %v", err)
 	}
@@ -435,6 +485,31 @@ func runScheduledTasksCommand() {
 	if err := handler.RunDueScheduledTasks(time.Now()); err != nil {
 		log.Fatalf("[SCHEDULE][FATAL] %v", err)
 	}
+}
+
+func applyRuntimeResourceLimits() {
+	if config.RuntimeGOMAXPROCS > 0 {
+		prev := runtime.GOMAXPROCS(config.RuntimeGOMAXPROCS)
+		log.Printf("[RUNTIME] GOMAXPROCS set to %d (previous=%d)", config.RuntimeGOMAXPROCS, prev)
+	}
+	if config.RuntimeMemoryLimitMB > 0 {
+		limitBytes := int64(config.RuntimeMemoryLimitMB) * 1024 * 1024
+		prev := debug.SetMemoryLimit(limitBytes)
+		log.Printf("[RUNTIME] memory limit set to %d MB (previous=%d MB)", config.RuntimeMemoryLimitMB, prev/(1024*1024))
+	}
+}
+
+func initRuntimeDBStoreOrFatal(prefix string) {
+	if err := handler.InitLogsStatsStoreWithBackend(
+		"db",
+		config.DBDriver,
+		config.DBPath,
+		config.DBDSN,
+		config.DBRetentionDays,
+	); err != nil {
+		log.Fatalf("%s[FATAL] failed to initialize db store: %v", prefix, err)
+	}
+	log.Printf("%s db store enabled (driver=%s path=%s retention_days=%d)", prefix, config.DBDriver, config.DBPath, config.DBRetentionDays)
 }
 
 func queueTimeoutLogValue(timeout time.Duration) string {

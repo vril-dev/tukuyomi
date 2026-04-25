@@ -1,9 +1,0 @@
-{
-  "default": {
-    "entries": [
-      {
-        "path": "/wp-admin/admin-ajax.php"
-      }
-    ]
-  }
-}

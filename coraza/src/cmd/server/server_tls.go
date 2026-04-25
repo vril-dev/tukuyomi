@@ -1,12 +1,15 @@
 package main
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +19,7 @@ import (
 
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/handler"
+	"tukuyomi/internal/persistentstore"
 )
 
 const letsEncryptStagingDirectoryURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
@@ -26,8 +30,8 @@ type managedServerTLSRuntime struct {
 	mu                 sync.RWMutex
 	legacyCert         *tls.Certificate
 	legacyNotAfter     time.Time
-	acmeManager        *autocert.Manager
-	acmeGetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+	acmeManagers       map[string]*autocert.Manager
+	acmeGetCertificate map[string]func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 	hasManual          bool
 	hasACME            bool
 	siteManualNotAfter time.Time
@@ -68,7 +72,7 @@ func newDynamicHTTPRedirectServer(addr string, tlsListenAddr string, runtime *ma
 		IdleTimeout:       60 * time.Second,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if runtime != nil {
-				if manager := runtime.acmeManagerSnapshot(); manager != nil {
+				if manager := runtime.acmeManagerForHost(r.Host); manager != nil {
 					manager.HTTPHandler(redirect).ServeHTTP(w, r)
 					return
 				}
@@ -106,14 +110,14 @@ func buildManagedServerTLSConfig() (*tls.Config, *http.Server, error) {
 	return tlsConfig, redirectSrv, nil
 }
 
-func buildACMEManager(domains []string) *autocert.Manager {
+func buildACMEManager(profile handler.ServerTLSACMEProfile, cache autocert.Cache) *autocert.Manager {
 	manager := &autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
-		Email:      strings.TrimSpace(config.ServerTLSACMEEmail),
-		HostPolicy: autocert.HostWhitelist(domains...),
-		Cache:      autocert.DirCache(config.ServerTLSACMECacheDir),
+		Email:      strings.TrimSpace(profile.Email),
+		HostPolicy: autocert.HostWhitelist(profile.Domains...),
+		Cache:      cache,
 	}
-	if config.ServerTLSACMEStaging {
+	if profile.Environment == "staging" {
 		manager.Client = &acme.Client{DirectoryURL: letsEncryptStagingDirectoryURL}
 	}
 	return manager
@@ -139,21 +143,31 @@ func (rt *managedServerTLSRuntime) Reload(sites handler.SiteConfigFile, statuses
 	}
 
 	var (
-		manager            *autocert.Manager
-		baseGetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
-		hasACME            = config.ServerTLSACMEEnabled
+		managers            map[string]*autocert.Manager
+		getCertificateFuncs map[string]func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+		profiles            = handler.EffectiveServerTLSACMEProfilesForSites(sites)
+		hasACME             = len(profiles) > 0
 	)
 	if hasACME {
-		domains := handler.EffectiveServerTLSACMEDomainsForSites(sites)
-		if len(domains) == 0 {
-			err := fmt.Errorf("server tls acme enabled but no ACME host domains are configured")
-			handler.RecordServerTLSError(err)
-			return err
+		managers = make(map[string]*autocert.Manager, len(profiles))
+		getCertificateFuncs = make(map[string]func(*tls.ClientHelloInfo) (*tls.Certificate, error), len(profiles))
+		for _, profile := range profiles {
+			if len(profile.Domains) == 0 {
+				err := fmt.Errorf("server tls acme profile %q has no host domains", profile.Key)
+				handler.RecordServerTLSError(err)
+				return err
+			}
+			cache, err := buildServerTLSACMECache(profile)
+			if err != nil {
+				handler.RecordServerTLSError(err)
+				return err
+			}
+			manager := buildACMEManager(profile, cache)
+			baseCfg := manager.TLSConfig()
+			baseCfg.MinVersion = rt.minVersion
+			managers[profile.Key] = manager
+			getCertificateFuncs[profile.Key] = baseCfg.GetCertificate
 		}
-		manager = buildACMEManager(domains)
-		baseCfg := manager.TLSConfig()
-		baseCfg.MinVersion = rt.minVersion
-		baseGetCertificate = baseCfg.GetCertificate
 	}
 
 	hasManual := legacyCert != nil
@@ -173,8 +187,8 @@ func (rt *managedServerTLSRuntime) Reload(sites handler.SiteConfigFile, statuses
 	rt.mu.Lock()
 	rt.legacyCert = legacyCert
 	rt.legacyNotAfter = legacyNotAfter
-	rt.acmeManager = manager
-	rt.acmeGetCertificate = baseGetCertificate
+	rt.acmeManagers = managers
+	rt.acmeGetCertificate = getCertificateFuncs
 	rt.hasManual = hasManual
 	rt.hasACME = hasACME
 	rt.siteManualNotAfter = siteManualNotAfter
@@ -195,7 +209,6 @@ func (rt *managedServerTLSRuntime) Reload(sites handler.SiteConfigFile, statuses
 func (rt *managedServerTLSRuntime) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	rt.mu.RLock()
 	legacyCert := rt.legacyCert
-	baseGetCertificate := rt.acmeGetCertificate
 	rt.mu.RUnlock()
 
 	if hello != nil {
@@ -206,12 +219,13 @@ func (rt *managedServerTLSRuntime) GetCertificate(hello *tls.ClientHelloInfo) (*
 					return match.Certificate, nil
 				}
 			case "acme":
-				if baseGetCertificate == nil {
+				getCertificate := rt.acmeGetCertificateForProfile(match.ACMEProfile)
+				if getCertificate == nil {
 					err := fmt.Errorf("acme certificate source is not configured")
 					handler.RecordServerTLSError(err)
 					return nil, err
 				}
-				cert, err := baseGetCertificate(hello)
+				cert, err := getCertificate(hello)
 				if err != nil {
 					handler.RecordServerTLSACMEFailure(err)
 					return nil, err
@@ -230,31 +244,58 @@ func (rt *managedServerTLSRuntime) GetCertificate(hello *tls.ClientHelloInfo) (*
 	if legacyCert != nil {
 		return legacyCert, nil
 	}
-	if baseGetCertificate != nil {
-		cert, err := baseGetCertificate(hello)
-		if err != nil {
-			handler.RecordServerTLSACMEFailure(err)
-			return nil, err
-		}
-		if notAfter, parseErr := certificateNotAfter(*cert); parseErr != nil {
-			handler.RecordServerTLSACMEFailure(parseErr)
-		} else {
-			handler.RecordServerTLSACMESuccess(notAfter)
-		}
-		return cert, nil
-	}
 	err := fmt.Errorf("no certificate configured for requested host")
 	handler.RecordServerTLSError(err)
 	return nil, err
 }
 
-func (rt *managedServerTLSRuntime) acmeManagerSnapshot() *autocert.Manager {
+func (rt *managedServerTLSRuntime) acmeManagerForHost(host string) *autocert.Manager {
 	if rt == nil {
+		return nil
+	}
+	match := handler.SiteBindingForHost(host)
+	if match.Mode != "acme" || strings.TrimSpace(match.ACMEProfile) == "" {
 		return nil
 	}
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
-	return rt.acmeManager
+	return rt.acmeManagers[match.ACMEProfile]
+}
+
+func (rt *managedServerTLSRuntime) acmeGetCertificateForProfile(profile string) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	if rt == nil || strings.TrimSpace(profile) == "" {
+		return nil
+	}
+	rt.mu.RLock()
+	defer rt.mu.RUnlock()
+	return rt.acmeGetCertificate[profile]
+}
+
+func serverTLSACMEProfileCacheDir(baseDir string, profile handler.ServerTLSACMEProfile) string {
+	return filepath.Join(strings.TrimSpace(baseDir), filepath.FromSlash(serverTLSACMEProfileCacheNamespace(profile)))
+}
+
+func serverTLSACMEProfileCacheNamespace(profile handler.ServerTLSACMEProfile) string {
+	account := "default"
+	if email := strings.TrimSpace(profile.Email); email != "" {
+		sum := sha256.Sum256([]byte(strings.ToLower(email)))
+		account = "email-" + hex.EncodeToString(sum[:8])
+	}
+	return strings.Join([]string{"acme", profile.Environment, account}, "/")
+}
+
+func buildServerTLSACMECache(profile handler.ServerTLSACMEProfile) (autocert.Cache, error) {
+	return persistentstore.NewAutocertCacheFromConfig(persistentstore.AutocertCacheConfig{
+		Backend:      config.PersistentStorageBackend,
+		LocalBaseDir: config.PersistentStorageLocalBaseDir,
+		S3: persistentstore.S3CacheConfig{
+			Bucket:         config.PersistentStorageS3Bucket,
+			Region:         config.PersistentStorageS3Region,
+			Endpoint:       config.PersistentStorageS3Endpoint,
+			Prefix:         config.PersistentStorageS3Prefix,
+			ForcePathStyle: config.PersistentStorageS3ForcePathStyle,
+		},
+	}, serverTLSACMEProfileCacheNamespace(profile))
 }
 
 func latestManualSiteNotAfter(statuses []handler.SiteRuntimeStatus) time.Time {

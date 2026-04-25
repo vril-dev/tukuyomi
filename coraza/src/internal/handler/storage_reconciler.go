@@ -10,6 +10,10 @@ import (
 
 var storageSyncMu sync.Mutex
 
+func DBStorageActive() bool {
+	return getLogsStatsStore() != nil
+}
+
 func SyncAllStorageFromDB() error {
 	storageSyncMu.Lock()
 	defer storageSyncMu.Unlock()
@@ -19,7 +23,9 @@ func SyncAllStorageFromDB() error {
 		run  func() error
 	}
 	tasks := []task{
-		{name: "proxy-rules", run: SyncProxyStorage},
+		{name: "sites", run: SyncSiteStorage},
+		{name: "scheduled-tasks", run: SyncScheduledTaskStorage},
+		{name: "upstream-runtime", run: SyncUpstreamRuntimeStorage},
 		{name: "rules", run: SyncRuleFilesStorage},
 		{name: "override-rules", run: SyncManagedOverrideRulesStorage},
 		{name: "crs-disabled", run: SyncCRSDisabledStorage},

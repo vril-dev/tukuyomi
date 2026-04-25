@@ -25,6 +25,7 @@ const (
 	maxScheduledTaskTimeout        = 86400
 	defaultScheduledTaskConfigPath = "conf/scheduled-tasks.json"
 	defaultScheduledTaskRuntimeDir = "data/scheduled-tasks"
+	scheduledTaskConfigBlobKey     = "scheduled_tasks"
 )
 
 type ScheduledTaskConfigFile struct {
@@ -64,10 +65,12 @@ type ScheduledTaskStatus struct {
 }
 
 type ScheduledTaskRuntimePaths struct {
-	ConfigFile string `json:"config_file"`
-	RuntimeDir string `json:"runtime_dir"`
-	StateFile  string `json:"state_file"`
-	LogDir     string `json:"log_dir"`
+	ConfigFile    string `json:"config_file"`
+	ConfigStorage string `json:"config_storage,omitempty"`
+	RuntimeDir    string `json:"runtime_dir"`
+	StateFile     string `json:"state_file"`
+	StateStorage  string `json:"state_storage,omitempty"`
+	LogDir        string `json:"log_dir"`
 }
 
 type scheduledTaskStateFile struct {
@@ -75,9 +78,10 @@ type scheduledTaskStateFile struct {
 }
 
 type scheduledTaskPreparedConfig struct {
-	cfg  ScheduledTaskConfigFile
-	raw  string
-	etag string
+	cfg       ScheduledTaskConfigFile
+	raw       string
+	etag      string
+	versionID int64
 }
 
 type scheduledTaskRuntime struct {
@@ -85,6 +89,7 @@ type scheduledTaskRuntime struct {
 	configPath    string
 	raw           string
 	etag          string
+	versionID     int64
 	cfg           ScheduledTaskConfigFile
 	rollbackMax   int
 	rollbackStack []proxyRollbackEntry
@@ -100,21 +105,15 @@ func InitScheduledTaskRuntime(path string, rollbackMax int) error {
 	if configPath == "" {
 		configPath = defaultScheduledTaskConfigPath
 	}
-	raw, err := loadScheduledTaskConfigRaw(configPath)
+	prepared, err := loadScheduledTaskPreparedConfig(configPath)
 	if err != nil {
-		return fmt.Errorf("read scheduled task config (%s): %w", configPath, err)
-	}
-	if strings.TrimSpace(raw) == "" {
-		raw = defaultScheduledTaskConfigRaw
-	}
-	prepared, err := prepareScheduledTaskConfigRaw(raw, currentPHPRuntimeInventoryConfig())
-	if err != nil {
-		return fmt.Errorf("invalid scheduled task config (%s): %w", configPath, err)
+		return fmt.Errorf("initialize scheduled task config (%s): %w", configPath, err)
 	}
 	rt := &scheduledTaskRuntime{
 		configPath:    configPath,
 		raw:           prepared.raw,
 		etag:          prepared.etag,
+		versionID:     prepared.versionID,
 		cfg:           prepared.cfg,
 		rollbackMax:   clampProxyRollbackMax(rollbackMax),
 		rollbackStack: make([]proxyRollbackEntry, 0, clampProxyRollbackMax(rollbackMax)),
@@ -123,6 +122,63 @@ func InitScheduledTaskRuntime(path string, rollbackMax int) error {
 	scheduledTaskRt = rt
 	scheduledTaskRuntimeMu.Unlock()
 	return nil
+}
+
+func loadScheduledTaskPreparedConfig(configPath string) (scheduledTaskPreparedConfig, error) {
+	store := getLogsStatsStore()
+	if store != nil {
+		cfg, rec, found, err := store.loadActiveScheduledTaskConfig()
+		if err != nil {
+			return scheduledTaskPreparedConfig{}, err
+		}
+		if found {
+			prepared, err := prepareScheduledTaskConfigRaw(mustJSON(cfg), currentPHPRuntimeInventoryConfig())
+			if err != nil {
+				return scheduledTaskPreparedConfig{}, err
+			}
+			prepared.etag = rec.ETag
+			prepared.versionID = rec.VersionID
+			return prepared, nil
+		}
+		if dbRaw, _, legacyFound, err := store.GetConfigBlob(scheduledTaskConfigBlobKey); err != nil {
+			return scheduledTaskPreparedConfig{}, err
+		} else if legacyFound {
+			prepared, err := prepareScheduledTaskConfigRaw(string(dbRaw), currentPHPRuntimeInventoryConfig())
+			if err != nil {
+				return scheduledTaskPreparedConfig{}, err
+			}
+			rec, err := store.writeScheduledTaskConfigVersion("", prepared.cfg, configVersionSourceImport, "", "legacy scheduled tasks import", 0)
+			if err != nil {
+				return scheduledTaskPreparedConfig{}, err
+			}
+			_ = store.DeleteConfigBlob(scheduledTaskConfigBlobKey)
+			prepared.etag = rec.ETag
+			prepared.versionID = rec.VersionID
+			return prepared, nil
+		}
+		return scheduledTaskPreparedConfig{}, fmt.Errorf("normalized scheduled task config missing in db; run make db-import before removing seed files")
+	}
+
+	raw, err := loadScheduledTaskConfigRaw(configPath)
+	if err != nil {
+		return scheduledTaskPreparedConfig{}, err
+	}
+	if strings.TrimSpace(raw) == "" {
+		raw = defaultScheduledTaskConfigRaw
+	}
+	prepared, err := prepareScheduledTaskConfigRaw(raw, currentPHPRuntimeInventoryConfig())
+	if err != nil {
+		return scheduledTaskPreparedConfig{}, err
+	}
+	if store != nil {
+		rec, err := store.writeScheduledTaskConfigVersion("", prepared.cfg, configVersionSourceImport, "", "scheduled tasks file import", 0)
+		if err != nil {
+			return scheduledTaskPreparedConfig{}, err
+		}
+		prepared.etag = rec.ETag
+		prepared.versionID = rec.VersionID
+	}
+	return prepared, nil
 }
 
 func scheduledTaskRuntimeInstance() *scheduledTaskRuntime {
@@ -195,12 +251,20 @@ func ApplyScheduledTaskConfigRaw(ifMatch string, raw string) (string, ScheduledT
 
 	prevRaw := rt.raw
 	prevETag := rt.etag
+	prevVersionID := rt.versionID
 	prevCfg := cloneScheduledTaskConfigFile(rt.cfg)
-	if err := persistScheduledTaskConfigRaw(rt.configPath, prepared.raw); err != nil {
+	nextETag, nextVersionID, err := persistScheduledTaskConfigAuthoritative(rt.configPath, rt.etag, prepared, configVersionSourceApply, 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			return "", ScheduledTaskConfigFile{}, proxyRulesConflictError{CurrentETag: rt.etag}
+		}
 		return "", ScheduledTaskConfigFile{}, err
 	}
+	prepared.etag = nextETag
+	prepared.versionID = nextVersionID
 	rt.raw = prepared.raw
 	rt.etag = prepared.etag
+	rt.versionID = prepared.versionID
 	rt.cfg = cloneScheduledTaskConfigFile(prepared.cfg)
 	rt.pushRollbackLocked(proxyRollbackEntry{
 		Raw:       prevRaw,
@@ -210,8 +274,12 @@ func ApplyScheduledTaskConfigRaw(ifMatch string, raw string) (string, ScheduledT
 	if err := pruneScheduledTaskState(rt.configPath, prepared.cfg); err != nil {
 		rt.raw = prevRaw
 		rt.etag = prevETag
+		rt.versionID = prevVersionID
 		rt.cfg = prevCfg
-		_ = persistScheduledTaskConfigRaw(rt.configPath, prevRaw)
+		if restoredETag, restoredVersionID, restoreErr := persistScheduledTaskConfigAuthoritative(rt.configPath, prepared.etag, scheduledTaskPreparedConfig{raw: prevRaw, etag: prevETag, cfg: prevCfg}, configVersionSourceRollback, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
 		return "", ScheduledTaskConfigFile{}, err
 	}
 	return rt.etag, cloneScheduledTaskConfigFile(rt.cfg), nil
@@ -240,26 +308,94 @@ func RollbackScheduledTaskConfig() (string, ScheduledTaskConfigFile, proxyRollba
 
 	prevRaw := rt.raw
 	prevETag := rt.etag
+	prevVersionID := rt.versionID
 	prevCfg := cloneScheduledTaskConfigFile(rt.cfg)
-	if err := persistScheduledTaskConfigRaw(rt.configPath, prepared.raw); err != nil {
+	restoredVersionID := int64(0)
+	if store := getLogsStatsStore(); store != nil {
+		if foundID, found, err := store.findConfigVersionIDByETag(scheduledTaskConfigDomain, entry.ETag); err == nil && found {
+			restoredVersionID = foundID
+		}
+	}
+	nextETag, nextVersionID, err := persistScheduledTaskConfigAuthoritative(rt.configPath, rt.etag, prepared, configVersionSourceRollback, restoredVersionID)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			return "", ScheduledTaskConfigFile{}, proxyRollbackEntry{}, proxyRulesConflictError{CurrentETag: rt.etag}
+		}
 		rt.pushRollbackLocked(entry)
 		return "", ScheduledTaskConfigFile{}, proxyRollbackEntry{}, err
 	}
+	prepared.etag = nextETag
+	prepared.versionID = nextVersionID
 	rt.raw = prepared.raw
 	rt.etag = prepared.etag
+	rt.versionID = prepared.versionID
 	rt.cfg = cloneScheduledTaskConfigFile(prepared.cfg)
 	if err := pruneScheduledTaskState(rt.configPath, prepared.cfg); err != nil {
 		rt.raw = prevRaw
 		rt.etag = prevETag
+		rt.versionID = prevVersionID
 		rt.cfg = prevCfg
-		_ = persistScheduledTaskConfigRaw(rt.configPath, prevRaw)
+		if restoredETag, restoredVersionID, restoreErr := persistScheduledTaskConfigAuthoritative(rt.configPath, prepared.etag, scheduledTaskPreparedConfig{raw: prevRaw, etag: prevETag, cfg: prevCfg}, configVersionSourceApply, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
 		rt.pushRollbackLocked(entry)
 		return "", ScheduledTaskConfigFile{}, proxyRollbackEntry{}, err
 	}
 	return rt.etag, cloneScheduledTaskConfigFile(rt.cfg), entry, nil
 }
 
+func SyncScheduledTaskStorage() error {
+	store := getLogsStatsStore()
+	rt := scheduledTaskRuntimeInstance()
+	if store == nil || rt == nil {
+		return nil
+	}
+	cfg, rec, found, err := store.loadActiveScheduledTaskConfig()
+	if err != nil {
+		return err
+	}
+	if !found {
+		rt.mu.RLock()
+		cfg := cloneScheduledTaskConfigFile(rt.cfg)
+		rt.mu.RUnlock()
+		_, err := store.writeScheduledTaskConfigVersion("", cfg, configVersionSourceImport, "", "scheduled tasks runtime import", 0)
+		return err
+	}
+	prepared, err := prepareScheduledTaskConfigRaw(mustJSON(cfg), currentPHPRuntimeInventoryConfig())
+	if err != nil {
+		return err
+	}
+	prepared.etag = rec.ETag
+	prepared.versionID = rec.VersionID
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if prepared.etag == rt.etag {
+		return nil
+	}
+	prevRaw := rt.raw
+	prevETag := rt.etag
+	prevVersionID := rt.versionID
+	prevCfg := cloneScheduledTaskConfigFile(rt.cfg)
+	rt.raw = prepared.raw
+	rt.etag = prepared.etag
+	rt.versionID = prepared.versionID
+	rt.cfg = cloneScheduledTaskConfigFile(prepared.cfg)
+	if err := pruneScheduledTaskState(rt.configPath, prepared.cfg); err != nil {
+		rt.raw = prevRaw
+		rt.etag = prevETag
+		rt.versionID = prevVersionID
+		rt.cfg = prevCfg
+		return err
+	}
+	return nil
+}
+
 func ScheduledTaskStatusSnapshot(configPath string, cfg ScheduledTaskConfigFile) ([]ScheduledTaskStatus, error) {
+	if store := getLogsStatsStore(); store != nil {
+		return scheduledTaskStatusSnapshotFromDB(store, cfg)
+	}
 	var out []ScheduledTaskStatus
 	err := withScheduledTaskStateLocked(configPath, func(state *scheduledTaskStateFile) error {
 		if state.Tasks == nil {
@@ -603,14 +739,16 @@ func cloneScheduledTaskConfigFile(in ScheduledTaskConfigFile) ScheduledTaskConfi
 	return out
 }
 
-func persistScheduledTaskConfigRaw(path string, raw string) error {
-	if strings.TrimSpace(path) == "" {
-		return fmt.Errorf("scheduled task config path is empty")
+func persistScheduledTaskConfigAuthoritative(path string, expectedETag string, prepared scheduledTaskPreparedConfig, source string, restoredFromVersionID int64) (string, int64, error) {
+	store, err := requireConfigDBStore()
+	if err != nil {
+		return "", 0, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+	rec, err := store.writeScheduledTaskConfigVersion(expectedETag, prepared.cfg, source, "", "scheduled tasks config update", restoredFromVersionID)
+	if err != nil {
+		return "", 0, err
 	}
-	return bypassconf.AtomicWriteWithBackup(path, []byte(raw))
+	return rec.ETag, rec.VersionID, nil
 }
 
 func loadScheduledTaskConfigRaw(configPath string) (string, error) {
@@ -652,12 +790,28 @@ func scheduledTaskLogPath(configPath string, taskName string) string {
 func CurrentScheduledTaskRuntimePaths() ScheduledTaskRuntimePaths {
 	configPath := currentScheduledTaskConfigPath()
 	runtimeDir := scheduledTaskRuntimeDir(configPath)
-	return ScheduledTaskRuntimePaths{
-		ConfigFile: configPath,
-		RuntimeDir: runtimeDir,
-		StateFile:  scheduledTaskStatePath(configPath),
-		LogDir:     filepath.Join(runtimeDir, "logs"),
+	paths := ScheduledTaskRuntimePaths{
+		ConfigFile:    configPath,
+		ConfigStorage: scheduledTaskConfigStorageLabel(configPath),
+		RuntimeDir:    runtimeDir,
+		LogDir:        filepath.Join(runtimeDir, "logs"),
 	}
+	if getLogsStatsStore() != nil {
+		paths.StateStorage = scheduledTaskStateStorageLabel
+		return paths
+	}
+	paths.StateFile = scheduledTaskStatePath(configPath)
+	return paths
+}
+
+func scheduledTaskConfigStorageLabel(configPath string) string {
+	if getLogsStatsStore() != nil {
+		return "db:" + scheduledTaskConfigBlobKey
+	}
+	if strings.TrimSpace(configPath) == "" {
+		return "memory"
+	}
+	return configPath
 }
 
 func loadScheduledTaskStateUnlocked(statePath string) (scheduledTaskStateFile, error) {
@@ -717,6 +871,9 @@ func withScheduledTaskStateLocked(configPath string, fn func(*scheduledTaskState
 }
 
 func updateScheduledTaskStatus(configPath string, taskName string, fn func(*ScheduledTaskStatus)) error {
+	if store := getLogsStatsStore(); store != nil {
+		return store.updateScheduledTaskRuntimeStatus(taskName, fn)
+	}
 	return withScheduledTaskStateLocked(configPath, func(state *scheduledTaskStateFile) error {
 		status := state.Tasks[taskName]
 		status.Name = taskName
@@ -730,6 +887,9 @@ func pruneScheduledTaskState(configPath string, cfg ScheduledTaskConfigFile) err
 	allowed := make(map[string]struct{}, len(cfg.Tasks))
 	for _, task := range cfg.Tasks {
 		allowed[task.Name] = struct{}{}
+	}
+	if store := getLogsStatsStore(); store != nil {
+		return store.pruneScheduledTaskRuntimeStatuses(allowed)
 	}
 	return withScheduledTaskStateLocked(configPath, func(state *scheduledTaskStateFile) error {
 		changed := false
@@ -787,6 +947,42 @@ func scheduledTaskPIDAlive(pid int) bool {
 	}
 	err := syscall.Kill(pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+func scheduledTaskStatusSnapshotFromDB(store *wafEventStore, cfg ScheduledTaskConfigFile) ([]ScheduledTaskStatus, error) {
+	state, err := store.loadScheduledTaskRuntimeStatuses()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ScheduledTaskStatus, 0, len(cfg.Tasks))
+	for _, task := range cfg.Tasks {
+		status := state[task.Name]
+		if status.Name == "" {
+			status.Name = task.Name
+		}
+		if status.Running && status.PID > 0 && !scheduledTaskPIDAlive(status.PID) {
+			finishedAt := time.Now().UTC()
+			updated, markErr := store.markScheduledTaskStatusAbandoned(task.Name, status.PID, finishedAt)
+			if markErr != nil {
+				return nil, markErr
+			}
+			if updated {
+				status.Running = false
+				status.PID = 0
+				if status.LastFinishedAt == "" {
+					status.LastFinishedAt = finishedAt.Format(time.RFC3339Nano)
+				}
+				if status.LastResult == "" || status.LastResult == "running" {
+					status.LastResult = "abandoned"
+				}
+			}
+		}
+		out = append(out, status)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
 }
 
 func normalizeScheduledTaskCommand(task ScheduledTaskRecord, inventory PHPRuntimeInventoryFile) string {

@@ -248,6 +248,7 @@ func TestNativeHTTP2SessionCapacityZeroDrainsPool(t *testing.T) {
 		fr = nativeHTTP2RawHandshake(t, conn)
 		streamID = nativeHTTP2RawReadRequestStream(t, fr)
 		nativeHTTP2RawWriteHeaders(t, fr, streamID, true, hpack.HeaderField{Name: ":status", Value: "204"})
+		nativeHTTP2RawHoldUntilClientSettles(conn, fr)
 	}()
 
 	rt, err := buildProxyNativeHTTP2Transport(normalizeProxyRulesConfig(ProxyRulesConfig{
@@ -262,6 +263,9 @@ func TestNativeHTTP2SessionCapacityZeroDrainsPool(t *testing.T) {
 	body := nativeHTTP2RoundTripBody(t, rt, "http://"+ln.Addr().String()+"/one")
 	if len(body) != 0 {
 		t.Fatalf("first body length=%d want 0", len(body))
+	}
+	if !waitNativeHTTP2TransportDrained(rt, time.Second) {
+		t.Fatal("first session was not drained after upstream disabled concurrent streams")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -679,6 +683,35 @@ func nativeHTTP2RawReadRequestStream(t *testing.T, fr *http2.Framer) uint32 {
 	}
 }
 
+func waitNativeHTTP2TransportDrained(rt *nativeHTTP2Transport, wait time.Duration) bool {
+	deadline := time.Now().Add(wait)
+	for {
+		rt.mu.Lock()
+		sessionCount := 0
+		for _, list := range rt.sessions {
+			sessionCount += len(list)
+		}
+		activeCount := 0
+		for _, count := range rt.active {
+			activeCount += count
+		}
+		rt.mu.Unlock()
+		if sessionCount == 0 && activeCount == 0 {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func nativeHTTP2RawHoldUntilClientSettles(conn net.Conn, fr *http2.Framer) {
+	_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	_, _ = fr.ReadFrame()
+	_ = conn.SetReadDeadline(time.Time{})
+}
+
 func nativeHTTP2RoundTripBody(t *testing.T, rt http.RoundTripper, rawURL string) []byte {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
@@ -705,9 +738,11 @@ func nativeHTTP2AssertInvalidRequestDoesNotWriteHeaders(t *testing.T, mutate fun
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	streamIDCh := make(chan uint32, 1)
+	invalidConnDone := make(chan struct{})
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
+			close(invalidConnDone)
 			return
 		}
 		fr := nativeHTTP2RawHandshake(t, conn)
@@ -721,9 +756,11 @@ func nativeHTTP2AssertInvalidRequestDoesNotWriteHeaders(t *testing.T, mutate fun
 			if _, ok := frame.(*http2.HeadersFrame); ok {
 				t.Errorf("invalid request reached upstream as HEADERS on stream %d", frame.Header().StreamID)
 				_ = conn.Close()
+				close(invalidConnDone)
 				return
 			}
 		}
+		close(invalidConnDone)
 
 		conn, err = ln.Accept()
 		if err != nil {
@@ -734,6 +771,7 @@ func nativeHTTP2AssertInvalidRequestDoesNotWriteHeaders(t *testing.T, mutate fun
 		streamID := nativeHTTP2RawReadRequestStream(t, fr)
 		streamIDCh <- streamID
 		nativeHTTP2RawWriteHeaders(t, fr, streamID, true, hpack.HeaderField{Name: ":status", Value: "204"})
+		nativeHTTP2RawHoldUntilClientSettles(conn, fr)
 	}()
 
 	rt, err := buildProxyNativeHTTP2Transport(normalizeProxyRulesConfig(ProxyRulesConfig{
@@ -754,6 +792,11 @@ func nativeHTTP2AssertInvalidRequestDoesNotWriteHeaders(t *testing.T, mutate fun
 			_ = resp.Body.Close()
 		}
 		t.Fatalf("invalid RoundTrip err=%v want %q", err, wantErr)
+	}
+	select {
+	case <-invalidConnDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream did not finish invalid request connection")
 	}
 
 	req, err = http.NewRequest(http.MethodGet, "http://"+ln.Addr().String()+"/small", nil)

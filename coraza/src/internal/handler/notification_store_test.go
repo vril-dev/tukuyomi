@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"bufio"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -114,5 +117,138 @@ func TestNotificationManagerTransitions(t *testing.T) {
 			t.Fatalf("timed out waiting for webhook notifications, got=%v", got)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestSendNotificationEmailDeliversToSMTPServer(t *testing.T) {
+	smtpServer := newTestSMTPServer(t)
+	dispatch := notificationDispatch{
+		Product:    "tukuyomi-test",
+		Category:   notificationCategorySecurity,
+		Source:     "rate_limited",
+		State:      notificationStateActive,
+		Title:      "[tukuyomi-test] rate limit active",
+		Summary:    "notification email smoke",
+		WindowSecs: 60,
+		Count:      3,
+		UniqueIPs:  2,
+		TopPaths:   []string{"/login", "/admin"},
+		MaxScore:   7,
+	}
+
+	err := sendNotificationEmail(notificationSinkConfig{
+		Name:          "ops-email",
+		Type:          notificationSinkTypeEmail,
+		Enabled:       true,
+		SMTPAddress:   smtpServer.addr,
+		From:          "alerts@example.invalid",
+		To:            []string{"secops@example.invalid"},
+		SubjectPrefix: "[tukuyomi-test]",
+	}, dispatch)
+	if err != nil {
+		t.Fatalf("sendNotificationEmail: %v", err)
+	}
+
+	select {
+	case msg := <-smtpServer.messages:
+		for _, want := range []string{
+			"From: alerts@example.invalid",
+			"To: secops@example.invalid",
+			"Subject: [tukuyomi-test] [tukuyomi-test] rate limit active",
+			"notification email smoke",
+			"Category: security",
+			"Source: rate_limited",
+			"State: active",
+			"Window: 60s",
+			"Count: 3",
+			"Unique IPs: 2",
+			"Top paths: /login, /admin",
+			"Max score: 7",
+		} {
+			if !strings.Contains(msg, want) {
+				t.Fatalf("email message missing %q: %q", want, msg)
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for SMTP message")
+	}
+}
+
+type testSMTPServer struct {
+	addr     string
+	listener net.Listener
+	messages chan string
+}
+
+func newTestSMTPServer(t *testing.T) *testSMTPServer {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen smtp: %v", err)
+	}
+	s := &testSMTPServer{
+		addr:     ln.Addr().String(),
+		listener: ln,
+		messages: make(chan string, 1),
+	}
+	t.Cleanup(func() {
+		_ = ln.Close()
+	})
+	go s.serve(t)
+	return s
+}
+
+func (s *testSMTPServer) serve(t *testing.T) {
+	conn, err := s.listener.Accept()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+
+	reader := bufio.NewReader(conn)
+	writeLine := func(line string) {
+		_, _ = conn.Write([]byte(line + "\r\n"))
+	}
+	writeLine("220 localhost ESMTP")
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Errorf("smtp read command: %v", err)
+			return
+		}
+		cmd := strings.TrimRight(line, "\r\n")
+		upper := strings.ToUpper(cmd)
+		switch {
+		case strings.HasPrefix(upper, "EHLO ") || strings.HasPrefix(upper, "HELO "):
+			writeLine("250 localhost")
+		case strings.HasPrefix(upper, "MAIL FROM:"):
+			writeLine("250 ok")
+		case strings.HasPrefix(upper, "RCPT TO:"):
+			writeLine("250 ok")
+		case upper == "DATA":
+			writeLine("354 end with dot")
+			var msg strings.Builder
+			for {
+				dataLine, err := reader.ReadString('\n')
+				if err != nil {
+					t.Errorf("smtp read data: %v", err)
+					return
+				}
+				if strings.TrimRight(dataLine, "\r\n") == "." {
+					break
+				}
+				msg.WriteString(dataLine)
+			}
+			s.messages <- msg.String()
+			writeLine("250 queued")
+		case upper == "QUIT":
+			writeLine("221 bye")
+			return
+		default:
+			t.Errorf("unexpected SMTP command: %q", cmd)
+			writeLine("500 unexpected command")
+			return
+		}
 	}
 }

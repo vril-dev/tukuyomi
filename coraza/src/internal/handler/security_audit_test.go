@@ -11,62 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	corazaTypes "github.com/corazawaf/coraza/v3/types"
 	"github.com/gin-gonic/gin"
+
+	"tukuyomi/internal/waf"
 )
-
-type testRuleMetadata struct {
-	id       int
-	file     string
-	line     int
-	revision string
-	version  string
-	severity corazaTypes.RuleSeverity
-	tags     []string
-	maturity int
-	accuracy int
-	operator string
-	phase    corazaTypes.RulePhase
-	raw      string
-	secMark  string
-}
-
-func (r testRuleMetadata) ID() int                            { return r.id }
-func (r testRuleMetadata) File() string                       { return r.file }
-func (r testRuleMetadata) Line() int                          { return r.line }
-func (r testRuleMetadata) Revision() string                   { return r.revision }
-func (r testRuleMetadata) Severity() corazaTypes.RuleSeverity { return r.severity }
-func (r testRuleMetadata) Version() string                    { return r.version }
-func (r testRuleMetadata) Tags() []string                     { return append([]string(nil), r.tags...) }
-func (r testRuleMetadata) Maturity() int                      { return r.maturity }
-func (r testRuleMetadata) Accuracy() int                      { return r.accuracy }
-func (r testRuleMetadata) Operator() string                   { return r.operator }
-func (r testRuleMetadata) Phase() corazaTypes.RulePhase       { return r.phase }
-func (r testRuleMetadata) Raw() string                        { return r.raw }
-func (r testRuleMetadata) SecMark() string                    { return r.secMark }
-
-type testMatchedRule struct {
-	message       string
-	data          string
-	disruptive    bool
-	matchedDatas  []corazaTypes.MatchData
-	rule          corazaTypes.RuleMetadata
-	transactionID string
-}
-
-func (m testMatchedRule) Message() string         { return m.message }
-func (m testMatchedRule) Data() string            { return m.data }
-func (m testMatchedRule) URI() string             { return "/login" }
-func (m testMatchedRule) TransactionID() string   { return m.transactionID }
-func (m testMatchedRule) Disruptive() bool        { return m.disruptive }
-func (m testMatchedRule) ServerIPAddress() string { return "127.0.0.1" }
-func (m testMatchedRule) ClientIPAddress() string { return "203.0.113.10" }
-func (m testMatchedRule) MatchedDatas() []corazaTypes.MatchData {
-	return append([]corazaTypes.MatchData(nil), m.matchedDatas...)
-}
-func (m testMatchedRule) Rule() corazaTypes.RuleMetadata { return m.rule }
-func (m testMatchedRule) AuditLog() string               { return "" }
-func (m testMatchedRule) ErrorLog() string               { return "" }
 
 func setSecurityAuditRuntimeForTest(t *testing.T, rt *securityAuditRuntime) {
 	t.Helper()
@@ -356,30 +304,26 @@ func TestVerifySecurityAuditRejectsInvalidFinalLine(t *testing.T) {
 
 func TestRecordWAFBlockLinksMatchedRules(t *testing.T) {
 	trail := &securityAuditTrail{}
-	matches := []corazaTypes.MatchedRule{
-		testMatchedRule{
-			disruptive: false,
-			rule: testRuleMetadata{
-				id:       942100,
-				file:     "rules/crs/request-942.conf",
-				line:     88,
-				severity: corazaTypes.RuleSeverityCritical,
-				tags:     []string{"attack-sqli", "paranoia-level/1"},
-				operator: "@rx",
-				phase:    corazaTypes.PhaseRequestBody,
-			},
+	matches := []waf.Match{
+		{
+			RuleID:     942100,
+			File:       "rules/crs/request-942.conf",
+			Line:       88,
+			Severity:   "critical",
+			Tags:       []string{"attack-sqli", "paranoia-level/1"},
+			Operator:   "@rx",
+			Phase:      "request_body",
+			Disruptive: false,
 		},
-		testMatchedRule{
-			disruptive: true,
-			rule: testRuleMetadata{
-				id:       949110,
-				file:     "rules/crs/request-949.conf",
-				line:     42,
-				severity: corazaTypes.RuleSeverityCritical,
-				tags:     []string{"anomaly-evaluation"},
-				operator: "@gt",
-				phase:    corazaTypes.PhaseRequestBody,
-			},
+		{
+			RuleID:     949110,
+			File:       "rules/crs/request-949.conf",
+			Line:       42,
+			Severity:   "critical",
+			Tags:       []string{"anomaly-evaluation"},
+			Operator:   "@gt",
+			Phase:      "request_body",
+			Disruptive: true,
 		},
 	}
 

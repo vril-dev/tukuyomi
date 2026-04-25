@@ -21,9 +21,9 @@ This is the official supported path today.
 - one internal `scheduled-task-runner` sidecar
 - shared writable paths for:
   - `/app/conf`
-  - `/app/data/geoip` when request country resolution uses managed `.mmdb`
   - `/app/data/scheduled-tasks`
-  - `/app/logs`
+  - `/app/audit`
+  - `/app/data/persistent` when using local `persistent_storage`
   - `/app/data/php-fpm` when bundled runtimes are used
 - live admin mutation is allowed
 
@@ -73,7 +73,7 @@ Operational constraints:
 ## Split Public/Admin Listeners
 
 When you need the public proxy listener on `:80` / `:443` but want admin UI/API
-on a separate high port, set `admin.listen_addr` in `conf/config.json`.
+on a separate high port, set `admin.listen_addr` in DB `app_config`.
 
 Sample:
 
@@ -126,9 +126,9 @@ Dedicated scheduler role:
 - has no public ingress
 - mounts the same source-of-truth paths as the frontend for:
   - `/app/conf`
-  - `/app/data/geoip`
   - `/app/data/scheduled-tasks`
-  - `/app/logs`
+  - `/app/audit`
+  - `/app/data/persistent` when using local `persistent_storage`
   - `/app/data/php-fpm` when bundled runtimes are used
 
 This does not imply distributed mutable runtime support. It only makes
@@ -163,37 +163,73 @@ docker build -f docs/build/Dockerfile.example -t tukuyomi:deploy .
 
 This path builds the Admin UI in-image, builds the Go binary, copies runtime config, and installs CRS during the image build.
 
+## Deployment Artifact Render
+
+For cloud/container platforms, render manifests for review instead of using the
+host-mutating `make install` path:
+
+```bash
+make deploy-render TARGET=container-image IMAGE_URI=registry.example.com/tukuyomi:1.1.0
+make deploy-render TARGET=ecs IMAGE_URI=registry.example.com/tukuyomi:1.1.0
+make deploy-render TARGET=kubernetes IMAGE_URI=registry.example.com/tukuyomi:1.1.0
+make deploy-render TARGET=azure-container-apps IMAGE_URI=registry.example.com/tukuyomi:1.1.0
+```
+
+Output goes to `dist/deploy/<target>/` by default.
+
+- `container-image` writes the deployment Dockerfile plus a local build helper; it does not push to a registry
+- `ecs` writes single-instance task/service artifacts plus replicated scheduler artifacts; it does not call AWS APIs
+- `kubernetes` writes single-instance and dedicated scheduler YAML; it does not run `kubectl apply`
+- `azure-container-apps` writes single-instance and scheduler singleton YAML; it does not call Azure APIs
+- set `DEPLOY_RENDER_OVERWRITE=1` to replace an existing output directory
+
 ## Shared Writable Paths
 
 Minimum writable paths for the official mutable single-instance path:
 
 - `/app/conf`
-- `/app/data/geoip`
 - `/app/data/scheduled-tasks`
-- `/app/logs`
+- `/app/audit`
+- `/app/data/persistent` when `persistent_storage.backend=local`
 
 Mount those from your platform unless you intentionally accept ephemeral local
 state.
 
 When you also use bundled PHP runtimes for `/options`, `/vhosts`, or scheduled
 PHP CLI jobs, mount `/app/data/php-fpm` as well.
+If internal response cache contents must survive node replacement, mount the
+path configured by `cache_store.store_dir`, such as `/app/cache/response`. That
+path is cache data, not runtime authority.
 
-`/app/rules` may stay image-baked if you do not mutate rule files at runtime.
-Mount it only when you want runtime rule-file changes.
+WAF/CRS import material is staged under `/app/data/tmp` and imported into DB
+`waf_rule_assets`. Runtime loads active WAF/CRS assets from DB, not from a
+mounted rules directory.
 
 ## Config and Secrets
 
-`tukuyomi` is primarily driven by `conf/config.json`, not by a large env surface.
+`tukuyomi` uses `conf/config.json` for DB connection bootstrap, then reads
+operator-managed app/proxy config from normalized DB tables.
 
 Typical production pattern:
 
-- render `conf/config.json` from your secret manager or config-management layer
-- mount or bake `conf/proxy.json`, `conf/sites.json`, `conf/scheduled-tasks.json`, and policy files
+- render `conf/config.json` from your secret manager or config-management layer for `storage.db_driver`, `storage.db_path`, and `storage.db_dsn`
+- mount or bake `seeds/conf/` as the bundled empty-DB seed set; configured files such as `conf/proxy.json` and policy files still override it
+- run `make db-migrate`, then `make crs-install` to install/import WAF rule assets, then `make db-import` for the remaining seed material before first start. `db-import` does not re-import WAF rule assets
+- treat `conf/sites.json`, `conf/scheduled-tasks.json`, and `conf/upstream-runtime.json` as empty-DB seed/export files; normalized DB rows are authoritative after bootstrap
 - use runtime env injection only for:
   - `WAF_CONFIG_FILE`
   - `WAF_PROXY_AUDIT_FILE`
+  - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, and `AWS_REGION` / `AWS_DEFAULT_REGION` only when `persistent_storage.backend=s3`
   - security-audit key env overrides when `security_audit.key_source=env`
-- the embedded `Settings` page edits the same `conf/config.json` surface for global product settings, but those changes are still `Save config only`; recreate/restart the container to apply listener/runtime/storage/observability updates
+- the embedded `Settings` page edits DB `app_config`; recreate/restart the container to apply listener/runtime/storage policy/observability updates
+
+Site-managed ACME is configured per site on the `Sites` page with
+`tls.mode=acme`. ACME cache data lives in the `acme/` namespace of
+`persistent_storage`. For a single-instance local backend, mount
+`/app/data/persistent`; for replicated or node-replacement deployments, use the
+S3 backend or an operator-managed shared mount. Azure Blob Storage and Google
+Cloud Storage backends fail closed until their provider adapters are
+implemented.
 
 Proxy engine selection is part of the same restart-required config surface:
 
@@ -215,9 +251,8 @@ Proxy engine selection is part of the same restart-required config surface:
 
 Keep these server-side:
 
-- `admin.api_key_primary`
-- `admin.api_key_secondary`
 - `admin.session_secret`
+- initial owner bootstrap credentials, when you use `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` / `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD`
 - optional security-audit encryption and HMAC keys
 - when you intentionally prototype immutable replicated rollouts, set
   `admin.read_only=true` on the frontend replicas and move scheduled-task
@@ -225,9 +260,8 @@ Keep these server-side:
 - default `tukuyomi` posture is `admin.external_mode=api_only_external`; use `deny_external` when remote admin API access is unnecessary
 - if you override to `full_external` on a non-loopback listener, treat front-side allowlists/auth as mandatory
 - widening `admin.trusted_cidrs` to public or catch-all networks also re-exposes the embedded admin UI/API to those sources and only triggers a warning
-- managed bypass override rules belong under `/app/conf/rules/*.conf`; the `Rules -> Override Rules` surface edits those files and `waf-bypass.json` references them via `extra_rule`
-- the container image and release bundle ship `/app/conf/rules/search-endpoint.conf` as a harmless standalone sample
-- the paired sample reference is `/app/conf/waf-bypass.sample.json`
+- base WAF and CRS assets are DB `waf_rule_assets` after import; image-baked files are seed material, not runtime authority
+- managed bypass override rules are DB `override_rules`; `extra_rule` values remain logical compatibility references
 
 ## Platform Mapping
 
@@ -261,7 +295,8 @@ These samples use separate EFS-backed mounts for:
 
 - `/app/conf`
 - `/app/data/scheduled-tasks`
-- `/app/logs`
+- `/app/audit`
+- `/app/data/persistent`
 - `/app/data/php-fpm`
 
 The task-definition sample also declares `9091/tcp` for `admin.listen_addr`.
@@ -299,7 +334,8 @@ The sample uses separate PVCs for:
 
 - `tukuyomi-conf`
 - `tukuyomi-scheduled-tasks`
-- `tukuyomi-logs`
+- `tukuyomi-audit`
+- `tukuyomi-persistent`
 - `tukuyomi-php-fpm`
 
 The sample now includes:
@@ -339,7 +375,8 @@ Container Apps environment for:
 
 - `proxyconf`
 - `proxyscheduledtasks`
-- `proxylogs`
+- `proxyaudit`
+- `proxypersistent`
 - `proxyphpfpm`
 
 Azure Container Apps still has one primary ingress target in the sample. When
@@ -374,7 +411,7 @@ Typical cloud path:
 
 `client -> ALB/nginx/ingress -> tukuyomi container -> app container/service`
 
-If a front layer exists, restrict the trusted proxy ranges in `conf/config.json` to only that layer.
+If a front layer exists, restrict the trusted proxy ranges in DB `app_config` to only that layer.
 
 If `tukuyomi` itself is the direct public entrypoint and built-in HTTP/3 is enabled, open the listener port for both TCP and UDP.
 
@@ -382,7 +419,7 @@ If `tukuyomi` itself is the direct public entrypoint and built-in HTTP/3 is enab
 
 - the embedded Admin UI is produced during image build, not at runtime
 - `scripts/install_crs.sh` can be run at image build time or startup time depending on your policy
-- for mutable runtime policy files, mount `/app/conf` and `/app/rules` instead of baking everything into the image
+- for mutable runtime policy files, mount `/app/conf`; WAF/CRS assets are imported from `/app/data/tmp` staging into DB
 - the repository `docker-compose.yml` now provides a real scheduler sidecar service named `scheduled-task-runner` behind the `scheduled-tasks` profile
 - the current sidecar model is explicit: a shell loop runs the image's proxy binary with `run-scheduled-tasks`, then sleeps until the next minute boundary
 - failure policy is explicit too: if `run-scheduled-tasks` returns non-zero, the sidecar exits non-zero and relies on container restart policy instead of hiding the fault
@@ -415,8 +452,8 @@ docker compose \
 
 - `make ui-preview-up` starts the preview-scoped scheduler sidecar too
 - default preview behavior is reset-on-start:
-  `ui-preview-up` rewrites `conf/scheduled-tasks.ui-preview.json` to `{"tasks":[]}` on each start so old preview tasks do not keep running
-- opt into retained preview config/state with:
+  `ui-preview-up` recreates the isolated preview SQLite DB on each start, so old preview tasks, listener changes, and DB rows do not carry over
+- opt into retained preview DB state with:
 
 ```bash
 UI_PREVIEW_PERSIST=1 make ui-preview-up
@@ -424,36 +461,30 @@ UI_PREVIEW_PERSIST=1 make ui-preview-down
 ```
 
 - when `UI_PREVIEW_PERSIST=1` is set, `ui-preview-up/down` keeps:
-  - `conf/config.ui-preview.json`
-  - `conf/proxy.ui-preview.json`
-  - `conf/scheduled-tasks.ui-preview.json`
-  - `data/php-fpm/inventory.ui-preview.json`
-  - `data/php-fpm/vhosts.ui-preview.json`
-- `ui-preview-up` now derives published ports from `conf/config.ui-preview.json`
+  - `data/<dirname(storage.db_path)>/tukuyomi-ui-preview.db`
+  - for example, when `storage.db_path` is `db/tukuyomi.db`, the preview DB is `data/db/tukuyomi-ui-preview.db`
+- `ui-preview-up` derives published ports from the active preview `app_config` stored in the preview DB
+  - on first boot, preview starts from `conf/config.json` plus optional `UI_PREVIEW_PUBLIC_ADDR` / `UI_PREVIEW_ADMIN_ADDR` overrides
   - single listener preview publishes the public listener port
   - split listener preview publishes both public and admin listener ports
   - healthcheck follows the admin listener in split mode
-- example split preview config:
+- example split preview bootstrap:
 
-```json
-{
-  "server": {
-    "listen_addr": ":80"
-  },
-  "admin": {
-    "listen_addr": ":9090"
-  }
-}
+```bash
+UI_PREVIEW_PERSIST=1 \
+UI_PREVIEW_PUBLIC_ADDR=:80 \
+UI_PREVIEW_ADMIN_ADDR=:9090 \
+make ui-preview-up
 ```
 
 - that yields:
   - public proxy: `http://127.0.0.1:80`
   - admin UI: `http://127.0.0.1:9090/tukuyomi-ui`
   - admin API: `http://127.0.0.1:9090/tukuyomi-api`
-- do not use loopback listener binds such as `localhost:80`, `127.0.0.1:80`, or `[::1]:9090` in preview config
+- do not use loopback listener binds such as `localhost:80`, `127.0.0.1:80`, or `[::1]:9090` in preview listener settings
   - preview rejects them because container-local loopback bind does not match host-published ports
 - when you save listener changes through `Settings`, use `UI_PREVIEW_PERSIST=1 make ui-preview-down` then `UI_PREVIEW_PERSIST=1 make ui-preview-up`
-  - plain `docker compose restart` does not recreate changed published ports
+  - preview persists those listener changes in the preview DB, but plain `docker compose restart` does not recreate changed published ports
 - operational signal for scheduler faults is container exit/restart plus sidecar logs; persistent faults should show up as restart churn
 - if a scheduled task command line points at a bundled PHP path such as `/app/data/php-fpm/binaries/php85/php`, mount `/app/data/php-fpm` into that scheduler container too
 - the platform health endpoint is `/healthz` on port `9090`

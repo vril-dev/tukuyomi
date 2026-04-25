@@ -3,7 +3,7 @@ set -euo pipefail
 
 VERSION="${1:-v4.23.0}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEST_DIR="${DEST_DIR:-${ROOT_DIR}/data/rules/crs}"
+DEST_DIR="${DEST_DIR:-${ROOT_DIR}/data/tmp/waf-rule-assets/rules/crs}"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT

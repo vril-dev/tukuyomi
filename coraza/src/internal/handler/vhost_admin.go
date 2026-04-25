@@ -14,12 +14,12 @@ type vhostConfigPutBody struct {
 func GetVhosts(c *gin.Context) {
 	raw, etag, cfg, rollbackDepth := VhostConfigSnapshot()
 	c.JSON(http.StatusOK, gin.H{
-		"etag":             etag,
-		"raw":              raw,
-		"vhosts":           cfg,
-		"materialized":     PHPRuntimeMaterializationSnapshot(),
-		"override_reports": VhostOverrideImportReportsSnapshot(),
-		"rollback_depth":   rollbackDepth,
+		"etag":           etag,
+		"raw":            raw,
+		"vhosts":         cfg,
+		"runtime_status": VhostRuntimeStatusSnapshot(),
+		"materialized":   PHPRuntimeMaterializationSnapshot(),
+		"rollback_depth": rollbackDepth,
 	})
 }
 
@@ -29,7 +29,7 @@ func ValidateVhosts(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	cfg, reports, err := ValidateVhostConfigRawWithInventoryDetailed(in.Raw, currentPHPRuntimeInventoryConfig())
+	cfg, err := ValidateVhostConfigRawWithInventory(in.Raw, currentPHPRuntimeInventoryConfig())
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{
 			"ok":       false,
@@ -45,10 +45,9 @@ func ValidateVhosts(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"ok":               true,
-		"messages":         []string{},
-		"vhosts":           cfg,
-		"override_reports": reports,
+		"ok":       true,
+		"messages": []string{},
+		"vhosts":   cfg,
 	})
 }
 
@@ -70,14 +69,16 @@ func PutVhosts(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": conflict.CurrentETag})
 			return
 		}
+		if respondIfConfigDBStoreRequired(c, err) {
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"ok":               true,
-		"etag":             etag,
-		"vhosts":           cfg,
-		"override_reports": VhostOverrideImportReportsSnapshot(),
+		"ok":     true,
+		"etag":   etag,
+		"vhosts": cfg,
 	})
 }
 
@@ -88,15 +89,17 @@ func RollbackVhosts(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": "no rollback snapshot"})
 			return
 		}
+		if respondIfConfigDBStoreRequired(c, err) {
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"ok":               true,
-		"etag":             etag,
-		"vhosts":           cfg,
-		"override_reports": VhostOverrideImportReportsSnapshot(),
-		"rollback":         true,
-		"restored_from":    restored,
+		"ok":            true,
+		"etag":          etag,
+		"vhosts":        cfg,
+		"rollback":      true,
+		"restored_from": restored,
 	})
 }

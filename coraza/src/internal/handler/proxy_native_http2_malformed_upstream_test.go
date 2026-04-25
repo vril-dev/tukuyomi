@@ -97,7 +97,8 @@ func TestNativeHTTP2MalformedUpstream(t *testing.T) {
 	})
 
 	t.Run("window starvation timeout", func(t *testing.T) {
-		rawURL := nativeHTTP2RawServerURL(t, func(fr *http2.Framer, _ uint32) {
+		rawURL := nativeHTTP2RawServerURL(t, func(fr *http2.Framer, streamID uint32) {
+			nativeHTTP2RawWriteHeaders(t, fr, streamID, false, hpack.HeaderField{Name: ":status", Value: "200"})
 			deadline := time.Now().Add(300 * time.Millisecond)
 			for time.Now().Before(deadline) {
 				_, err := fr.ReadFrame()

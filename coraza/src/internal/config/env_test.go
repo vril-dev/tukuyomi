@@ -58,30 +58,6 @@ func TestParseCSV(t *testing.T) {
 	}
 }
 
-func TestParseStorageBackend(t *testing.T) {
-	cases := []struct {
-		name            string
-		in              string
-		legacyDBEnabled bool
-		want            string
-	}{
-		{name: "explicit-file", in: "file", legacyDBEnabled: true, want: "file"},
-		{name: "explicit-db", in: "db", legacyDBEnabled: false, want: "db"},
-		{name: "legacy-fallback-db", in: "", legacyDBEnabled: true, want: "db"},
-		{name: "legacy-fallback-file", in: "", legacyDBEnabled: false, want: "file"},
-		{name: "invalid-fallback-file", in: "oracle", legacyDBEnabled: true, want: "file"},
-	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			got := parseStorageBackend(tc.in, tc.legacyDBEnabled)
-			if got != tc.want {
-				t.Fatalf("parseStorageBackend(%q, %v)=%q want=%q", tc.in, tc.legacyDBEnabled, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestParseDBDriver(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -90,6 +66,7 @@ func TestParseDBDriver(t *testing.T) {
 		{in: "", want: "sqlite"},
 		{in: "sqlite", want: "sqlite"},
 		{in: "mysql", want: "mysql"},
+		{in: "pgsql", want: "pgsql"},
 		{in: "oracle", want: "sqlite"},
 	}
 	for _, tc := range cases {
@@ -282,15 +259,14 @@ func TestLoadAppConfigFile(t *testing.T) {
 		"admin": {
 			"api_base_path": "/tukuyomi-api",
 			"ui_base_path": "/tukuyomi-ui",
-			"api_key_primary": "very-strong-random-api-key-12345",
 			"session_secret": "very-strong-random-session-secret-12345",
 			"session_ttl_sec": 7200
 		},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
-			"security_audit_file": "logs/coraza/security-audit.ndjson",
-			"security_audit_blob_dir": "logs/coraza/security-audit-blobs",
-			"rules_file": "rules/tukuyomi.conf"
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
+			"rules_file": "tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
 		"security_audit": {
@@ -300,7 +276,7 @@ func TestLoadAppConfigFile(t *testing.T) {
 			"hmac_key_id": "sig-test"
 		},
 		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
-		"storage": {"backend": "file", "db_driver": "sqlite"}
+		"storage": {"db_driver": "sqlite"}
 	}`
 	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -324,6 +300,9 @@ func TestLoadAppConfigFile(t *testing.T) {
 	if cfg.Paths.ScheduledTaskConfigFile != "conf/scheduled-tasks.json" {
 		t.Fatalf("unexpected scheduled_task_config_file: %s", cfg.Paths.ScheduledTaskConfigFile)
 	}
+	if cfg.Paths.CacheRulesFile != "conf/cache-rules.json" {
+		t.Fatalf("unexpected cache_rules_file: %s", cfg.Paths.CacheRulesFile)
+	}
 	if cfg.SecurityAudit.CaptureMode != "enforced_only" {
 		t.Fatalf("unexpected security audit capture mode: %s", cfg.SecurityAudit.CaptureMode)
 	}
@@ -336,11 +315,29 @@ func TestLoadAppConfigFile(t *testing.T) {
 	if cfg.Proxy.Engine.Mode != ProxyEngineModeTukuyomiProxy {
 		t.Fatalf("unexpected proxy engine mode: %s", cfg.Proxy.Engine.Mode)
 	}
+	if cfg.WAF.Engine.Mode != WAFEngineModeCoraza {
+		t.Fatalf("unexpected WAF engine mode: %s", cfg.WAF.Engine.Mode)
+	}
+	if cfg.Persistent.Backend != PersistentStorageBackendLocal {
+		t.Fatalf("unexpected persistent storage backend: %s", cfg.Persistent.Backend)
+	}
+	if cfg.Persistent.Local.BaseDir != DefaultPersistentStorageLocalDir {
+		t.Fatalf("unexpected persistent storage local base dir: %s", cfg.Persistent.Local.BaseDir)
+	}
 	if err := ReloadFromConfigFile(cfgPath); err != nil {
 		t.Fatalf("ReloadFromConfigFile returned error: %v", err)
 	}
 	if ProxyEngineMode != ProxyEngineModeTukuyomiProxy {
 		t.Fatalf("unexpected runtime proxy engine mode: %s", ProxyEngineMode)
+	}
+	if WAFEngineMode != WAFEngineModeCoraza {
+		t.Fatalf("unexpected runtime WAF engine mode: %s", WAFEngineMode)
+	}
+	if PersistentStorageBackend != PersistentStorageBackendLocal {
+		t.Fatalf("unexpected runtime persistent storage backend: %s", PersistentStorageBackend)
+	}
+	if PersistentStorageLocalBaseDir != DefaultPersistentStorageLocalDir {
+		t.Fatalf("unexpected runtime persistent storage local base dir: %s", PersistentStorageLocalBaseDir)
 	}
 }
 
@@ -351,9 +348,36 @@ func TestLoadAppConfigFileRejectsInvalid(t *testing.T) {
 		"admin": {"api_base_path": "/", "ui_base_path": "/tukuyomi-ui"},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
-			"security_audit_file": "logs/coraza/security-audit.ndjson",
-			"security_audit_blob_dir": "logs/coraza/security-audit-blobs",
-			"rules_file": "rules/tukuyomi.conf"
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
+			"rules_file": "tukuyomi.conf"
+		},
+		"proxy": {"rollback_history_size": 8},
+		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
+		"storage": {"db_driver": "sqlite"}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := loadAppConfigFile(cfgPath); err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+}
+
+func TestLoadAppConfigFileRejectsRemovedFileStorageBackend(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	raw := `{
+		"server": {"listen_addr": ":9090"},
+		"admin": {
+			"api_base_path": "/tukuyomi-api",
+			"ui_base_path": "/tukuyomi-ui",
+			"session_secret": "very-strong-random-session-secret-12345"
+		},
+		"paths": {
+			"proxy_config_file": "conf/proxy.json",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
+			"rules_file": "tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
 		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
@@ -362,8 +386,124 @@ func TestLoadAppConfigFileRejectsInvalid(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	if _, err := loadAppConfigFile(cfgPath); err == nil {
+	_, err := loadAppConfigFile(cfgPath)
+	if err == nil {
 		t.Fatal("expected validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "storage.backend=file has been removed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadAppConfigFileAcceptsS3PersistentStorageWithoutSecrets(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	raw := `{
+		"server": {"listen_addr": ":9090"},
+		"admin": {
+			"api_base_path": "/tukuyomi-api",
+			"ui_base_path": "/tukuyomi-ui",
+			"session_secret": "very-strong-random-session-secret-12345"
+		},
+		"paths": {
+			"proxy_config_file": "conf/proxy.json",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
+			"rules_file": "tukuyomi.conf"
+		},
+		"proxy": {"rollback_history_size": 8},
+		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
+		"storage": {"db_driver": "sqlite"},
+		"persistent_storage": {
+			"backend": "s3",
+			"s3": {
+				"bucket": "runtime-bucket",
+				"region": "ap-northeast-1",
+				"prefix": "prod"
+			}
+		}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := loadAppConfigFile(cfgPath)
+	if err != nil {
+		t.Fatalf("loadAppConfigFile returned error: %v", err)
+	}
+	if cfg.Persistent.S3.Bucket != "runtime-bucket" {
+		t.Fatalf("s3 bucket=%q want runtime-bucket", cfg.Persistent.S3.Bucket)
+	}
+	if cfg.Persistent.S3.Prefix != "prod" {
+		t.Fatalf("s3 prefix=%q want prod", cfg.Persistent.S3.Prefix)
+	}
+	if err := ReloadFromConfigFile(cfgPath); err != nil {
+		t.Fatalf("ReloadFromConfigFile returned error: %v", err)
+	}
+	if PersistentStorageBackend != PersistentStorageBackendS3 {
+		t.Fatalf("runtime backend=%q want s3", PersistentStorageBackend)
+	}
+	if PersistentStorageS3Bucket != "runtime-bucket" {
+		t.Fatalf("runtime s3 bucket=%q want runtime-bucket", PersistentStorageS3Bucket)
+	}
+}
+
+func TestLoadAppConfigFileRejectsInvalidS3PersistentStorage(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	raw := `{
+		"server": {"listen_addr": ":9090"},
+		"admin": {"api_base_path": "/tukuyomi-api", "ui_base_path": "/tukuyomi-ui"},
+		"paths": {
+			"proxy_config_file": "conf/proxy.json",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
+			"rules_file": "tukuyomi.conf"
+		},
+		"proxy": {"rollback_history_size": 8},
+		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
+		"storage": {"db_driver": "sqlite"},
+		"persistent_storage": {
+			"backend": "s3",
+			"s3": {
+				"bucket": "runtime-bucket",
+				"endpoint": "ftp://s3.example.test"
+			}
+		}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := loadAppConfigFile(cfgPath)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "persistent_storage.s3.endpoint must start with http:// or https://") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadAppConfigFileAcceptsPgSQLStorageDriver(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	raw := `{
+		"server": {"listen_addr": ":9090"},
+		"admin": {"api_base_path": "/tukuyomi-api", "ui_base_path": "/tukuyomi-ui"},
+		"paths": {
+			"proxy_config_file": "conf/proxy.json",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
+			"rules_file": "tukuyomi.conf"
+		},
+		"proxy": {"rollback_history_size": 8},
+		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
+		"storage": {"db_driver": "pgsql", "db_dsn": "postgres://user:pass@localhost/tukuyomi?sslmode=disable"}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := loadAppConfigFile(cfgPath)
+	if err != nil {
+		t.Fatalf("loadAppConfigFile returned error: %v", err)
+	}
+	if cfg.Storage.DBDriver != "pgsql" {
+		t.Fatalf("db_driver=%q want pgsql", cfg.Storage.DBDriver)
 	}
 }
 
@@ -374,13 +514,13 @@ func TestLoadAppConfigFileRejectsRemovedFPTunerMockMode(t *testing.T) {
 		"admin": {"api_base_path": "/tukuyomi-api", "ui_base_path": "/tukuyomi-ui"},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
-			"security_audit_file": "logs/coraza/security-audit.ndjson",
-			"security_audit_blob_dir": "logs/coraza/security-audit-blobs",
-			"rules_file": "rules/tukuyomi.conf"
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
+			"rules_file": "tukuyomi.conf"
 		},
 		"proxy": {"rollback_history_size": 8},
 		"fp_tuner": {"mode": "mock", "timeout_sec": 15, "approval_ttl_sec": 600},
-		"storage": {"backend": "file", "db_driver": "sqlite"}
+		"storage": {"db_driver": "sqlite"}
 	}`
 	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -401,16 +541,16 @@ func TestLoadAppConfigFileRejectsInvalidProxyEngineMode(t *testing.T) {
 		"admin": {"api_base_path": "/tukuyomi-api", "ui_base_path": "/tukuyomi-ui"},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
-			"security_audit_file": "logs/coraza/security-audit.ndjson",
-			"security_audit_blob_dir": "logs/coraza/security-audit-blobs",
-			"rules_file": "rules/tukuyomi.conf"
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
+			"rules_file": "tukuyomi.conf"
 		},
 		"proxy": {
 			"rollback_history_size": 8,
 			"engine": {"mode": "native"}
 		},
 		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
-		"storage": {"backend": "file", "db_driver": "sqlite"}
+		"storage": {"db_driver": "sqlite"}
 	}`
 	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -420,6 +560,36 @@ func TestLoadAppConfigFileRejectsInvalidProxyEngineMode(t *testing.T) {
 		t.Fatal("expected validation error, got nil")
 	}
 	if !strings.Contains(err.Error(), "proxy.engine.mode") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadAppConfigFileRejectsInvalidWAFEngineMode(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	raw := `{
+		"server": {"listen_addr": ":9090"},
+		"admin": {"api_base_path": "/tukuyomi-api", "ui_base_path": "/tukuyomi-ui"},
+		"paths": {
+			"proxy_config_file": "conf/proxy.json",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
+			"rules_file": "tukuyomi.conf"
+		},
+		"proxy": {"rollback_history_size": 8},
+		"waf": {
+			"engine": {"mode": "open_appsec"}
+		},
+		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
+		"storage": {"db_driver": "sqlite"}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := loadAppConfigFile(cfgPath)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "waf.engine.mode") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

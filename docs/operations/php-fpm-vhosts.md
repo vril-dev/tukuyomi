@@ -11,11 +11,12 @@ This document covers the optional PHP-FPM workflow exposed through `/options`, `
   - materialization and process visibility
 - `/vhosts`
   - source of truth for managed `php-fpm` applications
-  - host, port, docroot, rewrite, access rules, basic auth, `.htaccess` subset import, and PHP ini overrides
-  - generated target names for route binding
+  - host, FastCGI listen port, docroot, runtime, rewrite, access rules, basic auth, and PHP ini overrides
+  - generated vhost backend and host route ownership
 - `/proxy-rules`
-  - route binding only
-  - bind traffic to generated target names from `/vhosts`
+  - direct backends, backend pools, and explicit routes for non-vhost traffic
+  - PHP-FPM application backend settings move to `/vhosts`
+  - configured upstream URLs are never rewritten by `/vhosts`
   - do not treat raw `fcgi://` transport details as the normal operator entrypoint
 
 ## Data Layout
@@ -33,7 +34,7 @@ PHP-FPM operator-managed data lives under `data/php-fpm/`.
 
 Generic sample docroots live under `data/vhosts/samples/`.
 
-The default path wiring is controlled from `data/conf/config.json`:
+The default path wiring is controlled by effective DB `app_config` defaults:
 
 - `paths.php_runtime_inventory_file`
 - `paths.vhost_config_file`
@@ -106,13 +107,10 @@ Each vhost requires:
 - `hostname`
 - `listen_port`
 - `document_root`
-- `generated_target`
 - `runtime_id`
 
 Optional controls:
 
-- `override_file_name`
-  - defaults to `.htaccess`
 - `try_files`
 - rewrite rules
 - access rules
@@ -131,39 +129,52 @@ Typical flow:
 6. Run `Apply`.
 7. Use `Rollback` only when you need to restore the previous saved snapshot.
 
-Validation/apply also evaluates the optional override file import report. The UI shows:
+Vhost behavior is centralized and nginx-style. Files in the document root such
+as `.htaccess` are not parsed, imported, watched, or re-read at request time.
+Legacy `override_file_name` fields in old config files are accepted only for
+migration and are normalized away on validate/apply.
 
-- which override file name was checked
-- whether the file was found
-- how many rewrite rules were imported
-- how many access rules were imported
-- whether basic auth was imported
-- parser/import messages
+## Upstreams to Vhosts Boundary
 
-## Linked Upstreams and Route Binding
+Do not model Tukuyomi-owned PHP-FPM applications as direct backends in `Proxy Rules > Upstreams`; move those connection settings to `/vhosts`.
 
-Saving a vhost does not publish traffic by itself.
+- `Proxy Rules > Upstreams`
+  - direct non-vhost backends such as external HTTP/HTTPS services
+  - configured upstream URLs are used exactly as shown and are not rebound to vhost targets
+- `/vhosts`
+  - host, docroot, runtime, and FastCGI listen port ownership for PHP-FPM/static apps
+  - generated backend and generated host route publication into the effective runtime
+
+## Generated Vhost Routes
+
+Saving a vhost publishes traffic for its `hostname` through server-generated proxy state.
 
 After a vhost is saved:
 
 - `/vhosts` persists the definition into `data/php-fpm/vhosts.json`
 - the runtime layer materializes pool/config data under `data/php-fpm/runtime/<runtime_id>/`
-- the configured upstream named by `linked_upstream_name` becomes vhost-backed in the effective proxy runtime
-- `linked_upstream_name` is required and must reference an existing entry from `Proxy Rules > Upstreams`
+- the effective proxy runtime gets a generated upstream named by `generated_target`
+- the effective proxy runtime gets a generated host route named `vhost:<name>` for the vhost hostname
+- configured upstream URLs in `Proxy Rules > Upstreams` are left unchanged
 
-Use `/proxy-rules` to bind real traffic:
+Route order keeps explicit operator rules first:
 
-- set `routes[].action.upstream` to the vhost `linked_upstream_name`
-- or point `default_route.action.upstream` to that configured upstream name
+- explicit `routes[]`
+- generated vhost host routes
+- generated site host fallback routes
+- `default_route`
+- `upstreams[]`
 
 Notes:
 
 - `listen_port` is the PHP-FPM FastCGI listen port
 - do not treat `http://127.0.0.1:<listen_port>` as an HTTP upstream
-- `generated_target` remains an internal compatibility field; normal operator flow should reference `linked_upstream_name` from routes or the default route
-- if `linked_upstream_name` binds to an existing configured upstream, that direct upstream cannot be removed from `Proxy Rules > Upstreams` until the Vhost changes
+- the server owns `generated_target` as the generated backend alias and pool name; the admin UI does not expose it as operator input
+- normal operation does not require typing `generated_target` into `Proxy Rules`; publishing the vhost hostname is handled by saving `/vhosts`
+- `default_route` does not override a matching vhost hostname
+- explicit operator routes can override generated vhost routing when an intentional exception is needed
 
-Keep `Proxy Rules` focused on routing. Managed PHP application details should stay in `/vhosts`, not as raw `fcgi://` or generated-target edits inside `conf/proxy.json`.
+Keep `Proxy Rules` focused on non-vhost routing and backend pools. Managed PHP application details should stay in `/vhosts`, not as raw `fcgi://` or generated-target edits inside `conf/proxy.json`.
 
 ## Process Lifecycle
 

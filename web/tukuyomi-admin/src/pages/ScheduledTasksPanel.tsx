@@ -30,9 +30,6 @@ type ScheduledTaskStatus = {
 };
 
 type ScheduledTaskRuntimePaths = {
-  config_file?: string;
-  runtime_dir?: string;
-  state_file?: string;
   log_dir?: string;
 };
 
@@ -310,21 +307,15 @@ export default function ScheduledTasksPanel() {
         ) : null}
 
         <div className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
-          {tx("Enter the full command line you would normally put into cron. Example: date >> /app/logs/scheduled-task.log")}
+          {tx("Enter the full command line you would normally put into cron. Stdout and stderr are captured to the task log automatically. Example: date")}
         </div>
 
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-700 space-y-1">
-            <div>{tx("Saving a task does not execute it.")}</div>
-            <div>{tx("Binary deployments need a systemd timer.")}</div>
-            <div>{tx("Docker deployments need the scheduled-task-runner sidecar.")}</div>
-            <div>{tx("ui-preview-up starts its own preview scheduler sidecar and resets preview tasks to empty.")}</div>
-          </div>
-          <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-700 space-y-1">
-            <div>{tx("Config File")}: <code>{runtimePaths.config_file || "-"}</code></div>
-            <div>{tx("State File")}: <code>{runtimePaths.state_file || "-"}</code></div>
-            <div>{tx("Log Directory")}: <code>{runtimePaths.log_dir || "-"}</code></div>
-          </div>
+        <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-700 space-y-1">
+          <div>{tx("Saving a task does not execute it.")}</div>
+          <div>{tx("Binary deployments need a systemd timer.")}</div>
+          <div>{tx("Docker deployments need the scheduled-task-runner sidecar.")}</div>
+          <div>{tx("ui-preview-up starts its own preview scheduler sidecar and resets preview DB state unless UI_PREVIEW_PERSIST=1.")}</div>
+          <div>{tx("Log Directory")}: <code>{runtimePaths.log_dir || "-"}</code></div>
         </div>
 
         {tasks.length === 0 ? (
@@ -405,7 +396,7 @@ export default function ScheduledTasksPanel() {
                       </p>
                       <input
                         className="w-full"
-                        placeholder="date >> /app/logs/scheduled-task.log"
+                        placeholder="date"
                         value={task.command}
                         onChange={(event) => updateTask(index, { command: event.target.value })}
                       />
@@ -442,7 +433,6 @@ export default function ScheduledTasksPanel() {
                           <div>{tx("This task has never run yet. Saving only updates config.")}</div>
                           <div>{tx("Configured Command")}: <code>{task.command || "-"}</code></div>
                           <div>{tx("Expected Log File")}: <code>{expectedLogFile(task)}</code></div>
-                          <div>{tx("State File")}: <code>{runtimePaths.state_file || "-"}</code></div>
                         </>
                       )}
                     </div>
@@ -452,11 +442,6 @@ export default function ScheduledTasksPanel() {
             })}
           </div>
         )}
-
-        <div className="rounded border border-neutral-200 p-3 bg-neutral-50">
-          <div className="text-xs text-neutral-500 mb-2">{tx("Rendered JSON")}</div>
-          <pre className="overflow-x-auto text-xs whitespace-pre-wrap">{raw}</pre>
-        </div>
       </section>
     </div>
   );

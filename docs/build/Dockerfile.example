@@ -28,13 +28,18 @@ WORKDIR /app
 
 COPY --from=builder /out/tukuyomi /app/tukuyomi
 COPY data/conf/ /app/conf/
-COPY data/rules/tukuyomi.conf /app/rules/tukuyomi.conf
 COPY scripts/install_crs.sh /app/scripts/install_crs.sh
+COPY scripts/stage_waf_rule_assets.sh /app/scripts/stage_waf_rule_assets.sh
+COPY seeds/ /app/seeds/
 
 RUN find /app/conf -type f -name '*.bak' -delete \
-    && chmod +x /app/scripts/install_crs.sh \
-    && mkdir -p /app/rules/crs /app/logs/coraza /app/logs/proxy \
-    && DEST_DIR=/app/rules/crs /app/scripts/install_crs.sh \
+    && chmod +x /app/scripts/install_crs.sh /app/scripts/stage_waf_rule_assets.sh \
+    && mkdir -p /app/db /app/audit /app/cache/response /app/data/persistent /app/data/tmp \
+    && /app/scripts/stage_waf_rule_assets.sh /app/data/tmp/waf-import \
+    && WAF_CONFIG_FILE=/app/conf/config.json /app/tukuyomi db-migrate \
+    && WAF_RULE_ASSET_FS_ROOT=/app/data/tmp/waf-import WAF_CONFIG_FILE=/app/conf/config.json /app/tukuyomi db-import-waf-rule-assets \
+    && UI_PREVIEW_PUBLIC_ADDR=:9090 UI_PREVIEW_ADMIN_ADDR= WAF_CONFIG_FILE=/app/conf/config.json /app/tukuyomi db-import-preview \
+    && rm -rf /app/data/tmp/waf-import \
     && touch /app/conf/crs-disabled.conf
 
 ENV WAF_CONFIG_FILE=/app/conf/config.json

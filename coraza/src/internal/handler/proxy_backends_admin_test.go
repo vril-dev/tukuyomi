@@ -22,14 +22,17 @@ func TestGetProxyBackendsReturnsRuntimeBackendList(t *testing.T) {
 	defer restore()
 
 	proxyPath := filepath.Join(tmp, "proxy.json")
-	if err := os.WriteFile(proxyPath, []byte(`{
+	proxyRaw := `{
   "upstreams": [
     { "name": "primary", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true },
     { "name": "secondary", "url": "http://127.0.0.1:8081", "weight": 2, "enabled": true }
   ]
-}`), 0o644); err != nil {
+}`
+	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o644); err != nil {
 		t.Fatalf("write proxy.json: %v", err)
 	}
+	initConfigDBStoreForTest(t)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
@@ -59,6 +62,61 @@ func TestGetProxyBackendsReturnsRuntimeBackendList(t *testing.T) {
 	}
 }
 
+func TestGetProxyBackendsReportsDBRuntimeStorage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	runtimePath := filepath.Join(tmp, "conf", "upstream-runtime.json")
+	restore := saveUpstreamRuntimeFilePathForTest(t, runtimePath)
+	defer restore()
+
+	proxyPath := filepath.Join(tmp, "proxy.json")
+	if err := os.WriteFile(proxyPath, []byte(`{
+  "upstreams": [
+    { "name": "primary", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write proxy.json: %v", err)
+	}
+	importProxyRuntimeDBForTest(t, `{
+  "upstreams": [
+    { "name": "primary", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+  ]
+}`)
+	if err := InitProxyRuntime(proxyPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/tukuyomi-api/proxy-backends", nil)
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = req
+
+	GetProxyBackends(ctx)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out proxyBackendsStatusResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if got, want := out.Storage, "db:upstream_runtime"; got != want {
+		t.Fatalf("storage=%q want=%q", got, want)
+	}
+	if _, err := os.Stat(runtimePath); !os.IsNotExist(err) {
+		t.Fatalf("upstream runtime seed file should not be restored, stat err=%v", err)
+	}
+}
+
 func TestPutAndDeleteProxyBackendRuntimeOverrideRoundTrip(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -67,14 +125,17 @@ func TestPutAndDeleteProxyBackendRuntimeOverrideRoundTrip(t *testing.T) {
 	defer restore()
 
 	proxyPath := filepath.Join(tmp, "proxy.json")
-	if err := os.WriteFile(proxyPath, []byte(`{
+	proxyRaw := `{
   "upstreams": [
     { "name": "primary", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true },
     { "name": "secondary", "url": "http://127.0.0.1:8081", "weight": 2, "enabled": true }
   ]
-}`), 0o644); err != nil {
+}`
+	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o644); err != nil {
 		t.Fatalf("write proxy.json: %v", err)
 	}
+	initConfigDBStoreForTest(t)
+	importProxyRuntimeDBForTest(t, proxyRaw)
 	if err := InitProxyRuntime(proxyPath, 2); err != nil {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
@@ -121,12 +182,12 @@ func TestPutAndDeleteProxyBackendRuntimeOverrideRoundTrip(t *testing.T) {
 	if primaryAfterPut.EffectiveSelectable {
 		t.Fatal("draining backend should not be selectable")
 	}
-	raw, err := os.ReadFile(config.UpstreamRuntimeFile)
-	if err != nil {
-		t.Fatalf("ReadFile(upstream runtime): %v", err)
+	runtimeFile, _, found, err := getLogsStatsStore().loadActiveUpstreamRuntimeConfig(configuredManagedBackendKeys(currentProxyConfig()))
+	if err != nil || !found {
+		t.Fatalf("load upstream runtime from db found=%v err=%v", found, err)
 	}
-	if !bytes.Contains(raw, []byte(primaryKey)) {
-		t.Fatalf("runtime file missing primary key: %s", string(raw))
+	if _, ok := runtimeFile.Backends[primaryKey]; !ok {
+		t.Fatalf("runtime DB missing primary key: %#v", runtimeFile.Backends)
 	}
 
 	deleteRec := httptest.NewRecorder()
@@ -157,7 +218,7 @@ func TestPutAndDeleteProxyBackendRuntimeOverrideRoundTrip(t *testing.T) {
 	}
 }
 
-func TestGetProxyBackendsIncludesVhostManagedAliasAsStatusOnly(t *testing.T) {
+func TestGetProxyBackendsIncludesVhostGeneratedTargetAsStatusOnly(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	restore := resetPHPProxyFoundationForTest(t)
@@ -228,10 +289,10 @@ func TestGetProxyBackendsIncludesVhostManagedAliasAsStatusOnly(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
 	}
-	if got, want := len(out.Backends), 2; got != want {
+	if got, want := len(out.Backends), 3; got != want {
 		t.Fatalf("len(backends)=%d want=%d", got, want)
 	}
-	docs := findProxyBackendStatus(t, out.Backends, proxyBackendLookupKey("docs", "static://docs-static"))
+	docs := findProxyBackendStatus(t, out.Backends, proxyBackendLookupKey("docs-static", "static://docs-static"))
 	if got, want := docs.ProviderClass, proxyUpstreamProviderClassVhostManaged; got != want {
 		t.Fatalf("provider_class=%q want=%q", got, want)
 	}
@@ -239,7 +300,7 @@ func TestGetProxyBackendsIncludesVhostManagedAliasAsStatusOnly(t *testing.T) {
 		t.Fatalf("managed_by_vhost=%q want=%q", got, want)
 	}
 	if docs.RuntimeOpsSupported {
-		t.Fatal("vhost-bound configured upstream should be status-only in this slice")
+		t.Fatal("vhost-generated backend should be status-only in this slice")
 	}
 	if got, want := docs.HealthState, "unknown"; got != want {
 		t.Fatalf("health_state=%q want=%q", got, want)
@@ -316,7 +377,7 @@ func TestPutProxyBackendRuntimeOverrideRejectsVhostManagedAlias(t *testing.T) {
 		t.Fatalf("decode GET response: %v", err)
 	}
 
-	linkedKey := proxyBackendLookupKey("docs", "static://docs-static")
+	linkedKey := proxyBackendLookupKey("docs-static", "static://docs-static")
 	putRec := httptest.NewRecorder()
 	putReq := httptest.NewRequest(http.MethodPut, "/tukuyomi-api/proxy-backends/"+linkedKey+"/runtime-override", bytes.NewReader([]byte(`{"admin_state":"disabled"}`)))
 	putReq.Header.Set("Content-Type", "application/json")

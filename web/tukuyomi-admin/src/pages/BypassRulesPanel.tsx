@@ -35,17 +35,26 @@ type BypassRulesDTO = {
   saved_at?: string;
 };
 
+type RuleFileDTO = {
+  path?: string;
+  kind?: string;
+};
+
+type RulesResp = {
+  files?: RuleFileDTO[];
+};
+
 const exampleState: BypassRulesEditorState = {
   defaultEntries: [
     { path: "/assets/", extraRule: "" },
-    { path: "/search", extraRule: "conf/rules/search-endpoint.conf" },
+    { path: "/search", extraRule: "" },
   ],
   hosts: [
     {
       host: "example.com",
       entries: [
         { path: "/internal/", extraRule: "" },
-        { path: "/admin/login", extraRule: "conf/rules/admin-login.conf" },
+        { path: "/admin/login", extraRule: "" },
       ],
     },
   ],
@@ -70,12 +79,11 @@ export default function BypassRulesPanel() {
   const [messages, setMessages] = useState<string[]>([]);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [rawError, setRawError] = useState<string | null>(null);
   const [structuredError, setStructuredError] = useState<string | null>(null);
+  const [extraRuleAssets, setExtraRuleAssets] = useState<string[]>([]);
 
   const totalEntries = useMemo(() => countBypassEntries(editorState), [editorState]);
   const dirty = useMemo(() => raw !== serverRaw || !!structuredError, [raw, serverRaw, structuredError]);
-  const lineCount = useMemo(() => (raw ? raw.split(/\n/).length : 0), [raw]);
 
   const applyStructuredState = useCallback(
     (
@@ -87,10 +95,9 @@ export default function BypassRulesPanel() {
       setEditorState(next);
       setDefaultEntryBases(nextDefaultEntryBases);
       setHostBases(nextHostBases);
-      setHostEntryBases(nextHostEntryBases);
+        setHostEntryBases(nextHostEntryBases);
       try {
         setRaw(serializeBypassRulesEditor(editorBase, next, nextDefaultEntryBases, nextHostBases, nextHostEntryBases));
-        setRawError(null);
         setStructuredError(null);
       } catch (e: unknown) {
         setValid(null);
@@ -115,7 +122,6 @@ export default function BypassRulesPanel() {
       setHostBases(nextHostBases);
       setHostEntryBases(nextHostEntryBases);
       setRaw(serializeBypassRulesEditor(base, next, nextDefaultEntryBases, nextHostBases, nextHostEntryBases));
-      setRawError(null);
       setStructuredError(null);
     },
     [],
@@ -125,7 +131,15 @@ export default function BypassRulesPanel() {
     setLoading(true);
     setError(null);
     try {
-      const data = await apiGetJson<BypassRulesDTO>("/bypass-rules");
+      const [data, rulesData] = await Promise.all([
+        apiGetJson<BypassRulesDTO>("/bypass-rules"),
+        apiGetJson<RulesResp>("/rules"),
+      ]);
+      const extraRules = (Array.isArray(rulesData.files) ? rulesData.files : [])
+        .filter((file) => file.kind === "bypass_extra_rule" && typeof file.path === "string" && file.path.trim())
+        .map((file) => file.path as string)
+        .sort((a, b) => a.localeCompare(b));
+      setExtraRuleAssets(extraRules);
       const nextRaw = data.raw ?? "";
       const parsed = parseBypassRulesEditorDocument(nextRaw);
       setEditorBase(parsed.base);
@@ -139,7 +153,6 @@ export default function BypassRulesPanel() {
       setValid(null);
       setMessages([]);
       setLastSavedAt(parseSavedAt(data.saved_at));
-      setRawError(null);
       setStructuredError(null);
     } catch (e: unknown) {
       setError(getErrorMessage(e, tx("Failed to load")));
@@ -199,7 +212,6 @@ export default function BypassRulesPanel() {
       setRaw(nextRaw);
       setServerRaw(nextRaw);
       setEtag(js.etag ?? null);
-      setRawError(null);
       setStructuredError(null);
       setLastSavedAt(parseSavedAt(js.saved_at));
     } catch (e: unknown) {
@@ -216,13 +228,13 @@ export default function BypassRulesPanel() {
         return;
       }
       e.preventDefault();
-      if (!saving && !readOnly && !rawError && !structuredError) {
+      if (!saving && !readOnly && !structuredError) {
         void doSave();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [doSave, rawError, readOnly, saving, structuredError]);
+  }, [doSave, readOnly, saving, structuredError]);
 
   const statusBadge = useMemo(() => {
     if (loading) {
@@ -233,26 +245,6 @@ export default function BypassRulesPanel() {
     }
     return valid ? <Badge color="green">{tx("Valid")}</Badge> : <Badge color="red">{tx("Invalid")}</Badge>;
   }, [loading, tx, valid]);
-
-  const handleRawChange = useCallback(
-    (nextRaw: string) => {
-      setRaw(nextRaw);
-      try {
-        const parsed = parseBypassRulesEditorDocument(nextRaw);
-        setEditorBase(parsed.base);
-        setDefaultEntryBases(parsed.defaultEntryBases);
-        setHostBases(parsed.hostBases);
-        setHostEntryBases(parsed.hostEntryBases);
-        setEditorState(parsed.state);
-        setRawError(null);
-        setStructuredError(null);
-      } catch (e: unknown) {
-        setRawError(getErrorMessage(e, tx("Invalid")));
-        setStructuredError(null);
-      }
-    },
-    [tx],
-  );
 
   const updateDefaultEntry = useCallback(
     (index: number, updater: (entry: BypassRulesEditorState["defaultEntries"][number]) => BypassRulesEditorState["defaultEntries"][number]) => {
@@ -294,13 +286,13 @@ export default function BypassRulesPanel() {
         <div>
           <h1 className="text-xl font-semibold">{tx("Bypass Rules")}</h1>
           <p className="text-sm text-neutral-500">
-            {tx("Edit default and host-scoped bypass entries with a structured surface, then keep advanced JSON available below.")}
+            {tx("Edit default and host-scoped bypass entries with structured controls.")}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           {statusBadge}
-          <Badge color={rawError || structuredError ? "red" : "green"}>
-            {structuredError ? tx("Structured editor conflict") : rawError ? tx("Raw JSON out of sync") : tx("Structured editor synced")}
+          <Badge color={structuredError ? "red" : "green"}>
+            {structuredError ? tx("Structured editor conflict") : tx("Structured editor synced")}
           </Badge>
           {dirty ? <Badge color="amber">{tx("Unsaved")}</Badge> : null}
           {etag ? <MonoTag label="ETag" value={etag} /> : null}
@@ -308,11 +300,6 @@ export default function BypassRulesPanel() {
       </header>
 
       {error ? <Alert kind="error" title={tx("Error")} message={error} onClose={() => setError(null)} closeLabel={tx("Close")} /> : null}
-      {rawError ? (
-        <NoticeBar tone="warn">
-          {tx("Advanced JSON is currently invalid. The structured editor is still showing the last valid bypass snapshot. Any structured edit will regenerate valid JSON from that snapshot.")}
-        </NoticeBar>
-      ) : null}
       {structuredError ? <NoticeBar tone="warn">{structuredError}</NoticeBar> : null}
 
       <SectionCard
@@ -332,7 +319,7 @@ export default function BypassRulesPanel() {
             <ActionButton onClick={() => void load()} disabled={loading}>
               {tx("Refresh")}
             </ActionButton>
-            <PrimaryButton onClick={() => void doSave()} disabled={readOnly || loading || saving || !dirty || !!rawError || !!structuredError}>
+            <PrimaryButton onClick={() => void doSave()} disabled={readOnly || loading || saving || !dirty || !!structuredError}>
               {saving ? tx("Saving...") : tx("Save & hot reload")}
             </PrimaryButton>
           </div>
@@ -400,12 +387,12 @@ export default function BypassRulesPanel() {
                     placeholder="/assets/"
                   />
                 </Field>
-                <Field label={tx("Extra rule file")} hint={tx("Optional `.conf` file applied instead of a full bypass when you need a narrow override.")}>
-                  <input
-                    className={inputClass}
+                <Field label={tx("Extra rule reference")} hint={tx("Optional DB-managed `.conf` override applied instead of a full bypass when you need a narrow override.")}>
+                  <ExtraRuleSelect
+                    tx={tx}
+                    options={extraRuleAssets}
                     value={entry.extraRule}
-                    onChange={(event) => updateDefaultEntry(index, (current) => ({ ...current, extraRule: event.target.value }))}
-                    placeholder="conf/rules/override.conf"
+                    onChange={(value) => updateDefaultEntry(index, (current) => ({ ...current, extraRule: value }))}
                   />
                 </Field>
               </div>
@@ -537,14 +524,14 @@ export default function BypassRulesPanel() {
                           placeholder="/internal/"
                         />
                       </Field>
-                      <Field label={tx("Extra rule file")}>
-                        <input
-                          className={inputClass}
+                      <Field label={tx("Extra rule reference")}>
+                        <ExtraRuleSelect
+                          tx={tx}
+                          options={extraRuleAssets}
                           value={entry.extraRule}
-                          onChange={(event) =>
-                            updateHostEntry(hostIndex, entryIndex, (current) => ({ ...current, extraRule: event.target.value }))
+                          onChange={(value) =>
+                            updateHostEntry(hostIndex, entryIndex, (current) => ({ ...current, extraRule: value }))
                           }
-                          placeholder="conf/rules/internal.conf"
                         />
                       </Field>
                     </div>
@@ -557,22 +544,29 @@ export default function BypassRulesPanel() {
         </div>
       </SectionCard>
 
-      <SectionCard title={tx("Advanced JSON")} subtitle={tx("Keep using raw JSON when needed. Structured edits and valid raw edits stay in sync.")}>
-        <textarea
-          className="w-full h-[320px] p-3 border rounded-xl font-mono text-sm leading-5 outline-none focus:ring-2 focus:ring-black/20"
-          value={raw}
-          onChange={(event) => handleRawChange(event.target.value)}
-          spellCheck={false}
-        />
-        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-500">
-          <div className="flex items-center gap-3">
-            <span>{tx("Lines")}: {lineCount}</span>
-            <span>{tx("Entries")}: {totalEntries}</span>
-            <span>{tx("Host scopes")}: {editorState.hosts.length}</span>
-            {lastSavedAt ? <span>{tx("Last saved: {time}", { time: new Date(lastSavedAt).toLocaleString(locale === "ja" ? "ja-JP" : "en-US") })}</span> : null}
-          </div>
-        </div>
-      </SectionCard>
     </div>
+  );
+}
+
+function ExtraRuleSelect({
+  value,
+  options,
+  onChange,
+  tx,
+}: {
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  tx: (key: string, vars?: Record<string, string | number>) => string;
+}) {
+  const hasCurrent = !value || options.includes(value);
+  return (
+    <select className={inputClass} value={value} onChange={(event) => onChange(event.target.value)}>
+      <option value="">{tx("Full bypass")}</option>
+      {!hasCurrent ? <option value={value}>{value}</option> : null}
+      {options.map((path) => (
+        <option key={path} value={path}>{path}</option>
+      ))}
+    </select>
   );
 }

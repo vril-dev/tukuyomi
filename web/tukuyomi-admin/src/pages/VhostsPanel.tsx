@@ -37,8 +37,6 @@ type VhostEntry = {
   hostname: string;
   listen_port: number;
   document_root: string;
-  override_file_name?: string;
-  generated_target: string;
   linked_upstream_name?: string;
   runtime_id?: string;
   try_files?: string[];
@@ -49,22 +47,12 @@ type VhostEntry = {
   php_admin_value?: Record<string, string>;
 };
 
-type VhostOverrideImportReport = {
-  override_file_name?: string;
-  found?: boolean;
-  imported_rewrite_rules?: number;
-  imported_access_rules?: number;
-  imported_basic_auth?: boolean;
-  messages?: string[];
-};
-
 type VhostsResponse = {
   etag?: string;
   raw?: string;
   vhosts?: {
     vhosts?: VhostEntry[];
   };
-  override_reports?: Record<string, VhostOverrideImportReport>;
   rollback_depth?: number;
 };
 
@@ -81,23 +69,12 @@ type PHPRuntimesResponse = {
   };
 };
 
-type ProxyRulesUpstreamNameResponse = {
-  proxy?: {
-    upstreams?: Array<{
-      name?: string;
-    }>;
-  };
-};
-
 type VhostFormState = {
   name: string;
   mode: VhostMode;
   hostname: string;
   listenPort: string;
   documentRoot: string;
-  overrideFileName: string;
-  generatedTarget: string;
-  linkedUpstreamName: string;
   runtimeID: string;
   tryFilesText: string;
   rewriteRules: Array<{
@@ -120,16 +97,12 @@ type VhostFormState = {
 };
 
 function createEmptyVhost(index: number): VhostFormState {
-  const generatedTarget = `vhost-${index}`;
   return {
-    name: generatedTarget,
+    name: `vhost-${index}`,
     mode: "php-fpm",
     hostname: "",
     listenPort: String(9400 + index),
     documentRoot: "",
-    overrideFileName: ".htaccess",
-    generatedTarget,
-    linkedUpstreamName: "",
     runtimeID: "",
     tryFilesText: "",
     rewriteRules: [],
@@ -143,15 +116,6 @@ function createEmptyVhost(index: number): VhostFormState {
 
 function runtimeLabel(runtime: PHPRuntimeRecord) {
   return runtime.display_name || runtime.detected_version || runtime.runtime_id;
-}
-
-function extractConfiguredUpstreamNames(data?: ProxyRulesUpstreamNameResponse) {
-  const names = Array.isArray(data?.proxy?.upstreams)
-    ? data.proxy.upstreams
-        .map((entry) => String(entry?.name || "").trim())
-        .filter(Boolean)
-    : [];
-  return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
 }
 
 function stringListToText(values?: string[]) {
@@ -227,9 +191,6 @@ function parseVhostsResponse(data?: VhostsResponse): VhostFormState[] {
     hostname: vhost.hostname || "",
     listenPort: String(vhost.listen_port || 0),
     documentRoot: vhost.document_root || "",
-    overrideFileName: vhost.override_file_name || ".htaccess",
-    generatedTarget: vhost.generated_target || `vhost-${index + 1}`,
-    linkedUpstreamName: vhost.linked_upstream_name || "",
     runtimeID: vhost.runtime_id || "",
     tryFilesText: stringListToText(vhost.try_files),
     rewriteRules: Array.isArray(vhost.rewrite_rules)
@@ -272,9 +233,6 @@ function vhostsToRaw(vhosts: VhostFormState[]) {
       hostname: vhost.hostname.trim(),
       listen_port: Number(vhost.listenPort) || 0,
       document_root: vhost.documentRoot.trim(),
-      override_file_name: vhost.overrideFileName.trim() || ".htaccess",
-      generated_target: vhost.generatedTarget.trim(),
-      linked_upstream_name: vhost.linkedUpstreamName.trim(),
       ...(vhost.mode === "php-fpm" ? { runtime_id: vhost.runtimeID.trim() } : {}),
       ...(textToStringList(vhost.tryFilesText).length > 0 ? { try_files: textToStringList(vhost.tryFilesText) } : {}),
       ...(vhost.rewriteRules.length > 0
@@ -336,21 +294,6 @@ function validateVhostsForUI(vhosts: VhostFormState[], hasBuiltRuntime: boolean)
     if (!vhost.documentRoot.trim()) {
       return `${label}: document root is required`;
     }
-    if (!vhost.generatedTarget.trim()) {
-      return `${label}: generated target is required`;
-    }
-    if (!vhost.linkedUpstreamName.trim()) {
-      return `${label}: linked upstream name is required`;
-    }
-    if (vhost.linkedUpstreamName.trim() === vhost.generatedTarget.trim()) {
-      return `${label}: linked upstream name must differ from generated target`;
-    }
-    if (!vhost.overrideFileName.trim()) {
-      return `${label}: override file name is required`;
-    }
-    if (/[/\\\s]/.test(vhost.overrideFileName.trim())) {
-      return `${label}: override file name must be a single file name`;
-    }
     if (vhost.mode === "php-fpm" && !vhost.runtimeID.trim()) {
       return `${label}: runtime selection is required for php-fpm`;
     }
@@ -364,8 +307,6 @@ export default function VhostsPanel() {
   const [etag, setETag] = useState("");
   const [vhosts, setVhosts] = useState<VhostFormState[]>([]);
   const [runtimeOptions, setRuntimeOptions] = useState<PHPRuntimeRecord[]>([]);
-  const [configuredUpstreamNames, setConfiguredUpstreamNames] = useState<string[]>([]);
-  const [overrideReports, setOverrideReports] = useState<Record<string, VhostOverrideImportReport>>({});
   const [rollbackDepth, setRollbackDepth] = useState(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -384,17 +325,14 @@ export default function VhostsPanel() {
     setLoading(true);
     setError("");
     try {
-      const [vhostData, runtimeData, proxyData] = await Promise.all([
+      const [vhostData, runtimeData] = await Promise.all([
         apiGetJson<VhostsResponse>("/vhosts"),
         apiGetJson<PHPRuntimesResponse>("/php-runtimes"),
-        apiGetJson<ProxyRulesUpstreamNameResponse>("/proxy-rules"),
       ]);
       setETag(vhostData.etag ?? "");
       setVhosts(parseVhostsResponse(vhostData));
-      setOverrideReports(vhostData.override_reports ?? {});
       setRollbackDepth(typeof vhostData.rollback_depth === "number" ? vhostData.rollback_depth : 0);
       setRuntimeOptions(Array.isArray(runtimeData.runtimes?.runtimes) ? runtimeData.runtimes.runtimes : []);
-      setConfiguredUpstreamNames(extractConfiguredUpstreamNames(proxyData));
       setNotice("");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -422,8 +360,7 @@ export default function VhostsPanel() {
     setError("");
     setNotice("");
     try {
-      const out = await apiPostJson<VhostsResponse>("/vhosts/validate", { raw: rawPreview });
-      setOverrideReports(out.override_reports ?? {});
+      await apiPostJson<VhostsResponse>("/vhosts/validate", { raw: rawPreview });
       setNotice(tx("Validation passed."));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -446,7 +383,6 @@ export default function VhostsPanel() {
       const out = await apiPutJson<VhostsResponse>("/vhosts", { raw: rawPreview }, { headers: { "If-Match": etag } });
       setETag(out.etag ?? "");
       setVhosts(parseVhostsResponse(out));
-      setOverrideReports(out.override_reports ?? {});
       setRollbackDepth(typeof out.rollback_depth === "number" ? out.rollback_depth : rollbackDepth);
       setNotice(tx("Saved. Vhost config applied."));
     } catch (err: unknown) {
@@ -464,7 +400,6 @@ export default function VhostsPanel() {
       const out = await apiPostJson<VhostsResponse>("/vhosts/rollback", {});
       setETag(out.etag ?? "");
       setVhosts(parseVhostsResponse(out));
-      setOverrideReports(out.override_reports ?? {});
       setRollbackDepth((current) => Math.max(current - 1, 0));
       setNotice(tx("Rollback applied."));
     } catch (err: unknown) {
@@ -486,7 +421,7 @@ export default function VhostsPanel() {
       <header className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Vhosts")}</h1>
-          <p className="text-sm text-neutral-500">{tx("Define PHP-FPM vhosts without editing raw FastCGI upstreams. Each vhost owns its hostname, port, docroot, compatibility generated target, runtime binding, and a required canonical linked upstream name for routes and backend pools.")}</p>
+          <p className="text-sm text-neutral-500">{tx("Define PHP-FPM vhosts here instead of creating proxy upstream rows. Each vhost owns its hostname, FastCGI port, docroot, and runtime binding.")}</p>
         </div>
         <div className="flex items-center gap-2 text-xs text-neutral-500">
           <span className="rounded bg-neutral-100 px-2 py-1">ETag {etag || "-"}</span>
@@ -528,36 +463,17 @@ export default function VhostsPanel() {
         <div className="space-y-4">
           {vhosts.length === 0 ? (
             <div className="rounded-xl border border-dashed border-neutral-200 bg-white p-6 text-sm text-neutral-500">
-              {tx("No PHP-FPM vhosts configured. Add one to generate route targets for Proxy Rules.")}
+              {tx("No PHP-FPM vhosts configured. Add one to publish a host-backed PHP-FPM runtime.")}
             </div>
           ) : null}
 
           {vhosts.map((vhost, index) => (
             <article key={`${vhost.name}:${index}`} className="rounded-xl border border-neutral-200 bg-white p-4 space-y-4">
-              {overrideReports[vhost.generatedTarget] ? (
-                <section className="rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700 space-y-1">
-                  <div className="font-semibold">{tx("Override import")}</div>
-                  <div>{tx("Override file")}: <code>{overrideReports[vhost.generatedTarget].override_file_name || ".htaccess"}</code></div>
-                  <div>{tx("Status")}: {overrideReports[vhost.generatedTarget].found ? tx("found") : tx("not found")}</div>
-                  <div>{tx("Imported rewrites")}: {overrideReports[vhost.generatedTarget].imported_rewrite_rules || 0}</div>
-                  <div>{tx("Imported access rules")}: {overrideReports[vhost.generatedTarget].imported_access_rules || 0}</div>
-                  <div>{tx("Imported basic auth")}: {overrideReports[vhost.generatedTarget].imported_basic_auth ? tx("yes") : tx("no")}</div>
-                  {Array.isArray(overrideReports[vhost.generatedTarget].messages) && overrideReports[vhost.generatedTarget].messages!.length > 0 ? (
-                    <ul className="list-disc pl-5 space-y-1">
-                      {overrideReports[vhost.generatedTarget].messages!.map((message, messageIndex) => (
-                        <li key={`${vhost.generatedTarget}:msg:${messageIndex}`}>{message}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </section>
-              ) : null}
-
               <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <h2 className="text-sm font-semibold">{vhost.name || `vhost-${index + 1}`}</h2>
-                    <p className="text-xs text-neutral-500">{tx("Generated target (compatibility)")}: <code>{vhost.generatedTarget || "-"}</code></p>
-                    <p className="text-xs text-neutral-500">{tx("Linked upstream")}: <code>{vhost.linkedUpstreamName || "-"}</code></p>
-                  </div>
+                <div>
+                  <h2 className="text-sm font-semibold">{vhost.name || `vhost-${index + 1}`}</h2>
+                  <p className="text-xs text-neutral-500">{tx("Hostname")}: <code>{vhost.hostname || "-"}</code></p>
+                </div>
                 <button type="button" className="text-sm underline" onClick={() => setVhosts((current) => current.filter((_, currentIndex) => currentIndex !== index))} disabled={readOnly || saving}>
                   {tx("Remove")}
                 </button>
@@ -581,25 +497,6 @@ export default function VhostsPanel() {
                     <label className="space-y-1 text-sm">
                       <span className="block text-xs text-neutral-600">{tx("Name")}</span>
                       <input value={vhost.name} onChange={(e) => updateVhost(index, { ...vhost, name: e.target.value })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white" />
-                    </label>
-                    <label className="space-y-1 text-sm">
-                      <span className="block text-xs text-neutral-600">{tx("Linked upstream name")}</span>
-                      <select
-                        value={vhost.linkedUpstreamName}
-                        onChange={(e) => updateVhost(index, { ...vhost, linkedUpstreamName: e.target.value })}
-                        className="w-full rounded border border-neutral-200 px-3 py-2 bg-white"
-                        disabled={configuredUpstreamNames.length === 0}
-                      >
-                        <option value="">{tx("Select linked upstream")}</option>
-                        {configuredUpstreamNames.map((name) => (
-                          <option key={`${vhost.generatedTarget}:linked:${name}`} value={name}>
-                            {name}
-                          </option>
-                        ))}
-                      </select>
-                      <span className="block text-xs text-neutral-500">{configuredUpstreamNames.length === 0
-                        ? tx("Create a named upstream first in Proxy Rules > Upstreams. Vhosts can bind only to configured upstream names.")
-                        : tx("Required canonical upstream name for Routes and Backend Pools. Choose an existing configured upstream. Bound upstreams cannot be removed from Proxy Rules until the vhost changes.")}</span>
                     </label>
                     <label className="space-y-1 text-sm">
                       <span className="block text-xs text-neutral-600">{tx("Mode")}</span>
@@ -632,14 +529,6 @@ export default function VhostsPanel() {
                         className="w-full rounded border border-neutral-200 px-3 py-2 bg-white"
                         placeholder="./data/vhosts/<app>/public"
                       />
-                    </label>
-                    <label className="space-y-1 text-sm">
-                      <span className="block text-xs text-neutral-600">{tx("Override file name")}</span>
-                      <input value={vhost.overrideFileName} onChange={(e) => updateVhost(index, { ...vhost, overrideFileName: e.target.value })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-sm" placeholder=".htaccess" />
-                    </label>
-                    <label className="space-y-1 text-sm">
-                      <span className="block text-xs text-neutral-600">{tx("Generated target (compatibility)")}</span>
-                      <input value={vhost.generatedTarget} onChange={(e) => updateVhost(index, { ...vhost, generatedTarget: e.target.value })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white" />
                     </label>
                     <label className="space-y-1 text-sm md:col-span-2">
                       <span className="block text-xs text-neutral-600">{tx("try_files")}</span>
@@ -774,10 +663,6 @@ export default function VhostsPanel() {
             )}
           </section>
 
-          <section className="rounded-xl border border-neutral-200 bg-white p-4 space-y-2">
-            <h2 className="text-sm font-semibold">{tx("Raw JSON")}</h2>
-            <pre className="max-h-[70vh] overflow-auto rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700">{rawPreview || "{\n  \"vhosts\": []\n}"}</pre>
-          </section>
         </aside>
       </section>
     </div>

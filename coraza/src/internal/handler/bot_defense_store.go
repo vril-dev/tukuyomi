@@ -301,13 +301,24 @@ func InitBotDefense(path string) error {
 	if target == "" {
 		return fmt.Errorf("bot defense path is empty")
 	}
-	if err := ensureBotDefenseFile(target); err != nil {
-		return err
-	}
-
 	botDefenseMu.Lock()
 	botDefensePath = target
 	botDefenseMu.Unlock()
+
+	if store := getLogsStatsStore(); store != nil {
+		raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(botDefenseConfigBlobKey), normalizeBotDefensePolicyRaw, "bot defense rules")
+		if err != nil {
+			return fmt.Errorf("read bot defense config db: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("normalized bot defense config missing in db; run make db-import before removing seed files")
+		}
+		return applyBotDefensePolicyRaw(raw)
+	}
+
+	if err := ensureBotDefenseFile(target); err != nil {
+		return err
+	}
 
 	return ReloadBotDefense()
 }
@@ -1542,8 +1553,11 @@ func ensureBotDefenseFile(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	return os.WriteFile(path, []byte(defaultBotDefensePolicyRaw()), 0o644)
+}
 
-	const defaultRaw = `{
+func defaultBotDefensePolicyRaw() string {
+	return `{
   "enabled": true,
   "dry_run": false,
   "mode": "suspicious",
@@ -1635,5 +1649,4 @@ func ensureBotDefenseFile(path string) error {
   }
 }
 	`
-	return os.WriteFile(path, []byte(defaultRaw), 0o644)
 }

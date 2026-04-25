@@ -35,7 +35,7 @@ test("buildFPTunerAuditDetails returns representative detail fields", () => {
     ip: "203.0.113.10",
     proposal_id: "fp-2026-001",
     proposal_hash: "abcdef1234567890",
-    target_path: "rules/tukuyomi.conf",
+    target_path: "tukuyomi.conf",
     simulate: false,
     approval_required: true,
     approval_error: "approval token expired",
@@ -46,7 +46,7 @@ test("buildFPTunerAuditDetails returns representative detail fields", () => {
     { label: "Event", value: "fp_tuner_apply_denied" },
     { label: "Actor", value: "alice@example.com" },
     { label: "IP", value: "203.0.113.10" },
-    { label: "Target Path", value: "rules/tukuyomi.conf" },
+    { label: "Target Path", value: "tukuyomi.conf" },
   ]);
   assert.ok(details.some((detail) => detail.label === "Proposal" && detail.value === "fp-2026-001 (abcdef12)"));
   assert.ok(details.some((detail) => detail.label === "Approval Error" && detail.value === "approval token expired"));

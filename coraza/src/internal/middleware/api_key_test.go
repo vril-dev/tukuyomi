@@ -1,32 +1,18 @@
 package middleware
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"tukuyomi/internal/adminauth"
 	"tukuyomi/internal/config"
 )
 
-func TestSecureKeyMatch(t *testing.T) {
-	if !secureKeyMatch("abcdefghijklmnop", "abcdefghijklmnop") {
-		t.Fatal("secureKeyMatch should return true for equal keys")
-	}
-	if secureKeyMatch("abcdefghijklmnop", "abcdefghijklmnoq") {
-		t.Fatal("secureKeyMatch should return false for different keys")
-	}
-	if secureKeyMatch("", "abcdefghijklmnop") {
-		t.Fatal("secureKeyMatch should return false for empty candidate key")
-	}
-	if secureKeyMatch("abcdefghijklmnop", "") {
-		t.Fatal("secureKeyMatch should return false for empty expected key")
-	}
-}
-
-func TestAPIKeyAuth(t *testing.T) {
+func TestAdminAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	restore := saveAuthConfig()
@@ -35,72 +21,64 @@ func TestAPIKeyAuth(t *testing.T) {
 	tests := []struct {
 		name         string
 		authDisabled bool
-		primary      string
-		secondary    string
-		header       string
+		resolver     AdminAuthResolver
 		expectedCode int
 	}{
 		{
 			name:         "auth disabled allows request",
 			authDisabled: true,
-			primary:      "",
-			secondary:    "",
-			header:       "",
 			expectedCode: http.StatusOK,
 		},
 		{
-			name:         "primary key accepted",
+			name:         "resolver principal accepted",
 			authDisabled: false,
-			primary:      "primary-key-123456",
-			secondary:    "secondary-key-1234",
-			header:       "primary-key-123456",
+			resolver: func(*gin.Context) (AdminAuthResult, bool, error) {
+				return AdminAuthResult{
+					Principal: adminauth.Principal{
+						UserID:   1,
+						Username: "admin",
+						Role:     adminauth.AdminRoleOwner,
+						AuthKind: adminauth.AuthKindSession,
+					},
+					Mode:          string(adminauth.AuthKindSession),
+					FallbackActor: "admin",
+				}, true, nil
+			},
 			expectedCode: http.StatusOK,
 		},
 		{
-			name:         "secondary key accepted",
+			name:         "missing credential rejected",
 			authDisabled: false,
-			primary:      "primary-key-123456",
-			secondary:    "secondary-key-1234",
-			header:       "secondary-key-1234",
-			expectedCode: http.StatusOK,
-		},
-		{
-			name:         "invalid key rejected",
-			authDisabled: false,
-			primary:      "primary-key-123456",
-			secondary:    "",
-			header:       "wrong-key",
+			resolver: func(*gin.Context) (AdminAuthResult, bool, error) {
+				return AdminAuthResult{}, false, nil
+			},
 			expectedCode: http.StatusUnauthorized,
 		},
 		{
-			name:         "no configured key rejected",
+			name:         "resolver error rejected",
 			authDisabled: false,
-			primary:      "",
-			secondary:    "",
-			header:       "anything",
+			resolver: func(*gin.Context) (AdminAuthResult, bool, error) {
+				return AdminAuthResult{}, false, errors.New("invalid credential")
+			},
 			expectedCode: http.StatusUnauthorized,
 		},
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			config.APIAuthDisable = tc.authDisabled
-			config.APIKeyPrimary = tc.primary
-			config.APIKeySecondary = tc.secondary
-			config.AdminSessionSecret = tc.primary
-			config.AdminSessionTTL = time.Hour
+			SetAdminAuthResolver(tc.resolver)
+			t.Cleanup(func() {
+				SetAdminAuthResolver(nil)
+			})
 
 			r := gin.New()
-			r.Use(APIKeyAuth())
+			r.Use(AdminAuth())
 			r.GET("/protected", func(c *gin.Context) {
 				c.Status(http.StatusOK)
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-			if tc.header != "" {
-				req.Header.Set("X-API-Key", tc.header)
-			}
 			w := httptest.NewRecorder()
 
 			r.ServeHTTP(w, req)
@@ -111,52 +89,77 @@ func TestAPIKeyAuth(t *testing.T) {
 	}
 }
 
-func TestAPIKeyAuthAcceptsValidSession(t *testing.T) {
+func TestAdminAuthSetsPrincipalContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	restore := saveAuthConfig()
 	defer restore()
 
 	config.APIAuthDisable = false
-	config.APIKeyPrimary = "primary-key-123456"
-	config.APIKeySecondary = ""
-	config.AdminSessionSecret = "session-secret-123456"
-	config.AdminSessionTTL = time.Hour
-
-	token, csrf, expiresAt, err := adminauth.Issue(config.AdminSessionSecret, time.Hour, time.Now().UTC())
-	if err != nil {
-		t.Fatalf("Issue() error = %v", err)
-	}
+	SetAdminAuthResolver(func(*gin.Context) (AdminAuthResult, bool, error) {
+		return AdminAuthResult{
+			Principal: adminauth.Principal{
+				UserID:       7,
+				Username:     "operator",
+				Role:         adminauth.AdminRoleOperator,
+				AuthKind:     adminauth.AuthKindToken,
+				CredentialID: "11",
+				Scopes:       []string{"admin:read"},
+			},
+			Mode:          string(adminauth.AuthKindToken),
+			FallbackActor: "operator",
+		}, true, nil
+	})
+	defer SetAdminAuthResolver(nil)
 
 	r := gin.New()
-	r.Use(APIKeyAuth())
-	r.POST("/protected", func(c *gin.Context) {
-		c.Status(http.StatusOK)
+	r.Use(AdminAuth())
+	r.GET("/protected", func(c *gin.Context) {
+		principalValue, ok := c.Get("tukuyomi.admin_principal")
+		if !ok {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "missing principal"})
+			return
+		}
+		principal, ok := principalValue.(adminauth.Principal)
+		if !ok {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid principal"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"actor":    c.GetString("tukuyomi.admin_actor"),
+			"mode":     c.GetString("tukuyomi.admin_auth_mode"),
+			"username": principal.Username,
+		})
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/protected", nil)
-	req.Header.Set(adminauth.CSRFHeaderName, csrf)
-	req.AddCookie(&http.Cookie{Name: adminauth.SessionCookieName, Value: token, Expires: expiresAt})
-	req.AddCookie(&http.Cookie{Name: adminauth.CSRFCookieName, Value: csrf, Expires: expiresAt})
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	w := httptest.NewRecorder()
-
 	r.ServeHTTP(w, req)
+
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if got := w.Body.String(); got == "" || !containsAll(got, `"actor":"operator"`, `"mode":"token"`, `"username":"operator"`) {
+		t.Fatalf("unexpected body=%s", got)
 	}
 }
 
 func saveAuthConfig() func() {
 	oldDisable := config.APIAuthDisable
-	oldPrimary := config.APIKeyPrimary
-	oldSecondary := config.APIKeySecondary
-	oldSecret := config.AdminSessionSecret
-	oldTTL := config.AdminSessionTTL
+	adminAuthResolverMu.RLock()
+	oldResolver := adminAuthResolver
+	adminAuthResolverMu.RUnlock()
 	return func() {
 		config.APIAuthDisable = oldDisable
-		config.APIKeyPrimary = oldPrimary
-		config.APIKeySecondary = oldSecondary
-		config.AdminSessionSecret = oldSecret
-		config.AdminSessionTTL = oldTTL
+		SetAdminAuthResolver(oldResolver)
 	}
+}
+
+func containsAll(value string, needles ...string) bool {
+	for _, needle := range needles {
+		if !strings.Contains(value, needle) {
+			return false
+		}
+	}
+	return true
 }

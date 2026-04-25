@@ -75,6 +75,7 @@ COPY data/vhosts/ ./data/vhosts/
 COPY scripts/install_crs.sh ./scripts/install_crs.sh
 COPY scripts/stage_waf_rule_assets.sh ./scripts/stage_waf_rule_assets.sh
 COPY scripts/update_country_db.sh ./scripts/update_country_db.sh
+COPY seeds/conf/ ./seeds/conf/
 COPY seeds/waf/rules/ ./seeds/waf/rules/
 
 RUN set -eux; \
@@ -85,7 +86,7 @@ RUN set -eux; \
     fi; \
     archive_root="${APP_NAME}_${VERSION}_${os}_${arch}"; \
     bundle="/work/${archive_root}"; \
-    mkdir -p "${bundle}/bin" "${bundle}/conf" "${bundle}/db" "${bundle}/audit" "${bundle}/cache/response" "${bundle}/scripts" "${bundle}/seeds/waf/rules" "${bundle}/data/tmp" "${bundle}/data/scheduled-tasks" "${bundle}/data/php-fpm/binaries" "${bundle}/data/php-fpm/runtime" "${bundle}/data/vhosts/samples" "/out"; \
+    mkdir -p "${bundle}/bin" "${bundle}/conf" "${bundle}/db" "${bundle}/audit" "${bundle}/cache/response" "${bundle}/scripts" "${bundle}/seeds/conf" "${bundle}/seeds/waf/rules" "${bundle}/data/tmp" "${bundle}/data/scheduled-tasks" "${bundle}/data/php-fpm/binaries" "${bundle}/data/php-fpm/runtime" "${bundle}/data/vhosts/samples" "/out"; \
     cp "/tmp/out/${APP_NAME}" "${bundle}/${APP_NAME}"; \
     cp "/tmp/out/geoipupdate" "${bundle}/bin/geoipupdate"; \
     cp /src/README.md "${bundle}/README.md"; \
@@ -103,6 +104,7 @@ RUN set -eux; \
     cp /src/scripts/install_crs.sh "${bundle}/scripts/install_crs.sh"; \
     cp /src/scripts/stage_waf_rule_assets.sh "${bundle}/scripts/stage_waf_rule_assets.sh"; \
     cp /src/scripts/update_country_db.sh "${bundle}/scripts/update_country_db.sh"; \
+    cp -R /src/seeds/conf/. "${bundle}/seeds/conf/"; \
     cp -R /src/seeds/waf/rules/. "${bundle}/seeds/waf/rules/"; \
     chmod +x "${bundle}/${APP_NAME}" "${bundle}/bin/geoipupdate" "${bundle}/scripts/install_crs.sh" "${bundle}/scripts/stage_waf_rule_assets.sh" "${bundle}/scripts/update_country_db.sh"; \
     tar -C /work -czf "/out/${archive_root}.tar.gz" "${archive_root}"; \

@@ -1,0 +1,20 @@
+{
+  "default": {
+    "enabled": false,
+    "allowlist_ips": [],
+    "allowlist_countries": [],
+    "default_policy": {
+      "enabled": true,
+      "limit": 120,
+      "window_seconds": 60,
+      "burst": 20,
+      "key_by": "ip",
+      "action": {
+        "status": 429,
+        "retry_after_seconds": 60
+      }
+    },
+    "rules": []
+  },
+  "hosts": {}
+}

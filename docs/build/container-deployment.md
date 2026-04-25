@@ -213,7 +213,7 @@ operator-managed app/proxy config from normalized DB tables.
 Typical production pattern:
 
 - render `conf/config.json` from your secret manager or config-management layer for `storage.db_driver`, `storage.db_path`, and `storage.db_dsn`
-- mount or bake `conf/proxy.json` and policy files as seed/import/export material
+- mount or bake `seeds/conf/` as the bundled empty-DB seed set; configured files such as `conf/proxy.json` and policy files still override it
 - run `make db-migrate`, then `make crs-install` to install/import WAF rule assets, then `make db-import` for the remaining seed material before first start. `db-import` does not re-import WAF rule assets
 - treat `conf/sites.json`, `conf/scheduled-tasks.json`, and `conf/upstream-runtime.json` as empty-DB seed/export files; normalized DB rows are authoritative after bootstrap
 - use runtime env injection only for:

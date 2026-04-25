@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
-	"time"
 
 	"tukuyomi/internal/config"
 )
@@ -144,13 +143,7 @@ func TestBuildProxyBackendStatesAppliesRuntimeOverrides(t *testing.T) {
 
 func TestBuildProxyBackendStatesLoadsRuntimeOverridesFromDB(t *testing.T) {
 	tmp := t.TempDir()
-	dbPath := filepath.Join(tmp, "store.db")
-	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
-		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
-	}
-	defer func() {
-		_ = InitLogsStatsStore(false, "", 0)
-	}()
+	store := initConfigDBStoreForTest(t)
 
 	oldPath := config.UpstreamRuntimeFile
 	config.UpstreamRuntimeFile = filepath.Join(tmp, "conf", "upstream-runtime.json")
@@ -161,7 +154,7 @@ func TestBuildProxyBackendStatesLoadsRuntimeOverridesFromDB(t *testing.T) {
 	primaryKey := proxyBackendLookupKey("primary", "http://127.0.0.1:8080")
 	overrideRaw := fmt.Sprintf(`{
   "version": "v1",
-  "backends": {
+	"backends": {
     %q: {
       "admin_state": "disabled",
       "weight_override": 5
@@ -169,9 +162,12 @@ func TestBuildProxyBackendStatesLoadsRuntimeOverridesFromDB(t *testing.T) {
   }
 }
 `, primaryKey)
-	store := getLogsStatsStore()
-	if err := store.UpsertConfigBlob(upstreamRuntimeConfigBlobKey, []byte(overrideRaw), "", time.Now().UTC()); err != nil {
-		t.Fatalf("UpsertConfigBlob: %v", err)
+	runtimeFile, err := ParseUpstreamRuntimeRaw(overrideRaw)
+	if err != nil {
+		t.Fatalf("ParseUpstreamRuntimeRaw: %v", err)
+	}
+	if _, _, err := store.writeUpstreamRuntimeConfigVersion("", runtimeFile, nil, configVersionSourceImport, "", "test upstream runtime import", 0); err != nil {
+		t.Fatalf("writeUpstreamRuntimeConfigVersion: %v", err)
 	}
 
 	cfg := mustValidateProxyRulesRaw(t, `{

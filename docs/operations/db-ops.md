@@ -43,10 +43,15 @@ make db-import
 `make db-import` runs `db-migrate` first, then imports seed/export material into
 versioned normalized DB tables. `config.json` is loaded as the `app_config` seed
 after built-in defaults are applied; bundled configs intentionally keep only the
-`storage` bootstrap block. `proxy.json` supplies proxy config, and runtime files
-such as `sites`, `vhosts`, `scheduled_tasks`, `upstream_runtime`, and PHP-FPM
-runtime inventory are imported into their own feature tables. After import,
-those DB rows are authoritative.
+`storage` bootstrap block. Configured runtime files such as `conf/proxy.json`
+win when present; otherwise `seeds/conf/` supplies the bundled production seed
+set before compatibility defaults are used. Runtime files such as `sites`,
+`vhosts`, `scheduled_tasks`, `upstream_runtime`, and PHP-FPM runtime inventory
+are imported into their own feature tables. After import, those DB rows are
+authoritative.
+
+If the import command runs outside the bundle root, set
+`WAF_DB_IMPORT_SEED_CONF_DIR` to the directory containing the `seeds/conf` files.
 
 ## Driver Selection
 
@@ -167,7 +172,7 @@ Other configured JSON/text files are not a runtime storage backend. They are
 initial seed/import/export artifacts:
 
 - if the normalized domain is missing, startup imports DB rows from the current
-  configured seed/export file
+  configured seed/export file, or from `seeds/conf/` when that file is absent
 - if `app_config` exists, startup applies it after the initial DB open while
   preserving DB connection fields from bootstrap `config.json`
 - proxy, sites, vhosts, scheduled tasks, upstream runtime, policy domains, WAF

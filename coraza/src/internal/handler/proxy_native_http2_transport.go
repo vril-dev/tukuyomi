@@ -805,10 +805,7 @@ func (s *nativeHTTP2Session) handleMetaHeaders(f *http2.MetaHeadersFrame) error 
 			st.markRemoteClosed()
 			st.sendBodyEvent(nativeHTTP2BodyEvent{eof: true})
 		}
-		select {
-		case st.responseCh <- resp:
-		case <-st.done:
-		}
+		st.queueResponse(resp)
 		return nil
 	}
 	if st.remoteClosedSeen() {
@@ -1018,7 +1015,11 @@ func (s *nativeHTTP2Session) roundTrip(req *http.Request, st *nativeHTTP2Stream)
 			err := s.sendRequestBody(ctx, st, req)
 			if err != nil {
 				s.resetStream(st.id, http2.ErrCodeCancel)
-				s.releaseStream(st, err)
+				if nativeHTTP2IsFlowControlWindowTimeout(err) {
+					s.closeWithError(err)
+				} else {
+					s.releaseStream(st, err)
+				}
 			}
 			bodyErrCh <- err
 		}()
@@ -1029,8 +1030,7 @@ func (s *nativeHTTP2Session) roundTrip(req *http.Request, st *nativeHTTP2Stream)
 		select {
 		case resp := <-st.responseCh:
 			if resp != nil {
-				resp.Body = &nativeHTTP2ResponseBody{stream: st}
-				return resp, nil
+				return nativeHTTP2ResponseForCaller(resp, st), nil
 			}
 		case err := <-st.errCh:
 			if err == nil {
@@ -1048,9 +1048,21 @@ func (s *nativeHTTP2Session) roundTrip(req *http.Request, st *nativeHTTP2Stream)
 			s.releaseStream(st, ctx.Err())
 			return nil, ctx.Err()
 		case <-s.done:
+			select {
+			case resp := <-st.responseCh:
+				if resp != nil {
+					return nativeHTTP2ResponseForCaller(resp, st), nil
+				}
+			default:
+			}
 			return nil, s.error()
 		}
 	}
+}
+
+func nativeHTTP2ResponseForCaller(resp *http.Response, st *nativeHTTP2Stream) *http.Response {
+	resp.Body = &nativeHTTP2ResponseBody{stream: st}
+	return resp
 }
 
 func (s *nativeHTTP2Session) sendRequestHeaders(ctx context.Context, st *nativeHTTP2Stream, endStream bool) error {
@@ -1399,7 +1411,7 @@ func (s *nativeHTTP2Session) waitSendWindow(ctx context.Context, st *nativeHTTP2
 	case <-notify:
 		return nil
 	case <-timer.C:
-		return fmt.Errorf("native http2 flow-control window timeout after %s", wait)
+		return nativeHTTP2FlowControlWindowTimeoutError{Wait: wait}
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-st.done:
@@ -1483,6 +1495,7 @@ func (s *nativeHTTP2Session) releaseStream(st *nativeHTTP2Stream, err error) {
 	}
 	st.closeOnce.Do(func() {
 		var closeDrainedSession bool
+		responseQueued := st.responseQueuedForCaller()
 		st.setTerminalError(err)
 		s.mu.Lock()
 		if _, ok := s.streams[st.id]; ok {
@@ -1495,7 +1508,7 @@ func (s *nativeHTTP2Session) releaseStream(st *nativeHTTP2Stream, err error) {
 		closeDrainedSession = s.registered && !s.closed && s.activeStreams == 0 && s.remoteMaxStreams == 0
 		s.notifyWindowLocked()
 		s.mu.Unlock()
-		if err != nil {
+		if err != nil && !responseQueued {
 			select {
 			case st.errCh <- err:
 			default:
@@ -1532,10 +1545,16 @@ func (s *nativeHTTP2Session) closeWithError(err error) {
 		close(s.closeCh)
 		_ = s.conn.Close()
 		for _, st := range streams {
-			st.setTerminalError(err)
-			select {
-			case st.errCh <- err:
-			default:
+			responseQueued := st.responseQueuedForCaller()
+			remoteClosed := st.remoteClosedSeen()
+			if !responseQueued || !remoteClosed {
+				st.setTerminalError(err)
+			}
+			if !responseQueued {
+				select {
+				case st.errCh <- err:
+				default:
+				}
 			}
 			st.closeOnce.Do(func() { close(st.done) })
 		}
@@ -1611,6 +1630,7 @@ type nativeHTTP2Stream struct {
 	trailersSeen    bool
 	response        *http.Response
 	terminalErr     error
+	responseQueued  bool
 
 	responseCh chan *http.Response
 	errCh      chan error
@@ -1642,6 +1662,19 @@ func (e nativeHTTP2RapidResetError) Error() string {
 	return fmt.Sprintf("native http2 upstream rapid reset limit exceeded: %d RST_STREAM frames within %s", e.Count, e.Window)
 }
 
+type nativeHTTP2FlowControlWindowTimeoutError struct {
+	Wait time.Duration
+}
+
+func (e nativeHTTP2FlowControlWindowTimeoutError) Error() string {
+	return fmt.Sprintf("native http2 flow-control window timeout after %s", e.Wait)
+}
+
+func nativeHTTP2IsFlowControlWindowTimeout(err error) bool {
+	var target nativeHTTP2FlowControlWindowTimeoutError
+	return errors.As(err, &target)
+}
+
 func (st *nativeHTTP2Stream) responseStarted() bool {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -1670,6 +1703,22 @@ func (st *nativeHTTP2Stream) markResponseStarted(resp *http.Response) {
 		st.expectedLength = resp.ContentLength
 	}
 	st.mu.Unlock()
+}
+
+func (st *nativeHTTP2Stream) responseQueuedForCaller() bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.responseQueued
+}
+
+func (st *nativeHTTP2Stream) queueResponse(resp *http.Response) {
+	st.mu.Lock()
+	st.responseQueued = true
+	st.mu.Unlock()
+	select {
+	case st.responseCh <- resp:
+	case <-st.done:
+	}
 }
 
 func (st *nativeHTTP2Stream) markLocalClosed() {

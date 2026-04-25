@@ -1675,11 +1675,11 @@ func saveBotDefenseStateForTest() func() {
 	oldRuntime := botDefenseRuntime
 	botDefenseMu.RUnlock()
 	botDefenseBehaviorMu.Lock()
-	oldBehaviorState := botDefenseBehaviorStateByIP
+	oldBehaviorState := cloneBotDefenseBehaviorStateByIPForTest(botDefenseBehaviorStateByIP)
 	oldBehaviorSweep := botDefenseBehaviorSweep
 	botDefenseBehaviorMu.Unlock()
 	botDefenseQuarantineMu.Lock()
-	oldQuarantineState := botDefenseQuarantineStateByIP
+	oldQuarantineState := cloneBotDefenseQuarantineStateByIPForTest(botDefenseQuarantineStateByIP)
 	oldQuarantineSweep := botDefenseQuarantineSweep
 	botDefenseQuarantineMu.Unlock()
 	botDefenseChallengeStateMu.Lock()
@@ -1708,6 +1708,36 @@ func saveBotDefenseStateForTest() func() {
 		botDefenseChallengeStateSweep = oldChallengeSweep
 		botDefenseChallengeStateMu.Unlock()
 	}
+}
+
+func cloneBotDefenseBehaviorStateByIPForTest(in map[string]botDefenseBehaviorState) map[string]botDefenseBehaviorState {
+	out := make(map[string]botDefenseBehaviorState, len(in))
+	for key, state := range in {
+		if state.Paths != nil {
+			paths := make(map[string]struct{}, len(state.Paths))
+			for path := range state.Paths {
+				paths[path] = struct{}{}
+			}
+			state.Paths = paths
+		}
+		if state.UserAgents != nil {
+			userAgents := make(map[string]struct{}, len(state.UserAgents))
+			for userAgent := range state.UserAgents {
+				userAgents[userAgent] = struct{}{}
+			}
+			state.UserAgents = userAgents
+		}
+		out[key] = state
+	}
+	return out
+}
+
+func cloneBotDefenseQuarantineStateByIPForTest(in map[string]botDefenseQuarantineState) map[string]botDefenseQuarantineState {
+	out := make(map[string]botDefenseQuarantineState, len(in))
+	for key, state := range in {
+		out[key] = state
+	}
+	return out
 }
 
 func saveIPReputationStateForTest() func() {

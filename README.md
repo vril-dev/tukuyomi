@@ -57,12 +57,13 @@ make preset-check PRESET=minimal
 
 The bundled `minimal` preset stages only `.env` and `data/conf/config.json`.
 When `conf/proxy.json` / `conf/sites.json` are absent, `make db-import` seeds
-their initial minimal defaults directly into DB.
+from `seeds/conf/` before falling back to compatibility defaults.
 
 Before first DB import, replace the sample values in any seed files you want to
 bootstrap from:
 
 - `data/conf/config.json` for DB connection bootstrap
+- `seeds/conf/*.json` as the bundled production seed set for an empty DB
 - `data/conf/proxy.json` as the initial proxy rules seed/import file
 - `data/conf/sites.json` as the initial site seed/import file when site ownership / TLS is enabled
 - `data/conf/scheduled-tasks.json` as the initial scheduled task seed/import file when scheduled tasks are enabled
@@ -106,6 +107,7 @@ that DB plus preview config files on each start. If you use
 - `data/conf/config.json`: DB connection bootstrap; bundled configs keep only the `storage` block
 - DB `app_config_*`: global runtime, listener, admin, storage policy, and path config
 - DB `proxy_*`: live proxy transport and routing config
+- `seeds/conf/*`: bundled empty-DB production seeds used when configured seed files are absent
 - `data/conf/proxy.json`: proxy rules seed/import/export material
 - DB `proxy_backend_pools` / `proxy_backend_pool_members`: route-scoped balancing groups built from named upstream members
 - `data/conf/upstream-runtime.json`: seed/import/export material for opt-in runtime overrides from `Proxy Rules > Upstreams`

@@ -12,8 +12,18 @@ import (
 )
 
 const (
-	appConfigBlobKey        = "app_config"
-	proxyRulesConfigBlobKey = "proxy_rules"
+	appConfigBlobKey               = "app_config"
+	proxyRulesConfigBlobKey        = "proxy_rules"
+	startupSeedConfDefaultDir      = "seeds/conf"
+	startupSeedConfDirEnv          = "WAF_DB_IMPORT_SEED_CONF_DIR"
+	startupProxySeedName           = "proxy.json"
+	startupSitesSeedName           = "sites.json"
+	startupPHPRuntimeSeedName      = "php-runtime-inventory.json"
+	startupVhostsSeedName          = "vhosts.json"
+	startupScheduledTasksSeedName  = "scheduled-tasks.json"
+	startupUpstreamRuntimeSeedName = "upstream-runtime.json"
+	startupCRSDisabledSeedName     = "crs-disabled.conf"
+	startupResponseCacheSeedName   = "cache-store.json"
 )
 
 func SyncAppConfigStorage() error {
@@ -152,7 +162,7 @@ func importAppConfigStorage() error {
 }
 
 func importProxyRulesStorage() error {
-	raw, hadFile, err := readFileMaybe(config.ProxyConfigFile)
+	raw, hadFile, err := readStartupSeedFile(config.ProxyConfigFile, startupProxySeedName)
 	if err != nil {
 		return fmt.Errorf("read proxy seed file: %w", err)
 	}
@@ -186,7 +196,7 @@ func importSiteConfigStorage() error {
 	if path == "" {
 		path = "conf/sites.json"
 	}
-	raw, _, err := readFileMaybe(path)
+	raw, _, err := readStartupSeedFile(path, startupSitesSeedName)
 	if err != nil {
 		return fmt.Errorf("read sites seed file: %w", err)
 	}
@@ -214,7 +224,7 @@ func importVhostConfigStorage() error {
 	if path == "" {
 		path = "data/php-fpm/vhosts.json"
 	}
-	raw, _, err := readFileMaybe(path)
+	raw, _, err := readStartupSeedFile(path, startupVhostsSeedName)
 	if err != nil {
 		return fmt.Errorf("read vhost seed file: %w", err)
 	}
@@ -241,7 +251,7 @@ func importPHPRuntimeInventoryStorage() error {
 	if path == "" {
 		path = "data/php-fpm/inventory.json"
 	}
-	raw, _, err := readFileMaybe(path)
+	raw, _, err := readStartupSeedFile(path, startupPHPRuntimeSeedName)
 	if err != nil {
 		return fmt.Errorf("read php runtime inventory seed file: %w", err)
 	}
@@ -268,7 +278,7 @@ func importScheduledTaskConfigStorage() error {
 	if path == "" {
 		path = defaultScheduledTaskConfigPath
 	}
-	raw, _, err := readFileMaybe(path)
+	raw, _, err := readStartupSeedFile(path, startupScheduledTasksSeedName)
 	if err != nil {
 		return fmt.Errorf("read scheduled tasks seed file: %w", err)
 	}
@@ -293,7 +303,7 @@ func importScheduledTaskConfigStorage() error {
 
 func importUpstreamRuntimeConfigStorage() error {
 	path := managedUpstreamRuntimePath()
-	raw, _, err := readFileMaybe(path)
+	raw, _, err := readStartupSeedFile(path, startupUpstreamRuntimeSeedName)
 	if err != nil {
 		return fmt.Errorf("read upstream runtime seed file: %w", err)
 	}
@@ -343,7 +353,7 @@ func importPolicyConfigStorage() error {
 }
 
 func importPolicyJSONStorage(domain string, path string, normalize func(string) ([]byte, error), reason string) error {
-	raw, hadFile, err := readFileMaybe(path)
+	raw, hadFile, err := readStartupSeedFile(path, startupPolicySeedName(domain))
 	if err != nil {
 		return fmt.Errorf("read %s seed file: %w", domain, err)
 	}
@@ -371,7 +381,7 @@ func importPolicyJSONStorage(domain string, path string, normalize func(string) 
 }
 
 func importCRSDisabledStorage() error {
-	raw, _, err := readFileMaybe(config.CRSDisabledFile)
+	raw, _, err := readStartupSeedFile(config.CRSDisabledFile, startupCRSDisabledSeedName)
 	if err != nil {
 		return fmt.Errorf("read crs disabled seed file: %w", err)
 	}
@@ -404,9 +414,21 @@ func importResponseCacheConfigStorage() error {
 	if store == nil {
 		return fmt.Errorf("db store is not initialized")
 	}
-	prepared, err := defaultPreparedResponseCacheConfig()
+	raw, _, err := readStartupSeedFile(config.CacheStoreFile, startupResponseCacheSeedName)
 	if err != nil {
-		return fmt.Errorf("prepare default response cache config: %w", err)
+		return fmt.Errorf("read response cache seed file: %w", err)
+	}
+	var prepared preparedResponseCacheConfig
+	if strings.TrimSpace(string(raw)) == "" {
+		prepared, err = defaultPreparedResponseCacheConfig()
+		if err != nil {
+			return fmt.Errorf("prepare default response cache config: %w", err)
+		}
+	} else {
+		prepared, err = prepareResponseCacheRaw(string(raw))
+		if err != nil {
+			return fmt.Errorf("validate response cache seed file: %w", err)
+		}
 	}
 	if _, _, err := store.writeResponseCacheConfigVersion("", prepared.cfg, configVersionSourceImport, "", "response cache seed import", 0); err != nil {
 		return fmt.Errorf("import normalized response cache config: %w", err)
@@ -427,6 +449,77 @@ func loadBootstrapAppConfig() ([]byte, config.AppConfigFile, error) {
 	}
 	applyEffectiveBootstrapDBConnection(&cfg)
 	return raw, cfg, nil
+}
+
+func startupSeedConfDir() string {
+	if raw, ok := os.LookupEnv(startupSeedConfDirEnv); ok {
+		return strings.TrimSpace(raw)
+	}
+	return startupSeedConfDefaultDir
+}
+
+func readStartupSeedFile(primaryPath string, seedName string) ([]byte, bool, error) {
+	primaryPath = strings.TrimSpace(primaryPath)
+	if primaryPath != "" {
+		raw, hadFile, err := readFileMaybe(primaryPath)
+		if err != nil {
+			return nil, false, err
+		}
+		if hadFile && strings.TrimSpace(string(raw)) != "" {
+			return raw, true, nil
+		}
+		seedRaw, seedFound, err := readStartupSeedConfFile(seedName)
+		if err != nil || seedFound {
+			return seedRaw, seedFound, err
+		}
+		return raw, hadFile, nil
+	}
+	return readStartupSeedConfFile(seedName)
+}
+
+func readStartupSeedConfFile(seedName string) ([]byte, bool, error) {
+	seedName = filepath.Clean(strings.TrimSpace(seedName))
+	if seedName == "." || seedName == "" {
+		return []byte{}, false, nil
+	}
+	if seedName == ".." || filepath.IsAbs(seedName) || strings.HasPrefix(filepath.ToSlash(seedName), "../") {
+		return nil, false, fmt.Errorf("invalid bundled seed name %q", seedName)
+	}
+	seedDir := startupSeedConfDir()
+	if seedDir == "" {
+		return []byte{}, false, nil
+	}
+	raw, hadFile, err := readFileMaybe(filepath.Join(seedDir, seedName))
+	if err != nil {
+		return nil, false, err
+	}
+	if hadFile && strings.TrimSpace(string(raw)) != "" {
+		return raw, true, nil
+	}
+	return []byte{}, false, nil
+}
+
+func startupPolicySeedName(domain string) string {
+	switch domain {
+	case cacheConfigBlobKey:
+		return "cache-rules.json"
+	case bypassConfigBlobKey:
+		return "waf-bypass.json"
+	case countryBlockConfigBlobKey:
+		return "country-block.json"
+	case rateLimitConfigBlobKey:
+		return "rate-limit.json"
+	case botDefenseConfigBlobKey:
+		return "bot-defense.json"
+	case semanticConfigBlobKey:
+		return "semantic.json"
+	case notificationConfigBlobKey:
+		return "notifications.json"
+	case ipReputationConfigBlobKey:
+		return "ip-reputation.json"
+	default:
+		return ""
+	}
 }
 
 func applyEffectiveBootstrapDBConnection(cfg *config.AppConfigFile) {

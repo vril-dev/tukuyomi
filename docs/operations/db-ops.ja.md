@@ -41,10 +41,14 @@ make db-import
 `make db-import` は先に `db-migrate` を実行し、その後 seed/export material を
 versioned normalized DB table へ import します。`config.json` は built-in default
 適用後の `app_config` seed として読みますが、bundled config は意図的に
-`storage` bootstrap block だけを保持します。`proxy.json` は proxy config、
-`sites`、`vhosts`、`scheduled_tasks`、`upstream_runtime`、PHP-FPM runtime
-inventory などの runtime file は各 feature table へ import されます。import
-後はそれらの DB row が正です。
+`storage` bootstrap block だけを保持します。`conf/proxy.json` など configured
+runtime file がある場合はそれが優先され、無い場合は `seeds/conf/` の同梱本番
+seed を読んでから互換 default に fallback します。`sites`、`vhosts`、
+`scheduled_tasks`、`upstream_runtime`、PHP-FPM runtime inventory などの runtime
+file は各 feature table へ import されます。import 後はそれらの DB row が正です。
+
+bundle root 以外から import command を実行する場合は、
+`WAF_DB_IMPORT_SEED_CONF_DIR` に `seeds/conf` file がある directory を指定します。
 
 ## Driver Selection
 
@@ -161,7 +165,7 @@ defensive schema check 用に、現在の migration `version` と `dirty` state 
 initial seed / import / export artifact です。
 
 - normalized domain が存在しない場合、現在の seed/export file から DB row を
-  import します
+  import します。configured file が無い場合は `seeds/conf/` を使います
 - `app_config` が存在する場合、初期 DB open 後にそれを適用します。ただし DB
   接続項目は bootstrap `config.json` の値を保持します
 - proxy、sites、vhosts、scheduled tasks、upstream runtime、policy domain、

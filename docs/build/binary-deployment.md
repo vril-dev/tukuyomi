@@ -162,10 +162,12 @@ sudo install -d -m 755 \
   /opt/tukuyomi/cache/response \
   /opt/tukuyomi/data/persistent \
   /opt/tukuyomi/data/tmp \
+  /opt/tukuyomi/seeds/conf \
   /opt/tukuyomi/scripts
 
 sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
+sudo cp -R seeds/conf/. /opt/tukuyomi/seeds/conf/
 
 sudo install -o root -g tukuyomi -m 640 data/conf/config.json /opt/tukuyomi/conf/config.json
 
@@ -178,8 +180,8 @@ Notes:
 - `config.json` is the DB connection bootstrap; release samples keep only the `storage` block
 - `conf/proxy.json` is optional seed/import/export material for DB `proxy_rules`
 - `conf/sites.json` is optional seed/import/export material for DB `sites`
-- the public release bundle ships `conf/config.json`; other seed/import material is operator-supplied when needed
-- when `conf/proxy.json` / `conf/sites.json` are absent, `make db-import` seeds the built-in minimal defaults into DB
+- the public release bundle ships `conf/config.json` and bundled empty-DB runtime seeds under `seeds/conf/`
+- when configured files such as `conf/proxy.json` or policy JSON are absent, `make db-import` reads `seeds/conf/` before falling back to built-in compatibility defaults
 - `make crs-install` stages the default base WAF rule seed from `seeds/waf/rules/tukuyomi.conf` and imports it into DB
 - CRS files are temporary import material for DB `waf_rule_assets`; `make crs-install` stages them under `data/tmp` and cleans up
 - `sites.json`, `scheduled-tasks.json`, `upstream-runtime.json`, policy JSON,

@@ -152,10 +152,12 @@ sudo install -d -m 755 \
   /opt/tukuyomi/cache/response \
   /opt/tukuyomi/data/persistent \
   /opt/tukuyomi/data/tmp \
+  /opt/tukuyomi/seeds/conf \
   /opt/tukuyomi/scripts
 
 sudo install -m 755 bin/tukuyomi /opt/tukuyomi/bin/tukuyomi
 sudo install -m 755 scripts/update_country_db.sh /opt/tukuyomi/scripts/update_country_db.sh
+sudo cp -R seeds/conf/. /opt/tukuyomi/seeds/conf/
 
 sudo install -o root -g tukuyomi -m 640 data/conf/config.json /opt/tukuyomi/conf/config.json
 
@@ -168,8 +170,8 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
 - `config.json` は DB 接続 bootstrap です。release sample は `storage` block だけを保持します
 - `conf/proxy.json` は DB `proxy_rules` の任意 seed/import/export material です
 - `conf/sites.json` は DB `sites` の任意 seed/import/export material です
-- public release bundle が同梱するのは `conf/config.json` だけで、他の seed/import material は必要時に operator が用意します
-- `conf/proxy.json` / `conf/sites.json` が無い場合、`make db-import` が built-in の minimal 初期値を DB へ投入します
+- public release bundle は `conf/config.json` と、空 DB 向け runtime seed の `seeds/conf/` を同梱します
+- `conf/proxy.json` や policy JSON など configured file が無い場合、`make db-import` は `seeds/conf/` を読んでから built-in 互換 default に fallback します
 - 既定の base WAF rule seed は `make crs-install` が `seeds/waf/rules/tukuyomi.conf` から一時 stage して DB へ import します
 - CRS file は DB `waf_rule_assets` 向けの一時 import material であり、`make crs-install` が `data/tmp` で staging と cleanup を行います
 - `sites.json`、`scheduled-tasks.json`、`upstream-runtime.json`、policy JSON、

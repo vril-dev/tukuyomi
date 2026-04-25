@@ -12,6 +12,7 @@ import (
 func TestImportStartupConfigStorageKeepsDBWAFRuleAssetsWithoutSeedFiles(t *testing.T) {
 	restore := saveStartupConfigForTest()
 	defer restore()
+	t.Setenv(startupSeedConfDirEnv, "")
 
 	tmp := t.TempDir()
 	confDir := filepath.Join(tmp, "conf")
@@ -92,6 +93,118 @@ func TestImportStartupConfigStorageKeepsDBWAFRuleAssetsWithoutSeedFiles(t *testi
 	}
 }
 
+func TestReadStartupSeedFileFallsBackToSeedConf(t *testing.T) {
+	tmp := t.TempDir()
+	seedDir := filepath.Join(tmp, "seeds", "conf")
+	if err := os.MkdirAll(seedDir, 0o755); err != nil {
+		t.Fatalf("mkdir seed dir: %v", err)
+	}
+	seedRaw := []byte(`{"source":"seed"}` + "\n")
+	if err := os.WriteFile(filepath.Join(seedDir, startupProxySeedName), seedRaw, 0o600); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	t.Setenv(startupSeedConfDirEnv, seedDir)
+
+	raw, found, err := readStartupSeedFile(filepath.Join(tmp, "missing", "proxy.json"), startupProxySeedName)
+	if err != nil {
+		t.Fatalf("read fallback seed: %v", err)
+	}
+	if !found || string(raw) != string(seedRaw) {
+		t.Fatalf("fallback seed mismatch found=%v raw=%q", found, string(raw))
+	}
+
+	primaryPath := filepath.Join(tmp, "conf", "proxy.json")
+	if err := os.MkdirAll(filepath.Dir(primaryPath), 0o755); err != nil {
+		t.Fatalf("mkdir primary dir: %v", err)
+	}
+	primaryRaw := []byte(`{"source":"primary"}` + "\n")
+	if err := os.WriteFile(primaryPath, primaryRaw, 0o600); err != nil {
+		t.Fatalf("write primary: %v", err)
+	}
+	raw, found, err = readStartupSeedFile(primaryPath, startupProxySeedName)
+	if err != nil {
+		t.Fatalf("read primary seed: %v", err)
+	}
+	if !found || string(raw) != string(primaryRaw) {
+		t.Fatalf("primary seed mismatch found=%v raw=%q", found, string(raw))
+	}
+}
+
+func TestBundledStartupSeedConfFilesValidate(t *testing.T) {
+	root := repoRootForStartupSeedTest(t)
+	seedDir := filepath.Join(root, "seeds", "conf")
+	readSeed := func(name string) string {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(seedDir, name))
+		if err != nil {
+			t.Fatalf("read bundled seed %s: %v", name, err)
+		}
+		return string(raw)
+	}
+
+	if _, err := prepareProxyRulesRaw(readSeed(startupProxySeedName)); err != nil {
+		t.Fatalf("validate proxy seed: %v", err)
+	}
+	if _, err := prepareSiteConfigRaw(readSeed(startupSitesSeedName)); err != nil {
+		t.Fatalf("validate sites seed: %v", err)
+	}
+	inventory, err := preparePHPRuntimeInventoryRaw(readSeed(startupPHPRuntimeSeedName), filepath.Join(seedDir, startupPHPRuntimeSeedName))
+	if err != nil {
+		t.Fatalf("validate php runtime inventory seed: %v", err)
+	}
+	if _, err := prepareVhostConfigRawWithInventory(readSeed(startupVhostsSeedName), inventory.cfg); err != nil {
+		t.Fatalf("validate vhosts seed: %v", err)
+	}
+	if _, err := prepareScheduledTaskConfigRaw(readSeed(startupScheduledTasksSeedName), inventory.cfg); err != nil {
+		t.Fatalf("validate scheduled tasks seed: %v", err)
+	}
+	if _, err := ParseUpstreamRuntimeRaw(readSeed(startupUpstreamRuntimeSeedName)); err != nil {
+		t.Fatalf("validate upstream runtime seed: %v", err)
+	}
+	policySeeds := []struct {
+		name      string
+		normalize func(string) ([]byte, error)
+	}{
+		{"cache-rules.json", normalizeCacheRulesPolicyRaw},
+		{"waf-bypass.json", normalizeBypassPolicyRaw},
+		{"country-block.json", normalizeCountryBlockPolicyRaw},
+		{"rate-limit.json", normalizeRateLimitPolicyRaw},
+		{"bot-defense.json", normalizeBotDefensePolicyRaw},
+		{"semantic.json", normalizeSemanticPolicyRaw},
+		{"notifications.json", normalizeNotificationPolicyRaw},
+		{"ip-reputation.json", normalizeIPReputationPolicyRaw},
+	}
+	for _, seed := range policySeeds {
+		if _, err := seed.normalize(readSeed(seed.name)); err != nil {
+			t.Fatalf("validate policy seed %s: %v", seed.name, err)
+		}
+	}
+	if _, err := prepareResponseCacheRaw(readSeed(startupResponseCacheSeedName)); err != nil {
+		t.Fatalf("validate response cache seed: %v", err)
+	}
+	_ = crsDisabledNamesFromRaw([]byte(readSeed(startupCRSDisabledSeedName)))
+}
+
+func repoRootForStartupSeedTest(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for i := 0; i < 8; i++ {
+		if _, err := os.Stat(filepath.Join(dir, "seeds", "conf", startupProxySeedName)); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	t.Fatalf("repository root with seeds/conf/%s not found", startupProxySeedName)
+	return ""
+}
+
 func saveStartupConfigForTest() func() {
 	oldConfigFile := config.ConfigFile
 	oldProxy := config.ProxyConfigFile
@@ -100,6 +213,7 @@ func saveStartupConfigForTest() func() {
 	oldVhost := config.VhostConfigFile
 	oldScheduled := config.ScheduledTaskConfigFile
 	oldUpstream := config.UpstreamRuntimeFile
+	oldCacheStore := config.CacheStoreFile
 	oldCacheRules := config.CacheRulesFile
 	oldBypass := config.BypassFile
 	oldCountryBlock := config.CountryBlockFile
@@ -125,6 +239,7 @@ func saveStartupConfigForTest() func() {
 		config.VhostConfigFile = oldVhost
 		config.ScheduledTaskConfigFile = oldScheduled
 		config.UpstreamRuntimeFile = oldUpstream
+		config.CacheStoreFile = oldCacheStore
 		config.CacheRulesFile = oldCacheRules
 		config.BypassFile = oldBypass
 		config.CountryBlockFile = oldCountryBlock

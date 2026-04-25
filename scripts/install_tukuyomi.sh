@@ -416,14 +416,17 @@ install_files() {
     "${RUNTIME_DIR}/cache/response" \
     "${RUNTIME_DIR}/data/persistent" \
     "${RUNTIME_DIR}/data/tmp" \
+    "${RUNTIME_DIR}/seeds/conf" \
     "${RUNTIME_DIR}/scripts" \
     "${env_dir}"
 
   [[ -x "${ROOT_DIR}/bin/tukuyomi" ]] || die "missing built binary: ${ROOT_DIR}/bin/tukuyomi"
   [[ -f "${ROOT_DIR}/data/conf/config.json" ]] || die "missing bootstrap config: data/conf/config.json"
+  [[ -d "${ROOT_DIR}/seeds/conf" ]] || die "missing runtime seeds: seeds/conf"
 
   run_priv install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${RUNTIME_DIR}/bin/tukuyomi"
   run_priv install -m 755 "${ROOT_DIR}/scripts/update_country_db.sh" "${RUNTIME_DIR}/scripts/update_country_db.sh"
+  run_priv cp -R "${ROOT_DIR}/seeds/conf/." "${RUNTIME_DIR}/seeds/conf/"
   copy_file_preserve "${ROOT_DIR}/data/conf/config.json" "${RUNTIME_DIR}/conf/config.json" 644 "${INSTALL_OVERWRITE_CONFIG}"
   render_env_preserve "${ROOT_DIR}/docs/build/tukuyomi.env.example" "${env_dir}/tukuyomi.env" "${INSTALL_OVERWRITE_ENV}"
 

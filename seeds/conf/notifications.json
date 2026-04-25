@@ -1,0 +1,18 @@
+{
+  "enabled": false,
+  "cooldown_seconds": 900,
+  "sinks": [],
+  "upstream": {
+    "enabled": true,
+    "window_seconds": 60,
+    "active_threshold": 3,
+    "escalated_threshold": 10
+  },
+  "security": {
+    "enabled": true,
+    "window_seconds": 300,
+    "active_threshold": 20,
+    "escalated_threshold": 100,
+    "sources": ["waf_block", "rate_limited", "semantic_anomaly", "bot_challenge", "ip_reputation"]
+  }
+}

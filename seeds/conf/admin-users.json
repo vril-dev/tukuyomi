@@ -1,0 +1,11 @@
+{
+  "users": [
+    {
+      "username": "admin",
+      "email": "",
+      "role": "owner",
+      "password": "dev-only-change-this-password-please",
+      "must_change_password": true
+    }
+  ]
+}

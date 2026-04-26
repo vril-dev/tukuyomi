@@ -4,6 +4,7 @@ export type AdminSessionState = {
   authenticated: boolean;
   mode: string;
   expires_at?: string;
+  must_change_password?: boolean;
 };
 
 export type AuthContextValue = {

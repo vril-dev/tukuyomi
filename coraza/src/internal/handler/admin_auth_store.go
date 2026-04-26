@@ -488,7 +488,7 @@ func (s *wafEventStore) loadAdminSession(sessionToken string, now time.Time) (ad
 	sessionHash := adminAuthSecretHash(sessionToken, config.AdminSessionSecret)
 	row := s.queryRow(
 		`SELECT s.session_id, s.user_id, s.session_version, s.expires_at_unix, s.csrf_token_hash,
-		        u.username, u.role, u.session_version, COALESCE(u.disabled_at_unix, 0), COALESCE(s.revoked_at_unix, 0)
+		        u.username, u.role, u.must_change_password, u.session_version, COALESCE(u.disabled_at_unix, 0), COALESCE(s.revoked_at_unix, 0)
 		   FROM admin_sessions s
 		   JOIN admin_users u ON u.user_id = s.user_id
 		  WHERE s.session_token_hash = ?`,
@@ -498,17 +498,19 @@ func (s *wafEventStore) loadAdminSession(sessionToken string, now time.Time) (ad
 		sessionVersion int64
 		expiresAtUnix  int64
 		user           adminUserRecord
+		mustChange     any
 		userVersion    int64
 		disabledAtUnix int64
 		revokedAtUnix  int64
 		session        adminSessionRecord
 	)
-	if err := row.Scan(&session.SessionID, &user.UserID, &sessionVersion, &expiresAtUnix, &session.CSRFTokenHash, &user.Username, &user.Role, &userVersion, &disabledAtUnix, &revokedAtUnix); err != nil {
+	if err := row.Scan(&session.SessionID, &user.UserID, &sessionVersion, &expiresAtUnix, &session.CSRFTokenHash, &user.Username, &user.Role, &mustChange, &userVersion, &disabledAtUnix, &revokedAtUnix); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return adminSessionRecord{}, false, nil
 		}
 		return adminSessionRecord{}, false, err
 	}
+	user.MustChangePassword = dbBoolValue(mustChange)
 	now = now.UTC()
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -656,11 +658,12 @@ func (s *wafEventStore) loadAdminUserSessionVersion(userID int64) (int64, error)
 
 func adminPrincipalForUser(user adminUserRecord, kind adminauth.AuthKind, credentialID string) adminauth.Principal {
 	return adminauth.Principal{
-		UserID:       user.UserID,
-		Username:     user.Username,
-		Role:         user.Role,
-		AuthKind:     kind,
-		CredentialID: credentialID,
+		UserID:             user.UserID,
+		Username:           user.Username,
+		Role:               user.Role,
+		AuthKind:           kind,
+		CredentialID:       credentialID,
+		MustChangePassword: user.MustChangePassword,
 	}
 }
 
@@ -704,7 +707,7 @@ func normalizeAdminUsername(username string) (string, string, error) {
 	username = strings.TrimSpace(username)
 	normalized := adminauth.NormalizeAdminIdentifier(username)
 	if username == "" || len(username) > 64 || strings.ContainsAny(username, "\x00\r\n\t") {
-		return "", "", fmt.Errorf("invalid admin username")
+		return "", "", errAdminAuthInvalidUsername
 	}
 	return username, normalized, nil
 }
@@ -716,7 +719,7 @@ func normalizeAdminEmail(email string) (string, string, error) {
 	}
 	normalized := adminauth.NormalizeAdminIdentifier(email)
 	if len(email) > 254 || strings.ContainsAny(email, "\x00\r\n\t") || !strings.Contains(normalized, "@") {
-		return "", "", fmt.Errorf("invalid admin email")
+		return "", "", errAdminAuthInvalidEmail
 	}
 	return email, normalized, nil
 }

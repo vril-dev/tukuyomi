@@ -35,6 +35,9 @@ func SyncAppConfigStorage() error {
 }
 
 func ImportStartupConfigStorage() error {
+	if err := importAdminUsersSeedStorage(); err != nil {
+		return err
+	}
 	if err := importProxyRulesStorage(); err != nil {
 		return err
 	}

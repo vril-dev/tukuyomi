@@ -374,6 +374,15 @@ button:hover {
   border-color: color-mix(in srgb, var(--accent) 46%, var(--edge));
 }
 
+button:focus {
+  outline: none;
+}
+
+button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+  outline-offset: 2px;
+}
+
 button:disabled {
   opacity: 0.55;
   cursor: not-allowed;

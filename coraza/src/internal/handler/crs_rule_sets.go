@@ -12,6 +12,7 @@ import (
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/crsselection"
+	"tukuyomi/internal/runtimefiles"
 	"tukuyomi/internal/waf"
 )
 
@@ -63,7 +64,7 @@ func GetCRSRuleSets(c *gin.Context) {
 		}
 	} else {
 		raw, _ = os.ReadFile(config.CRSDisabledFile)
-		savedAt = fileSavedAt(config.CRSDisabledFile)
+		savedAt = runtimefiles.FileSavedAt(config.CRSDisabledFile)
 	}
 
 	if !config.CRSEnable {

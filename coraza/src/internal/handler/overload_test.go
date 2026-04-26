@@ -11,12 +11,13 @@ import (
 	"github.com/gin-gonic/gin"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/middleware"
+	"tukuyomi/internal/overloadstate"
 )
 
 func TestStatusHandlerIncludesOverloadState(t *testing.T) {
 	restore := saveOverloadConfig()
 	defer restore()
-	defer SetOverloadSnapshotProvider(nil)
+	defer overloadstate.SetProvider(nil)
 
 	config.ServerMaxConcurrentReqs = 32
 	config.ServerMaxQueuedReqs = 0
@@ -25,7 +26,7 @@ func TestStatusHandlerIncludesOverloadState(t *testing.T) {
 	config.ServerMaxQueuedProxy = 32
 	config.ServerQueuedProxyRequestTimeout = 100 * time.Millisecond
 
-	SetOverloadSnapshotProvider(func() map[string]middleware.ConcurrencyGuardSnapshot {
+	overloadstate.SetProvider(func() map[string]middleware.ConcurrencyGuardSnapshot {
 		return map[string]middleware.ConcurrencyGuardSnapshot{
 			"global": {
 				Name:                   "global",
@@ -96,9 +97,9 @@ func TestStatusHandlerIncludesOverloadState(t *testing.T) {
 }
 
 func TestMetricsHandlerIncludesOverloadMetrics(t *testing.T) {
-	defer SetOverloadSnapshotProvider(nil)
+	defer overloadstate.SetProvider(nil)
 
-	SetOverloadSnapshotProvider(func() map[string]middleware.ConcurrencyGuardSnapshot {
+	overloadstate.SetProvider(func() map[string]middleware.ConcurrencyGuardSnapshot {
 		return map[string]middleware.ConcurrencyGuardSnapshot{
 			"global": {
 				Name:                   "global",

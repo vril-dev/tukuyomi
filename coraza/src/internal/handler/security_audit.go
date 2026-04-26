@@ -26,6 +26,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/logfilearchive"
 	"tukuyomi/internal/observability"
 	"tukuyomi/internal/waf"
 )
@@ -1114,7 +1115,7 @@ func (w *securityAuditWriter) Append(rt *securityAuditRuntime, record *securityA
 	}
 	if config.FileRotateBytes > 0 {
 		if info, err := os.Stat(rt.File); err == nil && info.Size() > 0 && info.Size()+int64(len(line)) > config.FileRotateBytes {
-			if err := rotateWAFLogFile(rt.File); err != nil {
+			if err := logfilearchive.RotateGzip(rt.File); err != nil {
 				return err
 			}
 		}
@@ -1130,7 +1131,7 @@ func (w *securityAuditWriter) Append(rt *securityAuditRuntime, record *securityA
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := pruneWAFLogArchives(rt.File, time.Now().UTC()); err != nil {
+	if err := logfilearchive.PruneManaged(rt.File, time.Now().UTC()); err != nil {
 		return err
 	}
 	state.LastHash = record.Integrity.EntryHash
@@ -1264,7 +1265,7 @@ type securityAuditFileInfo struct {
 }
 
 func listSecurityAuditFilesChronological(path string) ([]securityAuditFileInfo, error) {
-	baseFiles, err := listManagedWAFLogFiles(path)
+	baseFiles, err := logfilearchive.ListManaged(path)
 	if err != nil {
 		return nil, err
 	}

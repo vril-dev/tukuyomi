@@ -7,20 +7,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"tukuyomi/internal/requestmeta"
 )
 
 func saveRequestSecurityEventStatsForTest() func() {
-	oldPublished := requestSecurityEventsPublishedTotal.Load()
-	oldChallengeFailures := requestSecurityBotChallengeFailuresTotal.Load()
-	oldChallengePenalties := requestSecurityBotChallengePenaltiesTotal.Load()
-	oldRateLimitPromotions := requestSecurityRateLimitPromotionsTotal.Load()
-	oldRateLimitPromotionDryRun := requestSecurityRateLimitPromotionDryRunTotal.Load()
+	old := requestSecurityEventStats.Snapshot()
 	return func() {
-		requestSecurityEventsPublishedTotal.Store(oldPublished)
-		requestSecurityBotChallengeFailuresTotal.Store(oldChallengeFailures)
-		requestSecurityBotChallengePenaltiesTotal.Store(oldChallengePenalties)
-		requestSecurityRateLimitPromotionsTotal.Store(oldRateLimitPromotions)
-		requestSecurityRateLimitPromotionDryRunTotal.Store(oldRateLimitPromotionDryRun)
+		requestSecurityEventStats.Restore(old)
 	}
 }
 
@@ -29,7 +23,7 @@ func TestRequestSecurityEventBusOrdersAndExposesPriorEvents(t *testing.T) {
 	defer restoreStats()
 
 	ctx := newRequestSecurityPluginContext("req-events", "10.0.0.1", "JP", time.Unix(1_700_000_000, 0))
-	ctx.CountrySource = requestMetadataCountrySourceMMDB
+	ctx.CountrySource = requestmeta.CountrySourceMMDB
 	req := httptest.NewRequest(http.MethodGet, "http://example.test/demo", nil)
 
 	var observedTypes []string
@@ -63,7 +57,7 @@ func TestRequestSecurityEventBusOrdersAndExposesPriorEvents(t *testing.T) {
 	if events[0].EventType != requestSecurityEventTypeSemanticAnomaly || events[1].EventType != requestSecurityEventTypeRateLimited {
 		t.Fatalf("unexpected stored events: %#v", events)
 	}
-	if events[0].CountrySource != requestMetadataCountrySourceMMDB || events[1].CountrySource != requestMetadataCountrySourceMMDB {
+	if events[0].CountrySource != requestmeta.CountrySourceMMDB || events[1].CountrySource != requestmeta.CountrySourceMMDB {
 		t.Fatalf("unexpected country sources: %#v", events)
 	}
 }

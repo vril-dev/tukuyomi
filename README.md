@@ -137,8 +137,8 @@ PHP-FPM/static application backends that are owned by Tukuyomi Vhosts are not
 configured there; move those host/docroot/runtime settings to `Vhosts` instead.
 `Proxy Rules > Backend Pools` groups direct routable upstream names into
 route-scoped balancing sets, and routes normally bind to `action.backend_pool`.
-`Backends` lists canonical backend objects used by routing and keeps runtime
-operations on the direct named upstream nodes themselves.
+`Backends` lists direct upstream backend objects used by routing and keeps
+runtime operations on those direct named upstream nodes themselves.
 
 In the structured `Proxy Rules` editor, the operator workflow is shown in this
 order:
@@ -164,9 +164,9 @@ with `action.backend_pool`.
 For Vhost-owned applications, define the application in `Vhosts`. The runtime
 creates a generated backend and generated host route from the vhost definition.
 Configured upstream URLs in `Proxy Rules > Upstreams` are never rebound or
-rewritten by Vhosts. Vhost-generated backends are visible in `Backends` as
-status-only canonical objects, while runtime enable/drain/disable and runtime
-weight override remain limited to direct named upstreams.
+rewritten by Vhosts. Vhost-generated targets stay on the `Vhosts` surface;
+runtime enable/drain/disable and runtime weight override remain limited to
+direct named upstreams shown in `Backends`.
 
 Standard `http://` and `https://` upstream proxying automatically adds:
 

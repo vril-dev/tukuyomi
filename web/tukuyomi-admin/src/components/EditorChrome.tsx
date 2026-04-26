@@ -1,4 +1,11 @@
-import type { ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type TextareaHTMLAttributes,
+} from "react";
 
 export function SectionCard({
   title,
@@ -41,6 +48,56 @@ export function Field({
       {hint ? <span className="text-xs text-neutral-500">{hint}</span> : null}
     </label>
   );
+}
+
+export function ParsedTextArea<T>({
+  value,
+  onValueChange,
+  serialize,
+  parse,
+  equals,
+  ...props
+}: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "onChange"> & {
+  value: T;
+  onValueChange: (next: T) => void;
+  serialize: (value: T) => string;
+  parse: (value: string) => T;
+  equals: (a: T, b: T) => boolean;
+}) {
+  const serialized = useMemo(() => serialize(value), [serialize, value]);
+  const [draft, setDraft] = useState(serialized);
+  const localNormalized = useRef(serialized);
+
+  useEffect(() => {
+    if (serialized === localNormalized.current) {
+      return;
+    }
+    localNormalized.current = serialized;
+    setDraft(serialized);
+  }, [serialized]);
+
+  return (
+    <textarea
+      {...props}
+      value={draft}
+      onChange={(event) => {
+        const nextText = event.target.value;
+        const parsed = parse(nextText);
+        localNormalized.current = serialize(parsed);
+        setDraft(nextText);
+        if (!equals(parsed, value)) {
+          onValueChange(parsed);
+        }
+      }}
+    />
+  );
+}
+
+export function stringListEqual(a: string[], b: string[]) {
+  if (a.length !== b.length) {
+    return false;
+  }
+  return a.every((value, index) => value === b[index]);
 }
 
 export function StatBox({ label, value }: { label: string; value: string }) {

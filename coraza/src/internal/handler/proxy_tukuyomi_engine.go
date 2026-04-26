@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/proxybuffer"
 )
 
 type proxyEngineFlushIntervalSetter interface {
@@ -398,9 +399,9 @@ func copyTukuyomiProxyTunnel(r *http.Request, clientConn io.ReadWriteCloser, cli
 var errTukuyomiProxyTunnelDone = errors.New("tukuyomi proxy tunnel copy complete")
 
 func tukuyomiProxyTunnelCopy(errc chan<- error, direction string, dst io.Writer, src io.Reader, closeWriteTarget any) {
-	buf := proxyReverseCopyBufferPool.Get()
+	buf := proxybuffer.GetCopyBuffer()
 	_, err := io.CopyBuffer(dst, src, buf)
-	proxyReverseCopyBufferPool.Put(buf)
+	proxybuffer.PutCopyBuffer(buf)
 	if err != nil {
 		errc <- fmt.Errorf("%s: %w", direction, err)
 		return
@@ -527,8 +528,8 @@ func copyTukuyomiProxyResponseBody(w http.ResponseWriter, src io.Reader, flushIn
 		dst = mlw
 	}
 
-	buf := proxyReverseCopyBufferPool.Get()
-	defer proxyReverseCopyBufferPool.Put(buf)
+	buf := proxybuffer.GetCopyBuffer()
+	defer proxybuffer.PutCopyBuffer(buf)
 
 	for {
 		nr, readErr := src.Read(buf)

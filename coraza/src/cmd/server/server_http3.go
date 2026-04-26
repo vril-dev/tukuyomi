@@ -13,7 +13,7 @@ import (
 	"github.com/quic-go/quic-go/http3"
 
 	"tukuyomi/internal/config"
-	"tukuyomi/internal/handler"
+	"tukuyomi/internal/serverruntime"
 )
 
 func buildManagedServerHTTP3Server(tlsConfig *tls.Config, appHandler http.Handler) (*http3.Server, string, error) {
@@ -22,17 +22,17 @@ func buildManagedServerHTTP3Server(tlsConfig *tls.Config, appHandler http.Handle
 	}
 	if !config.ServerTLSEnabled {
 		err := fmt.Errorf("server http3 requires tls listener")
-		handler.RecordServerHTTP3Error(err)
+		serverruntime.RecordHTTP3Error(err)
 		return nil, "", err
 	}
 	if tlsConfig == nil {
 		err := fmt.Errorf("server http3 requires tls config")
-		handler.RecordServerHTTP3Error(err)
+		serverruntime.RecordHTTP3Error(err)
 		return nil, "", err
 	}
 	altSvc, err := serverHTTP3AltSvcHeader(config.ListenAddr, config.ServerHTTP3AltSvcMaxAgeSec)
 	if err != nil {
-		handler.RecordServerHTTP3Error(err)
+		serverruntime.RecordHTTP3Error(err)
 		return nil, "", err
 	}
 	srv := &http3.Server{
@@ -42,7 +42,7 @@ func buildManagedServerHTTP3Server(tlsConfig *tls.Config, appHandler http.Handle
 		MaxHeaderBytes: config.ServerMaxHeaderBytes,
 		IdleTimeout:    config.ServerIdleTimeout,
 	}
-	handler.RecordServerHTTP3Configured(altSvc)
+	serverruntime.RecordHTTP3Configured(altSvc)
 	return srv, altSvc, nil
 }
 
@@ -89,12 +89,12 @@ func runHTTP3Server(lifecycle *managedServerLifecycle, activation *systemdActiva
 	if activation != nil && activation.Active() {
 		conn, ok, err := activation.TakePacketConn("http3", config.ListenAddr)
 		if err != nil {
-			handler.RecordServerHTTP3Error(err)
+			serverruntime.RecordHTTP3Error(err)
 			return err
 		}
 		if !ok {
 			err := fmt.Errorf("systemd activation is enabled but no fd exists for role %q", "http3")
-			handler.RecordServerHTTP3Error(err)
+			serverruntime.RecordHTTP3Error(err)
 			return err
 		}
 		packetConn = conn

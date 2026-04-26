@@ -15,15 +15,35 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
+	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/policyhost"
+	"tukuyomi/internal/ratelimitidentity"
+	"tukuyomi/internal/requestmeta"
+	"tukuyomi/internal/runtimefiles"
 )
 
 const (
-	rateLimitKeyByIP        = "ip"
-	rateLimitKeyByCountry   = "country"
-	rateLimitKeyByIPCountry = "ip_country"
+	rateLimitConfigBlobKey  = "rate_limit_rules"
+	rateLimitKeyByIP        = ratelimitidentity.KeyByIP
+	rateLimitKeyByCountry   = ratelimitidentity.KeyByCountry
+	rateLimitKeyByIPCountry = ratelimitidentity.KeyByIPCountry
+	rateLimitKeyBySession   = ratelimitidentity.KeyBySession
+	rateLimitKeyByIPSession = ratelimitidentity.KeyByIPSession
+	rateLimitKeyByJWTSub    = ratelimitidentity.KeyByJWTSub
+	rateLimitKeyByIPJWTSub  = ratelimitidentity.KeyByIPJWTSub
 	rateLimitDefaultScope   = "default"
 )
+
+var (
+	defaultRateLimitSessionCookieNames = ratelimitidentity.DefaultSessionCookieNames
+	defaultRateLimitJWTHeaderNames     = ratelimitidentity.DefaultJWTHeaderNames
+	defaultRateLimitJWTCookieNames     = ratelimitidentity.DefaultJWTCookieNames
+)
+
+type rateLimitIdentityConfig = ratelimitidentity.Config
+type rateLimitIdentity = ratelimitidentity.Identity
 
 type rateLimitAction struct {
 	Status            int `json:"status"`
@@ -77,6 +97,48 @@ type compiledRateLimitScope struct {
 	Rules             []compiledRateLimitRule
 	DefaultPolicy     rateLimitPolicy
 	Feedback          runtimeRateLimitFeedbackConfig
+}
+
+func normalizeRateLimitIdentityConfig(cfg *rateLimitIdentityConfig) {
+	ratelimitidentity.NormalizeConfig(cfg)
+}
+
+func extractRateLimitIdentity(r *http.Request, cfg rateLimitIdentityConfig) rateLimitIdentity {
+	return ratelimitidentity.Extract(r, cfg)
+}
+
+func extractRateLimitJWTSub(r *http.Request, headerNames, cookieNames []string) string {
+	return ratelimitidentity.ExtractJWTSub(r, headerNames, cookieNames)
+}
+
+func buildRateLimitKey(kind, ip, country string, identity rateLimitIdentity) string {
+	return ratelimitidentity.BuildKey(kind, ip, country, identity)
+}
+
+func applyAdaptiveRateLimit(cfg rateLimitIdentityConfig, policy rateLimitPolicy, riskScore int) (rateLimitPolicy, bool) {
+	out, changed := ratelimitidentity.ApplyAdaptive(cfg, ratelimitidentity.Policy{
+		Limit: policy.Limit,
+		Burst: policy.Burst,
+	}, riskScore)
+	if !changed {
+		return policy, false
+	}
+	adapted := policy
+	adapted.Limit = out.Limit
+	adapted.Burst = out.Burst
+	return adapted, true
+}
+
+func hashRateLimitKey(raw string) string {
+	return ratelimitidentity.HashKey(raw)
+}
+
+func sortedKeys(m map[string]struct{}) []string {
+	return ratelimitidentity.SortedKeys(m)
+}
+
+func sortedMethodList(methods map[string]struct{}) []string {
+	return ratelimitidentity.SortedMethodList(methods)
 }
 
 type runtimeRateLimitConfig struct {
@@ -147,15 +209,8 @@ func InitRateLimit(path string) error {
 	rateLimitPath = target
 	rateLimitMu.Unlock()
 
-	if store := getLogsStatsStore(); store != nil {
-		raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(rateLimitConfigBlobKey), normalizeRateLimitPolicyRaw, "rate limit rules")
-		if err != nil {
-			return fmt.Errorf("read rate limit config db: %w", err)
-		}
-		if !found {
-			return fmt.Errorf("normalized rate limit config missing in db; run make db-import before removing seed files")
-		}
-		return applyRateLimitPolicyRaw(raw)
+	if handled, err := initPolicyJSONConfigFromDB(rateLimitPolicyJSONDomain.dbInit(applyRateLimitPolicyRaw)); handled {
+		return err
 	}
 
 	if err := ensureRateLimitFile(target); err != nil {
@@ -178,6 +233,105 @@ func GetRateLimitConfig() rateLimitFile {
 		return rateLimitFile{}
 	}
 	return cloneRateLimitFile(rateLimitRuntime.Raw)
+}
+
+func GetRateLimitRules(c *gin.Context) {
+	path := GetRateLimitPath()
+	raw, _ := os.ReadFile(path)
+	savedAt := runtimefiles.FileSavedAt(path)
+	dbRaw, rec, found, ok := loadPolicyJSONConfigForAdmin(c, rateLimitPolicyJSONDomain.adminRead())
+	if !ok {
+		return
+	}
+	if found {
+		rt, parseErr := ValidateRateLimitRaw(string(dbRaw))
+		if parseErr != nil {
+			respondConfigBlobDBError(c, "rate-limit db rows parse failed", parseErr)
+			return
+		}
+		savedAt = configVersionSavedAt(rec)
+		c.JSON(http.StatusOK, gin.H{
+			"etag":     rec.ETag,
+			"raw":      string(dbRaw),
+			"enabled":  rateLimitEnabled(rt.Raw),
+			"rules":    rateLimitRuleCount(rt.Raw),
+			"saved_at": savedAt,
+		})
+		return
+	}
+
+	cfg := GetRateLimitConfig()
+	c.JSON(http.StatusOK, gin.H{
+		"etag":     bypassconf.ComputeETag(raw),
+		"raw":      string(raw),
+		"enabled":  rateLimitEnabled(cfg),
+		"rules":    rateLimitRuleCount(cfg),
+		"saved_at": savedAt,
+	})
+}
+
+func ValidateRateLimitRules(c *gin.Context) {
+	in, ok := bindRawPolicyPutBody(c)
+	if !ok {
+		return
+	}
+
+	rt, err := ValidateRateLimitRaw(in.Raw)
+	if err != nil {
+		respondPolicyValidationError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":       true,
+		"messages": []string{},
+		"enabled":  rateLimitEnabled(rt.Raw),
+		"rules":    rateLimitRuleCount(rt.Raw),
+	})
+}
+
+func PutRateLimitRules(c *gin.Context) {
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
+	}
+
+	in, ok := bindRawPolicyPutBody(c)
+	if !ok {
+		return
+	}
+
+	rt, err := ValidateRateLimitRaw(in.Raw)
+	if err != nil {
+		respondPolicyValidationError(c, err)
+		return
+	}
+
+	normalizedRaw, err := normalizeRateLimitPolicyRaw(in.Raw)
+	if err != nil {
+		respondPolicyValidationError(c, err)
+		return
+	}
+	rec, ok := writePolicyJSONConfigUpdate(c, store, rateLimitPolicyJSONDomain.update(normalizedRaw))
+	if !ok {
+		return
+	}
+	if err := applyRateLimitPolicyRaw(normalizedRaw); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":       true,
+		"etag":     rec.ETag,
+		"enabled":  rateLimitEnabled(rt.Raw),
+		"rules":    rateLimitRuleCount(rt.Raw),
+		"saved_at": rec.ActivatedAt.Format(time.RFC3339Nano),
+	})
+}
+
+func SyncRateLimitStorage() error {
+	return syncPolicyJSONConfigStorage(rateLimitPolicyJSONDomain.sync(applyRateLimitPolicyRaw))
 }
 
 func ReloadRateLimit() error {
@@ -234,7 +388,7 @@ func EvaluateRateLimit(r *http.Request, clientIP, country string, riskScore int,
 	rateLimitRequestsTotal.Add(1)
 
 	ip := normalizeClientIP(clientIP)
-	cc := normalizeCountryCode(country)
+	cc := requestmeta.NormalizeCountryCode(country)
 	if isAllowlistedIP(scope, ip) || isAllowlistedCountry(scope, cc) {
 		rateLimitAllowedTotal.Add(1)
 		return rateLimitDecision{Allowed: true}
@@ -563,7 +717,7 @@ func buildCompiledRateLimitScope(cfg rateLimitConfig) (compiledRateLimitScope, e
 
 	allowCountries := map[string]struct{}{}
 	for _, c := range cfg.AllowlistCountries {
-		code := normalizeCountryCode(c)
+		code := requestmeta.NormalizeCountryCode(c)
 		if code == "" {
 			continue
 		}

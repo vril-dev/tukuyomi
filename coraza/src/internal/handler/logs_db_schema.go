@@ -17,6 +17,7 @@ import (
 	migratemysql "github.com/golang-migrate/migrate/v4/database/mysql"
 	migratepostgres "github.com/golang-migrate/migrate/v4/database/postgres"
 	sourceiofs "github.com/golang-migrate/migrate/v4/source/iofs"
+	"tukuyomi/internal/sqlitemigrate"
 )
 
 //go:embed dbschema/*/*.up.sql
@@ -74,7 +75,7 @@ func migrationDatabaseName(driver string) string {
 func embeddedMigrationDatabaseDriver(db *sql.DB, driver string) (database.Driver, bool, error) {
 	switch driver {
 	case logStatsDBDriverSQLite:
-		migrationDriver, err := newEmbeddedSQLiteMigrationDriver(db, schemaMigrationsTableName)
+		migrationDriver, err := sqlitemigrate.NewDriver(db, schemaMigrationsTableName)
 		if err != nil {
 			return nil, false, fmt.Errorf("initialize sqlite migration driver: %w", err)
 		}

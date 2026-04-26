@@ -52,6 +52,40 @@ var (
 	rateLimitFeedbackStateSweep   int
 )
 
+func emitRequestSecurityFeedbackLog(evt requestSecurityEvent) {
+	logLevel := "INFO"
+	if evt.Enforced && !evt.DryRun {
+		logLevel = "WARN"
+	}
+	payload := map[string]any{
+		"ts":             evt.TS,
+		"service":        "coraza",
+		"level":          logLevel,
+		"event":          evt.EventType,
+		"req_id":         evt.ReqID,
+		"trace_id":       evt.TraceID,
+		"ip":             evt.ClientIP,
+		"country":        evt.Country,
+		"country_source": evt.CountrySource,
+		"path":           evt.Path,
+		"source_plugin":  evt.SourcePlugin,
+		"family":         evt.Family,
+		"action":         evt.Action,
+		"enforced":       evt.Enforced,
+		"dry_run":        evt.DryRun,
+	}
+	if evt.RiskScore > 0 {
+		payload["risk_score"] = evt.RiskScore
+	}
+	if evt.Status > 0 {
+		payload["status"] = evt.Status
+	}
+	if len(evt.Attributes) > 0 {
+		payload["attributes"] = evt.Attributes
+	}
+	emitJSONLogAndAppendEvent(payload)
+}
+
 func normalizeBotDefenseChallengeFailureFeedbackConfig(cfg botDefenseChallengeFailureFeedbackConfig) botDefenseChallengeFailureFeedbackConfig {
 	if !cfg.Enabled {
 		return botDefenseChallengeFailureFeedbackConfig{}
@@ -179,29 +213,6 @@ func rateLimitFeedbackStateKey(ip, hostScope string) string {
 	return scope + "|" + ip
 }
 
-func forceBotDefenseQuarantine(rt *runtimeBotDefenseConfig, ip string, now time.Time) bool {
-	return forceBotDefenseQuarantineForScope(botDefenseDefaultScope, rt, ip, now)
-}
-
-func forceBotDefenseQuarantineForScope(scopeKey string, rt *runtimeBotDefenseConfig, ip string, now time.Time) bool {
-	if rt == nil || !rt.Quarantine.Enabled || strings.TrimSpace(ip) == "" {
-		return false
-	}
-	key := botDefenseScopedStateKey(scopeKey, ip)
-	if key == "" {
-		return false
-	}
-	botDefenseQuarantineMu.Lock()
-	defer botDefenseQuarantineMu.Unlock()
-	state := botDefenseQuarantineStateByIP[key]
-	alreadyBlocked := !state.BlockedUntil.IsZero() && now.Before(state.BlockedUntil)
-	state.Strikes = maxInt(state.Strikes, rt.Quarantine.StrikesRequired)
-	state.WindowEnd = now.Add(rt.Quarantine.StrikeWindow)
-	state.BlockedUntil = now.Add(rt.Quarantine.TTL)
-	botDefenseQuarantineStateByIP[key] = state
-	return !alreadyBlocked
-}
-
 func applyRateLimitFeedbackEvent(now time.Time, ip, hostScope string, adaptive bool) requestSecurityRateLimitFeedbackResult {
 	ip = normalizeClientIP(ip)
 	key := rateLimitFeedbackStateKey(ip, hostScope)
@@ -271,11 +282,11 @@ func applyRateLimitFeedbackEvent(now time.Time, ip, hostScope string, adaptive b
 		return result
 	}
 	if scope.Feedback.DryRun {
-		requestSecurityRateLimitPromotionDryRunTotal.Add(1)
+		requestSecurityEventStats.AddRateLimitPromotionDryRun()
 		return result
 	}
 	if forceBotDefenseQuarantineForScope(scopeKey, scopeRT, ip, now.UTC()) {
-		requestSecurityRateLimitPromotionsTotal.Add(1)
+		requestSecurityEventStats.AddRateLimitPromotion()
 		if scopeRT.Quarantine.ReputationFeedback > 0 {
 			_ = ApplyIPReputationPenaltyForScope(scope.ScopeKey, ip, scopeRT.Quarantine.ReputationFeedback, now.UTC())
 		}
@@ -289,7 +300,7 @@ func handleRequestSecurityFeedbackEvent(ctx *requestSecurityPluginContext, evt r
 	}
 	switch evt.EventType {
 	case requestSecurityEventTypeBotChallengeFailed:
-		requestSecurityBotChallengeFailuresTotal.Add(1)
+		requestSecurityEventStats.AddBotChallengeFailure()
 		scopeKey, _ := evt.Attributes["host_scope"].(string)
 		scopeRT := selectBotDefenseRuntimeByScopeKey(currentBotDefenseRuntime(), scopeKey)
 		if strings.TrimSpace(scopeKey) == "" {
@@ -312,7 +323,7 @@ func handleRequestSecurityFeedbackEvent(ctx *requestSecurityPluginContext, evt r
 		}
 		ctx.BotChallengePenaltyApplied = true
 		ctx.BotChallengePenaltyTTL = scopeRT.ChallengeFailureFeedback.ReputationFeedback
-		requestSecurityBotChallengePenaltiesTotal.Add(1)
+		requestSecurityEventStats.AddBotChallengePenalty()
 
 		derived := ctx.deriveSecurityEvent(evt, requestSecurityEventSourceFeedbackLoop, "ip_reputation", requestSecurityEventTypeIPReputationFeedback, requestSecurityEventActionBlock)
 		derived.Enforced = true

@@ -158,7 +158,7 @@ export default function BackendsPanel() {
           <div className="space-y-1">
             <h1 className="text-xl font-semibold">{tx("Backends")}</h1>
             <p className="text-sm text-neutral-600">
-              {tx("Inspect canonical backend objects used by routing. Direct named upstreams support runtime enable/drain/disable and weight overrides here; Vhost-generated backends appear as status-only objects in this slice.")}
+              {tx("Inspect direct upstream backends used by routing. Runtime enable/drain/disable and weight overrides apply here; Vhost-generated targets stay on the Vhosts surface.")}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-600">
@@ -195,9 +195,9 @@ export default function BackendsPanel() {
               <tr>
                 <td colSpan={7} className="text-center text-neutral-500">
                   <div className="space-y-1 py-2">
-                    <div>{tx("No direct upstreams or Vhost-generated backends are configured.")}</div>
+                    <div>{tx("No direct upstream backends are configured.")}</div>
                     <div className="text-xs text-neutral-400">
-                      {tx("Add direct backends in Proxy Rules > Upstreams or add a Vhost, then return here for status and runtime operations.")}
+                      {tx("Add direct backends in Proxy Rules > Upstreams, then return here for status and runtime operations.")}
                     </div>
                   </div>
                 </td>

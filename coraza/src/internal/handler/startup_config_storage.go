@@ -3,12 +3,15 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/storagesync"
 )
 
 const (
@@ -25,6 +28,37 @@ const (
 	startupCRSDisabledSeedName     = "crs-disabled.conf"
 	startupResponseCacheSeedName   = "cache-store.json"
 )
+
+var storageSyncRunner = storagesync.NewRunner([]storagesync.Task{
+	{Name: "sites", Run: SyncSiteStorage},
+	{Name: "scheduled-tasks", Run: SyncScheduledTaskStorage},
+	{Name: "upstream-runtime", Run: SyncUpstreamRuntimeStorage},
+	{Name: "rules", Run: SyncRuleFilesStorage},
+	{Name: "override-rules", Run: SyncManagedOverrideRulesStorage},
+	{Name: "crs-disabled", Run: SyncCRSDisabledStorage},
+	{Name: "bypass", Run: SyncBypassStorage},
+	{Name: "country-block", Run: SyncCountryBlockStorage},
+	{Name: "rate-limit", Run: SyncRateLimitStorage},
+	{Name: "notifications", Run: SyncNotificationStorage},
+	{Name: "bot-defense", Run: SyncBotDefenseStorage},
+	{Name: "semantic", Run: SyncSemanticStorage},
+	{Name: "cache-rules", Run: SyncCacheRulesStorage},
+	{Name: "cache-store", Run: SyncResponseCacheStoreStorage},
+})
+
+func DBStorageActive() bool {
+	return getLogsStatsStore() != nil
+}
+
+func SyncAllStorageFromDB() error {
+	return storageSyncRunner.Sync()
+}
+
+func StartStorageSyncLoop(interval time.Duration) {
+	storagesync.StartLoop(interval, SyncAllStorageFromDB, func(err error) {
+		log.Printf("[DB][SYNC][WARN] periodic sync failed: %v", err)
+	})
+}
 
 func SyncAppConfigStorage() error {
 	_, _, cfg, err := loadAppConfigStorage(true)
@@ -67,6 +101,14 @@ func ImportStartupConfigStorage() error {
 	}
 	if err := importAppConfigStorage(); err != nil {
 		return err
+	}
+	return nil
+}
+
+func importRequestCountryStorage() error {
+	store := getLogsStatsStore()
+	if store == nil {
+		return fmt.Errorf("db store is not initialized")
 	}
 	return nil
 }

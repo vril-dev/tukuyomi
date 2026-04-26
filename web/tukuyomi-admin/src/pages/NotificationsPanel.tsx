@@ -9,10 +9,12 @@ import {
   Field,
   MonoTag,
   NoticeBar,
+  ParsedTextArea,
   PrimaryButton,
   SectionCard,
   StatBox,
   inputClass,
+  stringListEqual,
   textareaClass,
 } from "@/components/EditorChrome";
 import { useAdminRuntime } from "@/lib/adminRuntime";
@@ -267,12 +269,12 @@ export default function NotificationsPanel() {
   );
 
   const updateSecuritySources = useCallback(
-    (rawSources: string) => {
+    (sources: string[]) => {
       applyStructuredState({
         ...editorState,
         security: {
           ...editorState.security,
-          sources: multilineToList(rawSources),
+          sources,
         },
       });
     },
@@ -392,10 +394,13 @@ export default function NotificationsPanel() {
           <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
             <TriggerFields title={tx("Security")} tx={tx} trigger={editorState.security} onChange={(updater) => updateTrigger("security", updater)} />
             <Field label={tx("Security sources")} hint={tx("One source per line. Empty input falls back to the runtime default source set.")}>
-              <textarea
+              <ParsedTextArea
                 className={textareaClass}
-                value={listToMultiline(editorState.security.sources)}
-                onChange={(event) => updateSecuritySources(event.target.value)}
+                value={editorState.security.sources}
+                onValueChange={updateSecuritySources}
+                serialize={listToMultiline}
+                parse={multilineToList}
+                equals={stringListEqual}
                 spellCheck={false}
               />
             </Field>
@@ -710,10 +715,13 @@ function EmailSinkEditor({
         />
       </Field>
       <Field label={tx("Recipients")} hint={tx("One email address per line.")}>
-        <textarea
+        <ParsedTextArea
           className={textareaClass}
-          value={listToMultiline(sink.to)}
-          onChange={(event) => onSinkChange(sinkIndex, (current) => ({ ...current, to: multilineToList(event.target.value) }))}
+          value={sink.to}
+          onValueChange={(next) => onSinkChange(sinkIndex, (current) => ({ ...current, to: next }))}
+          serialize={listToMultiline}
+          parse={multilineToList}
+          equals={stringListEqual}
           spellCheck={false}
         />
       </Field>

@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/gin-gonic/gin"
 
+	"tukuyomi/internal/adminhttp"
 	"tukuyomi/internal/handler"
 )
 
@@ -26,6 +27,6 @@ func registerProxyRuleAdminRoutes(api *gin.RouterGroup) {
 	api.POST("/proxy-rules/probe", handler.ProbeProxyRules)
 	api.POST("/proxy-rules/dry-run", handler.DryRunProxyRulesHandler)
 	api.GET("/proxy-rules/rollback-preview", handler.RollbackPreviewProxyRulesHandler)
-	api.POST("/proxy-rules/rollback", handler.AdminReadOnlyMutationMiddleware(), handler.RollbackProxyRulesHandler)
-	api.PUT("/proxy-rules", handler.AdminReadOnlyMutationMiddleware(), handler.PutProxyRules)
+	api.POST("/proxy-rules/rollback", adminhttp.ReadOnlyMutationMiddleware(), handler.RollbackProxyRulesHandler)
+	api.PUT("/proxy-rules", adminhttp.ReadOnlyMutationMiddleware(), handler.PutProxyRules)
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 
+	"tukuyomi/internal/adminhttp"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/handler"
 	"tukuyomi/internal/middleware"
@@ -63,7 +64,7 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 		handler.AdminRateLimitMiddleware(),
 		middleware.AdminAuth(),
 	)
-	adminMutate := handler.AdminReadOnlyMutationMiddleware()
+	adminMutate := adminhttp.ReadOnlyMutationMiddleware()
 	api.GET("/", func(c *gin.Context) {
 		endpoints := []string{
 			config.APIBasePath + "/status",

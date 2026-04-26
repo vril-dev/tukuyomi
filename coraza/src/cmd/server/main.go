@@ -17,6 +17,8 @@ import (
 	"tukuyomi/internal/handler"
 	"tukuyomi/internal/middleware"
 	"tukuyomi/internal/observability"
+	"tukuyomi/internal/overloadstate"
+	"tukuyomi/internal/serverruntime"
 	"tukuyomi/internal/waf"
 )
 
@@ -215,7 +217,7 @@ func main() {
 			queueTimeoutLogValue(config.ServerQueuedProxyRequestTimeout),
 		)
 	}
-	handler.SetOverloadSnapshotProvider(func() map[string]middleware.ConcurrencyGuardSnapshot {
+	overloadstate.SetProvider(func() map[string]middleware.ConcurrencyGuardSnapshot {
 		return map[string]middleware.ConcurrencyGuardSnapshot{
 			"global": middleware.SnapshotOrDisabled(
 				globalConcurrencyGuard,
@@ -309,7 +311,7 @@ func main() {
 		MaxHeaderBytes:    config.ServerMaxHeaderBytes,
 	}
 	handler.RegisterNativeHTTP1ServerMetricsSource(publicSrv)
-	handler.ResetServerHTTP3RuntimeStatus()
+	serverruntime.ResetHTTP3Status()
 	if splitAdminListener {
 		adminListener, inherited, err := buildManagedTCPListenerForRole("admin", config.AdminListenAddr, adminListenerRuntime, activation)
 		if err != nil {
@@ -379,7 +381,7 @@ func main() {
 			config.ServerTLSHTTPRedirectAddr,
 		)
 		if config.ServerHTTP3Enabled {
-			http3Status := handler.ServerHTTP3RuntimeStatusSnapshot()
+			http3Status := serverruntime.HTTP3StatusSnapshot()
 			log.Printf("[SERVER] http3 enabled alt_svc_max_age=%d advertised=%t alt_svc=%q",
 				config.ServerHTTP3AltSvcMaxAgeSec,
 				http3Status.Advertised,

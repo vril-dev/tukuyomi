@@ -15,6 +15,8 @@ import (
 	"github.com/maxmind/mmdbwriter"
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/oschwald/maxminddb-golang"
+
+	"tukuyomi/internal/requestmeta"
 )
 
 func loadSampleCountryMMDBBytes(t *testing.T) []byte {
@@ -45,6 +47,13 @@ func loadSampleCountryMMDBBytes(t *testing.T) []byte {
 	if err := writer.Insert(network, record); err != nil {
 		t.Fatalf("insert sample country network: %v", err)
 	}
+	_, loopback, err := net.ParseCIDR("127.0.0.0/8")
+	if err != nil {
+		t.Fatalf("parse loopback country network: %v", err)
+	}
+	if err := writer.Insert(loopback, record); err != nil {
+		t.Fatalf("insert loopback country network: %v", err)
+	}
 	var buf bytes.Buffer
 	if _, err := writer.WriteTo(&buf); err != nil {
 		t.Fatalf("write sample country mmdb: %v", err)
@@ -59,68 +68,12 @@ func TestLoadSampleCountryMMDBBytesResolveCountry(t *testing.T) {
 	}
 	defer reader.Close()
 
-	var record requestCountryMMDBRecord
+	var record requestmeta.CountryMMDBRecord
 	if err := reader.Lookup(net.ParseIP("203.0.113.10"), &record); err != nil {
 		t.Fatalf("lookup sample country: %v", err)
 	}
 	if got, want := record.Country.ISOCode, "JP"; got != want {
 		t.Fatalf("sample country iso_code=%q want=%q", got, want)
-	}
-}
-
-func TestParseRequestCountryGeoIPConfigAcceptsCountryEdition(t *testing.T) {
-	raw := []byte(`
-# comment
-AccountID 12345
-LicenseKey secret
-EditionIDs GeoLite2-Country GeoLite2-City
-`)
-	summary, err := parseRequestCountryGeoIPConfig(raw)
-	if err != nil {
-		t.Fatalf("parseRequestCountryGeoIPConfig() error: %v", err)
-	}
-	if got, want := summary.SupportedCountryEdition, "GeoLite2-Country"; got != want {
-		t.Fatalf("supported edition=%q want=%q", got, want)
-	}
-	if len(summary.EditionIDs) != 2 {
-		t.Fatalf("edition ids=%v want two entries", summary.EditionIDs)
-	}
-}
-
-func TestParseRequestCountryGeoIPConfigRejectsWithoutSupportedCountryEdition(t *testing.T) {
-	raw := []byte(`
-AccountID 12345
-LicenseKey secret
-EditionIDs GeoLite2-City
-`)
-	_, err := parseRequestCountryGeoIPConfig(raw)
-	if err == nil {
-		t.Fatal("expected error for config without supported country edition")
-	}
-}
-
-func TestRenderRequestCountryGeoIPConfigForCountryEditionFiltersNonCountryEditions(t *testing.T) {
-	raw := []byte(`
-# keep comments
-AccountID 12345
-LicenseKey secret
-EditionIDs GeoLite2-ASN GeoLite2-City GeoLite2-Country
-ProductIDs GeoLite2-ASN
-`)
-	out, err := renderRequestCountryGeoIPConfigForCountryEdition(raw, "GeoLite2-Country")
-	if err != nil {
-		t.Fatalf("renderRequestCountryGeoIPConfigForCountryEdition: %v", err)
-	}
-	text := string(out)
-	for _, want := range []string{"AccountID 12345", "LicenseKey secret", "EditionIDs GeoLite2-Country"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("rendered config missing %q:\n%s", want, text)
-		}
-	}
-	for _, blocked := range []string{"GeoLite2-ASN", "GeoLite2-City", "ProductIDs"} {
-		if strings.Contains(text, blocked) {
-			t.Fatalf("rendered config still contains %q:\n%s", blocked, text)
-		}
 	}
 }
 
@@ -135,7 +88,11 @@ func TestWriteManagedRequestCountryGeoIPConfigRequiresDBStoreWithoutFileFallback
 	})
 
 	raw := []byte("AccountID 12345\nLicenseKey secret\nEditionIDs GeoLite2-Country\n")
-	err := writeManagedRequestCountryGeoIPConfigRaw(raw, configVersionSourceApply, "test geoip config upload")
+	summary, parseErr := requestmeta.ParseGeoIPConfig(raw)
+	if parseErr != nil {
+		t.Fatalf("ParseGeoIPConfig: %v", parseErr)
+	}
+	err := writeManagedRequestCountryGeoIPConfigRaw(raw, summary, configVersionSourceApply, "test geoip config upload")
 	if !errors.Is(err, errConfigDBStoreRequired) {
 		t.Fatalf("error=%v want %v", err, errConfigDBStoreRequired)
 	}
@@ -147,44 +104,55 @@ func TestWriteManagedRequestCountryGeoIPConfigRequiresDBStoreWithoutFileFallback
 func TestRequestCountryRuntimeMaybeRefreshFromManagedDBSwapsReaderState(t *testing.T) {
 	initConfigDBStoreForTest(t)
 	store := getLogsStatsStore()
-	if _, _, err := store.writeRequestCountryMMDBAssetVersion("", requestCountryMMDBAssetVersion{
+	rec, _, err := store.writeRequestCountryMMDBAssetVersion("", requestCountryMMDBAssetVersion{
 		Present: true,
 		Raw:     loadSampleCountryMMDBBytes(t),
-	}, configVersionSourceApply, "", "test mmdb", 0); err != nil {
+	}, configVersionSourceApply, "", "test mmdb", 0)
+	if err != nil {
 		t.Fatalf("writeRequestCountryMMDBAssetVersion: %v", err)
 	}
 
 	prevLoader := requestCountryMMDBLoader
+	loaderState := loadedRequestCountryMMDBState{}
 	requestCountryMMDBLoader = func() (loadedRequestCountryMMDBState, error) {
-		return loadedRequestCountryMMDBState{
-			reader:      &maxminddb.Reader{},
-			managedPath: requestCountryMMDBStorageLabel,
-			versionID:   1,
-			versionETag: "etag",
-			sizeBytes:   99,
-			modTime:     time.Unix(20, 0).UTC(),
-		}, nil
+		reader, err := maxminddb.FromBytes(loadSampleCountryMMDBBytes(t))
+		if err != nil {
+			return loadedRequestCountryMMDBState{}, err
+		}
+		loaderState.Reader = reader
+		return loaderState, nil
 	}
-	defer func() { requestCountryMMDBLoader = prevLoader }()
-
-	rt := &requestCountryRuntime{
-		effectiveMode: "mmdb",
-		managedPath:   requestCountryMMDBStorageLabel,
-		dbSizeBytes:   1,
-		dbModTime:     time.Unix(10, 0).UTC(),
+	t.Cleanup(func() {
+		requestCountryMMDBLoader = prevLoader
+		requestmeta.CloseCountryRuntime()
+	})
+	loaderState = loadedRequestCountryMMDBState{
+		ManagedPath: requestCountryMMDBStorageLabel,
+		VersionID:   0,
+		VersionETag: "old",
+		SizeBytes:   1,
+		ModTime:     time.Unix(10, 0).UTC(),
 	}
-	rt.maybeRefreshFromManagedSource()
+	if err := reloadRequestCountryRuntime("mmdb"); err != nil {
+		t.Fatalf("reloadRequestCountryRuntime: %v", err)
+	}
+	loaderState = loadedRequestCountryMMDBState{
+		ManagedPath: requestCountryMMDBStorageLabel,
+		VersionID:   rec.VersionID,
+		VersionETag: rec.ETag,
+		SizeBytes:   99,
+		ModTime:     time.Unix(20, 0).UTC(),
+	}
+	if _, _, err := lookupRequestCountryMMDB("203.0.113.10"); err != nil {
+		t.Fatalf("lookupRequestCountryMMDB: %v", err)
+	}
 
-	rt.mu.RLock()
-	defer rt.mu.RUnlock()
-	if got, want := rt.dbSizeBytes, int64(99); got != want {
+	status := RequestCountryRuntimeStatusSnapshot()
+	if got, want := status.DBSizeBytes, int64(99); got != want {
 		t.Fatalf("dbSizeBytes=%d want=%d", got, want)
 	}
-	if got := rt.dbModTime; !got.Equal(time.Unix(20, 0).UTC()) {
-		t.Fatalf("dbModTime=%s want=%s", got, time.Unix(20, 0).UTC())
-	}
-	if rt.reader == nil {
-		t.Fatal("expected reader to be refreshed")
+	if got, want := status.DBModTime, time.Unix(20, 0).UTC().Format(time.RFC3339Nano); got != want {
+		t.Fatalf("dbModTime=%s want=%s", got, want)
 	}
 }
 
@@ -199,25 +167,41 @@ func TestRequestCountryRuntimeMaybeRefreshFromManagedDBKeepsOldStateOnReloadErro
 	}
 
 	prevLoader := requestCountryMMDBLoader
+	loaderErr := error(nil)
 	requestCountryMMDBLoader = func() (loadedRequestCountryMMDBState, error) {
-		return loadedRequestCountryMMDBState{}, os.ErrPermission
+		if loaderErr != nil {
+			return loadedRequestCountryMMDBState{}, loaderErr
+		}
+		reader, err := maxminddb.FromBytes(loadSampleCountryMMDBBytes(t))
+		if err != nil {
+			return loadedRequestCountryMMDBState{}, err
+		}
+		return loadedRequestCountryMMDBState{
+			Reader:      reader,
+			ManagedPath: requestCountryMMDBStorageLabel,
+			VersionID:   0,
+			VersionETag: "old",
+			SizeBytes:   1,
+			ModTime:     time.Unix(10, 0).UTC(),
+		}, nil
 	}
-	defer func() { requestCountryMMDBLoader = prevLoader }()
-
-	rt := &requestCountryRuntime{
-		effectiveMode: "mmdb",
-		managedPath:   requestCountryMMDBStorageLabel,
-		dbSizeBytes:   1,
-		dbModTime:     time.Unix(10, 0).UTC(),
+	t.Cleanup(func() {
+		requestCountryMMDBLoader = prevLoader
+		requestmeta.CloseCountryRuntime()
+	})
+	if err := reloadRequestCountryRuntime("mmdb"); err != nil {
+		t.Fatalf("reloadRequestCountryRuntime: %v", err)
 	}
-	rt.maybeRefreshFromManagedSource()
+	loaderErr = os.ErrPermission
+	if _, _, err := lookupRequestCountryMMDB("203.0.113.10"); err != nil {
+		t.Fatalf("lookupRequestCountryMMDB: %v", err)
+	}
 
-	rt.mu.RLock()
-	defer rt.mu.RUnlock()
-	if got, want := rt.dbSizeBytes, int64(1); got != want {
+	status := RequestCountryRuntimeStatusSnapshot()
+	if got, want := status.DBSizeBytes, int64(1); got != want {
 		t.Fatalf("dbSizeBytes=%d want=%d", got, want)
 	}
-	if rt.lastError == "" {
+	if status.LastError == "" {
 		t.Fatal("expected lastError to be recorded")
 	}
 }
@@ -233,9 +217,9 @@ func TestBuildRequestCountryUpdateStatusUsesDBBackedConfigAndState(t *testing.T)
 	}
 
 	raw := []byte("AccountID 12345\nLicenseKey secret\nEditionIDs GeoLite2-Country GeoLite2-City\n")
-	summary, err := parseRequestCountryGeoIPConfig(raw)
+	summary, err := requestmeta.ParseGeoIPConfig(raw)
 	if err != nil {
-		t.Fatalf("parseRequestCountryGeoIPConfig: %v", err)
+		t.Fatalf("ParseGeoIPConfig: %v", err)
 	}
 	if _, _, err := store.writeRequestCountryGeoIPConfigVersion("", requestCountryGeoIPConfigVersion{
 		Present: true,
@@ -283,9 +267,9 @@ func TestDefaultRunRequestCountryDBUpdateNowPersistsDBAssetAndState(t *testing.T
 	}
 
 	rawConfig := []byte("AccountID 12345\nLicenseKey secret\nEditionIDs GeoLite2-ASN GeoLite2-City GeoLite2-Country\n")
-	summary, err := parseRequestCountryGeoIPConfig(rawConfig)
+	summary, err := requestmeta.ParseGeoIPConfig(rawConfig)
 	if err != nil {
-		t.Fatalf("parseRequestCountryGeoIPConfig: %v", err)
+		t.Fatalf("ParseGeoIPConfig: %v", err)
 	}
 	if _, _, err := store.writeRequestCountryGeoIPConfigVersion("", requestCountryGeoIPConfigVersion{
 		Present: true,

@@ -6,6 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -161,7 +165,7 @@ func TestAdminAuthDBPasswordSessionFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hash password: %v", err)
 	}
-	if _, err := store.createAdminUser("admin", "admin@example.test", adminauth.AdminRoleOwner, passwordHash, false, time.Now().UTC()); err != nil {
+	if _, err := store.createAdminUser("admin", "admin@example.test", adminauth.AdminRoleOwner, passwordHash, true, time.Now().UTC()); err != nil {
 		t.Fatalf("create admin user: %v", err)
 	}
 
@@ -206,6 +210,9 @@ func TestAdminAuthDBPasswordSessionFlow(t *testing.T) {
 	if !bytes.Contains(loginRes.Body.Bytes(), []byte(`"username":"admin"`)) {
 		t.Fatalf("expected username in login body, got=%s", loginRes.Body.String())
 	}
+	if !bytes.Contains(loginRes.Body.Bytes(), []byte(`"must_change_password":true`)) {
+		t.Fatalf("expected must_change_password in login body, got=%s", loginRes.Body.String())
+	}
 
 	sessionReq := httptest.NewRequest(http.MethodGet, config.APIBasePath+"/auth/session", nil)
 	sessionReq.AddCookie(sessionCookie)
@@ -217,6 +224,9 @@ func TestAdminAuthDBPasswordSessionFlow(t *testing.T) {
 	}
 	if !bytes.Contains(sessionRes.Body.Bytes(), []byte(`"username":"admin"`)) {
 		t.Fatalf("expected username in session body, got=%s", sessionRes.Body.String())
+	}
+	if !bytes.Contains(sessionRes.Body.Bytes(), []byte(`"must_change_password":true`)) {
+		t.Fatalf("expected must_change_password in session body, got=%s", sessionRes.Body.String())
 	}
 
 	protectedReq := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/protected", nil)
@@ -318,6 +328,252 @@ func TestAdminAuthDBPersonalAccessTokenFlow(t *testing.T) {
 	}
 }
 
+func TestAdminAuthManagementAccountAndPasswordFlow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	restore := saveAdminAuthConfig()
+	defer restore()
+
+	config.APIBasePath = "/tukuyomi-api"
+	config.APIAuthDisable = false
+	config.AdminSessionSecret = "session-secret-123456"
+	config.AdminSessionTTL = time.Hour
+	adminGuardMu.Lock()
+	currentAdminAccess = nil
+	currentAdminRate = nil
+	adminGuardMu.Unlock()
+
+	store := initConfigDBStoreForTest(t)
+	passwordHash, err := adminauth.HashPassword("correct horse battery staple")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := store.createAdminUser("admin", "admin@example.test", adminauth.AdminRoleOwner, passwordHash, false, time.Now().UTC()); err != nil {
+		t.Fatalf("create admin user: %v", err)
+	}
+
+	r := gin.New()
+	registerAdminAuthManagementRoutesForTest(r)
+	sessionCookie, csrfCookie := loginAdminForTest(t, r, "admin", "correct horse battery staple")
+
+	accountReq := httptest.NewRequest(http.MethodGet, config.APIBasePath+"/auth/account", nil)
+	accountReq.AddCookie(sessionCookie)
+	accountReq.AddCookie(csrfCookie)
+	accountRes := httptest.NewRecorder()
+	r.ServeHTTP(accountRes, accountReq)
+	if accountRes.Code != http.StatusOK {
+		t.Fatalf("account status=%d want=%d body=%s", accountRes.Code, http.StatusOK, accountRes.Body.String())
+	}
+	if !bytes.Contains(accountRes.Body.Bytes(), []byte(`"email":"admin@example.test"`)) {
+		t.Fatalf("expected account email, got=%s", accountRes.Body.String())
+	}
+
+	wrongUpdateBody, _ := json.Marshal(map[string]string{
+		"username":         "admin2",
+		"email":            "admin2@example.test",
+		"current_password": "wrong password",
+	})
+	wrongUpdateReq := httptest.NewRequest(http.MethodPut, config.APIBasePath+"/auth/account", bytes.NewReader(wrongUpdateBody))
+	wrongUpdateReq.Header.Set("Content-Type", "application/json")
+	wrongUpdateReq.Header.Set(adminauth.CSRFHeaderName, csrfCookie.Value)
+	wrongUpdateReq.AddCookie(sessionCookie)
+	wrongUpdateReq.AddCookie(csrfCookie)
+	wrongUpdateRes := httptest.NewRecorder()
+	r.ServeHTTP(wrongUpdateRes, wrongUpdateReq)
+	if wrongUpdateRes.Code != http.StatusForbidden {
+		t.Fatalf("wrong update status=%d want=%d body=%s", wrongUpdateRes.Code, http.StatusForbidden, wrongUpdateRes.Body.String())
+	}
+
+	updateBody, _ := json.Marshal(map[string]string{
+		"username":         "admin2",
+		"email":            "admin2@example.test",
+		"current_password": "correct horse battery staple",
+	})
+	updateReq := httptest.NewRequest(http.MethodPut, config.APIBasePath+"/auth/account", bytes.NewReader(updateBody))
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateReq.Header.Set(adminauth.CSRFHeaderName, csrfCookie.Value)
+	updateReq.AddCookie(sessionCookie)
+	updateReq.AddCookie(csrfCookie)
+	updateRes := httptest.NewRecorder()
+	r.ServeHTTP(updateRes, updateReq)
+	if updateRes.Code != http.StatusOK {
+		t.Fatalf("update status=%d want=%d body=%s", updateRes.Code, http.StatusOK, updateRes.Body.String())
+	}
+	if !bytes.Contains(updateRes.Body.Bytes(), []byte(`"username":"admin2"`)) {
+		t.Fatalf("expected updated username, got=%s", updateRes.Body.String())
+	}
+
+	passwordBody, _ := json.Marshal(map[string]string{
+		"current_password": "correct horse battery staple",
+		"new_password":     "new secure password",
+	})
+	passwordReq := httptest.NewRequest(http.MethodPut, config.APIBasePath+"/auth/password", bytes.NewReader(passwordBody))
+	passwordReq.Header.Set("Content-Type", "application/json")
+	passwordReq.Header.Set(adminauth.CSRFHeaderName, csrfCookie.Value)
+	passwordReq.AddCookie(sessionCookie)
+	passwordReq.AddCookie(csrfCookie)
+	passwordRes := httptest.NewRecorder()
+	r.ServeHTTP(passwordRes, passwordReq)
+	if passwordRes.Code != http.StatusOK {
+		t.Fatalf("password status=%d want=%d body=%s", passwordRes.Code, http.StatusOK, passwordRes.Body.String())
+	}
+	if !bytes.Contains(passwordRes.Body.Bytes(), []byte(`"reauth_required":true`)) {
+		t.Fatalf("expected reauth_required, got=%s", passwordRes.Body.String())
+	}
+
+	oldSessionReq := httptest.NewRequest(http.MethodGet, config.APIBasePath+"/auth/session", nil)
+	oldSessionReq.AddCookie(sessionCookie)
+	oldSessionReq.AddCookie(csrfCookie)
+	oldSessionRes := httptest.NewRecorder()
+	r.ServeHTTP(oldSessionRes, oldSessionReq)
+	if oldSessionRes.Code != http.StatusOK {
+		t.Fatalf("old session status=%d want=%d body=%s", oldSessionRes.Code, http.StatusOK, oldSessionRes.Body.String())
+	}
+	if !bytes.Contains(oldSessionRes.Body.Bytes(), []byte(`"authenticated":false`)) {
+		t.Fatalf("old session should be invalid, got=%s", oldSessionRes.Body.String())
+	}
+
+	loginAdminForTest(t, r, "admin2", "new secure password")
+}
+
+func TestAdminAuthManagementAPITokenFlow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	restore := saveAdminAuthConfig()
+	defer restore()
+
+	config.APIBasePath = "/tukuyomi-api"
+	config.APIAuthDisable = false
+	config.AdminSessionSecret = "session-secret-123456"
+	config.AdminSessionTTL = time.Hour
+	adminGuardMu.Lock()
+	currentAdminAccess = nil
+	currentAdminRate = nil
+	adminGuardMu.Unlock()
+
+	store := initConfigDBStoreForTest(t)
+	passwordHash, err := adminauth.HashPassword("correct horse battery staple")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := store.createAdminUser("admin", "admin@example.test", adminauth.AdminRoleOwner, passwordHash, false, time.Now().UTC()); err != nil {
+		t.Fatalf("create admin user: %v", err)
+	}
+
+	r := gin.New()
+	registerAdminAuthManagementRoutesForTest(r)
+	protected := r.Group(config.APIBasePath, middleware.AdminAuth())
+	protected.POST("/protected", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+	sessionCookie, csrfCookie := loginAdminForTest(t, r, "admin", "correct horse battery staple")
+
+	createBody, _ := json.Marshal(map[string]any{
+		"label":            "deploy",
+		"scopes":           []string{"admin:write"},
+		"current_password": "correct horse battery staple",
+	})
+	createReq := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/api-tokens", bytes.NewReader(createBody))
+	createReq.Header.Set("Content-Type", "application/json")
+	createReq.Header.Set(adminauth.CSRFHeaderName, csrfCookie.Value)
+	createReq.AddCookie(sessionCookie)
+	createReq.AddCookie(csrfCookie)
+	createRes := httptest.NewRecorder()
+	r.ServeHTTP(createRes, createReq)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("create token status=%d want=%d body=%s", createRes.Code, http.StatusCreated, createRes.Body.String())
+	}
+	var created adminAPITokenCreateResponse
+	if err := json.Unmarshal(createRes.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created token: %v", err)
+	}
+	if !strings.HasPrefix(created.Token, adminauth.PersonalAccessTokenPrefix) {
+		t.Fatalf("token prefix mismatch: %q", created.Token)
+	}
+	if created.Record.TokenID <= 0 || !created.Record.Active {
+		t.Fatalf("created record=%+v", created.Record)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, config.APIBasePath+"/auth/api-tokens", nil)
+	listReq.AddCookie(sessionCookie)
+	listReq.AddCookie(csrfCookie)
+	listRes := httptest.NewRecorder()
+	r.ServeHTTP(listRes, listReq)
+	if listRes.Code != http.StatusOK {
+		t.Fatalf("list token status=%d want=%d body=%s", listRes.Code, http.StatusOK, listRes.Body.String())
+	}
+	if bytes.Contains(listRes.Body.Bytes(), []byte(created.Token)) {
+		t.Fatalf("list response leaked token secret: %s", listRes.Body.String())
+	}
+
+	tokenReq := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/protected", nil)
+	tokenReq.Header.Set("Authorization", "Bearer "+created.Token)
+	tokenRes := httptest.NewRecorder()
+	r.ServeHTTP(tokenRes, tokenReq)
+	if tokenRes.Code != http.StatusOK {
+		t.Fatalf("token protected status=%d want=%d body=%s", tokenRes.Code, http.StatusOK, tokenRes.Body.String())
+	}
+
+	revokeReq := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/api-tokens/"+strconv.FormatInt(created.Record.TokenID, 10)+"/revoke", nil)
+	revokeReq.Header.Set(adminauth.CSRFHeaderName, csrfCookie.Value)
+	revokeReq.AddCookie(sessionCookie)
+	revokeReq.AddCookie(csrfCookie)
+	revokeRes := httptest.NewRecorder()
+	r.ServeHTTP(revokeRes, revokeReq)
+	if revokeRes.Code != http.StatusOK {
+		t.Fatalf("revoke token status=%d want=%d body=%s", revokeRes.Code, http.StatusOK, revokeRes.Body.String())
+	}
+
+	revokedTokenReq := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/protected", nil)
+	revokedTokenReq.Header.Set("Authorization", "Bearer "+created.Token)
+	revokedTokenRes := httptest.NewRecorder()
+	r.ServeHTTP(revokedTokenRes, revokedTokenReq)
+	if revokedTokenRes.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked token status=%d want=%d body=%s", revokedTokenRes.Code, http.StatusUnauthorized, revokedTokenRes.Body.String())
+	}
+}
+
+func TestAdminAuthManagementRejectsTokenAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	restore := saveAdminAuthConfig()
+	defer restore()
+
+	config.APIBasePath = "/tukuyomi-api"
+	config.APIAuthDisable = false
+	config.AdminSessionSecret = "session-secret-123456"
+	config.AdminSessionTTL = time.Hour
+	adminGuardMu.Lock()
+	currentAdminAccess = nil
+	currentAdminRate = nil
+	adminGuardMu.Unlock()
+
+	store := initConfigDBStoreForTest(t)
+	passwordHash, err := adminauth.HashPassword("unused-password")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	user, err := store.createAdminUser("automation", "", adminauth.AdminRoleOperator, passwordHash, false, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("create admin user: %v", err)
+	}
+	pat, _, err := store.createAdminPersonalAccessToken(user.UserID, "ci", []string{"admin:write"}, nil, config.AdminSessionSecret, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	r := gin.New()
+	registerAdminAuthManagementRoutesForTest(r)
+
+	req := httptest.NewRequest(http.MethodGet, config.APIBasePath+"/auth/account", nil)
+	req.Header.Set("Authorization", "Bearer "+pat.Token)
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want=%d body=%s", res.Code, http.StatusForbidden, res.Body.String())
+	}
+}
+
 func TestEnsureAdminBootstrapOwnerFromEnvCreatesOnlyWhenEmpty(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -363,6 +619,111 @@ func TestEnsureAdminBootstrapOwnerFromEnvCreatesOnlyWhenEmpty(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("admin user count=%d want 1", count)
 	}
+}
+
+func TestImportAdminUsersSeedStorageCreatesInitialOwner(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := initConfigDBStoreForTest(t)
+	seedDir := t.TempDir()
+	seedRaw := []byte(`{
+  "users": [
+    {
+      "username": "seed-admin",
+      "email": "seed-admin@example.test",
+      "role": "owner",
+      "password": "correct horse battery staple",
+      "must_change_password": true
+    }
+  ]
+}`)
+	if err := os.WriteFile(filepath.Join(seedDir, startupAdminUsersSeedName), seedRaw, 0o600); err != nil {
+		t.Fatalf("write admin user seed: %v", err)
+	}
+	t.Setenv(startupSeedConfDirEnv, seedDir)
+
+	if err := importAdminUsersSeedStorage(); err != nil {
+		t.Fatalf("import admin user seed: %v", err)
+	}
+	count, err := store.countAdminUsers()
+	if err != nil {
+		t.Fatalf("count admin users: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("admin user count=%d want 1", count)
+	}
+	principal, ok, err := store.authenticateAdminPassword("seed-admin", "correct horse battery staple", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("authenticate seed admin: %v", err)
+	}
+	if !ok {
+		t.Fatalf("authenticate seed admin ok=false want true")
+	}
+	if principal.Role != adminauth.AdminRoleOwner {
+		t.Fatalf("seed admin role=%q want owner", principal.Role)
+	}
+	if !principal.MustChangePassword {
+		t.Fatalf("seed admin must_change_password=false want true")
+	}
+
+	if err := importAdminUsersSeedStorage(); err != nil {
+		t.Fatalf("second import admin user seed: %v", err)
+	}
+	count, err = store.countAdminUsers()
+	if err != nil {
+		t.Fatalf("count admin users after second import: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("admin user count after second import=%d want 1", count)
+	}
+}
+
+func TestPrepareAdminUsersSeedRejectsPasswordChangeDisabled(t *testing.T) {
+	raw := []byte(`{
+  "users": [
+    {
+      "username": "seed-admin",
+      "role": "owner",
+      "password": "correct horse battery staple",
+      "must_change_password": false
+    }
+  ]
+}`)
+	if _, err := prepareAdminUsersSeed(raw); err == nil || !strings.Contains(err.Error(), "must_change_password") {
+		t.Fatalf("prepareAdminUsersSeed err=%v want must_change_password rejection", err)
+	}
+}
+
+func registerAdminAuthManagementRoutesForTest(r *gin.Engine) {
+	RegisterAdminAuthRoutes(r)
+	api := r.Group(config.APIBasePath, middleware.AdminAuth())
+	api.GET("/auth/account", GetAdminAccount)
+	api.PUT("/auth/account", PutAdminAccount)
+	api.PUT("/auth/password", PutAdminPassword)
+	api.GET("/auth/api-tokens", GetAdminAPITokens)
+	api.POST("/auth/api-tokens", PostAdminAPIToken)
+	api.POST("/auth/api-tokens/:token_id/revoke", PostAdminAPITokenRevoke)
+}
+
+func loginAdminForTest(t *testing.T, r *gin.Engine, identifier string, password string) (*http.Cookie, *http.Cookie) {
+	t.Helper()
+	loginBody, _ := json.Marshal(map[string]string{
+		"identifier": identifier,
+		"password":   password,
+	})
+	loginReq := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/login", bytes.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRes := httptest.NewRecorder()
+	r.ServeHTTP(loginRes, loginReq)
+	if loginRes.Code != http.StatusOK {
+		t.Fatalf("login status=%d want=%d body=%s", loginRes.Code, http.StatusOK, loginRes.Body.String())
+	}
+	sessionCookie := findCookie(loginRes.Result().Cookies(), adminauth.SessionCookieName)
+	csrfCookie := findCookie(loginRes.Result().Cookies(), adminauth.CSRFCookieName)
+	if sessionCookie == nil || csrfCookie == nil {
+		t.Fatalf("expected session and csrf cookies, got=%v", loginRes.Result().Cookies())
+	}
+	return sessionCookie, csrfCookie
 }
 
 func saveAdminAuthConfig() func() {

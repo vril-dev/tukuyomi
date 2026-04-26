@@ -10,6 +10,11 @@ missing or empty. The priority is:
 Use these files as production seed material before the first DB import. After
 DB bootstrap, normalized DB rows are the runtime authority.
 
+`admin-users.json` seeds the initial admin login users when `admin_users` is
+empty. Preview import uses this same seed file; there is no separate preview
+admin-user seed. Seeded users must keep `must_change_password=true` so the
+first login is forced to rotate the password.
+
 `conf/config.json` remains the bootstrap source for DB connection settings and
 is not seeded from this directory.
 

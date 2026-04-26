@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Layout from './components/Layout';
 import Status from './pages/Status';
 import Logs from './pages/Logs';
@@ -17,6 +17,7 @@ import ProxyRulesPanel from './pages/ProxyRulesPanel';
 import BackendsPanel from './pages/BackendsPanel';
 import SitesPanel from './pages/SitesPanel';
 import SettingsPanel from './pages/SettingsPanel';
+import UserPanel from './pages/UserPanel';
 import OptionsPanel from './pages/OptionsPanel';
 import VhostsPanel from './pages/VhostsPanel';
 import ScheduledTasksPanel from './pages/ScheduledTasksPanel';
@@ -29,12 +30,13 @@ import { useI18n } from './lib/i18n';
 function ProtectedLayout() {
   const { loading, session } = useAuth();
   const { tx } = useI18n();
+  const location = useLocation();
 
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center text-neutral-500">{tx("Checking admin session...")}</div>;
   }
   if (!session.authenticated) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}${location.hash}` }} />;
   }
   return (
     <AdminRuntimeProvider>
@@ -46,14 +48,27 @@ function ProtectedLayout() {
 function LoginRoute() {
   const { loading, session } = useAuth();
   const { tx } = useI18n();
+  const location = useLocation();
+  const from = loginReturnPath(location.state);
 
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center text-neutral-500">{tx("Checking admin session...")}</div>;
   }
   if (session.authenticated) {
-    return <Navigate to="/status" replace />;
+    return <Navigate to={from} replace />;
   }
   return <Login />;
+}
+
+function loginReturnPath(state: unknown) {
+  if (!state || typeof state !== "object" || !("from" in state)) {
+    return "/status";
+  }
+  const from = typeof state.from === "string" ? state.from : "";
+  if (!from.startsWith("/") || from === "/login" || from.startsWith("/login?") || from.startsWith("//")) {
+    return "/status";
+  }
+  return from;
 }
 
 function App() {
@@ -83,6 +98,7 @@ function App() {
             <Route path="sites" element={<SitesPanel />} />
             <Route path="vhosts" element={<VhostsPanel />} />
             <Route path="scheduled-tasks" element={<ScheduledTasksPanel />} />
+            <Route path="user" element={<UserPanel />} />
             <Route path="settings" element={<SettingsPanel />} />
             <Route path="options" element={<OptionsPanel />} />
           </Route>

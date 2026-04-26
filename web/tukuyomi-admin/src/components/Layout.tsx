@@ -98,7 +98,13 @@ const baseNavGroups: NavGroup[] = [
 const settingsNavItem: NavItem = {
   to: "/settings",
   label: "Settings",
-  hint: "admin session, operator identity, verify manifest",
+  hint: "startup config, operator identity, verify manifest",
+};
+
+const userNavItem: NavItem = {
+  to: "/user",
+  label: "User",
+  hint: "account, password, tokens",
 };
 
 function groupItems(group: NavGroup): NavItem[] {
@@ -157,10 +163,17 @@ export default function Layout() {
       ),
     [hasBuiltRuntime],
   );
-  const navItems = [...navGroups.flatMap(groupItems), settingsNavItem];
+  const utilityNavItems = [userNavItem, settingsNavItem];
+  const navItems = [...navGroups.flatMap(groupItems), ...utilityNavItems];
   const current = navItems.find((item) => isActive(pathname, item.to));
-  const currentGroup = isActive(pathname, settingsNavItem.to)
-    ? { id: "settings", label: "Settings", hint: settingsNavItem.hint, items: [settingsNavItem] }
+  const currentUtility = utilityNavItems.find((item) => isActive(pathname, item.to));
+  const currentGroup = currentUtility
+    ? {
+        id: currentUtility.label.toLowerCase(),
+        label: currentUtility.label,
+        hint: currentUtility.hint,
+        items: [currentUtility],
+      }
     : navGroups.find((group) =>
         groupItems(group).some((item) => isActive(pathname, item.to)),
       );
@@ -209,12 +222,15 @@ export default function Layout() {
         </nav>
 
         <div className="app-sidebar-footer">
-          <Link
-            to={settingsNavItem.to}
-            className={isActive(pathname, settingsNavItem.to) ? "app-nav-link active" : "app-nav-link"}
-          >
-            <span className="app-nav-label">{tx(settingsNavItem.label)}</span>
-          </Link>
+          {utilityNavItems.map((item) => (
+            <Link
+              key={item.to}
+              to={item.to}
+              className={isActive(pathname, item.to) ? "app-nav-link active" : "app-nav-link"}
+            >
+              <span className="app-nav-label">{tx(item.label)}</span>
+            </Link>
+          ))}
         </div>
       </aside>
 

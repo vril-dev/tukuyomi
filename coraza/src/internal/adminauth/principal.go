@@ -19,12 +19,13 @@ const (
 )
 
 type Principal struct {
-	UserID       int64
-	Username     string
-	Role         AdminRole
-	AuthKind     AuthKind
-	CredentialID string
-	Scopes       []string
+	UserID             int64
+	Username           string
+	Role               AdminRole
+	AuthKind           AuthKind
+	CredentialID       string
+	Scopes             []string
+	MustChangePassword bool
 }
 
 func NormalizeAdminIdentifier(value string) string {

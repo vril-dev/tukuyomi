@@ -144,6 +144,82 @@ func TestAdminAuthSetsPrincipalContext(t *testing.T) {
 	}
 }
 
+func TestAdminAuthTokenScopeRestrictsMutations(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	restore := saveAuthConfig()
+	defer restore()
+
+	config.APIAuthDisable = false
+	SetAdminAuthResolver(func(*gin.Context) (AdminAuthResult, bool, error) {
+		return AdminAuthResult{
+			Principal: adminauth.Principal{
+				UserID:       7,
+				Username:     "operator",
+				Role:         adminauth.AdminRoleOperator,
+				AuthKind:     adminauth.AuthKindToken,
+				CredentialID: "11",
+				Scopes:       []string{"admin:read"},
+			},
+			Mode:          string(adminauth.AuthKindToken),
+			FallbackActor: "operator",
+		}, true, nil
+	})
+	defer SetAdminAuthResolver(nil)
+
+	r := gin.New()
+	r.Use(AdminAuth())
+	r.POST("/protected", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/protected", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusForbidden, w.Body.String())
+	}
+}
+
+func TestAdminAuthWriteTokenAllowsMutation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	restore := saveAuthConfig()
+	defer restore()
+
+	config.APIAuthDisable = false
+	SetAdminAuthResolver(func(*gin.Context) (AdminAuthResult, bool, error) {
+		return AdminAuthResult{
+			Principal: adminauth.Principal{
+				UserID:       7,
+				Username:     "operator",
+				Role:         adminauth.AdminRoleOperator,
+				AuthKind:     adminauth.AuthKindToken,
+				CredentialID: "11",
+				Scopes:       []string{"admin:write"},
+			},
+			Mode:          string(adminauth.AuthKindToken),
+			FallbackActor: "operator",
+		}, true, nil
+	})
+	defer SetAdminAuthResolver(nil)
+
+	r := gin.New()
+	r.Use(AdminAuth())
+	r.POST("/protected", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/protected", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
 func saveAuthConfig() func() {
 	oldDisable := config.APIAuthDisable
 	adminAuthResolverMu.RLock()

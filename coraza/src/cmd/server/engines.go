@@ -93,6 +93,9 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 			config.APIBasePath + "/vhosts",
 			config.APIBasePath + "/scheduled-tasks",
 			config.APIBasePath + "/settings/listener-admin",
+			config.APIBasePath + "/auth/account",
+			config.APIBasePath + "/auth/password",
+			config.APIBasePath + "/auth/api-tokens",
 		}
 		endpoints = append(endpoints, proxyRuleAdminEndpoints(config.APIBasePath)...)
 		endpoints = append(endpoints,
@@ -106,6 +109,7 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 			config.APIBasePath+"/scheduled-tasks/validate",
 			config.APIBasePath+"/scheduled-tasks/rollback",
 			config.APIBasePath+"/settings/listener-admin/validate",
+			config.APIBasePath+"/auth/api-tokens/:token_id/revoke",
 			config.APIBasePath+"/request-country-db/upload",
 			config.APIBasePath+"/rules:validate",
 			config.APIBasePath+"/rules:order",
@@ -216,6 +220,12 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 	api.GET("/settings/listener-admin", handler.GetSettingsListenerAdmin)
 	api.POST("/settings/listener-admin/validate", handler.ValidateSettingsListenerAdmin)
 	api.PUT("/settings/listener-admin", adminMutate, handler.PutSettingsListenerAdmin)
+	api.GET("/auth/account", handler.GetAdminAccount)
+	api.PUT("/auth/account", adminMutate, handler.PutAdminAccount)
+	api.PUT("/auth/password", adminMutate, handler.PutAdminPassword)
+	api.GET("/auth/api-tokens", handler.GetAdminAPITokens)
+	api.POST("/auth/api-tokens", adminMutate, handler.PostAdminAPIToken)
+	api.POST("/auth/api-tokens/:token_id/revoke", adminMutate, handler.PostAdminAPITokenRevoke)
 	registerProxyRuleAdminRoutes(api)
 	api.GET("/verify-manifest", handler.GetVerifyManifest)
 	api.POST("/fp-tuner/propose", handler.ProposeFPTuning)

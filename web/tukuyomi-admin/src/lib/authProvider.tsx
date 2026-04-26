@@ -19,13 +19,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    setLoading(true);
     try {
       const next = await apiGetJson<AdminSessionState>("/auth/session");
       setSession({
         authenticated: !!next.authenticated,
         mode: next.mode || "none",
         expires_at: next.expires_at,
+        must_change_password: next.must_change_password === true,
       });
     } catch (error) {
       if (!(error instanceof APIUnauthorizedError)) {
@@ -65,6 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         authenticated: !!next.authenticated,
         mode: next.mode || "session",
         expires_at: next.expires_at,
+        must_change_password: next.must_change_password === true,
       });
     } finally {
       setLoading(false);

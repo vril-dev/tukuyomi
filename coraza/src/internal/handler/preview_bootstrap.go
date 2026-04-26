@@ -51,6 +51,10 @@ func ImportPreviewConfigStorage(opts PreviewBootstrapOptions) error {
 	}
 	_ = store.DeleteConfigBlob(appConfigBlobKey)
 
+	if err := importAdminUsersSeedStorage(); err != nil {
+		return err
+	}
+
 	sitePrepared, err := prepareSiteConfigRaw(defaultSiteConfigRaw)
 	if err != nil {
 		return err

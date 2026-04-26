@@ -166,16 +166,18 @@ func postAdminPasswordLogin(c *gin.Context, req adminLoginRequest) {
 	principal.CredentialID = strconv.FormatInt(sessionID, 10)
 	adminauth.SetCookies(c.Writer, sessionToken, csrfToken, expiresAt, requestIsHTTPS(c))
 	c.JSON(http.StatusOK, gin.H{
-		"ok":               true,
-		"authenticated":    true,
-		"mode":             "session",
-		"expires_at":       expiresAt.Format(time.RFC3339),
-		"csrf_cookie_name": adminauth.CSRFCookieName,
-		"csrf_header_name": adminauth.CSRFHeaderName,
+		"ok":                   true,
+		"authenticated":        true,
+		"mode":                 "session",
+		"expires_at":           expiresAt.Format(time.RFC3339),
+		"csrf_cookie_name":     adminauth.CSRFCookieName,
+		"csrf_header_name":     adminauth.CSRFHeaderName,
+		"must_change_password": principal.MustChangePassword,
 		"user": gin.H{
-			"user_id":  principal.UserID,
-			"username": principal.Username,
-			"role":     principal.Role,
+			"user_id":              principal.UserID,
+			"username":             principal.Username,
+			"role":                 principal.Role,
+			"must_change_password": principal.MustChangePassword,
 		},
 	})
 }
@@ -191,19 +193,21 @@ func adminLoginIdentifier(req adminLoginRequest) string {
 
 func adminSessionResponse(session adminSessionRecord, csrfToken string, c *gin.Context) gin.H {
 	resp := gin.H{
-		"authenticated":     true,
-		"mode":              "session",
-		"expires_at":        session.ExpiresAt.Format(time.RFC3339),
-		"csrf_cookie_name":  adminauth.CSRFCookieName,
-		"csrf_header_name":  adminauth.CSRFHeaderName,
-		"session_cookie":    adminauth.SessionCookieName,
-		"session_ttl_secs":  int(time.Until(session.ExpiresAt).Seconds()),
-		"same_origin_only":  true,
-		"cookie_secure_now": requestIsHTTPS(c),
+		"authenticated":        true,
+		"mode":                 "session",
+		"expires_at":           session.ExpiresAt.Format(time.RFC3339),
+		"csrf_cookie_name":     adminauth.CSRFCookieName,
+		"csrf_header_name":     adminauth.CSRFHeaderName,
+		"session_cookie":       adminauth.SessionCookieName,
+		"session_ttl_secs":     int(time.Until(session.ExpiresAt).Seconds()),
+		"same_origin_only":     true,
+		"cookie_secure_now":    requestIsHTTPS(c),
+		"must_change_password": session.Principal.MustChangePassword,
 		"user": gin.H{
-			"user_id":  session.Principal.UserID,
-			"username": session.Principal.Username,
-			"role":     session.Principal.Role,
+			"user_id":              session.Principal.UserID,
+			"username":             session.Principal.Username,
+			"role":                 session.Principal.Role,
+			"must_change_password": session.Principal.MustChangePassword,
 		},
 	}
 	if csrfToken != "" {

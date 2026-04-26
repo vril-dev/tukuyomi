@@ -45,12 +45,44 @@ func AdminAuth() gin.HandlerFunc {
 			c.AbortWithStatus(http.StatusUnauthorized)
 			return
 		} else if ok {
+			if !adminPrincipalAllowsMethod(result.Principal, c.Request.Method) {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "admin token scope does not allow this request"})
+				return
+			}
 			setAdminAuthContext(c, result)
 			c.Next()
 			return
 		}
 
 		c.AbortWithStatus(http.StatusUnauthorized)
+	}
+}
+
+func adminPrincipalAllowsMethod(principal adminauth.Principal, method string) bool {
+	if principal.AuthKind != adminauth.AuthKindToken {
+		return true
+	}
+	required := "admin:write"
+	if isAdminReadMethod(method) {
+		required = "admin:read"
+	}
+	for _, scope := range principal.Scopes {
+		switch strings.ToLower(strings.TrimSpace(scope)) {
+		case "admin:write":
+			return true
+		case required:
+			return true
+		}
+	}
+	return false
+}
+
+func isAdminReadMethod(method string) bool {
+	switch strings.ToUpper(strings.TrimSpace(method)) {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	default:
+		return false
 	}
 }
 

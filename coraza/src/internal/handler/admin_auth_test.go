@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -29,10 +28,7 @@ func TestAdminLoginRejectsLegacyAPIKeyPayload(t *testing.T) {
 	config.APIAuthDisable = false
 	config.AdminSessionSecret = "session-secret-123456"
 	config.AdminSessionTTL = time.Hour
-	adminGuardMu.Lock()
-	currentAdminAccess = nil
-	currentAdminRate = nil
-	adminGuardMu.Unlock()
+	allowAdminGuardsForTest(t)
 
 	r := gin.New()
 	RegisterAdminAuthRoutes(r)
@@ -58,15 +54,11 @@ func TestAdminLoginHonorsAdminAccessMiddleware(t *testing.T) {
 	config.APIAuthDisable = false
 	config.AdminSessionSecret = "session-secret-123456"
 	config.AdminSessionTTL = time.Hour
-
-	adminGuardMu.Lock()
-	currentAdminAccess = &adminAccessControl{
-		mode:              "deny_external",
-		trustForwardedFor: false,
-		trustedCIDRs:      []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")},
-	}
-	currentAdminRate = nil
-	adminGuardMu.Unlock()
+	config.AdminExternalMode = "deny_external"
+	config.AdminTrustedCIDRs = []string{"127.0.0.1/32"}
+	config.AdminTrustForwardedFor = false
+	config.AdminRateLimitEnabled = false
+	initAdminGuardsForTest(t)
 
 	r := gin.New()
 	RegisterAdminAuthRoutes(r)
@@ -96,18 +88,13 @@ func TestAdminLoginHonorsAdminRateLimitMiddleware(t *testing.T) {
 	config.APIAuthDisable = false
 	config.AdminSessionSecret = "session-secret-123456"
 	config.AdminSessionTTL = time.Hour
-
-	adminGuardMu.Lock()
-	currentAdminAccess = nil
-	currentAdminRate = &adminRateLimiter{
-		enabled:           true,
-		rps:               1,
-		burst:             1,
-		statusCode:        http.StatusTooManyRequests,
-		retryAfterSeconds: 1,
-		buckets:           map[string]*adminTokenBucket{},
-	}
-	adminGuardMu.Unlock()
+	config.AdminExternalMode = "full_external"
+	config.AdminRateLimitEnabled = true
+	config.AdminRateLimitRPS = 1
+	config.AdminRateLimitBurst = 1
+	config.AdminRateLimitStatusCode = http.StatusTooManyRequests
+	config.AdminRateLimitRetryAfter = 1
+	initAdminGuardsForTest(t)
 
 	r := gin.New()
 	RegisterAdminAuthRoutes(r)
@@ -155,10 +142,7 @@ func TestAdminAuthDBPasswordSessionFlow(t *testing.T) {
 	config.APIAuthDisable = false
 	config.AdminSessionSecret = "session-secret-123456"
 	config.AdminSessionTTL = time.Hour
-	adminGuardMu.Lock()
-	currentAdminAccess = nil
-	currentAdminRate = nil
-	adminGuardMu.Unlock()
+	allowAdminGuardsForTest(t)
 
 	store := initConfigDBStoreForTest(t)
 	passwordHash, err := adminauth.HashPassword("correct horse battery staple")
@@ -273,10 +257,7 @@ func TestAdminAuthDBPersonalAccessTokenFlow(t *testing.T) {
 	config.APIAuthDisable = false
 	config.AdminSessionSecret = "session-secret-123456"
 	config.AdminSessionTTL = time.Hour
-	adminGuardMu.Lock()
-	currentAdminAccess = nil
-	currentAdminRate = nil
-	adminGuardMu.Unlock()
+	allowAdminGuardsForTest(t)
 
 	store := initConfigDBStoreForTest(t)
 	passwordHash, err := adminauth.HashPassword("unused-password")
@@ -338,10 +319,7 @@ func TestAdminAuthManagementAccountAndPasswordFlow(t *testing.T) {
 	config.APIAuthDisable = false
 	config.AdminSessionSecret = "session-secret-123456"
 	config.AdminSessionTTL = time.Hour
-	adminGuardMu.Lock()
-	currentAdminAccess = nil
-	currentAdminRate = nil
-	adminGuardMu.Unlock()
+	allowAdminGuardsForTest(t)
 
 	store := initConfigDBStoreForTest(t)
 	passwordHash, err := adminauth.HashPassword("correct horse battery staple")
@@ -446,10 +424,7 @@ func TestAdminAuthManagementAPITokenFlow(t *testing.T) {
 	config.APIAuthDisable = false
 	config.AdminSessionSecret = "session-secret-123456"
 	config.AdminSessionTTL = time.Hour
-	adminGuardMu.Lock()
-	currentAdminAccess = nil
-	currentAdminRate = nil
-	adminGuardMu.Unlock()
+	allowAdminGuardsForTest(t)
 
 	store := initConfigDBStoreForTest(t)
 	passwordHash, err := adminauth.HashPassword("correct horse battery staple")
@@ -543,10 +518,7 @@ func TestAdminAuthManagementRejectsTokenAuth(t *testing.T) {
 	config.APIAuthDisable = false
 	config.AdminSessionSecret = "session-secret-123456"
 	config.AdminSessionTTL = time.Hour
-	adminGuardMu.Lock()
-	currentAdminAccess = nil
-	currentAdminRate = nil
-	adminGuardMu.Unlock()
+	allowAdminGuardsForTest(t)
 
 	store := initConfigDBStoreForTest(t)
 	passwordHash, err := adminauth.HashPassword("unused-password")
@@ -731,17 +703,44 @@ func saveAdminAuthConfig() func() {
 	oldDisable := config.APIAuthDisable
 	oldSecret := config.AdminSessionSecret
 	oldTTL := config.AdminSessionTTL
-	oldAccess := currentAdminAccess
-	oldRate := currentAdminRate
+	oldExternalMode := config.AdminExternalMode
+	oldTrustedCIDRs := append([]string(nil), config.AdminTrustedCIDRs...)
+	oldTrustForwardedFor := config.AdminTrustForwardedFor
+	oldRateLimitEnabled := config.AdminRateLimitEnabled
+	oldRateLimitRPS := config.AdminRateLimitRPS
+	oldRateLimitBurst := config.AdminRateLimitBurst
+	oldRateLimitStatusCode := config.AdminRateLimitStatusCode
+	oldRateLimitRetryAfter := config.AdminRateLimitRetryAfter
 	return func() {
 		config.APIBasePath = oldBasePath
 		config.APIAuthDisable = oldDisable
 		config.AdminSessionSecret = oldSecret
 		config.AdminSessionTTL = oldTTL
-		adminGuardMu.Lock()
-		currentAdminAccess = oldAccess
-		currentAdminRate = oldRate
-		adminGuardMu.Unlock()
+		config.AdminExternalMode = oldExternalMode
+		config.AdminTrustedCIDRs = oldTrustedCIDRs
+		config.AdminTrustForwardedFor = oldTrustForwardedFor
+		config.AdminRateLimitEnabled = oldRateLimitEnabled
+		config.AdminRateLimitRPS = oldRateLimitRPS
+		config.AdminRateLimitBurst = oldRateLimitBurst
+		config.AdminRateLimitStatusCode = oldRateLimitStatusCode
+		config.AdminRateLimitRetryAfter = oldRateLimitRetryAfter
+		_ = InitAdminGuards()
+	}
+}
+
+func allowAdminGuardsForTest(t *testing.T) {
+	t.Helper()
+	config.AdminExternalMode = "full_external"
+	config.AdminTrustedCIDRs = nil
+	config.AdminTrustForwardedFor = false
+	config.AdminRateLimitEnabled = false
+	initAdminGuardsForTest(t)
+}
+
+func initAdminGuardsForTest(t *testing.T) {
+	t.Helper()
+	if err := InitAdminGuards(); err != nil {
+		t.Fatalf("InitAdminGuards: %v", err)
 	}
 }
 

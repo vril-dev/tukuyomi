@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"tukuyomi/internal/proxystickysession"
 )
 
 var proxySelectionCursor uint64
@@ -533,6 +535,22 @@ func orderProxyRouteCandidates(req *http.Request, candidates []proxyRouteTargetC
 		out = append(out, candidates[idx])
 	}
 	return out
+}
+
+func proxyStickySessionCandidateIndex(req *http.Request, candidates []proxyRouteTargetCandidate, eligible []int, cfg ProxyStickySessionConfig) (int, bool) {
+	stickyID, ok := proxystickysession.RequestID(req, cfg, time.Now().UTC())
+	if !ok {
+		return 0, false
+	}
+	for _, idx := range eligible {
+		if idx < 0 || idx >= len(candidates) {
+			continue
+		}
+		if proxyRouteCandidateStickyID(candidates[idx]) == stickyID {
+			return idx, true
+		}
+	}
+	return 0, false
 }
 
 func proxySingleRouteCandidateSelectable(candidate proxyRouteTargetCandidate, health *upstreamHealthMonitor) bool {

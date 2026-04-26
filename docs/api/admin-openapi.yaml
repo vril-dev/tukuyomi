@@ -1203,7 +1203,7 @@ paths:
   /tukuyomi-api/proxy-backends:
     get:
       tags: [backends]
-      summary: Get canonical backend object status and direct-upstream runtime overrides
+      summary: Get direct upstream backend status and runtime overrides
       responses:
         '200':
           description: Backend runtime snapshot

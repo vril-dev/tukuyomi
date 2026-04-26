@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/serverruntime"
 )
 
 type settingsListenerAdminServerTLSConfig struct {
@@ -720,7 +721,7 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 }
 
 func buildSettingsListenerAdminRuntimeStatus() settingsListenerAdminRuntimeStatus {
-	serverHTTP3Status := ServerHTTP3RuntimeStatusSnapshot()
+	serverHTTP3Status := serverruntime.HTTP3StatusSnapshot()
 	serverTLSStatus := ServerTLSRuntimeStatusSnapshot()
 	requestCountryStatus := RequestCountryRuntimeStatusSnapshot()
 	return settingsListenerAdminRuntimeStatus{

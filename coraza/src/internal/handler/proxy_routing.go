@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"tukuyomi/internal/proxystickysession"
 )
 
 var proxyRouteHeaderNamePattern = regexp.MustCompile("^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$")
@@ -91,16 +93,7 @@ type ProxyBackendPool struct {
 	StickySession ProxyStickySessionConfig `json:"sticky_session,omitempty"`
 }
 
-type ProxyStickySessionConfig struct {
-	Enabled    bool   `json:"enabled"`
-	CookieName string `json:"cookie_name,omitempty"`
-	TTLSeconds int    `json:"ttl_seconds,omitempty"`
-	Path       string `json:"path,omitempty"`
-	Domain     string `json:"domain,omitempty"`
-	Secure     bool   `json:"secure,omitempty"`
-	HTTPOnly   *bool  `json:"http_only,omitempty"`
-	SameSite   string `json:"same_site,omitempty"`
-}
+type ProxyStickySessionConfig = proxystickysession.Config
 
 type ProxyRoutePathRewrite struct {
 	Prefix string `json:"prefix"`
@@ -607,11 +600,6 @@ func validateProxyBackendPoolStrategy(strategy string, field string) error {
 	}
 }
 
-const (
-	defaultProxyStickySessionTTLSeconds = 86400
-	maxProxyStickySessionTTLSeconds     = 30 * 24 * 60 * 60
-)
-
 func normalizeProxyStickySessionConfig(in ProxyStickySessionConfig, poolName string) ProxyStickySessionConfig {
 	out := in
 	out.CookieName = strings.TrimSpace(out.CookieName)
@@ -619,7 +607,7 @@ func normalizeProxyStickySessionConfig(in ProxyStickySessionConfig, poolName str
 		out.CookieName = defaultProxyStickyCookieName(poolName)
 	}
 	if out.Enabled && out.TTLSeconds <= 0 {
-		out.TTLSeconds = defaultProxyStickySessionTTLSeconds
+		out.TTLSeconds = proxystickysession.DefaultTTLSeconds
 	}
 	out.Path = strings.TrimSpace(out.Path)
 	if out.Enabled && out.Path == "" {
@@ -676,8 +664,8 @@ func validateProxyStickySessionConfig(cfg ProxyStickySessionConfig, field string
 	if !proxyRouteHeaderNamePattern.MatchString(cfg.CookieName) {
 		return fmt.Errorf("%s.cookie_name must be a valid HTTP cookie token", field)
 	}
-	if cfg.TTLSeconds <= 0 || cfg.TTLSeconds > maxProxyStickySessionTTLSeconds {
-		return fmt.Errorf("%s.ttl_seconds must be between 1 and %d", field, maxProxyStickySessionTTLSeconds)
+	if cfg.TTLSeconds <= 0 || cfg.TTLSeconds > proxystickysession.MaxTTLSeconds {
+		return fmt.Errorf("%s.ttl_seconds must be between 1 and %d", field, proxystickysession.MaxTTLSeconds)
 	}
 	if cfg.Path == "" || !strings.HasPrefix(cfg.Path, "/") {
 		return fmt.Errorf("%s.path must start with /", field)
@@ -985,6 +973,30 @@ func proxyRouteFallbackTarget(cfg ProxyRulesConfig) (*url.URL, bool, error) {
 
 func proxyRouteConfiguredTarget(cfg ProxyRulesConfig, ref string) (*url.URL, bool, error) {
 	return proxyRouteConfiguredTargetField(cfg, "action.upstream", ref)
+}
+
+func proxyRouteConfiguredTargetField(cfg ProxyRulesConfig, field string, ref string) (*url.URL, bool, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, false, nil
+	}
+	for _, upstream := range cfg.Upstreams {
+		if upstream.Name != ref {
+			continue
+		}
+		if !proxyUpstreamAllowedAsRouteTarget(upstream) {
+			return nil, false, nil
+		}
+		if proxyUpstreamDiscoveryEnabled(upstream) {
+			return nil, true, nil
+		}
+		target, err := parseProxyUpstreamURL(field, upstream.URL)
+		if err != nil {
+			return nil, false, err
+		}
+		return target, true, nil
+	}
+	return nil, false, nil
 }
 
 func proxyRoutesProvideFallback(cfg ProxyRulesConfig) bool {
@@ -1382,7 +1394,7 @@ func resolveProxyRouteTransportSelection(req *http.Request, classification proxy
 		OrderedTargets:       orderedTargets,
 		RewrittenHost:        resolveProxyRouteForwardedHost(classification.OriginalHost, selectedTarget.Target.Host, classification.RewrittenHost, classification.Source),
 		StickySession:        classification.StickySession,
-		StickySessionHit:     proxyStickySessionMatchesID(req, classification.StickySession, proxyRouteCandidateStickyID(selectedTarget), time.Now().UTC()),
+		StickySessionHit:     proxystickysession.MatchesID(req, classification.StickySession, proxyRouteCandidateStickyID(selectedTarget), time.Now().UTC()),
 		StickyTargetID:       proxyRouteCandidateStickyID(selectedTarget),
 	}, nil
 }

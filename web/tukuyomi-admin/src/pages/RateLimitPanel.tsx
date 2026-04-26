@@ -9,10 +9,12 @@ import {
   Field,
   MonoTag,
   NoticeBar,
+  ParsedTextArea,
   PrimaryButton,
   SectionCard,
   StatBox,
   inputClass,
+  stringListEqual,
   textareaClass,
 } from "@/components/EditorChrome";
 import { useAdminRuntime } from "@/lib/adminRuntime";
@@ -520,20 +522,26 @@ function RateLimitScopeEditor({
               <span>{tx("Enable rate limiting for this scope")}</span>
             </label>
             <Field label={tx("Allowlist IPs")} hint={tx("One CIDR or IP per line. These clients bypass rate limiting before policy matching.")}>
-              <textarea
+              <ParsedTextArea
                 className={`${textareaClass} min-h-32`}
-                value={listToMultiline(scope.allowlistIPs)}
-                onChange={(event) => applyScope({ ...scope, allowlistIPs: multilineToList(event.target.value) })}
+                value={scope.allowlistIPs}
+                onValueChange={(next) => applyScope({ ...scope, allowlistIPs: next })}
+                serialize={listToMultiline}
+                parse={multilineToList}
+                equals={stringListEqual}
                 placeholder={"127.0.0.1/32\n10.0.0.0/8"}
                 spellCheck={false}
               />
             </Field>
           </div>
           <Field label={tx("Allowlist countries")} hint={tx("One ISO-3166 alpha-2 code per line. These countries bypass rate limiting when country metadata is available.")}>
-            <textarea
+            <ParsedTextArea
               className={`${textareaClass} min-h-32`}
-              value={listToMultiline(scope.allowlistCountries)}
-              onChange={(event) => applyScope({ ...scope, allowlistCountries: multilineToList(event.target.value) })}
+              value={scope.allowlistCountries}
+              onValueChange={(next) => applyScope({ ...scope, allowlistCountries: next })}
+              serialize={listToMultiline}
+              parse={multilineToList}
+              equals={stringListEqual}
               placeholder={"JP\nUS"}
               spellCheck={false}
             />
@@ -545,26 +553,35 @@ function RateLimitScopeEditor({
         <div className="text-sm font-medium">{tx("Identity & Adaptive")}</div>
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
           <Field label={tx("Session cookie names")} hint={tx("When `key_by` uses `session`, these cookie names are checked in order.")}>
-            <textarea
+            <ParsedTextArea
               className={textareaClass}
-              value={listToMultiline(scope.sessionCookieNames)}
-              onChange={(event) => applyScope({ ...scope, sessionCookieNames: multilineToList(event.target.value) })}
+              value={scope.sessionCookieNames}
+              onValueChange={(next) => applyScope({ ...scope, sessionCookieNames: next })}
+              serialize={listToMultiline}
+              parse={multilineToList}
+              equals={stringListEqual}
               spellCheck={false}
             />
           </Field>
           <Field label={tx("JWT header names")} hint={tx("Authorization-style headers searched for bearer tokens when `key_by` uses `jwt_sub`.")}>
-            <textarea
+            <ParsedTextArea
               className={textareaClass}
-              value={listToMultiline(scope.jwtHeaderNames)}
-              onChange={(event) => applyScope({ ...scope, jwtHeaderNames: multilineToList(event.target.value) })}
+              value={scope.jwtHeaderNames}
+              onValueChange={(next) => applyScope({ ...scope, jwtHeaderNames: next })}
+              serialize={listToMultiline}
+              parse={multilineToList}
+              equals={stringListEqual}
               spellCheck={false}
             />
           </Field>
           <Field label={tx("JWT cookie names")} hint={tx("Cookies searched for JWTs when `key_by` uses `jwt_sub`.")}>
-            <textarea
+            <ParsedTextArea
               className={textareaClass}
-              value={listToMultiline(scope.jwtCookieNames)}
-              onChange={(event) => applyScope({ ...scope, jwtCookieNames: multilineToList(event.target.value) })}
+              value={scope.jwtCookieNames}
+              onValueChange={(next) => applyScope({ ...scope, jwtCookieNames: next })}
+              serialize={listToMultiline}
+              parse={multilineToList}
+              equals={stringListEqual}
               spellCheck={false}
             />
           </Field>
@@ -760,15 +777,18 @@ function RateLimitScopeEditor({
                 </Field>
               </div>
               <Field label={tx("Methods")} hint={tx("One HTTP method per line or separated by commas. Leave empty to match any method.")}>
-                <textarea
+                <ParsedTextArea
                   className={textareaClass}
-                  value={listToMultiline(rule.methods)}
-                  onChange={(event) =>
+                  value={rule.methods}
+                  onValueChange={(next) =>
                     updateRule(index, (current) => ({
                       ...current,
-                      methods: multilineToList(event.target.value),
+                      methods: next,
                     }))
                   }
+                  serialize={listToMultiline}
+                  parse={multilineToList}
+                  equals={stringListEqual}
                   placeholder={"POST\nGET"}
                   spellCheck={false}
                 />

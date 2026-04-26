@@ -9,10 +9,12 @@ import {
   Field,
   MonoTag,
   NoticeBar,
+  ParsedTextArea,
   PrimaryButton,
   SectionCard,
   StatBox,
   inputClass,
+  stringListEqual,
   textareaClass,
 } from "@/components/EditorChrome";
 import { useAdminRuntime } from "@/lib/adminRuntime";
@@ -468,10 +470,13 @@ function SemanticScopeEditor({
             />
           </Field>
           <Field label={tx("Exempt path prefixes")} hint={tx("One path prefix per line. Matching paths skip semantic scoring entirely.")}>
-            <textarea
+            <ParsedTextArea
               className={`${textareaClass} min-h-28`}
-              value={listToMultiline(scope.exemptPathPrefixes)}
-              onChange={(event) => applyScope({ ...scope, exemptPathPrefixes: multilineToList(event.target.value) })}
+              value={scope.exemptPathPrefixes}
+              onValueChange={(next) => applyScope({ ...scope, exemptPathPrefixes: next })}
+              serialize={listToMultiline}
+              parse={multilineToList}
+              equals={stringListEqual}
               placeholder={"/healthz\n/metrics"}
               spellCheck={false}
             />

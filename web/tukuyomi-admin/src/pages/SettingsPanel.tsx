@@ -10,6 +10,7 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useAdminRuntime } from "@/lib/adminRuntime";
+import { ParsedTextArea, stringListEqual } from "@/components/EditorChrome";
 import { useI18n } from "@/lib/i18n";
 import { computeSettingsRuntimeDrift } from "@/lib/settingsConfig";
 
@@ -932,24 +933,23 @@ export default function SettingsPanel() {
                 </label>
 
                 <Field label={tx("Trusted PROXY Peers CIDRs (one per line)")}>
-                  <textarea
-                    value={stringListToMultiline(
-                      listenerAdminConfig.server.proxy_protocol.trusted_cidrs,
-                    )}
-                    onChange={(e) =>
+                  <ParsedTextArea
+                    value={listenerAdminConfig.server.proxy_protocol.trusted_cidrs}
+                    onValueChange={(next) =>
                       setListenerAdminConfig((current) => ({
                         ...current,
                         server: {
                           ...current.server,
                           proxy_protocol: {
                             ...current.server.proxy_protocol,
-                            trusted_cidrs: multilineToStringList(
-                              e.target.value,
-                            ),
+                            trusted_cidrs: next,
                           },
                         },
                       }))
                     }
+                    serialize={stringListToMultiline}
+                    parse={multilineToStringList}
+                    equals={stringListEqual}
                     className="w-full rounded border border-neutral-200 bg-white"
                     rows={4}
                   />
@@ -1288,24 +1288,23 @@ export default function SettingsPanel() {
                 <Field
                   label={tx("Admin Trusted PROXY Peers CIDRs (one per line)")}
                 >
-                  <textarea
-                    value={stringListToMultiline(
-                      listenerAdminConfig.admin.proxy_protocol.trusted_cidrs,
-                    )}
-                    onChange={(e) =>
+                  <ParsedTextArea
+                    value={listenerAdminConfig.admin.proxy_protocol.trusted_cidrs}
+                    onValueChange={(next) =>
                       setListenerAdminConfig((current) => ({
                         ...current,
                         admin: {
                           ...current.admin,
                           proxy_protocol: {
                             ...current.admin.proxy_protocol,
-                            trusted_cidrs: multilineToStringList(
-                              e.target.value,
-                            ),
+                            trusted_cidrs: next,
                           },
                         },
                       }))
                     }
+                    serialize={stringListToMultiline}
+                    parse={multilineToStringList}
+                    equals={stringListEqual}
                     className="w-full rounded border border-neutral-200 bg-white"
                     rows={4}
                   />
@@ -1372,40 +1371,40 @@ export default function SettingsPanel() {
                 </div>
 
                 <Field label={tx("Trusted CIDRs (one per line)")}>
-                  <textarea
-                    value={stringListToMultiline(
-                      listenerAdminConfig.admin.trusted_cidrs,
-                    )}
-                    onChange={(e) =>
+                  <ParsedTextArea
+                    value={listenerAdminConfig.admin.trusted_cidrs}
+                    onValueChange={(next) =>
                       setListenerAdminConfig((current) => ({
                         ...current,
                         admin: {
                           ...current.admin,
-                          trusted_cidrs: multilineToStringList(e.target.value),
+                          trusted_cidrs: next,
                         },
                       }))
                     }
+                    serialize={stringListToMultiline}
+                    parse={multilineToStringList}
+                    equals={stringListEqual}
                     className="w-full rounded border border-neutral-200 bg-white"
                     rows={5}
                   />
                 </Field>
 
                 <Field label={tx("CORS Allowed Origins (one per line)")}>
-                  <textarea
-                    value={stringListToMultiline(
-                      listenerAdminConfig.admin.cors_allowed_origins,
-                    )}
-                    onChange={(e) =>
+                  <ParsedTextArea
+                    value={listenerAdminConfig.admin.cors_allowed_origins}
+                    onValueChange={(next) =>
                       setListenerAdminConfig((current) => ({
                         ...current,
                         admin: {
                           ...current.admin,
-                          cors_allowed_origins: multilineToStringList(
-                            e.target.value,
-                          ),
+                          cors_allowed_origins: next,
                         },
                       }))
                     }
+                    serialize={stringListToMultiline}
+                    parse={multilineToStringList}
+                    equals={stringListEqual}
                     className="w-full rounded border border-neutral-200 bg-white"
                     rows={4}
                   />

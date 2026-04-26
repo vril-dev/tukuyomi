@@ -439,12 +439,12 @@ const JA_STRINGS: Record<string, string> = {
     "有効にすると、named upstream へ流れる request だけが backend へ X-Tukuyomi-Upstream-Name を送ります。direct URL と generated vhost target には付きません。",
   "This header is internal observability data. It is stripped from inbound requests and re-added only when a named upstream is finally selected after WAF.":
     "この header は内部 observability 用です。inbound request からは一度除去し、WAF 後に named upstream が最終選択された時だけ付け直します。",
-  "Inspect canonical backend objects used by routing. Direct named upstreams support runtime enable/drain/disable and weight overrides here; Vhost-generated backends appear as status-only objects in this slice.":
-    "routing で使われる canonical backend object を確認します。direct named upstream はここで runtime enable/drain/disable と weight override に対応し、Vhost-generated backend はこの slice では status-only で表示されます。",
-  "No direct upstreams or Vhost-generated backends are configured.":
-    "direct upstream も Vhost-generated backend も未設定です。",
-  "Add direct backends in Proxy Rules > Upstreams or add a Vhost, then return here for status and runtime operations.":
-    "Proxy Rules > Upstreams で direct backend を追加するか、Vhost を追加してから、status と runtime 操作のためにここへ戻ってください。",
+  "Inspect direct upstream backends used by routing. Runtime enable/drain/disable and weight overrides apply here; Vhost-generated targets stay on the Vhosts surface.":
+    "routing で使われる direct upstream backend を確認します。runtime enable/drain/disable と weight override はここで操作し、Vhost-generated target は Vhosts 側に残します。",
+  "No direct upstream backends are configured.":
+    "direct upstream backend が未設定です。",
+  "Add direct backends in Proxy Rules > Upstreams, then return here for status and runtime operations.":
+    "Proxy Rules > Upstreams で direct backend を追加してから、status と runtime 操作のためにここへ戻ってください。",
   vhost: "vhost",
   "Runtime weight overrides are available only for direct named upstreams in this slice.":
     "この slice では runtime weight override は direct named upstream にだけ対応します。",

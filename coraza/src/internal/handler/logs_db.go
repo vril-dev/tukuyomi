@@ -23,6 +23,8 @@ import (
 	gormmysql "gorm.io/driver/mysql"
 	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
+
+	"tukuyomi/internal/requestmeta"
 )
 
 const (
@@ -1027,7 +1029,7 @@ func ingestWAFEventLine(stmt *sql.Stmt, rawLine []byte) error {
 
 	ruleID := normalizeStatsRuleID(m["rule_id"])
 	pathKey := normalizeStatsPath(m["path"])
-	country := normalizeCountryFromAny(m["country"])
+	country := requestmeta.NormalizeCountryFromAny(m["country"])
 	status := anyToInt(m["status"])
 	reqID := strings.TrimSpace(anyToString(m["req_id"]))
 	method := strings.ToUpper(strings.TrimSpace(anyToString(m["method"])))

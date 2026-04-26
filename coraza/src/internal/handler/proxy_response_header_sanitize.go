@@ -1,69 +1,42 @@
 package handler
 
 import (
-	"fmt"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
 	"tukuyomi/internal/observability"
+	"tukuyomi/internal/proxyheaders"
 )
 
 const (
-	proxyResponseHeaderSanitizeModeAuto   = "auto"
-	proxyResponseHeaderSanitizeModeManual = "manual"
-	proxyResponseHeaderSanitizeModeOff    = "off"
+	proxyResponseHeaderSanitizeModeAuto   = proxyheaders.ModeAuto
+	proxyResponseHeaderSanitizeModeManual = proxyheaders.ModeManual
+	proxyResponseHeaderSanitizeModeOff    = proxyheaders.ModeOff
 
-	proxyResponseHeaderSanitizeSourceURL = "https://owasp.org/www-project-secure-headers/ci/headers_remove.json"
+	proxyResponseHeaderSanitizeSourceURL = proxyheaders.SourceURL
 )
 
-type ProxyResponseHeaderSanitizeConfig struct {
-	Mode         string   `json:"mode,omitempty"`
-	CustomRemove []string `json:"custom_remove,omitempty"`
-	CustomKeep   []string `json:"custom_keep,omitempty"`
-	DebugLog     bool     `json:"debug_log,omitempty"`
-}
+type ProxyResponseHeaderSanitizeConfig = proxyheaders.Config
 
-type proxyResponseHeaderSanitizeCatalogData struct {
-	LastUpdateUTC string
-	Headers       []string
-	HeaderSet     map[string]struct{}
-}
+type proxyResponseHeaderSanitizePolicy = proxyheaders.Policy
 
-type proxyResponseHeaderSanitizePolicy struct {
-	Mode      string
-	DebugLog  bool
-	RemoveSet map[string]struct{}
-}
-
-type proxyResponseHeaderPolicySurface string
+type proxyResponseHeaderPolicySurface = proxyheaders.Surface
 
 const (
-	proxyResponseHeaderPolicySurfaceLive        proxyResponseHeaderPolicySurface = "live_proxy_response"
-	proxyResponseHeaderPolicySurfaceCacheStore  proxyResponseHeaderPolicySurface = "cache_store"
-	proxyResponseHeaderPolicySurfaceCacheReplay proxyResponseHeaderPolicySurface = "cache_replay"
+	proxyResponseHeaderPolicySurfaceLive        proxyResponseHeaderPolicySurface = proxyheaders.SurfaceLive
+	proxyResponseHeaderPolicySurfaceCacheStore  proxyResponseHeaderPolicySurface = proxyheaders.SurfaceCacheStore
+	proxyResponseHeaderPolicySurfaceCacheReplay proxyResponseHeaderPolicySurface = proxyheaders.SurfaceCacheReplay
 )
 
-type proxyResponseHeaderProcessingPlan struct {
-	FeatureSanitize bool
-	HardSafety      bool
-}
+type proxyResponseHeaderProcessingPlan = proxyheaders.ProcessingPlan
 
-type proxyResponseHeaderFilterOptions struct {
-	ExtraRemove map[string]struct{}
-	Request     *http.Request
-	Surface     string
-}
+type proxyResponseHeaderFilterOptions = proxyheaders.FilterOptions
 
-type proxyResponseHeaderFilterResult struct {
-	Header        http.Header
-	PolicyRemoved []string
-	Changed       bool
-}
+type proxyResponseHeaderFilterResult = proxyheaders.FilterResult
 
 var (
-	proxyResponseCacheRestrictedResponseHeaders = proxyResponseHeaderNameSet(
+	proxyResponseCacheRestrictedResponseHeaders = proxyheaders.NameSet(
 		"Connection",
 		"Proxy-Connection",
 		"Keep-Alive",
@@ -82,123 +55,35 @@ var (
 )
 
 func normalizeProxyResponseHeaderSanitizeConfig(in ProxyResponseHeaderSanitizeConfig) ProxyResponseHeaderSanitizeConfig {
-	out := in
-	out.Mode = strings.ToLower(strings.TrimSpace(out.Mode))
-	if out.Mode == "" {
-		out.Mode = proxyResponseHeaderSanitizeModeAuto
-	}
-	out.CustomRemove = normalizeProxyResponseHeaderSanitizeNameList(out.CustomRemove)
-	out.CustomKeep = normalizeProxyResponseHeaderSanitizeNameList(out.CustomKeep)
-	return out
+	return proxyheaders.NormalizeConfig(in)
 }
 
 func normalizeProxyResponseHeaderSanitizeNameList(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(in))
-	for _, raw := range in {
-		next := canonicalProxyResponseHeaderSanitizeName(raw)
-		if strings.TrimSpace(raw) == "" {
-			next = ""
-		}
-		if _, ok := seen[next]; ok {
-			continue
-		}
-		seen[next] = struct{}{}
-		out = append(out, next)
-	}
-	sort.Strings(out)
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return proxyheaders.NormalizeNameList(in)
 }
 
 func canonicalProxyResponseHeaderSanitizeName(raw string) string {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return ""
-	}
-	return http.CanonicalHeaderKey(value)
+	return proxyheaders.CanonicalName(raw)
 }
 
 func validateProxyResponseHeaderSanitizeConfig(cfg ProxyResponseHeaderSanitizeConfig) error {
-	switch cfg.Mode {
-	case proxyResponseHeaderSanitizeModeAuto, proxyResponseHeaderSanitizeModeManual, proxyResponseHeaderSanitizeModeOff:
-	default:
-		return fmt.Errorf("response_header_sanitize.mode must be one of auto|manual|off")
-	}
-	if err := validateProxyResponseHeaderSanitizeNames(cfg.CustomRemove, "response_header_sanitize.custom_remove"); err != nil {
-		return err
-	}
-	if err := validateProxyResponseHeaderSanitizeNames(cfg.CustomKeep, "response_header_sanitize.custom_keep"); err != nil {
-		return err
-	}
-	return nil
+	return proxyheaders.ValidateConfig(cfg)
 }
 
 func validateProxyResponseHeaderSanitizeNames(in []string, field string) error {
-	for _, name := range in {
-		if name == "" {
-			return fmt.Errorf("%s must not contain blank header names", field)
-		}
-		if !proxyRouteHeaderNamePattern.MatchString(name) {
-			return fmt.Errorf("%s contains invalid header name %q", field, name)
-		}
-	}
-	return nil
+	return proxyheaders.ValidateNames(in, field)
 }
 
 func buildProxyResponseHeaderSanitizePolicy(cfg ProxyResponseHeaderSanitizeConfig) proxyResponseHeaderSanitizePolicy {
-	policy := proxyResponseHeaderSanitizePolicy{
-		Mode:     cfg.Mode,
-		DebugLog: cfg.DebugLog,
-	}
-	switch cfg.Mode {
-	case proxyResponseHeaderSanitizeModeAuto:
-		policy.RemoveSet = cloneProxyResponseHeaderNameSet(proxyResponseHeaderSanitizeCatalogDataValue.HeaderSet)
-		for _, name := range cfg.CustomKeep {
-			delete(policy.RemoveSet, name)
-		}
-	case proxyResponseHeaderSanitizeModeManual:
-		policy.RemoveSet = map[string]struct{}{}
-	case proxyResponseHeaderSanitizeModeOff:
-		policy.RemoveSet = map[string]struct{}{}
-	default:
-		return policy
-	}
-	for _, name := range cfg.CustomRemove {
-		policy.RemoveSet[name] = struct{}{}
-	}
-	if len(policy.RemoveSet) == 0 {
-		policy.RemoveSet = nil
-	}
-	return policy
+	return proxyheaders.BuildPolicy(cfg)
 }
 
 func cloneProxyResponseHeaderNameSet(in map[string]struct{}) map[string]struct{} {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]struct{}, len(in))
-	for name := range in {
-		out[name] = struct{}{}
-	}
-	return out
+	return proxyheaders.CloneNameSet(in)
 }
 
 func proxyResponseHeaderNameSet(names ...string) map[string]struct{} {
-	out := make(map[string]struct{}, len(names))
-	for _, raw := range names {
-		name := canonicalProxyResponseHeaderSanitizeName(raw)
-		if name == "" {
-			continue
-		}
-		out[name] = struct{}{}
-	}
-	return out
+	return proxyheaders.NameSet(names...)
 }
 
 func sanitizeProxyLiveResponseHeaders(res *http.Response) {
@@ -265,83 +150,20 @@ func sanitizeProxyCachedResponseHeader(in http.Header, req *http.Request, surfac
 }
 
 func planProxyResponseHeaderProcessing(surface proxyResponseHeaderPolicySurface, policy proxyResponseHeaderSanitizePolicy) proxyResponseHeaderProcessingPlan {
-	plan := proxyResponseHeaderProcessingPlan{
-		FeatureSanitize: len(policy.RemoveSet) > 0,
-	}
-	switch surface {
-	case proxyResponseHeaderPolicySurfaceCacheStore, proxyResponseHeaderPolicySurfaceCacheReplay:
-		plan.HardSafety = true
-	}
-	return plan
-}
-
-func (p proxyResponseHeaderProcessingPlan) NeedsHeaderIteration() bool {
-	return p.FeatureSanitize || p.HardSafety
+	return proxyheaders.Plan(surface, policy)
 }
 
 func filterProxyResponseHeaders(in http.Header, policy proxyResponseHeaderSanitizePolicy, opts proxyResponseHeaderFilterOptions) proxyResponseHeaderFilterResult {
-	if in == nil {
-		return proxyResponseHeaderFilterResult{Header: make(http.Header), Changed: true}
-	}
-
-	changed := false
-	var policyRemoved map[string]struct{}
-	for key := range in {
-		name := http.CanonicalHeaderKey(key)
-		if name != key {
-			changed = true
-		}
-		if _, ok := opts.ExtraRemove[name]; ok {
-			changed = true
-			continue
-		}
-		if _, ok := policy.RemoveSet[name]; ok {
-			changed = true
-			if policyRemoved == nil {
-				policyRemoved = make(map[string]struct{}, 1)
-			}
-			policyRemoved[name] = struct{}{}
-			continue
+	if opts.Log == nil {
+		opts.Log = func(evt proxyheaders.FilterLog) {
+			emitProxyResponseHeaderSanitizeLog(evt.Policy, evt.Removed, evt.Request, evt.Surface)
 		}
 	}
-
-	removed := proxyResponseHeaderSetNames(policyRemoved)
-	emitProxyResponseHeaderSanitizeLog(policy, removed, opts.Request, opts.Surface)
-	if !changed {
-		return proxyResponseHeaderFilterResult{
-			Header:        in,
-			PolicyRemoved: removed,
-		}
-	}
-
-	out := make(http.Header, len(in))
-	for key, vals := range in {
-		name := http.CanonicalHeaderKey(key)
-		if _, ok := opts.ExtraRemove[name]; ok {
-			continue
-		}
-		if _, ok := policy.RemoveSet[name]; ok {
-			continue
-		}
-		out[name] = append(out[name], vals...)
-	}
-	return proxyResponseHeaderFilterResult{
-		Header:        out,
-		PolicyRemoved: removed,
-		Changed:       true,
-	}
+	return proxyheaders.FilterHeaders(in, policy, opts)
 }
 
 func proxyResponseHeaderSetNames(in map[string]struct{}) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(in))
-	for name := range in {
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out
+	return proxyheaders.SetNames(in)
 }
 
 func emitProxyResponseHeaderSanitizeLog(policy proxyResponseHeaderSanitizePolicy, removed []string, req *http.Request, surface string) {

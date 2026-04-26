@@ -131,7 +131,7 @@ vhost、scheduled task、upstream runtime、response cache、PHP-FPM inventory d
 `Proxy Rules > Upstreams` は direct backend node catalog、`Proxy Rules >
 Backend Pools` は route から参照できる upstream 名をまとめる route 単位の
 balancing group です。route は通常 `action.backend_pool` に bind し、
-`Backends` は routing で使われる canonical backend object を一覧化しつつ、
+`Backends` は routing で使われる direct upstream backend object を一覧化しつつ、
 runtime 操作は direct named upstream node 自体に対して行います。
 
 structured な `Proxy Rules` editor では、運用フローを次の順で表示します。

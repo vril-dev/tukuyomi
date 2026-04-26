@@ -9,10 +9,12 @@ import {
   Field,
   MonoTag,
   NoticeBar,
+  ParsedTextArea,
   PrimaryButton,
   SectionCard,
   StatBox,
   inputClass,
+  stringListEqual,
   textareaClass,
 } from "@/components/EditorChrome";
 import { useAdminRuntime } from "@/lib/adminRuntime";
@@ -273,15 +275,18 @@ export default function CountryBlockPanel() {
 
       <SectionCard title={tx("Default Scope")} subtitle={tx("These country codes apply when no more specific host scope matches.")}>
         <Field label={tx("Blocked countries")} hint={tx("One country code per line. `UNKNOWN` is allowed for unresolved lookups.")}>
-          <textarea
+          <ParsedTextArea
             className={`${textareaClass} min-h-32`}
-            value={countryCodesToMultiline(editorState.defaultBlockedCountries)}
-            onChange={(event) =>
+            value={editorState.defaultBlockedCountries}
+            onValueChange={(next) =>
               applyStructuredState({
                 ...editorState,
-                defaultBlockedCountries: multilineToCountryCodes(event.target.value),
+                defaultBlockedCountries: next,
               })
             }
+            serialize={countryCodesToMultiline}
+            parse={multilineToCountryCodes}
+            equals={stringListEqual}
             placeholder={"US\nCN\nUNKNOWN"}
             spellCheck={false}
           />
@@ -333,15 +338,18 @@ export default function CountryBlockPanel() {
                   />
                 </Field>
                 <Field label={tx("Blocked countries")} hint={tx("One code per line. You can paste multiple lines directly from a spreadsheet or notes.")}>
-                  <textarea
+                  <ParsedTextArea
                     className={`${textareaClass} min-h-32`}
-                    value={countryCodesToMultiline(scope.blockedCountries)}
-                    onChange={(event) =>
+                    value={scope.blockedCountries}
+                    onValueChange={(next) =>
                       updateHost(index, (current) => ({
                         ...current,
-                        blockedCountries: multilineToCountryCodes(event.target.value),
+                        blockedCountries: next,
                       }))
                     }
+                    serialize={countryCodesToMultiline}
+                    parse={multilineToCountryCodes}
+                    equals={stringListEqual}
                     placeholder={"US\nCN\nUNKNOWN"}
                     spellCheck={false}
                   />

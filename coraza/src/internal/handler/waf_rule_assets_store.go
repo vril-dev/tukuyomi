@@ -9,6 +9,7 @@ import (
 
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/runtimefiles"
 	"tukuyomi/internal/waf"
 )
 
@@ -721,7 +722,7 @@ func wafRuleAssetSavedAt(rec configVersionRecord, path string) string {
 	if rec.VersionID > 0 {
 		return configVersionSavedAt(rec)
 	}
-	return fileSavedAt(path)
+	return runtimefiles.FileSavedAt(path)
 }
 
 func wafRuleAssetsStatus() (int, string) {

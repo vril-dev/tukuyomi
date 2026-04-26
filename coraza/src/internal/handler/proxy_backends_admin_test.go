@@ -218,7 +218,7 @@ func TestPutAndDeleteProxyBackendRuntimeOverrideRoundTrip(t *testing.T) {
 	}
 }
 
-func TestGetProxyBackendsIncludesVhostGeneratedTargetAsStatusOnly(t *testing.T) {
+func TestGetProxyBackendsHidesVhostGeneratedTargets(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	restore := resetPHPProxyFoundationForTest(t)
@@ -289,22 +289,14 @@ func TestGetProxyBackendsIncludesVhostGeneratedTargetAsStatusOnly(t *testing.T) 
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
 	}
-	if got, want := len(out.Backends), 3; got != want {
+	if got, want := len(out.Backends), 2; got != want {
 		t.Fatalf("len(backends)=%d want=%d", got, want)
 	}
-	docs := findProxyBackendStatus(t, out.Backends, proxyBackendLookupKey("docs-static", "static://docs-static"))
-	if got, want := docs.ProviderClass, proxyUpstreamProviderClassVhostManaged; got != want {
-		t.Fatalf("provider_class=%q want=%q", got, want)
+	if hasProxyBackendStatus(out.Backends, proxyBackendLookupKey("docs-static", "static://docs-static")) {
+		t.Fatal("vhost-generated backend should not appear in upstream runtime backends")
 	}
-	if got, want := docs.ManagedByVhost, "docs"; got != want {
-		t.Fatalf("managed_by_vhost=%q want=%q", got, want)
-	}
-	if docs.RuntimeOpsSupported {
-		t.Fatal("vhost-generated backend should be status-only in this slice")
-	}
-	if got, want := docs.HealthState, "unknown"; got != want {
-		t.Fatalf("health_state=%q want=%q", got, want)
-	}
+	_ = findProxyBackendStatus(t, out.Backends, proxyBackendLookupKey("docs", "http://127.0.0.1:8081"))
+	_ = findProxyBackendStatus(t, out.Backends, proxyBackendLookupKey("primary", "http://127.0.0.1:8080"))
 }
 
 func TestPutProxyBackendRuntimeOverrideRejectsVhostManagedAlias(t *testing.T) {
@@ -411,4 +403,13 @@ func findProxyBackendStatus(t *testing.T, backends []upstreamBackendStatus, key 
 	}
 	t.Fatalf("backend %q not found in %#v", key, backends)
 	return upstreamBackendStatus{}
+}
+
+func hasProxyBackendStatus(backends []upstreamBackendStatus, key string) bool {
+	for _, backend := range backends {
+		if backend.Key == key {
+			return true
+		}
+	}
+	return false
 }

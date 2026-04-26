@@ -2,9 +2,7 @@ package handler
 
 import (
 	"errors"
-	"net"
 	"net/http"
-	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/adminauth"
+	"tukuyomi/internal/adminguard"
 	"tukuyomi/internal/config"
 )
 
@@ -244,29 +243,7 @@ func requestIsHTTPS(c *gin.Context) bool {
 }
 
 func trustedAdminForwardedHeaders(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-
-	host := r.RemoteAddr
-	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		host = h
-	}
-	sourceIP, ok := parseIPLiteral(host)
-	if !ok {
-		return false
-	}
-	return isAdminIPTrusted(snapshotAdminTrustedCIDRs(), sourceIP)
-}
-
-func snapshotAdminTrustedCIDRs() []netip.Prefix {
-	access := currentAdminAccessControl()
-	if access == nil {
-		return nil
-	}
-	access.mu.RLock()
-	defer access.mu.RUnlock()
-	return append([]netip.Prefix(nil), access.trustedCIDRs...)
+	return adminguard.TrustedForwardedHeaders(r)
 }
 
 func normalizeForwardedProto(raw string) string {

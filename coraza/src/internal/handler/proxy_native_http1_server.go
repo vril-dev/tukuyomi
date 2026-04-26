@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"tukuyomi/internal/proxybuffer"
 )
 
 type nativeHTTP1Server struct {
@@ -672,8 +674,8 @@ func (w *nativeHTTP1ResponseWriter) ReadFrom(r io.Reader) (int64, error) {
 	if r == nil {
 		return 0, nil
 	}
-	buf := proxyReverseCopyBufferPool.Get()
-	defer proxyReverseCopyBufferPool.Put(buf)
+	buf := proxybuffer.GetCopyBuffer()
+	defer proxybuffer.PutCopyBuffer(buf)
 	var total int64
 	for {
 		nr, er := r.Read(buf)

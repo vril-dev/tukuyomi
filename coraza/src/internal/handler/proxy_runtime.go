@@ -32,6 +32,11 @@ import (
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/observability"
+	"tukuyomi/internal/proxyaccesslog"
+	"tukuyomi/internal/proxycompression"
+	"tukuyomi/internal/proxydiscovery"
+	"tukuyomi/internal/proxyerror"
+	"tukuyomi/internal/proxytransportmetrics"
 )
 
 const (
@@ -57,6 +62,147 @@ const (
 	proxyHTTP2ModeForceAttempt = "force_attempt"
 	proxyHTTP2ModeH2C          = "h2c_prior_knowledge"
 )
+
+type ProxyResponseCompressionConfig = proxycompression.Config
+
+var supportedProxyResponseCompressionAlgorithms = proxycompression.SupportedAlgorithms()
+
+var proxyTransportLatencyBucketsSeconds = proxytransportmetrics.DefaultLatencyBucketsSeconds()
+
+const (
+	proxyTransportErrorKindTransport   = proxytransportmetrics.ErrorKindTransport
+	proxyTransportErrorKindStatus      = proxytransportmetrics.ErrorKindStatus
+	proxyTransportErrorKindUnavailable = proxytransportmetrics.ErrorKindUnavailable
+
+	proxyTransportRetryReasonTransport   = proxytransportmetrics.RetryReasonTransport
+	proxyTransportRetryReasonStatus      = proxytransportmetrics.RetryReasonStatus
+	proxyTransportRetryReasonUnavailable = proxytransportmetrics.RetryReasonUnavailable
+
+	proxyTransportPassiveFailureReasonTransport = proxytransportmetrics.PassiveFailureReasonTransport
+	proxyTransportPassiveFailureReasonStatus    = proxytransportmetrics.PassiveFailureReasonStatus
+
+	proxyTransportCircuitStateClosed   = proxytransportmetrics.CircuitStateClosed
+	proxyTransportCircuitStateHalfOpen = proxytransportmetrics.CircuitStateHalfOpen
+	proxyTransportCircuitStateOpen     = proxytransportmetrics.CircuitStateOpen
+)
+
+type proxyTransportMetrics = proxytransportmetrics.Metrics
+type proxyTransportMetricsSnapshot = proxytransportmetrics.Snapshot
+type proxyTransportUpstreamMetricsSnapshot = proxytransportmetrics.UpstreamSnapshot
+
+func newProxyTransportMetrics() *proxyTransportMetrics {
+	return proxytransportmetrics.New()
+}
+
+func proxyTransportMetricLabelsSet(labels []string) map[string]struct{} {
+	return proxytransportmetrics.LabelsSet(labels)
+}
+
+func proxyTransportMetricsUpstreamLabel(name string, target *url.URL, managed bool) string {
+	return proxytransportmetrics.UpstreamLabel(name, target, managed)
+}
+
+type proxyDNSLookup = proxydiscovery.DNSLookup
+type defaultProxyDNSLookup = proxydiscovery.DefaultDNSLookup
+type proxyDiscoveryRuntimeState = proxydiscovery.State
+
+var proxyDNSLookupProvider proxyDNSLookup = defaultProxyDNSLookup{}
+
+func proxyDiscoveryConfig(in ProxyDiscoveryConfig) proxydiscovery.Config {
+	return proxydiscovery.Config{
+		Type:               in.Type,
+		Hostname:           in.Hostname,
+		Scheme:             in.Scheme,
+		Port:               in.Port,
+		RecordTypes:        append([]string(nil), in.RecordTypes...),
+		Service:            in.Service,
+		Proto:              in.Proto,
+		Name:               in.Name,
+		RefreshIntervalSec: in.RefreshIntervalSec,
+		TimeoutMS:          in.TimeoutMS,
+		MaxTargets:         in.MaxTargets,
+	}
+}
+
+func proxyDiscoveryUpstream(in ProxyUpstream) proxydiscovery.Upstream {
+	return proxydiscovery.Upstream{
+		Name:      in.Name,
+		Enabled:   in.Enabled,
+		Discovery: proxyDiscoveryConfig(in.Discovery),
+	}
+}
+
+func proxyDiscoveryUpstreams(cfg ProxyRulesConfig) []proxydiscovery.Upstream {
+	upstreams := proxyConfiguredUpstreams(cfg)
+	out := make([]proxydiscovery.Upstream, 0, len(upstreams))
+	for _, upstream := range upstreams {
+		out = append(out, proxyDiscoveryUpstream(upstream))
+	}
+	return out
+}
+
+func proxyConfigHasDiscovery(cfg ProxyRulesConfig) bool {
+	return proxydiscovery.HasDiscovery(proxyDiscoveryUpstreams(cfg))
+}
+
+func proxyDiscoveryStatesInitial(cfg ProxyRulesConfig) map[string]proxyDiscoveryRuntimeState {
+	return proxydiscovery.StatesInitial(proxyDiscoveryUpstreams(cfg), proxyDNSLookupProvider)
+}
+
+func refreshProxyDiscoveryStates(cfg ProxyRulesConfig, prev map[string]proxyDiscoveryRuntimeState, now time.Time, force bool) map[string]proxyDiscoveryRuntimeState {
+	return proxydiscovery.RefreshStates(proxyDiscoveryUpstreams(cfg), prev, now, force, proxyDNSLookupProvider)
+}
+
+func resolveProxyDiscoveryUpstream(upstream ProxyUpstream, prev proxyDiscoveryRuntimeState, now time.Time) proxyDiscoveryRuntimeState {
+	return proxydiscovery.ResolveUpstream(proxyDiscoveryUpstream(upstream), prev, now, proxyDNSLookupProvider)
+}
+
+func lookupProxyDiscoveryTargets(ctx context.Context, cfg ProxyDiscoveryConfig) ([]string, error) {
+	return proxydiscovery.LookupTargets(ctx, proxyDiscoveryConfig(cfg), proxyDNSLookupProvider)
+}
+
+func proxyDiscoveryRecordTypeFlags(recordTypes []string) (allowA bool, allowAAAA bool) {
+	return proxydiscovery.RecordTypeFlags(recordTypes)
+}
+
+func proxyDiscoveryURL(scheme string, host string, port int) string {
+	return proxydiscovery.URL(scheme, host, port)
+}
+
+func proxyDiscoverySource(cfg ProxyDiscoveryConfig) string {
+	return proxydiscovery.Source(proxyDiscoveryConfig(cfg))
+}
+
+func uniqueProxyStrings(in []string) []string {
+	return proxydiscovery.UniqueStrings(in)
+}
+
+func proxyDiscoveryNextRefreshDelay(states map[string]proxyDiscoveryRuntimeState, now time.Time) time.Duration {
+	return proxydiscovery.NextRefreshDelay(states, now)
+}
+
+func proxyDiscoveryStatusSnapshot(states map[string]proxyDiscoveryRuntimeState) []upstreamDiscoveryStatus {
+	snapshot := proxydiscovery.StatusSnapshot(states)
+	if len(snapshot) == 0 {
+		return nil
+	}
+	out := make([]upstreamDiscoveryStatus, 0, len(snapshot))
+	for _, state := range snapshot {
+		out = append(out, upstreamDiscoveryStatus{
+			UpstreamName:  state.UpstreamName,
+			Type:          state.Type,
+			Source:        state.Source,
+			Targets:       append([]string(nil), state.Targets...),
+			TargetCount:   state.TargetCount,
+			LastLookupAt:  formatProxyTime(state.LastLookupAt),
+			LastSuccessAt: formatProxyTime(state.LastSuccessAt),
+			LastFailureAt: formatProxyTime(state.LastFailureAt),
+			LastError:     state.LastError,
+			NextRefreshAt: formatProxyTime(state.NextRefreshAt),
+		})
+	}
+	return out
+}
 
 type ProxyRulesConfig struct {
 	Upstreams                      []ProxyUpstream                   `json:"upstreams,omitempty"`
@@ -206,7 +352,7 @@ type proxyRulesPreparedUpdate struct {
 	target       *url.URL
 	raw          string
 	etag         string
-	errRes       proxyErrorResponse
+	errRes       proxyerror.Response
 }
 
 type proxyRulesConflictError struct {
@@ -234,7 +380,7 @@ type proxyRuntime struct {
 	proxyEngine   http.Handler
 	transport     *dynamicProxyTransport
 	health        *upstreamHealthMonitor
-	errRes        proxyErrorResponse
+	errRes        proxyerror.Response
 	versionID     int64
 	rollbackMax   int
 	rollbackStack []proxyRollbackEntry
@@ -284,7 +430,7 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 		rollbackStack: make([]proxyRollbackEntry, 0, clampProxyRollbackMax(rollbackMax)),
 	}
 	rt.health = health
-	setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
+	proxyaccesslog.SetRuntimeMode(prepared.effectiveCfg.AccessLogMode)
 
 	proxyRuntimeMu.Lock()
 	proxyRt = rt
@@ -545,11 +691,10 @@ func (w *proxyResponseSanitizeWriter) Push(target string, opts *http.PushOptions
 	return http.ErrNotSupported
 }
 
-func currentProxyErrorResponse() proxyErrorResponse {
+func currentProxyErrorResponse() proxyerror.Response {
 	rt := proxyRuntimeInstance()
 	if rt == nil {
-		resp, _ := newProxyErrorResponse(ProxyRulesConfig{})
-		return resp
+		return proxyerror.Response{}
 	}
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
@@ -695,7 +840,7 @@ func applyProxyRulesRaw(ifMatch string, raw string, actor string) (string, Proxy
 	rt.target = prepared.target
 	rt.errRes = prepared.errRes
 	rt.versionID = nextVersionID
-	setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
+	proxyaccesslog.SetRuntimeMode(prepared.effectiveCfg.AccessLogMode)
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
 	if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
 		setter.SetFlushInterval(flushInterval)
@@ -788,7 +933,7 @@ func rollbackProxyRules(actor string) (string, ProxyRulesConfig, proxyRollbackEn
 	rt.target = prepared.target
 	rt.errRes = prepared.errRes
 	rt.versionID = nextVersionID
-	setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
+	proxyaccesslog.SetRuntimeMode(prepared.effectiveCfg.AccessLogMode)
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
 	if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
 		setter.SetFlushInterval(flushInterval)
@@ -871,29 +1016,29 @@ func prepareProxyRulesRawWithSitesAndVhosts(raw string, sites SiteConfigFile, vh
 	}, nil
 }
 
-func parseProxyRulesRaw(raw string, sites SiteConfigFile, vhosts VhostConfigFile) (ProxyRulesConfig, ProxyRulesConfig, *url.URL, proxyErrorResponse, error) {
+func parseProxyRulesRaw(raw string, sites SiteConfigFile, vhosts VhostConfigFile) (ProxyRulesConfig, ProxyRulesConfig, *url.URL, proxyerror.Response, error) {
 	var in ProxyRulesConfig
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("invalid json")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("invalid json")
 	}
 	return normalizeAndValidateProxyRules(in, sites, vhosts)
 }
 
-func normalizeAndValidateProxyRules(in ProxyRulesConfig, sites SiteConfigFile, vhosts VhostConfigFile) (ProxyRulesConfig, ProxyRulesConfig, *url.URL, proxyErrorResponse, error) {
+func normalizeAndValidateProxyRules(in ProxyRulesConfig, sites SiteConfigFile, vhosts VhostConfigFile) (ProxyRulesConfig, ProxyRulesConfig, *url.URL, proxyerror.Response, error) {
 	cfg := normalizeProxyRulesConfig(in)
 	effectiveCfg := cfg
 	mergedUpstreams, err := mergeGeneratedVhostUpstreams(effectiveCfg.Upstreams, generatedVhostUpstreams(vhosts))
 	if err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	mergedUpstreams, err = mergeGeneratedVhostUpstreams(mergedUpstreams, siteGeneratedUpstreams(sites))
 	if err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	effectiveCfg.Upstreams = mergedUpstreams
 	effectiveCfg.Routes = append(append([]ProxyRoute(nil), effectiveCfg.Routes...), vhostGeneratedRoutes(vhosts)...)
@@ -901,128 +1046,131 @@ func normalizeAndValidateProxyRules(in ProxyRulesConfig, sites SiteConfigFile, v
 	effectiveCfg.routeOrder = sortedProxyRouteIndexes(effectiveCfg.Routes)
 
 	if effectiveCfg.DialTimeout <= 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("dial_timeout must be > 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("dial_timeout must be > 0")
 	}
 	if effectiveCfg.ResponseHeaderTimeout <= 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("response_header_timeout must be > 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("response_header_timeout must be > 0")
 	}
 	if effectiveCfg.IdleConnTimeout <= 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("idle_conn_timeout must be > 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("idle_conn_timeout must be > 0")
 	}
 	if effectiveCfg.UpstreamKeepAliveSec <= 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("upstream_keepalive_sec must be > 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("upstream_keepalive_sec must be > 0")
 	}
 	if effectiveCfg.MaxIdleConns <= 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("max_idle_conns must be > 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("max_idle_conns must be > 0")
 	}
 	if effectiveCfg.MaxIdleConnsPerHost <= 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("max_idle_conns_per_host must be > 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("max_idle_conns_per_host must be > 0")
 	}
 	if effectiveCfg.MaxConnsPerHost <= 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("max_conns_per_host must be > 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("max_conns_per_host must be > 0")
 	}
 	if effectiveCfg.ExpectContinueTimeout <= 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("expect_continue_timeout must be > 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("expect_continue_timeout must be > 0")
 	}
 	if effectiveCfg.MaxResponseBufferBytes < 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("max_response_buffer_bytes must be >= 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("max_response_buffer_bytes must be >= 0")
 	}
 	if effectiveCfg.FlushIntervalMS < 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("flush_interval_ms must be >= 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("flush_interval_ms must be >= 0")
 	}
-	if err := validateProxyAccessLogMode(effectiveCfg.AccessLogMode); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+	if err := proxyaccesslog.ValidateMode(effectiveCfg.AccessLogMode); err != nil {
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
-	if err := validateProxyResponseCompressionConfig(effectiveCfg.ResponseCompression, effectiveCfg.MaxResponseBufferBytes); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+	if err := proxycompression.ValidateConfig(effectiveCfg.ResponseCompression, effectiveCfg.MaxResponseBufferBytes); err != nil {
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	if effectiveCfg.RetryAttempts < 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("retry_attempts must be >= 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("retry_attempts must be >= 0")
 	}
 	if effectiveCfg.RetryBackoffMS < 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("retry_backoff_ms must be >= 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("retry_backoff_ms must be >= 0")
 	}
 	if effectiveCfg.RetryPerTryTimeoutMS < 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("retry_per_try_timeout_ms must be >= 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("retry_per_try_timeout_ms must be >= 0")
 	}
 	if effectiveCfg.PassiveFailureThreshold < 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("passive_failure_threshold must be >= 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("passive_failure_threshold must be >= 0")
 	}
 	if effectiveCfg.CircuitBreakerOpenSec < 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("circuit_breaker_open_sec must be >= 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("circuit_breaker_open_sec must be >= 0")
 	}
 	if effectiveCfg.CircuitBreakerHalfOpenRequests < 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("circuit_breaker_half_open_requests must be >= 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("circuit_breaker_half_open_requests must be >= 0")
 	}
 	if effectiveCfg.HealthCheckInterval <= 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("health_check_interval_sec must be > 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("health_check_interval_sec must be > 0")
 	}
 	if effectiveCfg.HealthCheckTimeout <= 0 {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("health_check_timeout_sec must be > 0")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("health_check_timeout_sec must be > 0")
 	}
 	if effectiveCfg.HealthCheckPath != "" && !strings.HasPrefix(effectiveCfg.HealthCheckPath, "/") {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("health_check_path must start with '/'")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("health_check_path must start with '/'")
 	}
 	if effectiveCfg.HealthCheckPath == "" {
 		if len(effectiveCfg.HealthCheckHeaders) > 0 {
-			return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("health_check_headers requires health_check_path")
+			return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("health_check_headers requires health_check_path")
 		}
 		if effectiveCfg.HealthCheckExpectedBody != "" {
-			return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("health_check_expected_body requires health_check_path")
+			return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("health_check_expected_body requires health_check_path")
 		}
 		if effectiveCfg.HealthCheckExpectedBodyRegex != "" {
-			return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("health_check_expected_body_regex requires health_check_path")
+			return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("health_check_expected_body_regex requires health_check_path")
 		}
 	}
 	if err := validateProxyHealthCheckConfig(effectiveCfg); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	if err := validateProxyUpstreams(effectiveCfg); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	if effectiveCfg.ErrorHTMLFile != "" && effectiveCfg.ErrorRedirectURL != "" {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("error_html_file and error_redirect_url are mutually exclusive")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("error_html_file and error_redirect_url are mutually exclusive")
 	}
 	if err := validateProxyResponseHeaderSanitizeConfig(effectiveCfg.ResponseHeaderSanitize); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	if err := validateProxyHashPolicy(effectiveCfg.HashPolicy, effectiveCfg.HashKey, "hash_policy"); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	if err := validateProxyRetryStatusCodes(effectiveCfg.RetryStatusCodes, "retry_status_codes"); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	if err := validateProxyRetryMethods(effectiveCfg.RetryMethods, "retry_methods"); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	if err := validateProxyRetryConfiguration(effectiveCfg); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	if err := validateProxyPassiveCircuitConfiguration(effectiveCfg); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	if proxyRulesHasGlobalTLSConfig(effectiveCfg) && !proxyRulesHasHTTPSUpstream(effectiveCfg) {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, fmt.Errorf("global upstream TLS settings require at least one https upstream")
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, fmt.Errorf("global upstream TLS settings require at least one https upstream")
 	}
 	if err := validateProxyHTTP2Configuration(effectiveCfg); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	if err := validateProxyRoutes(effectiveCfg); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	target, err := proxyPreparedPrimaryTarget(effectiveCfg)
 	if err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	if _, err := proxyTransportProfileCatalog(effectiveCfg); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	if err := precomputeProxyStaticFallbackTargets(&effectiveCfg); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
-	errRes, err := newProxyErrorResponse(effectiveCfg)
+	errRes, err := proxyerror.New(proxyerror.Config{
+		HTMLFile:    effectiveCfg.ErrorHTMLFile,
+		RedirectURL: effectiveCfg.ErrorRedirectURL,
+	})
 	if err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyErrorResponse{}, err
+		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	return cfg, effectiveCfg, target, errRes, nil
 }
@@ -1061,8 +1209,8 @@ func normalizeProxyRulesConfig(in ProxyRulesConfig) ProxyRulesConfig {
 	out.ErrorHTMLFile = strings.TrimSpace(out.ErrorHTMLFile)
 	out.ErrorRedirectURL = strings.TrimSpace(out.ErrorRedirectURL)
 	out.ResponseHeaderSanitize = normalizeProxyResponseHeaderSanitizeConfig(out.ResponseHeaderSanitize)
-	out.ResponseCompression = normalizeProxyResponseCompressionConfig(out.ResponseCompression)
-	out.AccessLogMode = normalizeProxyAccessLogMode(out.AccessLogMode)
+	out.ResponseCompression = proxycompression.NormalizeConfig(out.ResponseCompression)
+	out.AccessLogMode = proxyaccesslog.NormalizeMode(out.AccessLogMode)
 	out.LoadBalancingStrategy = normalizeProxyLoadBalancingStrategy(out.LoadBalancingStrategy)
 	out.HashPolicy = normalizeProxyHashPolicy(out.HashPolicy)
 	out.HashKey = strings.TrimSpace(out.HashKey)
@@ -1109,7 +1257,7 @@ func reloadProxyRuntimeWithSitesAndVhosts(sites SiteConfigFile, vhosts VhostConf
 	rt.effectiveCfg = prepared.effectiveCfg
 	rt.target = prepared.target
 	rt.errRes = prepared.errRes
-	setRuntimeProxyAccessLogMode(prepared.effectiveCfg.AccessLogMode)
+	proxyaccesslog.SetRuntimeMode(prepared.effectiveCfg.AccessLogMode)
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
 	if setter, ok := rt.proxyEngine.(proxyEngineFlushIntervalSetter); ok {
 		setter.SetFlushInterval(flushInterval)
@@ -2911,10 +3059,7 @@ func proxyBackendsVisibleUpstreams(cfg ProxyRulesConfig) []ProxyUpstream {
 }
 
 func proxyUpstreamVisibleInBackendsSurface(upstream ProxyUpstream) bool {
-	if proxyUpstreamIsDirect(upstream) {
-		return true
-	}
-	return proxyUpstreamIsVhostManaged(upstream) && upstream.GeneratedKind == proxyUpstreamGeneratedKindVhostTarget
+	return proxyUpstreamIsDirect(upstream)
 }
 
 func proxyDisplayUpstream(cfg ProxyRulesConfig) string {
@@ -3454,36 +3599,11 @@ func (m *upstreamHealthMonitor) refreshDiscoveryIfDue(force bool) time.Duration 
 }
 
 func copyProxyDiscoveryStates(in map[string]proxyDiscoveryRuntimeState) map[string]proxyDiscoveryRuntimeState {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]proxyDiscoveryRuntimeState, len(in))
-	for key, value := range in {
-		value.Targets = append([]string(nil), value.Targets...)
-		out[key] = value
-	}
-	return out
+	return proxydiscovery.CopyStates(in)
 }
 
 func proxyDiscoveryStatesEqual(left map[string]proxyDiscoveryRuntimeState, right map[string]proxyDiscoveryRuntimeState) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for key, leftState := range left {
-		rightState, ok := right[key]
-		if !ok {
-			return false
-		}
-		if leftState.LastLookupAt != rightState.LastLookupAt ||
-			leftState.LastSuccessAt != rightState.LastSuccessAt ||
-			leftState.LastFailureAt != rightState.LastFailureAt ||
-			leftState.LastError != rightState.LastError ||
-			leftState.NextRefreshAt != rightState.NextRefreshAt ||
-			strings.Join(leftState.Targets, "\x00") != strings.Join(rightState.Targets, "\x00") {
-			return false
-		}
-	}
-	return true
+	return proxydiscovery.StatesEqual(left, right)
 }
 
 func (m *upstreamHealthMonitor) currentConfig() ProxyRulesConfig {

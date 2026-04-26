@@ -76,9 +76,30 @@ rows; the other seed JSON/rule files are not runtime authority.
 
 ## Quick Start
 
-### Local Preview
+### Install
 
-A simple local preview flow is:
+For a direct Linux host install, start with the install target:
+
+```bash
+make install TARGET=linux-systemd
+```
+
+This builds the embedded Admin UI and Go binary, creates the runtime tree, runs
+DB migration, imports WAF/CRS assets, seeds first-run DB config, and installs
+systemd units for the local host. The scheduled-task timer is enabled by
+default; set `INSTALL_ENABLE_SCHEDULED_TASKS=0` if this host should not execute
+scheduled tasks.
+
+For detailed install options such as `PREFIX`, `INSTALL_USER`, scheduled task
+units, or container/platform deployment instead of host install, see:
+
+- [docs/build/binary-deployment.md](docs/build/binary-deployment.md)
+- [docs/build/container-deployment.md](docs/build/container-deployment.md)
+
+### Local Test Preview
+
+If you only want to test the Admin UI and local runtime flow, use the preview
+target:
 
 ```bash
 make preset-apply PRESET=minimal

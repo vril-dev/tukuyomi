@@ -17,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"tukuyomi/internal/proxybuffer"
 )
 
 type nativeHTTP1Transport struct {
@@ -723,8 +725,8 @@ func nativeHTTP1ValidateTrailers(trailer http.Header) (http.Header, error) {
 }
 
 func nativeHTTP1WriteChunkedBody(w *bufio.Writer, body io.Reader, trailer http.Header) error {
-	buf := proxyReverseCopyBufferPool.Get()
-	defer proxyReverseCopyBufferPool.Put(buf)
+	buf := proxybuffer.GetCopyBuffer()
+	defer proxybuffer.PutCopyBuffer(buf)
 	for {
 		n, readErr := body.Read(buf)
 		if n > 0 {

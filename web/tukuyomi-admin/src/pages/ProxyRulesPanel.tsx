@@ -2115,8 +2115,13 @@ function MultilineTextArea<T>({
 }) {
   const serialized = useMemo(() => serialize(value), [serialize, value]);
   const [draft, setDraft] = useState(serialized);
+  const localNormalized = useRef(serialized);
 
   useEffect(() => {
+    if (serialized === localNormalized.current) {
+      return;
+    }
+    localNormalized.current = serialized;
     setDraft(serialized);
   }, [serialized]);
 
@@ -2126,8 +2131,9 @@ function MultilineTextArea<T>({
       value={draft}
       onChange={(event) => {
         const nextText = event.target.value;
-        setDraft(nextText);
         const parsed = parse(nextText);
+        localNormalized.current = serialize(parsed);
+        setDraft(nextText);
         if (!equals(parsed, value)) {
           onValueChange(parsed);
         }

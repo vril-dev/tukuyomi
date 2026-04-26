@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"tukuyomi/internal/proxyaccesslog"
+
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
@@ -58,8 +60,8 @@ func TestValidateProxyRulesRaw(t *testing.T) {
 	if cfg.EmitUpstreamNameRequestHeader {
 		t.Fatal("emit_upstream_name_request_header should default to false")
 	}
-	if cfg.AccessLogMode != proxyAccessLogModeFull {
-		t.Fatalf("access_log_mode=%q want %q", cfg.AccessLogMode, proxyAccessLogModeFull)
+	if cfg.AccessLogMode != proxyaccesslog.ModeFull {
+		t.Fatalf("access_log_mode=%q want %q", cfg.AccessLogMode, proxyaccesslog.ModeFull)
 	}
 
 	bad := strings.Replace(good, "http://127.0.0.1:8080", "ftp://127.0.0.1:8080", 1)

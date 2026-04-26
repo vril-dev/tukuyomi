@@ -10,6 +10,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/middleware"
+	"tukuyomi/internal/overloadstate"
+	"tukuyomi/internal/proxycompression"
+	"tukuyomi/internal/serverruntime"
 )
 
 func MetricsHandler(c *gin.Context) {
@@ -20,18 +23,18 @@ func MetricsHandler(c *gin.Context) {
 	adminRate := AdminRateLimitStatsSnapshot()
 	requestSecurityEvents := RequestSecurityEventStatsSnapshot()
 	tlsStatus := ServerTLSRuntimeStatusSnapshot()
-	http3Status := ServerHTTP3RuntimeStatusSnapshot()
+	http3Status := serverruntime.HTTP3StatusSnapshot()
 	nativeHTTP1Status := NativeHTTP1ServerMetricsSnapshot()
 	securityAudit := SecurityAuditStatusSnapshot()
 	wafEventAsync := WAFEventAsyncStatusSnapshot()
-	globalOverload := overloadSnapshot("global")
-	proxyOverload := overloadSnapshot("proxy")
+	globalOverload := overloadstate.Snapshot("global")
+	proxyOverload := overloadstate.Snapshot("proxy")
 	_, _, proxyCfg, proxyHealth, _ := ProxyRulesSnapshot()
 	siteStatuses := SiteStatusSnapshot()
 	proxyCompressionStatus := proxyResponseCompressionStatusSnapshot()
 	transportMetrics := ProxyTransportMetricsSnapshot()
 	proxyRuntimeReady := proxyRuntimeInstance() != nil
-	proxyCompressionEnabled := proxyRuntimeReady && proxyResponseCompressionEnabled(proxyCfg.ResponseCompression)
+	proxyCompressionEnabled := proxyRuntimeReady && proxycompression.Enabled(proxyCfg.ResponseCompression)
 
 	var b strings.Builder
 	writePromCounter(&b, "tukuyomi_rate_limit_requests_total", rate.Requests)
@@ -106,7 +109,7 @@ func MetricsHandler(c *gin.Context) {
 	writePromCounter(&b, "tukuyomi_proxy_response_compression_skipped_transform_total", uint64(proxyCompressionStatus.SkippedTransformTotal))
 	writePromCounter(&b, "tukuyomi_proxy_response_compression_skipped_upgrade_total", uint64(proxyCompressionStatus.SkippedUpgradeTotal))
 	for _, algorithm := range supportedProxyResponseCompressionAlgorithms {
-		writePromGaugeLabeled(&b, "tukuyomi_proxy_response_compression_algorithm_enabled", map[string]string{"algorithm": algorithm}, boolGauge(proxyRuntimeReady && proxyResponseCompressionAllowsAlgorithm(proxyCfg.ResponseCompression, algorithm)))
+		writePromGaugeLabeled(&b, "tukuyomi_proxy_response_compression_algorithm_enabled", map[string]string{"algorithm": algorithm}, boolGauge(proxyRuntimeReady && proxycompression.AllowsAlgorithm(proxyCfg.ResponseCompression, algorithm)))
 		writePromCounterLabeled(&b, "tukuyomi_proxy_response_compression_compressed_by_algorithm_total", map[string]string{"algorithm": algorithm}, uint64(proxyCompressionStatus.CompressedByAlgorithm[algorithm]))
 	}
 	writePromGauge(&b, "tukuyomi_upstream_active_backends", proxyHealth.ActiveBackends)

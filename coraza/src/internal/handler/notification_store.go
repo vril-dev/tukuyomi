@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/mail"
 	"net/smtp"
@@ -15,9 +16,16 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"tukuyomi/internal/bypassconf"
+	"tukuyomi/internal/runtimefiles"
 )
 
 const (
+	notificationConfigBlobKey = "notification_rules"
+
 	notificationCategorySecurity = "security"
 	notificationCategoryUpstream = "upstream"
 
@@ -213,15 +221,8 @@ func InitNotifications(path string) error {
 	notificationPath = target
 	notificationMu.Unlock()
 
-	if store := getLogsStatsStore(); store != nil {
-		raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(notificationConfigBlobKey), normalizeNotificationPolicyRaw, "notification rules")
-		if err != nil {
-			return fmt.Errorf("read notification config db: %w", err)
-		}
-		if !found {
-			return fmt.Errorf("normalized notification config missing in db; run make db-import before removing seed files")
-		}
-		return applyNotificationPolicyRaw(raw)
+	if handled, err := initPolicyJSONConfigFromDB(notificationPolicyJSONDomain.dbInit(applyNotificationPolicyRaw)); handled {
+		return err
 	}
 
 	if err := ensureNotificationFile(target); err != nil {
@@ -247,6 +248,128 @@ func GetNotificationConfig() notificationConfig {
 
 func GetNotificationStatus() notificationStatusSnapshot {
 	return notificationRuntimeMgr.Status()
+}
+
+func GetNotificationRules(c *gin.Context) {
+	path := GetNotificationsPath()
+	raw, _ := os.ReadFile(path)
+	savedAt := runtimefiles.FileSavedAt(path)
+	dbRaw, rec, found, ok := loadPolicyJSONConfigForAdmin(c, notificationPolicyJSONDomain.adminRead())
+	if !ok {
+		return
+	}
+	if found {
+		rt, parseErr := ValidateNotificationRaw(string(dbRaw))
+		if parseErr != nil {
+			respondConfigBlobDBError(c, "notification db rows parse failed", parseErr)
+			return
+		}
+		savedAt = configVersionSavedAt(rec)
+		c.JSON(http.StatusOK, gin.H{
+			"etag":          rec.ETag,
+			"raw":           string(dbRaw),
+			"enabled":       rt.Raw.Enabled,
+			"sinks":         len(rt.Raw.Sinks),
+			"enabled_sinks": countEnabledNotificationSinks(rt.Raw.Sinks),
+			"active_alerts": GetNotificationStatus().ActiveAlerts,
+			"saved_at":      savedAt,
+		})
+		return
+	}
+
+	cfg := GetNotificationConfig()
+	status := GetNotificationStatus()
+	c.JSON(http.StatusOK, gin.H{
+		"etag":          bypassconf.ComputeETag(raw),
+		"raw":           string(raw),
+		"enabled":       cfg.Enabled,
+		"sinks":         len(cfg.Sinks),
+		"enabled_sinks": countEnabledNotificationSinks(cfg.Sinks),
+		"active_alerts": status.ActiveAlerts,
+		"saved_at":      savedAt,
+	})
+}
+
+func GetNotificationStatusHandler(c *gin.Context) {
+	c.JSON(http.StatusOK, GetNotificationStatus())
+}
+
+func ValidateNotificationRules(c *gin.Context) {
+	in, ok := bindRawPolicyPutBody(c)
+	if !ok {
+		return
+	}
+	rt, err := ValidateNotificationRaw(in.Raw)
+	if err != nil {
+		respondPolicyValidationError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":            true,
+		"messages":      []string{},
+		"enabled":       rt.Raw.Enabled,
+		"sinks":         len(rt.Raw.Sinks),
+		"enabled_sinks": countEnabledNotificationSinks(rt.Raw.Sinks),
+	})
+}
+
+func PutNotificationRules(c *gin.Context) {
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
+	}
+
+	in, ok := bindRawPolicyPutBody(c)
+	if !ok {
+		return
+	}
+	rt, err := ValidateNotificationRaw(in.Raw)
+	if err != nil {
+		respondPolicyValidationError(c, err)
+		return
+	}
+
+	normalizedRaw, err := normalizeNotificationPolicyRaw(in.Raw)
+	if err != nil {
+		respondPolicyValidationError(c, err)
+		return
+	}
+	rec, ok := writePolicyJSONConfigUpdate(c, store, notificationPolicyJSONDomain.update(normalizedRaw))
+	if !ok {
+		return
+	}
+	if err := applyNotificationPolicyRaw(normalizedRaw); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":            true,
+		"etag":          rec.ETag,
+		"enabled":       rt.Raw.Enabled,
+		"sinks":         len(rt.Raw.Sinks),
+		"enabled_sinks": countEnabledNotificationSinks(rt.Raw.Sinks),
+		"saved_at":      rec.ActivatedAt.Format(time.RFC3339Nano),
+	})
+}
+
+func TestNotificationRules(c *gin.Context) {
+	var in struct {
+		Note string `json:"note"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil && err != io.EOF {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := TestNotificationSend(in.Note); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func SyncNotificationStorage() error {
+	return syncPolicyJSONConfigStorage(notificationPolicyJSONDomain.sync(applyNotificationPolicyRaw))
 }
 
 func ReloadNotifications() error {

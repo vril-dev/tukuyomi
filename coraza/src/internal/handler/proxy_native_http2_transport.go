@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"tukuyomi/internal/proxybuffer"
+
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
 )
@@ -1081,8 +1083,8 @@ func (s *nativeHTTP2Session) sendRequestHeaders(ctx context.Context, st *nativeH
 
 func (s *nativeHTTP2Session) sendRequestBody(ctx context.Context, st *nativeHTTP2Stream, req *http.Request) error {
 	defer req.Body.Close()
-	buf := proxyReverseCopyBufferPool.Get()
-	defer proxyReverseCopyBufferPool.Put(buf)
+	buf := proxybuffer.GetCopyBuffer()
+	defer proxybuffer.PutCopyBuffer(buf)
 	for {
 		n, readErr := req.Body.Read(buf)
 		if n > 0 {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiGetJson, apiPostJson, apiPutJson } from "@/lib/api";
 import { useAdminRuntime } from "@/lib/adminRuntime";
+import { ParsedTextArea, stringListEqual } from "@/components/EditorChrome";
 import { getErrorMessage } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 
@@ -313,9 +314,12 @@ export default function SitesPanel() {
 
                 <label className="space-y-1 text-sm md:col-span-2">
                   <span className="block text-xs text-neutral-600">{tx("Hosts")}</span>
-                  <textarea
-                    value={stringListToMultiline(site.hosts)}
-                    onChange={(e) => updateSite(index, { ...site, hosts: multilineToStringList(e.target.value) })}
+                  <ParsedTextArea
+                    value={site.hosts}
+                    onValueChange={(next) => updateSite(index, { ...site, hosts: next })}
+                    serialize={stringListToMultiline}
+                    parse={multilineToStringList}
+                    equals={stringListEqual}
                     className="min-h-24 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-sm"
                     placeholder={"blog.example.com\n*.example.com"}
                   />

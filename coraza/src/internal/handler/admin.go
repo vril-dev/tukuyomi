@@ -1,17 +1,180 @@
 package handler
 
 import (
+	"embed"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"tukuyomi/internal/adminaudit"
+	"tukuyomi/internal/adminguard"
+	"tukuyomi/internal/adminui"
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/overloadstate"
+	"tukuyomi/internal/requestmeta"
+	"tukuyomi/internal/serverruntime"
 	"tukuyomi/internal/waf"
 )
+
+//go:embed admin_ui_dist
+var adminUIEmbedFS embed.FS
+
+type adminRateLimitStats = adminguard.RateLimitStats
+type adminRateLimitDecision = adminguard.RateLimitDecision
+type adminAuditInfo = adminaudit.Info
+type fpTunerAuditEntry = adminaudit.FPTunerEntry
+
+const defaultFPTunerAuditFile = adminaudit.DefaultFPTunerFile
+
+func InitAdminGuards() error {
+	return adminguard.Init()
+}
+
+func AdminAccessMiddleware(endpointKind string) gin.HandlerFunc {
+	return adminguard.AccessMiddleware(endpointKind)
+}
+
+func AdminRateLimitMiddleware() gin.HandlerFunc {
+	return adminguard.RateLimitMiddleware()
+}
+
+func CheckAdminUIAccess(r *http.Request) bool {
+	return adminguard.CheckUIAccess(r)
+}
+
+func EvaluateAdminUIRateLimit(r *http.Request) adminRateLimitDecision {
+	return adminguard.EvaluateUIRateLimit(r)
+}
+
+func AdminRateLimitStatsSnapshot() adminRateLimitStats {
+	return adminguard.StatsSnapshot()
+}
+
+func GetFPTunerAudit(c *gin.Context) {
+	entries, err := readFPTunerAudit(parseFPTunerAuditLimit(c.Query("limit")))
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"entries": entries,
+	})
+}
+
+func readFPTunerAudit(limit int) ([]fpTunerAuditEntry, error) {
+	path := strings.TrimSpace(config.FPTunerAuditFile)
+	if path == "" {
+		path = defaultFPTunerAuditFile
+	}
+	return readAdminAuditLatest[fpTunerAuditEntry](path, limit, "fp tuner")
+}
+
+func parseFPTunerAuditLimit(raw string) int {
+	return parseAdminAuditLimit(raw)
+}
+
+func newAdminAuditInfo(c *gin.Context, event string) adminAuditInfo {
+	actor := adminAuditActor(c)
+	ip := ""
+	if c != nil {
+		ip = requestmeta.ClientIPFromHeaders(c.GetHeader("X-Real-IP"), c.GetHeader("X-Forwarded-For"), c.ClientIP())
+	}
+	return adminaudit.NewInfo(event, actor, ip)
+}
+
+func adminAuditActor(c *gin.Context) string {
+	if c == nil {
+		return "unknown"
+	}
+	if actor := strings.TrimSpace(c.GetHeader("X-Tukuyomi-Actor")); actor != "" {
+		return actor
+	}
+	if actor := strings.TrimSpace(c.GetString("tukuyomi.admin_auth_fallback_actor")); actor != "" {
+		return actor
+	}
+	return "unknown"
+}
+
+func appendAdminAudit(path string, writeErrorEvent string, entry any) {
+	if err := adminaudit.Append(path, entry); err != nil {
+		emitAdminAuditWriteError(path, writeErrorEvent, err)
+	}
+}
+
+func readAdminAuditLatest[T any](path string, limit int, decodeLabel string) ([]T, error) {
+	return adminaudit.Latest[T](path, limit, decodeLabel)
+}
+
+func parseAdminAuditLimit(raw string) int {
+	return adminaudit.ParseLimit(raw)
+}
+
+func clampAdminAuditLimit(limit int) int {
+	return adminaudit.ClampLimit(limit)
+}
+
+func emitAdminAuditWriteError(path string, writeErrorEvent string, err error) {
+	emitJSONLog(map[string]any{
+		"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+		"service": "coraza",
+		"level":   "WARN",
+		"event":   writeErrorEvent,
+		"path":    path,
+		"error":   err.Error(),
+	})
+}
+
+func RegisterAdminUIRoutes(r *gin.Engine) {
+	if r == nil {
+		return
+	}
+	uiFS, err := fs.Sub(adminUIEmbedFS, "admin_ui_dist")
+	if err != nil {
+		return
+	}
+	adminui.RegisterRoutes(r, adminui.Options{
+		FS:          uiFS,
+		BasePath:    config.UIBasePath,
+		CheckAccess: CheckAdminUIAccess,
+		RateLimit: func(req *http.Request) adminui.RateLimitDecision {
+			decision := EvaluateAdminUIRateLimit(req)
+			return adminui.RateLimitDecision{
+				Allowed:           decision.Allowed,
+				StatusCode:        decision.StatusCode,
+				RetryAfterSeconds: decision.RetryAfterSeconds,
+			}
+		},
+	})
+}
+
+func respondConfigDBStoreRequired(c *gin.Context) {
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error": errConfigDBStoreRequired.Error()})
+}
+
+func respondIfConfigDBStoreRequired(c *gin.Context, err error) bool {
+	if !errors.Is(err, errConfigDBStoreRequired) {
+		return false
+	}
+	respondConfigDBStoreRequired(c)
+	return true
+}
+
+func respondConfigBlobDBError(c *gin.Context, message string, err error) {
+	if errors.Is(err, errConfigDBStoreRequired) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, gin.H{
+		"error":    message,
+		"db_error": err.Error(),
+	})
+}
 
 func StatusHandler(c *gin.Context) {
 	semantic := GetSemanticConfig()
@@ -22,10 +185,10 @@ func StatusHandler(c *gin.Context) {
 	latestBotDecision, hasLatestBotDecision := latestBotDefenseDecision()
 	adminRateStats := AdminRateLimitStatsSnapshot()
 	requestSecurityEventStats := RequestSecurityEventStatsSnapshot()
-	globalOverload := overloadSnapshot("global")
-	proxyOverload := overloadSnapshot("proxy")
+	globalOverload := overloadstate.Snapshot("global")
+	proxyOverload := overloadstate.Snapshot("proxy")
 	serverTLSStatus := ServerTLSRuntimeStatusSnapshot()
-	serverHTTP3Status := ServerHTTP3RuntimeStatusSnapshot()
+	serverHTTP3Status := serverruntime.HTTP3StatusSnapshot()
 	securityAuditStatus := SecurityAuditStatusSnapshot()
 	_, _, responseCacheCfg, responseCacheStats := ResponseCacheSnapshot()
 	_, proxyETag, proxyCfg, proxyHealth, proxyRollbackDepth := ProxyRulesSnapshot()

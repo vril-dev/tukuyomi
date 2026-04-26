@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"tukuyomi/internal/botdefensestate"
+	"tukuyomi/internal/bottelemetry"
 )
 
 func TestValidateBotDefenseRaw(t *testing.T) {
@@ -918,7 +921,7 @@ func TestMaybeInjectBotDefenseTelemetryHTMLResponse(t *testing.T) {
 		t.Fatalf("ReadAll(res.Body): %v", err)
 	}
 	out := string(got)
-	if !strings.Contains(out, botDefenseInvisibleScriptMarker) {
+	if !strings.Contains(out, bottelemetry.ScriptMarker) {
 		t.Fatalf("expected invisible telemetry marker in response body: %s", out)
 	}
 	if !strings.Contains(out, rt.BrowserSignals.JSCookieName) {
@@ -1674,14 +1677,8 @@ func saveBotDefenseStateForTest() func() {
 	oldPath := botDefensePath
 	oldRuntime := botDefenseRuntime
 	botDefenseMu.RUnlock()
-	botDefenseBehaviorMu.Lock()
-	oldBehaviorState := cloneBotDefenseBehaviorStateByIPForTest(botDefenseBehaviorStateByIP)
-	oldBehaviorSweep := botDefenseBehaviorSweep
-	botDefenseBehaviorMu.Unlock()
-	botDefenseQuarantineMu.Lock()
-	oldQuarantineState := cloneBotDefenseQuarantineStateByIPForTest(botDefenseQuarantineStateByIP)
-	oldQuarantineSweep := botDefenseQuarantineSweep
-	botDefenseQuarantineMu.Unlock()
+	oldBehaviorState := botdefensestate.SnapshotBehaviorStore()
+	oldQuarantineState := botdefensestate.SnapshotQuarantineStore()
 	botDefenseChallengeStateMu.Lock()
 	oldChallengeState := make(map[string]botDefenseChallengePendingState, len(botDefenseChallengeStateByKey))
 	for k, v := range botDefenseChallengeStateByKey {
@@ -1695,49 +1692,13 @@ func saveBotDefenseStateForTest() func() {
 		botDefensePath = oldPath
 		botDefenseRuntime = oldRuntime
 		botDefenseMu.Unlock()
-		botDefenseBehaviorMu.Lock()
-		botDefenseBehaviorStateByIP = oldBehaviorState
-		botDefenseBehaviorSweep = oldBehaviorSweep
-		botDefenseBehaviorMu.Unlock()
-		botDefenseQuarantineMu.Lock()
-		botDefenseQuarantineStateByIP = oldQuarantineState
-		botDefenseQuarantineSweep = oldQuarantineSweep
-		botDefenseQuarantineMu.Unlock()
+		botdefensestate.RestoreBehaviorStore(oldBehaviorState)
+		botdefensestate.RestoreQuarantineStore(oldQuarantineState)
 		botDefenseChallengeStateMu.Lock()
 		botDefenseChallengeStateByKey = oldChallengeState
 		botDefenseChallengeStateSweep = oldChallengeSweep
 		botDefenseChallengeStateMu.Unlock()
 	}
-}
-
-func cloneBotDefenseBehaviorStateByIPForTest(in map[string]botDefenseBehaviorState) map[string]botDefenseBehaviorState {
-	out := make(map[string]botDefenseBehaviorState, len(in))
-	for key, state := range in {
-		if state.Paths != nil {
-			paths := make(map[string]struct{}, len(state.Paths))
-			for path := range state.Paths {
-				paths[path] = struct{}{}
-			}
-			state.Paths = paths
-		}
-		if state.UserAgents != nil {
-			userAgents := make(map[string]struct{}, len(state.UserAgents))
-			for userAgent := range state.UserAgents {
-				userAgents[userAgent] = struct{}{}
-			}
-			state.UserAgents = userAgents
-		}
-		out[key] = state
-	}
-	return out
-}
-
-func cloneBotDefenseQuarantineStateByIPForTest(in map[string]botDefenseQuarantineState) map[string]botDefenseQuarantineState {
-	out := make(map[string]botDefenseQuarantineState, len(in))
-	for key, state := range in {
-		out[key] = state
-	}
-	return out
 }
 
 func saveIPReputationStateForTest() func() {

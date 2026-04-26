@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/adminauth"
+	"tukuyomi/internal/adminseed"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/middleware"
 )
@@ -29,6 +31,12 @@ const (
 	maxAdminCSRFCookieBytes       = 256
 	adminAuthHashPrefixSHA256     = "sha256:"
 	adminAuthHashPrefixHMACSHA256 = "hmac-sha256:"
+
+	startupAdminUsersSeedName = adminseed.StartupUsersSeedName
+
+	AdminBootstrapUsernameEnv = adminseed.BootstrapUsernameEnv
+	AdminBootstrapEmailEnv    = adminseed.BootstrapEmailEnv
+	AdminBootstrapPasswordEnv = adminseed.BootstrapPasswordEnv
 )
 
 var (
@@ -60,6 +68,90 @@ type adminSessionRecord struct {
 	Principal     adminauth.Principal
 	ExpiresAt     time.Time
 	CSRFTokenHash string
+}
+
+type preparedAdminUserSeedRecord = adminseed.PreparedUserSeedRecord
+
+func EnsureAdminBootstrapOwnerFromEnv() (bool, error) {
+	username := strings.TrimSpace(os.Getenv(AdminBootstrapUsernameEnv))
+	password := os.Getenv(AdminBootstrapPasswordEnv)
+	email := strings.TrimSpace(os.Getenv(AdminBootstrapEmailEnv))
+	if username == "" && strings.TrimSpace(password) == "" && email == "" {
+		return false, nil
+	}
+	if username == "" || strings.TrimSpace(password) == "" {
+		return false, fmt.Errorf("%s and %s are required for admin bootstrap", AdminBootstrapUsernameEnv, AdminBootstrapPasswordEnv)
+	}
+
+	store := getLogsStatsStore()
+	if store == nil {
+		return false, errAdminAuthStoreUnavailable
+	}
+	count, err := store.countAdminUsers()
+	if err != nil {
+		return false, err
+	}
+	if count > 0 {
+		return false, nil
+	}
+
+	passwordHash, err := adminauth.HashPassword(password)
+	if err != nil {
+		return false, err
+	}
+	if _, err := store.createAdminUser(username, email, adminauth.AdminRoleOwner, passwordHash, true, time.Now().UTC()); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func importAdminUsersSeedStorage() error {
+	raw, found, err := readStartupSeedFile("", startupAdminUsersSeedName)
+	if err != nil {
+		return fmt.Errorf("read admin users seed file: %w", err)
+	}
+	if !found || strings.TrimSpace(string(raw)) == "" {
+		return nil
+	}
+	prepared, err := prepareAdminUsersSeed(raw)
+	if err != nil {
+		return fmt.Errorf("validate admin users seed file: %w", err)
+	}
+	if len(prepared) == 0 {
+		return nil
+	}
+
+	store := getLogsStatsStore()
+	if store == nil {
+		return fmt.Errorf("db store is not initialized")
+	}
+	count, err := store.countAdminUsers()
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	for _, user := range prepared {
+		passwordHash, err := adminauth.HashPassword(user.Password)
+		if err != nil {
+			return err
+		}
+		if _, err := store.createAdminUser(user.Username, user.Email, user.Role, passwordHash, user.MustChangePassword, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func prepareAdminUsersSeed(raw []byte) ([]preparedAdminUserSeedRecord, error) {
+	return adminseed.PrepareUsers(raw, adminseed.Validators{
+		NormalizeUsername: normalizeAdminUsername,
+		NormalizeEmail:    normalizeAdminEmail,
+		ValidatePassword:  validateManagedAdminPassword,
+	})
 }
 
 func resolveDBAdminAuth(c *gin.Context) (middleware.AdminAuthResult, bool, error) {
@@ -196,6 +288,17 @@ func (s *wafEventStore) createAdminUser(username string, email string, role admi
 		return adminUserRecord{}, err
 	}
 	return rec, nil
+}
+
+func (s *wafEventStore) countAdminUsers() (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, errAdminAuthStoreUnavailable
+	}
+	var count int64
+	if err := s.queryRow(`SELECT COUNT(*) FROM admin_users`).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (s *wafEventStore) authenticateAdminPassword(identifier string, password string, now time.Time) (adminauth.Principal, bool, error) {

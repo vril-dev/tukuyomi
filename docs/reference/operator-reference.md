@@ -210,7 +210,7 @@ Main screens:
 | `/notifications` | Aggregate alerting config and runtime status |
 | `/cache` | Cache rules and internal cache store controls |
 | `/proxy-rules` | Structured direct upstream/backend-pool/route editor for non-vhost traffic, with validate/probe/dry-run/apply/rollback |
-| `/backends` | Canonical backend object inventory. Direct named upstreams support runtime enable/drain/disable and weight override; vhost-generated backends are status-only |
+| `/backends` | Direct upstream backend inventory. Direct named upstreams support runtime enable/drain/disable and weight override; vhost-generated targets stay on the Vhosts surface |
 | `/sites` | Site ownership and TLS binding |
 | `/options` | Runtime inventory, optional artifacts, GeoIP/Country DB management |
 | `/vhosts` | Static / `php-fpm` vhost host, docroot, runtime, and generated-route ownership |
@@ -322,7 +322,7 @@ Only Tukuyomi's native proxy engine is supported. Changing it requires a process
 ### Runtime Backend Operations
 
 - The normalized `upstream_runtime` DB domain stores opt-in runtime overrides for backend keys materialized from direct upstreams and DNS discovery; `data/conf/upstream-runtime.json` is only an empty-DB seed/export path.
-- `Backends` lists canonical backend objects, not backend pools.
+- `Backends` lists direct upstream backend objects, not backend pools.
 - `Backends` is the runtime operations panel for:
   - `enabled`
   - `draining`
@@ -330,8 +330,8 @@ Only Tukuyomi's native proxy engine is supported. Changing it requires a process
   - positive `weight_override`
 - No override means configured behavior from DB `proxy_rules`; `data/conf/proxy.json` is only seed/import/export material.
 - Runtime operations apply to static direct upstreams and DNS-discovered materialized targets.
-- Vhost-generated backends are exposed in `Backends` as status-only canonical objects.
-- Direct route URLs and vhost-generated backends are not runtime operation targets.
+- Vhost-generated targets stay on the `Vhosts` surface and are not listed in `Backends`.
+- Direct route URLs and vhost-generated targets are not runtime operation targets.
 - `draining`, `disabled`, and `unhealthy` backends are excluded from new target selection.
 - `proxy_access` logs now expose the selected backend runtime state via:
   - `selected_upstream_admin_state`

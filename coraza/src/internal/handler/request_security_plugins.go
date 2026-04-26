@@ -1,13 +1,16 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"tukuyomi/internal/botchallenge"
 	"tukuyomi/internal/observability"
+	"tukuyomi/internal/requestsecurityevents"
 )
 
 type requestSecurityPluginPhase string
@@ -16,6 +19,39 @@ const (
 	requestSecurityPluginPhasePreWAF  requestSecurityPluginPhase = "pre_waf"
 	requestSecurityPluginPhasePostWAF requestSecurityPluginPhase = "post_waf"
 )
+
+const (
+	requestSecurityEventSourceFeedbackLoop = requestsecurityevents.SourceFeedbackLoop
+
+	requestSecurityEventTypeIPReputation         = requestsecurityevents.TypeIPReputation
+	requestSecurityEventTypeBotDefenseObserve    = requestsecurityevents.TypeBotDefenseObserve
+	requestSecurityEventTypeBotChallenge         = requestsecurityevents.TypeBotChallenge
+	requestSecurityEventTypeBotChallengeDryRun   = requestsecurityevents.TypeBotChallengeDryRun
+	requestSecurityEventTypeBotQuarantine        = requestsecurityevents.TypeBotQuarantine
+	requestSecurityEventTypeBotQuarantineDryRun  = requestsecurityevents.TypeBotQuarantineDryRun
+	requestSecurityEventTypeBotChallengeIssued   = requestsecurityevents.TypeBotChallengeIssued
+	requestSecurityEventTypeBotChallengePassed   = requestsecurityevents.TypeBotChallengePassed
+	requestSecurityEventTypeBotChallengeFailed   = requestsecurityevents.TypeBotChallengeFailed
+	requestSecurityEventTypeIPReputationFeedback = requestsecurityevents.TypeIPReputationFeedback
+	requestSecurityEventTypeSemanticAnomaly      = requestsecurityevents.TypeSemanticAnomaly
+	requestSecurityEventTypeRateLimited          = requestsecurityevents.TypeRateLimited
+	requestSecurityEventTypeRateLimitPromotion   = requestsecurityevents.TypeRateLimitPromotion
+	requestSecurityEventTypeWAFBlock             = requestsecurityevents.TypeWAFBlock
+	requestSecurityEventActionAllow              = requestsecurityevents.ActionAllow
+	requestSecurityEventActionObserve            = requestsecurityevents.ActionObserve
+	requestSecurityEventActionBlock              = requestsecurityevents.ActionBlock
+	requestSecurityEventActionChallenge          = requestsecurityevents.ActionChallenge
+	requestSecurityEventActionQuarantine         = requestsecurityevents.ActionQuarantine
+	requestSecurityEventActionAllowWithFindings  = requestsecurityevents.ActionAllowWithFindings
+	requestSecurityEventActionWouldChallenge     = requestsecurityevents.ActionWouldChallenge
+	requestSecurityEventActionWouldQuarantine    = requestsecurityevents.ActionWouldQuarantine
+)
+
+type requestSecurityEvent = requestsecurityevents.Event
+type requestSecurityEventObserver = requestsecurityevents.Observer
+type requestSecurityEventBus = requestsecurityevents.Bus
+type requestSecurityEventStatsSnapshot = requestsecurityevents.StatsSnapshot
+type requestSecurityRateLimitFeedbackResult = requestsecurityevents.RateLimitFeedbackResult
 
 type requestSecurityPlugin interface {
 	Name() string
@@ -47,6 +83,7 @@ type requestSecurityPluginFactory func() requestSecurityPlugin
 var (
 	requestSecurityPluginRegistryMu sync.RWMutex
 	requestSecurityPluginFactories  []requestSecurityPluginFactory
+	requestSecurityEventStats       = requestsecurityevents.NewStats()
 )
 
 func init() {
@@ -81,6 +118,89 @@ func newRequestSecurityPlugins() []requestSecurityPlugin {
 		out = append(out, p)
 	}
 	return out
+}
+
+func WriteBotDefenseChallenge(w http.ResponseWriter, r *http.Request, d botDefenseDecision) {
+	botchallenge.Write(w, r, botchallenge.Decision{
+		Status:            d.Status,
+		CookieName:        d.CookieName,
+		BrowserCookieName: d.BrowserCookieName,
+		Token:             d.Token,
+		TTLSeconds:        d.TTLSeconds,
+	})
+}
+
+func newRequestSecurityEventBus() *requestSecurityEventBus {
+	return requestsecurityevents.NewBus(requestSecurityEventStats)
+}
+
+func cloneRequestSecurityEventAttributes(in map[string]any) map[string]any {
+	return requestsecurityevents.CloneAttributes(in)
+}
+
+func cloneRequestSecurityEvent(in requestSecurityEvent) requestSecurityEvent {
+	return requestsecurityevents.CloneEvent(in)
+}
+
+func RequestSecurityEventStatsSnapshot() requestSecurityEventStatsSnapshot {
+	return requestSecurityEventStats.Snapshot()
+}
+
+func (ctx *requestSecurityPluginContext) SubscribeSecurityEvents(observer requestSecurityEventObserver) {
+	if ctx == nil {
+		return
+	}
+	ctx.EventBus.Subscribe(observer)
+}
+
+func (ctx *requestSecurityPluginContext) SecurityEvents() []requestSecurityEvent {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.EventBus.Events()
+}
+
+func (ctx *requestSecurityPluginContext) newSecurityEvent(req *http.Request, sourcePlugin, family, eventType, action string) requestSecurityEvent {
+	traceCtx := context.Background()
+	if req != nil {
+		traceCtx = req.Context()
+	}
+	evt := requestSecurityEvent{
+		TS:            time.Now().UTC().Format(time.RFC3339Nano),
+		ReqID:         strings.TrimSpace(ctx.RequestID),
+		TraceID:       observability.TraceIDFromContext(traceCtx),
+		ClientIP:      strings.TrimSpace(ctx.ClientIP),
+		Country:       strings.TrimSpace(ctx.Country),
+		CountrySource: strings.TrimSpace(ctx.CountrySource),
+		Phase:         string(requestSecurityPluginPhasePreWAF),
+		SourcePlugin:  strings.TrimSpace(sourcePlugin),
+		Family:        strings.TrimSpace(family),
+		EventType:     strings.TrimSpace(eventType),
+		Action:        strings.TrimSpace(action),
+	}
+	if req != nil && req.URL != nil {
+		evt.Path = req.URL.Path
+	}
+	return evt
+}
+
+func (ctx *requestSecurityPluginContext) deriveSecurityEvent(base requestSecurityEvent, sourcePlugin, family, eventType, action string) requestSecurityEvent {
+	evt := cloneRequestSecurityEvent(base)
+	evt.EventID = ""
+	evt.SourcePlugin = strings.TrimSpace(sourcePlugin)
+	evt.Family = strings.TrimSpace(family)
+	evt.EventType = strings.TrimSpace(eventType)
+	evt.Action = strings.TrimSpace(action)
+	evt.Attributes = cloneRequestSecurityEventAttributes(evt.Attributes)
+	evt.TS = time.Now().UTC().Format(time.RFC3339Nano)
+	return evt
+}
+
+func (ctx *requestSecurityPluginContext) publishSecurityEvent(evt requestSecurityEvent) requestSecurityEvent {
+	if ctx == nil {
+		return evt
+	}
+	return ctx.EventBus.Publish(evt)
 }
 
 func newRequestSecurityPluginContext(reqID, clientIP, country string, now time.Time) *requestSecurityPluginContext {

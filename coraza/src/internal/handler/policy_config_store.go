@@ -3,27 +3,87 @@ package handler
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/cacheconf"
+	"tukuyomi/internal/config"
 	"tukuyomi/internal/crsselection"
+	"tukuyomi/internal/runtimefiles"
 )
 
 const (
 	policyJSONConfigSchemaVersion = 1
+	cacheConfigBlobKey            = "cache_rules"
+	bypassConfigBlobKey           = "bypass_rules"
 	crsDisabledConfigDomain       = "crs_disabled_rules"
 	crsDisabledSchemaVersion      = 1
 	overrideRulesConfigDomain     = "override_rules"
 	overrideRulesSchemaVersion    = 1
 )
 
+var errConfigDBStoreRequired = errors.New("configuration db store is not initialized")
+
+type rawPolicyPutBody struct {
+	Raw string `json:"raw"`
+}
+
+type crPutBody struct {
+	RawMode bool                `json:"rawMode"`
+	Raw     string              `json:"raw"`
+	Rules   cacheconf.RulesFile `json:"rules"`
+}
+
+type policyJSONConfigUpdate struct {
+	Spec          policyJSONConfigSpec
+	NormalizedRaw []byte
+	Normalize     func(string) ([]byte, error)
+	ReadReason    string
+	UpdateReason  string
+	DBErrorLabel  string
+}
+
+type policyJSONConfigSync struct {
+	Spec       policyJSONConfigSpec
+	Normalize  func(string) ([]byte, error)
+	ReadReason string
+	Apply      func([]byte) error
+}
+
+type policyJSONConfigDBInit struct {
+	Spec        policyJSONConfigSpec
+	Normalize   func(string) ([]byte, error)
+	ReadReason  string
+	ConfigLabel string
+	Apply       func([]byte) error
+}
+
+type policyJSONConfigAdminRead struct {
+	Spec         policyJSONConfigSpec
+	Normalize    func(string) ([]byte, error)
+	ReadReason   string
+	DBErrorLabel string
+}
+
 type policyJSONConfigSpec struct {
 	Domain string
+}
+
+type policyJSONConfigDomain struct {
+	Spec         policyJSONConfigSpec
+	Normalize    func(string) ([]byte, error)
+	ReadReason   string
+	UpdateReason string
+	DBErrorLabel string
+	ConfigLabel  string
 }
 
 var policyJSONSpecs = map[string]policyJSONConfigSpec{
@@ -53,12 +113,468 @@ var policyJSONSpecs = map[string]policyJSONConfigSpec{
 	},
 }
 
+var (
+	cachePolicyJSONDomain = policyJSONConfigDomain{
+		Spec:         mustPolicyJSONSpec(cacheConfigBlobKey),
+		Normalize:    normalizeCacheRulesPolicyRaw,
+		ReadReason:   "cache rules",
+		UpdateReason: "cache rules update",
+		DBErrorLabel: "cache-rules",
+		ConfigLabel:  "cache rules",
+	}
+	bypassPolicyJSONDomain = policyJSONConfigDomain{
+		Spec:         mustPolicyJSONSpec(bypassConfigBlobKey),
+		Normalize:    normalizeBypassPolicyRaw,
+		ReadReason:   "bypass rules",
+		UpdateReason: "bypass rules update",
+		DBErrorLabel: "bypass",
+		ConfigLabel:  "bypass rules",
+	}
+	countryBlockPolicyJSONDomain = policyJSONConfigDomain{
+		Spec:         mustPolicyJSONSpec(countryBlockConfigBlobKey),
+		Normalize:    normalizeCountryBlockPolicyRaw,
+		ReadReason:   "country block rules",
+		UpdateReason: "country block rules update",
+		DBErrorLabel: "country-block",
+		ConfigLabel:  "country block",
+	}
+	rateLimitPolicyJSONDomain = policyJSONConfigDomain{
+		Spec:         mustPolicyJSONSpec(rateLimitConfigBlobKey),
+		Normalize:    normalizeRateLimitPolicyRaw,
+		ReadReason:   "rate limit rules",
+		UpdateReason: "rate limit rules update",
+		DBErrorLabel: "rate-limit",
+		ConfigLabel:  "rate limit",
+	}
+	botDefensePolicyJSONDomain = policyJSONConfigDomain{
+		Spec:         mustPolicyJSONSpec(botDefenseConfigBlobKey),
+		Normalize:    normalizeBotDefensePolicyRaw,
+		ReadReason:   "bot defense rules",
+		UpdateReason: "bot defense rules update",
+		DBErrorLabel: "bot-defense",
+		ConfigLabel:  "bot defense",
+	}
+	semanticPolicyJSONDomain = policyJSONConfigDomain{
+		Spec:         mustPolicyJSONSpec(semanticConfigBlobKey),
+		Normalize:    normalizeSemanticPolicyRaw,
+		ReadReason:   "semantic rules",
+		UpdateReason: "semantic rules update",
+		DBErrorLabel: "semantic",
+		ConfigLabel:  "semantic",
+	}
+	notificationPolicyJSONDomain = policyJSONConfigDomain{
+		Spec:         mustPolicyJSONSpec(notificationConfigBlobKey),
+		Normalize:    normalizeNotificationPolicyRaw,
+		ReadReason:   "notification rules",
+		UpdateReason: "notification rules update",
+		DBErrorLabel: "notification",
+		ConfigLabel:  "notification",
+	}
+	ipReputationPolicyJSONDomain = policyJSONConfigDomain{
+		Spec:         mustPolicyJSONSpec(ipReputationConfigBlobKey),
+		Normalize:    normalizeIPReputationPolicyRaw,
+		ReadReason:   "ip reputation rules",
+		UpdateReason: "ip reputation rules update",
+		DBErrorLabel: "ip-reputation",
+		ConfigLabel:  "ip reputation",
+	}
+)
+
 func mustPolicyJSONSpec(domain string) policyJSONConfigSpec {
 	spec, ok := policyJSONSpecs[strings.TrimSpace(domain)]
 	if !ok {
 		panic("unknown policy json domain")
 	}
 	return spec
+}
+
+func (d policyJSONConfigDomain) adminRead() policyJSONConfigAdminRead {
+	return policyJSONConfigAdminRead{
+		Spec:         d.Spec,
+		Normalize:    d.Normalize,
+		ReadReason:   d.ReadReason,
+		DBErrorLabel: d.DBErrorLabel,
+	}
+}
+
+func (d policyJSONConfigDomain) update(normalizedRaw []byte) policyJSONConfigUpdate {
+	return policyJSONConfigUpdate{
+		Spec:          d.Spec,
+		NormalizedRaw: normalizedRaw,
+		Normalize:     d.Normalize,
+		ReadReason:    d.ReadReason,
+		UpdateReason:  d.UpdateReason,
+		DBErrorLabel:  d.DBErrorLabel,
+	}
+}
+
+func (d policyJSONConfigDomain) sync(apply func([]byte) error) policyJSONConfigSync {
+	return policyJSONConfigSync{
+		Spec:       d.Spec,
+		Normalize:  d.Normalize,
+		ReadReason: d.ReadReason,
+		Apply:      apply,
+	}
+}
+
+func (d policyJSONConfigDomain) dbInit(apply func([]byte) error) policyJSONConfigDBInit {
+	return policyJSONConfigDBInit{
+		Spec:        d.Spec,
+		Normalize:   d.Normalize,
+		ReadReason:  d.ReadReason,
+		ConfigLabel: d.ConfigLabel,
+		Apply:       apply,
+	}
+}
+
+func requireConfigDBStore() (*wafEventStore, error) {
+	store := getLogsStatsStore()
+	if store == nil {
+		return nil, errConfigDBStoreRequired
+	}
+	return store, nil
+}
+
+func bindRawPolicyPutBody(c *gin.Context) (rawPolicyPutBody, bool) {
+	var in rawPolicyPutBody
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return rawPolicyPutBody{}, false
+	}
+
+	return in, true
+}
+
+func respondPolicyValidationError(c *gin.Context, err error) {
+	c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
+}
+
+func respondPolicyValidationMessages(c *gin.Context, messages []string) {
+	c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": messages})
+}
+
+func loadPolicyJSONConfigForAdmin(c *gin.Context, read policyJSONConfigAdminRead) ([]byte, configVersionRecord, bool, bool) {
+	store := getLogsStatsStore()
+	if store == nil {
+		return nil, configVersionRecord{}, false, true
+	}
+	raw, rec, found, err := loadRuntimePolicyJSONConfig(store, read.Spec, read.Normalize, read.ReadReason)
+	if err != nil {
+		respondConfigBlobDBError(c, read.DBErrorLabel+" db read failed", err)
+		return nil, configVersionRecord{}, false, false
+	}
+	return raw, rec, found, true
+}
+
+func GetBypassRules(c *gin.Context) {
+	path := bypassconf.GetActivePath()
+	if strings.TrimSpace(path) == "" {
+		path = config.BypassFile
+	}
+	raw, _ := os.ReadFile(path)
+	displayRaw := string(raw)
+	savedAt := runtimefiles.FileSavedAt(path)
+	dbRaw, rec, found, ok := loadPolicyJSONConfigForAdmin(c, bypassPolicyJSONDomain.adminRead())
+	if !ok {
+		return
+	}
+	if found {
+		file, parseErr := bypassconf.Parse(string(dbRaw))
+		if parseErr != nil {
+			respondConfigBlobDBError(c, "bypass db rows parse failed", parseErr)
+			return
+		} else {
+			if normalized, err := bypassconf.MarshalJSON(file); err == nil {
+				displayRaw = string(normalized)
+			}
+			savedAt = configVersionSavedAt(rec)
+			c.JSON(http.StatusOK, gin.H{
+				"etag":     rec.ETag,
+				"raw":      displayRaw,
+				"saved_at": savedAt,
+			})
+			return
+		}
+	}
+	if file, err := bypassconf.Parse(displayRaw); err == nil {
+		if normalized, nerr := bypassconf.MarshalJSON(file); nerr == nil {
+			displayRaw = string(normalized)
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"etag":     bypassconf.ComputeETag(raw),
+		"raw":      displayRaw,
+		"saved_at": savedAt,
+	})
+}
+
+func ValidateBypassRules(c *gin.Context) {
+	in, ok := bindRawPolicyPutBody(c)
+	if !ok {
+		return
+	}
+
+	if _, err := validateRaw(in.Raw); err != nil {
+		respondPolicyValidationError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true, "messages": []string{}})
+}
+
+func PutBypassRules(c *gin.Context) {
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
+	}
+
+	in, ok := bindRawPolicyPutBody(c)
+	if !ok {
+		return
+	}
+
+	if _, err := validateRaw(in.Raw); err != nil {
+		respondPolicyValidationError(c, err)
+		return
+	}
+
+	file, _ := bypassconf.Parse(in.Raw)
+	normalizedRaw, err := bypassconf.MarshalJSON(file)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	rec, ok := writePolicyJSONConfigUpdate(c, store, bypassPolicyJSONDomain.update(normalizedRaw))
+	if !ok {
+		return
+	}
+	if err := applyBypassPolicyRaw(normalizedRaw); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": rec.ETag, "raw": string(normalizedRaw), "saved_at": rec.ActivatedAt.Format(time.RFC3339Nano)})
+}
+
+func SyncBypassStorage() error {
+	return syncPolicyJSONConfigStorage(bypassPolicyJSONDomain.sync(applyBypassPolicyRaw))
+}
+
+func validateRaw(s string) (int, error) {
+	file, err := bypassconf.Parse(s)
+	if err != nil {
+		return 0, err
+	}
+	for _, e := range bypassconf.GetEntries(file) {
+		if e.ExtraRule == "" {
+			continue
+		}
+		target, found, err := wafRuleAssetExistsForKind(e.ExtraRule, wafRuleAssetKindBypassExtra)
+		if err != nil {
+			return 0, fmt.Errorf("extra rule lookup failed: %s: %w", e.ExtraRule, err)
+		}
+		if !found {
+			if target == "" {
+				target = e.ExtraRule
+			}
+			return 0, fmt.Errorf("extra rule not found in DB-managed rule assets: %s", target)
+		}
+	}
+
+	return len(bypassconf.GetEntries(file)), nil
+}
+
+func configuredCacheRulesPath() string {
+	path := strings.TrimSpace(config.CacheRulesFile)
+	if path == "" {
+		return config.DefaultCacheRulesFilePath
+	}
+	return path
+}
+
+func configuredLegacyCacheRulesPath() string {
+	return config.LegacyCompatPath(configuredCacheRulesPath(), config.DefaultCacheRulesFilePath, config.LegacyDefaultCacheRulesPath)
+}
+
+func GetCacheRules(c *gin.Context) {
+	readPath := config.ResolveReadablePolicyPath(configuredCacheRulesPath(), configuredLegacyCacheRulesPath())
+	raw, _ := os.ReadFile(readPath)
+	savedAt := runtimefiles.FileSavedAt(readPath)
+	dbRaw, rec, found, ok := loadPolicyJSONConfigForAdmin(c, cachePolicyJSONDomain.adminRead())
+	if !ok {
+		return
+	}
+	if found {
+		rsDB, parseErr := cacheconf.LoadFromBytes(dbRaw)
+		if parseErr != nil {
+			respondConfigBlobDBError(c, "cache-rules db rows parse failed", parseErr)
+			return
+		}
+		savedAt = configVersionSavedAt(rec)
+		c.JSON(http.StatusOK, cacheconf.RulesDTO{
+			ETag:    rec.ETag,
+			Raw:     string(dbRaw),
+			Rules:   cacheconf.ToDTO(rsDB),
+			SavedAt: savedAt,
+		})
+		return
+	}
+
+	rs := cacheconf.Get()
+	dto := cacheconf.RulesDTO{
+		ETag:    cacheconf.ComputeETag(raw),
+		Raw:     string(mustCacheRulesJSON(rs)),
+		Rules:   cacheconf.ToDTO(rs),
+		SavedAt: savedAt,
+	}
+
+	c.JSON(http.StatusOK, dto)
+}
+
+func ValidateCacheRules(c *gin.Context) {
+	var in crPutBody
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if in.RawMode {
+		if _, err := cacheconf.LoadFromBytes([]byte(in.Raw)); err != nil {
+			respondPolicyValidationError(c, err)
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"ok": true, "messages": []string{}})
+		return
+	}
+
+	if _, errs := cacheconf.FromDTO(in.Rules); len(errs) > 0 {
+		msgs := make([]string, 0, len(errs))
+		for _, e := range errs {
+			msgs = append(msgs, e.Error())
+		}
+
+		respondPolicyValidationMessages(c, msgs)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true, "messages": []string{}})
+}
+
+func PutCacheRules(c *gin.Context) {
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
+	}
+
+	var in crPutBody
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var outBytes []byte
+	if in.RawMode {
+		rs, err := cacheconf.LoadFromBytes([]byte(in.Raw))
+		if err != nil {
+			respondPolicyValidationError(c, err)
+			return
+		}
+
+		outBytes, err = cacheconf.RulesetToJSON(rs)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	} else {
+		rs, errs := cacheconf.FromDTO(in.Rules)
+		if len(errs) > 0 {
+			msgs := make([]string, 0, len(errs))
+			for _, e := range errs {
+				msgs = append(msgs, e.Error())
+			}
+			respondPolicyValidationMessages(c, msgs)
+			return
+		}
+
+		var err error
+		outBytes, err = cacheconf.RulesetToJSON(rs)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	rec, ok := writePolicyJSONConfigUpdate(c, store, cachePolicyJSONDomain.update(outBytes))
+	if !ok {
+		return
+	}
+	if err := applyCacheRulesPolicyRaw(outBytes); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": rec.ETag, "saved_at": rec.ActivatedAt.Format(time.RFC3339Nano)})
+}
+
+func mustCacheRulesJSON(rs *cacheconf.Ruleset) []byte {
+	out, err := cacheconf.RulesetToJSON(rs)
+	if err != nil {
+		return []byte("{\n  \"default\": {\n    \"rules\": []\n  }\n}\n")
+	}
+	return out
+}
+
+func SyncCacheRulesStorage() error {
+	return syncPolicyJSONConfigStorage(cachePolicyJSONDomain.sync(applyCacheRulesPolicyRaw))
+}
+
+func writePolicyJSONConfigUpdate(c *gin.Context, store *wafEventStore, update policyJSONConfigUpdate) (configVersionRecord, bool) {
+	currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, update.Spec, update.Normalize, update.ReadReason)
+	if err != nil {
+		respondConfigBlobDBError(c, update.DBErrorLabel+" db seed failed", err)
+		return configVersionRecord{}, false
+	}
+	expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
+	rec, err := store.writePolicyJSONConfigVersion(expectedETag, update.Spec, update.NormalizedRaw, configVersionSourceApply, "", update.UpdateReason, 0)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, update.Spec.Domain)})
+			return configVersionRecord{}, false
+		}
+		respondConfigBlobDBError(c, update.DBErrorLabel+" db update failed", err)
+		return configVersionRecord{}, false
+	}
+	return rec, true
+}
+
+func syncPolicyJSONConfigStorage(sync policyJSONConfigSync) error {
+	store := getLogsStatsStore()
+	if store == nil {
+		return nil
+	}
+	raw, _, found, err := loadRuntimePolicyJSONConfig(store, sync.Spec, sync.Normalize, sync.ReadReason)
+	if err != nil || !found {
+		return err
+	}
+	return sync.Apply(raw)
+}
+
+func initPolicyJSONConfigFromDB(init policyJSONConfigDBInit) (bool, error) {
+	store := getLogsStatsStore()
+	if store == nil {
+		return false, nil
+	}
+	raw, _, found, err := loadRuntimePolicyJSONConfig(store, init.Spec, init.Normalize, init.ReadReason)
+	if err != nil {
+		return true, fmt.Errorf("read %s config db: %w", init.ConfigLabel, err)
+	}
+	if !found {
+		return true, fmt.Errorf("normalized %s config missing in db; run make db-import before removing seed files", init.ConfigLabel)
+	}
+	return true, init.Apply(raw)
 }
 
 func (s *wafEventStore) loadActivePolicyJSONConfig(spec policyJSONConfigSpec) ([]byte, configVersionRecord, bool, error) {

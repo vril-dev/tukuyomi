@@ -10,10 +10,12 @@ import {
   Field,
   MonoTag,
   NoticeBar,
+  ParsedTextArea,
   PrimaryButton,
   SectionCard,
   StatBox,
   inputClass,
+  stringListEqual,
   textareaClass,
 } from "@/components/EditorChrome";
 import { useAdminRuntime } from "@/lib/adminRuntime";
@@ -661,28 +663,37 @@ function BotDefenseScopeEditor({
             </Field>
           </div>
           <Field label={tx("Path prefixes")} hint={tx("One prefix per line. Requests outside these prefixes bypass bot defense entirely.")}>
-            <textarea
+            <ParsedTextArea
               className={`${textareaClass} min-h-40`}
-              value={listToMultiline(scope.pathPrefixes)}
-              onChange={(event) => applyScope({ ...scope, pathPrefixes: multilineToList(event.target.value) })}
+              value={scope.pathPrefixes}
+              onValueChange={(next) => applyScope({ ...scope, pathPrefixes: next })}
+              serialize={listToMultiline}
+              parse={multilineToList}
+              equals={stringListEqual}
               placeholder="/"
               spellCheck={false}
             />
           </Field>
           <Field label={tx("Exempt CIDRs")} hint={tx("One IP or CIDR per line. Matching clients skip bot defense before path or signal evaluation.")}>
-            <textarea
+            <ParsedTextArea
               className={`${textareaClass} min-h-40`}
-              value={listToMultiline(scope.exemptCIDRs)}
-              onChange={(event) => applyScope({ ...scope, exemptCIDRs: multilineToList(event.target.value) })}
+              value={scope.exemptCIDRs}
+              onValueChange={(next) => applyScope({ ...scope, exemptCIDRs: next })}
+              serialize={listToMultiline}
+              parse={multilineToList}
+              equals={stringListEqual}
               placeholder={"127.0.0.1/32\n10.0.0.0/8"}
               spellCheck={false}
             />
           </Field>
           <Field label={tx("Suspicious user-agent fragments")} hint={tx("Lowercase fragments matched against the request user-agent. One value per line.")}>
-            <textarea
+            <ParsedTextArea
               className={`${textareaClass} min-h-40`}
-              value={listToMultiline(scope.suspiciousUserAgents)}
-              onChange={(event) => applyScope({ ...scope, suspiciousUserAgents: multilineToList(event.target.value) })}
+              value={scope.suspiciousUserAgents}
+              onValueChange={(next) => applyScope({ ...scope, suspiciousUserAgents: next })}
+              serialize={listToMultiline}
+              parse={multilineToList}
+              equals={stringListEqual}
               placeholder={"curl\nwget\npython-requests"}
               spellCheck={false}
             />
@@ -824,15 +835,18 @@ function BotDefenseScopeEditor({
                 </Field>
               </div>
               <Field label={tx("Path prefixes")} hint={tx("One path prefix per line. Policies without prefixes are invalid.")}>
-                <textarea
+                <ParsedTextArea
                   className={`${textareaClass} min-h-28`}
-                  value={listToMultiline(policy.pathPrefixes)}
-                  onChange={(event) =>
+                  value={policy.pathPrefixes}
+                  onValueChange={(next) =>
                     updatePathPolicy(index, (current) => ({
                       ...current,
-                      pathPrefixes: multilineToList(event.target.value),
+                      pathPrefixes: next,
                     }))
                   }
+                  serialize={listToMultiline}
+                  parse={multilineToList}
+                  equals={stringListEqual}
                   placeholder={"/login\n/account/login"}
                   spellCheck={false}
                 />

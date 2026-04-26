@@ -4,13 +4,23 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/policyhost"
+	"tukuyomi/internal/requestmeta"
+	"tukuyomi/internal/runtimefiles"
 )
+
+const countryBlockConfigBlobKey = "country_block_rules"
 
 var (
 	countryBlockMu         sync.RWMutex
@@ -49,15 +59,8 @@ func InitCountryBlock(path, legacy string) error {
 	countryBlockActivePath = ""
 	countryBlockMu.Unlock()
 
-	if store := getLogsStatsStore(); store != nil {
-		raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(countryBlockConfigBlobKey), normalizeCountryBlockPolicyRaw, "country block rules")
-		if err != nil {
-			return fmt.Errorf("read country block config db: %w", err)
-		}
-		if !found {
-			return fmt.Errorf("normalized country block config missing in db; run make db-import before removing seed files")
-		}
-		return applyCountryBlockPolicyRaw(raw)
+	if handled, err := initPolicyJSONConfigFromDB(countryBlockPolicyJSONDomain.dbInit(applyCountryBlockPolicyRaw)); handled {
+		return err
 	}
 
 	if err := ensureCountryBlockFile(target, legacy); err != nil {
@@ -94,8 +97,107 @@ func GetCountryBlockFile() countryBlockFile {
 	return cloneCountryBlockFile(countryBlockState.Raw)
 }
 
+func GetCountryBlockRules(c *gin.Context) {
+	path := GetCountryBlockActivePath()
+	if strings.TrimSpace(path) == "" {
+		path = GetCountryBlockPath()
+	}
+	raw, _ := os.ReadFile(path)
+	displayRaw := string(raw)
+	savedAt := runtimefiles.FileSavedAt(path)
+	dbRaw, rec, found, ok := loadPolicyJSONConfigForAdmin(c, countryBlockPolicyJSONDomain.adminRead())
+	if !ok {
+		return
+	}
+	if found {
+		file, parseErr := ParseCountryBlockRaw(string(dbRaw))
+		if parseErr != nil {
+			respondConfigBlobDBError(c, "country-block db rows parse failed", parseErr)
+			return
+		} else {
+			if normalized, err := MarshalCountryBlockJSON(file); err == nil {
+				displayRaw = string(normalized)
+			}
+			savedAt = configVersionSavedAt(rec)
+			c.JSON(http.StatusOK, gin.H{
+				"etag":     rec.ETag,
+				"raw":      displayRaw,
+				"blocked":  flattenCountryBlockCodes(file),
+				"saved_at": savedAt,
+			})
+			return
+		}
+	}
+	if file, err := ParseCountryBlockRaw(displayRaw); err == nil {
+		if normalized, nerr := MarshalCountryBlockJSON(file); nerr == nil {
+			displayRaw = string(normalized)
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"etag":     bypassconf.ComputeETag(raw),
+		"raw":      displayRaw,
+		"blocked":  GetBlockedCountries(),
+		"saved_at": savedAt,
+	})
+}
+
+func ValidateCountryBlockRules(c *gin.Context) {
+	in, ok := bindRawPolicyPutBody(c)
+	if !ok {
+		return
+	}
+
+	file, err := ParseCountryBlockRaw(in.Raw)
+	if err != nil {
+		respondPolicyValidationError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true, "messages": []string{}, "blocked": flattenCountryBlockCodes(file)})
+}
+
+func PutCountryBlockRules(c *gin.Context) {
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
+	}
+
+	in, ok := bindRawPolicyPutBody(c)
+	if !ok {
+		return
+	}
+
+	file, err := ParseCountryBlockRaw(in.Raw)
+	if err != nil {
+		respondPolicyValidationError(c, err)
+		return
+	}
+
+	normalizedRaw, err := MarshalCountryBlockJSON(file)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	rec, ok := writePolicyJSONConfigUpdate(c, store, countryBlockPolicyJSONDomain.update(normalizedRaw))
+	if !ok {
+		return
+	}
+	if err := applyCountryBlockPolicyRaw(normalizedRaw); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "etag": rec.ETag, "blocked": flattenCountryBlockCodes(file), "raw": string(normalizedRaw), "saved_at": rec.ActivatedAt.Format(time.RFC3339Nano)})
+}
+
+func SyncCountryBlockStorage() error {
+	return syncPolicyJSONConfigStorage(countryBlockPolicyJSONDomain.sync(applyCountryBlockPolicyRaw))
+}
+
 func IsCountryBlocked(reqHost string, tls bool, country string) bool {
-	code := normalizeCountryCode(country)
+	code := requestmeta.NormalizeCountryCode(country)
 
 	countryBlockMu.RLock()
 	defer countryBlockMu.RUnlock()
@@ -232,7 +334,7 @@ func parseCountryBlockJSON(raw string) (countryBlockFile, error) {
 }
 
 func validateCountryCode(raw string) (string, error) {
-	code := normalizeCountryCode(raw)
+	code := requestmeta.NormalizeCountryCode(raw)
 	if code == "UNKNOWN" {
 		return code, nil
 	}

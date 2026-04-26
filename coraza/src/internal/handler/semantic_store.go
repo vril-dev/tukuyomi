@@ -19,7 +19,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
+	"tukuyomi/internal/bypassconf"
+	"tukuyomi/internal/challengecookie"
 	"tukuyomi/internal/policyhost"
+	"tukuyomi/internal/runtimefiles"
+	"tukuyomi/internal/semanticprovider"
+	"tukuyomi/internal/semanticrisk"
 )
 
 const (
@@ -37,6 +44,123 @@ const (
 )
 
 const semanticDefaultScope = "default"
+
+const semanticConfigBlobKey = "semantic_rules"
+
+const (
+	semanticProviderNameBuiltinAttackFamily = semanticprovider.NameBuiltinAttackFamily
+	defaultSemanticProviderTimeoutMS        = semanticprovider.DefaultTimeoutMS
+	maxSemanticProviderExcerptBytes         = semanticprovider.MaxExcerptBytes
+)
+
+type semanticProviderConfig = semanticprovider.Config
+type semanticProviderInput = semanticprovider.Input
+type semanticProviderOutput = semanticprovider.Output
+type semanticProviderRuntime = semanticprovider.Runtime
+
+func normalizeSemanticProviderConfig(cfg semanticProviderConfig) (semanticProviderConfig, error) {
+	return semanticprovider.NormalizeConfig(cfg)
+}
+
+func buildSemanticProviderRuntime(cfg semanticProviderConfig) *semanticProviderRuntime {
+	return semanticprovider.BuildRuntime(cfg)
+}
+
+func evaluateSemanticProvider(rt *semanticProviderRuntime, in semanticProviderInput) *semanticProviderOutput {
+	return semanticprovider.Evaluate(rt, in)
+}
+
+func newSemanticProviderInput(
+	r *http.Request,
+	requestID string,
+	telemetry *semanticTelemetry,
+	bodyChunk []byte,
+	baseScore, statefulScore int,
+	baseSignals, statefulSignals []semanticSignal,
+) semanticProviderInput {
+	in := semanticProviderInput{
+		RequestID:       strings.TrimSpace(requestID),
+		BaseScore:       baseScore,
+		StatefulScore:   statefulScore,
+		BaseReasons:     semanticReasons(baseSignals),
+		StatefulReasons: semanticReasons(statefulSignals),
+	}
+	if telemetry != nil {
+		in.ActorKey = telemetry.Context.ActorKey
+		in.PathClass = telemetry.Context.PathClass
+		in.TargetClass = telemetry.Context.TargetClass
+		in.SurfaceClass = telemetry.Context.SurfaceClass
+		in.QueryHash = telemetry.Fingerprints.QueryHash
+		in.FormHash = telemetry.Fingerprints.FormHash
+		in.JSONHash = telemetry.Fingerprints.JSONHash
+		in.BodyHash = telemetry.Fingerprints.BodyHash
+		in.HeaderHash = telemetry.Fingerprints.HeaderHash
+	}
+	if r != nil && r.URL != nil {
+		in.QueryExcerpt = boundedSemanticProviderExcerpt(normalizeSemanticFingerprintText(r.URL.RawQuery))
+	}
+	contentType := ""
+	if r != nil {
+		contentType = semanticNormalizedContentType(r.Header.Get("Content-Type"))
+		in.HeaderExcerpt = boundedSemanticProviderExcerpt(semanticHeaderExcerpt(r.Header))
+	}
+	if len(bodyChunk) > 0 {
+		switch {
+		case contentType == "application/x-www-form-urlencoded":
+			in.FormExcerpt = boundedSemanticProviderExcerpt(normalizeSemanticFingerprintText(string(bodyChunk)))
+		case contentType == "application/json", strings.HasSuffix(contentType, "+json"), semanticLooksLikeJSON(bodyChunk):
+			in.JSONExcerpt = boundedSemanticProviderExcerpt(semanticJSONExcerpt(bodyChunk))
+		default:
+			in.BodyExcerpt = boundedSemanticProviderExcerpt(normalizeSemanticFingerprintText(string(bodyChunk)))
+		}
+	}
+	return in
+}
+
+func boundedSemanticProviderExcerpt(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if len(raw) <= maxSemanticProviderExcerptBytes {
+		return raw
+	}
+	return raw[:maxSemanticProviderExcerptBytes]
+}
+
+func semanticHeaderExcerpt(header http.Header) string {
+	if header == nil {
+		return ""
+	}
+	parts := make([]string, 0, 3)
+	for _, name := range []string{"User-Agent", "Referer", "Content-Type"} {
+		value := strings.TrimSpace(header.Get(name))
+		if value == "" {
+			continue
+		}
+		parts = append(parts, strings.ToLower(name)+"="+normalizeSemanticFingerprintText(value))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func semanticJSONExcerpt(body []byte) string {
+	var payload any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return normalizeSemanticFingerprintText(string(body))
+	}
+	return semanticCanonicalJSONFingerprint(payload, 0)
+}
+
+func semanticProviderOutputSignals(out semanticProviderOutput) []semanticSignal {
+	if out.ScoreDelta <= 0 {
+		return nil
+	}
+	reason := "provider:" + strings.TrimSpace(out.AttackFamily)
+	if reason == "provider:" {
+		reason = "provider:" + strings.TrimSpace(out.Name)
+	}
+	return []semanticSignal{{
+		Reason: reason,
+		Score:  out.ScoreDelta,
+	}}
+}
 
 var (
 	semanticPatternUnionSelect = regexp.MustCompile(`\bunion\b[\s\W]{0,48}\bselect\b`)
@@ -101,11 +225,16 @@ type semanticEvaluation struct {
 	ProviderResult   *semanticProviderOutput
 }
 
+type semanticSignal = semanticrisk.Signal
+type semanticHistorySnapshot = semanticrisk.HistorySnapshot
+
+const statefulAdminAfterSuspiciousScore = semanticrisk.StatefulAdminAfterSuspiciousScore
+
 type runtimeSemanticScope struct {
 	Raw semanticConfig
 
-	temporal *temporalRiskStore
-	history  *semanticHistoryStore
+	temporal *semanticrisk.TemporalStore
+	history  *semanticrisk.HistoryStore
 	provider *semanticProviderRuntime
 
 	challengeCookieName string
@@ -148,15 +277,8 @@ func InitSemantic(path string) error {
 	semanticPath = target
 	semanticMu.Unlock()
 
-	if store := getLogsStatsStore(); store != nil {
-		raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(semanticConfigBlobKey), normalizeSemanticPolicyRaw, "semantic rules")
-		if err != nil {
-			return fmt.Errorf("read semantic config db: %w", err)
-		}
-		if !found {
-			return fmt.Errorf("normalized semantic config missing in db; run make db-import before removing seed files")
-		}
-		return applySemanticPolicyRaw(raw)
+	if handled, err := initPolicyJSONConfigFromDB(semanticPolicyJSONDomain.dbInit(applySemanticPolicyRaw)); handled {
+		return err
 	}
 
 	if err := ensureSemanticFile(target); err != nil {
@@ -200,6 +322,140 @@ func GetSemanticStats() semanticStats {
 		addSemanticStats(&stats, semanticScopeStats(scope))
 	}
 	return stats
+}
+
+func GetSemanticRules(c *gin.Context) {
+	path := GetSemanticPath()
+	raw, _ := os.ReadFile(path)
+	savedAt := runtimefiles.FileSavedAt(path)
+	dbRaw, rec, found, ok := loadPolicyJSONConfigForAdmin(c, semanticPolicyJSONDomain.adminRead())
+	if !ok {
+		return
+	}
+	if found {
+		rt, parseErr := ValidateSemanticRaw(string(dbRaw))
+		if parseErr != nil {
+			respondConfigBlobDBError(c, "semantic db rows parse failed", parseErr)
+			return
+		}
+		savedAt = configVersionSavedAt(rec)
+		c.JSON(http.StatusOK, gin.H{
+			"etag":                 rec.ETag,
+			"raw":                  string(dbRaw),
+			"enabled":              rt.Raw.Enabled,
+			"mode":                 rt.Raw.Mode,
+			"exempt_path_prefixes": rt.Raw.ExemptPathPrefixes,
+			"log_threshold":        rt.Raw.LogThreshold,
+			"challenge_threshold":  rt.Raw.ChallengeThreshold,
+			"block_threshold":      rt.Raw.BlockThreshold,
+			"max_inspect_body":     rt.Raw.MaxInspectBody,
+			"provider_enabled":     rt.Raw.Provider.Enabled,
+			"provider_name":        rt.Raw.Provider.Name,
+			"provider_timeout_ms":  rt.Raw.Provider.TimeoutMS,
+			"stats":                GetSemanticStats(),
+			"saved_at":             savedAt,
+		})
+		return
+	}
+	cfg := GetSemanticConfig()
+	stats := GetSemanticStats()
+
+	c.JSON(http.StatusOK, gin.H{
+		"etag":                 bypassconf.ComputeETag(raw),
+		"raw":                  string(raw),
+		"enabled":              cfg.Enabled,
+		"mode":                 cfg.Mode,
+		"exempt_path_prefixes": cfg.ExemptPathPrefixes,
+		"log_threshold":        cfg.LogThreshold,
+		"challenge_threshold":  cfg.ChallengeThreshold,
+		"block_threshold":      cfg.BlockThreshold,
+		"max_inspect_body":     cfg.MaxInspectBody,
+		"provider_enabled":     cfg.Provider.Enabled,
+		"provider_name":        cfg.Provider.Name,
+		"provider_timeout_ms":  cfg.Provider.TimeoutMS,
+		"stats":                stats,
+		"saved_at":             savedAt,
+	})
+}
+
+func ValidateSemanticRules(c *gin.Context) {
+	in, ok := bindRawPolicyPutBody(c)
+	if !ok {
+		return
+	}
+
+	rt, err := ValidateSemanticRaw(in.Raw)
+	if err != nil {
+		respondPolicyValidationError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":                   true,
+		"messages":             []string{},
+		"enabled":              rt.Raw.Enabled,
+		"mode":                 rt.Raw.Mode,
+		"exempt_path_prefixes": rt.Raw.ExemptPathPrefixes,
+		"log_threshold":        rt.Raw.LogThreshold,
+		"challenge_threshold":  rt.Raw.ChallengeThreshold,
+		"block_threshold":      rt.Raw.BlockThreshold,
+		"max_inspect_body":     rt.Raw.MaxInspectBody,
+		"provider_enabled":     rt.Raw.Provider.Enabled,
+		"provider_name":        rt.Raw.Provider.Name,
+		"provider_timeout_ms":  rt.Raw.Provider.TimeoutMS,
+	})
+}
+
+func PutSemanticRules(c *gin.Context) {
+	store, err := requireConfigDBStore()
+	if err != nil {
+		respondConfigDBStoreRequired(c)
+		return
+	}
+
+	in, ok := bindRawPolicyPutBody(c)
+	if !ok {
+		return
+	}
+
+	rt, err := ValidateSemanticRaw(in.Raw)
+	if err != nil {
+		respondPolicyValidationError(c, err)
+		return
+	}
+
+	normalizedRaw, err := normalizeSemanticPolicyRaw(in.Raw)
+	if err != nil {
+		respondPolicyValidationError(c, err)
+		return
+	}
+	rec, ok := writePolicyJSONConfigUpdate(c, store, semanticPolicyJSONDomain.update(normalizedRaw))
+	if !ok {
+		return
+	}
+	if err := applySemanticPolicyRaw(normalizedRaw); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":                   true,
+		"etag":                 rec.ETag,
+		"enabled":              rt.Raw.Enabled,
+		"mode":                 rt.Raw.Mode,
+		"exempt_path_prefixes": rt.Raw.ExemptPathPrefixes,
+		"log_threshold":        rt.Raw.LogThreshold,
+		"challenge_threshold":  rt.Raw.ChallengeThreshold,
+		"block_threshold":      rt.Raw.BlockThreshold,
+		"max_inspect_body":     rt.Raw.MaxInspectBody,
+		"provider_enabled":     rt.Raw.Provider.Enabled,
+		"provider_name":        rt.Raw.Provider.Name,
+		"provider_timeout_ms":  rt.Raw.Provider.TimeoutMS,
+		"saved_at":             rec.ActivatedAt.Format(time.RFC3339Nano),
+	})
+}
+
+func SyncSemanticStorage() error {
+	return syncPolicyJSONConfigStorage(semanticPolicyJSONDomain.sync(applySemanticPolicyRaw))
 }
 
 func ReloadSemantic() error {
@@ -749,28 +1005,28 @@ func normalizeSemanticConfig(cfg semanticConfig) (semanticConfig, error) {
 	}
 	cfg.Provider = normProvider
 	if cfg.TemporalWindowSeconds <= 0 {
-		cfg.TemporalWindowSeconds = defaultTemporalWindowSeconds
+		cfg.TemporalWindowSeconds = semanticrisk.DefaultTemporalWindowSeconds
 	}
 	if cfg.TemporalMaxEntriesPerIP <= 0 {
-		cfg.TemporalMaxEntriesPerIP = defaultTemporalMaxEntriesPerIP
+		cfg.TemporalMaxEntriesPerIP = semanticrisk.DefaultTemporalMaxEntriesPerIP
 	}
 	if cfg.TemporalBurstThreshold <= 0 {
-		cfg.TemporalBurstThreshold = defaultTemporalBurstThreshold
+		cfg.TemporalBurstThreshold = semanticrisk.DefaultTemporalBurstThreshold
 	}
 	if cfg.TemporalBurstScore <= 0 {
-		cfg.TemporalBurstScore = defaultTemporalBurstScore
+		cfg.TemporalBurstScore = semanticrisk.DefaultTemporalBurstScore
 	}
 	if cfg.TemporalPathFanoutThreshold <= 0 {
-		cfg.TemporalPathFanoutThreshold = defaultTemporalPathFanoutThreshold
+		cfg.TemporalPathFanoutThreshold = semanticrisk.DefaultTemporalPathFanoutThreshold
 	}
 	if cfg.TemporalPathFanoutScore <= 0 {
-		cfg.TemporalPathFanoutScore = defaultTemporalPathFanoutScore
+		cfg.TemporalPathFanoutScore = semanticrisk.DefaultTemporalPathFanoutScore
 	}
 	if cfg.TemporalUAChurnThreshold <= 0 {
-		cfg.TemporalUAChurnThreshold = defaultTemporalUAChurnThreshold
+		cfg.TemporalUAChurnThreshold = semanticrisk.DefaultTemporalUAChurnThreshold
 	}
 	if cfg.TemporalUAChurnScore <= 0 {
-		cfg.TemporalUAChurnScore = defaultTemporalUAChurnScore
+		cfg.TemporalUAChurnScore = semanticrisk.DefaultTemporalUAChurnScore
 	}
 	if !cfg.Enabled {
 		cfg.Mode = semanticModeOff
@@ -909,6 +1165,72 @@ func appendSemanticSignal(signals *[]semanticSignal, score *int, reason string, 
 	*score += delta
 }
 
+func newTemporalRiskStore(cfg semanticConfig) *semanticrisk.TemporalStore {
+	return semanticrisk.NewTemporalStore(semanticrisk.TemporalConfig{
+		WindowSeconds:   cfg.TemporalWindowSeconds,
+		MaxEntriesPerIP: cfg.TemporalMaxEntriesPerIP,
+	})
+}
+
+func newSemanticHistoryStore(cfg semanticConfig) *semanticrisk.HistoryStore {
+	return semanticrisk.NewHistoryStore(semanticrisk.TemporalConfig{
+		WindowSeconds:   cfg.TemporalWindowSeconds,
+		MaxEntriesPerIP: cfg.TemporalMaxEntriesPerIP,
+	})
+}
+
+func inspectSemanticTemporalRisk(rt *runtimeSemanticScope, cfg semanticConfig, clientIP, path, userAgent string, now time.Time, score *int, signals *[]semanticSignal) {
+	if rt == nil || rt.temporal == nil {
+		return
+	}
+	snap := rt.temporal.Observe(clientIP, path, userAgent, now)
+	for _, signal := range semanticrisk.EvaluateTemporal(snap, semanticTemporalThresholds(cfg)) {
+		appendSemanticSignal(signals, score, signal.Reason, signal.Score)
+	}
+}
+
+func semanticTemporalThresholds(cfg semanticConfig) semanticrisk.TemporalThresholds {
+	return semanticrisk.TemporalThresholds{
+		BurstThreshold:      cfg.TemporalBurstThreshold,
+		BurstScore:          cfg.TemporalBurstScore,
+		PathFanoutThreshold: cfg.TemporalPathFanoutThreshold,
+		PathFanoutScore:     cfg.TemporalPathFanoutScore,
+		UAChurnThreshold:    cfg.TemporalUAChurnThreshold,
+		UAChurnScore:        cfg.TemporalUAChurnScore,
+	}
+}
+
+func inspectSemanticStatefulRisk(
+	rt *runtimeSemanticScope,
+	telemetry *semanticTelemetry,
+	baseScore int,
+	now time.Time,
+	score *int,
+	signals *[]semanticSignal,
+) *semanticHistorySnapshot {
+	if rt == nil || rt.history == nil || telemetry == nil {
+		return nil
+	}
+	key := strings.TrimSpace(telemetry.Context.ActorKey)
+	if key == "" {
+		return nil
+	}
+	currentTargetClass := telemetry.Context.TargetClass
+	currentSurfaceClass := telemetry.Context.SurfaceClass
+	snapshot := rt.history.Observe(key, semanticrisk.HistoryObservation{
+		At:           now.UTC(),
+		PathClass:    telemetry.Context.PathClass,
+		TargetClass:  currentTargetClass,
+		SurfaceClass: currentSurfaceClass,
+		BaseScore:    baseScore,
+	}, now.UTC())
+
+	for _, signal := range semanticrisk.EvaluateStateful(snapshot, currentTargetClass, currentSurfaceClass, baseScore) {
+		appendSemanticSignal(signals, score, signal.Reason, signal.Score)
+	}
+	return &snapshot
+}
+
 func semanticReasons(signals []semanticSignal) []string {
 	if len(signals) == 0 {
 		return nil
@@ -954,7 +1276,7 @@ func verifySemanticChallengeToken(rt *runtimeSemanticScope, token, ipStr, userAg
 		return false
 	}
 
-	return subtleConstantTimeHexEqual(parts[1], signSemanticChallenge(rt, ipStr, userAgent, parts[0]))
+	return challengecookie.ConstantTimeHexEqual(parts[1], signSemanticChallenge(rt, ipStr, userAgent, parts[0]))
 }
 
 func signSemanticChallenge(rt *runtimeSemanticScope, ipStr, userAgent, payload string) string {

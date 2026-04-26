@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,22 +13,48 @@ import (
 	"github.com/oschwald/maxminddb-golang"
 
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/requestmeta"
 )
 
 type testRequestMetadataResolver struct {
 	name    string
-	resolve func(*http.Request, *requestMetadataResolverContext) error
+	resolve func(*http.Request, *requestmeta.ResolverContext) error
 }
 
 func (r testRequestMetadataResolver) Name() string {
 	return r.name
 }
 
-func (r testRequestMetadataResolver) Resolve(req *http.Request, ctx *requestMetadataResolverContext) error {
+func (r testRequestMetadataResolver) Resolve(req *http.Request, ctx *requestmeta.ResolverContext) error {
 	if r.resolve == nil {
 		return nil
 	}
 	return r.resolve(req, ctx)
+}
+
+func initMMDBRequestMetadataRuntimeForTest(t *testing.T) {
+	t.Helper()
+	prevLoader := requestCountryMMDBLoader
+	requestCountryMMDBLoader = func() (loadedRequestCountryMMDBState, error) {
+		reader, err := maxminddb.FromBytes(loadSampleCountryMMDBBytes(t))
+		if err != nil {
+			return loadedRequestCountryMMDBState{}, err
+		}
+		return loadedRequestCountryMMDBState{
+			Reader:      reader,
+			ManagedPath: managedRequestCountryMMDBPath(),
+			VersionID:   1,
+			VersionETag: "test",
+			SizeBytes:   1,
+		}, nil
+	}
+	t.Cleanup(func() {
+		requestCountryMMDBLoader = prevLoader
+		requestmeta.CloseCountryRuntime()
+	})
+	if err := reloadRequestCountryRuntime("mmdb"); err != nil {
+		t.Fatalf("reloadRequestCountryRuntime: %v", err)
+	}
 }
 
 func TestNewRequestMetadataResolversBuiltins(t *testing.T) {
@@ -60,15 +85,15 @@ func TestRunRequestMetadataResolversResolvesCountryFromHeader(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodGet, "/demo", nil)
 	c.Request.Header.Set("X-Country-Code", "jp")
 
-	ctx := newRequestMetadataResolverContext("10.0.0.1")
-	if err := runRequestMetadataResolvers(c.Request, newRequestMetadataResolvers(), ctx); err != nil {
-		t.Fatalf("runRequestMetadataResolvers() error: %v", err)
+	ctx := requestmeta.NewResolverContext("10.0.0.1")
+	if err := requestmeta.RunResolvers(c.Request, newRequestMetadataResolvers(), ctx); err != nil {
+		t.Fatalf("RunResolvers() error: %v", err)
 	}
 	if ctx.Country != "JP" {
 		t.Fatalf("country=%q want=%q", ctx.Country, "JP")
 	}
-	if ctx.CountrySource != requestMetadataCountrySourceHeader {
-		t.Fatalf("countrySource=%q want=%q", ctx.CountrySource, requestMetadataCountrySourceHeader)
+	if ctx.CountrySource != requestmeta.CountrySourceHeader {
+		t.Fatalf("countrySource=%q want=%q", ctx.CountrySource, requestmeta.CountrySourceHeader)
 	}
 }
 
@@ -76,44 +101,22 @@ func TestRunRequestMetadataResolversResolvesCountryFromMMDBRuntime(t *testing.T)
 	prevMode := config.RequestCountryMode
 	config.RequestCountryMode = "mmdb"
 	t.Cleanup(func() { config.RequestCountryMode = prevMode })
-
-	requestCountryRuntimeMu.Lock()
-	prevRuntime := requestCountryRuntimeRt
-	requestCountryRuntimeRt = &requestCountryRuntime{
-		configuredMode: "mmdb",
-		effectiveMode:  "mmdb",
-		managedPath:    managedRequestCountryMMDBPath(),
-		reader:         &maxminddb.Reader{},
-	}
-	requestCountryRuntimeMu.Unlock()
-	t.Cleanup(func() {
-		requestCountryRuntimeMu.Lock()
-		requestCountryRuntimeRt = prevRuntime
-		requestCountryRuntimeMu.Unlock()
-	})
-	prevLookup := requestCountryMMDBLookup
-	requestCountryMMDBLookup = func(_ *maxminddb.Reader, ip net.IP) (string, bool, error) {
-		if got := ip.String(); got != "203.0.113.9" {
-			t.Fatalf("lookup ip=%q want=%q", got, "203.0.113.9")
-		}
-		return "JP", true, nil
-	}
-	t.Cleanup(func() { requestCountryMMDBLookup = prevLookup })
+	initMMDBRequestMetadataRuntimeForTest(t)
 
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/demo", nil)
 
-	ctx := newRequestMetadataResolverContext("203.0.113.9")
-	if err := runRequestMetadataResolvers(c.Request, newRequestMetadataResolvers(), ctx); err != nil {
-		t.Fatalf("runRequestMetadataResolvers() error: %v", err)
+	ctx := requestmeta.NewResolverContext("203.0.113.9")
+	if err := requestmeta.RunResolvers(c.Request, newRequestMetadataResolvers(), ctx); err != nil {
+		t.Fatalf("RunResolvers() error: %v", err)
 	}
 	if ctx.Country != "JP" {
 		t.Fatalf("country=%q want=%q", ctx.Country, "JP")
 	}
-	if ctx.CountrySource != requestMetadataCountrySourceMMDB {
-		t.Fatalf("countrySource=%q want=%q", ctx.CountrySource, requestMetadataCountrySourceMMDB)
+	if ctx.CountrySource != requestmeta.CountrySourceMMDB {
+		t.Fatalf("countrySource=%q want=%q", ctx.CountrySource, requestmeta.CountrySourceMMDB)
 	}
 }
 
@@ -123,21 +126,21 @@ func TestRunRequestMetadataResolversBeforeRequestSecurityPluginUse(t *testing.T)
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/demo", nil)
 
-	metadataCtx := newRequestMetadataResolverContext("10.0.0.1")
+	metadataCtx := requestmeta.NewResolverContext("10.0.0.1")
 	order := make([]string, 0, 2)
-	resolvers := []requestMetadataResolver{
+	resolvers := []requestmeta.Resolver{
 		testRequestMetadataResolver{
 			name: "first",
-			resolve: func(_ *http.Request, ctx *requestMetadataResolverContext) error {
+			resolve: func(_ *http.Request, ctx *requestmeta.ResolverContext) error {
 				order = append(order, "metadata")
 				ctx.Country = "JP"
-				ctx.CountrySource = requestMetadataCountrySourceHeader
+				ctx.CountrySource = requestmeta.CountrySourceHeader
 				return nil
 			},
 		},
 	}
-	if err := runRequestMetadataResolvers(c.Request, resolvers, metadataCtx); err != nil {
-		t.Fatalf("runRequestMetadataResolvers() error: %v", err)
+	if err := requestmeta.RunResolvers(c.Request, resolvers, metadataCtx); err != nil {
+		t.Fatalf("RunResolvers() error: %v", err)
 	}
 
 	var pluginSawCountry string
@@ -228,29 +231,7 @@ func TestProxyHandlerRateLimitUsesResolvedCountryFromMMDBMetadata(t *testing.T) 
 
 	restoreRateLimit := saveRateLimitStateForTest()
 	defer restoreRateLimit()
-
-	requestCountryRuntimeMu.Lock()
-	prevRuntime := requestCountryRuntimeRt
-	requestCountryRuntimeRt = &requestCountryRuntime{
-		configuredMode: "mmdb",
-		effectiveMode:  "mmdb",
-		managedPath:    managedRequestCountryMMDBPath(),
-		reader:         &maxminddb.Reader{},
-	}
-	requestCountryRuntimeMu.Unlock()
-	defer func() {
-		requestCountryRuntimeMu.Lock()
-		requestCountryRuntimeRt = prevRuntime
-		requestCountryRuntimeMu.Unlock()
-	}()
-	prevLookup := requestCountryMMDBLookup
-	requestCountryMMDBLookup = func(_ *maxminddb.Reader, ip net.IP) (string, bool, error) {
-		if got := ip.String(); got != "127.0.0.1" {
-			t.Fatalf("lookup ip=%q want=%q", got, "127.0.0.1")
-		}
-		return "JP", true, nil
-	}
-	defer func() { requestCountryMMDBLookup = prevLookup }()
+	initMMDBRequestMetadataRuntimeForTest(t)
 
 	rateLimitPath := filepath.Join(t.TempDir(), "rate-limit.json")
 	rateLimitRaw := `{

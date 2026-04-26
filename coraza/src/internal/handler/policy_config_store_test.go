@@ -2,9 +2,15 @@ package handler
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/bypassconf"
 )
@@ -166,6 +172,89 @@ func TestPolicyWriteExpectedETagAllowsInitialDBWriteFromFallbackETag(t *testing.
 	}
 	if translated := policyWriteExpectedETag(fallbackETag, loadedRaw, loadedRec); translated != loadedRec.ETag {
 		t.Fatalf("content etag translated to %q want %q", translated, loadedRec.ETag)
+	}
+}
+
+func TestWritePolicyJSONConfigUpdateReturnsCurrentETagOnConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := initConfigDBStoreForTest(t)
+	spec := mustPolicyJSONSpec(cacheConfigBlobKey)
+	raw1, err := normalizeCacheRulesPolicyRaw(`{"default":{"rules":[]}}`)
+	if err != nil {
+		t.Fatalf("normalize first cache rules: %v", err)
+	}
+	raw2, err := normalizeCacheRulesPolicyRaw(`{"default":{"rules":[{"kind":"ALLOW","match":{"type":"prefix","value":"/assets/"},"ttl":60}]}}`)
+	if err != nil {
+		t.Fatalf("normalize second cache rules: %v", err)
+	}
+
+	firstRec := httptest.NewRecorder()
+	firstCtx, _ := gin.CreateTestContext(firstRec)
+	firstCtx.Request = httptest.NewRequest(http.MethodPut, "/cache-rules", nil)
+	rec1, ok := writePolicyJSONConfigUpdate(firstCtx, store, policyJSONConfigUpdate{
+		Spec:          spec,
+		NormalizedRaw: raw1,
+		Normalize:     normalizeCacheRulesPolicyRaw,
+		ReadReason:    "cache rules",
+		UpdateReason:  "test cache rules update",
+		DBErrorLabel:  "cache-rules",
+	})
+	if !ok {
+		t.Fatalf("first helper write failed with status=%d body=%s", firstRec.Code, firstRec.Body.String())
+	}
+
+	rec2, err := store.writePolicyJSONConfigVersion(rec1.ETag, spec, raw2, configVersionSourceApply, "", "test concurrent cache rules update", 0)
+	if err != nil {
+		t.Fatalf("write concurrent cache rules: %v", err)
+	}
+
+	staleRec := httptest.NewRecorder()
+	staleCtx, _ := gin.CreateTestContext(staleRec)
+	staleCtx.Request = httptest.NewRequest(http.MethodPut, "/cache-rules", nil)
+	staleCtx.Request.Header.Set("If-Match", rec1.ETag)
+	if _, ok := writePolicyJSONConfigUpdate(staleCtx, store, policyJSONConfigUpdate{
+		Spec:          spec,
+		NormalizedRaw: raw1,
+		Normalize:     normalizeCacheRulesPolicyRaw,
+		ReadReason:    "cache rules",
+		UpdateReason:  "test stale cache rules update",
+		DBErrorLabel:  "cache-rules",
+	}); ok {
+		t.Fatal("stale helper write unexpectedly succeeded")
+	}
+	if staleRec.Code != http.StatusConflict {
+		t.Fatalf("status=%d want=%d body=%s", staleRec.Code, http.StatusConflict, staleRec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(staleRec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode conflict body: %v", err)
+	}
+	if body["currentETag"] != rec2.ETag {
+		t.Fatalf("currentETag=%q want %q", body["currentETag"], rec2.ETag)
+	}
+}
+
+func TestInitPolicyJSONConfigFromDBRequiresNormalizedRows(t *testing.T) {
+	initConfigDBStoreForTest(t)
+	handled, err := initPolicyJSONConfigFromDB(policyJSONConfigDBInit{
+		Spec:        mustPolicyJSONSpec(cacheConfigBlobKey),
+		Normalize:   normalizeCacheRulesPolicyRaw,
+		ReadReason:  "cache rules",
+		ConfigLabel: "cache rules",
+		Apply: func([]byte) error {
+			t.Fatal("apply should not run when normalized rows are missing")
+			return nil
+		},
+	})
+	if !handled {
+		t.Fatal("expected db-backed init path to be handled")
+	}
+	if err == nil {
+		t.Fatal("expected missing normalized rows error")
+	}
+	want := "normalized cache rules config missing in db; run make db-import before removing seed files"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("err=%q want %q", err.Error(), want)
 	}
 }
 

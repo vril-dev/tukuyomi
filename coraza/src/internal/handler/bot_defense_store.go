@@ -14,6 +14,9 @@ import (
 	"sync"
 	"time"
 
+	"tukuyomi/internal/botdefensesignals"
+	"tukuyomi/internal/botdefensestate"
+	"tukuyomi/internal/challengecookie"
 	"tukuyomi/internal/policyhost"
 )
 
@@ -241,38 +244,7 @@ type botDefenseDecision struct {
 	TelemetryCookieRequired bool
 }
 
-type botDefenseBehaviorState struct {
-	WindowID           int64
-	RequestCount       int
-	MissingCookieCount int
-	Paths              map[string]struct{}
-	UserAgents         map[string]struct{}
-	Updated            time.Time
-}
-
-type botDefenseBehaviorSnapshot struct {
-	RequestCount       int
-	PathFanout         int
-	UAChurn            int
-	MissingCookieCount int
-}
-
-type botDefenseBrowserSignalCookie struct {
-	WebDriver           bool   `json:"wd"`
-	LanguageCount       int    `json:"lc"`
-	ScreenWidth         int    `json:"sw"`
-	ScreenHeight        int    `json:"sh"`
-	TimeZone            string `json:"tz"`
-	Platform            string `json:"pf"`
-	HardwareConcurrency int    `json:"hc"`
-	MaxTouchPoints      int    `json:"mt"`
-}
-
-type botDefenseQuarantineState struct {
-	Strikes      int
-	WindowEnd    time.Time
-	BlockedUntil time.Time
-}
+type botDefenseBehaviorSnapshot = botdefensestate.BehaviorSnapshot
 
 type botDefenseFeatureSummary struct {
 	Enabled                    bool
@@ -305,15 +277,8 @@ func InitBotDefense(path string) error {
 	botDefensePath = target
 	botDefenseMu.Unlock()
 
-	if store := getLogsStatsStore(); store != nil {
-		raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(botDefenseConfigBlobKey), normalizeBotDefensePolicyRaw, "bot defense rules")
-		if err != nil {
-			return fmt.Errorf("read bot defense config db: %w", err)
-		}
-		if !found {
-			return fmt.Errorf("normalized bot defense config missing in db; run make db-import before removing seed files")
-		}
-		return applyBotDefensePolicyRaw(raw)
+	if handled, err := initPolicyJSONConfigFromDB(botDefensePolicyJSONDomain.dbInit(applyBotDefensePolicyRaw)); handled {
+		return err
 	}
 
 	if err := ensureBotDefenseFile(target); err != nil {
@@ -595,6 +560,97 @@ func currentBotDefenseRuntime() *runtimeBotDefenseConfig {
 	botDefenseMu.RLock()
 	defer botDefenseMu.RUnlock()
 	return botDefenseRuntime
+}
+
+func resetBotDefenseBehaviorState() {
+	botdefensestate.ResetBehavior()
+}
+
+func observeBotDefenseBehavior(rt *runtimeBotDefenseConfig, clientIP, reqPath, userAgent string, hasValidCookie bool, now time.Time) botDefenseBehaviorSnapshot {
+	return observeBotDefenseBehaviorForScope(botDefenseDefaultScope, rt, clientIP, reqPath, userAgent, hasValidCookie, now)
+}
+
+func observeBotDefenseBehaviorForScope(scopeKey string, rt *runtimeBotDefenseConfig, clientIP, reqPath, userAgent string, hasValidCookie bool, now time.Time) botDefenseBehaviorSnapshot {
+	if rt == nil {
+		return botDefenseBehaviorSnapshot{}
+	}
+	return botdefensestate.ObserveBehavior(scopeKey, botDefenseBehaviorStateConfig(rt), normalizeClientIP(clientIP), reqPath, userAgent, hasValidCookie, now)
+}
+
+func evaluateBotDefenseBehavior(rt *runtimeBotDefenseConfig, snapshot botDefenseBehaviorSnapshot) (int, []string) {
+	if rt == nil {
+		return 0, nil
+	}
+	return botdefensestate.EvaluateBehavior(botDefenseBehaviorStateConfig(rt), snapshot)
+}
+
+func botDefenseBehaviorStateConfig(rt *runtimeBotDefenseConfig) botdefensestate.BehaviorConfig {
+	if rt == nil {
+		return botdefensestate.BehaviorConfig{}
+	}
+	cfg := rt.Behavioral
+	return botdefensestate.BehaviorConfig{
+		Enabled:                cfg.Enabled,
+		WindowSeconds:          cfg.WindowSeconds,
+		BurstThreshold:         cfg.BurstThreshold,
+		PathFanoutThreshold:    cfg.PathFanoutThreshold,
+		UAChurnThreshold:       cfg.UAChurnThreshold,
+		MissingCookieThreshold: cfg.MissingCookieThreshold,
+		ScoreThreshold:         cfg.ScoreThreshold,
+		RiskScorePerSignal:     cfg.RiskScorePerSignal,
+	}
+}
+
+func resetBotDefenseQuarantineState() {
+	botdefensestate.ResetQuarantine()
+}
+
+func botDefenseQuarantineStatus(rt *runtimeBotDefenseConfig, ip string, now time.Time) (bool, int, time.Time) {
+	return botDefenseQuarantineStatusForScope(botDefenseDefaultScope, rt, ip, now)
+}
+
+func botDefenseQuarantineStatusForScope(scopeKey string, rt *runtimeBotDefenseConfig, ip string, now time.Time) (bool, int, time.Time) {
+	if rt == nil {
+		return false, 0, time.Time{}
+	}
+	return botdefensestate.QuarantineStatus(scopeKey, botDefenseQuarantineStateConfig(rt), normalizeClientIP(ip), now)
+}
+
+func maybeEscalateBotDefenseQuarantine(rt *runtimeBotDefenseConfig, ip string, riskScore int, now time.Time) bool {
+	return maybeEscalateBotDefenseQuarantineForScope(botDefenseDefaultScope, rt, ip, riskScore, now)
+}
+
+func maybeEscalateBotDefenseQuarantineForScope(scopeKey string, rt *runtimeBotDefenseConfig, ip string, riskScore int, now time.Time) bool {
+	if rt == nil {
+		return false
+	}
+	return botdefensestate.MaybeEscalateQuarantine(scopeKey, botDefenseQuarantineStateConfig(rt), normalizeClientIP(ip), riskScore, now)
+}
+
+func forceBotDefenseQuarantine(rt *runtimeBotDefenseConfig, ip string, now time.Time) bool {
+	return forceBotDefenseQuarantineForScope(botDefenseDefaultScope, rt, ip, now)
+}
+
+func forceBotDefenseQuarantineForScope(scopeKey string, rt *runtimeBotDefenseConfig, ip string, now time.Time) bool {
+	if rt == nil {
+		return false
+	}
+	return botdefensestate.ForceQuarantine(scopeKey, botDefenseQuarantineStateConfig(rt), normalizeClientIP(ip), now)
+}
+
+func botDefenseQuarantineStateConfig(rt *runtimeBotDefenseConfig) botdefensestate.QuarantineConfig {
+	if rt == nil {
+		return botdefensestate.QuarantineConfig{}
+	}
+	cfg := rt.Quarantine
+	return botdefensestate.QuarantineConfig{
+		Enabled:         cfg.Enabled,
+		Threshold:       cfg.Threshold,
+		StrikesRequired: cfg.StrikesRequired,
+		StrikeWindow:    cfg.StrikeWindow,
+		TTL:             cfg.TTL,
+		StatusCode:      cfg.StatusCode,
+	}
 }
 
 func selectBotDefenseRuntime(rt *runtimeBotDefenseConfig, req *http.Request) (*runtimeBotDefenseConfig, string) {
@@ -1409,6 +1465,20 @@ func hasValidBotDefenseCookie(rt *runtimeBotDefenseConfig, r *http.Request, ip, 
 	return verifyBotDefenseToken(rt, c.Value, ip, userAgent, now)
 }
 
+func issueBotDefenseToken(rt *runtimeBotDefenseConfig, ip, userAgent string, now time.Time) string {
+	if rt == nil {
+		return ""
+	}
+	return challengecookie.IssueHMAC(rt.Secret, rt.ChallengeTTL, ip, userAgent, now)
+}
+
+func verifyBotDefenseToken(rt *runtimeBotDefenseConfig, token, ip, userAgent string, now time.Time) bool {
+	if rt == nil {
+		return false
+	}
+	return challengecookie.VerifyHMAC(rt.Secret, token, ip, userAgent, now)
+}
+
 func botDefenseChallengeCookieState(rt *runtimeBotDefenseConfig, r *http.Request, ip, userAgent string, now time.Time) string {
 	if rt == nil || r == nil {
 		return botDefenseCookieStateMissing
@@ -1501,6 +1571,94 @@ func maxBotDefenseRiskWeight(rt *runtimeBotDefenseConfig) int {
 		}
 	}
 	return maxScore
+}
+
+func evaluateBotDefenseBrowserSignals(rt *runtimeBotDefenseConfig, r *http.Request, hasValidChallengeCookie bool) (int, []string) {
+	if rt == nil {
+		return 0, nil
+	}
+	return botdefensesignals.EvaluateBrowser(botdefensesignals.BrowserConfig{
+		Enabled:            rt.BrowserSignals.Enabled,
+		CookieName:         rt.BrowserSignals.JSCookieName,
+		ScoreThreshold:     rt.BrowserSignals.ScoreThreshold,
+		RiskScorePerSignal: rt.BrowserSignals.RiskScorePerSignal,
+	}, r, hasValidChallengeCookie)
+}
+
+func evaluateBotDefenseDeviceSignals(rt *runtimeBotDefenseConfig, r *http.Request) (int, []string) {
+	if rt == nil {
+		return 0, nil
+	}
+	return botdefensesignals.EvaluateDevice(botdefensesignals.DeviceConfig{
+		Enabled:                    rt.DeviceSignals.Enabled,
+		CookieName:                 botDefenseTelemetryCookieName(rt),
+		RequireTimeZone:            rt.DeviceSignals.RequireTimeZone,
+		RequirePlatform:            rt.DeviceSignals.RequirePlatform,
+		RequireHardwareConcurrency: rt.DeviceSignals.RequireHardwareConcurrency,
+		CheckMobileTouch:           rt.DeviceSignals.CheckMobileTouch,
+		ScoreThreshold:             rt.DeviceSignals.ScoreThreshold,
+		RiskScorePerSignal:         rt.DeviceSignals.RiskScorePerSignal,
+	}, r)
+}
+
+func evaluateBotDefenseHeaderSignals(rt *runtimeBotDefenseConfig, r *http.Request) (int, []string) {
+	if rt == nil {
+		return 0, nil
+	}
+	return botdefensesignals.EvaluateHeaders(botdefensesignals.HeaderConfig{
+		Enabled:                rt.HeaderSignals.Enabled,
+		RequireAcceptLanguage:  rt.HeaderSignals.RequireAcceptLanguage,
+		RequireFetchMetadata:   rt.HeaderSignals.RequireFetchMetadata,
+		RequireClientHints:     rt.HeaderSignals.RequireClientHints,
+		RequireUpgradeInsecure: rt.HeaderSignals.RequireUpgradeInsecure,
+		ScoreThreshold:         rt.HeaderSignals.ScoreThreshold,
+		RiskScorePerSignal:     rt.HeaderSignals.RiskScorePerSignal,
+	}, r)
+}
+
+func evaluateBotDefenseTLSSignals(rt *runtimeBotDefenseConfig, r *http.Request) (int, []string) {
+	if rt == nil {
+		return 0, nil
+	}
+	return botdefensesignals.EvaluateTLS(botdefensesignals.TLSConfig{
+		Enabled:            rt.TLSSignals.Enabled,
+		RequireSNI:         rt.TLSSignals.RequireSNI,
+		RequireALPN:        rt.TLSSignals.RequireALPN,
+		RequireModernTLS:   rt.TLSSignals.RequireModernTLS,
+		ScoreThreshold:     rt.TLSSignals.ScoreThreshold,
+		RiskScorePerSignal: rt.TLSSignals.RiskScorePerSignal,
+	}, r)
+}
+
+func parseBotDefenseBrowserSignalCookie(raw string) (botdefensesignals.Telemetry, bool) {
+	return botdefensesignals.ParseTelemetryCookie(raw)
+}
+
+func botDefenseTelemetryCookieName(rt *runtimeBotDefenseConfig) string {
+	if rt == nil {
+		return ""
+	}
+	return strings.TrimSpace(rt.BrowserSignals.JSCookieName)
+}
+
+func looksLikeBrowserRequest(r *http.Request) bool {
+	return botdefensesignals.LooksLikeBrowserRequest(r)
+}
+
+func canInjectBotDefenseTelemetry(rt *runtimeBotDefenseConfig, req *http.Request, res *http.Response) bool {
+	if rt == nil {
+		return false
+	}
+	return botdefensesignals.CanInjectTelemetry(botdefensesignals.InjectionConfig{
+		RuntimeEnabled:         rt.Raw.Enabled,
+		DeviceSignalsEnabled:   rt.DeviceSignals.Enabled,
+		InvisibleHTMLInjection: rt.DeviceSignals.InvisibleHTMLInjection,
+		CookieName:             botDefenseTelemetryCookieName(rt),
+	}, req, res)
+}
+
+func acceptsHTML(rawAccept string) bool {
+	return botdefensesignals.AcceptsHTML(rawAccept)
 }
 
 func applyBotDefensePathPolicyRisk(riskScore int, policy *runtimeBotDefensePathPolicy) int {

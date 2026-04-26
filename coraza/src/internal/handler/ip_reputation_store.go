@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +21,7 @@ import (
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/policyhost"
+	"tukuyomi/internal/runtimefiles"
 )
 
 const (
@@ -117,15 +117,8 @@ func InitIPReputation(path string) error {
 	ipReputationPath = target
 	ipReputationMu.Unlock()
 
-	if store := getLogsStatsStore(); store != nil {
-		raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(ipReputationConfigBlobKey), normalizeIPReputationPolicyRaw, "ip reputation rules")
-		if err != nil {
-			return fmt.Errorf("read ip reputation config db: %w", err)
-		}
-		if !found {
-			return fmt.Errorf("normalized ip reputation config missing in db; run make db-import before removing seed files")
-		}
-		return applyIPReputationPolicyRaw(raw)
+	if handled, err := initPolicyJSONConfigFromDB(ipReputationPolicyJSONDomain.dbInit(applyIPReputationPolicyRaw)); handled {
+		return err
 	}
 
 	if err := ensureIPReputationFile(target); err != nil {
@@ -296,29 +289,26 @@ func selectIPReputationScopeByKey(rt *runtimeIPReputationConfig, scopeKey string
 func GetIPReputation(c *gin.Context) {
 	path := GetIPReputationPath()
 	raw, _ := os.ReadFile(path)
-	savedAt := fileSavedAt(path)
-	if store := getLogsStatsStore(); store != nil {
-		dbRaw, rec, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(ipReputationConfigBlobKey), normalizeIPReputationPolicyRaw, "ip reputation rules")
-		if err != nil {
-			respondConfigBlobDBError(c, "ip-reputation db read failed", err)
+	savedAt := runtimefiles.FileSavedAt(path)
+	dbRaw, rec, found, ok := loadPolicyJSONConfigForAdmin(c, ipReputationPolicyJSONDomain.adminRead())
+	if !ok {
+		return
+	}
+	if found {
+		rt, parseErr := ValidateIPReputationRaw(string(dbRaw))
+		if parseErr != nil {
+			respondConfigBlobDBError(c, "ip-reputation db rows parse failed", parseErr)
 			return
 		}
-		if found {
-			rt, parseErr := ValidateIPReputationRaw(string(dbRaw))
-			if parseErr != nil {
-				respondConfigBlobDBError(c, "ip-reputation db rows parse failed", parseErr)
-				return
-			}
-			savedAt = configVersionSavedAt(rec)
-			c.JSON(http.StatusOK, gin.H{
-				"etag":     rec.ETag,
-				"raw":      string(dbRaw),
-				"config":   rt.Raw,
-				"status":   IPReputationStatus(),
-				"saved_at": savedAt,
-			})
-			return
-		}
+		savedAt = configVersionSavedAt(rec)
+		c.JSON(http.StatusOK, gin.H{
+			"etag":     rec.ETag,
+			"raw":      string(dbRaw),
+			"config":   rt.Raw,
+			"status":   IPReputationStatus(),
+			"saved_at": savedAt,
+		})
+		return
 	}
 	var cfg ipReputationFile
 	if ipReputationRuntime != nil {
@@ -334,16 +324,13 @@ func GetIPReputation(c *gin.Context) {
 }
 
 func ValidateIPReputation(c *gin.Context) {
-	var in struct {
-		Raw string `json:"raw"`
-	}
-	if err := c.ShouldBindJSON(&in); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	in, ok := bindRawPolicyPutBody(c)
+	if !ok {
 		return
 	}
 	rt, err := ValidateIPReputationRaw(in.Raw)
 	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
+		respondPolicyValidationError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "messages": []string{}, "config": rt.Raw})
@@ -356,36 +343,21 @@ func PutIPReputation(c *gin.Context) {
 		return
 	}
 
-	var in struct {
-		Raw string `json:"raw"`
-	}
-	if err := c.ShouldBindJSON(&in); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	in, ok := bindRawPolicyPutBody(c)
+	if !ok {
 		return
 	}
 	if _, err := ValidateIPReputationRaw(in.Raw); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
+		respondPolicyValidationError(c, err)
 		return
 	}
 	normalizedRaw, err := normalizeIPReputationPolicyRaw(in.Raw)
 	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
+		respondPolicyValidationError(c, err)
 		return
 	}
-	spec := mustPolicyJSONSpec(ipReputationConfigBlobKey)
-	currentRaw, currentRec, _, err := loadRuntimePolicyJSONConfig(store, spec, normalizeIPReputationPolicyRaw, "ip reputation rules")
-	if err != nil {
-		respondConfigBlobDBError(c, "ip-reputation db seed failed", err)
-		return
-	}
-	expectedETag := policyWriteExpectedETag(c.GetHeader("If-Match"), currentRaw, currentRec)
-	rec, err := store.writePolicyJSONConfigVersion(expectedETag, spec, normalizedRaw, configVersionSourceApply, "", "ip reputation rules update", 0)
-	if err != nil {
-		if errors.Is(err, errConfigVersionConflict) {
-			c.JSON(http.StatusConflict, gin.H{"error": "conflict", "currentETag": policyConfigConflictETag(store, ipReputationConfigBlobKey)})
-			return
-		}
-		respondConfigBlobDBError(c, "ip-reputation db update failed", err)
+	rec, ok := writePolicyJSONConfigUpdate(c, store, ipReputationPolicyJSONDomain.update(normalizedRaw))
+	if !ok {
 		return
 	}
 	if err := applyIPReputationPolicyRaw(normalizedRaw); err != nil {
@@ -396,15 +368,7 @@ func PutIPReputation(c *gin.Context) {
 }
 
 func SyncIPReputationStorage() error {
-	store := getLogsStatsStore()
-	if store == nil {
-		return nil
-	}
-	raw, _, found, err := loadRuntimePolicyJSONConfig(store, mustPolicyJSONSpec(ipReputationConfigBlobKey), normalizeIPReputationPolicyRaw, "ip reputation rules")
-	if err != nil || !found {
-		return err
-	}
-	return applyIPReputationPolicyRaw(raw)
+	return syncPolicyJSONConfigStorage(ipReputationPolicyJSONDomain.sync(applyIPReputationPolicyRaw))
 }
 
 func GetIPReputationPath() string {

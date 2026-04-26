@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"tukuyomi/internal/proxystickysession"
 )
 
 func mustValidateProxyRulesRaw(t *testing.T, raw string) ProxyRulesConfig {
@@ -393,7 +395,7 @@ func TestProxyBackendPoolStickySessionSelectsCookieBackend(t *testing.T) {
 	if first.SelectedUpstream == "" {
 		t.Fatal("first request did not select upstream")
 	}
-	cookie := proxyStickySessionCookie(cfg.BackendPools[0].StickySession, first.SelectedUpstream, time.Now().UTC())
+	cookie := proxystickysession.Cookie(cfg.BackendPools[0].StickySession, first.SelectedUpstream, time.Now().UTC())
 	if cookie == nil {
 		t.Fatal("sticky cookie was not built")
 	}
@@ -440,27 +442,27 @@ func TestProxyBackendPoolStickySessionRejectsTamperedCookie(t *testing.T) {
     }
   ]
 }`)
-	cookie := proxyStickySessionCookie(cfg.BackendPools[0].StickySession, "blue", time.Now().UTC())
+	cookie := proxystickysession.Cookie(cfg.BackendPools[0].StickySession, "blue", time.Now().UTC())
 	if cookie == nil {
 		t.Fatal("sticky cookie was not built")
 	}
-	if _, ok := parseProxyStickySessionCookieValue(cookie.Name, cookie.Value+"x", time.Now().UTC()); ok {
+	if _, ok := proxystickysession.ParseValue(cookie.Name, cookie.Value+"x", time.Now().UTC()); ok {
 		t.Fatal("tampered sticky cookie should be rejected")
 	}
 }
 
 func TestProxyBackendPoolStickySessionRejectsExpiredCookie(t *testing.T) {
 	now := time.Unix(time.Now().UTC().Unix(), 0)
-	value := buildProxyStickySessionCookieValue("tky_lb_site_api", "blue", now)
-	if _, ok := parseProxyStickySessionCookieValue("tky_lb_site_api", value, now); ok {
+	value := proxystickysession.BuildValue("tky_lb_site_api", "blue", now)
+	if _, ok := proxystickysession.ParseValue("tky_lb_site_api", value, now); ok {
 		t.Fatal("expired sticky cookie should be rejected")
 	}
 }
 
 func TestProxyBackendPoolStickySessionEncodesUpstreamNameDelimiter(t *testing.T) {
 	now := time.Now().UTC()
-	value := buildProxyStickySessionCookieValue("tky_lb_site_api", "blue|west", now.Add(time.Minute))
-	got, ok := parseProxyStickySessionCookieValue("tky_lb_site_api", value, now)
+	value := proxystickysession.BuildValue("tky_lb_site_api", "blue|west", now.Add(time.Minute))
+	got, ok := proxystickysession.ParseValue("tky_lb_site_api", value, now)
 	if !ok {
 		t.Fatal("encoded sticky cookie should parse")
 	}
@@ -505,7 +507,7 @@ func TestProxyBackendPoolStickySessionIgnoresUnavailableBackend(t *testing.T) {
 		t.Fatalf("candidates=%d want=2", len(candidates))
 	}
 
-	cookie := proxyStickySessionCookie(cfg.BackendPools[0].StickySession, "blue", time.Now().UTC())
+	cookie := proxystickysession.Cookie(cfg.BackendPools[0].StickySession, "blue", time.Now().UTC())
 	if cookie == nil {
 		t.Fatal("sticky cookie was not built")
 	}

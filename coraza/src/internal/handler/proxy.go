@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,13 +14,22 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"tukuyomi/internal/bottelemetry"
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/cacheconf"
 	"tukuyomi/internal/observability"
+	"tukuyomi/internal/proxyaccesslog"
+	"tukuyomi/internal/proxycompression"
+	"tukuyomi/internal/proxyserve"
+	"tukuyomi/internal/proxystickysession"
+	"tukuyomi/internal/requestmeta"
 	"tukuyomi/internal/waf"
+	"tukuyomi/internal/wafmatch"
 )
 
 type ctxKey string
+
+type proxyServeContext = proxyserve.Context
 
 const (
 	ctxKeyReqID            ctxKey = "req_id"
@@ -247,8 +257,8 @@ func emitProxyAccessLog(req *http.Request, w http.ResponseWriter, reqID, clientI
 	if req == nil || w == nil {
 		return
 	}
-	mode := currentProxyAccessLogMode()
-	if mode == proxyAccessLogModeOff {
+	mode := proxyaccesslog.CurrentRuntimeMode()
+	if mode == proxyaccesslog.ModeOff {
 		return
 	}
 	evt := map[string]any{
@@ -263,7 +273,7 @@ func emitProxyAccessLog(req *http.Request, w http.ResponseWriter, reqID, clientI
 		"path":     req.URL.Path,
 		"status":   proxyResponseStatus(w, http.StatusOK),
 	}
-	if mode == proxyAccessLogModeMinimal {
+	if mode == proxyaccesslog.ModeMinimal {
 		emitProxyAccessLogEvent(evt)
 		return
 	}
@@ -289,6 +299,56 @@ func onProxyResponse(res *http.Response) error {
 	}
 	sanitizeProxyLiveResponseHeaders(res)
 	return nil
+}
+
+func maybeInjectBotDefenseTelemetry(res *http.Response) error {
+	rt, _ := selectBotDefenseRuntime(currentBotDefenseRuntime(), res.Request)
+	if !canInjectBotDefenseTelemetry(rt, res.Request, res) {
+		return nil
+	}
+	if err := bottelemetry.BufferResponseBodyWithLimit(res, rt.DeviceSignals.InvisibleMaxBodyBytes); err != nil {
+		return nil
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+	_ = res.Body.Close()
+
+	maxAge := int(rt.ChallengeTTL.Seconds())
+	updated, changed := bottelemetry.InjectHTML(body, botDefenseTelemetryCookieName(rt), maxAge)
+	if !changed {
+		res.Body = io.NopCloser(bytes.NewReader(body))
+		res.ContentLength = int64(len(body))
+		return nil
+	}
+	res.Body = io.NopCloser(bytes.NewReader(updated))
+	res.ContentLength = int64(len(updated))
+	if res.Header != nil {
+		res.Header.Set("Content-Length", strconv.FormatInt(res.ContentLength, 10))
+		res.Header.Del("ETag")
+		res.Header.Set("X-Tukuyomi-Bot-Telemetry", "injected")
+	}
+	return nil
+}
+
+func applyProxyStickySessionCookie(res *http.Response) {
+	if res == nil || res.Request == nil {
+		return
+	}
+	selection, ok := proxyRouteTransportSelectionFromContext(res.Request.Context())
+	if !ok || !selection.StickySession.Enabled {
+		return
+	}
+	stickyID := strings.TrimSpace(selection.StickyTargetID)
+	if stickyID == "" {
+		stickyID = selection.SelectedUpstream
+	}
+	cookie := proxystickysession.Cookie(selection.StickySession, stickyID, time.Now().UTC())
+	if cookie == nil {
+		return
+	}
+	res.Header.Add("Set-Cookie", cookie.String())
 }
 
 func applyRouteResponseHeaders(res *http.Response) {
@@ -366,6 +426,88 @@ func applyCacheHeaders(res *http.Response) {
 			h.Set("Vary", strings.Join(vary, ", "))
 		}
 	}
+}
+
+var proxyResponseCompressionRuntimeMetrics proxycompression.Metrics
+
+func proxyEffectiveResponseCacheVary(vary []string) []string {
+	out := append([]string(nil), vary...)
+	cfg := currentProxyConfig()
+	if proxycompression.Enabled(cfg.ResponseCompression) {
+		out = proxycompression.AppendVaryValue(out, "Accept-Encoding")
+	}
+	return out
+}
+
+func maybeCompressProxyResponse(res *http.Response) error {
+	cfg := currentProxyConfig()
+	compressionCfg := cfg.ResponseCompression
+	if !proxycompression.Enabled(compressionCfg) || res == nil || res.Header == nil || res.Request == nil {
+		return nil
+	}
+	if isDirectStaticResponse(res) {
+		return nil
+	}
+	proxycompression.AppendVaryHeader(res.Header, "Accept-Encoding")
+	if !proxycompression.HasEntityBody(res.Request.Method, res.StatusCode) {
+		proxyResponseCompressionRuntimeMetrics.RecordSkipped(proxycompression.SkipBodyless)
+		return nil
+	}
+	if proxycompression.IsUpgrade(res) {
+		proxyResponseCompressionRuntimeMetrics.RecordSkipped(proxycompression.SkipUpgrade)
+		return nil
+	}
+	if proxycompression.HasNoTransform(res.Header) {
+		proxyResponseCompressionRuntimeMetrics.RecordSkipped(proxycompression.SkipTransform)
+		return nil
+	}
+	algorithm, ok := proxycompression.SelectAlgorithm(res.Request, compressionCfg)
+	if !ok {
+		proxyResponseCompressionRuntimeMetrics.RecordSkipped(proxycompression.SkipClient)
+		return nil
+	}
+	if proxycompression.AlreadyEncoded(res.Header) {
+		proxyResponseCompressionRuntimeMetrics.RecordSkipped(proxycompression.SkipEncoded)
+		return nil
+	}
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+	_ = res.Body.Close()
+	proxycompression.RestoreResponseBody(res, body)
+
+	if int64(len(body)) < compressionCfg.MinBytes {
+		proxyResponseCompressionRuntimeMetrics.RecordSkipped(proxycompression.SkipSmall)
+		return nil
+	}
+	if !proxycompression.AllowsMIMEType(compressionCfg, res.Header.Get("Content-Type"), body) {
+		proxyResponseCompressionRuntimeMetrics.RecordSkipped(proxycompression.SkipMIME)
+		return nil
+	}
+
+	compressed, err := proxycompression.CompressBody(algorithm, body)
+	if err != nil {
+		return err
+	}
+	if len(compressed) >= len(body) {
+		proxyResponseCompressionRuntimeMetrics.RecordSkipped(proxycompression.SkipSmall)
+		return nil
+	}
+
+	proxycompression.RestoreResponseBody(res, compressed)
+	res.Header.Set("Content-Encoding", algorithm)
+	res.Header.Del("Content-MD5")
+	res.Header.Del("Accept-Ranges")
+	proxycompression.WeakenETag(res.Header)
+
+	proxyResponseCompressionRuntimeMetrics.RecordCompressed(algorithm, int64(len(body)), int64(len(compressed)))
+	return nil
+}
+
+func proxyResponseCompressionStatusSnapshot() proxycompression.Status {
+	return proxyResponseCompressionRuntimeMetrics.Snapshot()
 }
 
 func ensureProxyRequestID(c *proxyServeContext) string {
@@ -453,11 +595,19 @@ func attachProxyRouteTransportSelection(c *proxyServeContext, classification pro
 func ProxyHandler(c *gin.Context) {
 	pc := newProxyServeContextFromGin(c)
 	serveProxyRequest(pc)
-	pc.syncGinContext()
+	pc.SyncGinContext()
 }
 
 func ServeProxyHTTP(w http.ResponseWriter, r *http.Request) {
 	serveProxyRequest(newProxyServeContext(w, r))
+}
+
+func newProxyServeContext(w http.ResponseWriter, r *http.Request) *proxyServeContext {
+	return proxyserve.New(w, r)
+}
+
+func newProxyServeContextFromGin(c *gin.Context) *proxyServeContext {
+	return proxyserve.NewFromGin(c)
 }
 
 func serveProxyRequest(c *proxyServeContext) {
@@ -465,9 +615,9 @@ func serveProxyRequest(c *proxyServeContext) {
 		return
 	}
 	reqID := ensureProxyRequestID(c)
-	clientIP := requestClientIPHTTP(c.Request)
-	requestMetadataCtx := newRequestMetadataResolverContext(clientIP)
-	if err := runRequestMetadataResolvers(c.Request, newRequestMetadataResolvers(), requestMetadataCtx); err != nil {
+	clientIP := requestmeta.ClientIPFromHTTP(c.Request)
+	requestMetadataCtx := requestmeta.NewResolverContext(clientIP)
+	if err := requestmeta.RunResolvers(c.Request, newRequestMetadataResolvers(), requestMetadataCtx); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
@@ -672,7 +822,7 @@ func serveProxyRequest(c *proxyServeContext) {
 	setWAFContext(c, reqID, clientIP, country, countrySource, wafDecision.Hit, strings.Join(ruleIDs, ","))
 
 	if it := wafDecision.Interruption; it != nil {
-		primaryMatch, havePrimaryMatch := selectPrimaryWAFMatch(wafDecision.Matches, it.RuleID)
+		primaryMatch, havePrimaryMatch := wafmatch.SelectPrimary(wafDecision.Matches, it.RuleID, maxDBMatchedValueBytes)
 		securityEvt := requestSecurityCtx.newSecurityEvent(c.Request, "waf", "waf", requestSecurityEventTypeWAFBlock, requestSecurityEventActionBlock)
 		securityEvt.Phase = "waf"
 		securityEvt.Enforced = true
@@ -792,7 +942,14 @@ func releaseProxyRouteSelection(selection proxyRouteTransportSelection) {
 }
 
 func appendEncodedEventsToDB(raws [][]byte) error {
-	return appendEncodedWAFEvents(raws, "")
+	if len(raws) == 0 {
+		return nil
+	}
+	store := getLogsStatsStore()
+	if store == nil {
+		return errConfigDBStoreRequired
+	}
+	return store.AppendWAFEventLines(raws)
 }
 
 func requestPath(r *http.Request) string {

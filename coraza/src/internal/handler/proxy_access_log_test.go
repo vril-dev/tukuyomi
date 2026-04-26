@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"tukuyomi/internal/proxyaccesslog"
 )
 
 func boolValue(v any) bool {
@@ -137,9 +139,9 @@ func TestProxyHandlerEmitsAccessLogWithBodyByteCounts(t *testing.T) {
 func TestEmitProxyAccessLogMinimalSkipsExpandedFields(t *testing.T) {
 	initConfigDBStoreForTest(t)
 
-	setRuntimeProxyAccessLogMode(proxyAccessLogModeMinimal)
+	proxyaccesslog.SetRuntimeMode(proxyaccesslog.ModeMinimal)
 	t.Cleanup(func() {
-		setRuntimeProxyAccessLogMode(proxyAccessLogModeFull)
+		proxyaccesslog.SetRuntimeMode(proxyaccesslog.ModeFull)
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "http://proxy.local/demo", nil)
@@ -177,9 +179,9 @@ func TestEmitProxyAccessLogMinimalSkipsExpandedFields(t *testing.T) {
 func TestEmitProxyAccessLogOffSkipsAccessEvent(t *testing.T) {
 	initConfigDBStoreForTest(t)
 
-	setRuntimeProxyAccessLogMode(proxyAccessLogModeOff)
+	proxyaccesslog.SetRuntimeMode(proxyaccesslog.ModeOff)
 	t.Cleanup(func() {
-		setRuntimeProxyAccessLogMode(proxyAccessLogModeFull)
+		proxyaccesslog.SetRuntimeMode(proxyaccesslog.ModeFull)
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "http://proxy.local/demo", nil)

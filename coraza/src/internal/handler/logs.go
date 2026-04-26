@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,6 +22,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/eventasync"
+	"tukuyomi/internal/requestmeta"
 )
 
 var (
@@ -39,6 +43,116 @@ var (
 	maxStatsRangeHours     = 14 * 24
 	statsTopN              = 5
 )
+
+const (
+	wafEventAsyncQueueSize = 8192
+	wafEventAsyncBatchSize = 64
+)
+
+type wafEventAsyncSink = eventasync.Sink
+type wafEventAsyncWriter = eventasync.Writer
+type wafEventAsyncStatusSnapshot = eventasync.StatusSnapshot
+
+var (
+	wafEventAsyncStats                         = eventasync.NewStats()
+	runtimeWAFEventAsyncSink wafEventAsyncSink = newWAFEventAsyncWriter(wafEventAsyncQueueSize, wafEventAsyncBatchSize)
+
+	wafEventAsyncWarningMu        sync.Mutex
+	lastWAFEventAsyncWriteWarning time.Time
+	lastWAFEventAsyncDropWarning  time.Time
+)
+
+func newWAFEventAsyncWriter(queueSize int, batchSize int) *wafEventAsyncWriter {
+	return eventasync.NewWriter(queueSize, batchSize, wafEventAsyncStats, writeWAFEventAsyncBatch, logWAFEventAsyncWriteWarning)
+}
+
+func writeWAFEventAsyncBatch(raws [][]byte) error {
+	if len(raws) == 0 {
+		return nil
+	}
+	for _, raw := range raws {
+		log.Println(string(raw))
+		var evt map[string]any
+		if err := json.Unmarshal(raw, &evt); err == nil {
+			ObserveNotificationLogEvent(evt)
+		}
+	}
+	if err := appendEncodedEventsToDB(raws); err != nil {
+		return err
+	}
+	return nil
+}
+
+func logWAFEventAsyncWriteWarning(err error) {
+	wafEventAsyncWarningMu.Lock()
+	defer wafEventAsyncWarningMu.Unlock()
+
+	now := time.Now()
+	if now.Sub(lastWAFEventAsyncWriteWarning) < time.Second {
+		return
+	}
+	lastWAFEventAsyncWriteWarning = now
+	log.Printf("[WAF_EVENT][WARN] async event append failed: %v", err)
+}
+
+func logWAFEventAsyncDropWarning() {
+	wafEventAsyncWarningMu.Lock()
+	defer wafEventAsyncWarningMu.Unlock()
+
+	now := time.Now()
+	if now.Sub(lastWAFEventAsyncDropWarning) < time.Second {
+		return
+	}
+	lastWAFEventAsyncDropWarning = now
+	log.Printf("[WAF_EVENT][WARN] async event queue full; dropped event")
+}
+
+func enqueueEncodedWAFEvent(raw []byte) {
+	if len(raw) == 0 {
+		return
+	}
+	if runtimeWAFEventAsyncSink != nil && runtimeWAFEventAsyncSink.Enqueue(raw) {
+		return
+	}
+	wafEventAsyncStats.AddDropped()
+	logWAFEventAsyncDropWarning()
+}
+
+func emitProxyAccessLogEvent(evt map[string]any) {
+	emitJSONLogAndAppendEvent(evt)
+}
+
+func WAFEventAsyncStatusSnapshot() wafEventAsyncStatusSnapshot {
+	queueCurrent := 0
+	queueCapacity := 0
+	if writer, ok := runtimeWAFEventAsyncSink.(*wafEventAsyncWriter); ok && writer != nil {
+		queueCurrent = writer.QueueCurrent()
+		queueCapacity = writer.QueueCapacity()
+	}
+	return wafEventAsyncStats.Snapshot(queueCurrent, queueCapacity)
+}
+
+func FlushWAFEventAsync(ctx context.Context) error {
+	if runtimeWAFEventAsyncSink == nil {
+		return nil
+	}
+	return runtimeWAFEventAsyncSink.Flush(ctx)
+}
+
+func ShutdownWAFEventAsync(ctx context.Context) error {
+	if runtimeWAFEventAsyncSink == nil {
+		return nil
+	}
+	return runtimeWAFEventAsyncSink.Shutdown(ctx)
+}
+
+func FlushProxyAccessLogAsync(ctx context.Context) error {
+	return FlushWAFEventAsync(ctx)
+}
+
+func ShutdownProxyAccessLogAsync(ctx context.Context) error {
+	return ShutdownWAFEventAsync(ctx)
+}
 
 type logLine map[string]any
 
@@ -117,7 +231,7 @@ func LogsRead(c *gin.Context) {
 		off := mustAtoi64Default(v, 0)
 		cursor = &off
 	}
-	countryFilter := normalizeCountryFilter(c.Query("country"))
+	countryFilter := requestmeta.NormalizeCountryFilter(c.Query("country"))
 
 	if reqIDFilter != "" {
 		var (
@@ -241,7 +355,7 @@ func LogsDownload(c *gin.Context) {
 	if toStr == "" {
 		to = time.Now().Add(1 * time.Second)
 	}
-	countryFilter := normalizeCountryFilter(c.Query("country"))
+	countryFilter := requestmeta.NormalizeCountryFilter(c.Query("country"))
 
 	c.Header("Content-Type", "application/x-ndjson")
 	filename := fmt.Sprintf("%s-%s.ndjson.gz", src, time.Now().Format("20060102"))
@@ -270,7 +384,7 @@ func LogsDownload(c *gin.Context) {
 		if len(b) > 0 {
 			var m map[string]any
 			if json.Unmarshal(b, &m) == nil {
-				if ts, ok := m["ts"].(string); ok && tsInRange(ts, from, to) && countryMatchesFilter(m["country"], countryFilter) {
+				if ts, ok := m["ts"].(string); ok && tsInRange(ts, from, to) && requestmeta.CountryMatchesFilter(m["country"], countryFilter) {
 					if _, err := gw.Write(b); err != nil {
 						break
 					}
@@ -611,7 +725,7 @@ func readByRequestID(path string, reqIDFilter string, countryFilter string) ([]l
 		if len(b) > 0 {
 			var m map[string]any
 			if json.Unmarshal(trimLastNewline(b), &m) == nil {
-				if strings.TrimSpace(anyToString(m["req_id"])) == reqIDFilter && countryMatchesFilter(m["country"], countryFilter) {
+				if strings.TrimSpace(anyToString(m["req_id"])) == reqIDFilter && requestmeta.CountryMatchesFilter(m["country"], countryFilter) {
 					out = append(out, m)
 				}
 			}
@@ -746,7 +860,7 @@ func filterLinesByCountry(lines []logLine, filter string) []logLine {
 
 	out := make([]logLine, 0, len(lines))
 	for _, line := range lines {
-		if countryMatchesFilter(line["country"], filter) {
+		if requestmeta.CountryMatchesFilter(line["country"], filter) {
 			out = append(out, line)
 		}
 	}
@@ -756,7 +870,7 @@ func filterLinesByCountry(lines []logLine, filter string) []logLine {
 
 func normalizeCountryInLines(lines []logLine) {
 	for _, line := range lines {
-		line["country"] = normalizeCountryFromAny(line["country"])
+		line["country"] = requestmeta.NormalizeCountryFromAny(line["country"])
 	}
 }
 

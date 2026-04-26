@@ -14,7 +14,7 @@ import (
 	"github.com/quic-go/quic-go/http3"
 
 	"tukuyomi/internal/config"
-	"tukuyomi/internal/handler"
+	"tukuyomi/internal/serverruntime"
 )
 
 func TestServerHTTP3AltSvcHeader(t *testing.T) {
@@ -48,7 +48,7 @@ func TestWrapHTTP3AltSvcHandlerAddsHeader(t *testing.T) {
 func TestHTTP3ServerStartsAndAdvertisesAltSvc(t *testing.T) {
 	restore := setServerTLSGlobalsForTest(t)
 	defer restore()
-	handler.ResetServerHTTP3RuntimeStatus()
+	serverruntime.ResetHTTP3Status()
 
 	certFile, keyFile := writeServerTLSFiles(t, []string{"127.0.0.1", "localhost"})
 	tlsConfig, err := config.BuildServerTLSConfig(certFile, keyFile, "tls1.2")
@@ -138,7 +138,7 @@ func TestHTTP3ServerStartsAndAdvertisesAltSvc(t *testing.T) {
 	if got := resp.Header.Get("Alt-Svc"); !strings.Contains(got, `h3=":`) || !strings.Contains(got, `ma=86400`) {
 		t.Fatalf("unexpected Alt-Svc header: %q", got)
 	}
-	if !handler.ServerHTTP3RuntimeStatusSnapshot().Advertised {
+	if !serverruntime.HTTP3StatusSnapshot().Advertised {
 		t.Fatal("expected advertised http3 runtime status")
 	}
 

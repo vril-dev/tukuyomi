@@ -9,10 +9,12 @@ import {
   Field,
   MonoTag,
   NoticeBar,
+  ParsedTextArea,
   PrimaryButton,
   SectionCard,
   StatBox,
   inputClass,
+  stringListEqual,
   textareaClass,
 } from "@/components/EditorChrome";
 import { useAdminRuntime } from "@/lib/adminRuntime";
@@ -527,28 +529,37 @@ function IPReputationScopeEditor({
         <div className="text-sm font-medium">{tx("Lists")}</div>
         <div className="grid gap-4 xl:grid-cols-3">
           <Field label={tx("Feed URLs")} hint={tx("Plain text feeds are fetched in order. Leave empty if you only use static CIDRs.")}>
-            <textarea
+            <ParsedTextArea
               className={`${textareaClass} min-h-40`}
-              value={listToMultiline(scope.feedURLs)}
-              onChange={(event) => applyScope({ ...scope, feedURLs: multilineToList(event.target.value) })}
+              value={scope.feedURLs}
+              onValueChange={(next) => applyScope({ ...scope, feedURLs: next })}
+              serialize={listToMultiline}
+              parse={multilineToList}
+              equals={stringListEqual}
               placeholder="https://feeds.example.invalid/ip-reputation.txt"
               spellCheck={false}
             />
           </Field>
           <Field label={tx("Allowlist")} hint={tx("One IP or CIDR per line. These entries bypass static, feed, and dynamic block decisions.")}>
-            <textarea
+            <ParsedTextArea
               className={`${textareaClass} min-h-40`}
-              value={listToMultiline(scope.allowlist)}
-              onChange={(event) => applyScope({ ...scope, allowlist: multilineToList(event.target.value) })}
+              value={scope.allowlist}
+              onValueChange={(next) => applyScope({ ...scope, allowlist: next })}
+              serialize={listToMultiline}
+              parse={multilineToList}
+              equals={stringListEqual}
               placeholder={"127.0.0.1/32\n::1/128"}
               spellCheck={false}
             />
           </Field>
           <Field label={tx("Blocklist")} hint={tx("One IP or CIDR per line. These entries apply before feed results are merged.")}>
-            <textarea
+            <ParsedTextArea
               className={`${textareaClass} min-h-40`}
-              value={listToMultiline(scope.blocklist)}
-              onChange={(event) => applyScope({ ...scope, blocklist: multilineToList(event.target.value) })}
+              value={scope.blocklist}
+              onValueChange={(next) => applyScope({ ...scope, blocklist: next })}
+              serialize={listToMultiline}
+              parse={multilineToList}
+              equals={stringListEqual}
               placeholder={"203.0.113.0/24\n2001:db8:dead:beef::/64"}
               spellCheck={false}
             />

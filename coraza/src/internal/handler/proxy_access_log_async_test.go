@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"tukuyomi/internal/config"
 )
 
 func TestProxyAccessLogAsyncFlushWritesQueuedAccessLog(t *testing.T) {
@@ -151,4 +153,18 @@ func (wafEventFullSink) Flush(context.Context) error {
 
 func (wafEventFullSink) Shutdown(context.Context) error {
 	return nil
+}
+
+func saveWAFLogArchiveConfigForTest() func() {
+	prevFileRotateBytes := config.FileRotateBytes
+	prevFileMaxBytes := config.FileMaxBytes
+	prevFileRetention := config.FileRetention
+	prevLogFile := config.LogFile
+
+	return func() {
+		config.FileRotateBytes = prevFileRotateBytes
+		config.FileMaxBytes = prevFileMaxBytes
+		config.FileRetention = prevFileRetention
+		config.LogFile = prevLogFile
+	}
 }

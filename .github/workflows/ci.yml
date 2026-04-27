@@ -2,7 +2,13 @@ name: ci
 
 on:
   push:
+    branches:
+      - main
+      - dev
   pull_request:
+    branches:
+      - main
+      - dev
 
 jobs:
   go-test:
@@ -86,19 +92,9 @@ jobs:
         run: make compose-config compose-config-mysql preset-check-minimal
 
   waf-test:
-    name: waf-test (${{ matrix.mode }})
+    name: waf-test (sqlite)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - mode: file
-            db_driver: "sqlite"
-            expect_sqlite_artifact: "true"
-          - mode: sqlite
-            db_driver: "sqlite"
-            expect_sqlite_artifact: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -112,15 +108,13 @@ jobs:
       - name: Install CRS
         run: ./scripts/install_crs.sh
 
-      - name: Configure app config for matrix
-        env:
-          DB_DRIVER: ${{ matrix.db_driver }}
+      - name: Configure app config for SQLite
         run: |
           set -euo pipefail
           tmp="$(mktemp)"
-          jq --arg driver "${DB_DRIVER}" '
+          jq '
             .server.listen_addr = ":9090" |
-            .storage.db_driver = $driver |
+            .storage.db_driver = "sqlite" |
             .storage.db_retention_days = 30 |
             .admin = (.admin // {}) |
             .admin.session_secret = "ci-session-secret-1-1-0-release"
@@ -210,7 +204,6 @@ jobs:
         run: ./scripts/run_gotestwaf.sh
 
       - name: Validate SQLite DB artifact
-        if: matrix.expect_sqlite_artifact == 'true'
         run: |
           if [[ ! -s data/db/tukuyomi.db ]]; then
             echo "expected sqlite db file was not generated" >&2
@@ -229,7 +222,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gotestwaf-report-${{ matrix.mode }}
+          name: gotestwaf-report-sqlite
           path: |
             data/tmp/gotestwaf/gotestwaf-report.json
             data/tmp/gotestwaf/gotestwaf-report-summary.txt

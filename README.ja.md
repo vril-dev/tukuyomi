@@ -292,8 +292,8 @@ make ci-local-extended
 
 - `ci / go-test`
 - `ci / mysql-logstore-test`
+- `ci / ui-test`
 - `ci / compose-validate`
-- `ci / waf-test (file)`
 - `ci / waf-test (sqlite)`
 
 ## ライセンス

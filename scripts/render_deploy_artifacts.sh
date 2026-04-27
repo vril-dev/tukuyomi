@@ -180,12 +180,12 @@ set -euo pipefail
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="\${SCRIPT_DIR}"
 while [[ "\${ROOT_DIR}" != "/" ]]; do
-  if [[ -f "\${ROOT_DIR}/Makefile" && -d "\${ROOT_DIR}/coraza/src" ]]; then
+  if [[ -f "\${ROOT_DIR}/Makefile" && -d "\${ROOT_DIR}/server" ]]; then
     break
   fi
   ROOT_DIR="\$(dirname "\${ROOT_DIR}")"
 done
-if [[ ! -f "\${ROOT_DIR}/Makefile" || ! -d "\${ROOT_DIR}/coraza/src" ]]; then
+if [[ ! -f "\${ROOT_DIR}/Makefile" || ! -d "\${ROOT_DIR}/server" ]]; then
   echo "[build][ERROR] repository root not found above \${SCRIPT_DIR}" >&2
   exit 1
 fi

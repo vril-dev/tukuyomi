@@ -144,10 +144,10 @@ Refresh the embedded Admin UI first:
 
 ```bash
 make ui-build-sync
-docker build -f coraza/Dockerfile -t tukuyomi:local coraza
+docker build -f server/Dockerfile -t tukuyomi:local server
 ```
 
-This path uses the repository Dockerfile and the prepared `coraza/src/internal/handler/admin_ui_dist` tree.
+This path uses the repository Dockerfile and the prepared `server/internal/handler/admin_ui_dist` tree.
 
 ### 2. Use a deployment Dockerfile that builds UI and binary from scratch
 
@@ -248,6 +248,7 @@ Proxy engine selection is part of the same restart-required config surface:
 - HTTP/1.1 and explicit upstream HTTP/2 modes use Tukuyomi native upstream transports; HTTPS `force_attempt` falls back to native HTTP/1.1 only when ALPN does not select `h2`
 - Upgrade/WebSocket handshake requests stay inside `tukuyomi_proxy`; WebSocket frame payloads after `101 Switching Protocols` are tunnel data
 - rebuild/restart the container and benchmark real traffic before production rollout
+- `waf.engine.mode` currently accepts only the available `coraza` engine; `mod_security` is recognized as an unavailable future adapter and is rejected fail-closed until an adapter is compiled in
 
 Keep these server-side:
 
@@ -269,7 +270,7 @@ All samples below assume the deployment image built from
 [Dockerfile.example](Dockerfile.example), which installs the binary at
 `/app/tukuyomi`.
 
-If you instead use `coraza/Dockerfile`, replace scheduler-side
+If you instead use `server/Dockerfile`, replace scheduler-side
 `PROXY_BIN=/app/tukuyomi` with `PROXY_BIN=/app/server`.
 
 ### ECS / Fargate

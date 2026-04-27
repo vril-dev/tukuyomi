@@ -302,7 +302,7 @@ tukuyomi は、nginx と同じ permissive license 系列である BSD 2-Clause L
 で公開します。詳細は [LICENSE](LICENSE) を参照してください。
 
 サードパーティ依存ライブラリの著作権表示は [NOTICE](NOTICE) を参照してください。
-依存ライセンスの metadata は `coraza/src/go.mod` / `coraza/src/go.sum` と
+依存ライセンスの metadata は `server/go.mod` / `server/go.sum` と
 `web/tukuyomi-admin/package-lock.json` から確認できます。
 
 ## tukuyomi とは？

@@ -215,6 +215,7 @@ type ListenerAdminRuntime = {
   server_queued_proxy_request_timeout_ms?: number;
   proxy_engine_mode?: string;
   waf_engine_mode?: string;
+  waf_engine_modes?: EngineCapability[];
   storage_db_driver?: string;
   storage_db_path?: string;
   storage_db_retention_days?: number;
@@ -234,6 +235,15 @@ type ListenerAdminRuntime = {
   tracing_otlp_endpoint?: string;
   tracing_insecure?: boolean;
   tracing_sample_ratio?: number;
+};
+
+type EngineCapability = {
+  mode: string;
+  label?: string;
+  available?: boolean;
+  default?: boolean;
+  runtime_switchable?: boolean;
+  reason?: string;
 };
 
 type ListenerAdminResponse = {
@@ -572,6 +582,28 @@ function createEmptySecretStatus(): SecretStatus {
   };
 }
 
+function normalizeWAFEngineCapabilities(
+  runtime: ListenerAdminRuntime | null,
+  configuredMode: string,
+): EngineCapability[] {
+  const modes = Array.isArray(runtime?.waf_engine_modes)
+    ? runtime.waf_engine_modes.filter((item) => item && typeof item.mode === "string" && item.mode.trim())
+    : [];
+  const out = modes.length
+    ? modes.map((item) => ({
+        ...item,
+        mode: item.mode.trim(),
+        label: item.label?.trim() || item.mode.trim(),
+        available: item.available === true,
+      }))
+    : [{ mode: "coraza", label: "Coraza", available: true, default: true, runtime_switchable: false }];
+  const configured = (configuredMode || "coraza").trim();
+  if (configured && !out.some((item) => item.mode === configured)) {
+    out.unshift({ mode: configured, label: configured, available: false, reason: "Configured engine is not registered." });
+  }
+  return out;
+}
+
 export default function SettingsPanel() {
   const { tx } = useI18n();
   const [operatorIdentityInput, setOperatorIdentityInput] = useState(() =>
@@ -614,6 +646,14 @@ export default function SettingsPanel() {
   const driftItems = useMemo(() => {
     return computeSettingsRuntimeDrift(listenerAdminConfig, runtime, tx);
   }, [listenerAdminConfig, runtime, tx]);
+  const wafEngineModes = useMemo(
+    () => normalizeWAFEngineCapabilities(runtime, listenerAdminConfig.waf.engine.mode),
+    [listenerAdminConfig.waf.engine.mode, runtime],
+  );
+  const selectedWAFEngine = useMemo(() => {
+    const mode = listenerAdminConfig.waf.engine.mode || "coraza";
+    return wafEngineModes.find((item) => item.mode === mode) ?? wafEngineModes[0];
+  }, [listenerAdminConfig.waf.engine.mode, wafEngineModes]);
 
   const loadSettingsConfig = useCallback(async () => {
     setConfigLoading(true);
@@ -2309,18 +2349,43 @@ export default function SettingsPanel() {
                           </p>
                         </Field>
                         <Field label={tx("WAF Engine")}>
-                          <input
+                          <select
                             value={
                               listenerAdminConfig.waf.engine.mode || "coraza"
                             }
-                            readOnly
-                            className="w-full rounded border border-neutral-200 bg-neutral-100 text-neutral-700"
-                          />
+                            onChange={(event) => {
+                              const nextMode = event.target.value;
+                              setListenerAdminConfig((current) => ({
+                                ...current,
+                                waf: {
+                                  ...current.waf,
+                                  engine: {
+                                    ...current.waf.engine,
+                                    mode: nextMode,
+                                  },
+                                },
+                              }));
+                            }}
+                            disabled={readOnly || configSaving}
+                            className="w-full rounded border border-neutral-300 bg-white text-neutral-900 disabled:bg-neutral-100 disabled:text-neutral-500"
+                          >
+                            {wafEngineModes.map((engine) => (
+                              <option key={engine.mode} value={engine.mode} disabled={!engine.available}>
+                                {engine.label || engine.mode}
+                                {engine.available ? "" : ` (${tx("unavailable")})`}
+                              </option>
+                            ))}
+                          </select>
                           <p className="mt-1 text-[11px] text-neutral-500">
                             {tx(
-                              "Coraza is the active WAF engine. Additional engines must be registered before this value can be changed.",
+                              "Select a registered WAF engine. Unavailable engines are shown for planning but cannot be saved in this build.",
                             )}
                           </p>
+                          {!selectedWAFEngine?.available && selectedWAFEngine?.reason ? (
+                            <p className="mt-1 text-[11px] text-amber-700">
+                              {tx("Unavailable")}: {selectedWAFEngine.reason}
+                            </p>
+                          ) : null}
                         </Field>
                         <NumberField
                           label={tx("Proxy Rollback History Size")}

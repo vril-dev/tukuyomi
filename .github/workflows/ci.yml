@@ -9,13 +9,13 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: coraza/src
+        working-directory: server
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.0"
-          cache-dependency-path: coraza/src/go.sum
+          cache-dependency-path: server/go.sum
       - name: Run unit tests
         run: go test ./...
 
@@ -27,7 +27,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.0"
-          cache-dependency-path: coraza/src/go.sum
+          cache-dependency-path: server/go.sum
 
       - name: Prepare env file
         run: cp .env.example .env
@@ -50,7 +50,7 @@ jobs:
           exit 1
 
       - name: Run MySQL log-store integration test
-        working-directory: coraza/src
+        working-directory: server
         env:
           WAF_TEST_MYSQL_DSN: tukuyomi:tukuyomi@tcp(127.0.0.1:13306)/tukuyomi?charset=utf8mb4&parseTime=true
         run: go test ./internal/handler -run TestLogsStatsMySQLStoreAggregatesAndIngestsIncrementally -count=1
@@ -104,7 +104,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.0"
-          cache-dependency-path: coraza/src/go.sum
+          cache-dependency-path: server/go.sum
 
       - name: Prepare env file
         run: cp .env.example .env

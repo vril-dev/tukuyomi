@@ -248,6 +248,7 @@ Proxy engine selection is a restart-required DB `app_config` setting:
 - HTTP/1.1 and explicit upstream HTTP/2 modes use Tukuyomi native upstream transports; HTTPS `force_attempt` falls back to native HTTP/1.1 only when ALPN does not select `h2`
 - Upgrade/WebSocket handshake requests stay inside `tukuyomi_proxy`; WebSocket frame payloads after `101 Switching Protocols` are tunnel data
 - benchmark your real workload before production rollout
+- `waf.engine.mode` currently accepts only the available `coraza` engine; `mod_security` is recognized as an unavailable future adapter and is rejected fail-closed until an adapter is compiled in
 
 ## Split Public/Admin Listeners
 

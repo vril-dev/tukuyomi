@@ -173,7 +173,7 @@ stage_workspace() {
     "${WORKSPACE}/scripts"
   install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${WORKSPACE}/bin/tukuyomi"
   install -m 644 "${ROOT_DIR}/docker-compose.yml" "${WORKSPACE}/docker-compose.yml"
-  rsync -a "${ROOT_DIR}/coraza/" "${WORKSPACE}/coraza/"
+  rsync -a "${ROOT_DIR}/server/" "${WORKSPACE}/server/"
   rsync -a "${ROOT_DIR}/data/conf/" "${WORKSPACE}/data/conf/"
   rsync -a "${ROOT_DIR}/seeds/" "${WORKSPACE}/seeds/"
   rsync -a "${ROOT_DIR}/scripts/" "${WORKSPACE}/scripts/"

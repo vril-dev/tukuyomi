@@ -142,7 +142,7 @@ sed -i "s#/opt/tukuyomi#${RUNTIME_DIR}#g" "${ENV_FILE}"
 
 log "generating temporary self-signed certificate"
 (
-  cd "${ROOT_DIR}/coraza/src"
+  cd "${ROOT_DIR}/server"
   go run ./cmd/http3smoke gen-cert \
     --cert-file "${CERT_FILE}" \
     --key-file "${KEY_FILE}" \
@@ -287,7 +287,7 @@ fi
 
 log "checking actual HTTP/3 request over UDP"
 (
-  cd "${ROOT_DIR}/coraza/src"
+  cd "${ROOT_DIR}/server"
   go run ./cmd/http3smoke check \
     --url "https://127.0.0.1:${HTTP3_SMOKE_PROXY_PORT}/http3/users?lang=ja" \
     --host "${PROTECTED_HOST}" \

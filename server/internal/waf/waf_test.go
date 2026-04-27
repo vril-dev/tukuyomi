@@ -4,7 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	"tukuyomi/internal/config"
 )
 
 func TestSplitRuleFiles(t *testing.T) {
@@ -186,6 +189,21 @@ SecRule ARGS "@rx (?i)<script>" "id:100001,phase:2,deny,status:403,log,msg:'bloc
 	}
 	if it := tx.Interruption(); it != nil {
 		t.Fatalf("unexpected interruption: status=%d rule=%d", it.Status, it.RuleID)
+	}
+}
+
+func TestEngineSelectionRejectsCorazaExtraRulesForNonCorazaMode(t *testing.T) {
+	oldMode := config.WAFEngineMode
+	config.WAFEngineMode = "mod_security"
+	defer func() {
+		config.WAFEngineMode = oldMode
+	}()
+
+	if got := GetBaseEngine(); got != nil {
+		t.Fatalf("GetBaseEngine()=%T, want nil for unavailable non-Coraza mode", got)
+	}
+	if _, err := GetEngineForExtraRule("custom.conf"); err == nil || !strings.Contains(err.Error(), "mod_security") {
+		t.Fatalf("GetEngineForExtraRule() error=%v, want mod_security availability error", err)
 	}
 }
 

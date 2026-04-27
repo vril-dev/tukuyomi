@@ -319,6 +319,29 @@ Only Tukuyomi's native proxy engine is supported. Changing it requires a process
 - Upgrade/WebSocket handshake requests stay inside `tukuyomi_proxy`; WebSocket frame payloads after `101 Switching Protocols` are tunnel data and are not HTTP WAF inspection input.
 - Runtime visibility is exposed through `/tukuyomi-api/status` as `proxy_engine_mode` and through `Settings -> Runtime Inventory`.
 
+### WAF Engine
+
+DB `app_config` exposes the process-wide WAF engine under `waf.engine.mode`.
+The current build runs Coraza only, but the engine catalog is explicit so future
+adapters can be registered without pretending an unsupported engine is live.
+
+```json
+{
+  "waf": {
+    "engine": {
+      "mode": "coraza"
+    }
+  }
+}
+```
+
+- `coraza` is the only available engine in this build.
+- `mod_security` is a recognized future engine mode, but it is unavailable unless a ModSecurity adapter is compiled in; config validation rejects it fail-closed.
+- unknown `waf.engine.mode` values are rejected during config validation.
+- Runtime visibility is exposed through `/tukuyomi-api/status` as `waf_engine_mode` and `waf_engine_modes`, and through `Settings -> Runtime Inventory`.
+- The left navigation treats `Security > Coraza` as engine-specific and hides it when the active WAF engine is not Coraza. `Security > Request Controls` remains visible because those controls are Tukuyomi request policy, not Coraza rule authoring.
+- `Bypass Rules` are request controls. Their `extra_rule` references are Coraza-backed DB-managed `.conf` snippets and are unavailable when the active WAF engine is not Coraza; full bypass entries still apply.
+
 ### Runtime Backend Operations
 
 - The normalized `upstream_runtime` DB domain stores opt-in runtime overrides for backend keys materialized from direct upstreams and DNS discovery; `data/conf/upstream-runtime.json` is only an empty-DB seed/export path.

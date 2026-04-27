@@ -135,10 +135,10 @@ dedicated scheduler role:
 
 ```bash
 make ui-build-sync
-docker build -f coraza/Dockerfile -t tukuyomi:local coraza
+docker build -f server/Dockerfile -t tukuyomi:local server
 ```
 
-この方法では、repository の Dockerfile と、更新済み `coraza/src/internal/handler/admin_ui_dist` をそのまま使います。
+この方法では、repository の Dockerfile と、更新済み `server/internal/handler/admin_ui_dist` をそのまま使います。
 
 ### 2. UI とバイナリを image 内で build する deployment Dockerfile を使う
 
@@ -234,6 +234,7 @@ proxy engine 選択も同じ restart-required config surface です:
 - HTTP/1.1 と明示的な upstream HTTP/2 mode は Tukuyomi native upstream transport を使います。HTTPS `force_attempt` は ALPN で `h2` が選ばれない場合だけ native HTTP/1.1 へ fallback します
 - Upgrade/WebSocket handshake request は `tukuyomi_proxy` 内で処理します。`101 Switching Protocols` 後の WebSocket frame payload は tunnel data です
 - 本番 rollout 前に container を rebuild/restart し、実 traffic で benchmark してください
+- `waf.engine.mode` は現在、利用可能な `coraza` engine のみ受け付けます。`mod_security` は将来 adapter 用の既知 mode ですが、adapter が compile されるまでは fail-closed で拒否されます
 
 server-side に閉じ込める値:
 
@@ -251,7 +252,7 @@ server-side に閉じ込める値:
 
 以下の sample は、[Dockerfile.example](Dockerfile.example) で build した deployment image を前提にしています。この image では binary path は `/app/tukuyomi` です。
 
-もし `coraza/Dockerfile` を使うなら、scheduler sidecar sample の
+もし `server/Dockerfile` を使うなら、scheduler sidecar sample の
 `PROXY_BIN=/app/tukuyomi` を `PROXY_BIN=/app/server` に置き換えてください。
 
 ### ECS / Fargate

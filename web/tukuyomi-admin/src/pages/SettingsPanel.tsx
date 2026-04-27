@@ -115,6 +115,7 @@ type ListenerAdminConfig = {
     proxy_config_file: string;
     site_config_file: string;
     php_runtime_inventory_file: string;
+    psgi_runtime_inventory_file: string;
     vhost_config_file: string;
     scheduled_task_config_file: string;
     security_audit_file: string;
@@ -368,6 +369,7 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
       proxy_config_file: "conf/proxy.json",
       site_config_file: "conf/sites.json",
       php_runtime_inventory_file: "data/php-fpm/inventory.json",
+      psgi_runtime_inventory_file: "data/psgi/inventory.json",
       vhost_config_file: "data/php-fpm/vhosts.json",
       scheduled_task_config_file: "conf/scheduled-tasks.json",
       security_audit_file: "audit/security-audit.ndjson",
@@ -2251,8 +2253,12 @@ export default function SettingsPanel() {
                             "PHP Runtime Inventory Seed File",
                           )}
                           {renderPathField(
+                            "psgi_runtime_inventory_file",
+                            "PSGI Runtime Inventory Seed File",
+                          )}
+                          {renderPathField(
                             "vhost_config_file",
-                            "Vhost Seed File",
+                            "Runtime Apps Seed File",
                           )}
                           {renderPathField(
                             "scheduled_task_config_file",

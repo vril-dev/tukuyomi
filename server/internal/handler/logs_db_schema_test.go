@@ -88,8 +88,8 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("query migration version: %v", err)
 	}
-	if version != 13 || dirty != 0 {
-		t.Fatalf("migration version=%d dirty=%d want version=13 dirty=0", version, dirty)
+	if version != 14 || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=14 dirty=0", version, dirty)
 	}
 	var wafRuleAssetEnabledColumns int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('waf_rule_assets') WHERE name = 'enabled'`).Scan(&wafRuleAssetEnabledColumns); err != nil {
@@ -165,8 +165,8 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteReplacesLegacyMigrationTable(t *t
 	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("query migration version: %v", err)
 	}
-	if version != 13 || dirty != 0 {
-		t.Fatalf("migration version=%d dirty=%d want version=13 dirty=0", version, dirty)
+	if version != 14 || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=14 dirty=0", version, dirty)
 	}
 
 	var legacyColumns int

@@ -42,8 +42,8 @@ func TestPrepareProxyRulesRawWithSitesAndVhostsAddsGeneratedPHPTargets(t *testin
 	if !ok {
 		t.Fatal("generated vhost upstream not found in effective config")
 	}
-	if upstream.URL != "fcgi://127.0.0.1:9081" {
-		t.Fatalf("generated upstream url=%q want=%q", upstream.URL, "fcgi://127.0.0.1:9081")
+	if upstream.URL != "fcgi://app.example.com:9081" {
+		t.Fatalf("generated upstream url=%q want=%q", upstream.URL, "fcgi://app.example.com:9081")
 	}
 	if upstream.GeneratedKind != proxyUpstreamGeneratedKindVhostTarget {
 		t.Fatalf("generated target kind=%q want=%q", upstream.GeneratedKind, proxyUpstreamGeneratedKindVhostTarget)
@@ -67,10 +67,8 @@ func TestPrepareProxyRulesRawWithSitesAndVhostsAddsGeneratedPHPTargets(t *testin
 	if configured.ProviderClass != proxyUpstreamProviderClassDirect {
 		t.Fatalf("configured upstream provider_class=%q want=%q", configured.ProviderClass, proxyUpstreamProviderClassDirect)
 	}
-	if route, ok := findProxyRouteByName(prepared.effectiveCfg.Routes, "vhost:app"); !ok {
-		t.Fatal("generated vhost route not found in effective config")
-	} else if route.Action.Upstream != "app-php" {
-		t.Fatalf("generated vhost route upstream=%q want app-php", route.Action.Upstream)
+	if _, ok := findProxyRouteByName(prepared.effectiveCfg.Routes, "vhost:app"); ok {
+		t.Fatal("vhost runtime listener must not synthesize a Host-header route")
 	}
 	if prepared.target == nil {
 		t.Fatal("prepared target should not be nil")
@@ -106,10 +104,13 @@ func TestPrepareProxyRulesRawWithSitesAndVhostsAllowsVhostWithoutConfiguredLinke
 	if _, ok := findProxyUpstreamByName(prepared.effectiveCfg.Upstreams, "app"); ok {
 		t.Fatal("linked_upstream_name should not synthesize or require a configured upstream")
 	}
-	if route, ok := findProxyRouteByName(prepared.effectiveCfg.Routes, "vhost:app"); !ok {
-		t.Fatal("generated vhost route not found")
-	} else if route.Action.Upstream != "app-php" {
-		t.Fatalf("generated vhost route upstream=%q want app-php", route.Action.Upstream)
+	if upstream, ok := findProxyUpstreamByName(prepared.effectiveCfg.Upstreams, "app-php"); !ok {
+		t.Fatal("generated vhost upstream not found")
+	} else if upstream.URL != "fcgi://app.example.com:9081" {
+		t.Fatalf("generated upstream url=%q want fcgi://app.example.com:9081", upstream.URL)
+	}
+	if _, ok := findProxyRouteByName(prepared.effectiveCfg.Routes, "vhost:app"); ok {
+		t.Fatal("vhost runtime listener must not synthesize a Host-header route")
 	}
 }
 
@@ -250,7 +251,7 @@ func TestApplyAndRollbackVhostConfigRawMaterializesRuntimeFiles(t *testing.T) {
 	if !strings.Contains(string(configBody), "include = "+expectedInclude) {
 		t.Fatalf("php-fpm.conf missing absolute include path: %s", string(configBody))
 	}
-	if !strings.Contains(string(poolBody), "listen = 127.0.0.1:9081") {
+	if !strings.Contains(string(poolBody), "listen = app.example.com:9081") {
 		t.Fatalf("pool file missing listen directive: %s", string(poolBody))
 	}
 	expectedDocroot, err := filepath.Abs("apps/app/public")
@@ -352,8 +353,8 @@ func TestApplyVhostConfigRawRefreshesProxyGeneratedTargets(t *testing.T) {
 	if !ok {
 		t.Fatal("generated vhost upstream missing from current proxy config")
 	}
-	if upstream.URL != "fcgi://127.0.0.1:9081" {
-		t.Fatalf("upstream url=%q want=%q", upstream.URL, "fcgi://127.0.0.1:9081")
+	if upstream.URL != "fcgi://app.example.com:9081" {
+		t.Fatalf("upstream url=%q want=%q", upstream.URL, "fcgi://app.example.com:9081")
 	}
 
 	_, etag, _, _ := VhostConfigSnapshot()
@@ -380,8 +381,8 @@ func TestApplyVhostConfigRawRefreshesProxyGeneratedTargets(t *testing.T) {
 	if !ok {
 		t.Fatal("generated vhost upstream missing from current proxy config after refresh")
 	}
-	if upstream.URL != "fcgi://127.0.0.1:9082" {
-		t.Fatalf("refreshed upstream url=%q want=%q", upstream.URL, "fcgi://127.0.0.1:9082")
+	if upstream.URL != "fcgi://app.example.com:9082" {
+		t.Fatalf("refreshed upstream url=%q want=%q", upstream.URL, "fcgi://app.example.com:9082")
 	}
 }
 
@@ -470,10 +471,8 @@ func TestApplyVhostConfigRawIgnoresLinkedUpstreamRenameForRouting(t *testing.T) 
 	if upstream.URL != "http://127.0.0.1:8080" || upstream.ProviderClass != proxyUpstreamProviderClassDirect {
 		t.Fatalf("configured upstream app changed unexpectedly: %#v", upstream)
 	}
-	if route, ok := findProxyRouteByName(cfg.Routes, "vhost:app"); !ok {
-		t.Fatal("generated vhost route missing")
-	} else if route.Action.Upstream != "app-php" {
-		t.Fatalf("generated vhost route upstream=%q want app-php", route.Action.Upstream)
+	if _, ok := findProxyRouteByName(cfg.Routes, "vhost:app"); ok {
+		t.Fatal("vhost runtime listener must not synthesize a Host-header route")
 	}
 }
 

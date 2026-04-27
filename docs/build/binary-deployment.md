@@ -291,7 +291,7 @@ Operator contract:
 
 ## Optional PHP-FPM Runtime Bundles
 
-If you also want PHP-FPM `/options` and `/vhosts` on a binary deployment, build and stage a runtime bundle.
+If you also want PHP-FPM `/options` and `/runtime-apps` on a binary deployment, build and stage a runtime bundle.
 
 For the standard `/opt/tukuyomi` layout:
 
@@ -320,8 +320,8 @@ Notes:
 
 - `php-fpm-copy` syncs `data/php-fpm/binaries/<runtime_id>/` into the binary deployment tree; import inventory/module metadata with `make db-import` before removing PHP-FPM JSON manifests
 - after staging, refresh Options Runtime Inventory or restart `tukuyomi` when needed
-- remove an unneeded staged runtime bundle with `sudo make php-fpm-prune RUNTIME=php85`; it checks DB vhost references and the runtime pid before deleting `binaries/<runtime_id>` and `runtime/<runtime_id>`
-- `data/php-fpm/runtime/` is not copied; `tukuyomi` generates it later from vhost definitions
+- remove an unneeded staged runtime bundle with `sudo make php-fpm-prune RUNTIME=php85`; it checks DB Runtime App references and the runtime pid before deleting `binaries/<runtime_id>` and `runtime/<runtime_id>`
+- `data/php-fpm/runtime/` is not copied; `tukuyomi` generates it later from Runtime App definitions
 - Docker is needed only for `php-fpm-build`; runtime execution does not depend on Docker after the bundle is staged
 - PHP, base image libraries, and PECL extension security updates remain operator-managed: rebuild and restage the bundle when you need those updates
 

@@ -76,6 +76,7 @@ export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_ADMIN_USERNAME
 	release-linux-amd64 release-linux-arm64 release-linux-all \
 	ui-install ui-test ui-build ui-sync ui-build-sync \
 	ui-preview-up ui-preview-down ui-preview-smoke php-fpm-build php-fpm-copy php-fpm-prune php-fpm-remove php-fpm-up php-fpm-down php-fpm-reload php-fpm-test php-fpm-smoke \
+	psgi-build psgi-up psgi-down psgi-reload psgi-test \
 	scheduled-tasks-smoke container-platform-smoke dual-listener-smoke \
 	compose-config compose-config-mysql compose-config-scheduled-tasks compose-up compose-up-scheduled-tasks compose-down mysql-up mysql-down \
 	preset-list preset-apply preset-check preset-check-minimal \
@@ -126,6 +127,12 @@ help:
 	@echo "  make php-fpm-reload RUNTIME=php83 Reload a running PHP-FPM runtime through admin API"
 	@echo "  make php-fpm-test               Run dedicated php-fpm focused handler/admin tests"
 	@echo "  make php-fpm-smoke              Run dedicated php-fpm build/lifecycle smoke"
+	@echo "  make psgi-build VER=5.38        Build Perl/Starman runtime bundle under data/psgi/binaries/perl538"
+	@echo "    - alias: RUNTIME=perl536|perl538|perl540"
+	@echo "  make psgi-up RUNTIME_APP=mt-site      Start a materialized PSGI Runtime App through admin API"
+	@echo "  make psgi-down RUNTIME_APP=mt-site    Stop a running PSGI Runtime App through admin API"
+	@echo "  make psgi-reload RUNTIME_APP=mt-site  Reload a running PSGI Runtime App through admin API"
+	@echo "  make psgi-test                  Run dedicated PSGI focused handler/admin tests"
 	@echo "  make scheduled-tasks-smoke      Validate binary + docker + preview scheduled-task flows"
 	@echo "  make container-platform-smoke   Validate single-instance support plus replicated read-only prerequisites"
 	@echo "  make dual-listener-smoke        Validate split public/admin listener topology"
@@ -503,10 +510,25 @@ php-fpm-reload:
 	RUNTIME="$(RUNTIME)" CORAZA_PORT="$(CORAZA_PORT)" WAF_ADMIN_USERNAME="$(WAF_ADMIN_USERNAME)" WAF_ADMIN_PASSWORD="$(WAF_ADMIN_PASSWORD)" ./scripts/php_fpm_runtime_ctl.sh reload
 
 php-fpm-test:
-	cd $(SERVER_DIR) && $(GO) test ./internal/handler -run 'Test(PHPRuntimeInventoryListsOnlyBuiltArtifacts|PHPRuntimeInventoryDBAutoDiscoveryReflectsBuiltArtifactsAfterStartup|PHPRuntimeInventoryDBExplicitEmptyDoesNotAutoDiscover|PHPRuntimeInventoryDBLegacyImportWithoutStateAutoDiscovers|PHPRuntimeInventoryDBLoadsWithoutInventoryOrManifestJSON|ApplyPHPRuntimeInventoryRawDoesNotDeadlockOnMaterializationRefresh|GetPHPRuntimesAndVhostsHandlers|ValidatePHPRuntimeInventoryRawIgnoresLegacyPHPSupportFlag|DefaultPHPRuntimeInventoryStartsEmptyUntilRuntimeIsBuilt|ValidatePHPRuntimeInventoryRawLoadsBuiltArtifactModulesAndDefaults|ValidateVhostConfigRawRequiresKnownRuntime|ValidateVhostConfigRawAcceptsKnownRuntimeWithoutSupportToggle|ApplyAndRollbackVhostConfigRaw|PHPRuntimeSupervisorStartsRestartsAndStopsRuntime|ResolvePHPRuntimeIdentityUsesConfiguredCurrentUserAndGroup|ValidatePHPRuntimeLaunchRejectsPrivilegeTransitionWithoutRoot|ValidatePHPRuntimeLaunchRejectsUnreadableDocumentRoot|ServeProxyServesStaticVhostAssets|ServeProxyRunsFastCGIOverUnixSocket|ServeProxyRunsFastCGITryFilesAndStaticAssets|ServeProxyAppliesVhostRewriteAccessAndBasicAuth|BuildPHPRuntimePoolConfigIncludesINIOverrides|ValidateVhostConfigRejectsPlaintextBasicAuthHash)'
+	cd $(SERVER_DIR) && $(GO) test ./internal/handler -run 'Test(PHPRuntimeInventoryListsOnlyBuiltArtifacts|PHPRuntimeInventoryDBAutoDiscoveryReflectsBuiltArtifactsAfterStartup|PHPRuntimeInventoryDBExplicitEmptyDoesNotAutoDiscover|PHPRuntimeInventoryDBLegacyImportWithoutStateAutoDiscovers|PHPRuntimeInventoryDBLoadsWithoutInventoryOrManifestJSON|ApplyPHPRuntimeInventoryRawDoesNotDeadlockOnMaterializationRefresh|GetPHPRuntimesAndRuntimeAppsHandlers|ValidatePHPRuntimeInventoryRawIgnoresLegacyPHPSupportFlag|DefaultPHPRuntimeInventoryStartsEmptyUntilRuntimeIsBuilt|ValidatePHPRuntimeInventoryRawLoadsBuiltArtifactModulesAndDefaults|ValidateVhostConfigRawRequiresKnownRuntime|ValidateVhostConfigRawAcceptsKnownRuntimeWithoutSupportToggle|ApplyAndRollbackVhostConfigRaw|PHPRuntimeSupervisorStartsRestartsAndStopsRuntime|ResolvePHPRuntimeIdentityUsesConfiguredCurrentUserAndGroup|ValidatePHPRuntimeLaunchRejectsPrivilegeTransitionWithoutRoot|ValidatePHPRuntimeLaunchRejectsUnreadableDocumentRoot|ServeProxyServesStaticVhostAssets|ServeProxyRunsFastCGIOverUnixSocket|ServeProxyRunsFastCGITryFilesAndStaticAssets|ServeProxyAppliesVhostRewriteAccessAndBasicAuth|BuildPHPRuntimePoolConfigIncludesINIOverrides|ValidateVhostConfigRejectsPlaintextBasicAuthHash)'
 
 php-fpm-smoke: ui-build-sync
 	VER="$(VER)" CORAZA_PORT="$(CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" WAF_ADMIN_USERNAME="$(WAF_ADMIN_USERNAME)" WAF_ADMIN_PASSWORD="$(WAF_ADMIN_PASSWORD)" ./scripts/run_php_fpm_smoke.sh
+
+psgi-build:
+	VER="$(VER)" RUNTIME="$(RUNTIME)" ./scripts/psgi_runtime_build.sh
+
+psgi-up:
+	RUNTIME_APP="$(RUNTIME_APP)" VHOST="$(VHOST)" CORAZA_PORT="$(CORAZA_PORT)" WAF_ADMIN_USERNAME="$(WAF_ADMIN_USERNAME)" WAF_ADMIN_PASSWORD="$(WAF_ADMIN_PASSWORD)" ./scripts/psgi_runtime_ctl.sh up
+
+psgi-down:
+	RUNTIME_APP="$(RUNTIME_APP)" VHOST="$(VHOST)" CORAZA_PORT="$(CORAZA_PORT)" WAF_ADMIN_USERNAME="$(WAF_ADMIN_USERNAME)" WAF_ADMIN_PASSWORD="$(WAF_ADMIN_PASSWORD)" ./scripts/psgi_runtime_ctl.sh down
+
+psgi-reload:
+	RUNTIME_APP="$(RUNTIME_APP)" VHOST="$(VHOST)" CORAZA_PORT="$(CORAZA_PORT)" WAF_ADMIN_USERNAME="$(WAF_ADMIN_USERNAME)" WAF_ADMIN_PASSWORD="$(WAF_ADMIN_PASSWORD)" ./scripts/psgi_runtime_ctl.sh reload
+
+psgi-test:
+	cd $(SERVER_DIR) && $(GO) test ./internal/handler -run 'Test(PSGI|ValidateVhostConfigRaw|GetPHPRuntimesAndRuntimeAppsHandlers)'
 
 scheduled-tasks-smoke: build
 	SCHEDULED_TASKS_SMOKE_SKIP_BUILD=1 ./scripts/run_scheduled_tasks_smoke.sh

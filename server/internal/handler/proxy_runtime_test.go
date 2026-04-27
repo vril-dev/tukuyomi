@@ -662,16 +662,12 @@ func TestPrepareProxyRulesRawDoesNotBindConfiguredUpstreamToVhost(t *testing.T) 
 	if _, ok := findProxyUpstreamByName(prepared.effectiveCfg.Upstreams, "app"); ok {
 		t.Fatal("configured upstream app should not be synthesized from linked_upstream_name")
 	}
-	for _, route := range prepared.effectiveCfg.Routes {
-		if route.Name != "vhost:app" {
-			continue
-		}
-		if route.Action.Upstream != "vhost-1" {
-			t.Fatalf("generated vhost route upstream=%q want vhost-1", route.Action.Upstream)
-		}
-		return
+	if _, ok := findProxyUpstreamByName(prepared.effectiveCfg.Upstreams, "vhost-1"); !ok {
+		t.Fatal("generated vhost upstream missing")
 	}
-	t.Fatal("generated vhost route missing")
+	if _, ok := findProxyRouteByName(prepared.effectiveCfg.Routes, "vhost:app"); ok {
+		t.Fatal("vhost runtime listener must not synthesize a Host-header route")
+	}
 }
 
 func TestBuildProxyTransportUsesH2CPriorKnowledge(t *testing.T) {

@@ -67,18 +67,24 @@ func main() {
 	if err := handler.InitPHPRuntimeInventoryRuntime(config.PHPRuntimeInventoryFile, config.ProxyRollbackMax); err != nil {
 		log.Fatalf("[FATAL] failed to initialize php runtime inventory: %v", err)
 	}
+	if err := handler.InitPSGIRuntimeInventoryRuntime(config.PSGIRuntimeInventoryFile, config.ProxyRollbackMax); err != nil {
+		log.Fatalf("[FATAL] failed to initialize psgi runtime inventory: %v", err)
+	}
 	if err := handler.InitScheduledTaskRuntime(config.ScheduledTaskConfigFile, config.ProxyRollbackMax); err != nil {
 		log.Fatalf("[FATAL] failed to initialize scheduled task runtime: %v", err)
 	}
 	if err := handler.InitVhostRuntime(config.VhostConfigFile, config.ProxyRollbackMax); err != nil {
 		if handler.IsVhostStartupConfigError(err) {
-			log.Printf("[VHOST][WARN] vhost runtime degraded at startup: %v", err)
+			log.Printf("[RUNTIME_APPS][WARN] runtime apps degraded at startup: %v", err)
 		} else {
-			log.Fatalf("[FATAL] failed to initialize vhost runtime: %v", err)
+			log.Fatalf("[FATAL] failed to initialize runtime apps: %v", err)
 		}
 	}
 	if err := handler.InitPHPRuntimeSupervisor(); err != nil {
 		log.Fatalf("[FATAL] failed to initialize php runtime supervisor: %v", err)
+	}
+	if err := handler.InitPSGIRuntimeSupervisor(); err != nil {
+		log.Fatalf("[FATAL] failed to initialize psgi runtime supervisor: %v", err)
 	}
 	if err := handler.InitSiteRuntime(config.SiteConfigFile, config.ProxyRollbackMax); err != nil {
 		log.Fatalf("[FATAL] failed to initialize site runtime: %v", err)
@@ -480,6 +486,9 @@ func runScheduledTasksCommand() {
 	initRuntimeDBStoreOrFatal("[SCHEDULE][DB]")
 	if err := handler.InitPHPRuntimeInventoryRuntime(config.PHPRuntimeInventoryFile, config.ProxyRollbackMax); err != nil {
 		log.Fatalf("[SCHEDULE][FATAL] initialize php runtime inventory: %v", err)
+	}
+	if err := handler.InitPSGIRuntimeInventoryRuntime(config.PSGIRuntimeInventoryFile, config.ProxyRollbackMax); err != nil {
+		log.Fatalf("[SCHEDULE][FATAL] initialize psgi runtime inventory: %v", err)
 	}
 	if err := handler.InitScheduledTaskRuntime(config.ScheduledTaskConfigFile, config.ProxyRollbackMax); err != nil {
 		log.Fatalf("[SCHEDULE][FATAL] initialize scheduled task runtime: %v", err)

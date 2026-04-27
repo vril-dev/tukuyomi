@@ -128,29 +128,30 @@ type appAdminRateLimitConfig struct {
 }
 
 type appPathsConfig struct {
-	ProxyConfigFile         string `json:"proxy_config_file"`
-	SiteConfigFile          string `json:"site_config_file"`
-	PHPRuntimeInventoryFile string `json:"php_runtime_inventory_file"`
-	VhostConfigFile         string `json:"vhost_config_file"`
-	ScheduledTaskConfigFile string `json:"scheduled_task_config_file"`
-	SecurityAuditFile       string `json:"security_audit_file"`
-	SecurityAuditBlobDir    string `json:"security_audit_blob_dir"`
-	CacheRulesFile          string `json:"cache_rules_file"`
-	CacheStoreFile          string `json:"cache_store_file"`
-	RulesFile               string `json:"rules_file"`
-	OverrideRulesDir        string `json:"override_rules_dir"`
-	UpstreamRuntimeFile     string `json:"upstream_runtime_file"`
-	BypassFile              string `json:"bypass_file"`
-	CountryBlockFile        string `json:"country_block_file"`
-	RateLimitFile           string `json:"rate_limit_file"`
-	BotDefenseFile          string `json:"bot_defense_file"`
-	SemanticFile            string `json:"semantic_file"`
-	NotificationFile        string `json:"notification_file"`
-	IPReputationFile        string `json:"ip_reputation_file"`
-	LogFile                 string `json:"log_file"`
-	CRSSetupFile            string `json:"crs_setup_file"`
-	CRSRulesDir             string `json:"crs_rules_dir"`
-	CRSDisabledFile         string `json:"crs_disabled_file"`
+	ProxyConfigFile          string `json:"proxy_config_file"`
+	SiteConfigFile           string `json:"site_config_file"`
+	PHPRuntimeInventoryFile  string `json:"php_runtime_inventory_file"`
+	PSGIRuntimeInventoryFile string `json:"psgi_runtime_inventory_file"`
+	VhostConfigFile          string `json:"vhost_config_file"`
+	ScheduledTaskConfigFile  string `json:"scheduled_task_config_file"`
+	SecurityAuditFile        string `json:"security_audit_file"`
+	SecurityAuditBlobDir     string `json:"security_audit_blob_dir"`
+	CacheRulesFile           string `json:"cache_rules_file"`
+	CacheStoreFile           string `json:"cache_store_file"`
+	RulesFile                string `json:"rules_file"`
+	OverrideRulesDir         string `json:"override_rules_dir"`
+	UpstreamRuntimeFile      string `json:"upstream_runtime_file"`
+	BypassFile               string `json:"bypass_file"`
+	CountryBlockFile         string `json:"country_block_file"`
+	RateLimitFile            string `json:"rate_limit_file"`
+	BotDefenseFile           string `json:"bot_defense_file"`
+	SemanticFile             string `json:"semantic_file"`
+	NotificationFile         string `json:"notification_file"`
+	IPReputationFile         string `json:"ip_reputation_file"`
+	LogFile                  string `json:"log_file"`
+	CRSSetupFile             string `json:"crs_setup_file"`
+	CRSRulesDir              string `json:"crs_rules_dir"`
+	CRSDisabledFile          string `json:"crs_disabled_file"`
 }
 
 type appProxyConfig struct {
@@ -341,29 +342,30 @@ func defaultAppConfigFile() appConfigFile {
 			},
 		},
 		Paths: appPathsConfig{
-			ProxyConfigFile:         "conf/proxy.json",
-			SiteConfigFile:          "conf/sites.json",
-			PHPRuntimeInventoryFile: "data/php-fpm/inventory.json",
-			VhostConfigFile:         "data/php-fpm/vhosts.json",
-			ScheduledTaskConfigFile: "conf/scheduled-tasks.json",
-			SecurityAuditFile:       "audit/security-audit.ndjson",
-			SecurityAuditBlobDir:    "audit/security-audit-blobs",
-			CacheRulesFile:          DefaultCacheRulesFilePath,
-			CacheStoreFile:          "conf/cache-store.json",
-			RulesFile:               DefaultBaseRuleAssetPath,
-			OverrideRulesDir:        "conf/rules",
-			UpstreamRuntimeFile:     DefaultUpstreamRuntimeFilePath,
-			BypassFile:              DefaultBypassFilePath,
-			CountryBlockFile:        DefaultCountryBlockFilePath,
-			RateLimitFile:           "conf/rate-limit.json",
-			BotDefenseFile:          "conf/bot-defense.json",
-			SemanticFile:            "conf/semantic.json",
-			NotificationFile:        "conf/notifications.json",
-			IPReputationFile:        "conf/ip-reputation.json",
-			LogFile:                 "",
-			CRSSetupFile:            "rules/crs/crs-setup.conf",
-			CRSRulesDir:             "rules/crs/rules",
-			CRSDisabledFile:         "conf/crs-disabled.conf",
+			ProxyConfigFile:          "conf/proxy.json",
+			SiteConfigFile:           "conf/sites.json",
+			PHPRuntimeInventoryFile:  "data/php-fpm/inventory.json",
+			PSGIRuntimeInventoryFile: "data/psgi/inventory.json",
+			VhostConfigFile:          "data/php-fpm/vhosts.json",
+			ScheduledTaskConfigFile:  "conf/scheduled-tasks.json",
+			SecurityAuditFile:        "audit/security-audit.ndjson",
+			SecurityAuditBlobDir:     "audit/security-audit-blobs",
+			CacheRulesFile:           DefaultCacheRulesFilePath,
+			CacheStoreFile:           "conf/cache-store.json",
+			RulesFile:                DefaultBaseRuleAssetPath,
+			OverrideRulesDir:         "conf/rules",
+			UpstreamRuntimeFile:      DefaultUpstreamRuntimeFilePath,
+			BypassFile:               DefaultBypassFilePath,
+			CountryBlockFile:         DefaultCountryBlockFilePath,
+			RateLimitFile:            "conf/rate-limit.json",
+			BotDefenseFile:           "conf/bot-defense.json",
+			SemanticFile:             "conf/semantic.json",
+			NotificationFile:         "conf/notifications.json",
+			IPReputationFile:         "conf/ip-reputation.json",
+			LogFile:                  "",
+			CRSSetupFile:             "rules/crs/crs-setup.conf",
+			CRSRulesDir:              "rules/crs/rules",
+			CRSDisabledFile:          "conf/crs-disabled.conf",
 		},
 		Proxy: appProxyConfig{
 			RollbackHistorySize: 8,
@@ -508,6 +510,7 @@ func normalizeAppConfigFile(cfg *appConfigFile) {
 	cfg.Paths.ProxyConfigFile = strings.TrimSpace(cfg.Paths.ProxyConfigFile)
 	cfg.Paths.SiteConfigFile = strings.TrimSpace(cfg.Paths.SiteConfigFile)
 	cfg.Paths.PHPRuntimeInventoryFile = strings.TrimSpace(cfg.Paths.PHPRuntimeInventoryFile)
+	cfg.Paths.PSGIRuntimeInventoryFile = strings.TrimSpace(cfg.Paths.PSGIRuntimeInventoryFile)
 	cfg.Paths.VhostConfigFile = strings.TrimSpace(cfg.Paths.VhostConfigFile)
 	cfg.Paths.ScheduledTaskConfigFile = strings.TrimSpace(cfg.Paths.ScheduledTaskConfigFile)
 	cfg.Paths.SecurityAuditFile = strings.TrimSpace(cfg.Paths.SecurityAuditFile)
@@ -641,6 +644,9 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	}
 	if cfg.Paths.PHPRuntimeInventoryFile == "" {
 		return fmt.Errorf("paths.php_runtime_inventory_file is required")
+	}
+	if cfg.Paths.PSGIRuntimeInventoryFile == "" {
+		return fmt.Errorf("paths.psgi_runtime_inventory_file is required")
 	}
 	if cfg.Paths.VhostConfigFile == "" {
 		return fmt.Errorf("paths.vhost_config_file is required")

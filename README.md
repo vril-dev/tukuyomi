@@ -133,18 +133,20 @@ that DB plus preview config files on each start. If you use
 - DB `proxy_backend_pools` / `proxy_backend_pool_members`: route-scoped balancing groups built from named upstream members
 - `data/conf/upstream-runtime.json`: seed/import/export material for opt-in runtime overrides from `Proxy Rules > Upstreams`
 - `data/conf/sites.json`: site ownership and TLS binding seed/import/export material
-- DB `vhosts` / `vhost_*`: live vhost and PHP-FPM vhost config
+- DB `vhosts` / `vhost_*`: live Runtime Apps config; storage names remain `vhost` for compatibility
 - DB `waf_rule_assets`: base WAF and CRS rule/data assets
 - DB `override_rules`: managed bypass `extra_rule` rule bodies
 - DB `php_runtime_inventory` / `php_runtime_modules`: PHP-FPM runtime inventory and module metadata
-- `data/php-fpm/inventory.json` and `data/php-fpm/vhosts.json`: PHP-FPM seed/import/export material
+- DB `psgi_runtime_inventory` / `psgi_runtime_modules`: Perl/Starman runtime inventory and module metadata
+- `data/php-fpm/inventory.json` and `data/php-fpm/vhosts.json`: PHP-FPM and Runtime Apps seed/import/export material
+- `data/psgi/inventory.json`: PSGI runtime seed/import/export material
 - `data/conf/scheduled-tasks.json`: scheduled task seed/import/export material
 
 Base WAF/CRS assets and managed bypass overrides are DB-backed. `make crs-install`
 stages rule import material under `data/tmp`, imports it, and removes the stage.
 The configured paths remain logical asset names and compatibility references;
 runtime does not use `data/rules`, `data/conf/rules`, or `data/geoip` fallback
-directories. The same applies to startup, policy, site, vhost, scheduled task,
+directories. The same applies to startup, policy, site, Runtime Apps, scheduled task,
 upstream runtime, response cache, and PHP-FPM inventory domains after
 `make db-import`.
 
@@ -153,9 +155,10 @@ For the detailed operator model, see:
 - [docs/reference/operator-reference.md](docs/reference/operator-reference.md)
 - [docs/operations/listener-topology.md](docs/operations/listener-topology.md)
 
-`Proxy Rules > Upstreams` is the catalog for direct non-vhost backend nodes.
-PHP-FPM/static application backends that are owned by Tukuyomi Vhosts are not
-configured there; move those host/docroot/runtime settings to `Vhosts` instead.
+`Proxy Rules > Upstreams` is the catalog for direct backend nodes outside
+Runtime Apps. PHP-FPM/PSGI application backends that are owned by Tukuyomi
+Runtime Apps are not configured there; move those listen host/docroot/runtime
+settings to `Runtime Apps` instead.
 `Proxy Rules > Backend Pools` groups direct routable upstream names into
 route-scoped balancing sets, and routes normally bind to `action.backend_pool`.
 `Backends` lists direct upstream backend objects used by routing and keeps
@@ -178,16 +181,16 @@ or given a runtime weight override from `Backends` without editing
 overrides live in DB `upstream_runtime` and use `data/conf/upstream-runtime.json`
 only as seed/import/export material.
 
-For route-scoped web balancing outside Vhosts, define backend nodes in
+For route-scoped web balancing outside Runtime Apps, define backend nodes in
 `upstreams[]`, group them in `backend_pools[]`, then bind routes to those pools
 with `action.backend_pool`.
 
-For Vhost-owned applications, define the application in `Vhosts`. The runtime
-creates a generated backend and generated host route from the vhost definition.
-Configured upstream URLs in `Proxy Rules > Upstreams` are never rebound or
-rewritten by Vhosts. Vhost-generated targets stay on the `Vhosts` surface;
-runtime enable/drain/disable and runtime weight override remain limited to
-direct named upstreams shown in `Backends`.
+For Runtime Apps-owned applications, define the runtime listener in `Runtime Apps`.
+The runtime creates a generated backend from the configured listen host and
+port. `Proxy Rules` remains responsible for routing traffic to that generated
+upstream target. Configured upstream URLs in `Proxy Rules > Upstreams` are never
+rebound or rewritten by Runtime Apps. Runtime enable/drain/disable and runtime weight
+override remain limited to direct named upstreams shown in `Backends`.
 
 Standard `http://` and `https://` upstream proxying automatically adds:
 
@@ -201,7 +204,7 @@ Optional `emit_upstream_name_request_header=true` also adds:
 
 This internal observability header is emitted only when the final target is a
 configured named upstream from `Proxy Rules > Upstreams`. Direct route URLs and
-generated vhost targets do not receive it, and route-level `request_headers`
+generated Runtime Apps targets do not receive it, and route-level `request_headers`
 cannot override it.
 
 ### Minimal Route-Scoped Backend Pool Example
@@ -268,10 +271,12 @@ Container platform examples:
 - Static fastpath evaluation:
   - [docs/operations/static-fastpath-evaluation.md](docs/operations/static-fastpath-evaluation.md)
 
-### PHP and Scheduled Tasks
+### PHP, PSGI, and Scheduled Tasks
 
-- PHP-FPM runtime and VHosts:
+- PHP-FPM runtime and Runtime Apps:
   - [docs/operations/php-fpm-vhosts.md](docs/operations/php-fpm-vhosts.md)
+- PSGI Runtime Apps and Movable Type:
+  - [docs/operations/psgi-vhosts.md](docs/operations/psgi-vhosts.md)
 - Scheduled tasks and scheduler deployment:
   - [docs/operations/php-scheduled-tasks.md](docs/operations/php-scheduled-tasks.md)
 

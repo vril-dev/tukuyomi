@@ -195,7 +195,7 @@ Minimum writable paths for the official mutable single-instance path:
 Mount those from your platform unless you intentionally accept ephemeral local
 state.
 
-When you also use bundled PHP runtimes for `/options`, `/vhosts`, or scheduled
+When you also use bundled PHP runtimes for `/options`, `/runtime-apps`, or scheduled
 PHP CLI jobs, mount `/app/data/php-fpm` as well.
 If internal response cache contents must survive node replacement, mount the
 path configured by `cache_store.store_dir`, such as `/app/cache/response`. That

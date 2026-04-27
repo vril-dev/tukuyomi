@@ -207,7 +207,7 @@ export default function Layout() {
             items: hasBuiltRuntime
               ? [
                   ...groupItems(group),
-                  { to: "/vhosts", label: "Vhosts", hint: "php-fpm host, port, and docroot bindings" },
+                  { to: "/runtime-apps", label: "Runtime Apps", hint: "runtime listener, port, and docroot bindings" },
                 ]
               : groupItems(group),
           };

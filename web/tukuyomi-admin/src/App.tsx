@@ -18,7 +18,7 @@ import SitesPanel from './pages/SitesPanel';
 import SettingsPanel from './pages/SettingsPanel';
 import UserPanel from './pages/UserPanel';
 import OptionsPanel from './pages/OptionsPanel';
-import VhostsPanel from './pages/VhostsPanel';
+import RuntimeAppsPanel from './pages/RuntimeAppsPanel';
 import ScheduledTasksPanel from './pages/ScheduledTasksPanel';
 import Login from './pages/Login';
 import { useAuth } from './lib/auth';
@@ -95,7 +95,7 @@ function App() {
             <Route path="proxy-rules" element={<ProxyRulesPanel />} />
             <Route path="backends" element={<BackendsPanel />} />
             <Route path="sites" element={<SitesPanel />} />
-            <Route path="vhosts" element={<VhostsPanel />} />
+            <Route path="runtime-apps" element={<RuntimeAppsPanel />} />
             <Route path="scheduled-tasks" element={<ScheduledTasksPanel />} />
             <Route path="user" element={<UserPanel />} />
             <Route path="settings" element={<SettingsPanel />} />

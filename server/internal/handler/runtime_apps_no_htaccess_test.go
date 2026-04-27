@@ -18,7 +18,7 @@ func TestVhostConfigNormalizesLegacyOverrideFileNameAway(t *testing.T) {
     {
       "name": "docs",
       "mode": "static",
-      "hostname": "docs.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9440,
       "document_root": "/srv/docs/public",
       "override_file_name": "../.htaccess",
@@ -75,7 +75,7 @@ func TestServeProxyIgnoresHtaccessLikeNginx(t *testing.T) {
     {
       "name": "docs",
       "mode": "static",
-      "hostname": "docs.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9441,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "override_file_name": ".htaccess",
@@ -91,6 +91,9 @@ func TestServeProxyIgnoresHtaccessLikeNginx(t *testing.T) {
 	proxyRaw := mustJSON(normalizeProxyRulesConfig(ProxyRulesConfig{
 		Upstreams: []ProxyUpstream{
 			{Name: "docs", URL: "http://127.0.0.1:8080", Weight: 1, Enabled: true},
+		},
+		DefaultRoute: &ProxyDefaultRoute{
+			Action: ProxyRouteAction{Upstream: "docs-static"},
 		},
 	}))
 	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o600); err != nil {
@@ -128,7 +131,7 @@ func TestServeProxyIgnoresHtaccessLikeNginx(t *testing.T) {
 	}
 }
 
-func TestGetVhostsOmitsOverrideReports(t *testing.T) {
+func TestGetRuntimeAppsOmitsOverrideReports(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	restore := resetPHPFoundationRuntimesForTest(t)
@@ -152,7 +155,7 @@ func TestGetVhostsOmitsOverrideReports(t *testing.T) {
     {
       "name": "docs",
       "mode": "static",
-      "hostname": "docs.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9442,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "override_file_name": ".htaccess",
@@ -174,10 +177,10 @@ func TestGetVhostsOmitsOverrideReports(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(rec)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/vhosts", nil)
-	GetVhosts(ctx)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/runtime-apps", nil)
+	GetRuntimeApps(ctx)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GetVhosts status=%d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("GetRuntimeApps status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	var resp map[string]json.RawMessage
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {

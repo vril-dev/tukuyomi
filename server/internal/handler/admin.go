@@ -198,10 +198,13 @@ func StatusHandler(c *gin.Context) {
 	siteStatuses := SiteStatusSnapshot()
 	requestCountryStatus := RequestCountryRuntimeStatusSnapshot()
 	_, _, phpRuntimeInventory, phpRuntimeRollbackDepth := PHPRuntimeInventorySnapshot()
+	_, _, psgiRuntimeInventory, psgiRuntimeRollbackDepth := PSGIRuntimeInventorySnapshot()
 	_, _, vhostCfg, vhostRollbackDepth := VhostConfigSnapshot()
 	vhostRuntimeStatus := VhostRuntimeStatusSnapshot()
 	phpRuntimeMaterialized := PHPRuntimeMaterializationSnapshot()
 	phpRuntimeProcesses := PHPRuntimeProcessSnapshot()
+	psgiRuntimeMaterialized := PSGIRuntimeMaterializationSnapshot()
+	psgiRuntimeProcesses := PSGIRuntimeProcessSnapshot()
 	adminListenerEnabled := strings.TrimSpace(config.AdminListenAddr) != ""
 	listenerMode := "single"
 	if adminListenerEnabled {
@@ -330,10 +333,26 @@ func StatusHandler(c *gin.Context) {
 		"php_runtime_materialized":                            phpRuntimeMaterialized,
 		"php_runtime_process_count":                           len(phpRuntimeProcesses),
 		"php_runtime_processes":                               phpRuntimeProcesses,
+		"psgi_runtime_inventory_file":                         config.PSGIRuntimeInventoryFile,
+		"psgi_runtime_count":                                  len(psgiRuntimeInventory.Runtimes),
+		"psgi_runtime_rollback_depth":                         psgiRuntimeRollbackDepth,
+		"psgi_runtime_materialized_count":                     len(psgiRuntimeMaterialized),
+		"psgi_runtime_materialized":                           psgiRuntimeMaterialized,
+		"psgi_runtime_process_count":                          len(psgiRuntimeProcesses),
+		"psgi_runtime_processes":                              psgiRuntimeProcesses,
+		"runtime_app_config_file":                             config.VhostConfigFile,
+		"runtime_app_count":                                   len(vhostCfg.Vhosts),
+		"runtime_app_static_count":                            countVhostsByMode(vhostCfg, "static"),
+		"runtime_app_php_fpm_count":                           countVhostsByMode(vhostCfg, "php-fpm"),
+		"runtime_app_psgi_count":                              countVhostsByMode(vhostCfg, "psgi"),
+		"runtime_app_rollback_depth":                          vhostRollbackDepth,
+		"runtime_app_degraded":                                vhostRuntimeStatus.Degraded,
+		"runtime_app_last_error":                              vhostRuntimeStatus.LastError,
 		"vhost_config_file":                                   config.VhostConfigFile,
 		"vhost_count":                                         len(vhostCfg.Vhosts),
 		"vhost_static_count":                                  countVhostsByMode(vhostCfg, "static"),
 		"vhost_php_fpm_count":                                 countVhostsByMode(vhostCfg, "php-fpm"),
+		"vhost_psgi_count":                                    countVhostsByMode(vhostCfg, "psgi"),
 		"vhost_rollback_depth":                                vhostRollbackDepth,
 		"vhost_degraded":                                      vhostRuntimeStatus.Degraded,
 		"vhost_last_error":                                    vhostRuntimeStatus.LastError,

@@ -1,0 +1,65 @@
+ARG PERL_VERSION=5.38
+FROM perl:${PERL_VERSION}-bookworm
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# DBD::mysql 5.x expects Oracle MySQL client symbols that Debian bookworm's MariaDB client does not expose.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      build-essential \
+      ca-certificates \
+      libdb-dev \
+      default-libmysqlclient-dev \
+      libexpat1-dev \
+      libffi-dev \
+      libfreetype6-dev \
+      libgd-dev \
+      libgif-dev \
+      libjpeg62-turbo-dev \
+      libpng-dev \
+      libssl-dev \
+      libtiff-dev \
+      libwebp-dev \
+      libxml2-dev \
+      libxslt1-dev \
+      netpbm \
+      zlib1g-dev \
+      imagemagick; \
+    cpanm --notest \
+      Starman \
+      Plack \
+      CGI \
+      CGI::PSGI \
+      CGI::Parse::PSGI \
+      CGI::Compile \
+      DBI \
+      https://cpan.metacpan.org/authors/id/D/DV/DVEEDEN/DBD-mysql-4.052.tar.gz \
+      DBD::SQLite \
+      XML::LibXML \
+      XML::SAX \
+      XML::SAX::Expat \
+      XML::Atom \
+      XML::Parser \
+      SOAP::Lite \
+      XMLRPC::Transport::HTTP::Plack \
+      JSON \
+      YAML::Tiny \
+      Archive::Zip \
+      Image::Size \
+      GD \
+      Imager \
+      File::Copy::Recursive \
+      IPC::Run \
+      Cache::File \
+      Cache::Memcached \
+      Digest::SHA1 \
+      Crypt::DSA \
+      Crypt::SSLeay \
+      Authen::SASL \
+      IO::Socket::SSL \
+      Mozilla::CA; \
+    perl -MExtUtils::Installed -e 'print join("\n", sort ExtUtils::Installed->new->modules), "\n"' >/tmp/perl-modules.txt; \
+    perl -e 'print $^V' >/tmp/perl-version.txt; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/* /root/.cpanm

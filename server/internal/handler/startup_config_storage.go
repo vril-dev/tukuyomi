@@ -22,6 +22,7 @@ const (
 	startupProxySeedName           = "proxy.json"
 	startupSitesSeedName           = "sites.json"
 	startupPHPRuntimeSeedName      = "php-runtime-inventory.json"
+	startupPSGIRuntimeSeedName     = "psgi-runtime-inventory.json"
 	startupVhostsSeedName          = "vhosts.json"
 	startupScheduledTasksSeedName  = "scheduled-tasks.json"
 	startupUpstreamRuntimeSeedName = "upstream-runtime.json"
@@ -79,6 +80,9 @@ func ImportStartupConfigStorage() error {
 		return err
 	}
 	if err := importPHPRuntimeInventoryStorage(); err != nil {
+		return err
+	}
+	if err := importPSGIRuntimeInventoryStorage(); err != nil {
 		return err
 	}
 	if err := importVhostConfigStorage(); err != nil {
@@ -271,22 +275,22 @@ func importVhostConfigStorage() error {
 	}
 	raw, _, err := readStartupSeedFile(path, startupVhostsSeedName)
 	if err != nil {
-		return fmt.Errorf("read vhost seed file: %w", err)
+		return fmt.Errorf("read Runtime Apps seed file: %w", err)
 	}
 	rawText := string(raw)
 	if strings.TrimSpace(rawText) == "" {
 		rawText = defaultVhostConfigRaw
 	}
-	prepared, err := prepareVhostConfigRawWithInventory(rawText, currentPHPRuntimeInventoryConfig())
+	prepared, err := prepareVhostConfigRawWithInventories(rawText, currentPHPRuntimeInventoryConfig(), currentPSGIRuntimeInventoryConfig())
 	if err != nil {
-		return fmt.Errorf("validate vhost seed file: %w", err)
+		return fmt.Errorf("validate Runtime Apps seed file: %w", err)
 	}
 	store := getLogsStatsStore()
 	if store == nil {
 		return fmt.Errorf("db store is not initialized")
 	}
-	if _, err := store.writeVhostConfigVersion("", prepared.cfg, configVersionSourceImport, "", "vhost seed import", 0); err != nil {
-		return fmt.Errorf("import normalized vhost config: %w", err)
+	if _, err := store.writeVhostConfigVersion("", prepared.cfg, configVersionSourceImport, "", "Runtime Apps seed import", 0); err != nil {
+		return fmt.Errorf("import normalized Runtime Apps config: %w", err)
 	}
 	return nil
 }
@@ -314,6 +318,33 @@ func importPHPRuntimeInventoryStorage() error {
 	}
 	if _, err := store.writePHPRuntimeInventoryPreparedConfigVersion("", prepared, configVersionSourceImport, "", "php runtime inventory seed import", 0); err != nil {
 		return fmt.Errorf("import normalized php runtime inventory config: %w", err)
+	}
+	return nil
+}
+
+func importPSGIRuntimeInventoryStorage() error {
+	path := strings.TrimSpace(config.PSGIRuntimeInventoryFile)
+	if path == "" {
+		path = "data/psgi/inventory.json"
+	}
+	raw, _, err := readStartupSeedFile(path, startupPSGIRuntimeSeedName)
+	if err != nil {
+		return fmt.Errorf("read psgi runtime inventory seed file: %w", err)
+	}
+	rawText := string(raw)
+	if strings.TrimSpace(rawText) == "" {
+		rawText = defaultPSGIRuntimeInventoryRaw
+	}
+	prepared, err := preparePSGIRuntimeInventoryRaw(rawText, path)
+	if err != nil {
+		return fmt.Errorf("validate psgi runtime inventory seed file: %w", err)
+	}
+	store := getLogsStatsStore()
+	if store == nil {
+		return fmt.Errorf("db store is not initialized")
+	}
+	if _, err := store.writePSGIRuntimeInventoryPreparedConfigVersion("", prepared, configVersionSourceImport, "", "psgi runtime inventory seed import", 0); err != nil {
+		return fmt.Errorf("import normalized psgi runtime inventory config: %w", err)
 	}
 	return nil
 }

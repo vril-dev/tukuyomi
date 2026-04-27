@@ -10,6 +10,7 @@ import {
   MonoTag,
   NoticeBar,
   PrimaryButton,
+  QuietActionButton,
   SectionCard,
   StatBox,
   inputClass,
@@ -307,7 +308,13 @@ export default function BypassRulesPanel() {
         subtitle={tx("Host scope precedence stays host:port, then host, then default. Save still uses the existing bypass validate and hot-reload API.")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <ActionButton
+            <ActionButton onClick={() => void load()} disabled={loading}>
+              {tx("Refresh")}
+            </ActionButton>
+            <PrimaryButton onClick={() => void doSave()} disabled={readOnly || loading || saving || !dirty || !!structuredError}>
+              {saving ? tx("Saving...") : tx("Save & hot reload")}
+            </PrimaryButton>
+            <QuietActionButton
               onClick={() => {
                 const parsed = parseBypassRulesEditorDocument(exampleRaw);
                 applyStructuredDocument(parsed.base, parsed.state, parsed.defaultEntryBases, parsed.hostBases, parsed.hostEntryBases);
@@ -315,13 +322,7 @@ export default function BypassRulesPanel() {
               disabled={loading}
             >
               {tx("Insert example")}
-            </ActionButton>
-            <ActionButton onClick={() => void load()} disabled={loading}>
-              {tx("Refresh")}
-            </ActionButton>
-            <PrimaryButton onClick={() => void doSave()} disabled={readOnly || loading || saving || !dirty || !!structuredError}>
-              {saving ? tx("Saving...") : tx("Save & hot reload")}
-            </PrimaryButton>
+            </QuietActionButton>
           </div>
         }
       >

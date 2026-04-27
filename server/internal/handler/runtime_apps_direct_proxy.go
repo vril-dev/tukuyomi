@@ -37,15 +37,23 @@ type vhostResolvedRequest struct {
 
 const directStaticResponseMarkerHeader = "X-Tukuyomi-Internal-Direct-Static"
 
-var errVhostPathEscapesDocumentRoot = errors.New("vhost path escapes document root")
-var errVhostHiddenPathBlocked = errors.New("vhost hidden path blocked")
+var errVhostPathEscapesDocumentRoot = errors.New("runtime app path escapes document root")
+var errVhostHiddenPathBlocked = errors.New("runtime app hidden path blocked")
+var psgiDirectTransport = &http.Transport{
+	Proxy:                 nil,
+	DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+	MaxIdleConns:          32,
+	MaxIdleConnsPerHost:   8,
+	IdleConnTimeout:       90 * time.Second,
+	ResponseHeaderTimeout: 60 * time.Second,
+}
 
 func shouldServeDirectProxyTarget(target *url.URL) bool {
 	if target == nil {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(target.Scheme)) {
-	case "fcgi", "static":
+	case "fcgi", "psgi", "static":
 		return true
 	default:
 		return false
@@ -56,7 +64,7 @@ func serveDirectProxyTarget(w http.ResponseWriter, r *http.Request, decision pro
 	defer releaseProxyRouteSelection(decision.TransportSelection)
 	vhost, ok := proxyVhostForDecision(decision)
 	if !ok {
-		return fmt.Errorf("no vhost metadata found for selected upstream %q (%s)", decision.SelectedUpstream, decision.SelectedUpstreamURL)
+		return fmt.Errorf("no Runtime App metadata found for selected upstream %q (%s)", decision.SelectedUpstream, decision.SelectedUpstreamURL)
 	}
 	resp, err := buildDirectVhostResponse(r, decision, vhost)
 	if err != nil {
@@ -90,7 +98,25 @@ func proxyVhostForDecision(decision proxyRouteDecision) (VhostConfig, bool) {
 			if normalizeVhostMode(vhost.Mode) != "php-fpm" {
 				continue
 			}
-			if port > 0 && vhost.ListenPort == port {
+			if port > 0 && vhost.ListenPort == port && proxyTargetHostMatchesRuntime(host, vhost.Hostname) {
+				return vhost, true
+			}
+			if vhost.GeneratedTarget != "" && target.Host == vhost.GeneratedTarget {
+				return vhost, true
+			}
+			if host != "" && host == vhost.GeneratedTarget {
+				return vhost, true
+			}
+		}
+	}
+	if strings.EqualFold(target.Scheme, "psgi") {
+		host := strings.TrimSpace(target.Hostname())
+		port, _ := strconv.Atoi(strings.TrimSpace(target.Port()))
+		for _, vhost := range cfg.Vhosts {
+			if normalizeVhostMode(vhost.Mode) != "psgi" {
+				continue
+			}
+			if port > 0 && vhost.ListenPort == port && proxyTargetHostMatchesRuntime(host, vhost.Hostname) {
 				return vhost, true
 			}
 			if vhost.GeneratedTarget != "" && target.Host == vhost.GeneratedTarget {
@@ -112,6 +138,10 @@ func proxyVhostForDecision(decision proxyRouteDecision) (VhostConfig, bool) {
 		}
 	}
 	return VhostConfig{}, false
+}
+
+func proxyTargetHostMatchesRuntime(targetHost string, listenHost string) bool {
+	return normalizeRuntimeListenHost(targetHost) == normalizeRuntimeListenHost(listenHost)
 }
 
 func buildDirectVhostResponse(r *http.Request, decision proxyRouteDecision, vhost VhostConfig) (*http.Response, error) {
@@ -144,10 +174,12 @@ func buildDirectVhostResponse(r *http.Request, decision proxyRouteDecision, vhos
 		return buildStaticVhostResponse(r, resolved)
 	case "php":
 		return buildFastCGIVhostResponse(r, decision.Target, vhost, resolved)
+	case "psgi":
+		return buildPSGIVhostResponse(r, vhost, resolved)
 	case "status":
 		return buildDirectStatusResponse(r, resolved.StatusCode), nil
 	default:
-		return nil, fmt.Errorf("unsupported vhost resolution kind %q", resolved.Kind)
+		return nil, fmt.Errorf("unsupported Runtime App resolution kind %q", resolved.Kind)
 	}
 }
 
@@ -177,6 +209,14 @@ func requestQueryFromDecision(decision proxyRouteDecision, r *http.Request) stri
 func resolveVhostRequest(vhost VhostConfig, requestPath string, rawQuery string, method string) (vhostResolvedRequest, error) {
 	tryFiles := effectiveVhostTryFiles(vhost)
 	for _, entry := range tryFiles {
+		if strings.TrimSpace(entry) == "@psgi" && normalizeVhostMode(vhost.Mode) == "psgi" {
+			return vhostResolvedRequest{
+				Kind:         "psgi",
+				RequestPath:  normalizeVhostRequestPath(requestPath),
+				OriginalPath: requestPath,
+				Query:        rawQuery,
+			}, nil
+		}
 		candidatePath, candidateQuery := expandVhostTryFilesEntry(entry, requestPath, rawQuery)
 		resolved, ok, err := resolveVhostTryFileCandidate(vhost, candidatePath, candidateQuery, method)
 		if err != nil {
@@ -196,6 +236,8 @@ func effectiveVhostTryFiles(vhost VhostConfig) []string {
 	switch normalizeVhostMode(vhost.Mode) {
 	case "php-fpm":
 		return []string{"$uri", "$uri/", "/index.php?$query_string"}
+	case "psgi":
+		return []string{"$uri", "$uri/", "@psgi"}
 	default:
 		return []string{"$uri", "$uri/", "/index.html"}
 	}
@@ -207,6 +249,10 @@ func expandVhostTryFilesEntry(entry string, requestPath string, rawQuery string)
 	if idx := strings.Index(pathPart, "?"); idx >= 0 {
 		queryPart = pathPart[idx+1:]
 		pathPart = pathPart[:idx]
+	}
+	if strings.TrimSpace(pathPart) == "@psgi" {
+		queryPart = strings.ReplaceAll(queryPart, "$query_string", rawQuery)
+		return "@psgi", strings.TrimPrefix(strings.TrimSpace(queryPart), "?")
 	}
 	pathPart = strings.ReplaceAll(pathPart, "$uri", normalizeVhostRequestPath(requestPath))
 	queryPart = strings.ReplaceAll(queryPart, "$query_string", rawQuery)
@@ -225,6 +271,16 @@ func normalizeVhostRequestPath(in string) string {
 }
 
 func resolveVhostTryFileCandidate(vhost VhostConfig, candidatePath string, candidateQuery string, method string) (vhostResolvedRequest, bool, error) {
+	if strings.TrimSpace(candidatePath) == "@psgi" {
+		if normalizeVhostMode(vhost.Mode) != "psgi" {
+			return vhostResolvedRequest{}, false, nil
+		}
+		return vhostResolvedRequest{
+			Kind:        "psgi",
+			RequestPath: "/",
+			Query:       candidateQuery,
+		}, true, nil
+	}
 	resolvedPath, info, err := resolveVhostFilesystemPath(vhost.DocumentRoot, candidatePath)
 	if err != nil {
 		if errors.Is(err, errVhostPathEscapesDocumentRoot) || errors.Is(err, errVhostHiddenPathBlocked) {
@@ -393,6 +449,44 @@ func resolveVhostPHPPathInfo(documentRoot string, requestPath string) (string, s
 		return scriptName, resolvedPath, pathInfo, true
 	}
 	return "", "", "", false
+}
+
+func buildPSGIVhostResponse(r *http.Request, vhost VhostConfig, resolved vhostResolvedRequest) (*http.Response, error) {
+	if r == nil {
+		return nil, fmt.Errorf("request is nil")
+	}
+	if vhost.ListenPort < 1 || vhost.ListenPort > 65535 {
+		return nil, fmt.Errorf("Runtime App %q listen_port is invalid", vhost.Name)
+	}
+	targetURL := &url.URL{
+		Scheme:   "http",
+		Host:     runtimeListenEndpoint(vhost.Hostname, vhost.ListenPort),
+		Path:     normalizeVhostRequestPath(resolved.RequestPath),
+		RawQuery: strings.TrimPrefix(strings.TrimSpace(resolved.Query), "?"),
+	}
+	outReq := cloneTukuyomiProxyOutboundRequest(r)
+	if outReq == nil {
+		return nil, fmt.Errorf("request clone failed")
+	}
+	outReq.URL = targetURL
+	outReq.RequestURI = ""
+	outReq.Close = false
+	if outReq.Body == nil {
+		outReq.Body = http.NoBody
+	}
+	outReq.Host = r.Host
+	removeProxyHopByHopHeaders(outReq.Header)
+	setTukuyomiProxyXForwarded(outReq.Header, r)
+	if _, ok := outReq.Header["User-Agent"]; !ok {
+		outReq.Header.Set("User-Agent", "")
+	}
+	resp, err := psgiDirectTransport.RoundTrip(outReq)
+	if err != nil {
+		return nil, err
+	}
+	removeProxyHopByHopHeaders(resp.Header)
+	resp.Request = r
+	return resp, nil
 }
 
 func buildStaticVhostResponse(r *http.Request, resolved vhostResolvedRequest) (*http.Response, error) {
@@ -577,14 +671,14 @@ func buildFastCGIVhostResponse(r *http.Request, target *url.URL, vhost VhostConf
 		return nil, fmt.Errorf("fastcgi execute: %w", err)
 	}
 	if len(stderr) > 0 {
-		log.Printf("[VHOST][PHP][ERROR] fastcgi stderr vhost=%q script=%q err=%s", vhost.Name, resolved.ScriptName, vhostLogMessage(string(stderr)))
+		log.Printf("[RUNTIME_APP][PHP][ERROR] fastcgi stderr app=%q script=%q err=%s", vhost.Name, resolved.ScriptName, vhostLogMessage(string(stderr)))
 	}
 	if len(stdout) == 0 {
 		return buildDirectStatusResponse(r, http.StatusInternalServerError), nil
 	}
 	resp, err := parseFastCGIHTTPResponse(stdout, r)
 	if err != nil {
-		log.Printf("[VHOST][PHP][ERROR] fastcgi response parse failed vhost=%q script=%q err=%s", vhost.Name, resolved.ScriptName, vhostLogMessage(err.Error()))
+		log.Printf("[RUNTIME_APP][PHP][ERROR] fastcgi response parse failed app=%q script=%q err=%s", vhost.Name, resolved.ScriptName, vhostLogMessage(err.Error()))
 		return buildDirectStatusResponse(r, http.StatusInternalServerError), nil
 	}
 	return resp, nil

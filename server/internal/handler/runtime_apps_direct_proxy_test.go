@@ -48,6 +48,63 @@ func TestWriteDirectProxyResponsePreservesContextRequestID(t *testing.T) {
 	}
 }
 
+func TestBuildDirectVhostResponseProxiesPSGI(t *testing.T) {
+	docroot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(docroot, "static.txt"), []byte("static"), 0o644); err != nil {
+		t.Fatalf("write static: %v", err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/mt.cgi" || r.URL.RawQuery != "q=1" {
+			http.Error(w, fmt.Sprintf("path=%q query=%q", r.URL.Path, r.URL.RawQuery), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("X-Upstream-Host", r.Host)
+		_, _ = w.Write([]byte("psgi ok"))
+	}))
+	t.Cleanup(upstream.Close)
+	_, portText, err := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split host port: %v", err)
+	}
+	var port int
+	if _, err := fmt.Sscanf(portText, "%d", &port); err != nil {
+		t.Fatalf("parse port: %v", err)
+	}
+
+	vhost := normalizeVhostConfigFile(VhostConfigFile{Vhosts: []VhostConfig{{
+		Name:         "mt-site",
+		Mode:         "psgi",
+		Hostname:     "127.0.0.1",
+		ListenPort:   port,
+		DocumentRoot: docroot,
+		RuntimeID:    "perl538",
+		AppRoot:      docroot,
+		PSGIFile:     "mt.psgi",
+		TryFiles:     []string{"$uri", "$uri/", "@psgi"},
+	}}}).Vhosts[0]
+	req := httptest.NewRequest(http.MethodGet, "http://mt.example.test/mt.cgi?q=1", nil)
+	decision := proxyRouteDecision{
+		Target:         mustURL("psgi://127.0.0.1:" + portText),
+		RewrittenPath:  "/mt.cgi",
+		RewrittenQuery: "q=1",
+	}
+	resp, err := buildDirectVhostResponse(req, decision, vhost)
+	if err != nil {
+		t.Fatalf("buildDirectVhostResponse: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != "psgi ok" {
+		t.Fatalf("body=%q", body)
+	}
+}
+
 func TestWriteDirectProxyResponseFallsBackToInboundRequestID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://docs.example.com/index.php", nil)
 	req.Header.Set("X-Request-ID", "req-inbound")
@@ -94,7 +151,7 @@ func TestServeProxyServesStaticVhostAssets(t *testing.T) {
     {
       "name": "docs",
       "mode": "static",
-      "hostname": "docs.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9401,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "generated_target": "docs-static",
@@ -111,7 +168,7 @@ func TestServeProxyServesStaticVhostAssets(t *testing.T) {
   ],
   "default_route": {
     "action": {
-      "upstream": "docs"
+      "upstream": "docs-static"
     }
   }
 }`
@@ -168,7 +225,7 @@ func TestServeProxyWithCacheCachesStaticVhostAssets(t *testing.T) {
     {
       "name": "docs",
       "mode": "static",
-      "hostname": "docs.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9401,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "generated_target": "docs-static",
@@ -185,7 +242,7 @@ func TestServeProxyWithCacheCachesStaticVhostAssets(t *testing.T) {
   ],
   "default_route": {
     "action": {
-      "upstream": "docs"
+      "upstream": "docs-static"
     }
   }
 }`
@@ -273,7 +330,7 @@ func TestServeProxyServesStaticVhostAssetsViaGeneratedRoute(t *testing.T) {
     {
       "name": "docs",
       "mode": "static",
-      "hostname": "docs.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9401,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "generated_target": "docs-static",
@@ -291,7 +348,7 @@ func TestServeProxyServesStaticVhostAssetsViaGeneratedRoute(t *testing.T) {
   "backend_pools": [
     {
       "name": "docs-pool",
-      "members": ["docs"]
+      "members": ["docs-static"]
     }
   ],
   "default_route": {
@@ -357,7 +414,7 @@ func TestServeProxyStreamsLargeStaticVhostAssets(t *testing.T) {
     {
       "name": "docs",
       "mode": "static",
-      "hostname": "docs.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9401,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "generated_target": "docs-static",
@@ -374,7 +431,7 @@ func TestServeProxyStreamsLargeStaticVhostAssets(t *testing.T) {
   ],
   "default_route": {
     "action": {
-      "upstream": "docs"
+      "upstream": "docs-static"
     }
   }
 }`
@@ -439,7 +496,7 @@ func TestServeProxyStaticVhostReturnsValidatorsAndNotModified(t *testing.T) {
     {
       "name": "docs",
       "mode": "static",
-      "hostname": "docs.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9401,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "generated_target": "docs-static",
@@ -456,7 +513,7 @@ func TestServeProxyStaticVhostReturnsValidatorsAndNotModified(t *testing.T) {
   ],
   "default_route": {
     "action": {
-      "upstream": "docs"
+      "upstream": "docs-static"
     }
   }
 }`
@@ -558,7 +615,7 @@ func TestServeProxyStaticVhostBlocksSymlinkEscape(t *testing.T) {
     {
       "name": "docs",
       "mode": "static",
-      "hostname": "docs.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9401,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "generated_target": "docs-static",
@@ -575,7 +632,7 @@ func TestServeProxyStaticVhostBlocksSymlinkEscape(t *testing.T) {
   ],
   "default_route": {
     "action": {
-      "upstream": "docs"
+      "upstream": "docs-static"
     }
   }
 }`
@@ -638,7 +695,7 @@ func TestServeProxyStaticVhostBlocksHiddenPathsByDefault(t *testing.T) {
     {
       "name": "docs",
       "mode": "static",
-      "hostname": "docs.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9401,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "generated_target": "docs-static",
@@ -655,7 +712,7 @@ func TestServeProxyStaticVhostBlocksHiddenPathsByDefault(t *testing.T) {
   ],
   "default_route": {
     "action": {
-      "upstream": "docs"
+      "upstream": "docs-static"
     }
   }
 }`
@@ -715,7 +772,7 @@ func TestServeProxyStaticVhostAllowsWellKnownPaths(t *testing.T) {
     {
       "name": "docs",
       "mode": "static",
-      "hostname": "docs.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9401,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "generated_target": "docs-static",
@@ -732,7 +789,7 @@ func TestServeProxyStaticVhostAllowsWellKnownPaths(t *testing.T) {
   ],
   "default_route": {
     "action": {
-      "upstream": "docs"
+      "upstream": "docs-static"
     }
   }
 }`
@@ -881,7 +938,7 @@ func TestServeProxyRunsFastCGITryFilesAndStaticAssets(t *testing.T) {
     {
       "name": "app",
       "mode": "php-fpm",
-      "hostname": "app.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": ` + strconv.Itoa(port) + `,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "generated_target": "app-php",
@@ -899,7 +956,7 @@ func TestServeProxyRunsFastCGITryFilesAndStaticAssets(t *testing.T) {
   ],
   "default_route": {
     "action": {
-      "upstream": "app"
+      "upstream": "app-php"
     }
   }
 }`
@@ -997,7 +1054,7 @@ func TestServeProxyReturnsGeneric500ForFastCGIStderrOnly(t *testing.T) {
     {
       "name": "app",
       "mode": "php-fpm",
-      "hostname": "app.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": ` + strconv.Itoa(port) + `,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "generated_target": "app-php",
@@ -1015,7 +1072,7 @@ func TestServeProxyReturnsGeneric500ForFastCGIStderrOnly(t *testing.T) {
   ],
   "default_route": {
     "action": {
-      "upstream": "app"
+      "upstream": "app-php"
     }
   }
 }`
@@ -1082,7 +1139,7 @@ func TestServeProxyRunsFastCGIOverUnixSocket(t *testing.T) {
     {
       "name": "app",
       "mode": "php-fpm",
-      "hostname": "app.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9402,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "generated_target": "app-php",

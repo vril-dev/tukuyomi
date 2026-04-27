@@ -91,7 +91,8 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 			config.APIBasePath + "/semantic-rules",
 			config.APIBasePath + "/sites",
 			config.APIBasePath + "/php-runtimes",
-			config.APIBasePath + "/vhosts",
+			config.APIBasePath + "/psgi-runtimes",
+			config.APIBasePath + "/runtime-apps",
 			config.APIBasePath + "/scheduled-tasks",
 			config.APIBasePath + "/settings/listener-admin",
 			config.APIBasePath + "/auth/account",
@@ -105,8 +106,13 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 			config.APIBasePath+"/php-runtimes/:runtime_id/up",
 			config.APIBasePath+"/php-runtimes/:runtime_id/down",
 			config.APIBasePath+"/php-runtimes/:runtime_id/reload",
-			config.APIBasePath+"/vhosts/validate",
-			config.APIBasePath+"/vhosts/rollback",
+			config.APIBasePath+"/psgi-runtimes/validate",
+			config.APIBasePath+"/psgi-runtimes/rollback",
+			config.APIBasePath+"/psgi-processes/:runtime_app_name/up",
+			config.APIBasePath+"/psgi-processes/:runtime_app_name/down",
+			config.APIBasePath+"/psgi-processes/:runtime_app_name/reload",
+			config.APIBasePath+"/runtime-apps/validate",
+			config.APIBasePath+"/runtime-apps/rollback",
 			config.APIBasePath+"/scheduled-tasks/validate",
 			config.APIBasePath+"/scheduled-tasks/rollback",
 			config.APIBasePath+"/settings/listener-admin/validate",
@@ -210,10 +216,17 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 	api.POST("/php-runtimes/:runtime_id/up", adminMutate, handler.UpPHPRuntimeHandler)
 	api.POST("/php-runtimes/:runtime_id/down", adminMutate, handler.DownPHPRuntimeHandler)
 	api.POST("/php-runtimes/:runtime_id/reload", adminMutate, handler.ReloadPHPRuntimeHandler)
-	api.GET("/vhosts", handler.GetVhosts)
-	api.POST("/vhosts/validate", handler.ValidateVhosts)
-	api.PUT("/vhosts", adminMutate, handler.PutVhosts)
-	api.POST("/vhosts/rollback", adminMutate, handler.RollbackVhosts)
+	api.GET("/psgi-runtimes", handler.GetPSGIRuntimes)
+	api.POST("/psgi-runtimes/validate", handler.ValidatePSGIRuntimes)
+	api.PUT("/psgi-runtimes", adminMutate, handler.PutPSGIRuntimes)
+	api.POST("/psgi-runtimes/rollback", adminMutate, handler.RollbackPSGIRuntimes)
+	api.POST("/psgi-processes/:runtime_app_name/up", adminMutate, handler.UpPSGIProcessHandler)
+	api.POST("/psgi-processes/:runtime_app_name/down", adminMutate, handler.DownPSGIProcessHandler)
+	api.POST("/psgi-processes/:runtime_app_name/reload", adminMutate, handler.ReloadPSGIProcessHandler)
+	api.GET("/runtime-apps", handler.GetRuntimeApps)
+	api.POST("/runtime-apps/validate", handler.ValidateRuntimeApps)
+	api.PUT("/runtime-apps", adminMutate, handler.PutRuntimeApps)
+	api.POST("/runtime-apps/rollback", adminMutate, handler.RollbackRuntimeApps)
 	api.GET("/scheduled-tasks", handler.GetScheduledTasks)
 	api.POST("/scheduled-tasks/validate", handler.ValidateScheduledTasks)
 	api.PUT("/scheduled-tasks", adminMutate, handler.PutScheduledTasks)

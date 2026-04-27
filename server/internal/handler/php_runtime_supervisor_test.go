@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -30,7 +31,7 @@ func TestPHPRuntimeSupervisorStartsRestartsAndStopsRuntime(t *testing.T) {
     {
       "name": "app",
       "mode": "php-fpm",
-      "hostname": "app.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9211,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "runtime_id": "php82",
@@ -100,7 +101,7 @@ func TestPHPRuntimeSupervisorStartsRestartsAndStopsRuntime(t *testing.T) {
     {
       "name": "app",
       "mode": "php-fpm",
-      "hostname": "app.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9212,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "runtime_id": "php82",
@@ -124,6 +125,54 @@ func TestPHPRuntimeSupervisorStartsRestartsAndStopsRuntime(t *testing.T) {
 	waitForTCPState(t, "127.0.0.1:9212", false)
 	if len(PHPRuntimeProcessSnapshot()) != 0 {
 		t.Fatalf("process snapshot should be empty after deleting the last vhost: %+v", PHPRuntimeProcessSnapshot())
+	}
+}
+
+func TestPreparePSGIRuntimeStarmanPIDFileRemovesStaleFile(t *testing.T) {
+	tmp := t.TempDir()
+	port := closedLocalTCPPort(t)
+	mat := PSGIRuntimeMaterializedStatus{
+		ProcessID:  "app",
+		RuntimeDir: tmp,
+		ListenHost: "127.0.0.1",
+		ListenPort: port,
+	}
+	pidPath := psgiRuntimePidPath(mat)
+	if err := os.WriteFile(pidPath, []byte("18\n"), 0o644); err != nil {
+		t.Fatalf("write pid file: %v", err)
+	}
+	if err := preparePSGIRuntimeStarmanPIDFile(mat); err != nil {
+		t.Fatalf("prepare pid file: %v", err)
+	}
+	if _, err := os.Stat(pidPath); !os.IsNotExist(err) {
+		t.Fatalf("pid file should be removed, err=%v", err)
+	}
+}
+
+func TestPreparePSGIRuntimeStarmanPIDFileRejectsUnmanagedListener(t *testing.T) {
+	tmp := t.TempDir()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+	mat := PSGIRuntimeMaterializedStatus{
+		ProcessID:  "app",
+		RuntimeDir: tmp,
+		ListenHost: "127.0.0.1",
+		ListenPort: port,
+	}
+	pidPath := psgiRuntimePidPath(mat)
+	if err := os.WriteFile(pidPath, []byte("18\n"), 0o644); err != nil {
+		t.Fatalf("write pid file: %v", err)
+	}
+	err = preparePSGIRuntimeStarmanPIDFile(mat)
+	if err == nil || !strings.Contains(err.Error(), "unmanaged listener") {
+		t.Fatalf("err=%v want unmanaged listener", err)
+	}
+	if _, err := os.Stat(pidPath); err != nil {
+		t.Fatalf("pid file should remain when listener is active: %v", err)
 	}
 }
 
@@ -188,6 +237,19 @@ for sock in sockets:
     sock.close()
 PY
 `
+}
+
+func closedLocalTCPPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+	return port
 }
 
 func waitForTCPState(t *testing.T, address string, wantOpen bool) {

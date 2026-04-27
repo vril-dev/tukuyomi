@@ -589,7 +589,7 @@ export default function Rules() {
                             {tx("setup")}
                         </span>
                     )}
-                    <div className="min-w-0 flex-1 text-sm font-medium truncate">{editor.kind === "crs_asset" ? editor.name : editor.path}</div>
+                    <div className="min-w-0 flex-1 text-xs font-medium truncate">{editor.kind === "crs_asset" ? editor.name : editor.path}</div>
                 </div>
             </div>
         );
@@ -694,7 +694,7 @@ export default function Rules() {
                                         onClick={() => setSelectedKey(key)}
                                     >
                                         <div className="flex items-center justify-between gap-2">
-                                            <span className="text-sm font-medium truncate">{editor.path}</span>
+                                            <span className="text-xs font-medium truncate">{editor.path}</span>
                                             <span className={`text-xs shrink-0 ${selected ? "text-neutral-300" : "text-neutral-500"}`}>
                                                 {tx("{count} refs", { count: editor.referenceCount })}
                                             </span>

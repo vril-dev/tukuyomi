@@ -17,6 +17,7 @@ var (
 	ProxyConfigFile                     string
 	SiteConfigFile                      string
 	PHPRuntimeInventoryFile             string
+	PSGIRuntimeInventoryFile            string
 	VhostConfigFile                     string
 	ScheduledTaskConfigFile             string
 	SecurityAuditFile                   string
@@ -183,6 +184,10 @@ func applyAppConfig(cfg appConfigFile) {
 	PHPRuntimeInventoryFile = strings.TrimSpace(cfg.Paths.PHPRuntimeInventoryFile)
 	if PHPRuntimeInventoryFile == "" {
 		PHPRuntimeInventoryFile = "data/php-fpm/inventory.json"
+	}
+	PSGIRuntimeInventoryFile = strings.TrimSpace(cfg.Paths.PSGIRuntimeInventoryFile)
+	if PSGIRuntimeInventoryFile == "" {
+		PSGIRuntimeInventoryFile = "data/psgi/inventory.json"
 	}
 	VhostConfigFile = strings.TrimSpace(cfg.Paths.VhostConfigFile)
 	if VhostConfigFile == "" {

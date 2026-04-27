@@ -183,6 +183,41 @@ func TestBuildAdminEngineExposesAdminRoutes(t *testing.T) {
 	}
 }
 
+func TestBuildAdminEngineExposesRuntimeAppsWithoutVhostsAlias(t *testing.T) {
+	restore := saveListenerConfigForTest()
+	defer restore()
+
+	adminEngine, err := buildAdminEngine(nil)
+	if err != nil {
+		t.Fatalf("buildAdminEngine() error = %v", err)
+	}
+
+	routes := map[string]struct{}{}
+	for _, route := range adminEngine.Routes() {
+		routes[route.Method+" "+route.Path] = struct{}{}
+	}
+	for _, want := range []string{
+		"GET " + config.APIBasePath + "/runtime-apps",
+		"POST " + config.APIBasePath + "/runtime-apps/validate",
+		"PUT " + config.APIBasePath + "/runtime-apps",
+		"POST " + config.APIBasePath + "/runtime-apps/rollback",
+	} {
+		if _, ok := routes[want]; !ok {
+			t.Fatalf("missing route %s", want)
+		}
+	}
+	for _, legacy := range []string{
+		"GET " + config.APIBasePath + "/vhosts",
+		"POST " + config.APIBasePath + "/vhosts/validate",
+		"PUT " + config.APIBasePath + "/vhosts",
+		"POST " + config.APIBasePath + "/vhosts/rollback",
+	} {
+		if _, ok := routes[legacy]; ok {
+			t.Fatalf("unexpected legacy route %s", legacy)
+		}
+	}
+}
+
 func saveListenerConfigForTest() func() {
 	prevAPIBasePath := config.APIBasePath
 	prevUIBasePath := config.UIBasePath

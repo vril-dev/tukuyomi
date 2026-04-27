@@ -53,7 +53,7 @@ print(",".join([name for name in names if name]))
 PY
 )"
   if [[ -n "${refs}" ]]; then
-    echo "[php-fpm-prune][ERROR] runtime ${runtime_id} is still referenced by staged vhosts: ${refs}" >&2
+    echo "[php-fpm-prune][ERROR] runtime ${runtime_id} is still referenced by staged Runtime Apps: ${refs}" >&2
     exit 1
   fi
 fi

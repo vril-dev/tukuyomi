@@ -24,6 +24,9 @@
 2. 必要なら `Rules` > Advanced > `Bypass snippets` で専用 `*.conf` asset を用意し、対象Ruleを `ctl:ruleRemoveById` で限定無効化する。
 3. 最終手段として広いパスのバイパスを使う（期限付きで実施し、後で戻す）。
 
+`extra_rule` は Coraza-backed のチューニング用 hook です。非 Coraza の WAF engine が active な場合は、
+Coraza snippet ではなく full bypass entry か engine-native tuning を使います。
+
 Bypass Rules の JSON 例:
 
 ```json

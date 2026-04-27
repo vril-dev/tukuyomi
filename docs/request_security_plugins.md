@@ -2,7 +2,7 @@
 
 # Request-Time Security Plugins
 
-`tukuyomi` supports request-time security extensions as compile-time plugins inside `coraza/src/internal/handler`.
+`tukuyomi` supports request-time security extensions as compile-time plugins inside `server/internal/handler`.
 
 This is intentionally static and does not use Go runtime `.so` plugins.
 
@@ -158,7 +158,7 @@ Current built-ins are registered in `request_security_plugins.go`:
 
 Add new plugin files under:
 
-- `coraza/src/internal/handler/`
+- `server/internal/handler/`
 
 Recommended naming:
 
@@ -209,7 +209,7 @@ Because this is a compile-time extension, normal builds automatically include th
 Useful checks:
 
 ```bash
-cd coraza/src
+cd server
 go test ./internal/handler ./...
 ```
 

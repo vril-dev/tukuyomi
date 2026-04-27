@@ -38,9 +38,9 @@ BENCH_PROFILE_ADDR ?= 127.0.0.1:6060
 BENCH_PROFILE_SECONDS ?= 10
 UPSTREAM_PORT ?=
 
-CORAZA_SRC := coraza/src
+SERVER_DIR := server
 UI_DIR := web/tukuyomi-admin
-UI_EMBED_DIR := coraza/src/internal/handler/admin_ui_dist
+UI_EMBED_DIR := server/internal/handler/admin_ui_dist
 BIN_DIR ?= bin
 APP_NAME ?= tukuyomi
 APP_PKG ?= ./cmd/server
@@ -94,7 +94,7 @@ help:
 	@echo "  make deploy-render TARGET=ecs|kubernetes|azure-container-apps|container-image IMAGE_URI=... Render deploy artifacts"
 	@echo "    - optional: DEPLOY_RENDER_OUT_DIR=dist/deploy DEPLOY_RENDER_OVERWRITE=1"
 	@echo ""
-	@echo "  make go-test                    Run Go tests (coraza/src)"
+	@echo "  make go-test                    Run Go tests (server)"
 	@echo "  make go-fuzz-short              Run short native HTTP/1 fuzz passes"
 	@echo "  make go-build                   Build single binary into ./bin/$(APP_NAME)"
 	@echo "  make db-migrate                 Build binary and apply configured DB schema migrations"
@@ -341,10 +341,10 @@ crs-ensure: db-migrate
 setup: env-init crs-install db-import
 
 go-test:
-	cd $(CORAZA_SRC) && $(GO) test ./...
+	cd $(SERVER_DIR) && $(GO) test ./...
 
 go-fuzz-short:
-	cd $(CORAZA_SRC) && set -e; for target in \
+	cd $(SERVER_DIR) && set -e; for target in \
 		FuzzNativeHTTP1ParseStatusLine \
 		FuzzNativeHTTP1ReadHeaderBlock \
 		FuzzNativeHTTP1ChunkedRead \
@@ -359,7 +359,7 @@ go-fuzz-short:
 
 go-build:
 	mkdir -p $(abspath $(BIN_DIR))
-	cd $(CORAZA_SRC) && $(GO) build -o "$(abspath $(BIN_DIR))/$(APP_NAME)" $(APP_PKG)
+	cd $(SERVER_DIR) && $(GO) build -o "$(abspath $(BIN_DIR))/$(APP_NAME)" $(APP_PKG)
 	@echo "[go-build] built $(abspath $(BIN_DIR))/$(APP_NAME)"
 
 db-migrate: go-build
@@ -503,7 +503,7 @@ php-fpm-reload:
 	RUNTIME="$(RUNTIME)" CORAZA_PORT="$(CORAZA_PORT)" WAF_ADMIN_USERNAME="$(WAF_ADMIN_USERNAME)" WAF_ADMIN_PASSWORD="$(WAF_ADMIN_PASSWORD)" ./scripts/php_fpm_runtime_ctl.sh reload
 
 php-fpm-test:
-	cd $(CORAZA_SRC) && $(GO) test ./internal/handler -run 'Test(PHPRuntimeInventoryListsOnlyBuiltArtifacts|PHPRuntimeInventoryDBAutoDiscoveryReflectsBuiltArtifactsAfterStartup|PHPRuntimeInventoryDBExplicitEmptyDoesNotAutoDiscover|PHPRuntimeInventoryDBLegacyImportWithoutStateAutoDiscovers|PHPRuntimeInventoryDBLoadsWithoutInventoryOrManifestJSON|ApplyPHPRuntimeInventoryRawDoesNotDeadlockOnMaterializationRefresh|GetPHPRuntimesAndVhostsHandlers|ValidatePHPRuntimeInventoryRawIgnoresLegacyPHPSupportFlag|DefaultPHPRuntimeInventoryStartsEmptyUntilRuntimeIsBuilt|ValidatePHPRuntimeInventoryRawLoadsBuiltArtifactModulesAndDefaults|ValidateVhostConfigRawRequiresKnownRuntime|ValidateVhostConfigRawAcceptsKnownRuntimeWithoutSupportToggle|ApplyAndRollbackVhostConfigRaw|PHPRuntimeSupervisorStartsRestartsAndStopsRuntime|ResolvePHPRuntimeIdentityUsesConfiguredCurrentUserAndGroup|ValidatePHPRuntimeLaunchRejectsPrivilegeTransitionWithoutRoot|ValidatePHPRuntimeLaunchRejectsUnreadableDocumentRoot|ServeProxyServesStaticVhostAssets|ServeProxyRunsFastCGIOverUnixSocket|ServeProxyRunsFastCGITryFilesAndStaticAssets|ServeProxyAppliesVhostRewriteAccessAndBasicAuth|BuildPHPRuntimePoolConfigIncludesINIOverrides|ValidateVhostConfigRejectsPlaintextBasicAuthHash)'
+	cd $(SERVER_DIR) && $(GO) test ./internal/handler -run 'Test(PHPRuntimeInventoryListsOnlyBuiltArtifacts|PHPRuntimeInventoryDBAutoDiscoveryReflectsBuiltArtifactsAfterStartup|PHPRuntimeInventoryDBExplicitEmptyDoesNotAutoDiscover|PHPRuntimeInventoryDBLegacyImportWithoutStateAutoDiscovers|PHPRuntimeInventoryDBLoadsWithoutInventoryOrManifestJSON|ApplyPHPRuntimeInventoryRawDoesNotDeadlockOnMaterializationRefresh|GetPHPRuntimesAndVhostsHandlers|ValidatePHPRuntimeInventoryRawIgnoresLegacyPHPSupportFlag|DefaultPHPRuntimeInventoryStartsEmptyUntilRuntimeIsBuilt|ValidatePHPRuntimeInventoryRawLoadsBuiltArtifactModulesAndDefaults|ValidateVhostConfigRawRequiresKnownRuntime|ValidateVhostConfigRawAcceptsKnownRuntimeWithoutSupportToggle|ApplyAndRollbackVhostConfigRaw|PHPRuntimeSupervisorStartsRestartsAndStopsRuntime|ResolvePHPRuntimeIdentityUsesConfiguredCurrentUserAndGroup|ValidatePHPRuntimeLaunchRejectsPrivilegeTransitionWithoutRoot|ValidatePHPRuntimeLaunchRejectsUnreadableDocumentRoot|ServeProxyServesStaticVhostAssets|ServeProxyRunsFastCGIOverUnixSocket|ServeProxyRunsFastCGITryFilesAndStaticAssets|ServeProxyAppliesVhostRewriteAccessAndBasicAuth|BuildPHPRuntimePoolConfigIncludesINIOverrides|ValidateVhostConfigRejectsPlaintextBasicAuthHash)'
 
 php-fpm-smoke: ui-build-sync
 	VER="$(VER)" CORAZA_PORT="$(CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" WAF_ADMIN_USERNAME="$(WAF_ADMIN_USERNAME)" WAF_ADMIN_PASSWORD="$(WAF_ADMIN_PASSWORD)" ./scripts/run_php_fpm_smoke.sh

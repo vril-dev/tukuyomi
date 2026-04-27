@@ -592,6 +592,39 @@ func TestLoadAppConfigFileRejectsInvalidWAFEngineMode(t *testing.T) {
 	if !strings.Contains(err.Error(), "waf.engine.mode") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if !strings.Contains(err.Error(), "coraza, mod_security") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadAppConfigFileRejectsUnavailableWAFEngineMode(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	raw := `{
+		"server": {"listen_addr": ":9090"},
+		"admin": {"api_base_path": "/tukuyomi-api", "ui_base_path": "/tukuyomi-ui"},
+		"paths": {
+			"proxy_config_file": "conf/proxy.json",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
+			"rules_file": "tukuyomi.conf"
+		},
+		"proxy": {"rollback_history_size": 8},
+		"waf": {
+			"engine": {"mode": "mod_security"}
+		},
+		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
+		"storage": {"db_driver": "sqlite"}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := loadAppConfigFile(cfgPath)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "waf.engine.mode") || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestListenAddrExposesBeyondLoopback(t *testing.T) {

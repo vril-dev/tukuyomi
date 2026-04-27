@@ -40,8 +40,10 @@ const JA_STRINGS: Record<string, string> = {
   "Proxy Engine": "Proxy Engine",
   "WAF Engine": "WAF Engine",
   "Current WAF Engine": "現在のWAF Engine",
-  "Coraza is the active WAF engine. Additional engines must be registered before this value can be changed.":
-    "現在の WAF engine は Coraza です。追加 engine は登録後にこの値を変更できます。",
+  unavailable: "利用不可",
+  Unavailable: "利用不可",
+  "Select a registered WAF engine. Unavailable engines are shown for planning but cannot be saved in this build.":
+    "登録済みの WAF engine を選択します。利用不可の engine は計画用に表示されますが、この build では保存できません。",
   "Proxy Engine, CRS, Rollback, and FP Tuner":
     "Proxy Engine、CRS、ロールバック、FP Tuner",
   "Current Proxy Engine": "現在のProxy Engine",
@@ -836,6 +838,8 @@ const JA_STRINGS: Record<string, string> = {
   "WAF Asset References": "WAF asset 参照",
   "Logical references resolved against DB-backed WAF rule assets.":
     "DB-backed WAF rule asset に対して解決される論理参照です。",
+  "Extra rule references are unavailable because the active WAF engine is not Coraza. Full bypass entries still apply.":
+    "現在の WAF engine が Coraza ではないため、追加ルール参照は利用できません。Full bypass entry は引き続き適用されます。",
   "Proxy Seed File": "Proxy 初期投入ファイル",
   "PHP Runtime Inventory Seed File": "PHP runtime inventory 初期投入ファイル",
   "Vhost Seed File": "Vhost 初期投入ファイル",
@@ -1015,6 +1019,8 @@ const JA_STRINGS: Record<string, string> = {
   "Exempt paths": "除外パス",
   "Extra rule file": "追加ルールファイル",
   "Extra rule reference": "追加ルール参照",
+  "Optional Coraza-backed DB-managed `.conf` override applied instead of a full bypass when you need a narrow override.":
+    "限定的な override が必要な場合に、full bypass の代わりに適用する Coraza-backed DB 管理の `.conf` 参照です。",
   "Optional DB-managed `.conf` override applied instead of a full bypass when you need a narrow override.":
     "限定的な override が必要な場合に、full bypass の代わりに適用する DB 管理の `.conf` 参照です。",
   "Fail open on feed errors": "フィード取得エラー時はフェイルオープン",

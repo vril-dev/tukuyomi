@@ -80,13 +80,13 @@ need_cmd install
 BUILD_CONTEXT="$(mktemp -d "${ROOT_DIR}/.tmp-container-deployment-context.XXXXXX")"
 log "staging container build context at ${BUILD_CONTEXT}"
 install -d -m 755 \
-  "${BUILD_CONTEXT}/coraza" \
+  "${BUILD_CONTEXT}/server" \
   "${BUILD_CONTEXT}/web" \
   "${BUILD_CONTEXT}/data/conf" \
   "${BUILD_CONTEXT}/seeds" \
   "${BUILD_CONTEXT}/scripts" \
   "${BUILD_CONTEXT}/docs/build"
-rsync -a "${ROOT_DIR}/coraza/" "${BUILD_CONTEXT}/coraza/"
+rsync -a "${ROOT_DIR}/server/" "${BUILD_CONTEXT}/server/"
 rsync -a --exclude 'node_modules' --exclude 'dist' "${ROOT_DIR}/web/tukuyomi-admin/" "${BUILD_CONTEXT}/web/tukuyomi-admin/"
 rsync -a --exclude '*.bak' "${ROOT_DIR}/data/conf/" "${BUILD_CONTEXT}/data/conf/"
 install -m 755 "${ROOT_DIR}/scripts/install_crs.sh" "${BUILD_CONTEXT}/scripts/install_crs.sh"

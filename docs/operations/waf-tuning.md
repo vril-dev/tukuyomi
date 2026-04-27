@@ -24,6 +24,9 @@ Recommended order:
 2. If needed, create a dedicated `*.conf` asset from `Rules` > Advanced > `Bypass snippets` and disable the target rule narrowly with `ctl:ruleRemoveById`.
 3. Use a broader path bypass only as a last resort (time-boxed, and roll it back later).
 
+`extra_rule` is a Coraza-backed tuning hook. When a non-Coraza WAF engine is active,
+use full bypass entries or engine-native tuning instead of Coraza snippets.
+
 Bypass Rules JSON example:
 
 ```json

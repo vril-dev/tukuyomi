@@ -235,6 +235,7 @@ proxy engine 選択は restart-required な DB `app_config` 設定です:
 - HTTP/1.1 と明示的な upstream HTTP/2 mode は Tukuyomi native upstream transport を使います。HTTPS `force_attempt` は ALPN で `h2` が選ばれない場合だけ native HTTP/1.1 へ fallback します
 - Upgrade/WebSocket handshake request は `tukuyomi_proxy` 内で処理します。`101 Switching Protocols` 後の WebSocket frame payload は tunnel data です
 - 本番展開前に実 workload で benchmark してください
+- `waf.engine.mode` は現在、利用可能な `coraza` engine のみ受け付けます。`mod_security` は将来 adapter 用の既知 mode ですが、adapter が compile されるまでは fail-closed で拒否されます
 
 ## public/admin listener 分離
 

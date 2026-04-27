@@ -94,6 +94,18 @@ func TestStatusHandlerIncludesOverloadState(t *testing.T) {
 	if got := int(proxy["rejected_queue_full_total"].(float64)); got != 2 {
 		t.Fatalf("proxy rejected_queue_full_total=%d want=2", got)
 	}
+	capabilities, ok := body["waf_engine_modes"].([]any)
+	if !ok || len(capabilities) != 2 {
+		t.Fatalf("waf_engine_modes=%#v", body["waf_engine_modes"])
+	}
+	coraza, ok := capabilities[0].(map[string]any)
+	if !ok || coraza["mode"] != config.WAFEngineModeCoraza || coraza["available"] != true {
+		t.Fatalf("unexpected coraza capability: %#v", capabilities[0])
+	}
+	modSecurity, ok := capabilities[1].(map[string]any)
+	if !ok || modSecurity["mode"] != "mod_security" || modSecurity["available"] != false {
+		t.Fatalf("unexpected mod_security capability: %#v", capabilities[1])
+	}
 }
 
 func TestMetricsHandlerIncludesOverloadMetrics(t *testing.T) {

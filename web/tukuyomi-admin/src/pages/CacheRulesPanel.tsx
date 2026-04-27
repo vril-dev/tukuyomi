@@ -9,6 +9,7 @@ import {
   Field,
   MonoTag,
   PrimaryButton,
+  QuietActionButton,
   SectionCard,
   StatBox,
   inputClass,
@@ -504,9 +505,6 @@ export default function CacheRulePanel() {
         subtitle={tx("Host-specific cache scopes replace the default scope for matching host requests.")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <ActionButton onClick={() => applyStructuredState(exampleState)} disabled={readOnly || loading || saving}>
-              {tx("Insert example")}
-            </ActionButton>
             <ActionButton onClick={() => void load()} disabled={loading || saving}>
               {tx("Refresh")}
             </ActionButton>
@@ -516,6 +514,9 @@ export default function CacheRulePanel() {
             <PrimaryButton onClick={() => void save()} disabled={readOnly || loading || saving || !dirty}>
               {saving ? tx("Saving...") : tx("Save & hot reload")}
             </PrimaryButton>
+            <QuietActionButton onClick={() => applyStructuredState(exampleState)} disabled={readOnly || loading || saving}>
+              {tx("Insert example")}
+            </QuietActionButton>
           </div>
         }
       >

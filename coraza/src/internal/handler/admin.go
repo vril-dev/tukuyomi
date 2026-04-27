@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"tukuyomi/internal/adminui"
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/crsselection"
 	"tukuyomi/internal/overloadstate"
 	"tukuyomi/internal/requestmeta"
 	"tukuyomi/internal/serverruntime"
@@ -552,35 +554,32 @@ func RulesHandler(c *gin.Context) {
 	editable := editableWAFRuleAssets(assets)
 	result := make(map[string]string, len(editable))
 	out := make([]gin.H, 0, len(editable))
+	groupPositions := make(map[string]int, 2)
 	for i, asset := range editable {
-		etag := strings.TrimSpace(asset.ETag)
-		if etag == "" {
-			etag = bypassconf.ComputeETag(asset.Raw)
-		}
 		if asset.Kind == wafRuleAssetKindBase {
 			result[asset.Path] = string(asset.Raw)
 		}
-		out = append(out, gin.H{
-			"path":     asset.Path,
-			"kind":     asset.Kind,
-			"position": i,
-			"raw":      string(asset.Raw),
-			"etag":     etag,
-			"usage":    wafRuleAssetUsageLabel(asset.Kind),
-			"saved_at": wafRuleAssetSavedAt(assetRec, asset.Path),
-		})
+		group := wafRuleAssetOrderGroup(asset.Kind)
+		groupPosition := groupPositions[group]
+		groupPositions[group] = groupPosition + 1
+		out = append(out, ruleAssetResponseFile(asset, i, groupPosition, assetRec))
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"rules": result,
 		"files": out,
-	})
+	}
+	if c.Query("runtime") == "1" {
+		resp["runtime_files"] = ruleAssetRuntimeResponseFiles(assets, assetRec)
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 type rulesPutBody struct {
-	Path string `json:"path"`
-	Kind string `json:"kind"`
-	Raw  string `json:"raw"`
+	Path    string `json:"path"`
+	Kind    string `json:"kind"`
+	Raw     string `json:"raw"`
+	Enabled *bool  `json:"enabled"`
 }
 
 func ValidateRules(c *gin.Context) {
@@ -621,7 +620,7 @@ func PutRules(c *gin.Context) {
 		respondConfigDBStoreRequired(c)
 		return
 	}
-	curRaw, curETag, domainETag, _, err := loadEditableWAFRuleAssetForKind(target, kind)
+	curRaw, curETag, domainETag, curEnabled, _, err := loadEditableWAFRuleAssetForKind(target, kind)
 	existed := err == nil
 	if err != nil && !strings.Contains(err.Error(), "not found") {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -638,7 +637,7 @@ func PutRules(c *gin.Context) {
 		return
 	}
 
-	rec, asset, err := writeWAFRuleAssetUpdateForKind(target, kind, []byte(in.Raw), domainETag, ruleAssetWriteReason(kind))
+	rec, asset, err := writeWAFRuleAssetUpdateForKindEnabled(target, kind, []byte(in.Raw), in.Enabled, domainETag, ruleAssetWriteReason(kind))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -647,7 +646,7 @@ func PutRules(c *gin.Context) {
 	if kind == wafRuleAssetKindBase {
 		if err := waf.ReloadBaseWAF(); err != nil {
 			if existed {
-				_, _, _ = writeWAFRuleAssetUpdateForKind(target, kind, curRaw, rec.ETag, "base rule rollback after reload failure")
+				_, _, _ = writeWAFRuleAssetUpdateForKindEnabled(target, kind, curRaw, &curEnabled, rec.ETag, "base rule rollback after reload failure")
 			} else {
 				_, _ = deleteWAFRuleAssetForKind(target, kind, rec.ETag, "base rule create rollback after reload failure")
 			}
@@ -664,6 +663,7 @@ func PutRules(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"ok":            true,
 		"etag":          asset.ETag,
+		"enabled":       !asset.Disabled,
 		"kind":          kind,
 		"path":          target,
 		"hot_reloaded":  hotReloaded,
@@ -698,7 +698,7 @@ func DeleteRuleAsset(c *gin.Context) {
 			return
 		}
 	}
-	curRaw, _, domainETag, _, err := loadEditableWAFRuleAssetForKind(target, kind)
+	curRaw, _, domainETag, curEnabled, _, err := loadEditableWAFRuleAssetForKind(target, kind)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -710,7 +710,7 @@ func DeleteRuleAsset(c *gin.Context) {
 	}
 	if kind == wafRuleAssetKindBase {
 		if err := waf.ReloadBaseWAF(); err != nil {
-			_, _, _ = writeWAFRuleAssetUpdateForKind(target, kind, curRaw, rec.ETag, "base rule delete rollback after reload failure")
+			_, _, _ = writeWAFRuleAssetUpdateForKindEnabled(target, kind, curRaw, &curEnabled, rec.ETag, "base rule delete rollback after reload failure")
 			_ = waf.ReloadBaseWAF()
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("reload failed and rollback applied: %v", err)})
 			return
@@ -759,7 +759,7 @@ func PutRuleAssetOrder(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "active waf rule assets missing in db; run make crs-install before editing rule assets"})
 		return
 	}
-	previous := editableWAFRuleAssets(current)
+	previous := baseWAFRuleAssets(current)
 	nextOrder := make([]wafRuleAssetVersion, 0, len(order))
 	for _, item := range order {
 		kind, target, err := normalizeRulesRequestTarget(item.Path, item.Kind)
@@ -767,15 +767,19 @@ func PutRuleAssetOrder(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		if kind != wafRuleAssetKindBase {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "rule asset order supports base WAF rule assets only"})
+			return
+		}
 		nextOrder = append(nextOrder, wafRuleAssetVersion{Path: target, Kind: kind})
 	}
-	nextRec, nextAssets, err := reorderEditableWAFRuleAssets(nextOrder, rec.ETag, "rule asset order update")
+	nextRec, nextAssets, err := reorderBaseWAFRuleAssets(nextOrder, rec.ETag, "base rule asset order update")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	if err := waf.ReloadBaseWAF(); err != nil {
-		_, _, _ = reorderEditableWAFRuleAssets(previous, nextRec.ETag, "rule asset order rollback after reload failure")
+		_, _, _ = reorderBaseWAFRuleAssets(previous, nextRec.ETag, "base rule asset order rollback after reload failure")
 		_ = waf.ReloadBaseWAF()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("reload failed and rollback applied: %v", err)})
 		return
@@ -852,11 +856,38 @@ func validateRuleAssetRaw(kind string, target string, raw []byte) error {
 
 func wafRuleAssetUsageLabel(kind string) string {
 	switch kind {
+	case wafRuleAssetKindCRSSetup:
+		return "Coraza CRS setup"
+	case wafRuleAssetKindCRSAsset:
+		return "Coraza CRS rule"
 	case wafRuleAssetKindBypassExtra:
-		return "Bypass Rules extra_rule"
+		return "Bypass rule snippet"
 	default:
 		return "Base WAF rule set"
 	}
+}
+
+func wafRuleAssetOrderGroup(kind string) string {
+	switch kind {
+	case wafRuleAssetKindCRSSetup, wafRuleAssetKindCRSAsset:
+		return "coraza_load_order"
+	case wafRuleAssetKindBypassExtra:
+		return "bypass_snippet"
+	default:
+		return "base_load_order"
+	}
+}
+
+func wafRuleAssetEnabled(asset wafRuleAssetVersion) bool {
+	return asset.Kind != wafRuleAssetKindBase || !asset.Disabled
+}
+
+func wafRuleAssetRuntimeLoaded(asset wafRuleAssetVersion) bool {
+	return asset.Kind == wafRuleAssetKindBase && !asset.Disabled
+}
+
+func wafRuleAssetAdvanced(kind string) bool {
+	return kind == wafRuleAssetKindBypassExtra
 }
 
 func ruleAssetWriteReason(kind string) string {
@@ -876,20 +907,149 @@ func ruleAssetDeleteReason(kind string) string {
 func ruleAssetResponseFiles(assets []wafRuleAssetVersion, rec configVersionRecord) []gin.H {
 	editable := editableWAFRuleAssets(assets)
 	out := make([]gin.H, 0, len(editable))
+	groupPositions := make(map[string]int, 2)
 	for i, asset := range editable {
-		etag := strings.TrimSpace(asset.ETag)
-		if etag == "" {
-			etag = bypassconf.ComputeETag(asset.Raw)
-		}
-		out = append(out, gin.H{
-			"path":     asset.Path,
-			"kind":     asset.Kind,
-			"position": i,
-			"raw":      string(asset.Raw),
-			"etag":     etag,
-			"usage":    wafRuleAssetUsageLabel(asset.Kind),
-			"saved_at": wafRuleAssetSavedAt(rec, asset.Path),
-		})
+		group := wafRuleAssetOrderGroup(asset.Kind)
+		groupPosition := groupPositions[group]
+		groupPositions[group] = groupPosition + 1
+		out = append(out, ruleAssetResponseFile(asset, i, groupPosition, rec))
 	}
 	return out
+}
+
+func ruleAssetResponseFile(asset wafRuleAssetVersion, position int, groupPosition int, rec configVersionRecord) gin.H {
+	etag := strings.TrimSpace(asset.ETag)
+	if etag == "" {
+		etag = bypassconf.ComputeETag(asset.Raw)
+	}
+	referencedBy := []string{}
+	if asset.Kind == wafRuleAssetKindBypassExtra {
+		referencedBy, _ = managedOverrideRuleInUse(asset.Path)
+	}
+	return gin.H{
+		"path":            asset.Path,
+		"kind":            asset.Kind,
+		"position":        position,
+		"raw":             string(asset.Raw),
+		"etag":            etag,
+		"usage":           wafRuleAssetUsageLabel(asset.Kind),
+		"order_group":     wafRuleAssetOrderGroup(asset.Kind),
+		"group_position":  groupPosition,
+		"editable":        true,
+		"toggleable":      asset.Kind == wafRuleAssetKindBase,
+		"enabled":         wafRuleAssetEnabled(asset),
+		"runtime_loaded":  wafRuleAssetRuntimeLoaded(asset),
+		"advanced":        wafRuleAssetAdvanced(asset.Kind),
+		"reference_count": len(referencedBy),
+		"referenced_by":   referencedBy,
+		"saved_at":        wafRuleAssetSavedAt(rec, asset.Path),
+	}
+}
+
+func ruleAssetRuntimeResponseFiles(assets []wafRuleAssetVersion, rec configVersionRecord) []gin.H {
+	assets = normalizeWAFRuleAssets(assets)
+	baseAssets := make([]wafRuleAssetVersion, 0, len(assets))
+	crsAssets := make([]wafRuleAssetVersion, 0, len(assets))
+	var crsSetup wafRuleAssetVersion
+	hasCRSSetup := false
+	setupPath, _ := normalizeWAFRuleAssetPathForKind(config.CRSSetupFile, wafRuleAssetKindCRSSetup)
+	for _, asset := range assets {
+		switch asset.Kind {
+		case wafRuleAssetKindBase:
+			baseAssets = append(baseAssets, asset)
+		case wafRuleAssetKindCRSSetup:
+			if setupPath == "" || asset.Path == setupPath {
+				crsSetup = asset
+				hasCRSSetup = true
+			}
+		case wafRuleAssetKindCRSAsset:
+			if isRuntimeCRSRuleAsset(asset.Path) {
+				crsAssets = append(crsAssets, asset)
+			}
+		}
+	}
+	sort.SliceStable(crsAssets, func(i, j int) bool {
+		return crsAssets[i].Path < crsAssets[j].Path
+	})
+
+	crsDisabled := map[string]struct{}{}
+	if config.CRSEnable {
+		disabled, _, err := loadCRSDisabledForWAF()
+		if err == nil {
+			crsDisabled = disabled
+		}
+	}
+
+	out := make([]gin.H, 0, len(baseAssets)+len(crsAssets)+1)
+	position := 0
+	groupPositions := make(map[string]int, 2)
+	appendRuntime := func(asset wafRuleAssetVersion, enabled bool, editable bool, toggleable bool, runtimeLoaded bool) {
+		group := wafRuleAssetOrderGroup(asset.Kind)
+		groupPosition := groupPositions[group]
+		groupPositions[group] = groupPosition + 1
+		out = append(out, ruleAssetRuntimeResponseFile(asset, position, groupPosition, enabled, editable, toggleable, runtimeLoaded, rec))
+		position++
+	}
+	if config.CRSEnable && hasCRSSetup {
+		appendRuntime(crsSetup, true, false, false, true)
+	}
+	if config.CRSEnable {
+		for _, asset := range crsAssets {
+			name := crsselection.NormalizeName(asset.Path)
+			_, disabled := crsDisabled[name]
+			appendRuntime(asset, !disabled, false, true, !disabled)
+		}
+	}
+	for _, asset := range baseAssets {
+		enabled := !asset.Disabled
+		appendRuntime(asset, enabled, true, true, enabled)
+	}
+	return out
+}
+
+func ruleAssetRuntimeResponseFile(asset wafRuleAssetVersion, position int, groupPosition int, enabled bool, editable bool, toggleable bool, runtimeLoaded bool, rec configVersionRecord) gin.H {
+	etag := strings.TrimSpace(asset.ETag)
+	if etag == "" {
+		etag = bypassconf.ComputeETag(asset.Raw)
+	}
+	name := filepath.Base(asset.Path)
+	if asset.Kind == wafRuleAssetKindCRSAsset {
+		name = crsselection.NormalizeName(asset.Path)
+	}
+	return gin.H{
+		"name":            name,
+		"path":            asset.Path,
+		"kind":            asset.Kind,
+		"position":        position,
+		"group_position":  groupPosition,
+		"raw":             string(asset.Raw),
+		"etag":            etag,
+		"usage":           wafRuleAssetUsageLabel(asset.Kind),
+		"order_group":     wafRuleAssetOrderGroup(asset.Kind),
+		"editable":        editable,
+		"toggleable":      toggleable,
+		"enabled":         enabled,
+		"runtime_loaded":  runtimeLoaded,
+		"advanced":        false,
+		"reference_count": 0,
+		"referenced_by":   []string{},
+		"saved_at":        wafRuleAssetSavedAt(rec, asset.Path),
+	}
+}
+
+func isRuntimeCRSRuleAsset(path string) bool {
+	normalized := normalizeWAFRuleAssetPath(path)
+	rulesDir := normalizeWAFRuleAssetPath(config.CRSRulesDir)
+	if normalized == "" || rulesDir == "" {
+		return false
+	}
+	prefix := strings.TrimSuffix(rulesDir, "/") + "/"
+	if !strings.HasPrefix(normalized, prefix) {
+		return false
+	}
+	name := strings.ToLower(filepath.Base(normalized))
+	if !strings.HasSuffix(name, ".conf") {
+		return false
+	}
+	return !strings.HasSuffix(name, ".conf.example")
 }

@@ -204,7 +204,7 @@ Main screens:
 | --- | --- |
 | `/status` | Runtime status, config snapshot, listener topology, health/runtime disclosure |
 | `/logs` | WAF/security logs and detail lookups |
-| `/rules` / `/rule-sets` | Base rule editing and CRS toggles |
+| `/rules` | Runtime WAF rule order, base rule editing, and CRS toggles |
 | `/bypass` / `/country-block` / `/rate-limit` | DB-synced policy editing |
 | `/ip-reputation` / `/bot-defense` / `/semantic` | Request-time security controls |
 | `/notifications` | Aggregate alerting config and runtime status |
@@ -580,7 +580,7 @@ Main endpoint groups:
 }
 ```
 
-Managed `extra_rule` bodies are stored in DB `override_rules` and edited from the `Rules` page with usage set to `Bypass Rules extra_rule`. There is no `conf/rules` filesystem fallback. They are not added to the base WAF rule set at startup; they are loaded only when a bypass entry references their logical `extra_rule` name.
+Managed `extra_rule` bodies are stored in DB `override_rules` and edited from `Rules` > Advanced > `Bypass snippets`. There is no `conf/rules` filesystem fallback. They are not added to the base WAF rule set at startup; they are loaded only when a bypass entry references their logical `extra_rule` name.
 Host scope precedence is exact `host:port`, then bare `host`, then `default`. Host-specific entries replace the default scope; they do not merge with it.
 
 ### Country Block
@@ -675,8 +675,11 @@ Capabilities include:
 
 ### Rules / CRS Editing
 
+- `/rules` shows Coraza CRS assets and base WAF rule assets in runtime order
 - `/rules` edits active DB-backed base WAF rule assets
-- `/rule-sets` toggles DB-backed CRS assets under logical `rules/crs/rules/*.conf` names
+- base WAF rule assets can be disabled; disabled assets stay editable but are
+  excluded from the live WAF load set
+- `/rules` toggles DB-backed CRS assets under logical `rules/crs/rules/*.conf` names
 - successful saves hot-reload WAF
 - failed reloads auto-rollback
 

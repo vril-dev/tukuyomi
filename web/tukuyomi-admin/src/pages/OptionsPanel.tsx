@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiDeleteJson, apiGetJson, apiPostFormData, apiPostJson, apiPutJson } from "@/lib/api";
 import { useAdminRuntime } from "@/lib/adminRuntime";
+import { getErrorMessage } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 
 type PHPRuntimeRecord = {
@@ -27,6 +28,7 @@ type PHPRuntimeMaterializedStatus = {
   generated_targets?: string[];
   document_roots?: string[];
   config_file?: string;
+  pool_files?: string[];
   runtime_dir?: string;
 };
 
@@ -35,14 +37,29 @@ type PHPRuntimeProcessStatus = {
   running: boolean;
   pid?: number;
   last_error?: string;
+  last_action?: string;
+  started_at?: string;
+  stopped_at?: string;
+  configured_user?: string;
+  configured_group?: string;
   effective_user?: string;
   effective_group?: string;
+  effective_uid?: number;
+  effective_gid?: number;
+  config_file?: string;
+  generated_targets?: string[];
 };
 
 type PHPRuntimesResponse = {
   etag?: string;
   runtimes?: PHPRuntimeInventory;
   materialized?: PHPRuntimeMaterializedStatus[];
+  processes?: PHPRuntimeProcessStatus[];
+};
+
+type PHPRuntimeActionResponse = {
+  ok?: boolean;
+  runtime_id?: string;
   processes?: PHPRuntimeProcessStatus[];
 };
 
@@ -77,6 +94,34 @@ function runtimeDisplayName(runtime: PHPRuntimeRecord) {
   return runtime.display_name || runtime.detected_version || runtime.runtime_id;
 }
 
+function processActionLabel(process: PHPRuntimeProcessStatus | undefined, materialized: boolean) {
+  if (process?.last_action) {
+    return process.last_action;
+  }
+  if (process?.running) {
+    return "running";
+  }
+  return materialized ? "stopped" : "not_materialized";
+}
+
+function processBadgeClass(process: PHPRuntimeProcessStatus | undefined, materialized: boolean) {
+  const action = processActionLabel(process, materialized);
+  if (process?.last_error || ["exited", "start_failed", "restart_failed", "identity_error", "preflight_failed", "reconcile_error"].includes(action)) {
+    return "bg-red-100 text-red-800";
+  }
+  if (process?.running) {
+    return "bg-green-100 text-green-800";
+  }
+  if (action === "manual_stopped") {
+    return "bg-amber-100 text-amber-900";
+  }
+  return "bg-neutral-100 text-neutral-700";
+}
+
+function runtimeIdentity(process: PHPRuntimeProcessStatus | undefined, runtime: PHPRuntimeRecord) {
+  return [process?.effective_user || runtime.run_user, process?.effective_group || runtime.run_group].filter(Boolean).join(":") || "-";
+}
+
 export default function OptionsPanel() {
   const { tx } = useI18n();
   const [runtimes, setRuntimes] = useState<PHPRuntimeRecord[]>([]);
@@ -101,6 +146,9 @@ export default function OptionsPanel() {
   const [configRemoving, setConfigRemoving] = useState(false);
   const [updatingNow, setUpdatingNow] = useState(false);
   const [selectedCountryConfig, setSelectedCountryConfig] = useState<File | null>(null);
+  const [runtimeNotice, setRuntimeNotice] = useState("");
+  const [runtimeError, setRuntimeError] = useState("");
+  const [runtimeAction, setRuntimeAction] = useState<{ runtimeID: string; action: "up" | "down" | "reload" } | null>(null);
   const { readOnly } = useAdminRuntime();
 
   const availableRuntimeCount = useMemo(
@@ -272,6 +320,40 @@ export default function OptionsPanel() {
       }
     } finally {
       setModeSaving(false);
+    }
+  }
+
+  async function onRuntimeAction(runtimeID: string, action: "up" | "down" | "reload") {
+    setRuntimeAction({ runtimeID, action });
+    setRuntimeNotice("");
+    setRuntimeError("");
+    try {
+      const next = await apiPostJson<PHPRuntimeActionResponse>(`/php-runtimes/${encodeURIComponent(runtimeID)}/${action}`, {});
+      if (Array.isArray(next.processes)) {
+        setProcesses(next.processes);
+      } else {
+        const data = await apiGetJson<PHPRuntimesResponse>("/php-runtimes");
+        setProcesses(Array.isArray(data.processes) ? data.processes : []);
+        setMaterialized(Array.isArray(data.materialized) ? data.materialized : []);
+      }
+      if (action === "up") {
+        setRuntimeNotice(tx("PHP runtime {runtime} started.", { runtime: runtimeID }));
+      } else if (action === "down") {
+        setRuntimeNotice(tx("PHP runtime {runtime} stopped.", { runtime: runtimeID }));
+      } else {
+        setRuntimeNotice(tx("PHP runtime {runtime} reloaded.", { runtime: runtimeID }));
+      }
+    } catch (err: unknown) {
+      setRuntimeError(getErrorMessage(err, tx("PHP runtime action failed.")));
+      try {
+        const data = await apiGetJson<PHPRuntimesResponse>("/php-runtimes");
+        setProcesses(Array.isArray(data.processes) ? data.processes : []);
+        setMaterialized(Array.isArray(data.materialized) ? data.materialized : []);
+      } catch {
+        //
+      }
+    } finally {
+      setRuntimeAction(null);
     }
   }
 
@@ -459,9 +541,11 @@ export default function OptionsPanel() {
           </div>
       </div>
 
-      <div className="rounded-xl border border-neutral-200 p-4 space-y-3">
+      <div id="runtime-inventory" className="rounded-xl border border-neutral-200 p-4 space-y-3">
         <h2 className="text-sm font-semibold">{tx("Runtime Inventory")}</h2>
-        <p className="text-sm text-neutral-500">{tx("Runtime entries are read-only here. This panel is for visibility, readiness, and process status.")}</p>
+        <p className="text-sm text-neutral-500">{tx("Runtime entries are managed here for visibility, readiness, and PHP-FPM process controls.")}</p>
+        {runtimeNotice ? <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900">{runtimeNotice}</div> : null}
+        {runtimeError ? <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">{runtimeError}</div> : null}
         {availableRuntimeCount === 0 ? (
           <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
             {tx("No built runtimes are available yet. Build a runtime bundle first, then return here to confirm readiness.")}
@@ -482,6 +566,11 @@ export default function OptionsPanel() {
               const materializedEntry = materializedMap.get(runtime.runtime_id);
               const process = processMap.get(runtime.runtime_id);
               const usageCount = materializedEntry?.generated_targets?.length ?? 0;
+              const materializedRuntime = !!materializedEntry;
+              const generatedTargets = process?.generated_targets?.length ? process.generated_targets : (materializedEntry?.generated_targets ?? []);
+              const isBusy = runtimeAction?.runtimeID === runtime.runtime_id;
+              const canStart = materializedRuntime && !process?.running;
+              const canStop = materializedRuntime && process?.running === true;
               return (
                 <article key={runtime.runtime_id} className="rounded-xl border border-neutral-200 p-4 space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -496,10 +585,37 @@ export default function OptionsPanel() {
                       <span className={`rounded px-2 py-1 ${runtime.available ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-900"}`}>
                         {runtime.available ? tx("ready") : tx("not built")}
                       </span>
-                      <span className={`rounded px-2 py-1 ${process?.running ? "bg-green-100 text-green-800" : "bg-neutral-100 text-neutral-700"}`}>
-                        {process?.running ? tx("running") : tx("stopped")}
+                      <span className={`rounded px-2 py-1 ${processBadgeClass(process, materializedRuntime)}`}>
+                        {tx(processActionLabel(process, materializedRuntime))}
                       </span>
                     </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void onRuntimeAction(runtime.runtime_id, "up")}
+                      disabled={readOnly || !!runtimeAction || !canStart}
+                    >
+                      {isBusy && runtimeAction?.action === "up" ? tx("Working...") : tx("Start")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void onRuntimeAction(runtime.runtime_id, "down")}
+                      disabled={readOnly || !!runtimeAction || !canStop}
+                    >
+                      {isBusy && runtimeAction?.action === "down" ? tx("Working...") : tx("Stop")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void onRuntimeAction(runtime.runtime_id, "reload")}
+                      disabled={readOnly || !!runtimeAction || !canStop}
+                    >
+                      {isBusy && runtimeAction?.action === "reload" ? tx("Working...") : tx("Reload")}
+                    </button>
+                    {!materializedRuntime ? (
+                      <span className="text-xs text-neutral-500">{tx("Bind this runtime from Vhosts before process controls become available.")}</span>
+                    ) : null}
                   </div>
 
                   <div className="grid gap-3 md:grid-cols-2 text-sm">
@@ -518,6 +634,30 @@ export default function OptionsPanel() {
                     <div>
                       <div className="text-xs text-neutral-500">{tx("Run User")}</div>
                       <div>{[runtime.run_user, runtime.run_group].filter(Boolean).join(":") || "-"}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-neutral-500">{tx("PID")}</div>
+                      <div>{process?.pid || "-"}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-neutral-500">{tx("Effective User")}</div>
+                      <div>{runtimeIdentity(process, runtime)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-neutral-500">{tx("Started At")}</div>
+                      <div>{process?.started_at || "-"}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-neutral-500">{tx("Stopped At")}</div>
+                      <div>{process?.stopped_at || "-"}</div>
+                    </div>
+                    <div className="md:col-span-2">
+                      <div className="text-xs text-neutral-500">{tx("Generated Targets")}</div>
+                      <code className="break-all">{generatedTargets.length > 0 ? generatedTargets.join(", ") : "-"}</code>
+                    </div>
+                    <div className="md:col-span-2">
+                      <div className="text-xs text-neutral-500">{tx("Config File")}</div>
+                      <code className="break-all">{process?.config_file || materializedEntry?.config_file || "-"}</code>
                     </div>
                   </div>
 

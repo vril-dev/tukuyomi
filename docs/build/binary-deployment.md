@@ -47,7 +47,7 @@ Common overrides:
 ```bash
 make install TARGET=linux-systemd \
   PREFIX=/opt/tukuyomi \
-  INSTALL_ENABLE_SCHEDULED_TASKS=1 \
+  INSTALL_ENABLE_SCHEDULED_TASKS=0 \
   INSTALL_DB_SEED=auto
 ```
 
@@ -77,7 +77,9 @@ Behavior:
   the real backend endpoint before exposing the proxy to traffic
 - rerunning against an existing DB migrates schema and refreshes WAF/CRS assets
 - for an empty MySQL / PostgreSQL DB, set `INSTALL_DB_SEED=always` explicitly
-- the scheduled-task timer is enabled only with `INSTALL_ENABLE_SCHEDULED_TASKS=1`
+- the scheduled-task timer is enabled by default; use
+  `INSTALL_ENABLE_SCHEDULED_TASKS=0` when this host should not execute scheduled
+  tasks
 - staging / smoke flows can use `DESTDIR=<tmp> INSTALL_ENABLE_SYSTEMD=0`
 
 To run explicitly as the login user:
@@ -143,7 +145,7 @@ After import, the executable bundle remains required when using bundled PHP-FPM,
 but `inventory.json`, `vhosts.json`, `runtime.json`, and `modules.json` are not
 runtime authority.
 
-Additional files when you want `/scheduled-tasks` execution state:
+Scheduled-task execution state uses:
 
 - `data/scheduled-tasks/`
 

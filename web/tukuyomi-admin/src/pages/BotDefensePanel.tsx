@@ -12,6 +12,7 @@ import {
   NoticeBar,
   ParsedTextArea,
   PrimaryButton,
+  QuietActionButton,
   SectionCard,
   StatBox,
   inputClass,
@@ -385,7 +386,13 @@ export default function BotDefensePanel() {
         subtitle={tx("Host scope precedence stays host:port, then host, then default. Save still uses the existing bot-defense validate and hot-reload API.")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <ActionButton
+            <ActionButton onClick={() => void load()} disabled={loading}>
+              {tx("Refresh")}
+            </ActionButton>
+            <PrimaryButton onClick={() => void doSave()} disabled={readOnly || loading || saving || !dirty || !!structuredError}>
+              {saving ? tx("Saving...") : tx("Save & hot reload")}
+            </PrimaryButton>
+            <QuietActionButton
               onClick={() => {
                 const parsed = parseBotDefenseEditorDocument(exampleRaw);
                 applyStructuredDocument(
@@ -400,13 +407,7 @@ export default function BotDefensePanel() {
               disabled={loading}
             >
               {tx("Insert example")}
-            </ActionButton>
-            <ActionButton onClick={() => void load()} disabled={loading}>
-              {tx("Refresh")}
-            </ActionButton>
-            <PrimaryButton onClick={() => void doSave()} disabled={readOnly || loading || saving || !dirty || !!structuredError}>
-              {saving ? tx("Saving...") : tx("Save & hot reload")}
-            </PrimaryButton>
+            </QuietActionButton>
           </div>
         }
       >

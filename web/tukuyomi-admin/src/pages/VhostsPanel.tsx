@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Navigate } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { apiGetJson, apiPostJson, apiPutJson } from "@/lib/api";
 import { useAdminRuntime } from "@/lib/adminRuntime";
 import { useI18n } from "@/lib/i18n";
@@ -63,10 +63,27 @@ type PHPRuntimeRecord = {
   available?: boolean;
 };
 
+type PHPRuntimeMaterializedStatus = {
+  runtime_id: string;
+  generated_targets?: string[];
+  document_roots?: string[];
+};
+
+type PHPRuntimeProcessStatus = {
+  runtime_id: string;
+  running: boolean;
+  pid?: number;
+  last_action?: string;
+  last_error?: string;
+  generated_targets?: string[];
+};
+
 type PHPRuntimesResponse = {
   runtimes?: {
     runtimes?: PHPRuntimeRecord[];
   };
+  materialized?: PHPRuntimeMaterializedStatus[];
+  processes?: PHPRuntimeProcessStatus[];
 };
 
 type VhostFormState = {
@@ -116,6 +133,30 @@ function createEmptyVhost(index: number): VhostFormState {
 
 function runtimeLabel(runtime: PHPRuntimeRecord) {
   return runtime.display_name || runtime.detected_version || runtime.runtime_id;
+}
+
+function runtimeStateLabel(process: PHPRuntimeProcessStatus | undefined, materialized: boolean) {
+  if (process?.last_action) {
+    return process.last_action;
+  }
+  if (process?.running) {
+    return "running";
+  }
+  return materialized ? "stopped" : "not_materialized";
+}
+
+function runtimeStateClass(process: PHPRuntimeProcessStatus | undefined, materialized: boolean) {
+  const state = runtimeStateLabel(process, materialized);
+  if (process?.last_error || ["exited", "start_failed", "restart_failed", "identity_error", "preflight_failed", "reconcile_error"].includes(state)) {
+    return "bg-red-100 text-red-800";
+  }
+  if (process?.running) {
+    return "bg-green-100 text-green-800";
+  }
+  if (state === "manual_stopped") {
+    return "bg-amber-100 text-amber-900";
+  }
+  return "bg-neutral-100 text-neutral-700";
 }
 
 function stringListToText(values?: string[]) {
@@ -307,6 +348,8 @@ export default function VhostsPanel() {
   const [etag, setETag] = useState("");
   const [vhosts, setVhosts] = useState<VhostFormState[]>([]);
   const [runtimeOptions, setRuntimeOptions] = useState<PHPRuntimeRecord[]>([]);
+  const [runtimeMaterialized, setRuntimeMaterialized] = useState<PHPRuntimeMaterializedStatus[]>([]);
+  const [runtimeProcesses, setRuntimeProcesses] = useState<PHPRuntimeProcessStatus[]>([]);
   const [rollbackDepth, setRollbackDepth] = useState(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -318,6 +361,18 @@ export default function VhostsPanel() {
   const builtRuntimeOptions = useMemo(
     () => runtimeOptions.filter((runtime) => runtime.available === true),
     [runtimeOptions],
+  );
+  const runtimeMap = useMemo(
+    () => new Map(runtimeOptions.map((runtime) => [runtime.runtime_id, runtime])),
+    [runtimeOptions],
+  );
+  const materializedMap = useMemo(
+    () => new Map(runtimeMaterialized.map((runtime) => [runtime.runtime_id, runtime])),
+    [runtimeMaterialized],
+  );
+  const processMap = useMemo(
+    () => new Map(runtimeProcesses.map((process) => [process.runtime_id, process])),
+    [runtimeProcesses],
   );
   const hasBuiltRuntime = builtRuntimeOptions.length > 0;
 
@@ -333,6 +388,8 @@ export default function VhostsPanel() {
       setVhosts(parseVhostsResponse(vhostData));
       setRollbackDepth(typeof vhostData.rollback_depth === "number" ? vhostData.rollback_depth : 0);
       setRuntimeOptions(Array.isArray(runtimeData.runtimes?.runtimes) ? runtimeData.runtimes.runtimes : []);
+      setRuntimeMaterialized(Array.isArray(runtimeData.materialized) ? runtimeData.materialized : []);
+      setRuntimeProcesses(Array.isArray(runtimeData.processes) ? runtimeData.processes : []);
       setNotice("");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -513,6 +570,13 @@ export default function VhostsPanel() {
                         ))}
                       </select>
                     </label>
+                    <RuntimeStateSummary
+                      tx={tx}
+                      runtimeID={vhost.runtimeID}
+                      runtime={runtimeMap.get(vhost.runtimeID)}
+                      materialized={materializedMap.get(vhost.runtimeID)}
+                      process={processMap.get(vhost.runtimeID)}
+                    />
                     <label className="space-y-1 text-sm">
                       <span className="block text-xs text-neutral-600">{tx("Hostname")}</span>
                       <input value={vhost.hostname} onChange={(e) => updateVhost(index, { ...vhost, hostname: e.target.value })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white" placeholder="app.example.com" />
@@ -665,6 +729,52 @@ export default function VhostsPanel() {
 
         </aside>
       </section>
+    </div>
+  );
+}
+
+function RuntimeStateSummary({
+  tx,
+  runtimeID,
+  runtime,
+  materialized,
+  process,
+}: {
+  tx: (key: string, vars?: Record<string, string | number | boolean | null | undefined>) => string;
+  runtimeID: string;
+  runtime?: PHPRuntimeRecord;
+  materialized?: PHPRuntimeMaterializedStatus;
+  process?: PHPRuntimeProcessStatus;
+}) {
+  if (!runtimeID.trim()) {
+    return (
+      <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm">
+        <div className="text-xs text-neutral-500">{tx("Runtime State")}</div>
+        <div className="text-neutral-600">{tx("Select runtime")}</div>
+      </div>
+    );
+  }
+  const targets = process?.generated_targets?.length ? process.generated_targets : (materialized?.generated_targets ?? []);
+  const materializedRuntime = !!materialized;
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-xs text-neutral-500">{tx("Runtime State")}</div>
+          <div className="font-medium">{runtime ? runtimeLabel(runtime) : runtimeID}</div>
+        </div>
+        <span className={`rounded px-2 py-1 text-xs ${runtimeStateClass(process, materializedRuntime)}`}>
+          {tx(runtimeStateLabel(process, materializedRuntime))}
+        </span>
+      </div>
+      <div className="grid gap-1 text-xs text-neutral-600">
+        <div>{tx("PID")}: <code>{process?.pid || "-"}</code></div>
+        <div>{tx("Generated Targets")}: <code className="break-all">{targets.length > 0 ? targets.join(", ") : "-"}</code></div>
+        {process?.last_error ? <div className="text-red-700">{process.last_error}</div> : null}
+      </div>
+      <Link to="/options#runtime-inventory" className="inline-flex text-xs underline">
+        {tx("Open Runtime")}
+      </Link>
     </div>
   );
 }

@@ -60,7 +60,7 @@ INSTALL_USER ?=
 INSTALL_GROUP ?=
 INSTALL_CREATE_USER ?= auto
 INSTALL_ENABLE_SYSTEMD ?= 1
-INSTALL_ENABLE_SCHEDULED_TASKS ?= 0
+INSTALL_ENABLE_SCHEDULED_TASKS ?= 1
 INSTALL_DB_SEED ?= auto
 DEPLOY_TARGET ?=
 DEPLOY_RENDER_OUT_DIR ?= dist/deploy
@@ -90,7 +90,7 @@ help:
 	@echo "  make crs-install                Run db-migrate, install OWASP CRS seed files, and import WAF rule assets into DB"
 	@echo "  make crs-ensure                 Run db-migrate, install CRS only when missing, and import WAF rule assets into DB"
 	@echo "  make install TARGET=linux-systemd Install binary runtime onto this Linux host"
-	@echo "    - optional: PREFIX=/opt/tukuyomi INSTALL_USER=<user> INSTALL_ENABLE_SCHEDULED_TASKS=1 INSTALL_DB_SEED=auto|always|never"
+	@echo "    - optional: PREFIX=/opt/tukuyomi INSTALL_USER=<user> INSTALL_ENABLE_SCHEDULED_TASKS=0(disable) INSTALL_DB_SEED=auto|always|never"
 	@echo "  make deploy-render TARGET=ecs|kubernetes|azure-container-apps|container-image IMAGE_URI=... Render deploy artifacts"
 	@echo "    - optional: DEPLOY_RENDER_OUT_DIR=dist/deploy DEPLOY_RENDER_OVERWRITE=1"
 	@echo ""

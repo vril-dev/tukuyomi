@@ -193,7 +193,7 @@ export default function BackendsPanel() {
           <tbody>
             {backends.length === 0 ? (
               <tr>
-                <td colSpan={7} className="text-center text-neutral-500">
+                <td colSpan={7} className="px-2 py-1 text-center text-neutral-500">
                   <div className="space-y-1 py-2">
                     <div>{tx("No direct upstream backends are configured.")}</div>
                     <div className="text-xs text-neutral-400">
@@ -208,7 +208,7 @@ export default function BackendsPanel() {
                 const runtimeOpsSupported = backendRuntimeOpsSupported(backend);
                 return (
                   <tr key={backend.key}>
-                    <td>
+                    <td className="px-2 py-1">
                       <div className="space-y-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <div className="font-semibold">{backend.name || tx("unnamed")}</div>
@@ -225,7 +225,7 @@ export default function BackendsPanel() {
                         </div>
                       </div>
                     </td>
-                    <td>
+                    <td className="px-2 py-1">
                       <div className="space-y-1">
                         <StateChip kind="admin" value={backend.admin_state || "enabled"} />
                         <StateChip kind="health" value={backend.health_state || "unknown"} />
@@ -234,7 +234,7 @@ export default function BackendsPanel() {
                         </div>
                       </div>
                     </td>
-                    <td>
+                    <td className="px-2 py-1">
                       <div className="space-y-2">
                         <div className="text-xs text-neutral-600">
                           {tx("configured")} {backend.configured_weight ?? 1} / {tx("effective")} {backend.effective_weight ?? backend.configured_weight ?? 1}
@@ -267,9 +267,9 @@ export default function BackendsPanel() {
                         )}
                       </div>
                     </td>
-                    <td>{backend.inflight ?? 0}</td>
-                    <td>{formatTime(backend.checked_at, locale)}</td>
-                    <td>
+                    <td className="px-2 py-1">{backend.inflight ?? 0}</td>
+                    <td className="px-2 py-1">{formatTime(backend.checked_at, locale)}</td>
+                    <td className="px-2 py-1">
                       <div className="space-y-1 text-xs">
                         <div>
                           {backend.last_status_code ? `${backend.last_status_code}` : "-"}
@@ -278,7 +278,7 @@ export default function BackendsPanel() {
                         {backend.last_error ? <div className="text-red-700">{backend.last_error}</div> : <div className="text-neutral-500">-</div>}
                       </div>
                     </td>
-                    <td>
+                    <td className="px-2 py-1">
                       {runtimeOpsSupported ? (
                         <div className="flex flex-wrap gap-2">
                           <button

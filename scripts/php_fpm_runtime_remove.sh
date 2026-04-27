@@ -33,7 +33,7 @@ print(",".join([name for name in names if name]))
 PY
 )"
   if [[ -n "${refs}" ]]; then
-    echo "[php-fpm-remove][ERROR] runtime ${runtime_id} is still referenced by vhosts: ${refs}" >&2
+    echo "[php-fpm-remove][ERROR] runtime ${runtime_id} is still referenced by Runtime Apps: ${refs}" >&2
     exit 1
   fi
 fi
@@ -49,4 +49,3 @@ fi
 
 rm -rf "${runtime_dir}" "${materialized_dir}"
 echo "[php-fpm-remove] removed ${runtime_id}"
-

@@ -53,7 +53,7 @@ func TestServeProxyAppliesVhostRewriteAccessAndBasicAuth(t *testing.T) {
     {
       "name": "docs",
       "mode": "static",
-      "hostname": "docs.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9401,
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "generated_target": "docs-static",
@@ -126,7 +126,7 @@ func TestServeProxyAppliesVhostRewriteAccessAndBasicAuth(t *testing.T) {
   ],
   "default_route": {
     "action": {
-      "upstream": "docs"
+      "upstream": "docs-static"
     }
   }
 }`
@@ -287,7 +287,7 @@ func TestValidateVhostConfigRejectsPlaintextBasicAuthHash(t *testing.T) {
     {
       "name": "docs",
       "mode": "static",
-      "hostname": "docs.example.com",
+      "hostname": "127.0.0.1",
       "listen_port": 9401,
       "document_root": "data/vhosts/samples/static-site/public",
       "generated_target": "docs-static",

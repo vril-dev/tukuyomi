@@ -72,12 +72,20 @@ func ImportPreviewConfigStorage(opts PreviewBootstrapOptions) error {
 		return fmt.Errorf("import preview php runtime inventory: %w", err)
 	}
 
-	vhostPrepared, err := prepareVhostConfigRawWithInventory(defaultVhostConfigRaw, inventoryPrepared.cfg)
+	psgiInventoryPrepared, err := preparePSGIRuntimeInventoryRaw(defaultPSGIRuntimeInventoryRaw, config.PSGIRuntimeInventoryFile)
 	if err != nil {
 		return err
 	}
-	if _, err := store.writeVhostConfigVersion("", vhostPrepared.cfg, configVersionSourceImport, "", "preview vhost seed import", 0); err != nil {
-		return fmt.Errorf("import preview vhost config: %w", err)
+	if _, err := store.writePSGIRuntimeInventoryPreparedConfigVersion("", psgiInventoryPrepared, configVersionSourceImport, "", "preview psgi runtime inventory seed import", 0); err != nil {
+		return fmt.Errorf("import preview psgi runtime inventory: %w", err)
+	}
+
+	vhostPrepared, err := prepareVhostConfigRawWithInventories(defaultVhostConfigRaw, inventoryPrepared.cfg, psgiInventoryPrepared.cfg)
+	if err != nil {
+		return err
+	}
+	if _, err := store.writeVhostConfigVersion("", vhostPrepared.cfg, configVersionSourceImport, "", "preview Runtime Apps seed import", 0); err != nil {
+		return fmt.Errorf("import preview Runtime Apps config: %w", err)
 	}
 
 	scheduledPrepared, err := prepareScheduledTaskConfigRaw(defaultScheduledTaskConfigRaw, inventoryPrepared.cfg)

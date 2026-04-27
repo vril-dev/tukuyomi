@@ -63,6 +63,63 @@ type PHPRuntimeActionResponse = {
   processes?: PHPRuntimeProcessStatus[];
 };
 
+type PSGIRuntimeRecord = {
+  runtime_id: string;
+  display_name: string;
+  detected_version?: string;
+  perl_path: string;
+  starman_path: string;
+  modules?: string[];
+  available?: boolean;
+  availability_message?: string;
+  run_user?: string;
+  run_group?: string;
+};
+
+type PSGIRuntimeInventory = {
+  runtimes?: PSGIRuntimeRecord[];
+};
+
+type PSGIRuntimeMaterializedStatus = {
+  process_id: string;
+  vhost_name: string;
+  runtime_id: string;
+  app_root?: string;
+  psgi_file?: string;
+  listen_port?: number;
+  workers?: number;
+  max_requests?: number;
+  generated_target?: string;
+};
+
+type PSGIRuntimeProcessStatus = {
+  process_id: string;
+  vhost_name: string;
+  runtime_id: string;
+  running: boolean;
+  pid?: number;
+  last_error?: string;
+  last_action?: string;
+  started_at?: string;
+  stopped_at?: string;
+  effective_user?: string;
+  effective_group?: string;
+  generated_target?: string;
+};
+
+type PSGIRuntimesResponse = {
+  etag?: string;
+  runtimes?: PSGIRuntimeInventory;
+  materialized?: PSGIRuntimeMaterializedStatus[];
+  processes?: PSGIRuntimeProcessStatus[];
+};
+
+type PSGIProcessActionResponse = {
+  ok?: boolean;
+  vhost_name?: string;
+  processes?: PSGIRuntimeProcessStatus[];
+};
+
 type RequestCountryDBStatus = {
   managed_path?: string;
   config_etag?: string;
@@ -91,6 +148,10 @@ type RequestCountryUpdateStatus = {
 };
 
 function runtimeDisplayName(runtime: PHPRuntimeRecord) {
+  return runtime.display_name || runtime.detected_version || runtime.runtime_id;
+}
+
+function psgiRuntimeDisplayName(runtime: PSGIRuntimeRecord) {
   return runtime.display_name || runtime.detected_version || runtime.runtime_id;
 }
 
@@ -127,6 +188,9 @@ export default function OptionsPanel() {
   const [runtimes, setRuntimes] = useState<PHPRuntimeRecord[]>([]);
   const [materialized, setMaterialized] = useState<PHPRuntimeMaterializedStatus[]>([]);
   const [processes, setProcesses] = useState<PHPRuntimeProcessStatus[]>([]);
+  const [psgiRuntimes, setPSGIRuntimes] = useState<PSGIRuntimeRecord[]>([]);
+  const [psgiMaterialized, setPSGIMaterialized] = useState<PSGIRuntimeMaterializedStatus[]>([]);
+  const [psgiProcesses, setPSGIProcesses] = useState<PSGIRuntimeProcessStatus[]>([]);
   const [requestCountryDB, setRequestCountryDB] = useState<RequestCountryDBStatus | null>(null);
   const [requestCountryUpdate, setRequestCountryUpdate] = useState<RequestCountryUpdateStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -149,6 +213,7 @@ export default function OptionsPanel() {
   const [runtimeNotice, setRuntimeNotice] = useState("");
   const [runtimeError, setRuntimeError] = useState("");
   const [runtimeAction, setRuntimeAction] = useState<{ runtimeID: string; action: "up" | "down" | "reload" } | null>(null);
+  const [psgiAction, setPSGIAction] = useState<{ appName: string; action: "up" | "down" | "reload" } | null>(null);
   const { readOnly } = useAdminRuntime();
 
   const availableRuntimeCount = useMemo(
@@ -163,19 +228,43 @@ export default function OptionsPanel() {
     () => new Map(processes.map((entry) => [entry.runtime_id, entry])),
     [processes],
   );
+  const psgiAvailableRuntimeCount = useMemo(
+    () => psgiRuntimes.filter((runtime) => runtime.available === true).length,
+    [psgiRuntimes],
+  );
+  const psgiProcessMap = useMemo(
+    () => new Map(psgiProcesses.map((entry) => [entry.vhost_name, entry])),
+    [psgiProcesses],
+  );
+
+  const applyRuntimeState = useCallback((data: PHPRuntimesResponse, psgiData: PSGIRuntimesResponse) => {
+    setRuntimes(Array.isArray(data.runtimes?.runtimes) ? data.runtimes.runtimes : []);
+    setMaterialized(Array.isArray(data.materialized) ? data.materialized : []);
+    setProcesses(Array.isArray(data.processes) ? data.processes : []);
+    setPSGIRuntimes(Array.isArray(psgiData.runtimes?.runtimes) ? psgiData.runtimes.runtimes : []);
+    setPSGIMaterialized(Array.isArray(psgiData.materialized) ? psgiData.materialized : []);
+    setPSGIProcesses(Array.isArray(psgiData.processes) ? psgiData.processes : []);
+  }, []);
+
+  const refreshRuntimeState = useCallback(async () => {
+    const [data, psgiData] = await Promise.all([
+      apiGetJson<PHPRuntimesResponse>("/php-runtimes"),
+      apiGetJson<PSGIRuntimesResponse>("/psgi-runtimes"),
+    ]);
+    applyRuntimeState(data, psgiData);
+  }, [applyRuntimeState]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [data, countryDB, countryUpdate] = await Promise.all([
+      const [data, psgiData, countryDB, countryUpdate] = await Promise.all([
         apiGetJson<PHPRuntimesResponse>("/php-runtimes"),
+        apiGetJson<PSGIRuntimesResponse>("/psgi-runtimes"),
         apiGetJson<RequestCountryDBStatus>("/request-country-db"),
         apiGetJson<RequestCountryUpdateStatus>("/request-country-update"),
       ]);
-      setRuntimes(Array.isArray(data.runtimes?.runtimes) ? data.runtimes.runtimes : []);
-      setMaterialized(Array.isArray(data.materialized) ? data.materialized : []);
-      setProcesses(Array.isArray(data.processes) ? data.processes : []);
+      applyRuntimeState(data, psgiData);
       setRequestCountryDB(countryDB);
       setRequestCountryUpdate(countryUpdate);
     } catch (err: unknown) {
@@ -183,11 +272,25 @@ export default function OptionsPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyRuntimeState]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const sync = () => {
+      void refreshRuntimeState().catch(() => {
+        //
+      });
+    };
+    const interval = window.setInterval(sync, 5000);
+    window.addEventListener("focus", sync);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", sync);
+    };
+  }, [refreshRuntimeState]);
 
   useEffect(() => {
     setCountryMode(requestCountryDB?.configured_mode || "header");
@@ -354,6 +457,40 @@ export default function OptionsPanel() {
       }
     } finally {
       setRuntimeAction(null);
+    }
+  }
+
+  async function onPSGIAction(appName: string, action: "up" | "down" | "reload") {
+    setPSGIAction({ appName, action });
+    setRuntimeNotice("");
+    setRuntimeError("");
+    try {
+      const next = await apiPostJson<PSGIProcessActionResponse>(`/psgi-processes/${encodeURIComponent(appName)}/${action}`, {});
+      if (Array.isArray(next.processes)) {
+        setPSGIProcesses(next.processes);
+      } else {
+        const data = await apiGetJson<PSGIRuntimesResponse>("/psgi-runtimes");
+        setPSGIProcesses(Array.isArray(data.processes) ? data.processes : []);
+        setPSGIMaterialized(Array.isArray(data.materialized) ? data.materialized : []);
+      }
+      if (action === "up") {
+        setRuntimeNotice(tx("PSGI process {runtime} started.", { runtime: appName }));
+      } else if (action === "down") {
+        setRuntimeNotice(tx("PSGI process {runtime} stopped.", { runtime: appName }));
+      } else {
+        setRuntimeNotice(tx("PSGI process {runtime} reloaded.", { runtime: appName }));
+      }
+    } catch (err: unknown) {
+      setRuntimeError(getErrorMessage(err, tx("PSGI process action failed.")));
+      try {
+        const data = await apiGetJson<PSGIRuntimesResponse>("/psgi-runtimes");
+        setPSGIProcesses(Array.isArray(data.processes) ? data.processes : []);
+        setPSGIMaterialized(Array.isArray(data.materialized) ? data.materialized : []);
+      } catch {
+        //
+      }
+    } finally {
+      setPSGIAction(null);
     }
   }
 
@@ -552,9 +689,9 @@ export default function OptionsPanel() {
           </div>
         ) : (
           <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900 flex flex-wrap items-center justify-between gap-2">
-            <span>{tx("Built runtimes are available. Manage PHP-FPM host, port, and docroot bindings from Vhosts.")}</span>
-            <Link to="/vhosts" className="underline">
-              {tx("Open Vhosts")}
+            <span>{tx("Built runtimes are available. Manage PHP-FPM host, port, and docroot bindings from Runtime Apps.")}</span>
+            <Link to="/runtime-apps" className="underline">
+              {tx("Open Runtime Apps")}
             </Link>
           </div>
         )}
@@ -581,7 +718,7 @@ export default function OptionsPanel() {
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2 text-xs">
-                      <span className="rounded bg-neutral-100 px-2 py-1">{usageCount} {tx("vhost(s)")}</span>
+                      <span className="rounded bg-neutral-100 px-2 py-1">{usageCount} {tx("app(s)")}</span>
                       <span className={`rounded px-2 py-1 ${runtime.available ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-900"}`}>
                         {runtime.available ? tx("ready") : tx("not built")}
                       </span>
@@ -614,7 +751,7 @@ export default function OptionsPanel() {
                       {isBusy && runtimeAction?.action === "reload" ? tx("Working...") : tx("Reload")}
                     </button>
                     {!materializedRuntime ? (
-                      <span className="text-xs text-neutral-500">{tx("Bind this runtime from Vhosts before process controls become available.")}</span>
+                      <span className="text-xs text-neutral-500">{tx("Bind this runtime from Runtime Apps before process controls become available.")}</span>
                     ) : null}
                   </div>
 
@@ -695,6 +832,123 @@ export default function OptionsPanel() {
             })}
           </div>
         )}
+      </div>
+
+      <div id="psgi-runtime-inventory" className="rounded-xl border border-neutral-200 p-4 space-y-3">
+        <h2 className="text-sm font-semibold">{tx("PSGI Runtime Inventory")}</h2>
+        <p className="text-sm text-neutral-500">{tx("Perl/Starman runtime entries are managed here for PSGI Runtime Apps and per-app process controls.")}</p>
+        {psgiAvailableRuntimeCount === 0 ? (
+          <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            {tx("No built PSGI runtimes are available yet. Build a PSGI runtime bundle first, then bind it from Runtime Apps.")}
+          </div>
+        ) : (
+          <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900 flex flex-wrap items-center justify-between gap-2">
+            <span>{tx("Built PSGI runtimes are available. Bind each PSGI app from Runtime Apps.")}</span>
+            <Link to="/runtime-apps" className="underline">
+              {tx("Open Runtime Apps")}
+            </Link>
+          </div>
+        )}
+        {psgiRuntimes.length === 0 ? (
+          <div className="rounded border border-dashed border-neutral-200 px-3 py-6 text-sm text-neutral-500">{tx("No built PSGI runtimes detected.")}</div>
+        ) : (
+          <div className="space-y-3">
+            {psgiRuntimes.map((runtime) => (
+              <article key={runtime.runtime_id} className="rounded-xl border border-neutral-200 p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-semibold">{psgiRuntimeDisplayName(runtime)}</h3>
+                    <p className="text-xs text-neutral-500">
+                      <code>{runtime.runtime_id}</code> · {tx("bundled")}
+                    </p>
+                  </div>
+                  <span className={`rounded px-2 py-1 text-xs ${runtime.available ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-900"}`}>
+                    {runtime.available ? tx("ready") : tx("not built")}
+                  </span>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2 text-sm">
+                  <div>
+                    <div className="text-xs text-neutral-500">{tx("Perl Path")}</div>
+                    <code className="break-all">{runtime.perl_path}</code>
+                  </div>
+                  <div>
+                    <div className="text-xs text-neutral-500">{tx("Starman Path")}</div>
+                    <code className="break-all">{runtime.starman_path}</code>
+                  </div>
+                  <div>
+                    <div className="text-xs text-neutral-500">{tx("Detected Version")}</div>
+                    <div>{runtime.detected_version || "-"}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-neutral-500">{tx("Run User")}</div>
+                    <div>{[runtime.run_user, runtime.run_group].filter(Boolean).join(":") || "-"}</div>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <div className="text-xs text-neutral-500">{tx("Modules")}</div>
+                  {(runtime.modules ?? []).length === 0 ? (
+                    <div className="rounded border border-dashed border-neutral-200 px-3 py-2 text-xs text-neutral-500">
+                      {runtime.availability_message || tx("No built modules detected.")}
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {(runtime.modules ?? []).map((module) => (
+                        <span key={module} className="rounded-full border bg-neutral-50 px-2 py-1 text-xs text-neutral-700">
+                          {module}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold">{tx("PSGI Processes")}</h3>
+          {psgiMaterialized.length === 0 ? (
+            <div className="rounded border border-dashed border-neutral-200 px-3 py-6 text-sm text-neutral-500">{tx("No PSGI Runtime Apps are materialized.")}</div>
+          ) : (
+            psgiMaterialized.map((entry) => {
+              const process = psgiProcessMap.get(entry.vhost_name);
+              const running = process?.running === true;
+              const busy = psgiAction?.appName === entry.vhost_name;
+              const state = process?.last_action || (running ? "running" : "stopped");
+              return (
+                <article key={entry.process_id} className="rounded-xl border border-neutral-200 p-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-sm font-semibold">{entry.vhost_name}</h4>
+                      <p className="text-xs text-neutral-500"><code>{entry.runtime_id}</code> · <code>{entry.generated_target || "-"}</code></p>
+                    </div>
+                    <span className={`rounded px-2 py-1 text-xs ${process?.last_error ? "bg-red-100 text-red-800" : running ? "bg-green-100 text-green-800" : "bg-neutral-100 text-neutral-700"}`}>
+                      {tx(state)}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" onClick={() => void onPSGIAction(entry.vhost_name, "up")} disabled={readOnly || !!psgiAction || running}>
+                      {busy && psgiAction?.action === "up" ? tx("Working...") : tx("Start")}
+                    </button>
+                    <button type="button" onClick={() => void onPSGIAction(entry.vhost_name, "down")} disabled={readOnly || !!psgiAction || !running}>
+                      {busy && psgiAction?.action === "down" ? tx("Working...") : tx("Stop")}
+                    </button>
+                    <button type="button" onClick={() => void onPSGIAction(entry.vhost_name, "reload")} disabled={readOnly || !!psgiAction || !running}>
+                      {busy && psgiAction?.action === "reload" ? tx("Working...") : tx("Reload")}
+                    </button>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2 text-sm">
+                    <div><div className="text-xs text-neutral-500">{tx("PID")}</div><div>{process?.pid || "-"}</div></div>
+                    <div><div className="text-xs text-neutral-500">{tx("Listen Port")}</div><div>{entry.listen_port || "-"}</div></div>
+                    <div><div className="text-xs text-neutral-500">{tx("App Root")}</div><code className="break-all">{entry.app_root || "-"}</code></div>
+                    <div><div className="text-xs text-neutral-500">{tx("PSGI File")}</div><code className="break-all">{entry.psgi_file || "-"}</code></div>
+                  </div>
+                  {process?.last_error ? <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">{process.last_error}</div> : null}
+                </article>
+              );
+            })
+          )}
+        </div>
       </div>
 
       {error ? <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">{error}</div> : null}

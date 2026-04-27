@@ -113,29 +113,30 @@ type settingsListenerAdminPersistentStorageGCSConfig struct {
 }
 
 type settingsListenerAdminPathsConfig struct {
-	ProxyConfigFile         string `json:"proxy_config_file"`
-	SiteConfigFile          string `json:"site_config_file"`
-	PHPRuntimeInventoryFile string `json:"php_runtime_inventory_file"`
-	VhostConfigFile         string `json:"vhost_config_file"`
-	ScheduledTaskConfigFile string `json:"scheduled_task_config_file"`
-	SecurityAuditFile       string `json:"security_audit_file"`
-	SecurityAuditBlobDir    string `json:"security_audit_blob_dir"`
-	CacheRulesFile          string `json:"cache_rules_file"`
-	CacheStoreFile          string `json:"cache_store_file"`
-	RulesFile               string `json:"rules_file"`
-	OverrideRulesDir        string `json:"override_rules_dir"`
-	UpstreamRuntimeFile     string `json:"upstream_runtime_file"`
-	BypassFile              string `json:"bypass_file"`
-	CountryBlockFile        string `json:"country_block_file"`
-	RateLimitFile           string `json:"rate_limit_file"`
-	BotDefenseFile          string `json:"bot_defense_file"`
-	SemanticFile            string `json:"semantic_file"`
-	NotificationFile        string `json:"notification_file"`
-	IPReputationFile        string `json:"ip_reputation_file"`
-	LogFile                 string `json:"log_file"`
-	CRSSetupFile            string `json:"crs_setup_file"`
-	CRSRulesDir             string `json:"crs_rules_dir"`
-	CRSDisabledFile         string `json:"crs_disabled_file"`
+	ProxyConfigFile          string `json:"proxy_config_file"`
+	SiteConfigFile           string `json:"site_config_file"`
+	PHPRuntimeInventoryFile  string `json:"php_runtime_inventory_file"`
+	PSGIRuntimeInventoryFile string `json:"psgi_runtime_inventory_file"`
+	VhostConfigFile          string `json:"vhost_config_file"`
+	ScheduledTaskConfigFile  string `json:"scheduled_task_config_file"`
+	SecurityAuditFile        string `json:"security_audit_file"`
+	SecurityAuditBlobDir     string `json:"security_audit_blob_dir"`
+	CacheRulesFile           string `json:"cache_rules_file"`
+	CacheStoreFile           string `json:"cache_store_file"`
+	RulesFile                string `json:"rules_file"`
+	OverrideRulesDir         string `json:"override_rules_dir"`
+	UpstreamRuntimeFile      string `json:"upstream_runtime_file"`
+	BypassFile               string `json:"bypass_file"`
+	CountryBlockFile         string `json:"country_block_file"`
+	RateLimitFile            string `json:"rate_limit_file"`
+	BotDefenseFile           string `json:"bot_defense_file"`
+	SemanticFile             string `json:"semantic_file"`
+	NotificationFile         string `json:"notification_file"`
+	IPReputationFile         string `json:"ip_reputation_file"`
+	LogFile                  string `json:"log_file"`
+	CRSSetupFile             string `json:"crs_setup_file"`
+	CRSRulesDir              string `json:"crs_rules_dir"`
+	CRSDisabledFile          string `json:"crs_disabled_file"`
 }
 
 type settingsListenerAdminProxyEngineConfig struct {
@@ -552,29 +553,30 @@ func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListener
 			},
 		},
 		Paths: settingsListenerAdminPathsConfig{
-			ProxyConfigFile:         cfg.Paths.ProxyConfigFile,
-			SiteConfigFile:          cfg.Paths.SiteConfigFile,
-			PHPRuntimeInventoryFile: cfg.Paths.PHPRuntimeInventoryFile,
-			VhostConfigFile:         cfg.Paths.VhostConfigFile,
-			ScheduledTaskConfigFile: cfg.Paths.ScheduledTaskConfigFile,
-			SecurityAuditFile:       cfg.Paths.SecurityAuditFile,
-			SecurityAuditBlobDir:    cfg.Paths.SecurityAuditBlobDir,
-			CacheRulesFile:          cfg.Paths.CacheRulesFile,
-			CacheStoreFile:          cfg.Paths.CacheStoreFile,
-			RulesFile:               cfg.Paths.RulesFile,
-			OverrideRulesDir:        cfg.Paths.OverrideRulesDir,
-			UpstreamRuntimeFile:     cfg.Paths.UpstreamRuntimeFile,
-			BypassFile:              cfg.Paths.BypassFile,
-			CountryBlockFile:        cfg.Paths.CountryBlockFile,
-			RateLimitFile:           cfg.Paths.RateLimitFile,
-			BotDefenseFile:          cfg.Paths.BotDefenseFile,
-			SemanticFile:            cfg.Paths.SemanticFile,
-			NotificationFile:        cfg.Paths.NotificationFile,
-			IPReputationFile:        cfg.Paths.IPReputationFile,
-			LogFile:                 cfg.Paths.LogFile,
-			CRSSetupFile:            cfg.Paths.CRSSetupFile,
-			CRSRulesDir:             cfg.Paths.CRSRulesDir,
-			CRSDisabledFile:         cfg.Paths.CRSDisabledFile,
+			ProxyConfigFile:          cfg.Paths.ProxyConfigFile,
+			SiteConfigFile:           cfg.Paths.SiteConfigFile,
+			PHPRuntimeInventoryFile:  cfg.Paths.PHPRuntimeInventoryFile,
+			PSGIRuntimeInventoryFile: cfg.Paths.PSGIRuntimeInventoryFile,
+			VhostConfigFile:          cfg.Paths.VhostConfigFile,
+			ScheduledTaskConfigFile:  cfg.Paths.ScheduledTaskConfigFile,
+			SecurityAuditFile:        cfg.Paths.SecurityAuditFile,
+			SecurityAuditBlobDir:     cfg.Paths.SecurityAuditBlobDir,
+			CacheRulesFile:           cfg.Paths.CacheRulesFile,
+			CacheStoreFile:           cfg.Paths.CacheStoreFile,
+			RulesFile:                cfg.Paths.RulesFile,
+			OverrideRulesDir:         cfg.Paths.OverrideRulesDir,
+			UpstreamRuntimeFile:      cfg.Paths.UpstreamRuntimeFile,
+			BypassFile:               cfg.Paths.BypassFile,
+			CountryBlockFile:         cfg.Paths.CountryBlockFile,
+			RateLimitFile:            cfg.Paths.RateLimitFile,
+			BotDefenseFile:           cfg.Paths.BotDefenseFile,
+			SemanticFile:             cfg.Paths.SemanticFile,
+			NotificationFile:         cfg.Paths.NotificationFile,
+			IPReputationFile:         cfg.Paths.IPReputationFile,
+			LogFile:                  cfg.Paths.LogFile,
+			CRSSetupFile:             cfg.Paths.CRSSetupFile,
+			CRSRulesDir:              cfg.Paths.CRSRulesDir,
+			CRSDisabledFile:          cfg.Paths.CRSDisabledFile,
 		},
 		Proxy: settingsListenerAdminProxyConfig{
 			RollbackHistorySize: cfg.Proxy.RollbackHistorySize,
@@ -680,6 +682,11 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 	cfg.Paths.ProxyConfigFile = next.Paths.ProxyConfigFile
 	cfg.Paths.SiteConfigFile = next.Paths.SiteConfigFile
 	cfg.Paths.PHPRuntimeInventoryFile = next.Paths.PHPRuntimeInventoryFile
+	if strings.TrimSpace(next.Paths.PSGIRuntimeInventoryFile) != "" {
+		cfg.Paths.PSGIRuntimeInventoryFile = next.Paths.PSGIRuntimeInventoryFile
+	} else if strings.TrimSpace(cfg.Paths.PSGIRuntimeInventoryFile) == "" {
+		cfg.Paths.PSGIRuntimeInventoryFile = "data/psgi/inventory.json"
+	}
 	cfg.Paths.VhostConfigFile = next.Paths.VhostConfigFile
 	cfg.Paths.ScheduledTaskConfigFile = next.Paths.ScheduledTaskConfigFile
 	cfg.Paths.SecurityAuditFile = next.Paths.SecurityAuditFile

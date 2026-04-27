@@ -53,6 +53,29 @@ func configVersionETag(domain string, generation int64, contentHash string) stri
 	return fmt.Sprintf("%s:%d:%s", strings.TrimSpace(domain), generation, strings.TrimSpace(contentHash))
 }
 
+func configVersionETagParts(etag string) (string, string) {
+	parts := strings.SplitN(strings.TrimSpace(etag), ":", 3)
+	if len(parts) != 3 {
+		return "", ""
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[2])
+}
+
+func configVersionETagSameContent(a string, b string) bool {
+	aDomain, aHash := configVersionETagParts(a)
+	bDomain, bHash := configVersionETagParts(b)
+	return aDomain != "" && aHash != "" && aDomain == bDomain && aHash == bHash
+}
+
+func currentConfigVersionETag(domain string, fallback string) string {
+	if store := getLogsStatsStore(); store != nil {
+		if rec, found, err := store.loadActiveConfigVersion(domain); err == nil && found && strings.TrimSpace(rec.ETag) != "" {
+			return rec.ETag
+		}
+	}
+	return strings.TrimSpace(fallback)
+}
+
 func normalizeConfigVersionSource(source string) string {
 	source = strings.ToLower(strings.TrimSpace(source))
 	switch source {

@@ -158,7 +158,7 @@ export default function BackendsPanel() {
           <div className="space-y-1">
             <h1 className="text-xl font-semibold">{tx("Backends")}</h1>
             <p className="text-sm text-neutral-600">
-              {tx("Inspect direct upstream backends used by routing. Runtime enable/drain/disable and weight overrides apply here; Vhost-generated targets stay on the Vhosts surface.")}
+              {tx("Inspect direct upstream backends used by routing. Runtime enable/drain/disable and weight overrides apply here; Runtime App targets stay on the Runtime Apps surface.")}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-600">
@@ -217,7 +217,7 @@ export default function BackendsPanel() {
                         <code className="text-xs text-neutral-600">{backend.url}</code>
                         {backend.managed_by_vhost ? (
                           <div className="text-xs text-neutral-500">
-                            {tx("vhost")} <code>{backend.managed_by_vhost}</code>
+                            {tx("runtime app")} <code>{backend.managed_by_vhost}</code>
                           </div>
                         ) : null}
                         <div className="text-xs text-neutral-500">
@@ -332,7 +332,7 @@ function backendRuntimeOpsSupported(backend: BackendRecord) {
 
 function ProviderChip({ providerClass }: { providerClass?: string }) {
   const normalized = String(providerClass || "").trim().toLowerCase();
-  const label = normalized === "vhost_managed" ? "vhost-managed" : "direct";
+  const label = normalized === "vhost_managed" ? "runtime-app" : "direct";
   const className =
     normalized === "vhost_managed"
       ? "inline-flex rounded px-2 py-0.5 text-xs font-semibold bg-sky-100 text-sky-800"

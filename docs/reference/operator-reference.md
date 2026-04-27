@@ -209,11 +209,11 @@ Main screens:
 | `/ip-reputation` / `/bot-defense` / `/semantic` | Request-time security controls |
 | `/notifications` | Aggregate alerting config and runtime status |
 | `/cache` | Cache rules and internal cache store controls |
-| `/proxy-rules` | Structured direct upstream/backend-pool/route editor for non-vhost traffic, with validate/probe/dry-run/apply/rollback |
-| `/backends` | Direct upstream backend inventory. Direct named upstreams support runtime enable/drain/disable and weight override; vhost-generated targets stay on the Vhosts surface |
+| `/proxy-rules` | Structured direct upstream/backend-pool/route editor for traffic not owned by Runtime Apps, with validate/probe/dry-run/apply/rollback |
+| `/backends` | Direct upstream backend inventory. Direct named upstreams support runtime enable/drain/disable and weight override; Runtime App-generated targets stay on the Runtime Apps surface |
 | `/sites` | Site ownership and TLS binding |
 | `/options` | Runtime inventory, optional artifacts, GeoIP/Country DB management |
-| `/vhosts` | Static / `php-fpm` vhost host, docroot, runtime, and generated-route ownership |
+| `/runtime-apps` | Static / `php-fpm` / `psgi` application listener, docroot, runtime, and generated-backend ownership |
 | `/scheduled-tasks` | Command-based cron task definitions and run status |
 | `/settings` | Product-wide DB `app_config` editor for restart-required settings |
 
@@ -257,7 +257,7 @@ make compose-down
 - HTTP/3 public-entry smoke: [../operations/http3-public-entry-smoke.md](../operations/http3-public-entry-smoke.md)
 - WAF tuning: [../operations/waf-tuning.md](../operations/waf-tuning.md)
 - FP Tuner API contract: [../operations/fp-tuner-api.md](../operations/fp-tuner-api.md)
-- PHP runtime / vhosts: [../operations/php-fpm-vhosts.md](../operations/php-fpm-vhosts.md)
+- PHP runtime / Runtime Apps: [../operations/php-fpm-vhosts.md](../operations/php-fpm-vhosts.md)
 - scheduled tasks: [../operations/php-scheduled-tasks.md](../operations/php-scheduled-tasks.md)
 - DB operations: [../operations/db-ops.md](../operations/db-ops.md)
 
@@ -274,16 +274,15 @@ Routing model:
 - `routes[]` are evaluated in ascending `priority` order with first-match semantics.
 - Selection order is:
   1. explicit `routes[]`
-  2. generated vhost host routes
-  3. generated host fallback routes from the DB `sites` domain
-  4. `default_route`
-  5. `upstreams[]`
+  2. generated host fallback routes from the DB `sites` domain
+  3. `default_route`
+  4. `upstreams[]`
 - Host matching supports exact host and `*.example.com` wildcard host.
 - Path matching supports `exact`, `prefix`, and `regex`.
-- `upstreams[]` is the direct non-vhost backend node catalog. A row can use either a static `url` or `discovery`, never both.
+- `upstreams[]` is the direct backend node catalog for targets not owned by Runtime Apps. A row can use either a static `url` or `discovery`, never both.
 - `backend_pools[]` groups named upstream members into route-scoped balancing sets.
 - `action.backend_pool` is the standard route binding for balancing.
-- `action.upstream` can reference a direct upstream name or a server-generated vhost upstream name. Normal vhost traffic is published through the `/vhosts` generated host route.
+- `action.upstream` can reference a direct upstream name or a server-generated Runtime App upstream name.
 - `action.canary_upstream` and `action.canary_weight_percent` provide route-level canary.
 - `action.host_rewrite`, `action.path_rewrite.prefix`, and `action.query_rewrite` rewrite outbound traffic.
 - `action.request_headers` and `action.response_headers` allow bounded header manipulation.
@@ -293,10 +292,10 @@ Routing model:
   2. `Backend Pools`
   3. `Routes` / `Default route`
 - Each `Upstreams` row has its own `Probe` action so connectivity checks target one configured upstream at a time.
-- `Vhosts` publish generated host routes and generated vhost backends in the effective runtime.
-- `Vhosts` do not rewrite configured upstream URLs. A configured `primary` remains the URL shown in `Proxy Rules > Upstreams`.
-- `generated_target` is server-owned vhost materialization state and is not normal operator input.
-- PHP-FPM/static application connection settings belong in `Vhosts`, not in `Proxy Rules > Upstreams`.
+- `Runtime Apps` publish generated runtime-listener backends in the effective runtime.
+- `Runtime Apps` do not rewrite configured upstream URLs. A configured `primary` remains the URL shown in `Proxy Rules > Upstreams`.
+- `generated_target` is server-owned Runtime App materialization state and is not normal operator input.
+- PHP-FPM/PSGI/static application listener settings belong in `Runtime Apps`; public traffic routing belongs in `Proxy Rules`.
 
 ### Proxy Engine
 
@@ -353,8 +352,8 @@ adapters can be registered without pretending an unsupported engine is live.
   - positive `weight_override`
 - No override means configured behavior from DB `proxy_rules`; `data/conf/proxy.json` is only seed/import/export material.
 - Runtime operations apply to static direct upstreams and DNS-discovered materialized targets.
-- Vhost-generated targets stay on the `Vhosts` surface and are not listed in `Backends`.
-- Direct route URLs and vhost-generated targets are not runtime operation targets.
+- Runtime App-generated targets stay on the `Runtime Apps` surface and are not listed in `Backends`.
+- Direct route URLs and Runtime App-generated targets are not runtime operation targets.
 - `draining`, `disabled`, and `unhealthy` backends are excluded from new target selection.
 - `proxy_access` logs now expose the selected backend runtime state via:
   - `selected_upstream_admin_state`
@@ -567,7 +566,7 @@ Main endpoint groups:
 | Policy files | `/bypass-rules*`, `/country-block-rules*`, `/rate-limit-rules*`, `/ip-reputation*`, `/notifications*`, `/bot-defense-rules*`, `/semantic-rules*` |
 | FP Tuner | `/fp-tuner/propose`, `/fp-tuner/apply` |
 | Cache | `/cache-rules*`, `/cache-store*` |
-| PHP / vhosts / tasks | `/php-runtimes*`, `/vhosts*`, `/scheduled-tasks*` |
+| PHP / Runtime Apps / tasks | `/php-runtimes*`, `/runtime-apps*`, `/scheduled-tasks*` |
 | Sites / proxy routing | `/sites*`, `/proxy-rules*` |
 | GeoIP country update | `/request-country-mode`, `/request-country-db*`, `/request-country-update*` |
 

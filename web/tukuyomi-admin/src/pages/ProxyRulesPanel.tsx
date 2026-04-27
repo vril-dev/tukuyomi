@@ -75,6 +75,15 @@ type GetResponse = {
   rollback_depth?: number;
 };
 
+type RuntimeAppsResponse = {
+  runtime_apps?: {
+    vhosts?: Array<{
+      name?: string;
+      generated_target?: string;
+    }>;
+  };
+};
+
 type RollbackPreviewResponse = {
   ok?: boolean;
   raw?: string;
@@ -87,6 +96,24 @@ type ProxyRulesAuditResponse = {
 
 type RoutePathType = "" | "exact" | "prefix" | "regex";
 const defaultProxyRulesAuditLimit = 20 as const;
+
+function extractGeneratedRuntimeAppTargets(data?: RuntimeAppsResponse) {
+  const entries = data?.runtime_apps?.vhosts;
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const app of entries) {
+    const name = (app.generated_target || app.name || "").trim();
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
+}
 
 export default function ProxyRulesPanel() {
   const { tx } = useI18n();
@@ -137,22 +164,26 @@ export default function ProxyRulesPanel() {
   const [dryRunMessages, setDryRunMessages] = useState<string[]>([]);
   const [diffPreview, setDiffPreview] = useState<ProxyRulesDiffPreview | null>(null);
   const [routingTab, setRoutingTab] = useState<"routes" | "default">("routes");
+  const [generatedRuntimeAppTargets, setGeneratedRuntimeAppTargets] = useState<string[]>([]);
   const auditInitialLoadDone = useRef(false);
 
   const dirty = useMemo(() => raw !== serverRaw, [raw, serverRaw]);
   const routeTargetOptions = useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const upstream of routingState.upstreams) {
-      const name = upstream.name.trim();
-      if (!name || seen.has(name)) {
+    for (const name of [
+      ...routingState.upstreams.map((upstream) => upstream.name),
+      ...generatedRuntimeAppTargets,
+    ]) {
+      const normalized = name.trim();
+      if (!normalized || seen.has(normalized)) {
         continue;
       }
-      seen.add(name);
-      out.push(name);
+      seen.add(normalized);
+      out.push(normalized);
     }
     return out;
-  }, [routingState.upstreams]);
+  }, [generatedRuntimeAppTargets, routingState.upstreams]);
   const backendPoolOptions = useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -185,6 +216,12 @@ export default function ProxyRulesPanel() {
     setDryRunMessages([]);
     try {
       const data = await apiGetJson<GetResponse>("/proxy-rules");
+      try {
+        const runtimeAppsData = await apiGetJson<RuntimeAppsResponse>("/runtime-apps");
+        setGeneratedRuntimeAppTargets(extractGeneratedRuntimeAppTargets(runtimeAppsData));
+      } catch {
+        setGeneratedRuntimeAppTargets([]);
+      }
       const nextRaw = data.raw || "";
       setRaw(nextRaw);
       setServerRaw(nextRaw);
@@ -531,7 +568,7 @@ export default function ProxyRulesPanel() {
 
           <SectionCard
             title="Upstreams"
-            subtitle="Define direct non-vhost backend nodes here. PHP-FPM/static app backends belong in Vhosts."
+            subtitle="Define direct backend nodes here. PHP-FPM/PSGI app backends belong in Runtime Apps."
             actions={
               <ActionButton
                 disabled={readOnly}
@@ -548,7 +585,7 @@ export default function ProxyRulesPanel() {
           >
             <div className="space-y-3">
               {routingState.upstreams.length === 0 ? (
-                <EmptyState>{tx("No named upstreams configured. Add upstreams only for direct non-vhost route targets.")}</EmptyState>
+                <EmptyState>{tx("No named upstreams configured. Add upstreams only for direct route targets outside Runtime Apps.")}</EmptyState>
               ) : null}
               {routingState.upstreams.map((upstream, index) => (
                 <div key={`upstream-${index}`} className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
@@ -916,7 +953,7 @@ export default function ProxyRulesPanel() {
                   key={`backend-pool-${index}`}
                   title={tx("Backend Pool #{index}", { index: index + 1 })}
                   pool={pool}
-                  upstreamOptions={routingState.upstreams.map((item) => item.name)}
+                  upstreamOptions={routeTargetOptions}
                   onChange={(next) => updateBackendPool(index, next)}
                   onRemove={readOnly ? undefined : () =>
                     applyStructuredChange((current) => ({
@@ -940,7 +977,7 @@ export default function ProxyRulesPanel() {
 
           <SectionCard
             title="Routing"
-            subtitle="Explicit routes run first, then generated Vhost/Site routes, default_route, and finally upstreams."
+            subtitle="Explicit routes run first, then Site routes, default_route, and finally upstreams. Use generated Runtime App targets from action.upstream for managed app traffic."
             actions={
               routingTab === "routes" ? (
                 <ActionButton
@@ -1000,7 +1037,7 @@ export default function ProxyRulesPanel() {
             <div className="mt-4">
               {routingTab === "routes" ? (
                 <div className="space-y-4">
-                  {routingState.routes.length === 0 ? <EmptyState>{tx("No explicit route rules configured. Traffic can still match generated Vhost/Site routes before default_route or upstreams.")}</EmptyState> : null}
+                  {routingState.routes.length === 0 ? <EmptyState>{tx("No explicit route rules configured. Traffic can still use default_route or upstream fallback; managed Runtime Apps are selected by generated target name.")}</EmptyState> : null}
                   {routingState.routes.map((route, index) => (
                     <RouteEditorCard
                       key={`route-${index}`}
@@ -1036,7 +1073,7 @@ export default function ProxyRulesPanel() {
                     allowMatch={false}
                   />
                 ) : (
-                  <EmptyState>{tx("Configure a default route when you want a distinct fallback after generated Vhost/Site routes and before upstream selection.")}</EmptyState>
+                  <EmptyState>{tx("Configure a default route when you want a distinct fallback before upstream selection.")}</EmptyState>
                 )
               ) : null}
             </div>
@@ -1112,7 +1149,7 @@ export default function ProxyRulesPanel() {
             <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
               <Field
                 label="Emit X-Tukuyomi-Upstream-Name"
-                hint="When enabled, named upstream requests carry X-Tukuyomi-Upstream-Name to the backend. Direct URLs and generated vhost targets do not receive it."
+                hint="When enabled, named upstream requests carry X-Tukuyomi-Upstream-Name to the backend. Direct URLs and generated Runtime App targets do not receive it."
               >
                 <label className="flex h-10 items-center gap-2 text-sm">
                   <input
@@ -1234,7 +1271,7 @@ export default function ProxyRulesPanel() {
                   <button
                     key={`${entry.ts || "audit"}-${index}`}
                     type="button"
-                    className="min-w-0 w-full rounded-xl border border-neutral-200 bg-neutral-50 p-3 text-left transition hover:border-neutral-300 hover:bg-white"
+                    className="min-w-0 w-full overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50 p-3 text-left transition hover:border-neutral-300 hover:bg-white"
                     onClick={() => previewAuditEntry(entry)}
                   >
                     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -1461,7 +1498,7 @@ function RouteEditorCard({
             ))}
           </select>
         </Field>
-        <Field label="Action upstream" hint="Direct upstream name only for operator-managed routes. Vhost-owned app traffic is published from Vhosts.">
+        <Field label="Action upstream" hint="Use a direct upstream name or a generated Runtime App target name. Runtime App targets point to the configured listen host and port.">
           <input
             className={inputClass}
             list={routeTargetOptions.length > 0 ? "proxy-route-target-options" : undefined}
@@ -1644,7 +1681,7 @@ function BackendPoolEditorCard({
         </Field>
       </div>
 
-      <Field label="Members" hint="One named upstream per line. Only Proxy Rules > Upstreams entries are valid members.">
+      <Field label="Members" hint="One named upstream per line. Direct upstreams and generated Runtime App targets are valid members.">
         <MultilineTextArea
           className={textAreaClass}
           value={pool.members}

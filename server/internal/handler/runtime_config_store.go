@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"sort"
+	"strings"
 )
 
 const (
@@ -187,9 +188,13 @@ func (s *wafEventStore) writeVhostConfigVersion(expectedETag string, cfg VhostCo
 
 func (s *wafEventStore) insertVhostConfigRowsTx(tx *sql.Tx, versionID int64, cfg VhostConfigFile) error {
 	for i, vhost := range cfg.Vhosts {
+		includeExtlib := 0
+		if vhost.IncludeExtlib != nil && *vhost.IncludeExtlib {
+			includeExtlib = 1
+		}
 		if _, err := s.txExec(
 			tx,
-			`INSERT INTO vhosts (version_id, position, name, mode, hostname, listen_port, document_root, runtime_id, generated_target, linked_upstream_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO vhosts (version_id, position, name, mode, hostname, listen_port, document_root, runtime_id, generated_target, linked_upstream_name, app_root, psgi_file, workers, max_requests, include_extlib) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			versionID,
 			i,
 			vhost.Name,
@@ -200,6 +205,11 @@ func (s *wafEventStore) insertVhostConfigRowsTx(tx *sql.Tx, versionID int64, cfg
 			vhost.RuntimeID,
 			vhost.GeneratedTarget,
 			vhost.LinkedUpstreamName,
+			vhost.AppRoot,
+			vhost.PSGIFile,
+			vhost.Workers,
+			vhost.MaxRequests,
+			includeExtlib,
 		); err != nil {
 			return err
 		}
@@ -233,6 +243,9 @@ func (s *wafEventStore) insertVhostConfigRowsTx(tx *sql.Tx, versionID int64, cfg
 			return err
 		}
 		if err := s.insertVhostStringMapTx(tx, `vhost_php_admin_values`, versionID, i, vhost.PHPAdminValues); err != nil {
+			return err
+		}
+		if err := s.insertVhostStringMapTx(tx, `vhost_psgi_env`, versionID, i, vhost.Env); err != nil {
 			return err
 		}
 	}
@@ -270,7 +283,7 @@ func (s *wafEventStore) insertVhostStringMapTx(tx *sql.Tx, table string, version
 
 func (s *wafEventStore) loadVhostConfigVersion(versionID int64) (VhostConfigFile, error) {
 	rows, err := s.query(
-		`SELECT position, name, mode, hostname, listen_port, document_root, runtime_id, generated_target, linked_upstream_name
+		`SELECT position, name, mode, hostname, listen_port, document_root, runtime_id, generated_target, linked_upstream_name, app_root, psgi_file, workers, max_requests, include_extlib
 		   FROM vhosts
 		  WHERE version_id = ?
 		  ORDER BY position`,
@@ -287,9 +300,14 @@ func (s *wafEventStore) loadVhostConfigVersion(versionID int64) (VhostConfigFile
 	for rows.Next() {
 		var position int
 		var vhost VhostConfig
-		if err := rows.Scan(&position, &vhost.Name, &vhost.Mode, &vhost.Hostname, &vhost.ListenPort, &vhost.DocumentRoot, &vhost.RuntimeID, &vhost.GeneratedTarget, &vhost.LinkedUpstreamName); err != nil {
+		var includeExtlib int
+		if err := rows.Scan(&position, &vhost.Name, &vhost.Mode, &vhost.Hostname, &vhost.ListenPort, &vhost.DocumentRoot, &vhost.RuntimeID, &vhost.GeneratedTarget, &vhost.LinkedUpstreamName, &vhost.AppRoot, &vhost.PSGIFile, &vhost.Workers, &vhost.MaxRequests, &includeExtlib); err != nil {
 			_ = rows.Close()
 			return VhostConfigFile{}, err
+		}
+		if normalizeVhostMode(vhost.Mode) == "psgi" {
+			include := boolFromDB(includeExtlib)
+			vhost.IncludeExtlib = &include
 		}
 		scanned = append(scanned, vhostRow{position: position, vhost: vhost})
 	}
@@ -321,6 +339,9 @@ func (s *wafEventStore) loadVhostConfigVersion(versionID int64) (VhostConfigFile
 			return VhostConfigFile{}, err
 		}
 		if vhost.PHPAdminValues, err = s.loadVhostStringMap(versionID, `vhost_php_admin_values`, item.position); err != nil {
+			return VhostConfigFile{}, err
+		}
+		if vhost.Env, err = s.loadVhostStringMap(versionID, `vhost_psgi_env`, item.position); err != nil {
 			return VhostConfigFile{}, err
 		}
 		out.Vhosts = append(out.Vhosts, vhost)
@@ -723,4 +744,216 @@ func (s *wafEventStore) loadUpstreamRuntimeConfigVersion(versionID int64) (upstr
 		out.Backends = nil
 	}
 	return out, nil
+}
+
+const (
+	psgiRuntimeInventoryConfigDomain        = "psgi_runtime_inventory"
+	psgiRuntimeInventoryConfigSchemaVersion = 1
+)
+
+func psgiRuntimeInventoryPreparedHash(prepared psgiRuntimeInventoryPreparedConfig) string {
+	return configContentHash(strings.TrimSpace(prepared.raw) + "\n" + mustJSON(normalizePSGIRuntimeInventoryFile(prepared.cfg)))
+}
+
+func (s *wafEventStore) writePSGIRuntimeInventoryConfigVersion(expectedETag string, cfg PSGIRuntimeInventoryFile, source string, actor string, reason string, restoredFromVersionID int64) (configVersionRecord, error) {
+	normalized := normalizePSGIRuntimeInventoryFile(cfg)
+	state := psgiRuntimeInventoryStateFromConfig(normalized)
+	prepared := psgiRuntimeInventoryPreparedConfig{
+		state: state,
+		cfg:   normalized,
+		raw:   marshalPSGIRuntimeInventoryStateRaw(state),
+	}
+	return s.writePSGIRuntimeInventoryPreparedConfigVersion(expectedETag, prepared, source, actor, reason, restoredFromVersionID)
+}
+
+func (s *wafEventStore) writePSGIRuntimeInventoryPreparedConfigVersion(expectedETag string, prepared psgiRuntimeInventoryPreparedConfig, source string, actor string, reason string, restoredFromVersionID int64) (configVersionRecord, error) {
+	normalized := normalizePSGIRuntimeInventoryFile(prepared.cfg)
+	prepared.cfg = normalized
+	if strings.TrimSpace(prepared.raw) == "" {
+		prepared.raw = marshalPSGIRuntimeInventoryStateRaw(prepared.state)
+	}
+	return s.writeConfigVersion(
+		psgiRuntimeInventoryConfigDomain,
+		psgiRuntimeInventoryConfigSchemaVersion,
+		expectedETag,
+		source,
+		actor,
+		reason,
+		psgiRuntimeInventoryPreparedHash(prepared),
+		restoredFromVersionID,
+		func(tx *sql.Tx, versionID int64) error {
+			if err := s.insertPSGIRuntimeInventoryStateTx(tx, versionID, prepared.state, prepared.raw); err != nil {
+				return err
+			}
+			return s.insertPSGIRuntimeInventoryRowsTx(tx, versionID, normalized)
+		},
+	)
+}
+
+func (s *wafEventStore) loadActivePSGIRuntimeInventoryPreparedConfig(inventoryPath string) (psgiRuntimeInventoryPreparedConfig, configVersionRecord, bool, error) {
+	rec, found, err := s.loadActiveConfigVersion(psgiRuntimeInventoryConfigDomain)
+	if err != nil || !found {
+		return psgiRuntimeInventoryPreparedConfig{}, configVersionRecord{}, false, err
+	}
+	cfg, err := s.loadPSGIRuntimeInventoryConfigVersion(rec.VersionID)
+	if err != nil {
+		return psgiRuntimeInventoryPreparedConfig{}, configVersionRecord{}, false, err
+	}
+	state, raw, err := s.loadPSGIRuntimeInventoryStateVersion(rec.VersionID, normalizePSGIRuntimeInventoryFile(cfg), rec)
+	if err != nil {
+		return psgiRuntimeInventoryPreparedConfig{}, configVersionRecord{}, false, err
+	}
+	prepared, err := preparePSGIRuntimeInventoryState(state, inventoryPath)
+	if err != nil {
+		return psgiRuntimeInventoryPreparedConfig{}, configVersionRecord{}, false, err
+	}
+	if strings.TrimSpace(raw) != "" {
+		prepared.raw = raw
+	}
+	return prepared, rec, true, nil
+}
+
+func (s *wafEventStore) insertPSGIRuntimeInventoryStateTx(tx *sql.Tx, versionID int64, state psgiRuntimeInventoryStateFile, raw string) error {
+	autoDiscover := 0
+	if !state.explicitRuntimes {
+		autoDiscover = 1
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = marshalPSGIRuntimeInventoryStateRaw(state)
+	}
+	_, err := s.txExec(tx, `INSERT INTO psgi_runtime_inventory_state (version_id, auto_discover, raw_text) VALUES (?, ?, ?)`, versionID, autoDiscover, raw)
+	return err
+}
+
+func (s *wafEventStore) loadPSGIRuntimeInventoryStateVersion(versionID int64, cfg PSGIRuntimeInventoryFile, rec configVersionRecord) (psgiRuntimeInventoryStateFile, string, error) {
+	var autoDiscover int
+	var raw string
+	err := s.queryRow(`SELECT auto_discover, raw_text FROM psgi_runtime_inventory_state WHERE version_id = ?`, versionID).Scan(&autoDiscover, &raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			state := psgiRuntimeInventoryStateFromConfig(cfg)
+			if len(cfg.Runtimes) == 0 && rec.Source == configVersionSourceImport {
+				state = psgiRuntimeInventoryStateFile{}
+			}
+			return state, marshalPSGIRuntimeInventoryStateRaw(state), nil
+		}
+		return psgiRuntimeInventoryStateFile{}, "", err
+	}
+	if autoDiscover != 0 {
+		state := psgiRuntimeInventoryStateFile{}
+		return state, marshalPSGIRuntimeInventoryStateRaw(state), nil
+	}
+	state, err := parsePSGIRuntimeInventoryRaw(raw)
+	if err != nil || !state.explicitRuntimes {
+		state = psgiRuntimeInventoryStateFromConfig(cfg)
+		raw = marshalPSGIRuntimeInventoryStateRaw(state)
+	}
+	return state, raw, nil
+}
+
+func (s *wafEventStore) insertPSGIRuntimeInventoryRowsTx(tx *sql.Tx, versionID int64, cfg PSGIRuntimeInventoryFile) error {
+	for i, runtime := range cfg.Runtimes {
+		if _, err := s.txExec(
+			tx,
+			`INSERT INTO psgi_runtime_inventory (version_id, position, runtime_id, display_name, detected_version, perl_path, starman_path, available, availability_message, run_user, run_group, source, sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			versionID,
+			i,
+			runtime.RuntimeID,
+			runtime.DisplayName,
+			runtime.DetectedVersion,
+			runtime.PerlPath,
+			runtime.StarmanPath,
+			boolToDB(runtime.Available),
+			runtime.AvailabilityMessage,
+			runtime.RunUser,
+			runtime.RunGroup,
+			runtime.Source,
+			runtime.SHA256,
+		); err != nil {
+			return err
+		}
+		for j, module := range runtime.Modules {
+			if _, err := s.txExec(tx, `INSERT INTO psgi_runtime_modules (version_id, runtime_position, position, module) VALUES (?, ?, ?, ?)`, versionID, i, j, module); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *wafEventStore) loadPSGIRuntimeInventoryConfigVersion(versionID int64) (PSGIRuntimeInventoryFile, error) {
+	rows, err := s.query(
+		`SELECT position, runtime_id, display_name, detected_version, perl_path, starman_path, available, availability_message, run_user, run_group, source, sha256
+		   FROM psgi_runtime_inventory
+		  WHERE version_id = ?
+		  ORDER BY position`,
+		versionID,
+	)
+	if err != nil {
+		return PSGIRuntimeInventoryFile{}, err
+	}
+	type runtimeRow struct {
+		position int
+		runtime  PSGIRuntimeRecord
+	}
+	scanned := make([]runtimeRow, 0)
+	for rows.Next() {
+		var item runtimeRow
+		var available int
+		if err := rows.Scan(
+			&item.position,
+			&item.runtime.RuntimeID,
+			&item.runtime.DisplayName,
+			&item.runtime.DetectedVersion,
+			&item.runtime.PerlPath,
+			&item.runtime.StarmanPath,
+			&available,
+			&item.runtime.AvailabilityMessage,
+			&item.runtime.RunUser,
+			&item.runtime.RunGroup,
+			&item.runtime.Source,
+			&item.runtime.SHA256,
+		); err != nil {
+			_ = rows.Close()
+			return PSGIRuntimeInventoryFile{}, err
+		}
+		item.runtime.Available = available != 0
+		scanned = append(scanned, item)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return PSGIRuntimeInventoryFile{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return PSGIRuntimeInventoryFile{}, err
+	}
+
+	out := PSGIRuntimeInventoryFile{Runtimes: make([]PSGIRuntimeRecord, 0, len(scanned))}
+	for _, item := range scanned {
+		modules, err := s.loadPSGIRuntimeInventoryModules(versionID, item.position)
+		if err != nil {
+			return PSGIRuntimeInventoryFile{}, err
+		}
+		item.runtime.Modules = modules
+		out.Runtimes = append(out.Runtimes, item.runtime)
+	}
+	return out, nil
+}
+
+func (s *wafEventStore) loadPSGIRuntimeInventoryModules(versionID int64, runtimePosition int) ([]string, error) {
+	rows, err := s.query(`SELECT module FROM psgi_runtime_modules WHERE version_id = ? AND runtime_position = ? ORDER BY position`, versionID, runtimePosition)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var module string
+		if err := rows.Scan(&module); err != nil {
+			return nil, err
+		}
+		out = append(out, module)
+	}
+	return out, rows.Err()
 }

@@ -84,6 +84,296 @@ func TestValidateVhostConfigRawAcceptsKnownRuntimeWithoutSupportToggle(t *testin
 	}
 }
 
+func TestNormalizePSGIRuntimeModulesAllowsPerlModuleNames(t *testing.T) {
+	got := normalizePSGIRuntimeModules([]string{
+		"GD",
+		"XMLRPC::Transport::HTTP::Plack",
+		"Crypt::DSA",
+		"Digest::SHA1",
+		"bad-module",
+		"Bad::",
+		"XMLRPC::Transport::HTTP::Plack",
+	})
+	want := []string{
+		"gd",
+		"xmlrpc::transport::http::plack",
+		"crypt::dsa",
+		"digest::sha1",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("modules=%v want=%v", got, want)
+	}
+}
+
+func TestReadPSGIRuntimeModuleManifestPreservesNestedModuleNames(t *testing.T) {
+	tmp := t.TempDir()
+	perlPath := filepath.Join(tmp, "perl")
+	if err := os.WriteFile(perlPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write perl: %v", err)
+	}
+	raw, err := json.Marshal([]string{
+		"GD",
+		"Imager",
+		"XMLRPC::Transport::HTTP::Plack",
+		"Crypt::SSLeay",
+		"bad-module",
+	})
+	if err != nil {
+		t.Fatalf("marshal modules: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "modules.json"), raw, 0o600); err != nil {
+		t.Fatalf("write modules.json: %v", err)
+	}
+	got, err := readPSGIRuntimeModuleManifest(perlPath)
+	if err != nil {
+		t.Fatalf("readPSGIRuntimeModuleManifest: %v", err)
+	}
+	want := []string{"gd", "imager", "xmlrpc::transport::http::plack", "crypt::ssleay"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("modules=%v want=%v", got, want)
+	}
+}
+
+func TestValidateVhostConfigRawAcceptsPSGIRuntime(t *testing.T) {
+	raw := `{
+  "vhosts": [{
+    "name": "mt-site",
+    "mode": "psgi",
+    "hostname": "127.0.0.1",
+    "listen_port": 9501,
+    "document_root": "data/mt/mt-static",
+    "runtime_id": "perl538",
+    "app_root": "data/mt/MT-9.0.7",
+    "psgi_file": "mt.psgi",
+    "try_files": ["$uri", "$uri/", "@psgi"]
+  }]
+}`
+	cfg, err := ValidateVhostConfigRawWithInventories(raw, PHPRuntimeInventoryFile{}, PSGIRuntimeInventoryFile{
+		Runtimes: []PSGIRuntimeRecord{{RuntimeID: "perl538", PerlPath: "perl", StarmanPath: "starman"}},
+	})
+	if err != nil {
+		t.Fatalf("ValidateVhostConfigRawWithInventories: %v", err)
+	}
+	vhost := cfg.Vhosts[0]
+	if vhost.Workers != 2 || vhost.MaxRequests != 200 || vhost.IncludeExtlib == nil || !*vhost.IncludeExtlib {
+		t.Fatalf("unexpected PSGI defaults: workers=%d max=%d include=%v", vhost.Workers, vhost.MaxRequests, vhost.IncludeExtlib)
+	}
+	upstreams := generatedVhostUpstreams(cfg)
+	if len(upstreams) != 1 || upstreams[0].URL != "psgi://127.0.0.1:9501" {
+		t.Fatalf("generated upstreams=%+v", upstreams)
+	}
+	routes := vhostGeneratedRoutes(cfg)
+	if len(routes) != 0 {
+		t.Fatalf("generated routes=%+v want none", routes)
+	}
+}
+
+func TestPSGIVhostRuntimePreflightRequiresPSGIFile(t *testing.T) {
+	tmp := t.TempDir()
+	appRoot := filepath.Join(tmp, "app")
+	docRoot := filepath.Join(tmp, "public")
+	if err := os.MkdirAll(appRoot, 0o755); err != nil {
+		t.Fatalf("mkdir app root: %v", err)
+	}
+	if err := os.MkdirAll(docRoot, 0o755); err != nil {
+		t.Fatalf("mkdir document root: %v", err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	raw := `{
+  "vhosts": [{
+    "name": "mt-site",
+    "mode": "psgi",
+    "hostname": "mt.example.test",
+    "listen_port": 9501,
+    "document_root": "` + filepath.ToSlash(docRoot) + `",
+    "runtime_id": "perl538",
+    "app_root": "` + filepath.ToSlash(appRoot) + `",
+    "psgi_file": "mt.psgi"
+  }]
+}`
+	inventory := PSGIRuntimeInventoryFile{
+		Runtimes: []PSGIRuntimeRecord{{RuntimeID: "perl538", PerlPath: exe, StarmanPath: exe}},
+	}
+	cfg, err := ValidateVhostConfigRawWithInventories(raw, PHPRuntimeInventoryFile{}, inventory)
+	if err != nil {
+		t.Fatalf("ValidateVhostConfigRawWithInventories: %v", err)
+	}
+	err = validatePSGIVhostRuntimePreflight(cfg, inventory)
+	if err == nil || !strings.Contains(err.Error(), "psgi_path") {
+		t.Fatalf("err=%v want missing psgi_path", err)
+	}
+}
+
+func TestPSGIVhostRuntimePreflightDoesNotRequireMovableTypeConfig(t *testing.T) {
+	tmp := t.TempDir()
+	appRoot := filepath.Join(tmp, "app")
+	docRoot := filepath.Join(tmp, "public")
+	if err := os.MkdirAll(appRoot, 0o755); err != nil {
+		t.Fatalf("mkdir app root: %v", err)
+	}
+	if err := os.MkdirAll(docRoot, 0o755); err != nil {
+		t.Fatalf("mkdir document root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(appRoot, "mt.psgi"), []byte("use strict;\n"), 0o644); err != nil {
+		t.Fatalf("write mt.psgi: %v", err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	raw := `{
+  "vhosts": [{
+    "name": "mt-site",
+    "mode": "psgi",
+    "hostname": "mt.example.test",
+    "listen_port": 9501,
+    "document_root": "` + filepath.ToSlash(docRoot) + `",
+    "runtime_id": "perl538",
+    "app_root": "` + filepath.ToSlash(appRoot) + `",
+    "psgi_file": "mt.psgi"
+  }]
+}`
+	inventory := PSGIRuntimeInventoryFile{
+		Runtimes: []PSGIRuntimeRecord{{RuntimeID: "perl538", PerlPath: exe, StarmanPath: exe}},
+	}
+	cfg, err := ValidateVhostConfigRawWithInventories(raw, PHPRuntimeInventoryFile{}, inventory)
+	if err != nil {
+		t.Fatalf("ValidateVhostConfigRawWithInventories: %v", err)
+	}
+	if err := validatePSGIVhostRuntimePreflight(cfg, inventory); err != nil {
+		t.Fatalf("preflight should not require mt-config.cgi: %v", err)
+	}
+}
+
+func TestValidateVhostConfigRawRejectsUnknownPSGIRuntime(t *testing.T) {
+	raw := `{
+  "vhosts": [{
+    "name": "mt-site",
+    "mode": "psgi",
+    "hostname": "mt.example.test",
+    "listen_port": 9501,
+    "document_root": "data/mt/mt-static",
+    "runtime_id": "perl538",
+    "app_root": "data/mt/MT-9.0.7",
+    "psgi_file": "mt.psgi"
+  }]
+}`
+	_, err := ValidateVhostConfigRawWithInventories(raw, PHPRuntimeInventoryFile{}, PSGIRuntimeInventoryFile{})
+	if err == nil || !strings.Contains(err.Error(), `unknown psgi runtime "perl538"`) {
+		t.Fatalf("err=%v want unknown psgi runtime", err)
+	}
+}
+
+func TestPSGIRuntimeStarmanArgsPreloadApp(t *testing.T) {
+	tmp := t.TempDir()
+	appRoot := filepath.Join(tmp, "app")
+	if err := os.MkdirAll(filepath.Join(appRoot, "extlib"), 0o755); err != nil {
+		t.Fatalf("mkdir app extlib: %v", err)
+	}
+	mat := PSGIRuntimeMaterializedStatus{
+		AppRoot:       appRoot,
+		RuntimeDir:    filepath.Join(tmp, "runtime"),
+		PSGIPath:      filepath.Join(appRoot, "app.psgi"),
+		ListenHost:    "127.0.0.1",
+		ListenPort:    9401,
+		Workers:       2,
+		MaxRequests:   200,
+		IncludeExtlib: true,
+	}
+	args := psgiRuntimeStarmanArgs(mat)
+	joined := strings.Join(args, " ")
+	if !containsString(args, "--preload-app") {
+		t.Fatalf("starman args=%q missing --preload-app", joined)
+	}
+	if !strings.Contains(joined, "-I "+absoluteRuntimePath(filepath.Join(appRoot, "extlib"))) {
+		t.Fatalf("starman args=%q missing extlib include", joined)
+	}
+}
+
+func TestPSGIRuntimeLogErrorSummaryPrefersLoadError(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "starman-supervisor.log"), []byte(strings.Join([]string{
+		"Starman::Server starting",
+		"Compilation failed in require at /srv/app/app.psgi line 3.",
+		"Error while loading /srv/app/app.psgi: Can't locate CGI/PSGI.pm in @INC",
+		"Child process exited with status 2",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	got := psgiRuntimeLogErrorSummary(tmp, "fallback")
+	if !strings.Contains(got, "Can't locate CGI/PSGI.pm") {
+		t.Fatalf("summary=%q want CGI::PSGI load error", got)
+	}
+}
+
+func TestPSGIRuntimeStatusErrorUsesRelativePaths(t *testing.T) {
+	psgiPath := filepath.ToSlash(absoluteRuntimePath("data/vhosts/samples/perl-site/MT-9.0.7/mt.psgi"))
+	got := trimStatusError("Error while loading " + psgiPath + ": Bad CGIPath config")
+	if strings.Contains(got, filepath.ToSlash(absoluteRuntimePath("data"))) {
+		t.Fatalf("summary=%q still contains absolute data path", got)
+	}
+	if !strings.Contains(got, "data/vhosts/samples/perl-site/MT-9.0.7/mt.psgi") {
+		t.Fatalf("summary=%q missing relative psgi path", got)
+	}
+	if !strings.Contains(got, "Bad CGIPath config") {
+		t.Fatalf("summary=%q missing app error", got)
+	}
+}
+
+func TestPSGIExplicitStartupWaitReturnsFastFailure(t *testing.T) {
+	sup := &psgiRuntimeSupervisor{
+		processes: map[string]*psgiRuntimeManagedProcess{},
+		statuses: map[string]PSGIRuntimeProcessStatus{
+			"vhost-1": {LastAction: "start_failed", LastError: "Bad CGIPath config"},
+		},
+		manuallyStopped: map[string]bool{},
+	}
+	err := sup.waitForExplicitStartup(PSGIRuntimeMaterializedStatus{ProcessID: "vhost-1"})
+	if err == nil || !strings.Contains(err.Error(), "Bad CGIPath config") {
+		t.Fatalf("err=%v want Bad CGIPath config", err)
+	}
+}
+
+func TestPSGIHandleExitTreatsUnreadyExitAsStartFailure(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "starman-supervisor.log"), []byte("Error while loading /app/data/vhosts/app/app.psgi: DB unavailable\n"), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	mat := PSGIRuntimeMaterializedStatus{
+		ProcessID:  "vhost-1",
+		VhostName:  "vhost-1",
+		RuntimeID:  "perl538",
+		RuntimeDir: tmp,
+	}
+	proc := &psgiRuntimeManagedProcess{
+		processID: "vhost-1",
+		desired:   true,
+		startedAt: time.Now().Add(-10 * time.Second),
+	}
+	sup := &psgiRuntimeSupervisor{
+		processes:       map[string]*psgiRuntimeManagedProcess{"vhost-1": proc},
+		statuses:        map[string]PSGIRuntimeProcessStatus{},
+		manuallyStopped: map[string]bool{},
+	}
+	sup.handleExit(mat, proc, os.ErrInvalid)
+	status := sup.statuses["vhost-1"]
+	if status.LastAction != "start_failed" {
+		t.Fatalf("last_action=%q want start_failed", status.LastAction)
+	}
+	if strings.Contains(status.LastError, "/app/") {
+		t.Fatalf("last_error=%q should not expose container root", status.LastError)
+	}
+	if !strings.Contains(status.LastError, "DB unavailable") {
+		t.Fatalf("last_error=%q missing load error", status.LastError)
+	}
+	if _, ok := sup.processes["vhost-1"]; ok {
+		t.Fatal("unready process should not stay registered")
+	}
+}
+
 func TestValidateVhostConfigRawGeneratesHiddenTargetWhenOmitted(t *testing.T) {
 	restore := resetPHPFoundationRuntimesForTest(t)
 	defer restore()
@@ -210,6 +500,96 @@ func TestValidateVhostConfigRawRejectsDuplicateLinkedUpstreamNames(t *testing.T)
   ]
 }`
 	if _, err := ValidateVhostConfigRawWithInventory(raw, inventory); err == nil || !strings.Contains(err.Error(), `duplicates "app"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateVhostConfigRawAllowsSamePortOnDifferentListenHosts(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	inventory := PHPRuntimeInventoryFile{
+		Runtimes: []PHPRuntimeRecord{
+			{
+				RuntimeID:  "php82",
+				BinaryPath: "data/php-fpm/binaries/php82/php-fpm",
+				Modules:    []string{"mbstring"},
+				Source:     "bundled",
+			},
+		},
+	}
+	raw := `{
+  "vhosts": [
+    {
+      "name": "app1",
+      "mode": "php-fpm",
+      "hostname": "192.0.2.10",
+      "listen_port": 9081,
+      "document_root": "apps/app1/public",
+      "runtime_id": "php82",
+      "generated_target": "app1-php"
+    },
+    {
+      "name": "app2",
+      "mode": "php-fpm",
+      "hostname": "192.0.2.11",
+      "listen_port": 9081,
+      "document_root": "apps/app2/public",
+      "runtime_id": "php82",
+      "generated_target": "app2-php"
+    }
+  ]
+}`
+	cfg, err := ValidateVhostConfigRawWithInventory(raw, inventory)
+	if err != nil {
+		t.Fatalf("ValidateVhostConfigRawWithInventory: %v", err)
+	}
+	upstreams := generatedVhostUpstreams(cfg)
+	if len(upstreams) != 2 {
+		t.Fatalf("generated upstream count=%d want=2: %+v", len(upstreams), upstreams)
+	}
+	if upstreams[0].URL != "fcgi://192.0.2.10:9081" || upstreams[1].URL != "fcgi://192.0.2.11:9081" {
+		t.Fatalf("generated upstreams=%+v", upstreams)
+	}
+}
+
+func TestValidateVhostConfigRawRejectsDuplicateListenTarget(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	inventory := PHPRuntimeInventoryFile{
+		Runtimes: []PHPRuntimeRecord{
+			{
+				RuntimeID:  "php82",
+				BinaryPath: "data/php-fpm/binaries/php82/php-fpm",
+				Modules:    []string{"mbstring"},
+				Source:     "bundled",
+			},
+		},
+	}
+	raw := `{
+  "vhosts": [
+    {
+      "name": "app1",
+      "mode": "php-fpm",
+      "hostname": "127.0.0.1",
+      "listen_port": 9081,
+      "document_root": "apps/app1/public",
+      "runtime_id": "php82",
+      "generated_target": "app1-php"
+    },
+    {
+      "name": "app2",
+      "mode": "php-fpm",
+      "hostname": "127.0.0.1",
+      "listen_port": 9081,
+      "document_root": "apps/app2/public",
+      "runtime_id": "php82",
+      "generated_target": "app2-php"
+    }
+  ]
+}`
+	if _, err := ValidateVhostConfigRawWithInventory(raw, inventory); err == nil || !strings.Contains(err.Error(), "listen target duplicates") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -404,9 +784,17 @@ func TestApplyAndRollbackVhostConfigRaw(t *testing.T) {
 	if len(rolledCfg.Vhosts) != 0 {
 		t.Fatalf("vhost count after rollback=%d want=0", len(rolledCfg.Vhosts))
 	}
+
+	reappliedETag, _, err := ApplyVhostConfigRaw(etag, nextVhosts)
+	if err != nil {
+		t.Fatalf("ApplyVhostConfigRaw with stale equivalent etag after rollback: %v", err)
+	}
+	if reappliedETag == "" || reappliedETag == rolledETag || reappliedETag == etag {
+		t.Fatalf("unexpected reapply etag transition original=%q rolled=%q reapplied=%q", etag, rolledETag, reappliedETag)
+	}
 }
 
-func TestGetPHPRuntimesAndVhostsHandlers(t *testing.T) {
+func TestGetPHPRuntimesAndRuntimeAppsHandlers(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	restore := resetPHPFoundationRuntimesForTest(t)
@@ -494,26 +882,26 @@ func TestGetPHPRuntimesAndVhostsHandlers(t *testing.T) {
 		t.Fatalf("materialized runtime mismatch: %+v", runtimeResp.Materialized)
 	}
 
-	vhostRec := httptest.NewRecorder()
-	vhostCtx, _ := gin.CreateTestContext(vhostRec)
-	vhostCtx.Request = httptest.NewRequest(http.MethodGet, "/vhosts", nil)
-	GetVhosts(vhostCtx)
-	if vhostRec.Code != http.StatusOK {
-		t.Fatalf("GetVhosts status=%d body=%s", vhostRec.Code, vhostRec.Body.String())
+	runtimeAppsRec := httptest.NewRecorder()
+	runtimeAppsCtx, _ := gin.CreateTestContext(runtimeAppsRec)
+	runtimeAppsCtx.Request = httptest.NewRequest(http.MethodGet, "/runtime-apps", nil)
+	GetRuntimeApps(runtimeAppsCtx)
+	if runtimeAppsRec.Code != http.StatusOK {
+		t.Fatalf("GetRuntimeApps status=%d body=%s", runtimeAppsRec.Code, runtimeAppsRec.Body.String())
 	}
-	var vhostResp struct {
-		ETag   string          `json:"etag"`
-		Raw    string          `json:"raw"`
-		Vhosts VhostConfigFile `json:"vhosts"`
+	var runtimeAppsResp struct {
+		ETag        string          `json:"etag"`
+		Raw         string          `json:"raw"`
+		RuntimeApps VhostConfigFile `json:"runtime_apps"`
 	}
-	if err := json.Unmarshal(vhostRec.Body.Bytes(), &vhostResp); err != nil {
-		t.Fatalf("vhost response json: %v", err)
+	if err := json.Unmarshal(runtimeAppsRec.Body.Bytes(), &runtimeAppsResp); err != nil {
+		t.Fatalf("runtime apps response json: %v", err)
 	}
-	if vhostResp.ETag == "" || vhostResp.Raw == "" {
-		t.Fatalf("vhost response missing etag/raw: %s", vhostRec.Body.String())
+	if runtimeAppsResp.ETag == "" || runtimeAppsResp.Raw == "" {
+		t.Fatalf("runtime apps response missing etag/raw: %s", runtimeAppsRec.Body.String())
 	}
-	if len(vhostResp.Vhosts.Vhosts) != 2 {
-		t.Fatalf("vhost count=%d want=2", len(vhostResp.Vhosts.Vhosts))
+	if len(runtimeAppsResp.RuntimeApps.Vhosts) != 2 {
+		t.Fatalf("runtime app count=%d want=2", len(runtimeAppsResp.RuntimeApps.Vhosts))
 	}
 }
 

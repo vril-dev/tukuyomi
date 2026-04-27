@@ -275,7 +275,7 @@ operator contract:
 
 ## Optional PHP-FPM Runtime Bundles
 
-binary 配備先で `/options` と `/vhosts` を使いたい場合は、runtime bundle を build して配置します。
+binary 配備先で `/options` と `/runtime-apps` を使いたい場合は、runtime bundle を build して配置します。
 
 標準レイアウト `/opt/tukuyomi` を使う場合:
 
@@ -303,8 +303,8 @@ make php-fpm-copy RUNTIME=php85 DEST="$HOME/tukuyomi"
 
 - `php-fpm-copy` は `data/php-fpm/binaries/<runtime_id>/` を binary 配備ツリーへ同期します。PHP-FPM JSON manifest を削除する前に `make db-import` で inventory/module metadata を import してください
 - 配置後は Options の Runtime Inventory で Refresh するか、必要に応じて `tukuyomi` を restart してください
-- 不要になった staged runtime bundle は `sudo make php-fpm-prune RUNTIME=php85` で削除できます。DB vhost 参照と実行中 pid を確認してから `binaries/<runtime_id>` と `runtime/<runtime_id>` を消します
-- `data/php-fpm/runtime/` はコピー対象ではなく、`tukuyomi` 起動後に vhost 定義から生成されます
+- 不要になった staged runtime bundle は `sudo make php-fpm-prune RUNTIME=php85` で削除できます。DB Runtime App 参照と実行中 pid を確認してから `binaries/<runtime_id>` と `runtime/<runtime_id>` を消します
+- `data/php-fpm/runtime/` はコピー対象ではなく、`tukuyomi` 起動後に Runtime App 定義から生成されます
 - Docker が必要なのは `php-fpm-build` の build 時だけです。bundle 配置後の `tukuyomi` 実行時には Docker は不要です
 - PHP / base image library / PECL extension の security update は bundle を rebuild して再配置する必要があります
 

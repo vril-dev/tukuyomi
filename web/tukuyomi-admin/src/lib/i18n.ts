@@ -357,25 +357,25 @@ const JA_STRINGS: Record<string, string> = {
   Name: "名前",
   URL: "URL",
   Weight: "重み",
-  "Define direct non-vhost backend nodes here. PHP-FPM/static app backends belong in Vhosts.":
-    "ここでは vhost 以外の direct backend node を定義します。PHP-FPM/static app の backend は Vhosts 側です。",
-  "Named upstreams are direct non-vhost backends. Define PHP-FPM/static app backends in Vhosts instead.":
-    "名前付き upstream は vhost 以外の direct backend 用です。PHP-FPM/static app の backend は Vhosts で定義してください。",
-  "No named upstreams configured. Add upstreams only for direct non-vhost route targets.":
-    "名前付き upstream は未設定です。vhost 以外の direct route target が必要な場合だけ upstream を追加してください。",
+  "Define direct backend nodes here. PHP-FPM/PSGI app backends belong in Runtime Apps.":
+    "ここでは direct backend node を定義します。PHP-FPM/PSGI app の backend は Runtime Apps 側です。",
+  "Named upstreams are direct backends. Define PHP-FPM/PSGI app backends in Runtime Apps instead.":
+    "名前付き upstream は direct backend 用です。PHP-FPM/PSGI app の backend は Runtime Apps で定義してください。",
+  "No named upstreams configured. Add upstreams only for direct route targets outside Runtime Apps.":
+    "名前付き upstream は未設定です。Runtime Apps 外の direct route target が必要な場合だけ upstream を追加してください。",
   "Upstream #{index}": "upstream #{index}",
   "Name is referenced from route action.upstream.":
     "この名前は route の action.upstream から参照されます。",
   "Name is referenced from backend pools or route action.upstream.":
     "この名前は backend pool または route の action.upstream から参照されます。",
-  "Explicit routes run first, then generated Vhost/Site routes, default_route, and finally upstreams.":
-    "explicit route が先に評価され、その後 generated Vhost/Site route、default_route、最後に upstreams が使われます。",
-  "No explicit route rules configured. Traffic can still match generated Vhost/Site routes before default_route or upstreams.":
-    "explicit route は未設定です。トラフィックは default_route や upstreams の前に generated Vhost/Site route へ一致する場合があります。",
+  "Explicit routes run first, then Site routes, default_route, and finally upstreams. Use generated Runtime App targets from action.upstream for managed app traffic.":
+    "explicit route が先に評価され、その後 Site route、default_route、最後に upstreams が使われます。管理 app の通信は action.upstream から generated Runtime App target を指定します。",
+  "No explicit route rules configured. Traffic can still use default_route or upstream fallback; managed Runtime Apps are selected by generated target name.":
+    "explicit route は未設定です。トラフィックは default_route または upstream fallback を使えます。管理 Runtime Apps は generated target 名で選択します。",
   "Used only when no route matches. If absent, upstreams are used.":
     "どの route にも一致しない時だけ使われます。未設定なら upstreams が使われます。",
-  "Configure a default route when you want a distinct fallback after generated Vhost/Site routes and before upstream selection.":
-    "generated Vhost/Site route の後、upstreams の選択に入る前に別の fallback を使いたい場合は default route を設定します。",
+  "Configure a default route when you want a distinct fallback before upstream selection.":
+    "upstream 選択の前に別の fallback を使いたい場合は default route を設定します。",
   "Dry Run": "Dry Run",
   "Confirm which route would win and which final upstream URL would be used without changing live traffic.":
     "実トラフィックを変えずに、どの route が選ばれ、最終的にどの upstream URL が使われるか確認します。",
@@ -412,8 +412,8 @@ const JA_STRINGS: Record<string, string> = {
   prefix: "prefix",
   regex: "regex",
   "Action upstream": "action upstream",
-  "Direct upstream name only for operator-managed routes. Vhost-owned app traffic is published from Vhosts.":
-    "operator が管理する route では direct upstream 名だけを指定します。Vhost 管理 app の通信は Vhosts から公開されます。",
+  "Use a direct upstream name or a generated Runtime App target name. Runtime App targets point to the configured listen host and port.":
+    "direct upstream 名または generated Runtime App target 名を指定します。Runtime App target は設定済み listen host と port を指します。",
   "Host rewrite": "Host 書き換え",
   "Optional outbound Host header override.":
     "任意の送信先 Host ヘッダ上書きです。",
@@ -437,6 +437,8 @@ const JA_STRINGS: Record<string, string> = {
   "Required only for header/cookie hash.":
     "header/cookie hash の時だけ必要です。",
   "Sticky session": "Sticky session",
+  "One named upstream per line. Direct upstreams and generated Runtime App targets are valid members.":
+    "1 行に 1 つの named upstream を指定します。direct upstream と generated Runtime App target が member として有効です。",
   "Issue a signed affinity cookie so clients return to the same selectable backend in this pool.":
     "署名付き affinity Cookie を発行し、この pool 内の同じ選択可能 backend へ client を戻します。",
   "Cookie name": "Cookie 名",
@@ -454,17 +456,17 @@ const JA_STRINGS: Record<string, string> = {
   "Optionally tell backend applications which named upstream handled the request. This is observability-only and applies only to Proxy Rules > Upstreams targets.":
     "必要な場合だけ、どの named upstream が request を処理したかを backend application へ伝えます。用途は observability 専用で、対象は Proxy Rules > Upstreams の named upstream だけです。",
   "Emit X-Tukuyomi-Upstream-Name": "Emit X-Tukuyomi-Upstream-Name",
-  "When enabled, named upstream requests carry X-Tukuyomi-Upstream-Name to the backend. Direct URLs and generated vhost targets do not receive it.":
-    "有効にすると、named upstream へ流れる request だけが backend へ X-Tukuyomi-Upstream-Name を送ります。direct URL と generated vhost target には付きません。",
+  "When enabled, named upstream requests carry X-Tukuyomi-Upstream-Name to the backend. Direct URLs and generated Runtime App targets do not receive it.":
+    "有効にすると、named upstream へ流れる request だけが backend へ X-Tukuyomi-Upstream-Name を送ります。direct URL と generated Runtime App target には付きません。",
   "This header is internal observability data. It is stripped from inbound requests and re-added only when a named upstream is finally selected after WAF.":
     "この header は内部 observability 用です。inbound request からは一度除去し、WAF 後に named upstream が最終選択された時だけ付け直します。",
-  "Inspect direct upstream backends used by routing. Runtime enable/drain/disable and weight overrides apply here; Vhost-generated targets stay on the Vhosts surface.":
-    "routing で使われる direct upstream backend を確認します。runtime enable/drain/disable と weight override はここで操作し、Vhost-generated target は Vhosts 側に残します。",
+  "Inspect direct upstream backends used by routing. Runtime enable/drain/disable and weight overrides apply here; Runtime App targets stay on the Runtime Apps surface.":
+    "routing で使われる direct upstream backend を確認します。runtime enable/drain/disable と weight override はここで操作し、Runtime App target は Runtime Apps 側に残します。",
   "No direct upstream backends are configured.":
     "direct upstream backend が未設定です。",
   "Add direct backends in Proxy Rules > Upstreams, then return here for status and runtime operations.":
     "Proxy Rules > Upstreams で direct backend を追加してから、status と runtime 操作のためにここへ戻ってください。",
-  vhost: "vhost",
+  "runtime app": "runtime app",
   "Runtime weight overrides are available only for direct named upstreams in this slice.":
     "この slice では runtime weight override は direct named upstream にだけ対応します。",
   "Status only in this slice. Runtime enable/drain/disable stays on direct named upstreams.":
@@ -842,7 +844,7 @@ const JA_STRINGS: Record<string, string> = {
     "現在の WAF engine が Coraza ではないため、追加ルール参照は利用できません。Full bypass entry は引き続き適用されます。",
   "Proxy Seed File": "Proxy 初期投入ファイル",
   "PHP Runtime Inventory Seed File": "PHP runtime inventory 初期投入ファイル",
-  "Vhost Seed File": "Vhost 初期投入ファイル",
+  "Runtime Apps Seed File": "Runtime Apps 初期投入ファイル",
   "Cache Rules Seed File": "Cache Rules 初期投入ファイル",
   "Cache Store Seed File": "Cache Store 初期投入ファイル",
   "Bypass Seed File": "Bypass 初期投入ファイル",
@@ -892,10 +894,26 @@ const JA_STRINGS: Record<string, string> = {
   "TLS mode": "TLS モード",
   "ACME environment": "ACME environment",
   "ACME account email": "ACME account email",
-  "Define PHP-FPM vhosts here instead of creating proxy upstream rows. Each vhost owns its hostname, FastCGI port, docroot, and runtime binding.":
-    "proxy upstream 行を作らず、ここで PHP-FPM vhost を定義します。各 vhost は hostname、FastCGI port、docroot、runtime binding を持ちます。",
-  "No PHP-FPM vhosts configured. Add one to publish a host-backed PHP-FPM runtime.":
-    "PHP-FPM vhost は未設定です。host に紐づく PHP-FPM runtime を公開するには vhost を追加してください。",
+  "Define runtime-backed application listeners here. Proxy Rules routes traffic to the generated upstream target.":
+    "runtime backed application listener をここで定義します。traffic は Proxy Rules から generated upstream target へ routing します。",
+  "Runtime Apps": "Runtime Apps",
+  "Loading Runtime Apps...": "Runtime Apps を読み込んでいます...",
+  "Saved. Runtime Apps config applied.": "保存しました。Runtime Apps 設定を適用しました。",
+  "Add app": "app 追加",
+  "No runtime-backed apps configured. Add one to publish a managed application listener.":
+    "runtime backed app は未設定です。managed application listener を公開するには追加してください。",
+  "Legacy static runtime apps are still present in local config. Static mode is no longer supported here; remove those entries before applying changes.":
+    "legacy static runtime app が local config に残っています。Static mode はこの画面ではサポートしていないため、適用前に削除してください。",
+  "Legacy static runtime app": "legacy static runtime app",
+  "Static mode is no longer supported from this page. Remove this entry, or replace it with a PHP-FPM runtime app that has an explicit runtime binding.":
+    "Static mode はこの画面ではサポートしていません。この entry を削除するか、明示的な runtime binding を持つ PHP-FPM runtime app に置き換えてください。",
+  "Listen Host": "待ち受け Host",
+  "Listen Port": "待ち受け Port",
+  "Runtime App Basic Auth Realm": "Runtime App Basic Auth Realm",
+  "Server-side Runtime Apps ETag was refreshed; the editor values were kept. Review the error and apply again.":
+    "サーバ側の Runtime Apps ETag を更新しました。編集中の値は保持しています。エラー内容を確認してから再度適用してください。",
+  "Server-side Runtime Apps config changed; load before applying to avoid overwriting another change.":
+    "サーバ側の Runtime Apps 設定が変更されています。別の変更を上書きしないよう、適用前に読み込み直してください。",
   cert_file: "cert_file",
   key_file: "key_file",
   "Validation Summary": "Validation Summary",
@@ -1213,8 +1231,20 @@ const JA_STRINGS: Record<string, string> = {
   "Window seconds": "ウィンドウ秒数",
   "`suspicious` challenges only suspicious or scored requests. `always` challenges all GET requests under the selected prefixes.":
     "`suspicious` は suspicious または score 付きの request だけを challenge します。`always` は選択した prefix 配下のすべての GET request を challenge します。",
-  "Bind this runtime from Vhosts before process controls become available.":
-    "process 操作を使うには、先に Vhosts からこの runtime を紐付けてください。",
+  "Built runtimes are available. Manage PHP-FPM host, port, and docroot bindings from Runtime Apps.":
+    "build 済み runtime があります。PHP-FPM の host、port、docroot binding は Runtime Apps から管理します。",
+  "Open Runtime Apps": "Runtime Apps を開く",
+  "Bind this runtime from Runtime Apps before process controls become available.":
+    "process 操作を使うには、先に Runtime Apps からこの runtime を紐付けてください。",
+  "Perl/Starman runtime entries are managed here for PSGI Runtime Apps and per-app process controls.":
+    "PSGI Runtime Apps と app 単位の process 操作用に Perl/Starman runtime entry をここで管理します。",
+  "No built PSGI runtimes are available yet. Build a PSGI runtime bundle first, then bind it from Runtime Apps.":
+    "build 済み PSGI runtime はまだありません。先に PSGI runtime bundle を build し、Runtime Apps から紐付けてください。",
+  "Built PSGI runtimes are available. Bind each PSGI app from Runtime Apps.":
+    "build 済み PSGI runtime があります。各 PSGI app は Runtime Apps から紐付けます。",
+  "No PSGI Runtime Apps are materialized.":
+    "materialize 済み PSGI Runtime Apps はありません。",
+  "app(s)": "app",
   "Effective User": "実行ユーザー",
   "Generated Targets": "生成ターゲット",
   "Open Runtime": "Runtime を開く",

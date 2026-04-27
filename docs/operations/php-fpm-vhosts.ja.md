@@ -1,22 +1,22 @@
 [English](php-fpm-vhosts.md) | [日本語](php-fpm-vhosts.ja.md)
 
-# PHP-FPM ランタイム / Vhost 運用
+# PHP-FPM ランタイム / Runtime App 運用
 
-この文書は、`/options`、`/vhosts`、`/proxy-rules` を使う任意の PHP-FPM 運用をまとめたものです。
+この文書は、`/options`、`/runtime-apps`、`/proxy-rules` を使う任意の PHP-FPM 運用をまとめたものです。
 
 ## 役割分担
 
 - `/options`
   - build 済み runtime の一覧表示
   - materialization 状態 / process 状態の確認
-- `/vhosts`
+- `/runtime-apps`
   - 管理対象 `php-fpm` アプリ定義の管理
-  - host、FastCGI listen port、docroot、runtime、rewrite、access rule、basic auth、PHP ini override の管理
-  - vhost 用の生成 backend / host route の管理
+  - runtime listen host、FastCGI listen port、docroot、runtime、rewrite、access rule、basic auth、PHP ini override の管理
+  - generated backend の管理
 - `/proxy-rules`
-  - vhost 以外の direct backend / backend pool / 明示 route 管理
-  - PHP-FPM アプリの接続先設定は `/vhosts` 側へ移す
-  - configured upstream の URL は `/vhosts` によって書き換えられません
+  - Runtime Apps が所有しない direct backend / backend pool / 明示 route 管理
+  - PHP-FPM アプリの接続先設定は `/runtime-apps` 側へ移す
+  - configured upstream の URL は `/runtime-apps` によって書き換えられません
   - raw の `fcgi://` を通常の運用入口にはしない
 
 ## データ配置
@@ -26,7 +26,7 @@ PHP-FPM の運用データは `data/php-fpm/` に集約されています。
 - `inventory.json`
   - runtime inventory のローカル metadata
 - `vhosts.json`
-  - 管理対象 PHP-FPM vhost 定義
+  - 管理対象 PHP-FPM Runtime App 定義
 - `binaries/<runtime_id>/`
   - build 済み runtime bundle、`php-fpm` wrapper、`php` CLI wrapper、`runtime.json`、`modules.json`
 - `runtime/<runtime_id>/`
@@ -86,7 +86,7 @@ build 後の確認手順:
 補足:
 
 - `php-fpm-copy` の既定配備先は `/opt/tukuyomi` です。別 path は `DEST=/srv/tukuyomi` のように上書きします
-- `php-fpm-prune` も既定配備先は `/opt/tukuyomi` です。staged `vhosts.json` の参照と実行中 pid を確認してから削除します
+- `php-fpm-prune` も既定配備先は `/opt/tukuyomi` です。staged `vhosts.json` 内の Runtime App 参照と実行中 pid を確認してから削除します
 - Docker が必要なのは runtime bundle の build 時だけで、bundle 配置後の実行時には不要です
 - PHP / base image library / PECL extension の security update は operator が bundle を rebuild / 再配置して取り込みます
 - 同梱 runtime には、SQLite / MySQL(MariaDB) / PostgreSQL の主要 DB 用 extension を標準で含めます
@@ -95,13 +95,13 @@ build 後の確認手順:
   - `pgsql`, `pdo_pgsql`
 - 同梱 module 一覧は `/options` または `data/php-fpm/binaries/<runtime_id>/php -m` で確認できます
 
-## Vhost の流れ
+## Runtime App の流れ
 
-管理対象 PHP-FPM アプリ定義は `/vhosts` で管理します。
+管理対象 PHP-FPM アプリ定義は `/runtime-apps` で管理します。
 
-`/vhosts` は build 済み runtime が 1 つ以上ある時だけ表示されます。
+`/runtime-apps` は build 済み runtime が 1 つ以上ある時だけ表示されます。
 
-各 vhost の必須項目:
+各 Runtime App の必須項目:
 
 - `name`
 - `hostname`
@@ -114,74 +114,74 @@ build 後の確認手順:
 - `try_files`
 - rewrite rules
 - access rules
-- vhost 全体の basic auth
+- Runtime App 全体の basic auth
 - access rule 単位の basic auth
 - `php_value`
 - `php_admin_value`
 
 基本フロー:
 
-1. `/vhosts` を開く
-2. vhost を追加する
+1. `/runtime-apps` を開く
+2. Runtime App を追加する
 3. 必須項目を入力する
 4. 必要なら rewrite / access / auth / ini を追加する
 5. `Validate` を実行する
 6. `Apply` を実行する
 7. 直前の保存状態へ戻す必要がある時だけ `Rollback` を使う
 
-Vhost の動作は nginx と同じく集中設定です。document root 内の
+Runtime App の動作は nginx と同じく集中設定です。document root 内の
 `.htaccess` のようなファイルは、parse / import / watch / request 時再読込
 の対象にしません。古い config に残っている `override_file_name` は移行用
 として読み取るだけで、validate/apply 時に保存形から消えます。
 
-## Upstream から Vhost への境界
+## Upstream から Runtime App への境界
 
-PHP-FPM アプリを `Proxy Rules > Upstreams` に direct backend として置く運用はやめ、接続先設定は `/vhosts` に移します。
+PHP-FPM アプリを `Proxy Rules > Upstreams` に direct backend として置く運用はやめ、接続先設定は `/runtime-apps` に移します。
 
 - `Proxy Rules > Upstreams`
-  - 外部 HTTP/HTTPS backend など、vhost が所有しない direct backend 用
-  - configured upstream URL は表示値どおりに扱われ、vhost によって別 target へ差し替えられません
-- `/vhosts`
-  - PHP-FPM/static app の host、docroot、runtime、FastCGI listen port を管理
-  - 保存時に generated backend と generated host route を effective runtime へ公開
+  - 外部 HTTP/HTTPS backend など、Runtime Apps が所有しない direct backend 用
+  - configured upstream URL は表示値どおりに扱われ、Runtime Apps によって別 target へ差し替えられません
+- `/runtime-apps`
+  - PHP-FPM/static app の runtime listen host、docroot、runtime、FastCGI listen port を管理
+  - 保存時に generated backend を effective runtime へ公開
 
-## 生成 Vhost Route
+## 生成 Runtime App Backend
 
-vhost を保存すると、その `hostname` 向けの通信は server-generated proxy state で公開されます。
+Runtime App を保存すると、設定した listener 用の generated backend が公開されます。
+JSON の `hostname` は runtime の待ち受け host/address であり、VirtualHost 名や
+Host header match ではありません。
 
-vhost 保存後の流れ:
+Runtime App 保存後の流れ:
 
-- `/vhosts` が定義を `data/php-fpm/vhosts.json` へ保存
+- `/runtime-apps` が定義を `data/php-fpm/vhosts.json` へ保存
 - runtime layer が `data/php-fpm/runtime/<runtime_id>/` に pool/config を生成
 - effective proxy runtime に `generated_target` 名の generated upstream が追加される
-- effective proxy runtime に vhost hostname 用の generated host route `vhost:<name>` が追加される
 - `Proxy Rules > Upstreams` の configured upstream URL は変更されない
+- traffic を Runtime App-backed app へ流す時は、operator が `Proxy Rules` の route または default route から generated upstream を選択する
 
-route の優先順は operator の明示設定を先に見ます。
+route の優先順は `Proxy Rules` が管理します。
 
 - explicit `routes[]`
-- generated vhost host route
 - generated site host fallback route
 - `default_route`
 - `upstreams[]`
 
 補足:
 
-- `listen_port` は PHP-FPM の FastCGI listen port です
-- `http://127.0.0.1:<listen_port>` のような HTTP upstream としては扱いません
+- `hostname` と `listen_port` は PHP-FPM の FastCGI listen target です
+- `http://<hostname>:<listen_port>` のような HTTP upstream としては扱いません
 - `generated_target` は server-owned の generated backend alias / pool 名です。admin UI では operator input として表示しません
-- 通常運用では `generated_target` を `Proxy Rules` に手入力しません。vhost hostname の publish は `/vhosts` の保存で完結します
-- `default_route` は一致した vhost hostname を上書きしません
-- 例外的に vhost routing を上書きしたい場合は、operator が explicit route を定義します
+- 通常運用では `Proxy Rules` から generated upstream target へ routing します
 
-`Proxy Rules` は vhost 以外の routing / backend pool に集中させ、管理対象 PHP アプリの詳細は `/vhosts` で管理してください。`conf/proxy.json` へ raw の `fcgi://` や generated target を手で書く前提にはしません。
+PHP runtime の詳細は `/runtime-apps` に置き、公開 traffic の選択は `Proxy Rules` に置きます。
+generated upstream target が listener を表すため、raw の `fcgi://` URL を手書きする必要はありません。
 
 ## Process Lifecycle
 
-有効な `php-fpm` vhost があると、tukuyomi は `runtime_id` ごとに 1 つの `php-fpm` master process を supervise します。
+有効な `php-fpm` Runtime App があると、tukuyomi は `runtime_id` ごとに 1 つの `php-fpm` master process を supervise します。
 
-- `php-fpm` vhost の追加・変更で runtime の起動または再起動が起こり得る
-- 最後の参照 vhost を削除すると、その runtime は停止する
+- `php-fpm` Runtime App の追加・変更で runtime の起動または再起動が起こり得る
+- 最後の参照 Runtime App を削除すると、その runtime は停止する
 - runtime の状態は `/options` で確認できる
 
 必要なら明示的に制御できます。

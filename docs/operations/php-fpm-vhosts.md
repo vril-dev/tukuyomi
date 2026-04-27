@@ -1,22 +1,22 @@
 [English](php-fpm-vhosts.md) | [日本語](php-fpm-vhosts.ja.md)
 
-# PHP-FPM Runtime and Vhost Operations
+# PHP-FPM Runtime and Runtime App Operations
 
-This document covers the optional PHP-FPM workflow exposed through `/options`, `/vhosts`, and `/proxy-rules`.
+This document covers the optional PHP-FPM workflow exposed through `/options`, `/runtime-apps`, and `/proxy-rules`.
 
 ## Ownership Boundaries
 
 - `/options`
   - built runtime inventory
   - materialization and process visibility
-- `/vhosts`
+- `/runtime-apps`
   - source of truth for managed `php-fpm` applications
-  - host, FastCGI listen port, docroot, runtime, rewrite, access rules, basic auth, and PHP ini overrides
-  - generated vhost backend and host route ownership
+  - runtime listen host, FastCGI listen port, docroot, runtime, rewrite, access rules, basic auth, and PHP ini overrides
+  - generated backend ownership
 - `/proxy-rules`
-  - direct backends, backend pools, and explicit routes for non-vhost traffic
-  - PHP-FPM application backend settings move to `/vhosts`
-  - configured upstream URLs are never rewritten by `/vhosts`
+  - direct backends, backend pools, and explicit routes for traffic not owned by Runtime Apps
+  - PHP-FPM application backend settings move to `/runtime-apps`
+  - configured upstream URLs are never rewritten by `/runtime-apps`
   - do not treat raw `fcgi://` transport details as the normal operator entrypoint
 
 ## Data Layout
@@ -26,7 +26,7 @@ PHP-FPM operator-managed data lives under `data/php-fpm/`.
 - `inventory.json`
   - local runtime inventory metadata
 - `vhosts.json`
-  - persisted managed PHP-FPM vhost definitions
+  - persisted managed PHP-FPM Runtime App definitions
 - `binaries/<runtime_id>/`
   - built runtime bundle, `php-fpm` wrapper, `php` CLI wrapper, `runtime.json`, and `modules.json`
 - `runtime/<runtime_id>/`
@@ -86,7 +86,7 @@ If a runtime bundle is removed from `data/php-fpm/binaries/<runtime_id>/`, it di
 Notes:
 
 - `php-fpm-copy` defaults to `/opt/tukuyomi`; override with `DEST=/srv/tukuyomi` when needed
-- `php-fpm-prune` uses the same default destination and checks staged `vhosts.json` references plus the runtime pid before deleting the staged bundle
+- `php-fpm-prune` uses the same default destination and checks staged Runtime App references in `vhosts.json` plus the runtime pid before deleting the staged bundle
 - Docker is required only while building the runtime bundle; runtime execution does not depend on Docker once the bundle is staged
 - PHP, base image library, and PECL extension security updates are operator-managed, so rebuild and restage the bundle when those updates are needed
 - the bundled runtime includes the major DB extensions needed for SQLite, MySQL/MariaDB, and PostgreSQL
@@ -95,13 +95,13 @@ Notes:
   - `pgsql`, `pdo_pgsql`
 - verify the bundled module set from `/options` or with `data/php-fpm/binaries/<runtime_id>/php -m`
 
-## Vhost Workflow
+## Runtime App Workflow
 
-Use `/vhosts` when you need to define managed PHP-FPM application ownership.
+Use `/runtime-apps` when you need to define managed PHP-FPM application ownership.
 
-`/vhosts` is visible only after at least one runtime bundle is built and detected.
+`/runtime-apps` is visible only after at least one runtime bundle is built and detected.
 
-Each vhost requires:
+Each runtime app requires:
 
 - `name`
 - `hostname`
@@ -114,74 +114,75 @@ Optional controls:
 - `try_files`
 - rewrite rules
 - access rules
-- vhost-level basic auth
+- runtime app-level basic auth
 - access-rule-level basic auth
 - `php_value`
 - `php_admin_value`
 
 Typical flow:
 
-1. Open `/vhosts`.
-2. Add a vhost.
+1. Open `/runtime-apps`.
+2. Add a runtime app.
 3. Fill the required fields.
 4. Add rewrite/access/auth/ini settings as needed.
 5. Run `Validate`.
 6. Run `Apply`.
 7. Use `Rollback` only when you need to restore the previous saved snapshot.
 
-Vhost behavior is centralized and nginx-style. Files in the document root such
+Runtime App behavior is centralized and nginx-style. Files in the document root such
 as `.htaccess` are not parsed, imported, watched, or re-read at request time.
 Legacy `override_file_name` fields in old config files are accepted only for
 migration and are normalized away on validate/apply.
 
-## Upstreams to Vhosts Boundary
+## Upstreams to Runtime Apps Boundary
 
-Do not model Tukuyomi-owned PHP-FPM applications as direct backends in `Proxy Rules > Upstreams`; move those connection settings to `/vhosts`.
+Do not model Tukuyomi-owned PHP-FPM applications as direct backends in `Proxy Rules > Upstreams`; move those connection settings to `/runtime-apps`.
 
 - `Proxy Rules > Upstreams`
-  - direct non-vhost backends such as external HTTP/HTTPS services
-  - configured upstream URLs are used exactly as shown and are not rebound to vhost targets
-- `/vhosts`
-  - host, docroot, runtime, and FastCGI listen port ownership for PHP-FPM/static apps
-  - generated backend and generated host route publication into the effective runtime
+  - direct backends such as external HTTP/HTTPS services
+  - configured upstream URLs are used exactly as shown and are not rebound to Runtime App targets
+- `/runtime-apps`
+  - runtime listen host, docroot, runtime, and FastCGI listen port ownership for PHP-FPM/static apps
+  - generated backend publication into the effective runtime
 
-## Generated Vhost Routes
+## Generated Runtime App Backends
 
-Saving a vhost publishes traffic for its `hostname` through server-generated proxy state.
+Saving a runtime app publishes a generated backend for its configured listener.
+The `hostname` JSON field is the runtime listen host/address, not a virtual host
+name or Host-header match.
 
-After a vhost is saved:
+After a runtime app is saved:
 
-- `/vhosts` persists the definition into `data/php-fpm/vhosts.json`
+- `/runtime-apps` persists the definition into `data/php-fpm/vhosts.json`
 - the runtime layer materializes pool/config data under `data/php-fpm/runtime/<runtime_id>/`
 - the effective proxy runtime gets a generated upstream named by `generated_target`
-- the effective proxy runtime gets a generated host route named `vhost:<name>` for the vhost hostname
 - configured upstream URLs in `Proxy Rules > Upstreams` are left unchanged
+- operator routes or the default route in `Proxy Rules` select the generated upstream when traffic should reach the Runtime App-backed app
 
-Route order keeps explicit operator rules first:
+Route order is controlled by `Proxy Rules`:
 
 - explicit `routes[]`
-- generated vhost host routes
 - generated site host fallback routes
 - `default_route`
 - `upstreams[]`
 
 Notes:
 
-- `listen_port` is the PHP-FPM FastCGI listen port
-- do not treat `http://127.0.0.1:<listen_port>` as an HTTP upstream
+- `hostname` plus `listen_port` is the PHP-FPM FastCGI listen target
+- do not treat `http://<hostname>:<listen_port>` as an HTTP upstream
 - the server owns `generated_target` as the generated backend alias and pool name; the admin UI does not expose it as operator input
-- normal operation does not require typing `generated_target` into `Proxy Rules`; publishing the vhost hostname is handled by saving `/vhosts`
-- `default_route` does not override a matching vhost hostname
-- explicit operator routes can override generated vhost routing when an intentional exception is needed
+- normal operation routes to the generated upstream target from `Proxy Rules`
 
-Keep `Proxy Rules` focused on non-vhost routing and backend pools. Managed PHP application details should stay in `/vhosts`, not as raw `fcgi://` or generated-target edits inside `conf/proxy.json`.
+Keep PHP runtime details in `/runtime-apps`. Keep public traffic selection in
+`Proxy Rules`; do not hand-write raw `fcgi://` URLs when the generated upstream
+target already represents the listener.
 
 ## Process Lifecycle
 
-For active `php-fpm` vhosts, tukuyomi supervises one `php-fpm` master per active `runtime_id`.
+For active `php-fpm` Runtime Apps, tukuyomi supervises one `php-fpm` master per active `runtime_id`.
 
-- adding or changing a `php-fpm` vhost can start or restart the owning runtime
-- removing the last referencing `php-fpm` vhost stops that runtime
+- adding or changing a `php-fpm` Runtime App can start or restart the owning runtime
+- removing the last referencing `php-fpm` Runtime App stops that runtime
 - runtime status is visible from `/options`
 
 You can also control a built runtime explicitly:

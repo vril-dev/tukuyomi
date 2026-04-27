@@ -185,7 +185,7 @@ official な mutable single-instance path で最低限必要な writable path:
 
 ephemeral local state を許容しないなら、これらを platform 側で mount してください。
 
-`/options`、`/vhosts`、または scheduled PHP CLI job で bundled PHP runtime も使う場合は、`/app/data/php-fpm` も mount してください。
+`/options`、`/runtime-apps`、または scheduled PHP CLI job で bundled PHP runtime も使う場合は、`/app/data/php-fpm` も mount してください。
 internal response cache store を node replacement 後も残したい場合は、`cache_store.store_dir`
 に合わせて `/app/cache/response` なども mount してください。これは cache であり、
 DB/runtime authority ではありません。

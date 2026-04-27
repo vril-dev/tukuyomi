@@ -1693,7 +1693,7 @@ func parseProxyUpstreamURL(field, raw string) (*url.URL, error) {
 	}
 	scheme := strings.ToLower(strings.TrimSpace(target.Scheme))
 	switch scheme {
-	case "http", "https", "static":
+	case "http", "https", "psgi", "static":
 		if target.Host == "" {
 			return nil, fmt.Errorf("%s must include scheme and host", field)
 		}
@@ -1702,7 +1702,7 @@ func parseProxyUpstreamURL(field, raw string) (*url.URL, error) {
 			return nil, fmt.Errorf("%s must include host:port or /unix.sock path", field)
 		}
 	default:
-		return nil, fmt.Errorf("%s scheme must be http, https, fcgi, or static", field)
+		return nil, fmt.Errorf("%s scheme must be http, https, fcgi, psgi, or static", field)
 	}
 	return target, nil
 }
@@ -1867,7 +1867,7 @@ func resolveProxyHTTP2ValidationTarget(cfg ProxyRulesConfig, ref string, field s
 			return nil, fmt.Errorf("%s references duplicated upstream name %q", field, ref)
 		}
 		if !proxyUpstreamAllowedAsRouteTarget(upstream) {
-			return nil, fmt.Errorf("%s must reference a direct or generated vhost upstream name", field)
+			return nil, fmt.Errorf("%s must reference a direct or generated Runtime App upstream name", field)
 		}
 		if proxyUpstreamDiscoveryEnabled(upstream) {
 			return &url.URL{Scheme: upstream.Discovery.Scheme}, nil

@@ -21,7 +21,7 @@ This document describes practical operating steps to safely reduce false positiv
 Recommended order:
 
 1. Set an `extra_rule` only on the affected path in `Bypass Rules`.
-2. If needed, create a dedicated `*.conf` asset in `Rules` with usage `Bypass Rules extra_rule` and disable the target rule narrowly with `ctl:ruleRemoveById`.
+2. If needed, create a dedicated `*.conf` asset from `Rules` > Advanced > `Bypass snippets` and disable the target rule narrowly with `ctl:ruleRemoveById`.
 3. Use a broader path bypass only as a last resort (time-boxed, and roll it back later).
 
 Bypass Rules JSON example:

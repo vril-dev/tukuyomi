@@ -12,9 +12,10 @@ import (
 )
 
 type RuleAsset struct {
-	Path string
-	Kind string
-	Raw  []byte
+	Path     string
+	Kind     string
+	Raw      []byte
+	Disabled bool
 }
 
 type RuleAssetBundle struct {

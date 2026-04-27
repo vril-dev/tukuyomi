@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/waf"
 )
@@ -195,7 +196,7 @@ func TestRulesHandlerReturnsCanonicalDBAssetPath(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/tukuyomi-api/rules", nil)
+	req := httptest.NewRequest(http.MethodGet, "/tukuyomi-api/rules?runtime=1", nil)
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = req
 
@@ -275,6 +276,14 @@ func TestRulesHandlerReturnsBypassExtraRuleAssets(t *testing.T) {
 	config.CRSEnable = false
 	config.OverrideRulesDir = filepath.Join(tmp, "conf", "rules")
 	target := managedOverrideRulePath("orders-preview.conf")
+	oldBypass := bypassconf.GetFile()
+	bypassconf.SetFile(bypassconf.File{Default: bypassconf.Scope{Entries: []bypassconf.Entry{{
+		Path:      "/api/orders/preview",
+		ExtraRule: "orders-preview.conf",
+	}}}})
+	t.Cleanup(func() {
+		bypassconf.SetFile(oldBypass)
+	})
 
 	dbPath := filepath.Join(tmp, "tukuyomi.db")
 	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
@@ -296,7 +305,7 @@ func TestRulesHandlerReturnsBypassExtraRuleAssets(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/tukuyomi-api/rules", nil)
+	req := httptest.NewRequest(http.MethodGet, "/tukuyomi-api/rules?runtime=1", nil)
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = req
 
@@ -307,8 +316,15 @@ func TestRulesHandlerReturnsBypassExtraRuleAssets(t *testing.T) {
 	}
 	var out struct {
 		Files []struct {
-			Path string `json:"path"`
-			Kind string `json:"kind"`
+			Path           string   `json:"path"`
+			Kind           string   `json:"kind"`
+			Position       int      `json:"position"`
+			OrderGroup     string   `json:"order_group"`
+			GroupPosition  int      `json:"group_position"`
+			RuntimeLoaded  bool     `json:"runtime_loaded"`
+			Advanced       bool     `json:"advanced"`
+			ReferenceCount int      `json:"reference_count"`
+			ReferencedBy   []string `json:"referenced_by"`
 		} `json:"files"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
@@ -319,6 +335,189 @@ func TestRulesHandlerReturnsBypassExtraRuleAssets(t *testing.T) {
 	}
 	if out.Files[1].Path != filepath.ToSlash(target) || out.Files[1].Kind != wafRuleAssetKindBypassExtra {
 		t.Fatalf("extra asset=%+v want path=%q kind=%q", out.Files[1], filepath.ToSlash(target), wafRuleAssetKindBypassExtra)
+	}
+	if out.Files[0].OrderGroup != "base_load_order" || !out.Files[0].RuntimeLoaded || out.Files[0].Advanced {
+		t.Fatalf("base metadata=%+v", out.Files[0])
+	}
+	if out.Files[0].Position != 0 || out.Files[0].GroupPosition != 0 || out.Files[1].Position != 1 || out.Files[1].GroupPosition != 0 {
+		t.Fatalf("positions=%+v", out.Files)
+	}
+	if out.Files[1].OrderGroup != "bypass_snippet" || out.Files[1].RuntimeLoaded || !out.Files[1].Advanced {
+		t.Fatalf("bypass metadata=%+v", out.Files[1])
+	}
+	if out.Files[1].ReferenceCount != 1 || len(out.Files[1].ReferencedBy) != 1 || out.Files[1].ReferencedBy[0] != "/api/orders/preview" {
+		t.Fatalf("bypass references=%+v", out.Files[1])
+	}
+}
+
+func TestRulesHandlerReturnsRuntimeCRSAndBaseLoadOrder(t *testing.T) {
+	restore := saveRulesFileConfigForTest()
+	defer restore()
+
+	gin.SetMode(gin.TestMode)
+	tmp := t.TempDir()
+	config.RulesFile = config.DefaultBaseRuleAssetPath
+	config.CRSEnable = true
+	config.CRSSetupFile = "rules/crs/crs-setup.conf"
+	config.CRSRulesDir = "rules/crs/rules"
+	disabledName := "REQUEST-920-PROTOCOL-ENFORCEMENT.conf"
+	disabledPath := "rules/crs/rules/" + disabledName
+
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected sqlite store")
+	}
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{
+		{Path: config.DefaultBaseRuleAssetPath, Kind: wafRuleAssetKindBase, Raw: []byte("SecRuleEngine On\n")},
+		{Path: "disabled-base.conf", Kind: wafRuleAssetKindBase, Raw: []byte("SecRequestBodyAccess On\n"), Disabled: true},
+		{Path: disabledPath, Kind: wafRuleAssetKindCRSAsset, Raw: []byte("SecRule REQUEST_URI @rx test \"id:920000,phase:1,pass\"\n")},
+		{Path: config.CRSSetupFile, Kind: wafRuleAssetKindCRSSetup, Raw: []byte("SecRequestBodyAccess On\n")},
+		{Path: "rules/crs/rules/REQUEST-901-INITIALIZATION.conf", Kind: wafRuleAssetKindCRSAsset, Raw: []byte("SecRule REQUEST_URI @rx test \"id:901000,phase:1,pass\"\n")},
+		{Path: "rules/crs/rules/README.md", Kind: wafRuleAssetKindCRSAsset, Raw: []byte("# CRS docs\n")},
+		{Path: "rules/crs/rules/agents.data", Kind: wafRuleAssetKindCRSAsset, Raw: []byte("blocked-agent\n")},
+		{Path: "rules/crs/rules/REQUEST-999-EXAMPLE.conf.example", Kind: wafRuleAssetKindCRSAsset, Raw: []byte("# example\n")},
+	}, configVersionSourceImport, "", "test waf asset import", 0); err != nil {
+		t.Fatalf("write waf rule assets: %v", err)
+	}
+	if _, err := store.writeCRSDisabledConfigVersion("", []string{disabledName}, configVersionSourceImport, "", "test crs disabled import", 0); err != nil {
+		t.Fatalf("write crs disabled: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/tukuyomi-api/rules?runtime=1", nil)
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+
+	RulesHandler(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		RuntimeFiles []struct {
+			Path          string `json:"path"`
+			Kind          string `json:"kind"`
+			OrderGroup    string `json:"order_group"`
+			Position      int    `json:"position"`
+			GroupPosition int    `json:"group_position"`
+			Enabled       bool   `json:"enabled"`
+			RuntimeLoaded bool   `json:"runtime_loaded"`
+			Editable      bool   `json:"editable"`
+			Toggleable    bool   `json:"toggleable"`
+		} `json:"runtime_files"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode rules response: %v", err)
+	}
+	if len(out.RuntimeFiles) != 5 {
+		t.Fatalf("runtime files len=%d want=5 body=%s", len(out.RuntimeFiles), rec.Body.String())
+	}
+	for _, f := range out.RuntimeFiles {
+		if strings.HasSuffix(f.Path, ".md") || strings.HasSuffix(f.Path, ".data") || strings.HasSuffix(f.Path, ".conf.example") {
+			t.Fatalf("runtime files include non-runtime CRS asset: %+v", out.RuntimeFiles)
+		}
+	}
+	want := []struct {
+		path          string
+		kind          string
+		enabled       bool
+		runtimeLoaded bool
+		editable      bool
+		toggleable    bool
+	}{
+		{config.CRSSetupFile, wafRuleAssetKindCRSSetup, true, true, false, false},
+		{"rules/crs/rules/REQUEST-901-INITIALIZATION.conf", wafRuleAssetKindCRSAsset, true, true, false, true},
+		{disabledPath, wafRuleAssetKindCRSAsset, false, false, false, true},
+		{config.DefaultBaseRuleAssetPath, wafRuleAssetKindBase, true, true, true, true},
+		{"disabled-base.conf", wafRuleAssetKindBase, false, false, true, true},
+	}
+	for i, expected := range want {
+		got := out.RuntimeFiles[i]
+		if got.Path != expected.path || got.Kind != expected.kind || got.Enabled != expected.enabled || got.RuntimeLoaded != expected.runtimeLoaded || got.Editable != expected.editable || got.Toggleable != expected.toggleable {
+			t.Fatalf("runtime file[%d]=+%v want=%+v", i, got, expected)
+		}
+		if got.Position != i {
+			t.Fatalf("runtime file[%d] position=%d", i, got.Position)
+		}
+	}
+	if out.RuntimeFiles[0].OrderGroup != "coraza_load_order" || out.RuntimeFiles[1].GroupPosition != 1 || out.RuntimeFiles[3].OrderGroup != "base_load_order" {
+		t.Fatalf("runtime grouping=%+v", out.RuntimeFiles)
+	}
+}
+
+func TestPutRulesCreatesBaseRuleDisabledByDefault(t *testing.T) {
+	restore := saveRulesFileConfigForTest()
+	defer restore()
+
+	gin.SetMode(gin.TestMode)
+	tmp := t.TempDir()
+	config.RulesFile = config.DefaultBaseRuleAssetPath
+	config.CRSEnable = false
+
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected sqlite store")
+	}
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{{
+		Path: config.DefaultBaseRuleAssetPath,
+		Kind: wafRuleAssetKindBase,
+		Raw:  []byte("SecRuleEngine On\n"),
+	}}, configVersionSourceImport, "", "test waf asset import", 0); err != nil {
+		t.Fatalf("write waf rule assets: %v", err)
+	}
+
+	body := rulesPutBody{
+		Path: "custom.conf",
+		Kind: wafRuleAssetKindBase,
+		Raw:  "SecRequestBodyAccess On\n",
+	}
+	payload, _ := json.Marshal(body)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/tukuyomi-api/rules", strings.NewReader(string(payload)))
+	req.Header.Set("Content-Type", "application/json")
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+
+	PutRules(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode put response: %v", err)
+	}
+	if out.Enabled {
+		t.Fatalf("new base rule should default disabled, response=%s", rec.Body.String())
+	}
+	assets, _, found, err := store.loadActiveWAFRuleAssets()
+	if err != nil || !found {
+		t.Fatalf("load active waf rule assets found=%v err=%v", found, err)
+	}
+	asset, ok := wafRuleAssetByPath(assets, "custom.conf")
+	if !ok {
+		t.Fatalf("custom.conf not found in assets: %+v", assets)
+	}
+	if !asset.Disabled {
+		t.Fatalf("custom.conf should be disabled by default: %+v", asset)
 	}
 }
 
@@ -376,6 +575,65 @@ func TestPutRulesCreatesBypassExtraRuleAsset(t *testing.T) {
 	}
 	if _, err := waf.GetEngineForExtraRule(target); err != nil {
 		t.Fatalf("load DB-backed extra rule: %v", err)
+	}
+}
+
+func TestPutRuleAssetOrderReordersBaseOnlyAndPreservesBypassExtra(t *testing.T) {
+	restore := saveRulesFileConfigForTest()
+	defer restore()
+
+	gin.SetMode(gin.TestMode)
+	tmp := t.TempDir()
+	config.RulesFile = "a.conf,b.conf"
+	config.CRSEnable = false
+	config.OverrideRulesDir = filepath.Join(tmp, "conf", "rules")
+	target := managedOverrideRulePath("orders-preview.conf")
+
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected sqlite store")
+	}
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{
+		{Path: "a.conf", Kind: wafRuleAssetKindBase, Raw: []byte("SecRuleEngine On\n")},
+		{Path: target, Kind: wafRuleAssetKindBypassExtra, Raw: []byte("SecRuleEngine On\n")},
+		{Path: "b.conf", Kind: wafRuleAssetKindBase, Raw: []byte("SecRequestBodyAccess On\n")},
+	}, configVersionSourceImport, "", "test waf asset import", 0); err != nil {
+		t.Fatalf("write waf rule assets: %v", err)
+	}
+
+	body := rulesOrderBody{Assets: []rulesOrderItem{
+		{Path: "b.conf", Kind: wafRuleAssetKindBase},
+		{Path: "a.conf", Kind: wafRuleAssetKindBase},
+	}}
+	payload, _ := json.Marshal(body)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/tukuyomi-api/rules:order", strings.NewReader(string(payload)))
+	req.Header.Set("Content-Type", "application/json")
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+
+	PutRuleAssetOrder(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assets, _, found, err := store.loadActiveWAFRuleAssets()
+	if err != nil || !found {
+		t.Fatalf("load active waf rule assets found=%v err=%v", found, err)
+	}
+	if len(assets) != 3 {
+		t.Fatalf("assets len=%d want=3: %+v", len(assets), assets)
+	}
+	if assets[0].Path != "b.conf" || assets[1].Path != "a.conf" || assets[2].Path != filepath.ToSlash(target) {
+		t.Fatalf("asset order=%+v", assets)
 	}
 }
 

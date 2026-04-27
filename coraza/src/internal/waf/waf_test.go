@@ -109,6 +109,23 @@ func TestComposeInitialRuleFiles_WithCRSDisabledFile(t *testing.T) {
 	}
 }
 
+func TestComposeInitialRuleFilesFromAssetsSkipsDisabledBaseRules(t *testing.T) {
+	bundle := RuleAssetBundle{Assets: []RuleAsset{
+		{Path: "enabled.conf", Kind: ruleAssetKindBase, Raw: []byte("SecRuleEngine On\n")},
+		{Path: "disabled.conf", Kind: ruleAssetKindBase, Raw: []byte("SecRequestBodyAccess On\n"), Disabled: true},
+	}}
+
+	got, err := composeInitialRuleFilesFromAssets(bundle, "", false, "", "", nil)
+	if err != nil {
+		t.Fatalf("composeInitialRuleFilesFromAssets() error = %v", err)
+	}
+
+	want := []string{"enabled.conf"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("composeInitialRuleFilesFromAssets() = %v, want %v", got, want)
+	}
+}
+
 func TestBuildWAF_BlocksMaliciousQuery(t *testing.T) {
 	dir := t.TempDir()
 	rulePath := filepath.Join(dir, "test.conf")

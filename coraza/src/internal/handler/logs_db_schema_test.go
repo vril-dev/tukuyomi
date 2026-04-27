@@ -88,8 +88,15 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("query migration version: %v", err)
 	}
-	if version != 12 || dirty != 0 {
-		t.Fatalf("migration version=%d dirty=%d want version=12 dirty=0", version, dirty)
+	if version != 13 || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=13 dirty=0", version, dirty)
+	}
+	var wafRuleAssetEnabledColumns int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('waf_rule_assets') WHERE name = 'enabled'`).Scan(&wafRuleAssetEnabledColumns); err != nil {
+		t.Fatalf("query waf_rule_assets enabled column: %v", err)
+	}
+	if wafRuleAssetEnabledColumns != 1 {
+		t.Fatalf("waf_rule_assets enabled column count=%d want 1", wafRuleAssetEnabledColumns)
 	}
 	for _, column := range []string{"acme_environment", "acme_email"} {
 		var count int
@@ -158,8 +165,8 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteReplacesLegacyMigrationTable(t *t
 	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("query migration version: %v", err)
 	}
-	if version != 12 || dirty != 0 {
-		t.Fatalf("migration version=%d dirty=%d want version=12 dirty=0", version, dirty)
+	if version != 13 || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=13 dirty=0", version, dirty)
 	}
 
 	var legacyColumns int

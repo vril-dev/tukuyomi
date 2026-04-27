@@ -192,7 +192,7 @@ func composeInitialRuleFilesFromAssets(bundle RuleAssetBundle, baseRuleSpec stri
 			continue
 		}
 		assetSet[path] = struct{}{}
-		if normalizeRuleAssetKind(asset.Kind) == ruleAssetKindBase {
+		if normalizeRuleAssetKind(asset.Kind) == ruleAssetKindBase && !asset.Disabled {
 			baseAssets = append(baseAssets, path)
 		}
 	}

@@ -1,0 +1,1 @@
+ALTER TABLE waf_rule_assets ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;

@@ -45,6 +45,10 @@ type RulesResp = {
   files?: RuleFileDTO[];
 };
 
+type StatusResp = {
+  waf_engine_mode?: string;
+};
+
 const exampleState: BypassRulesEditorState = {
   defaultEntries: [
     { path: "/assets/", extraRule: "" },
@@ -82,9 +86,11 @@ export default function BypassRulesPanel() {
   const [error, setError] = useState<string | null>(null);
   const [structuredError, setStructuredError] = useState<string | null>(null);
   const [extraRuleAssets, setExtraRuleAssets] = useState<string[]>([]);
+  const [wafEngineMode, setWAFEngineMode] = useState("coraza");
 
   const totalEntries = useMemo(() => countBypassEntries(editorState), [editorState]);
   const dirty = useMemo(() => raw !== serverRaw || !!structuredError, [raw, serverRaw, structuredError]);
+  const corazaExtraRulesAvailable = wafEngineMode === "coraza";
 
   const applyStructuredState = useCallback(
     (
@@ -132,14 +138,20 @@ export default function BypassRulesPanel() {
     setLoading(true);
     setError(null);
     try {
-      const [data, rulesData] = await Promise.all([
+      const [data, statusData] = await Promise.all([
         apiGetJson<BypassRulesDTO>("/bypass-rules"),
-        apiGetJson<RulesResp>("/rules"),
+        apiGetJson<StatusResp>("/status"),
       ]);
-      const extraRules = (Array.isArray(rulesData.files) ? rulesData.files : [])
-        .filter((file) => file.kind === "bypass_extra_rule" && typeof file.path === "string" && file.path.trim())
-        .map((file) => file.path as string)
-        .sort((a, b) => a.localeCompare(b));
+      const mode = (statusData.waf_engine_mode || "coraza").trim().toLowerCase() || "coraza";
+      setWAFEngineMode(mode);
+      let extraRules: string[] = [];
+      if (mode === "coraza") {
+        const rulesData = await apiGetJson<RulesResp>("/rules");
+        extraRules = (Array.isArray(rulesData.files) ? rulesData.files : [])
+          .filter((file) => file.kind === "bypass_extra_rule" && typeof file.path === "string" && file.path.trim())
+          .map((file) => file.path as string)
+          .sort((a, b) => a.localeCompare(b));
+      }
       setExtraRuleAssets(extraRules);
       const nextRaw = data.raw ?? "";
       const parsed = parseBypassRulesEditorDocument(nextRaw);
@@ -302,6 +314,11 @@ export default function BypassRulesPanel() {
 
       {error ? <Alert kind="error" title={tx("Error")} message={error} onClose={() => setError(null)} closeLabel={tx("Close")} /> : null}
       {structuredError ? <NoticeBar tone="warn">{structuredError}</NoticeBar> : null}
+      {!corazaExtraRulesAvailable ? (
+        <NoticeBar tone="warn">
+          {tx("Extra rule references are unavailable because the active WAF engine is not Coraza. Full bypass entries still apply.")}
+        </NoticeBar>
+      ) : null}
 
       <SectionCard
         title={tx("Workflow")}
@@ -388,11 +405,12 @@ export default function BypassRulesPanel() {
                     placeholder="/assets/"
                   />
                 </Field>
-                <Field label={tx("Extra rule reference")} hint={tx("Optional DB-managed `.conf` override applied instead of a full bypass when you need a narrow override.")}>
+                <Field label={tx("Extra rule reference")} hint={tx("Optional Coraza-backed DB-managed `.conf` override applied instead of a full bypass when you need a narrow override.")}>
                   <ExtraRuleSelect
                     tx={tx}
                     options={extraRuleAssets}
                     value={entry.extraRule}
+                    disabled={!corazaExtraRulesAvailable}
                     onChange={(value) => updateDefaultEntry(index, (current) => ({ ...current, extraRule: value }))}
                   />
                 </Field>
@@ -525,11 +543,12 @@ export default function BypassRulesPanel() {
                           placeholder="/internal/"
                         />
                       </Field>
-                      <Field label={tx("Extra rule reference")}>
+                      <Field label={tx("Extra rule reference")} hint={tx("Optional Coraza-backed DB-managed `.conf` override applied instead of a full bypass when you need a narrow override.")}>
                         <ExtraRuleSelect
                           tx={tx}
                           options={extraRuleAssets}
                           value={entry.extraRule}
+                          disabled={!corazaExtraRulesAvailable}
                           onChange={(value) =>
                             updateHostEntry(hostIndex, entryIndex, (current) => ({ ...current, extraRule: value }))
                           }
@@ -552,17 +571,19 @@ export default function BypassRulesPanel() {
 function ExtraRuleSelect({
   value,
   options,
+  disabled = false,
   onChange,
   tx,
 }: {
   value: string;
   options: string[];
+  disabled?: boolean;
   onChange: (value: string) => void;
   tx: (key: string, vars?: Record<string, string | number>) => string;
 }) {
   const hasCurrent = !value || options.includes(value);
   return (
-    <select className={inputClass} value={value} onChange={(event) => onChange(event.target.value)}>
+    <select className={inputClass} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
       <option value="">{tx("Full bypass")}</option>
       {!hasCurrent ? <option value={value}>{value}</option> : null}
       {options.map((path) => (

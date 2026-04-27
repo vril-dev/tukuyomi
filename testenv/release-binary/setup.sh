@@ -33,10 +33,10 @@ PUID=$(id -u)
 GUID=$(id -g)
 EOF
 
-if [[ ! -x "${BINARY_PATH}" && -f "${ROOT_DIR}/coraza/src/go.mod" ]] && command -v go >/dev/null 2>&1; then
+if [[ ! -x "${BINARY_PATH}" && -f "${ROOT_DIR}/server/go.mod" ]] && command -v go >/dev/null 2>&1; then
   echo "[release-binary-setup] building local tukuyomi binary"
   (
-    cd "${ROOT_DIR}/coraza/src"
+    cd "${ROOT_DIR}/server"
     go build -o "${BINARY_PATH}" ./cmd/server
   )
 fi

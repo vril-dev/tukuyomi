@@ -22,7 +22,7 @@ services:
   coraza:
     user: "${PUID}:${GUID}"
     build:
-      context: ./coraza
+      context: ./server
       dockerfile: Dockerfile
     environment:
       - WAF_CONFIG_FILE=${WAF_CONFIG_FILE:-conf/config.json}
@@ -58,7 +58,7 @@ services:
     user: "${PUID}:${GUID}"
     profiles: ["scheduled-tasks"]
     build:
-      context: ./coraza
+      context: ./server
       dockerfile: Dockerfile
     environment:
       - WAF_CONFIG_FILE=${WAF_CONFIG_FILE:-conf/config.json}

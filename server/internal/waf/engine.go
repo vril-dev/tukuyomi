@@ -11,9 +11,10 @@ import (
 	corazaVariables "github.com/corazawaf/coraza/v3/types/variables"
 
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/wafengine"
 )
 
-const EngineModeCoraza = "coraza"
+const EngineModeCoraza = wafengine.ModeCoraza
 
 type Engine interface {
 	Name() string
@@ -101,7 +102,7 @@ func (e corazaEngine) InspectRequest(req *http.Request) (Decision, error) {
 }
 
 func GetBaseEngine() Engine {
-	if mode := strings.TrimSpace(config.WAFEngineMode); mode != "" && mode != EngineModeCoraza {
+	if mode := wafengine.Normalize(config.WAFEngineMode); mode != EngineModeCoraza {
 		return nil
 	}
 	base := getBaseWAF()
@@ -112,11 +113,18 @@ func GetBaseEngine() Engine {
 }
 
 func GetEngineForExtraRule(extraRule string) (Engine, error) {
+	if mode := wafengine.Normalize(config.WAFEngineMode); mode != EngineModeCoraza {
+		return nil, fmt.Errorf("extra-rule WAF engine is unavailable for mode %q", mode)
+	}
 	w, err := getWAFForExtraRule(extraRule)
 	if err != nil || w == nil {
 		return nil, err
 	}
 	return corazaEngine{w: w}, nil
+}
+
+func EngineCapabilities() []wafengine.Capability {
+	return wafengine.Capabilities()
 }
 
 func convertCorazaMatches(matches []corazaTypes.MatchedRule) []Match {

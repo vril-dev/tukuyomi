@@ -2,7 +2,7 @@
 
 # Request-Time Security Plugins
 
-`tukuyomi` は `coraza/src/internal/handler` 内の compile-time plugin として request-time security extension をサポートします。
+`tukuyomi` は `server/internal/handler` 内の compile-time plugin として request-time security extension をサポートします。
 
 これは意図的に static で、Go runtime の `.so` plugin は使いません。
 
@@ -156,7 +156,7 @@ type requestSecurityPluginFactory func() requestSecurityPlugin
 
 新しい plugin file は次の配下に追加します。
 
-- `coraza/src/internal/handler/`
+- `server/internal/handler/`
 
 推奨 naming:
 
@@ -207,7 +207,7 @@ func (p *sampleRequestSecurityPlugin) Handle(c *gin.Context, ctx *requestSecurit
 便利な確認コマンド:
 
 ```bash
-cd coraza/src
+cd server
 go test ./internal/handler ./...
 ```
 

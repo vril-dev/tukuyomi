@@ -8,13 +8,15 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"tukuyomi/internal/wafengine"
 )
 
 const (
 	ProxyEngineModeTukuyomiProxy      = "tukuyomi_proxy"
 	DefaultProxyEngineMode            = ProxyEngineModeTukuyomiProxy
-	WAFEngineModeCoraza               = "coraza"
-	DefaultWAFEngineMode              = WAFEngineModeCoraza
+	WAFEngineModeCoraza               = wafengine.ModeCoraza
+	DefaultWAFEngineMode              = wafengine.DefaultMode
 	PersistentStorageBackendLocal     = "local"
 	PersistentStorageBackendS3        = "s3"
 	PersistentStorageBackendAzureBlob = "azure_blob"
@@ -675,10 +677,8 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	default:
 		return fmt.Errorf("proxy.engine.mode must be %s", ProxyEngineModeTukuyomiProxy)
 	}
-	switch cfg.WAF.Engine.Mode {
-	case WAFEngineModeCoraza:
-	default:
-		return fmt.Errorf("waf.engine.mode must be %s", WAFEngineModeCoraza)
+	if err := wafengine.ValidateConfiguredMode(cfg.WAF.Engine.Mode); err != nil {
+		return fmt.Errorf("waf.engine.mode: %w", err)
 	}
 	switch cfg.SecurityAudit.CaptureMode {
 	case "", "off", "enforced_only", "security_events", "all_security_findings":
@@ -853,11 +853,7 @@ func normalizeAppProxyEngineMode(mode string) string {
 }
 
 func normalizeAppWAFEngineMode(mode string) string {
-	mode = strings.ToLower(strings.TrimSpace(mode))
-	if mode == "" {
-		return DefaultWAFEngineMode
-	}
-	return mode
+	return wafengine.Normalize(mode)
 }
 
 func validateAppAdminListenerConfig(cfg appConfigFile) error {

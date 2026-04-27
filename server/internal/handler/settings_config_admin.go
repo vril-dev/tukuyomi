@@ -10,6 +10,7 @@ import (
 
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/serverruntime"
+	"tukuyomi/internal/wafengine"
 )
 
 type settingsListenerAdminServerTLSConfig struct {
@@ -227,68 +228,69 @@ type settingsListenerAdminSecretStatus struct {
 }
 
 type settingsListenerAdminRuntimeStatus struct {
-	RequestCountryConfiguredMode      string   `json:"request_country_configured_mode"`
-	RequestCountryEffectiveMode       string   `json:"request_country_effective_mode"`
-	RequestCountryManagedPath         string   `json:"request_country_managed_path"`
-	RequestCountryLoaded              bool     `json:"request_country_loaded"`
-	RequestCountryDBSizeBytes         int64    `json:"request_country_db_size_bytes"`
-	RequestCountryDBModTime           string   `json:"request_country_db_mod_time"`
-	RequestCountryLastError           string   `json:"request_country_last_error"`
-	ListenAddr                        string   `json:"listen_addr"`
-	APIBasePath                       string   `json:"api_base_path"`
-	UIBasePath                        string   `json:"ui_base_path"`
-	AdminListenAddr                   string   `json:"admin_listen_addr"`
-	ServerTLSEnabled                  bool     `json:"server_tls_enabled"`
-	ServerTLSSource                   string   `json:"server_tls_source"`
-	ServerTLSMinVersion               string   `json:"server_tls_min_version"`
-	ServerTLSRedirectHTTP             bool     `json:"server_tls_redirect_http"`
-	ServerTLSHTTPRedirectAddr         string   `json:"server_tls_http_redirect_addr"`
-	ServerHTTP3Enabled                bool     `json:"server_http3_enabled"`
-	ServerHTTP3Advertised             bool     `json:"server_http3_advertised"`
-	ServerHTTP3AltSvc                 string   `json:"server_http3_alt_svc"`
-	ServerProxyProtocolEnabled        bool     `json:"server_proxy_protocol_enabled"`
-	ServerProxyProtocolTrustedCIDRs   []string `json:"server_proxy_protocol_trusted_cidrs"`
-	AdminExternalMode                 string   `json:"admin_external_mode"`
-	AdminTrustedCIDRs                 []string `json:"admin_trusted_cidrs"`
-	AdminTrustForwardedFor            bool     `json:"admin_trust_forwarded_for"`
-	AdminProxyProtocolEnabled         bool     `json:"admin_proxy_protocol_enabled"`
-	AdminProxyProtocolTrustedCIDRs    []string `json:"admin_proxy_protocol_trusted_cidrs"`
-	AdminReadOnly                     bool     `json:"admin_read_only"`
-	AdminRateLimitEnabled             bool     `json:"admin_rate_limit_enabled"`
-	AdminRateLimitRPS                 int      `json:"admin_rate_limit_rps"`
-	AdminRateLimitBurst               int      `json:"admin_rate_limit_burst"`
-	AdminRateLimitStatusCode          int      `json:"admin_rate_limit_status_code"`
-	AdminRateLimitRetryAfterSec       int      `json:"admin_rate_limit_retry_after_seconds"`
-	RuntimeGOMAXPROCS                 int      `json:"runtime_gomaxprocs"`
-	RuntimeMemoryLimitMB              int      `json:"runtime_memory_limit_mb"`
-	ServerGracefulShutdownTimeoutSec  int      `json:"server_graceful_shutdown_timeout_sec"`
-	ServerMaxConcurrentReqs           int      `json:"server_max_concurrent_requests"`
-	ServerMaxQueuedReqs               int      `json:"server_max_queued_requests"`
-	ServerQueuedTimeoutMS             int      `json:"server_queued_request_timeout_ms"`
-	ServerMaxConcurrentProxy          int      `json:"server_max_concurrent_proxy_requests"`
-	ServerMaxQueuedProxy              int      `json:"server_max_queued_proxy_requests"`
-	ServerQueuedProxyTimeoutMS        int      `json:"server_queued_proxy_request_timeout_ms"`
-	ProxyEngineMode                   string   `json:"proxy_engine_mode"`
-	WAFEngineMode                     string   `json:"waf_engine_mode"`
-	StorageDBDriver                   string   `json:"storage_db_driver"`
-	StorageDBPath                     string   `json:"storage_db_path"`
-	StorageDBRetentionDays            int      `json:"storage_db_retention_days"`
-	StorageDBSyncIntervalSec          int      `json:"storage_db_sync_interval_sec"`
-	StorageFileRotateBytes            int64    `json:"storage_file_rotate_bytes"`
-	StorageFileMaxBytes               int64    `json:"storage_file_max_bytes"`
-	StorageFileRetentionDays          int      `json:"storage_file_retention_days"`
-	PersistentStorageBackend          string   `json:"persistent_storage_backend"`
-	PersistentStorageLocalBaseDir     string   `json:"persistent_storage_local_base_dir"`
-	PersistentStorageS3Bucket         string   `json:"persistent_storage_s3_bucket"`
-	PersistentStorageS3Region         string   `json:"persistent_storage_s3_region"`
-	PersistentStorageS3Endpoint       string   `json:"persistent_storage_s3_endpoint"`
-	PersistentStorageS3Prefix         string   `json:"persistent_storage_s3_prefix"`
-	PersistentStorageS3ForcePathStyle bool     `json:"persistent_storage_s3_force_path_style"`
-	TracingEnabled                    bool     `json:"tracing_enabled"`
-	TracingServiceName                string   `json:"tracing_service_name"`
-	TracingOTLPEndpoint               string   `json:"tracing_otlp_endpoint"`
-	TracingInsecure                   bool     `json:"tracing_insecure"`
-	TracingSampleRatio                float64  `json:"tracing_sample_ratio"`
+	RequestCountryConfiguredMode      string                 `json:"request_country_configured_mode"`
+	RequestCountryEffectiveMode       string                 `json:"request_country_effective_mode"`
+	RequestCountryManagedPath         string                 `json:"request_country_managed_path"`
+	RequestCountryLoaded              bool                   `json:"request_country_loaded"`
+	RequestCountryDBSizeBytes         int64                  `json:"request_country_db_size_bytes"`
+	RequestCountryDBModTime           string                 `json:"request_country_db_mod_time"`
+	RequestCountryLastError           string                 `json:"request_country_last_error"`
+	ListenAddr                        string                 `json:"listen_addr"`
+	APIBasePath                       string                 `json:"api_base_path"`
+	UIBasePath                        string                 `json:"ui_base_path"`
+	AdminListenAddr                   string                 `json:"admin_listen_addr"`
+	ServerTLSEnabled                  bool                   `json:"server_tls_enabled"`
+	ServerTLSSource                   string                 `json:"server_tls_source"`
+	ServerTLSMinVersion               string                 `json:"server_tls_min_version"`
+	ServerTLSRedirectHTTP             bool                   `json:"server_tls_redirect_http"`
+	ServerTLSHTTPRedirectAddr         string                 `json:"server_tls_http_redirect_addr"`
+	ServerHTTP3Enabled                bool                   `json:"server_http3_enabled"`
+	ServerHTTP3Advertised             bool                   `json:"server_http3_advertised"`
+	ServerHTTP3AltSvc                 string                 `json:"server_http3_alt_svc"`
+	ServerProxyProtocolEnabled        bool                   `json:"server_proxy_protocol_enabled"`
+	ServerProxyProtocolTrustedCIDRs   []string               `json:"server_proxy_protocol_trusted_cidrs"`
+	AdminExternalMode                 string                 `json:"admin_external_mode"`
+	AdminTrustedCIDRs                 []string               `json:"admin_trusted_cidrs"`
+	AdminTrustForwardedFor            bool                   `json:"admin_trust_forwarded_for"`
+	AdminProxyProtocolEnabled         bool                   `json:"admin_proxy_protocol_enabled"`
+	AdminProxyProtocolTrustedCIDRs    []string               `json:"admin_proxy_protocol_trusted_cidrs"`
+	AdminReadOnly                     bool                   `json:"admin_read_only"`
+	AdminRateLimitEnabled             bool                   `json:"admin_rate_limit_enabled"`
+	AdminRateLimitRPS                 int                    `json:"admin_rate_limit_rps"`
+	AdminRateLimitBurst               int                    `json:"admin_rate_limit_burst"`
+	AdminRateLimitStatusCode          int                    `json:"admin_rate_limit_status_code"`
+	AdminRateLimitRetryAfterSec       int                    `json:"admin_rate_limit_retry_after_seconds"`
+	RuntimeGOMAXPROCS                 int                    `json:"runtime_gomaxprocs"`
+	RuntimeMemoryLimitMB              int                    `json:"runtime_memory_limit_mb"`
+	ServerGracefulShutdownTimeoutSec  int                    `json:"server_graceful_shutdown_timeout_sec"`
+	ServerMaxConcurrentReqs           int                    `json:"server_max_concurrent_requests"`
+	ServerMaxQueuedReqs               int                    `json:"server_max_queued_requests"`
+	ServerQueuedTimeoutMS             int                    `json:"server_queued_request_timeout_ms"`
+	ServerMaxConcurrentProxy          int                    `json:"server_max_concurrent_proxy_requests"`
+	ServerMaxQueuedProxy              int                    `json:"server_max_queued_proxy_requests"`
+	ServerQueuedProxyTimeoutMS        int                    `json:"server_queued_proxy_request_timeout_ms"`
+	ProxyEngineMode                   string                 `json:"proxy_engine_mode"`
+	WAFEngineMode                     string                 `json:"waf_engine_mode"`
+	WAFEngineModes                    []wafengine.Capability `json:"waf_engine_modes"`
+	StorageDBDriver                   string                 `json:"storage_db_driver"`
+	StorageDBPath                     string                 `json:"storage_db_path"`
+	StorageDBRetentionDays            int                    `json:"storage_db_retention_days"`
+	StorageDBSyncIntervalSec          int                    `json:"storage_db_sync_interval_sec"`
+	StorageFileRotateBytes            int64                  `json:"storage_file_rotate_bytes"`
+	StorageFileMaxBytes               int64                  `json:"storage_file_max_bytes"`
+	StorageFileRetentionDays          int                    `json:"storage_file_retention_days"`
+	PersistentStorageBackend          string                 `json:"persistent_storage_backend"`
+	PersistentStorageLocalBaseDir     string                 `json:"persistent_storage_local_base_dir"`
+	PersistentStorageS3Bucket         string                 `json:"persistent_storage_s3_bucket"`
+	PersistentStorageS3Region         string                 `json:"persistent_storage_s3_region"`
+	PersistentStorageS3Endpoint       string                 `json:"persistent_storage_s3_endpoint"`
+	PersistentStorageS3Prefix         string                 `json:"persistent_storage_s3_prefix"`
+	PersistentStorageS3ForcePathStyle bool                   `json:"persistent_storage_s3_force_path_style"`
+	TracingEnabled                    bool                   `json:"tracing_enabled"`
+	TracingServiceName                string                 `json:"tracing_service_name"`
+	TracingOTLPEndpoint               string                 `json:"tracing_otlp_endpoint"`
+	TracingInsecure                   bool                   `json:"tracing_insecure"`
+	TracingSampleRatio                float64                `json:"tracing_sample_ratio"`
 }
 
 type settingsListenerAdminPutBody struct {
@@ -768,6 +770,7 @@ func buildSettingsListenerAdminRuntimeStatus() settingsListenerAdminRuntimeStatu
 		ServerQueuedProxyTimeoutMS:        int(config.ServerQueuedProxyRequestTimeout / time.Millisecond),
 		ProxyEngineMode:                   normalizeProxyEngineMode(config.ProxyEngineMode),
 		WAFEngineMode:                     normalizeSettingsWAFEngineMode(config.WAFEngineMode),
+		WAFEngineModes:                    wafengine.Capabilities(),
 		StorageDBDriver:                   config.DBDriver,
 		StorageDBPath:                     config.DBPath,
 		StorageDBRetentionDays:            config.DBRetentionDays,
@@ -791,11 +794,7 @@ func buildSettingsListenerAdminRuntimeStatus() settingsListenerAdminRuntimeStatu
 }
 
 func normalizeSettingsWAFEngineMode(mode string) string {
-	mode = strings.ToLower(strings.TrimSpace(mode))
-	if mode == "" {
-		return config.DefaultWAFEngineMode
-	}
-	return mode
+	return wafengine.Normalize(mode)
 }
 
 func buildSettingsListenerAdminSecretStatus(cfg config.AppConfigFile) settingsListenerAdminSecretStatus {

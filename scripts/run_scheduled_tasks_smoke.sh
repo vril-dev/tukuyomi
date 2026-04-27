@@ -252,7 +252,7 @@ stage_compose_workspace() {
     "${workspace}/scripts"
   install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${workspace}/bin/tukuyomi"
   install -m 644 "${ROOT_DIR}/docker-compose.yml" "${workspace}/docker-compose.yml"
-  rsync -a "${ROOT_DIR}/coraza/" "${workspace}/coraza/"
+  rsync -a "${ROOT_DIR}/server/" "${workspace}/server/"
   rsync -a "${ROOT_DIR}/data/conf/" "${workspace}/data/conf/"
   write_smoke_admin_config "${workspace}/data/conf"
   rsync -a "${ROOT_DIR}/seeds/" "${workspace}/seeds/"

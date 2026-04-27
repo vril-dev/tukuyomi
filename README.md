@@ -314,7 +314,7 @@ tukuyomi is released under the BSD 2-Clause License, the same permissive license
 family used by nginx. See [LICENSE](LICENSE).
 
 Third-party dependency notices are listed in [NOTICE](NOTICE). Dependency
-license metadata is available through `coraza/src/go.mod` / `coraza/src/go.sum`
+license metadata is available through `server/go.mod` / `server/go.sum`
 and `web/tukuyomi-admin/package-lock.json`.
 
 ## What Is tukuyomi?

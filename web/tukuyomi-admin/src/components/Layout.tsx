@@ -34,6 +34,17 @@ type PHPRuntimeNavResponse = {
   };
 };
 
+type WAFEngineCapability = {
+  mode?: string;
+  label?: string;
+  available?: boolean;
+};
+
+type StatusNavResponse = {
+  waf_engine_mode?: string;
+  waf_engine_modes?: WAFEngineCapability[];
+};
+
 const baseNavGroups: NavGroup[] = [
   {
     id: "observe",
@@ -117,12 +128,25 @@ function isActive(pathname: string, to: string) {
   return pathname === to || pathname.startsWith(`${to}/`);
 }
 
+function normalizeWAFEngineMode(mode: string | undefined) {
+  return (mode || "coraza").trim().toLowerCase() || "coraza";
+}
+
+function hasAvailableWAFEngine(mode: string, engines: WAFEngineCapability[]) {
+  if (engines.length === 0) {
+    return mode === "coraza";
+  }
+  return engines.some((engine) => normalizeWAFEngineMode(engine.mode) === mode && engine.available === true);
+}
+
 export default function Layout() {
   const { locale, setLocale, tx } = useI18n();
   const { pathname } = useLocation();
   const { logout, session, loading } = useAuth();
   const { readOnly } = useAdminRuntime();
   const [hasBuiltRuntime, setHasBuiltRuntime] = useState(false);
+  const [wafEngineMode, setWAFEngineMode] = useState("coraza");
+  const [wafEngineModes, setWAFEngineModes] = useState<WAFEngineCapability[]>([]);
 
   useEffect(() => {
     let active = true;
@@ -145,22 +169,52 @@ export default function Layout() {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    void apiGetJson<StatusNavResponse>("/status")
+      .then((data) => {
+        if (!active) {
+          return;
+        }
+        setWAFEngineMode(normalizeWAFEngineMode(data.waf_engine_mode));
+        setWAFEngineModes(Array.isArray(data.waf_engine_modes) ? data.waf_engine_modes : []);
+      })
+      .catch(() => {
+        if (!active) {
+          return;
+        }
+        setWAFEngineMode("coraza");
+        setWAFEngineModes([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const navGroups = useMemo(
     () =>
-      baseNavGroups.map((group) =>
-        group.id !== "operations"
-          ? group
-          : {
-              ...group,
-              items: hasBuiltRuntime
-                ? [
-                    ...groupItems(group),
-                    { to: "/vhosts", label: "Vhosts", hint: "php-fpm host, port, and docroot bindings" },
-                  ]
-                : groupItems(group),
-            },
-      ),
-    [hasBuiltRuntime],
+      baseNavGroups.map((group) => {
+        if (group.id === "security" && group.sections) {
+          const showCoraza = wafEngineMode === "coraza" && hasAvailableWAFEngine("coraza", wafEngineModes);
+          return {
+            ...group,
+            sections: group.sections.filter((section) => section.id !== "coraza" || showCoraza),
+          };
+        }
+        if (group.id === "operations") {
+          return {
+            ...group,
+            items: hasBuiltRuntime
+              ? [
+                  ...groupItems(group),
+                  { to: "/vhosts", label: "Vhosts", hint: "php-fpm host, port, and docroot bindings" },
+                ]
+              : groupItems(group),
+          };
+        }
+        return group;
+      }),
+    [hasBuiltRuntime, wafEngineMode, wafEngineModes],
   );
   const utilityNavItems = [userNavItem, settingsNavItem];
   const navItems = [...navGroups.flatMap(groupItems), ...utilityNavItems];

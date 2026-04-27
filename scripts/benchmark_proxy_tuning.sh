@@ -864,7 +864,7 @@ start_proxy_runtime() {
         pprof_env="${BENCH_PROFILE_ADDR}"
       fi
       (
-        cd "${ROOT_DIR}/coraza/src"
+        cd "${ROOT_DIR}/server"
         "${GO_BIN}" build -o "${server_bin}" ./cmd/server
       )
       (

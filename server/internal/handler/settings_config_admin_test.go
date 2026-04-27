@@ -37,6 +37,12 @@ func TestGetSettingsListenerAdmin(t *testing.T) {
 		ETag    string                            `json:"etag"`
 		Config  settingsListenerAdminConfig       `json:"config"`
 		Secrets settingsListenerAdminSecretStatus `json:"secrets"`
+		Runtime struct {
+			WAFEngineModes []struct {
+				Mode      string `json:"mode"`
+				Available bool   `json:"available"`
+			} `json:"waf_engine_modes"`
+		} `json:"runtime"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -55,6 +61,15 @@ func TestGetSettingsListenerAdmin(t *testing.T) {
 	}
 	if !out.Secrets.AdminSessionSecretConfigured {
 		t.Fatal("expected session secret configured metadata")
+	}
+	if len(out.Runtime.WAFEngineModes) != 2 {
+		t.Fatalf("waf_engine_modes len=%d want=2", len(out.Runtime.WAFEngineModes))
+	}
+	if out.Runtime.WAFEngineModes[0].Mode != config.WAFEngineModeCoraza || !out.Runtime.WAFEngineModes[0].Available {
+		t.Fatalf("unexpected coraza capability: %+v", out.Runtime.WAFEngineModes[0])
+	}
+	if out.Runtime.WAFEngineModes[1].Mode != "mod_security" || out.Runtime.WAFEngineModes[1].Available {
+		t.Fatalf("unexpected mod_security capability: %+v", out.Runtime.WAFEngineModes[1])
 	}
 	if bytes.Contains(rec.Body.Bytes(), []byte("very-strong-random-session-secret-12345")) {
 		t.Fatal("response must not expose raw session secret")

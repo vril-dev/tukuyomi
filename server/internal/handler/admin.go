@@ -428,6 +428,7 @@ func StatusHandler(c *gin.Context) {
 		"proxy_config_file":                                   config.ProxyConfigFile,
 		"proxy_engine_mode":                                   normalizeProxyEngineMode(config.ProxyEngineMode),
 		"waf_engine_mode":                                     normalizeSettingsWAFEngineMode(config.WAFEngineMode),
+		"waf_engine_modes":                                    waf.EngineCapabilities(),
 		"proxy_etag":                                          proxyETag,
 		"proxy_dial_timeout":                                  proxyCfg.DialTimeout,
 		"proxy_response_header_timeout":                       proxyCfg.ResponseHeaderTimeout,

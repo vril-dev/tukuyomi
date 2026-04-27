@@ -10,13 +10,13 @@ RUN npm run build
 
 FROM golang:1.26.0-alpine AS builder
 
-WORKDIR /src/coraza/src
+WORKDIR /src/server
 RUN apk add --no-cache git
 
-COPY coraza/src/go.mod coraza/src/go.sum ./
+COPY server/go.mod server/go.sum ./
 RUN go mod download
 
-COPY coraza/src/ ./
+COPY server/ ./
 COPY --from=ui-builder /src/web/tukuyomi-admin/dist ./internal/handler/admin_ui_dist
 RUN go build -o /out/tukuyomi ./cmd/server
 

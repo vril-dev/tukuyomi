@@ -4,9 +4,9 @@ WORKDIR /app
 
 RUN apk add --no-cache git
 
-COPY src .
-RUN go mod tidy
+COPY go.mod go.sum ./
 RUN go mod download
+COPY . .
 
 RUN go build -o server /app/cmd/server
 RUN CGO_ENABLED=0 go install github.com/maxmind/geoipupdate/v7/cmd/geoipupdate@v7.1.1

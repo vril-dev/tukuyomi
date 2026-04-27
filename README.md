@@ -304,8 +304,8 @@ Typical required checks in CI are:
 
 - `ci / go-test`
 - `ci / mysql-logstore-test`
+- `ci / ui-test`
 - `ci / compose-validate`
-- `ci / waf-test (file)`
 - `ci / waf-test (sqlite)`
 
 ## License

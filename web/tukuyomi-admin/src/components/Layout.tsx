@@ -54,8 +54,7 @@ const baseNavGroups: NavGroup[] = [
         id: "coraza",
         label: "Coraza",
         items: [
-          { to: "/rules", label: "Rules", hint: "base and bypass extra rules" },
-          { to: "/rule-sets", label: "Rule Sets", hint: "CRS toggles" },
+          { to: "/rules", label: "Rules", hint: "Coraza and base WAF load order" },
           { to: "/fp-tuner", label: "FP Tuner", hint: "propose and apply exclusions" },
         ],
       },

@@ -11,6 +11,7 @@ import {
   NoticeBar,
   ParsedTextArea,
   PrimaryButton,
+  QuietActionButton,
   SectionCard,
   StatBox,
   inputClass,
@@ -241,7 +242,13 @@ export default function CountryBlockPanel() {
         subtitle={tx("Host scope precedence stays host:port, then host, then default. Save still uses the existing country-block validate and hot-reload API.")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <ActionButton
+            <ActionButton onClick={() => void load()} disabled={loading}>
+              {tx("Refresh")}
+            </ActionButton>
+            <PrimaryButton onClick={() => void doSave()} disabled={readOnly || loading || saving || !dirty || !!structuredError}>
+              {saving ? tx("Saving...") : tx("Save & hot reload")}
+            </PrimaryButton>
+            <QuietActionButton
               onClick={() => {
                 const parsed = parseCountryBlockEditorDocument(exampleRaw);
                 applyStructuredDocument(parsed.base, parsed.state, parsed.hostBases);
@@ -249,13 +256,7 @@ export default function CountryBlockPanel() {
               disabled={loading}
             >
               {tx("Insert example")}
-            </ActionButton>
-            <ActionButton onClick={() => void load()} disabled={loading}>
-              {tx("Refresh")}
-            </ActionButton>
-            <PrimaryButton onClick={() => void doSave()} disabled={readOnly || loading || saving || !dirty || !!structuredError}>
-              {saving ? tx("Saving...") : tx("Save & hot reload")}
-            </PrimaryButton>
+            </QuietActionButton>
           </div>
         }
       >

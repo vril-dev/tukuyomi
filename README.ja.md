@@ -73,27 +73,41 @@ JSON/rule file は runtime authority ではありません。
 
 ## クイックスタート
 
-### ローカル preview
+### インストール
 
-単純なローカル preview 手順は次です。
+Linux host へ直接入れる場合は、まず install target から始めます。
+
+```bash
+make install TARGET=linux-systemd
+```
+
+このターゲットでは、管理UIを埋め込んだGoバイナリをビルドし、ランタイムツリーを作成したうえで、DBマイグレーション、WAF/CRSアセットのインポート、初回DB設定のシード投入、ローカルホスト向けsystemdユニットのインストールまでを一括で実行します。  
+スケジュールタスク用タイマーはデフォルトで有効になります。このホストでスケジュールタスクを実行しない場合は、`INSTALL_ENABLE_SCHEDULED_TASKS=0` を指定してください。
+
+`PREFIX`、`INSTALL_USER`、スケジュールタスク用ユニットの詳細、およびホストへのインストールではなくコンテナ／プラットフォームへのデプロイを利用する場合の詳細については、以下を参照してください。
+
+- [docs/build/binary-deployment.ja.md](docs/build/binary-deployment.ja.md)
+- [docs/build/container-deployment.ja.md](docs/build/container-deployment.ja.md)
+
+### ローカルテスト preview
+
+管理UIとローカルランタイムのフローだけを試したい場合は、`preview` ターゲットを使用してください。
 
 ```bash
 make preset-apply PRESET=minimal
 make ui-preview-up
 ```
 
-`make ui-preview-up` は CRS ensure flow を自動実行します。この flow は
-`make db-migrate` を実行し、CRS seed file が無ければ配置し、WAF rule asset を
-DB へ import します。
+`make ui-preview-up` は CRS の ensure フローを自動的に実行します。  
+このフローでは、`make db-migrate` の実行、CRS シードファイルが存在しない場合の配置、および WAFルールアセットのDBへのインポートまでをまとめて行います。
 
 その後、既定では以下へアクセスします。
 
 - 管理 UI: `http://localhost:9090/tukuyomi-ui`
 - 管理 API: `http://localhost:9090/tukuyomi-api`
 
-既定では `make ui-preview-up` は preview 専用 SQLite DB を使い、起動のたびに
-その DB と preview 専用設定 file を初期化します。`UI_PREVIEW_PERSIST=1` を付けると、
-preview 専用設定と DB state を `ui-preview-down` / `ui-preview-up` の間で保持できます。
+デフォルトでは、`make ui-preview-up` はプレビュー専用の SQLite DB を使用し、起動のたびにその DB とプレビュー専用の設定ファイルを初期化します。
+`UI_PREVIEW_PERSIST=1` を指定すると、プレビュー用の設定と DB の状態を ui-preview-down と ui-preview-up の間で保持できます。
 
 ### Runtime 設定モデル
 

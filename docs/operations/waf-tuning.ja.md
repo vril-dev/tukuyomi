@@ -21,7 +21,7 @@
 推奨順序:
 
 1. `Bypass Rules` で対象パスだけに `extra_rule` を指定する。
-2. 必要なら `Rules` で用途 `Bypass Rules extra_rule` の専用 `*.conf` asset を用意し、対象Ruleを `ctl:ruleRemoveById` で限定無効化する。
+2. 必要なら `Rules` > Advanced > `Bypass snippets` で専用 `*.conf` asset を用意し、対象Ruleを `ctl:ruleRemoveById` で限定無効化する。
 3. 最終手段として広いパスのバイパスを使う（期限付きで実施し、後で戻す）。
 
 Bypass Rules の JSON 例:

@@ -353,15 +353,16 @@ button {
   background: linear-gradient(180deg, #ffffff, #f7fbf9);
   color: var(--ink);
   font-size: 12px;
-  line-height: 1.25rem;
+  line-height: 1rem;
   font-weight: 600;
+  white-space: nowrap;
   transition: transform 100ms ease-out, box-shadow 120ms ease-out, border-color 120ms ease-out;
 }
 
 button.text-xs,
 button.text-sm {
   font-size: 12px;
-  line-height: 1.25rem;
+  line-height: 1rem;
 }
 
 button.rounded-xl {

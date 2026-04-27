@@ -3,7 +3,6 @@ import Layout from './components/Layout';
 import Status from './pages/Status';
 import Logs from './pages/Logs';
 import Rules from './pages/Rules';
-import RuleSets from './pages/RuleSets';
 import CacheRulePanel from './pages/CacheRulesPanel';
 import BypassRulesPanel from './pages/BypassRulesPanel';
 import CountryBlockPanel from './pages/CountryBlockPanel';
@@ -83,7 +82,7 @@ function App() {
             <Route path="logs" element={<Logs />} />
             <Route path="rules" element={<Rules />} />
             <Route path="override-rules" element={<Navigate to="/rules" replace />} />
-            <Route path="rule-sets" element={<RuleSets />} />
+            <Route path="rule-sets" element={<Navigate to="/rules" replace />} />
             <Route path="bypass" element={<BypassRulesPanel />} />
             <Route path="country-block" element={<CountryBlockPanel />} />
             <Route path="rate-limit" element={<RateLimitPanel />} />

@@ -190,6 +190,27 @@ export function ActionButton({
   );
 }
 
+export function QuietActionButton({
+  children,
+  disabled,
+  onClick,
+}: {
+  children: ReactNode;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="px-2 py-1 text-xs text-neutral-500 hover:text-neutral-800 hover:underline disabled:opacity-40"
+      onClick={onClick}
+      disabled={disabled}
+    >
+      {children}
+    </button>
+  );
+}
+
 export function PrimaryButton({
   children,
   disabled,

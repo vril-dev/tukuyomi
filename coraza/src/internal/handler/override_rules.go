@@ -209,7 +209,7 @@ func managedOverrideRuleCurrent(name string) ([]byte, string, bool, bool, error)
 	if err != nil {
 		return nil, "", false, false, err
 	}
-	raw, etag, _, dbBacked, err := loadEditableWAFRuleAssetForKind(target, wafRuleAssetKindBypassExtra)
+	raw, etag, _, _, dbBacked, err := loadEditableWAFRuleAssetForKind(target, wafRuleAssetKindBypassExtra)
 	if err == nil {
 		return raw, etag, true, dbBacked, nil
 	}

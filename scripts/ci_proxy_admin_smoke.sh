@@ -166,7 +166,7 @@ route_raw="$(jq -n \
     idle_conn_timeout: 90,
     max_idle_conns: 100,
     max_idle_conns_per_host: 100,
-    max_conns_per_host: 200,
+    max_conns_per_host: 600,
     force_http2: true,
     disable_compression: false,
     response_compression: {

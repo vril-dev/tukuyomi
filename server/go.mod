@@ -2,7 +2,7 @@ module tukuyomi
 
 // module github.com/vril-dev/tukuyomi
 
-go 1.26.0
+go 1.26.2
 
 require (
 	github.com/andybalholm/brotli v1.2.1

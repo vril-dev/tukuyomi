@@ -11,12 +11,13 @@ COPY web/tukuyomi-admin/ ./
 RUN npm run build
 
 
-FROM --platform=$BUILDPLATFORM golang:1.26.0-alpine AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1.26.2-alpine AS go-builder
 
 ARG TARGETOS
 ARG TARGETARCH
 ARG TARGETVARIANT
 ARG APP_NAME=tukuyomi
+ARG VERSION
 
 WORKDIR /src/server
 
@@ -34,7 +35,7 @@ RUN set -eux; \
         goarm="${TARGETVARIANT#v}"; \
     fi; \
     CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" GOARM="${goarm}" \
-      go build -trimpath -o "/out/${APP_NAME}" ./cmd/server
+      go build -trimpath -ldflags "-X tukuyomi/internal/buildinfo.Version=${VERSION}" -o "/out/${APP_NAME}" ./cmd/server
 RUN set -eux; \
     goarm=""; \
     if [ "${TARGETARCH}" = "arm" ] && [ -n "${TARGETVARIANT}" ]; then \
@@ -57,7 +58,7 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG TARGETVARIANT
 ARG APP_NAME=tukuyomi
-ARG VERSION=dev
+ARG VERSION
 
 WORKDIR /src
 

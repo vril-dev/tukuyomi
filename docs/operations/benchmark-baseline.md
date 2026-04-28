@@ -17,6 +17,7 @@ It is intentionally operator-facing: the goal is to make benchmark runs comparab
 `make bench` and `make bench-proxy` are wrappers around `./scripts/benchmark_proxy_tuning.sh`.
 The script:
 
+- prepares an isolated benchmark config and SQLite DB by default
 - starts the local `tukuyomi` compose stack
 - launches a temporary concurrent Go upstream mock from `scripts/benchmark_upstream.go`
 - applies proxy presets through `/tukuyomi-api/proxy-rules`
@@ -33,6 +34,7 @@ Use it to compare proxy tuning presets and to catch large regressions before rel
 `make bench-waf` is a wrapper around `./scripts/benchmark_waf.sh`.
 The script:
 
+- prepares an isolated benchmark config and SQLite DB by default
 - starts the local `tukuyomi` compose stack
 - launches a temporary concurrent Go upstream mock from `scripts/benchmark_upstream.go`
 - applies a stable benchmark proxy route through `/tukuyomi-api/proxy-rules`
@@ -121,7 +123,8 @@ If you want to compare two branches, use the same host, concurrency levels, and 
 | `BENCH_ACCESS_LOG_MODE` | `full` | Proxy rules `access_log_mode`; use `off` or `minimal` for throughput investigations |
 | `BENCH_CLIENT_KEEPALIVE` | `1` | Pass `-k` to ApacheBench when `1`; set `0` for the older connection-churn baseline |
 | `BENCH_PROXY_MODE` | `current` | `current` includes WAF inspection; `proxy-only` temporarily bypasses WAF inspection for `BENCH_PATH` |
-| `BENCH_PROXY_ENGINE` | `tukuyomi_proxy` | Temporarily writes `proxy.engine.mode` in `conf/config.json`; only `tukuyomi_proxy` is supported |
+| `BENCH_PROXY_ENGINE` | `tukuyomi_proxy` | Temporarily writes `proxy.engine.mode` in the benchmark config; only `tukuyomi_proxy` is supported |
+| `BENCH_ISOLATED_RUNTIME` | `1` | Use temporary benchmark config/DB under `data/tmp/bench`; set `0` only when intentionally measuring the current local runtime state |
 | `BENCH_PROFILE` | `0` | Set to `1` to capture pprof CPU, heap, and allocation artifacts |
 | `BENCH_PROFILE_ADDR` | `127.0.0.1:6060` | Loopback-only pprof listener address inside the container |
 | `BENCH_PROFILE_SECONDS` | `10` | CPU profile capture duration |

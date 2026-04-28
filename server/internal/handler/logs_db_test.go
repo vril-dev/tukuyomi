@@ -295,6 +295,73 @@ func TestLogsReadUsesSQLiteStoreCountryFilterPagination(t *testing.T) {
 	}
 }
 
+func TestLogsReadUsesSQLiteStoreFreeTextSearch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	now := time.Now().UTC()
+	entries := []map[string]any{
+		{
+			"ts":      now.Add(-3 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "waf_block",
+			"req_id":  "req-login",
+			"path":    "/admin/login",
+			"rule_id": 942100,
+			"country": "JP",
+			"status":  403,
+			"msg":     "SQL injection attempt",
+		},
+		{
+			"ts":      now.Add(-2 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "waf_block",
+			"req_id":  "req-percent-literal",
+			"path":    "/percent%literal",
+			"rule_id": 949110,
+			"country": "JP",
+			"status":  403,
+		},
+		{
+			"ts":      now.Add(-1 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "waf_block",
+			"req_id":  "req-percent-wildcard",
+			"path":    "/percentXliteral",
+			"rule_id": 949110,
+			"country": "US",
+			"status":  403,
+		},
+	}
+
+	tmp := t.TempDir()
+	logPath := filepath.Join(tmp, "waf-events.ndjson")
+	writeNDJSONFile(t, logPath, entries)
+
+	restoreLogPath := setWAFLogPathForTest(t, logPath)
+	defer restoreLogPath()
+
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStore(true, dbPath, 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	sqlSearch := callLogsRead(t, "/tukuyomi-api/logs/read?src=waf&tail=10&q=sql+injection")
+	if len(sqlSearch.Lines) != 1 {
+		t.Fatalf("sql search lines=%d want=1", len(sqlSearch.Lines))
+	}
+	if got := anyToString(sqlSearch.Lines[0]["req_id"]); got != "req-login" {
+		t.Fatalf("sql search req_id=%q want=req-login", got)
+	}
+
+	literalSearch := callLogsRead(t, "/tukuyomi-api/logs/read?src=waf&tail=10&q=percent%25literal")
+	if len(literalSearch.Lines) != 1 {
+		t.Fatalf("literal search lines=%d want=1", len(literalSearch.Lines))
+	}
+	if got := anyToString(literalSearch.Lines[0]["req_id"]); got != "req-percent-literal" {
+		t.Fatalf("literal search req_id=%q want=req-percent-literal", got)
+	}
+}
+
 func TestLogsReadUsesSQLiteStoreReqIDFilterAcrossPolicyEvents(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -52,6 +52,7 @@ async function readLogs(params: {
   dir?: "prev" | "next";
   country?: string;
   reqID?: string;
+  search?: string;
   signal?: AbortSignal;
 }): Promise<ReadResponse> {
   const q = new URLSearchParams();
@@ -74,16 +75,23 @@ async function readLogs(params: {
     q.set("req_id", params.reqID);
   }
 
+  if (params.search) {
+    q.set("q", params.search);
+  }
+
   return apiGetJson<ReadResponse>(`/logs/read?${q.toString()}`, {
     signal: params.signal,
   });
 }
 
-function buildDownloadPath(country?: string) {
+function buildDownloadPath(country?: string, search?: string) {
   const q = new URLSearchParams();
   q.set("src", "waf");
   if (country) {
     q.set("country", country);
+  }
+  if (search) {
+    q.set("q", search);
   }
 
   return `/logs/download?${q.toString()}`;
@@ -195,6 +203,8 @@ export default function Logs() {
   const [tail, setTail] = useState<number>(30);
   const [countryFilter, setCountryFilter] = useState<string>("ALL");
   const [reqIDFilter, setReqIDFilter] = useState<string>("");
+  const [searchInput, setSearchInput] = useState<string>("");
+  const [searchQuery, setSearchQuery] = useState<string>("");
   const [pageStart, setPageStart] = useState<number | undefined>(undefined);
   const [pageEnd, setPageEnd] = useState<number | undefined>(undefined);
   const [dir, setDir] = useState<"prev" | "next" | undefined>(undefined);
@@ -249,6 +259,7 @@ export default function Logs() {
           dir: useDir,
           country: normalizeCountryFilterValue(countryFilter),
           reqID: useReqID || undefined,
+          search: useReqID ? undefined : searchQuery.trim() || undefined,
           signal: ac.signal,
         });
 
@@ -311,7 +322,7 @@ export default function Logs() {
         setLoading(false);
       }
     },
-    [countryFilter, dir, pageEnd, pageStart, reqIDFilter, tail, tx]
+    [countryFilter, dir, pageEnd, pageStart, reqIDFilter, searchQuery, tail, tx]
   );
 
   const openRequestDetail = useCallback(
@@ -381,7 +392,7 @@ export default function Logs() {
 
   async function downloadAll() {
     const country = normalizeCountryFilterValue(countryFilter);
-    const path = buildDownloadPath(country);
+    const path = buildDownloadPath(country, searchQuery.trim() || undefined);
     const { blob, filename } = await apiGetBinary(path);
     const a = document.createElement("a");
     const url = URL.createObjectURL(blob);
@@ -398,6 +409,7 @@ export default function Logs() {
   const detailSummary = detailReqID ? summarizeRequestEvents(detailReqID, detailLines) : null;
   const normalizedCountry = normalizeCountryFilterValue(countryFilter) || "ALL";
   const reqIDActive = reqIDFilter.trim();
+  const searchActive = searchQuery.trim();
   const displayLines = useMemo(() => sortLogLinesNewestFirst(data?.lines ?? []), [data?.lines]);
 
   return (
@@ -406,19 +418,46 @@ export default function Logs() {
 
       <div className="flex flex-wrap items-center gap-2">
         <label className="ml-2 text-sm">
-          {tx("Rows")}:
-          <select
-            className="ml-1 rounded border px-1 py-1"
-            value={tail}
-            onChange={(e) => setTail(Number(e.target.value))}
-          >
-            {[30, 50, 100, 200].map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
+          {tx("Search")}:
+          <input
+            className="ml-1 w-64 rounded border px-2 py-1 font-mono"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                setDir(undefined);
+                setSearchQuery(searchInput.trim());
+              }
+            }}
+            placeholder={tx("path, rule_id, host, message")}
+          />
         </label>
+
+        <button
+          disabled={loading}
+          onClick={() => {
+            setDir(undefined);
+            setSearchQuery(searchInput.trim());
+          }}
+          className="rounded border px-3 py-1 text-sm"
+          title={tx("Search logs")}
+        >
+          {tx("Search")}
+        </button>
+
+        {searchActive && (
+          <button
+            className="rounded border px-3 py-1 text-sm"
+            onClick={() => {
+              setSearchInput("");
+              setSearchQuery("");
+              setDir(undefined);
+            }}
+          >
+            {tx("Clear search")}
+          </button>
+        )}
 
         <label className="ml-2 text-sm">
           {tx("Country")}:
@@ -448,6 +487,21 @@ export default function Logs() {
             {tx("Clear req_id")}
           </button>
         )}
+
+        <label className="ml-2 text-sm">
+          {tx("Rows")}:
+          <select
+            className="ml-1 rounded border px-1 py-1"
+            value={tail}
+            onChange={(e) => setTail(Number(e.target.value))}
+          >
+            {[30, 50, 100, 200].map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
 
         <button
           className="ml-auto text-sm underline"
@@ -498,6 +552,11 @@ export default function Logs() {
         {reqIDActive && (
           <span className="text-sm text-gray-500">
             {tx("request filter active")}: <code>{reqIDActive}</code>
+          </span>
+        )}
+        {searchActive && (
+          <span className="text-sm text-gray-500">
+            {tx("search active")}: <code>{searchActive}</code>
           </span>
         )}
       </div>
@@ -588,7 +647,7 @@ export default function Logs() {
         <div className="text-xs text-gray-500">
           has_more: {String(data.has_more)} / next_cursor:{" "}
           {data.next_cursor != null ? data.next_cursor : "-"} / page: [{pageStart ?? "-"},{" "}
-          {pageEnd ?? "-"}) / country: {normalizedCountry}
+          {pageEnd ?? "-"}) / country: {normalizedCountry} / search: {searchActive || "-"}
         </div>
       )}
 

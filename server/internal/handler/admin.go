@@ -15,6 +15,7 @@ import (
 	"tukuyomi/internal/adminaudit"
 	"tukuyomi/internal/adminguard"
 	"tukuyomi/internal/adminui"
+	"tukuyomi/internal/buildinfo"
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/crsselection"
@@ -239,6 +240,7 @@ func StatusHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
+		"app_version":                                         buildinfo.Version,
 		"status":                                              "running",
 		"rules_file":                                          config.RulesFile,
 		"bypass_file":                                         config.BypassFile,

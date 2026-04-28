@@ -74,6 +74,9 @@ func TestStatusHandlerIncludesOverloadState(t *testing.T) {
 	if got := int(body["server_max_queued_proxy_requests"].(float64)); got != 32 {
 		t.Fatalf("server_max_queued_proxy_requests=%d want=32", got)
 	}
+	if got := body["app_version"]; got != "" {
+		t.Fatalf("app_version=%#v want empty", got)
+	}
 	if got := int(body["server_queued_proxy_request_timeout_ms"].(float64)); got != 100 {
 		t.Fatalf("server_queued_proxy_request_timeout_ms=%d want=100", got)
 	}

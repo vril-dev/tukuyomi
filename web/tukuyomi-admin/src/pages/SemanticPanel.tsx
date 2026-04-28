@@ -75,6 +75,10 @@ const exampleState: SemanticEditorState = {
 };
 
 const exampleRaw = serializeSemanticEditor(exampleState);
+const toggleCardClass = "flex min-h-9 items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs";
+const policyGridClass = "grid max-w-[58rem] items-start gap-4 lg:grid-cols-[minmax(13rem,18rem)_minmax(12rem,18rem)_minmax(10rem,14rem)]";
+const providerGridClass = "grid max-w-[60rem] items-start gap-4 lg:grid-cols-[minmax(13rem,18rem)_minmax(16rem,24rem)_minmax(10rem,14rem)]";
+const thresholdGridClass = "grid max-w-[44rem] items-start gap-4 md:grid-cols-3";
 
 export default function SemanticPanel() {
   const { locale, tx } = useI18n();
@@ -267,7 +271,7 @@ export default function SemanticPanel() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Semantic Security")}</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-xs text-neutral-500">
             {tx("Manage default and per-host semantic anomaly scopes with structured controls.")}
           </p>
         </div>
@@ -432,15 +436,18 @@ function SemanticScopeEditor({
     <div className="space-y-6">
       <div className="space-y-4">
         <div className="text-sm font-medium">{tx("Policy")}</div>
-        <div className="grid gap-4 lg:grid-cols-4">
-          <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
-            <input
-              type="checkbox"
-              checked={scope.enabled}
-              onChange={(event) => applyScope({ ...scope, enabled: event.target.checked })}
-            />
-            <span>{tx("Enable semantic scoring")}</span>
-          </label>
+        <div className={policyGridClass}>
+          <div className="grid gap-1">
+            <span className="text-xs font-medium">{tx("Semantic scoring")}</span>
+            <label className={toggleCardClass}>
+              <input
+                type="checkbox"
+                checked={scope.enabled}
+                onChange={(event) => applyScope({ ...scope, enabled: event.target.checked })}
+              />
+              <span className="min-w-0 leading-5">{tx("Enable semantic scoring")}</span>
+            </label>
+          </div>
           <Field label={tx("Mode")}>
             <select
               className={inputClass}
@@ -487,15 +494,18 @@ function SemanticScopeEditor({
 
       <div className="space-y-4">
         <div className="text-sm font-medium">{tx("Provider")}</div>
-        <div className="grid gap-4 lg:grid-cols-3">
-          <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
-            <input
-              type="checkbox"
-              checked={scope.providerEnabled}
-              onChange={(event) => applyScope({ ...scope, providerEnabled: event.target.checked })}
-            />
-            <span>{tx("Enable provider")}</span>
-          </label>
+        <div className={providerGridClass}>
+          <div className="grid gap-1">
+            <span className="text-xs font-medium">{tx("Provider status")}</span>
+            <label className={toggleCardClass}>
+              <input
+                type="checkbox"
+                checked={scope.providerEnabled}
+                onChange={(event) => applyScope({ ...scope, providerEnabled: event.target.checked })}
+              />
+              <span className="min-w-0 leading-5">{tx("Enable provider")}</span>
+            </label>
+          </div>
           <Field label={tx("Provider name")}>
             <input
               className={inputClass}
@@ -519,7 +529,7 @@ function SemanticScopeEditor({
 
       <div className="space-y-4">
         <div className="text-sm font-medium">{tx("Thresholds")}</div>
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className={thresholdGridClass}>
           <Field label={tx("Log threshold")}>
             <input
               type="number"

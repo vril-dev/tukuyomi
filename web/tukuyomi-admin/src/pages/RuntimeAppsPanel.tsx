@@ -665,7 +665,7 @@ export default function RuntimeAppsPanel() {
       <header className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Runtime Apps")}</h1>
-          <p className="text-sm text-neutral-500">{tx("Define runtime-backed application listeners here. Proxy Rules routes traffic to the generated upstream target.")}</p>
+          <p className="text-xs text-neutral-500">{tx("Define runtime-backed application listeners here. Proxy Rules routes traffic to the generated upstream target.")}</p>
         </div>
         <div className="flex items-center gap-2 text-xs text-neutral-500">
           <span className="rounded bg-neutral-100 px-2 py-1">ETag {etag || "-"}</span>
@@ -712,7 +712,7 @@ export default function RuntimeAppsPanel() {
       <section className="grid gap-4 xl:grid-cols-[minmax(0,2fr),minmax(360px,1fr)]">
         <div className="space-y-4">
           {vhosts.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-neutral-200 bg-white p-6 text-sm text-neutral-500">
+            <div className="rounded-xl border border-dashed border-neutral-200 bg-white p-6 text-xs text-neutral-500">
               {tx("No runtime-backed apps configured. Add one to publish a managed application listener.")}
             </div>
           ) : null}
@@ -724,7 +724,7 @@ export default function RuntimeAppsPanel() {
                   <h2 className="text-sm font-semibold">{app.name || `app-${index + 1}`}</h2>
                   <p className="text-xs text-neutral-500">{tx("Listen Host")}: <code>{app.hostname || "-"}</code></p>
                 </div>
-                <button type="button" className="text-sm underline" onClick={() => setRuntimeApps((current) => current.filter((_, currentIndex) => currentIndex !== index))} disabled={readOnly || saving}>
+                <button type="button" className="text-xs underline" onClick={() => setRuntimeApps((current) => current.filter((_, currentIndex) => currentIndex !== index))} disabled={readOnly || saving}>
                   {tx("Remove")}
                 </button>
               </div>
@@ -744,11 +744,11 @@ export default function RuntimeAppsPanel() {
               {app.mode === "static" ? null : (
                 <>
                   <div className="grid gap-3 md:grid-cols-2">
-                    <label className="space-y-1 text-sm">
+                    <label className="space-y-1 text-xs">
                       <span className="block text-xs text-neutral-600">{tx("Name")}</span>
                       <input value={app.name} onChange={(e) => updateRuntimeApp(index, { ...app, name: e.target.value })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white" />
                     </label>
-                    <label className="space-y-1 text-sm">
+                    <label className="space-y-1 text-xs">
                       <span className="block text-xs text-neutral-600">{tx("Mode")}</span>
                       <select
                         value={app.mode}
@@ -767,7 +767,7 @@ export default function RuntimeAppsPanel() {
                         <option value="psgi">psgi</option>
                       </select>
                     </label>
-                    <label className="space-y-1 text-sm">
+                    <label className="space-y-1 text-xs">
                       <span className="block text-xs text-neutral-600">{tx("Runtime")}</span>
                       <select
                         value={app.runtimeID}
@@ -802,15 +802,15 @@ export default function RuntimeAppsPanel() {
                         process={processMap.get(app.runtimeID)}
                       />
                     )}
-                    <label className="space-y-1 text-sm">
+                    <label className="space-y-1 text-xs">
                       <span className="block text-xs text-neutral-600">{tx("Listen Host")}</span>
                       <input value={app.hostname} onChange={(e) => updateRuntimeApp(index, { ...app, hostname: e.target.value })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white" placeholder="127.0.0.1" />
                     </label>
-                    <label className="space-y-1 text-sm">
+                    <label className="space-y-1 text-xs">
                       <span className="block text-xs text-neutral-600">{tx("Listen Port")}</span>
                       <input value={app.listenPort} onChange={(e) => updateRuntimeApp(index, { ...app, listenPort: e.target.value })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white" />
                     </label>
-                    <label className="space-y-1 text-sm md:col-span-2">
+                    <label className="space-y-1 text-xs md:col-span-2">
                       <span className="block text-xs text-neutral-600">{tx("Document Root")}</span>
                       <input
                         value={app.documentRoot}
@@ -821,7 +821,7 @@ export default function RuntimeAppsPanel() {
                     </label>
                     {app.mode === "psgi" ? (
                       <>
-                        <label className="space-y-1 text-sm md:col-span-2">
+                        <label className="space-y-1 text-xs md:col-span-2">
                           <span className="block text-xs text-neutral-600">{tx("App Root")}</span>
                           <input
                             value={app.appRoot}
@@ -830,7 +830,7 @@ export default function RuntimeAppsPanel() {
                             placeholder="./data/mt/MT-9.0.7"
                           />
                         </label>
-                        <label className="space-y-1 text-sm">
+                        <label className="space-y-1 text-xs">
                           <span className="block text-xs text-neutral-600">{tx("PSGI File")}</span>
                           <input
                             value={app.psgiFile}
@@ -839,7 +839,7 @@ export default function RuntimeAppsPanel() {
                             placeholder="mt.psgi"
                           />
                         </label>
-                        <label className="space-y-1 text-sm">
+                        <label className="space-y-1 text-xs">
                           <span className="block text-xs text-neutral-600">{tx("Workers")}</span>
                           <input
                             value={app.workers}
@@ -847,7 +847,7 @@ export default function RuntimeAppsPanel() {
                             className="w-full rounded border border-neutral-200 px-3 py-2 bg-white"
                           />
                         </label>
-                        <label className="space-y-1 text-sm">
+                        <label className="space-y-1 text-xs">
                           <span className="block text-xs text-neutral-600">{tx("Max Requests")}</span>
                           <input
                             value={app.maxRequests}
@@ -855,7 +855,7 @@ export default function RuntimeAppsPanel() {
                             className="w-full rounded border border-neutral-200 px-3 py-2 bg-white"
                           />
                         </label>
-                        <label className="flex items-center gap-2 text-sm">
+                        <label className="flex items-center gap-2 text-xs">
                           <input
                             type="checkbox"
                             checked={app.includeExtlib}
@@ -865,12 +865,12 @@ export default function RuntimeAppsPanel() {
                         </label>
                       </>
                     ) : null}
-                    <label className="space-y-1 text-sm md:col-span-2">
+                    <label className="space-y-1 text-xs md:col-span-2">
                       <span className="block text-xs text-neutral-600">{tx("try_files")}</span>
                       <textarea
                         value={app.tryFilesText}
                         onChange={(e) => updateRuntimeApp(index, { ...app, tryFilesText: e.target.value })}
-                        className="min-h-24 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-sm"
+                        className="min-h-24 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-xs"
                         placeholder={app.mode === "psgi" ? "$uri\n$uri/\n@psgi" : "$uri\n$uri/\n/index.php?$query_string"}
                       />
                     </label>
@@ -886,15 +886,15 @@ export default function RuntimeAppsPanel() {
                     <div className="space-y-3">
                       {app.rewriteRules.map((rule, ruleIndex) => (
                         <div key={`${rule.pattern}:${ruleIndex}`} className="rounded-lg border border-neutral-200 p-3 grid gap-3 md:grid-cols-2">
-                          <label className="space-y-1 text-sm">
+                          <label className="space-y-1 text-xs">
                             <span className="block text-xs text-neutral-600">{tx("Pattern")}</span>
-                            <input value={rule.pattern} onChange={(e) => updateRuntimeApp(index, { ...app, rewriteRules: app.rewriteRules.map((entry, currentIndex) => currentIndex === ruleIndex ? { ...entry, pattern: e.target.value } : entry) })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-sm" />
+                            <input value={rule.pattern} onChange={(e) => updateRuntimeApp(index, { ...app, rewriteRules: app.rewriteRules.map((entry, currentIndex) => currentIndex === ruleIndex ? { ...entry, pattern: e.target.value } : entry) })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-xs" />
                           </label>
-                          <label className="space-y-1 text-sm">
+                          <label className="space-y-1 text-xs">
                             <span className="block text-xs text-neutral-600">{tx("Replacement")}</span>
-                            <input value={rule.replacement} onChange={(e) => updateRuntimeApp(index, { ...app, rewriteRules: app.rewriteRules.map((entry, currentIndex) => currentIndex === ruleIndex ? { ...entry, replacement: e.target.value } : entry) })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-sm" />
+                            <input value={rule.replacement} onChange={(e) => updateRuntimeApp(index, { ...app, rewriteRules: app.rewriteRules.map((entry, currentIndex) => currentIndex === ruleIndex ? { ...entry, replacement: e.target.value } : entry) })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-xs" />
                           </label>
-                          <label className="space-y-1 text-sm">
+                          <label className="space-y-1 text-xs">
                             <span className="block text-xs text-neutral-600">{tx("Flag")}</span>
                             <select value={rule.flag} onChange={(e) => updateRuntimeApp(index, { ...app, rewriteRules: app.rewriteRules.map((entry, currentIndex) => currentIndex === ruleIndex ? { ...entry, flag: e.target.value as RewriteFlag } : entry) })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white">
                               <option value="break">break</option>
@@ -903,11 +903,11 @@ export default function RuntimeAppsPanel() {
                               <option value="permanent">permanent</option>
                             </select>
                           </label>
-                          <label className="flex items-center gap-2 text-sm">
+                          <label className="flex items-center gap-2 text-xs">
                             <input type="checkbox" checked={rule.preserveQuery} onChange={(e) => updateRuntimeApp(index, { ...app, rewriteRules: app.rewriteRules.map((entry, currentIndex) => currentIndex === ruleIndex ? { ...entry, preserveQuery: e.target.checked } : entry) })} />
                             {tx("Preserve query string")}
                           </label>
-                          <button type="button" className="text-sm underline text-left" onClick={() => updateRuntimeApp(index, { ...app, rewriteRules: app.rewriteRules.filter((_, currentIndex) => currentIndex !== ruleIndex) })} disabled={readOnly || saving}>
+                          <button type="button" className="text-xs underline text-left" onClick={() => updateRuntimeApp(index, { ...app, rewriteRules: app.rewriteRules.filter((_, currentIndex) => currentIndex !== ruleIndex) })} disabled={readOnly || saving}>
                             {tx("Remove")}
                           </button>
                         </div>
@@ -925,32 +925,32 @@ export default function RuntimeAppsPanel() {
                     <div className="space-y-3">
                       {app.accessRules.map((rule, ruleIndex) => (
                         <div key={`${rule.pathPattern}:${ruleIndex}`} className="rounded-lg border border-neutral-200 p-3 grid gap-3 md:grid-cols-2">
-                          <label className="space-y-1 text-sm">
+                          <label className="space-y-1 text-xs">
                             <span className="block text-xs text-neutral-600">{tx("Path pattern")}</span>
                             <input value={rule.pathPattern} onChange={(e) => updateRuntimeApp(index, { ...app, accessRules: app.accessRules.map((entry, currentIndex) => currentIndex === ruleIndex ? { ...entry, pathPattern: e.target.value } : entry) })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white" />
                           </label>
-                          <label className="space-y-1 text-sm">
+                          <label className="space-y-1 text-xs">
                             <span className="block text-xs text-neutral-600">{tx("Action")}</span>
                             <select value={rule.action} onChange={(e) => updateRuntimeApp(index, { ...app, accessRules: app.accessRules.map((entry, currentIndex) => currentIndex === ruleIndex ? { ...entry, action: e.target.value as "allow" | "deny" } : entry) })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white">
                               <option value="allow">allow</option>
                               <option value="deny">deny</option>
                             </select>
                           </label>
-                          <label className="space-y-1 text-sm">
+                          <label className="space-y-1 text-xs">
                             <span className="block text-xs text-neutral-600">{tx("CIDRs")}</span>
-                            <textarea value={rule.cidrsText} onChange={(e) => updateRuntimeApp(index, { ...app, accessRules: app.accessRules.map((entry, currentIndex) => currentIndex === ruleIndex ? { ...entry, cidrsText: e.target.value } : entry) })} className="min-h-20 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-sm" placeholder={"127.0.0.1/32\n10.0.0.0/8"} />
+                            <textarea value={rule.cidrsText} onChange={(e) => updateRuntimeApp(index, { ...app, accessRules: app.accessRules.map((entry, currentIndex) => currentIndex === ruleIndex ? { ...entry, cidrsText: e.target.value } : entry) })} className="min-h-20 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-xs" placeholder={"127.0.0.1/32\n10.0.0.0/8"} />
                           </label>
                           <div className="space-y-3">
-                            <label className="space-y-1 text-sm block">
+                            <label className="space-y-1 text-xs block">
                               <span className="block text-xs text-neutral-600">{tx("Basic Auth Realm")}</span>
                               <input value={rule.authRealm} onChange={(e) => updateRuntimeApp(index, { ...app, accessRules: app.accessRules.map((entry, currentIndex) => currentIndex === ruleIndex ? { ...entry, authRealm: e.target.value } : entry) })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white" />
                             </label>
-                            <label className="space-y-1 text-sm block">
+                            <label className="space-y-1 text-xs block">
                               <span className="block text-xs text-neutral-600">{tx("Users (`username:bcrypt-hash`)")}</span>
-                              <textarea value={rule.authUsersText} onChange={(e) => updateRuntimeApp(index, { ...app, accessRules: app.accessRules.map((entry, currentIndex) => currentIndex === ruleIndex ? { ...entry, authUsersText: e.target.value } : entry) })} className="min-h-20 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-sm" placeholder={"alice:$2a$..."} />
+                              <textarea value={rule.authUsersText} onChange={(e) => updateRuntimeApp(index, { ...app, accessRules: app.accessRules.map((entry, currentIndex) => currentIndex === ruleIndex ? { ...entry, authUsersText: e.target.value } : entry) })} className="min-h-20 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-xs" placeholder={"alice:$2a$..."} />
                             </label>
                           </div>
-                          <button type="button" className="text-sm underline text-left" onClick={() => updateRuntimeApp(index, { ...app, accessRules: app.accessRules.filter((_, currentIndex) => currentIndex !== ruleIndex) })} disabled={readOnly || saving}>
+                          <button type="button" className="text-xs underline text-left" onClick={() => updateRuntimeApp(index, { ...app, accessRules: app.accessRules.filter((_, currentIndex) => currentIndex !== ruleIndex) })} disabled={readOnly || saving}>
                             {tx("Remove")}
                           </button>
                         </div>
@@ -959,29 +959,29 @@ export default function RuntimeAppsPanel() {
                   </section>
 
                   <section className="grid gap-3 md:grid-cols-2">
-                    <label className="space-y-1 text-sm">
+                    <label className="space-y-1 text-xs">
                       <span className="block text-xs text-neutral-600">{tx("Runtime App Basic Auth Realm")}</span>
                       <input value={app.basicAuthRealm} onChange={(e) => updateRuntimeApp(index, { ...app, basicAuthRealm: e.target.value })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white" />
                     </label>
-                    <label className="space-y-1 text-sm md:col-span-2">
+                    <label className="space-y-1 text-xs md:col-span-2">
                       <span className="block text-xs text-neutral-600">{tx("Users (`username:bcrypt-hash`)")}</span>
-                      <textarea value={app.basicAuthUsersText} onChange={(e) => updateRuntimeApp(index, { ...app, basicAuthUsersText: e.target.value })} className="min-h-20 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-sm" placeholder={"alice:$2a$..."} />
+                      <textarea value={app.basicAuthUsersText} onChange={(e) => updateRuntimeApp(index, { ...app, basicAuthUsersText: e.target.value })} className="min-h-20 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-xs" placeholder={"alice:$2a$..."} />
                     </label>
                     {app.mode === "php-fpm" ? (
                       <>
-                        <label className="space-y-1 text-sm">
+                        <label className="space-y-1 text-xs">
                           <span className="block text-xs text-neutral-600">{tx("php_value (`key=value`)")}</span>
-                          <textarea value={app.phpValueText} onChange={(e) => updateRuntimeApp(index, { ...app, phpValueText: e.target.value })} className="min-h-24 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-sm" placeholder={"memory_limit=512M"} />
+                          <textarea value={app.phpValueText} onChange={(e) => updateRuntimeApp(index, { ...app, phpValueText: e.target.value })} className="min-h-24 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-xs" placeholder={"memory_limit=512M"} />
                         </label>
-                        <label className="space-y-1 text-sm">
+                        <label className="space-y-1 text-xs">
                           <span className="block text-xs text-neutral-600">{tx("php_admin_value (`key=value`)")}</span>
-                          <textarea value={app.phpAdminValueText} onChange={(e) => updateRuntimeApp(index, { ...app, phpAdminValueText: e.target.value })} className="min-h-24 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-sm" placeholder={"open_basedir=/srv/app"} />
+                          <textarea value={app.phpAdminValueText} onChange={(e) => updateRuntimeApp(index, { ...app, phpAdminValueText: e.target.value })} className="min-h-24 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-xs" placeholder={"open_basedir=/srv/app"} />
                         </label>
                       </>
                     ) : (
-                      <label className="space-y-1 text-sm md:col-span-2">
+                      <label className="space-y-1 text-xs md:col-span-2">
                         <span className="block text-xs text-neutral-600">{tx("Environment (`KEY=value`)")}</span>
-                        <textarea value={app.envText} onChange={(e) => updateRuntimeApp(index, { ...app, envText: e.target.value })} className="min-h-24 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-sm" placeholder={"MT_HOME=/srv/mt"} />
+                        <textarea value={app.envText} onChange={(e) => updateRuntimeApp(index, { ...app, envText: e.target.value })} className="min-h-24 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-xs" placeholder={"MT_HOME=/srv/mt"} />
                       </label>
                     )}
                   </section>
@@ -995,9 +995,9 @@ export default function RuntimeAppsPanel() {
           <section className="rounded-xl border border-neutral-200 bg-white p-4 space-y-2">
             <h2 className="text-sm font-semibold">{tx("PHP runtime options")}</h2>
             {builtRuntimeOptions.length === 0 ? (
-              <div className="text-sm text-neutral-500">{tx("No built PHP runtimes are available.")}</div>
+              <div className="text-xs text-neutral-500">{tx("No built PHP runtimes are available.")}</div>
             ) : (
-              <ul className="flex flex-wrap gap-2 text-sm">
+              <ul className="flex flex-wrap gap-2 text-xs">
                 {builtRuntimeOptions.map((runtime) => (
                   <li
                     key={runtime.runtime_id}
@@ -1015,9 +1015,9 @@ export default function RuntimeAppsPanel() {
           <section className="rounded-xl border border-neutral-200 bg-white p-4 space-y-2">
             <h2 className="text-sm font-semibold">{tx("PSGI runtime options")}</h2>
             {builtPSGIOptions.length === 0 ? (
-              <div className="text-sm text-neutral-500">{tx("No built PSGI runtimes are available.")}</div>
+              <div className="text-xs text-neutral-500">{tx("No built PSGI runtimes are available.")}</div>
             ) : (
-              <ul className="flex flex-wrap gap-2 text-sm">
+              <ul className="flex flex-wrap gap-2 text-xs">
                 {builtPSGIOptions.map((runtime) => (
                   <li
                     key={runtime.runtime_id}
@@ -1053,7 +1053,7 @@ function RuntimeStateSummary({
 }) {
   if (!runtimeID.trim()) {
     return (
-      <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm">
+      <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs">
         <div className="text-xs text-neutral-500">{tx("Runtime State")}</div>
         <div className="text-neutral-600">{tx("Select runtime")}</div>
       </div>
@@ -1062,7 +1062,7 @@ function RuntimeStateSummary({
   const targets = process?.generated_targets?.length ? process.generated_targets : (materialized?.generated_targets ?? []);
   const materializedRuntime = !!materialized;
   return (
-    <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm space-y-2">
+    <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-xs text-neutral-500">{tx("Runtime State")}</div>
@@ -1099,7 +1099,7 @@ function PSGIStateSummary({
 }) {
   if (!runtimeID.trim()) {
     return (
-      <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm">
+      <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs">
         <div className="text-xs text-neutral-500">{tx("Runtime State")}</div>
         <div className="text-neutral-600">{tx("Select runtime")}</div>
       </div>
@@ -1112,7 +1112,7 @@ function PSGIStateSummary({
       ? "bg-green-100 text-green-800"
       : "bg-neutral-100 text-neutral-700";
   return (
-    <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm space-y-2">
+    <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-xs text-neutral-500">{tx("PSGI State")}</div>

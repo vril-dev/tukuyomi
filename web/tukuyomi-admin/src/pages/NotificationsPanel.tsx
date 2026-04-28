@@ -304,7 +304,7 @@ export default function NotificationsPanel() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Notifications")}</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-xs text-neutral-500">
             {tx("Configure aggregate notifications for upstream and security state changes. Notifications are off by default.")}
           </p>
         </div>
@@ -363,7 +363,7 @@ export default function NotificationsPanel() {
 
       <SectionCard title={tx("Global Settings")} subtitle={tx("Notifications require at least one enabled sink before global delivery can be enabled.")}>
         <div className="grid gap-3 md:grid-cols-2">
-          <label className="flex items-center gap-2 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm">
+          <label className="flex items-center gap-2 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs">
             <input
               type="checkbox"
               checked={editorState.enabled}
@@ -495,7 +495,7 @@ export default function NotificationsPanel() {
                     <option value="email">email</option>
                   </select>
                 </Field>
-                <label className="flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+                <label className="flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
                   <input
                     type="checkbox"
                     checked={sink.enabled}
@@ -552,7 +552,7 @@ function TriggerFields({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm font-medium">{title}</div>
-        <label className="flex items-center gap-2 text-sm">
+        <label className="flex items-center gap-2 text-xs">
           <input type="checkbox" checked={trigger.enabled} onChange={(event) => onChange((current) => ({ ...current, enabled: event.target.checked }))} />
           <span>{tx("Enabled")}</span>
         </label>
@@ -629,7 +629,7 @@ function WebhookSinkEditor({
 
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="text-sm font-medium">{tx("Headers")}</div>
+          <div className="text-xs font-medium">{tx("Headers")}</div>
           <ActionButton onClick={() => onHeadersChange(sinkIndex, [...sink.headers, { key: "", value: "" }])}>{tx("Add header")}</ActionButton>
         </div>
         {sink.headers.length === 0 ? <EmptyState>{tx("No webhook headers configured.")}</EmptyState> : null}

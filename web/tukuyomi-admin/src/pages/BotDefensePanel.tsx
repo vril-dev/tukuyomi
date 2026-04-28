@@ -132,6 +132,9 @@ const exampleState: BotDefenseEditorState = {
 };
 
 const exampleRaw = serializeBotDefenseEditor(exampleState);
+const toggleCardClass = "flex min-h-9 items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs";
+const challengeSettingsGridClass = "grid max-w-[64rem] items-start gap-4 xl:grid-cols-[minmax(14rem,18rem)_minmax(18rem,24rem)_minmax(9rem,11rem)_minmax(9rem,11rem)]";
+const quarantineGridClass = "grid max-w-[58rem] items-start gap-4 lg:grid-cols-[minmax(13rem,18rem)_minmax(10rem,13rem)_minmax(16rem,22rem)]";
 
 export default function BotDefensePanel() {
   const { locale, tx } = useI18n();
@@ -362,7 +365,7 @@ export default function BotDefensePanel() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Bot Defense")}</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-xs text-neutral-500">
             {tx("Manage default and per-host bot-defense scopes with structured controls and recent decision history.")}
           </p>
         </div>
@@ -634,11 +637,11 @@ function BotDefenseScopeEditor({
         <div className="text-sm font-medium">{tx("Core Policy")}</div>
         <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,1.1fr)_minmax(0,1.1fr)]">
           <div className="space-y-4">
-            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
               <input type="checkbox" checked={scope.enabled} onChange={(event) => applyScope({ ...scope, enabled: event.target.checked })} />
               <span>{tx("Enable bot defense for this scope")}</span>
             </label>
-            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
               <input type="checkbox" checked={scope.dryRun} onChange={(event) => applyScope({ ...scope, dryRun: event.target.checked })} />
               <span>{tx("Dry run all actions in this scope")}</span>
             </label>
@@ -704,7 +707,7 @@ function BotDefenseScopeEditor({
 
       <div className="space-y-4">
         <div className="text-sm font-medium">{tx("Challenge Settings")}</div>
-        <div className="grid gap-4 xl:grid-cols-4">
+        <div className={challengeSettingsGridClass}>
           <Field label={tx("Challenge cookie name")}>
             <input
               className={inputClass}
@@ -770,7 +773,7 @@ function BotDefenseScopeEditor({
           {scope.pathPolicies.map((policy, index) => (
             <div key={`bot-policy-${index}`} className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-sm font-medium">{policy.name || `${tx("Policy")} ${index + 1}`}</div>
+                <div className="text-xs font-medium">{policy.name || `${tx("Policy")} ${index + 1}`}</div>
                 <ActionButton
                   onClick={() =>
                     applyScope(
@@ -880,7 +883,7 @@ function BotDefenseScopeEditor({
                     }
                   />
                 </Field>
-                <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+                <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
                   <input
                     type="checkbox"
                     checked={policy.telemetryCookieRequired}
@@ -893,7 +896,7 @@ function BotDefenseScopeEditor({
                   />
                   <span>{tx("Require telemetry cookie")}</span>
                 </label>
-                <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+                <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
                   <input
                     type="checkbox"
                     checked={policy.disableQuarantine}
@@ -960,23 +963,23 @@ function BotDefenseScopeEditor({
 
         <SignalCard title={tx("Device Signals")} enabled={scope.deviceSignals.enabled} onEnabledChange={(checked) => applyScope({ ...scope, deviceSignals: { ...scope.deviceSignals, enabled: checked } })}>
           <div className="grid gap-4 lg:grid-cols-3">
-            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
               <input type="checkbox" checked={scope.deviceSignals.requireTimeZone} onChange={(event) => applyScope({ ...scope, deviceSignals: { ...scope.deviceSignals, requireTimeZone: event.target.checked } })} />
               <span>{tx("Require time zone")}</span>
             </label>
-            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
               <input type="checkbox" checked={scope.deviceSignals.requirePlatform} onChange={(event) => applyScope({ ...scope, deviceSignals: { ...scope.deviceSignals, requirePlatform: event.target.checked } })} />
               <span>{tx("Require platform")}</span>
             </label>
-            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
               <input type="checkbox" checked={scope.deviceSignals.requireHardwareConcurrency} onChange={(event) => applyScope({ ...scope, deviceSignals: { ...scope.deviceSignals, requireHardwareConcurrency: event.target.checked } })} />
               <span>{tx("Require hardware concurrency")}</span>
             </label>
-            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
               <input type="checkbox" checked={scope.deviceSignals.checkMobileTouch} onChange={(event) => applyScope({ ...scope, deviceSignals: { ...scope.deviceSignals, checkMobileTouch: event.target.checked } })} />
               <span>{tx("Check mobile touch")}</span>
             </label>
-            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
               <input type="checkbox" checked={scope.deviceSignals.invisibleHTMLInjection} onChange={(event) => applyScope({ ...scope, deviceSignals: { ...scope.deviceSignals, invisibleHTMLInjection: event.target.checked } })} />
               <span>{tx("Inject invisible HTML telemetry")}</span>
             </label>
@@ -1012,19 +1015,19 @@ function BotDefenseScopeEditor({
 
         <SignalCard title={tx("Header Signals")} enabled={scope.headerSignals.enabled} onEnabledChange={(checked) => applyScope({ ...scope, headerSignals: { ...scope.headerSignals, enabled: checked } })}>
           <div className="grid gap-4 lg:grid-cols-3">
-            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
               <input type="checkbox" checked={scope.headerSignals.requireAcceptLanguage} onChange={(event) => applyScope({ ...scope, headerSignals: { ...scope.headerSignals, requireAcceptLanguage: event.target.checked } })} />
               <span>{tx("Require Accept-Language")}</span>
             </label>
-            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
               <input type="checkbox" checked={scope.headerSignals.requireFetchMetadata} onChange={(event) => applyScope({ ...scope, headerSignals: { ...scope.headerSignals, requireFetchMetadata: event.target.checked } })} />
               <span>{tx("Require Fetch Metadata")}</span>
             </label>
-            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
               <input type="checkbox" checked={scope.headerSignals.requireClientHints} onChange={(event) => applyScope({ ...scope, headerSignals: { ...scope.headerSignals, requireClientHints: event.target.checked } })} />
               <span>{tx("Require client hints")}</span>
             </label>
-            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
               <input type="checkbox" checked={scope.headerSignals.requireUpgradeInsecure} onChange={(event) => applyScope({ ...scope, headerSignals: { ...scope.headerSignals, requireUpgradeInsecure: event.target.checked } })} />
               <span>{tx("Require Upgrade-Insecure-Requests")}</span>
             </label>
@@ -1051,15 +1054,15 @@ function BotDefenseScopeEditor({
 
         <SignalCard title={tx("TLS Signals")} enabled={scope.tlsSignals.enabled} onEnabledChange={(checked) => applyScope({ ...scope, tlsSignals: { ...scope.tlsSignals, enabled: checked } })}>
           <div className="grid gap-4 lg:grid-cols-3">
-            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
               <input type="checkbox" checked={scope.tlsSignals.requireSNI} onChange={(event) => applyScope({ ...scope, tlsSignals: { ...scope.tlsSignals, requireSNI: event.target.checked } })} />
               <span>{tx("Require SNI")}</span>
             </label>
-            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
               <input type="checkbox" checked={scope.tlsSignals.requireALPN} onChange={(event) => applyScope({ ...scope, tlsSignals: { ...scope.tlsSignals, requireALPN: event.target.checked } })} />
               <span>{tx("Require ALPN")}</span>
             </label>
-            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
               <input type="checkbox" checked={scope.tlsSignals.requireModernTLS} onChange={(event) => applyScope({ ...scope, tlsSignals: { ...scope.tlsSignals, requireModernTLS: event.target.checked } })} />
               <span>{tx("Require modern TLS")}</span>
             </label>
@@ -1087,11 +1090,14 @@ function BotDefenseScopeEditor({
 
       <div className="space-y-4">
         <div className="text-sm font-medium">{tx("Quarantine")}</div>
-        <div className="grid gap-4 xl:grid-cols-3">
-          <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
-            <input type="checkbox" checked={scope.quarantine.enabled} onChange={(event) => applyScope({ ...scope, quarantine: { ...scope.quarantine, enabled: event.target.checked } })} />
-            <span>{tx("Enable quarantine")}</span>
-          </label>
+        <div className={quarantineGridClass}>
+          <div className="grid gap-1">
+            <span className="text-xs font-medium">{tx("Quarantine status")}</span>
+            <label className={toggleCardClass}>
+              <input type="checkbox" checked={scope.quarantine.enabled} onChange={(event) => applyScope({ ...scope, quarantine: { ...scope.quarantine, enabled: event.target.checked } })} />
+              <span className="min-w-0 leading-5">{tx("Enable quarantine")}</span>
+            </label>
+          </div>
           <Field label={tx("Quarantine status code")}>
             <input
               type="number"
@@ -1140,7 +1146,7 @@ function SignalCard({
     <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm font-medium">{title}</div>
-        <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+        <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
           <input type="checkbox" checked={enabled} onChange={(event) => onEnabledChange(event.target.checked)} />
           <span>{enabled ? "on" : "off"}</span>
         </label>

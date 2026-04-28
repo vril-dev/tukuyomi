@@ -608,7 +608,7 @@ export default function Rules() {
                 <header className="flex items-center justify-between gap-3">
                     <div>
                         <h1 className="text-xl font-semibold">{tx("Rules")}</h1>
-                        <p className="text-sm text-neutral-500">{tx("Manage Coraza CRS and base WAF rule assets in runtime load order.")}</p>
+                        <p className="text-xs text-neutral-500">{tx("Manage Coraza CRS and base WAF rule assets in runtime load order.")}</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                         {activeRuleStatus}
@@ -617,7 +617,7 @@ export default function Rules() {
                     </div>
                 </header>
 
-                {error && <div className="border border-red-300 bg-red-50 rounded-xl p-3 text-sm text-red-700">{error}</div>}
+                {error && <div className="border border-red-300 bg-red-50 rounded-xl p-3 text-xs text-red-700">{error}</div>}
 
                 <div className="grid gap-3 xl:grid-cols-[minmax(260px,360px)_1fr]">
                     <aside className="space-y-3">
@@ -625,7 +625,7 @@ export default function Rules() {
                             <div className="grid gap-2">
                                 <label className="text-xs text-neutral-500">{tx("New rule asset")}</label>
                                 <select
-                                    className="border border-[#e5e7eb] rounded px-2 py-1 text-sm bg-white"
+                                    className="border border-[#e5e7eb] rounded px-2 py-1 text-xs bg-white"
                                     value={newKind}
                                     onChange={(e) => setNewKind(e.target.value as RuleAssetKind)}
                                     disabled={readOnly}
@@ -635,14 +635,14 @@ export default function Rules() {
                                     ))}
                                 </select>
                                 <input
-                                    className="border border-[#e5e7eb] rounded px-2 py-1 text-sm"
+                                    className="border border-[#e5e7eb] rounded px-2 py-1 text-xs"
                                     value={newPath}
                                     onChange={(e) => setNewPath(e.target.value)}
                                     placeholder={newKind === "base" ? "custom.conf" : "custom-extra.conf"}
                                     disabled={readOnly}
                                 />
                                 {newKind === "base" && (
-                                    <label className="flex items-center gap-2 text-sm text-neutral-700">
+                                    <label className="flex items-center gap-2 text-xs text-neutral-700">
                                         <input
                                             type="checkbox"
                                             checked={newEnabled}
@@ -654,7 +654,7 @@ export default function Rules() {
                                 )}
                                 <button
                                     type="button"
-                                    className="px-3 py-1.5 rounded-xl shadow text-sm bg-black text-white disabled:opacity-50"
+                                    className="px-3 py-1.5 rounded-xl shadow text-xs bg-black text-white disabled:opacity-50"
                                     onClick={addRuleDraft}
                                     disabled={readOnly}
                                 >
@@ -669,7 +669,7 @@ export default function Rules() {
                             </summary>
                             <div className="max-h-[520px] overflow-y-auto">
                                 {baseEditors.length === 0 ? (
-                                    <div className="p-3 text-sm text-neutral-500">{tx("No rule files configured.")}</div>
+                                    <div className="p-3 text-xs text-neutral-500">{tx("No rule files configured.")}</div>
                                 ) : baseEditors.map(renderRuleListItem)}
                             </div>
                         </details>
@@ -682,7 +682,7 @@ export default function Rules() {
                                 {tx("Advanced")} · {tx("Bypass snippets")} · {snippetEditors.length}
                             </summary>
                             {snippetEditors.length === 0 ? (
-                                <div className="p-3 text-sm text-neutral-500">{tx("No bypass snippets configured.")}</div>
+                                <div className="p-3 text-xs text-neutral-500">{tx("No bypass snippets configured.")}</div>
                             ) : snippetEditors.map((editor) => {
                                 const key = assetKey(editor.kind, editor.path);
                                 const selected = key === selectedKey;
@@ -713,7 +713,7 @@ export default function Rules() {
                                     <div className="flex flex-wrap items-center gap-2">
                                         <button
                                             type="button"
-                                            className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border border-[#e5e7eb]"
+                                            className="px-3 py-1.5 rounded-xl shadow text-xs hover:bg-neutral-50 border border-[#e5e7eb]"
                                             onClick={() => setAllCRSAssets(true)}
                                             disabled={readOnly || saving || !crsEnabled}
                                         >
@@ -721,7 +721,7 @@ export default function Rules() {
                                         </button>
                                         <button
                                             type="button"
-                                            className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border border-[#e5e7eb]"
+                                            className="px-3 py-1.5 rounded-xl shadow text-xs hover:bg-neutral-50 border border-[#e5e7eb]"
                                             onClick={() => setAllCRSAssets(false)}
                                             disabled={readOnly || saving || !crsEnabled}
                                         >
@@ -729,7 +729,7 @@ export default function Rules() {
                                         </button>
                                         <button
                                             type="button"
-                                            className="px-3 py-1.5 rounded-xl shadow text-sm bg-black text-white disabled:opacity-50"
+                                            className="px-3 py-1.5 rounded-xl shadow text-xs bg-black text-white disabled:opacity-50"
                                             onClick={() => void doSaveCRS()}
                                             disabled={readOnly || saving || !crsDirty || !crsEnabled}
                                         >
@@ -740,7 +740,7 @@ export default function Rules() {
                             )}
                             <div className="max-h-[520px] overflow-y-auto">
                                 {corazaEditors.length === 0 ? (
-                                    <div className="p-3 text-sm text-neutral-500">{tx("No rule files configured.")}</div>
+                                    <div className="p-3 text-xs text-neutral-500">{tx("No rule files configured.")}</div>
                                 ) : corazaEditors.map(renderRuleListItem)}
                             </div>
                         </details>
@@ -749,16 +749,16 @@ export default function Rules() {
                     {active ? (
                         <main className="space-y-4">
                             <div className="grid gap-3 lg:grid-cols-[minmax(180px,220px)_minmax(220px,1fr)_auto] items-end">
-                                <div className="grid gap-1 text-sm">
+                                <div className="grid gap-1 text-xs">
                                     <span className="text-neutral-600">{tx("Usage")}</span>
-                                    <div className="min-h-8 border border-[#e5e7eb] rounded px-2 py-1 text-sm bg-neutral-50 flex items-center">
+                                    <div className="min-h-8 border border-[#e5e7eb] rounded px-2 py-1 text-xs bg-neutral-50 flex items-center">
                                         {tx(wafRuleAssetKindLabel(active.kind))}
                                     </div>
                                 </div>
-                                <label className="grid gap-1 text-sm">
+                                <label className="grid gap-1 text-xs">
                                     <span className="text-neutral-600">{tx("Rule asset")}</span>
                                     <input
-                                        className="border border-[#e5e7eb] rounded px-2 py-1 text-sm"
+                                        className="border border-[#e5e7eb] rounded px-2 py-1 text-xs"
                                         value={active.path}
                                         onChange={(e) => setActive({ path: e.target.value })}
                                         disabled={readOnly || activePathLocked}
@@ -766,7 +766,7 @@ export default function Rules() {
                                 </label>
                                 {active.kind === "base" ? (
                                     <div className="flex flex-wrap items-center gap-2">
-                                        <label className="flex items-center gap-2 text-sm h-8 mr-1">
+                                        <label className="flex items-center gap-2 text-xs h-8 mr-1">
                                             <input
                                                 type="checkbox"
                                                 checked={active.enabled}
@@ -775,10 +775,10 @@ export default function Rules() {
                                             />
                                             <span>{tx("Enabled")}</span>
                                         </label>
-                                        <button type="button" className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border border-[#e5e7eb]" onClick={() => void doMove(-1)} disabled={readOnly || saving || dirty}>
+                                        <button type="button" className="px-3 py-1.5 rounded-xl shadow text-xs hover:bg-neutral-50 border border-[#e5e7eb]" onClick={() => void doMove(-1)} disabled={readOnly || saving || dirty}>
                                             {tx("Move up")}
                                         </button>
-                                        <button type="button" className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border border-[#e5e7eb]" onClick={() => void doMove(1)} disabled={readOnly || saving || dirty}>
+                                        <button type="button" className="px-3 py-1.5 rounded-xl shadow text-xs hover:bg-neutral-50 border border-[#e5e7eb]" onClick={() => void doMove(1)} disabled={readOnly || saving || dirty}>
                                             {tx("Move down")}
                                         </button>
                                     </div>
@@ -789,7 +789,7 @@ export default function Rules() {
                                         </Badge>
                                     </div>
                                 ) : active.kind === "crs_asset" ? (
-                                    <label className="flex items-center gap-2 text-sm h-8">
+                                    <label className="flex items-center gap-2 text-xs h-8">
                                         <input
                                             type="checkbox"
                                             checked={active.enabled}
@@ -806,7 +806,7 @@ export default function Rules() {
                             </div>
 
                             {active.kind === "bypass_extra_rule" && active.referencedBy.length > 0 && (
-                                <div className="rounded-xl border border-[#e5e7eb] p-3 text-sm">
+                                <div className="rounded-xl border border-[#e5e7eb] p-3 text-xs">
                                     <div className="text-xs font-semibold text-neutral-500 mb-2">{tx("Referenced by")}</div>
                                     <div className="flex flex-wrap gap-2">
                                         {active.referencedBy.map((path) => (
@@ -819,7 +819,7 @@ export default function Rules() {
                             <div className="flex flex-wrap items-center gap-2">
                                 <button
                                     type="button"
-                                    className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border border-[#e5e7eb]"
+                                    className="px-3 py-1.5 rounded-xl shadow text-xs hover:bg-neutral-50 border border-[#e5e7eb]"
                                     onClick={() => void load(activeCurrentKey)}
                                     disabled={loading}
                                 >
@@ -827,7 +827,7 @@ export default function Rules() {
                                 </button>
                                 <button
                                     type="button"
-                                    className="px-3 py-1.5 rounded-xl shadow text-sm bg-black text-white disabled:opacity-50"
+                                    className="px-3 py-1.5 rounded-xl shadow text-xs bg-black text-white disabled:opacity-50"
                                     onClick={() => {
                                         if (active.kind === "crs_asset") {
                                             void doSaveCRS();
@@ -843,7 +843,7 @@ export default function Rules() {
                                 {active.editable && (
                                     <button
                                         type="button"
-                                        className="px-3 py-1.5 rounded-xl shadow text-sm border border-red-200 text-red-700 hover:bg-red-50 disabled:opacity-50"
+                                        className="px-3 py-1.5 rounded-xl shadow text-xs border border-red-200 text-red-700 hover:bg-red-50 disabled:opacity-50"
                                         onClick={() => void doDelete()}
                                         disabled={activeDeleteDisabled}
                                     >
@@ -853,7 +853,7 @@ export default function Rules() {
                             </div>
 
                             {active.loadError && (
-                                <div className="border border-red-300 bg-red-50 rounded-xl p-3 text-sm">
+                                <div className="border border-red-300 bg-red-50 rounded-xl p-3 text-xs">
                                     {tx("Load failed: {error}", { error: active.loadError })}
                                 </div>
                             )}
@@ -864,7 +864,7 @@ export default function Rules() {
                             />
 
                             <textarea
-                                className="w-full h-[500px] p-3 border border-[#e5e7eb] rounded-xl font-mono text-sm leading-5 outline-none focus:ring-2 focus:ring-black/20"
+                                className="w-full h-[500px] p-3 border border-[#e5e7eb] rounded-xl font-mono text-xs leading-5 outline-none focus:ring-2 focus:ring-black/20"
                                 value={active.raw}
                                 onChange={(e) => setActive({ raw: e.target.value })}
                                 spellCheck={false}
@@ -880,7 +880,7 @@ export default function Rules() {
                             </div>
                         </main>
                     ) : (
-                        <main className="text-sm text-neutral-500">{tx("No rule files configured.")}</main>
+                        <main className="text-xs text-neutral-500">{tx("No rule files configured.")}</main>
                     )}
                 </div>
             </section>

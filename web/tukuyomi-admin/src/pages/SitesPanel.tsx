@@ -240,7 +240,7 @@ export default function SitesPanel() {
       <header className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Sites")}</h1>
-          <p className="text-sm text-neutral-500">{tx("Manage hostname ownership, default upstreams, and TLS binding as first-class protected sites.")}</p>
+          <p className="text-xs text-neutral-500">{tx("Manage hostname ownership, default upstreams, and TLS binding as first-class protected sites.")}</p>
         </div>
         <div className="flex items-center gap-2 text-xs text-neutral-500">
           <span className="rounded bg-neutral-100 px-2 py-1">ETag {etag || "-"}</span>
@@ -270,7 +270,7 @@ export default function SitesPanel() {
       <section className="grid gap-4 xl:grid-cols-[minmax(0,2fr),minmax(320px,1fr)]">
         <div className="space-y-4">
           {sites.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-neutral-200 bg-white p-6 text-sm text-neutral-500">
+            <div className="rounded-xl border border-dashed border-neutral-200 bg-white p-6 text-xs text-neutral-500">
               {tx("No sites configured. Existing proxy routing keeps working unchanged until you add a site.")}
             </div>
           ) : null}
@@ -284,7 +284,7 @@ export default function SitesPanel() {
                 </div>
                 <button
                   type="button"
-                  className="text-sm underline"
+                  className="text-xs underline"
                   onClick={() => setSites((current) => current.filter((_, siteIndex) => siteIndex !== index))}
                   disabled={readOnly || saving}
                 >
@@ -293,7 +293,7 @@ export default function SitesPanel() {
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">
-                <label className="space-y-1 text-sm">
+                <label className="space-y-1 text-xs">
                   <span className="block text-xs text-neutral-600">{tx("Site name")}</span>
                   <input
                     value={site.name}
@@ -302,7 +302,7 @@ export default function SitesPanel() {
                   />
                 </label>
 
-                <label className="space-y-1 text-sm">
+                <label className="space-y-1 text-xs">
                   <span className="block text-xs text-neutral-600">{tx("Default upstream")}</span>
                   <input
                     value={site.default_upstream}
@@ -312,7 +312,7 @@ export default function SitesPanel() {
                   />
                 </label>
 
-                <label className="space-y-1 text-sm md:col-span-2">
+                <label className="space-y-1 text-xs md:col-span-2">
                   <span className="block text-xs text-neutral-600">{tx("Hosts")}</span>
                   <ParsedTextArea
                     value={site.hosts}
@@ -320,12 +320,12 @@ export default function SitesPanel() {
                     serialize={stringListToMultiline}
                     parse={multilineToStringList}
                     equals={stringListEqual}
-                    className="min-h-24 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-sm"
+                    className="min-h-24 w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-xs"
                     placeholder={"blog.example.com\n*.example.com"}
                   />
                 </label>
 
-                <label className="flex items-center gap-2 text-sm">
+                <label className="flex items-center gap-2 text-xs">
                   <input
                     type="checkbox"
                     checked={site.enabled}
@@ -334,7 +334,7 @@ export default function SitesPanel() {
                   {tx("Enabled")}
                 </label>
 
-                <label className="space-y-1 text-sm">
+                <label className="space-y-1 text-xs">
                   <span className="block text-xs text-neutral-600">{tx("TLS mode")}</span>
                   <select
                     value={site.tls.mode}
@@ -349,7 +349,7 @@ export default function SitesPanel() {
 
                 {site.tls.mode === "manual" ? (
                   <>
-                    <label className="space-y-1 text-sm">
+                    <label className="space-y-1 text-xs">
                       <span className="block text-xs text-neutral-600">{tx("cert_file")}</span>
                       <input
                         value={site.tls.cert_file ?? ""}
@@ -358,7 +358,7 @@ export default function SitesPanel() {
                         placeholder="/etc/tukuyomi/tls/fullchain.pem"
                       />
                     </label>
-                    <label className="space-y-1 text-sm">
+                    <label className="space-y-1 text-xs">
                       <span className="block text-xs text-neutral-600">{tx("key_file")}</span>
                       <input
                         value={site.tls.key_file ?? ""}
@@ -371,7 +371,7 @@ export default function SitesPanel() {
                 ) : null}
                 {site.tls.mode === "acme" ? (
                   <>
-                    <label className="space-y-1 text-sm">
+                    <label className="space-y-1 text-xs">
                       <span className="block text-xs text-neutral-600">{tx("ACME environment")}</span>
                       <select
                         value={site.tls.acme?.environment ?? "production"}
@@ -391,7 +391,7 @@ export default function SitesPanel() {
                         <option value="staging">staging</option>
                       </select>
                     </label>
-                    <label className="space-y-1 text-sm">
+                    <label className="space-y-1 text-xs">
                       <span className="block text-xs text-neutral-600">{tx("ACME account email")}</span>
                       <input
                         value={site.tls.acme?.email ?? ""}

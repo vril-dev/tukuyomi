@@ -279,6 +279,7 @@ function HourlyBars({
     const maxCount = points.reduce((max, point) => Math.max(max, point.count), 0);
     const start = points[0]?.bucket_start;
     const end = points[points.length - 1]?.bucket_start;
+    const chartHeightPx = 112;
 
     return (
                         <div className="rounded-xl border border-neutral-200 bg-white px-3 py-2">
@@ -291,14 +292,22 @@ function HourlyBars({
                 <div className="mt-3">
                     <div className="h-28 flex items-end gap-1">
                         {points.map((point) => {
-                            const height = Math.max(6, Math.round((point.count / maxCount) * 100));
+                            const height = point.count > 0
+                                ? Math.max(6, Math.round((point.count / maxCount) * chartHeightPx))
+                                : 0;
+                            const tooltipLabel = `${formatHourTooltipTime(point.bucket_start, locale)} · ${formatCount(point.count)}`;
                             return (
-                                <div key={point.bucket_start} className="flex-1 min-w-0">
+                                <div key={point.bucket_start} className="group relative flex h-full flex-1 min-w-0 items-end">
                                     <div
                                         className="w-full rounded-sm bg-red-400 hover:bg-red-500"
-                                        style={{ height: `${height}%` }}
-                                        title={`${formatTime(point.bucket_start, locale)}: ${point.count}`}
+                                        style={{ height: `${height}px` }}
+                                        title={point.count > 0 ? tooltipLabel : undefined}
                                     />
+                                    {point.count > 0 ? (
+                                        <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-[10px] font-mono text-white shadow-lg group-hover:block">
+                                            {tooltipLabel}
+                                        </div>
+                                    ) : null}
                                 </div>
                             );
                         })}
@@ -332,6 +341,23 @@ function formatShortTime(value: string | undefined) {
         return value;
     }
     return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:00`;
+}
+
+function formatHourTooltipTime(value: string | undefined, locale: "en" | "ja" = "en") {
+    if (!value) {
+        return "-";
+    }
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) {
+        return value;
+    }
+    return d.toLocaleString(locale === "ja" ? "ja-JP" : "en-US", {
+        year: "numeric",
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+    });
 }
 
 function formatCount(value: number | undefined) {

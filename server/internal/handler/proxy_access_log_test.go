@@ -493,7 +493,7 @@ func readProxyLogEvents(t *testing.T) []map[string]any {
 	if store == nil {
 		t.Fatal("expected sqlite store")
 	}
-	lines, _, _, _, err := store.ReadWAFLogs("", 1000, nil, "", "")
+	lines, _, _, _, err := store.ReadWAFLogs("", 1000, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("read db logs: %v", err)
 	}

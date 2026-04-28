@@ -102,7 +102,7 @@ export default function BypassRulesPanel() {
       setEditorState(next);
       setDefaultEntryBases(nextDefaultEntryBases);
       setHostBases(nextHostBases);
-        setHostEntryBases(nextHostEntryBases);
+      setHostEntryBases(nextHostEntryBases);
       try {
         setRaw(serializeBypassRulesEditor(editorBase, next, nextDefaultEntryBases, nextHostBases, nextHostEntryBases));
         setStructuredError(null);
@@ -375,50 +375,24 @@ export default function BypassRulesPanel() {
           </ActionButton>
         }
       >
-        {editorState.defaultEntries.length === 0 ? <EmptyState>{tx("No default bypass entries yet.")}</EmptyState> : null}
-        <div className="space-y-3">
-          {editorState.defaultEntries.map((entry, index) => (
-            <div key={`default-entry-${index}`} className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-sm font-medium">{entry.path || `${tx("Entry")} ${index + 1}`}</div>
-                <ActionButton
-                  onClick={() =>
-                    applyStructuredState(
-                      {
-                        ...editorState,
-                        defaultEntries: editorState.defaultEntries.filter((_, currentIndex) => currentIndex !== index),
-                      },
-                      defaultEntryBases.filter((_, currentIndex) => currentIndex !== index),
-                    )
-                  }
-                  disabled={readOnly}
-                >
-                  {tx("Remove")}
-                </ActionButton>
-              </div>
-              <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(0,1fr)]">
-                <Field label={tx("Path")} hint={tx("Use path prefixes like `/assets/` or exact paths like `/login`.")}>
-                  <input
-                    className={inputClass}
-                    value={entry.path}
-                    onChange={(event) => updateDefaultEntry(index, (current) => ({ ...current, path: event.target.value }))}
-                    placeholder="/assets/"
-                  />
-                </Field>
-                <Field label={tx("Extra rule reference")} hint={tx("Optional Coraza-backed DB-managed `.conf` override applied instead of a full bypass when you need a narrow override.")}>
-                  <ExtraRuleSelect
-                    tx={tx}
-                    options={extraRuleAssets}
-                    value={entry.extraRule}
-                    disabled={!corazaExtraRulesAvailable}
-                    onChange={(value) => updateDefaultEntry(index, (current) => ({ ...current, extraRule: value }))}
-                  />
-                </Field>
-              </div>
-              {entry.extraRule ? <Badge color="amber">{entry.extraRule}</Badge> : null}
-            </div>
-          ))}
-        </div>
+        <BypassEntriesTable
+          entries={editorState.defaultEntries}
+          extraRuleAssets={extraRuleAssets}
+          corazaExtraRulesAvailable={corazaExtraRulesAvailable}
+          readOnly={readOnly}
+          tx={tx}
+          emptyMessage={tx("No default bypass entries yet.")}
+          onChange={(index, nextEntry) => updateDefaultEntry(index, () => nextEntry)}
+          onDelete={(index) =>
+            applyStructuredState(
+              {
+                ...editorState,
+                defaultEntries: editorState.defaultEntries.filter((_, currentIndex) => currentIndex !== index),
+              },
+              defaultEntryBases.filter((_, currentIndex) => currentIndex !== index),
+            )
+          }
+        />
       </SectionCard>
 
       <SectionCard
@@ -447,10 +421,18 @@ export default function BypassRulesPanel() {
         {editorState.hosts.length === 0 ? <EmptyState>{tx("No host-specific bypass overrides yet.")}</EmptyState> : null}
         <div className="space-y-4">
           {editorState.hosts.map((scope, hostIndex) => (
-            <div key={`host-scope-${hostIndex}`} className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-sm font-medium">{scope.host || tx("New host scope")}</div>
-                <div className="flex flex-wrap items-center gap-2">
+            <section key={`host-scope-${hostIndex}`} className="rounded-xl border border-neutral-200 p-4 space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <Field label={tx("Host")} hint={tx("Examples: `example.com`, `admin.example.com`, `example.com:8443`.")}>
+                  <input
+                    className={inputClass}
+                    value={scope.host}
+                    onChange={(event) => updateHost(hostIndex, (current) => ({ ...current, host: event.target.value }))}
+                    disabled={readOnly}
+                    placeholder="example.com"
+                  />
+                </Field>
+                <div className="flex items-center gap-2 pt-6">
                   <ActionButton
                     onClick={() =>
                       applyStructuredState(
@@ -492,78 +474,109 @@ export default function BypassRulesPanel() {
                   </ActionButton>
                 </div>
               </div>
-              <Field label={tx("Host")} hint={tx("Examples: `example.com`, `admin.example.com`, `example.com:8443`.")}>
-                <input
-                  className={inputClass}
-                  value={scope.host}
-                  onChange={(event) => updateHost(hostIndex, (current) => ({ ...current, host: event.target.value }))}
-                  placeholder="example.com"
-                />
-              </Field>
-              {scope.entries.length === 0 ? <EmptyState>{tx("This host scope has no entries yet.")}</EmptyState> : null}
-              <div className="space-y-3">
-                {scope.entries.map((entry, entryIndex) => (
-                  <div key={`host-entry-${hostIndex}-${entryIndex}`} className="rounded-xl border border-neutral-200 bg-white p-3 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="text-sm font-medium">{entry.path || `${tx("Entry")} ${entryIndex + 1}`}</div>
-                      <ActionButton
-                        onClick={() =>
-                          applyStructuredState(
-                            {
-                              ...editorState,
-                              hosts: editorState.hosts.map((currentScope, currentIndex) =>
-                                currentIndex === hostIndex
-                                  ? {
-                                      ...currentScope,
-                                      entries: currentScope.entries.filter((_, currentEntryIndex) => currentEntryIndex !== entryIndex),
-                                    }
-                                  : currentScope,
-                              ),
-                            },
-                            defaultEntryBases,
-                            hostBases,
-                            hostEntryBases.map((bases, currentIndex) =>
-                              currentIndex === hostIndex ? bases.filter((_, currentEntryIndex) => currentEntryIndex !== entryIndex) : bases,
-                            ),
-                          )
-                        }
-                        disabled={readOnly}
-                      >
-                        {tx("Remove")}
-                      </ActionButton>
-                    </div>
-                    <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(0,1fr)]">
-                      <Field label={tx("Path")}>
-                        <input
-                          className={inputClass}
-                          value={entry.path}
-                          onChange={(event) =>
-                            updateHostEntry(hostIndex, entryIndex, (current) => ({ ...current, path: event.target.value }))
-                          }
-                          placeholder="/internal/"
-                        />
-                      </Field>
-                      <Field label={tx("Extra rule reference")} hint={tx("Optional Coraza-backed DB-managed `.conf` override applied instead of a full bypass when you need a narrow override.")}>
-                        <ExtraRuleSelect
-                          tx={tx}
-                          options={extraRuleAssets}
-                          value={entry.extraRule}
-                          disabled={!corazaExtraRulesAvailable}
-                          onChange={(value) =>
-                            updateHostEntry(hostIndex, entryIndex, (current) => ({ ...current, extraRule: value }))
-                          }
-                        />
-                      </Field>
-                    </div>
-                    {entry.extraRule ? <Badge color="amber">{entry.extraRule}</Badge> : null}
-                  </div>
-                ))}
-              </div>
-            </div>
+              <BypassEntriesTable
+                entries={scope.entries}
+                extraRuleAssets={extraRuleAssets}
+                corazaExtraRulesAvailable={corazaExtraRulesAvailable}
+                readOnly={readOnly}
+                tx={tx}
+                emptyMessage={tx("This host scope has no entries yet.")}
+                onChange={(entryIndex, nextEntry) => updateHostEntry(hostIndex, entryIndex, () => nextEntry)}
+                onDelete={(entryIndex) =>
+                  applyStructuredState(
+                    {
+                      ...editorState,
+                      hosts: editorState.hosts.map((currentScope, currentIndex) =>
+                        currentIndex === hostIndex
+                          ? {
+                              ...currentScope,
+                              entries: currentScope.entries.filter((_, currentEntryIndex) => currentEntryIndex !== entryIndex),
+                            }
+                          : currentScope,
+                      ),
+                    },
+                    defaultEntryBases,
+                    hostBases,
+                    hostEntryBases.map((bases, currentIndex) =>
+                      currentIndex === hostIndex ? bases.filter((_, currentEntryIndex) => currentEntryIndex !== entryIndex) : bases,
+                    ),
+                  )
+                }
+              />
+            </section>
           ))}
         </div>
       </SectionCard>
 
+    </div>
+  );
+}
+
+function BypassEntriesTable({
+  entries,
+  extraRuleAssets,
+  corazaExtraRulesAvailable,
+  readOnly,
+  emptyMessage,
+  onChange,
+  onDelete,
+  tx,
+}: {
+  entries: BypassRulesEditorState["defaultEntries"];
+  extraRuleAssets: string[];
+  corazaExtraRulesAvailable: boolean;
+  readOnly: boolean;
+  emptyMessage: string;
+  onChange: (index: number, nextEntry: BypassRulesEditorState["defaultEntries"][number]) => void;
+  onDelete: (index: number) => void;
+  tx: (key: string, vars?: Record<string, string | number>) => string;
+}) {
+  if (entries.length === 0) {
+    return <EmptyState>{emptyMessage}</EmptyState>;
+  }
+
+  return (
+    <div className="app-table-shell">
+      <div className="app-table-scroll-shell overflow-auto">
+        <table className="app-table min-w-[760px] w-full text-sm">
+          <thead className="app-table-head">
+            <tr>
+              <th className="p-2 text-left border-b">{tx("Path")}</th>
+              <th className="p-2 text-left border-b w-[320px]">{tx("Extra rule reference")}</th>
+              <th className="p-2 text-center border-b w-28">{tx("Action")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((entry, index) => (
+              <tr key={index}>
+                <td className="p-1.5 border-b">
+                  <input
+                    className={inputClass}
+                    value={entry.path}
+                    onChange={(event) => onChange(index, { ...entry, path: event.target.value })}
+                    placeholder="/assets/"
+                    disabled={readOnly}
+                  />
+                </td>
+                <td className="p-1.5 border-b">
+                  <ExtraRuleSelect
+                    tx={tx}
+                    options={extraRuleAssets}
+                    value={entry.extraRule}
+                    disabled={readOnly || !corazaExtraRulesAvailable}
+                    onChange={(value) => onChange(index, { ...entry, extraRule: value })}
+                  />
+                </td>
+                <td className="p-1.5 border-b text-center">
+                  <ActionButton onClick={() => onDelete(index)} disabled={readOnly}>
+                    {tx("Delete")}
+                  </ActionButton>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

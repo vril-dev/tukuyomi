@@ -47,7 +47,8 @@ APP_PKG ?= ./cmd/server
 DB_MIGRATE_BIN ?= $(abspath $(BIN_DIR))/$(APP_NAME)
 DB_MIGRATE_WORKDIR ?= data
 DB_MIGRATE_CONFIG ?= conf/config.json
-VERSION ?= dev
+VERSION ?=
+GO_LDFLAGS ?= $(if $(VERSION),-X tukuyomi/internal/buildinfo.Version=$(VERSION),)
 RELEASE_DIR ?= dist/release
 RELEASE_DOCKERFILE ?= build/Dockerfile.release
 PRESET ?= minimal
@@ -67,7 +68,7 @@ DEPLOY_RENDER_OUT_DIR ?= dist/deploy
 DEPLOY_RENDER_OVERWRITE ?= 0
 IMAGE_URI ?=
 
-export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_ADMIN_USERNAME WAF_ADMIN_PASSWORD TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD PROTECTED_HOST
+export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_ADMIN_USERNAME WAF_ADMIN_PASSWORD TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD PROTECTED_HOST VERSION
 
 .PHONY: \
 	help setup env-init crs-install crs-ensure \
@@ -366,7 +367,7 @@ go-fuzz-short:
 
 go-build:
 	mkdir -p $(abspath $(BIN_DIR))
-	cd $(SERVER_DIR) && $(GO) build -o "$(abspath $(BIN_DIR))/$(APP_NAME)" $(APP_PKG)
+	cd $(SERVER_DIR) && $(GO) build -ldflags "$(GO_LDFLAGS)" -o "$(abspath $(BIN_DIR))/$(APP_NAME)" $(APP_PKG)
 	@echo "[go-build] built $(abspath $(BIN_DIR))/$(APP_NAME)"
 
 db-migrate: go-build

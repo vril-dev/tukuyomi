@@ -10,6 +10,8 @@ RUN npm run build
 
 FROM golang:1.26.2-alpine AS builder
 
+ARG VERSION
+
 WORKDIR /src/server
 RUN apk add --no-cache git
 
@@ -18,7 +20,7 @@ RUN go mod download
 
 COPY server/ ./
 COPY --from=ui-builder /src/web/tukuyomi-admin/dist ./internal/handler/admin_ui_dist
-RUN go build -o /out/tukuyomi ./cmd/server
+RUN go build -ldflags "-X tukuyomi/internal/buildinfo.Version=${VERSION}" -o /out/tukuyomi ./cmd/server
 
 FROM alpine:3.19
 

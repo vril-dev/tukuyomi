@@ -146,7 +146,7 @@ export default function BackendsPanel() {
   if (error && !data) {
     return (
       <div className="w-full p-4">
-        <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div>
+        <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800">{error}</div>
       </div>
     );
   }
@@ -157,7 +157,7 @@ export default function BackendsPanel() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="space-y-1">
             <h1 className="text-xl font-semibold">{tx("Backends")}</h1>
-            <p className="text-sm text-neutral-600">
+            <p className="text-xs text-neutral-600">
               {tx("Inspect direct upstream backends used by routing. Runtime enable/drain/disable and weight overrides apply here; Runtime App targets stay on the Runtime Apps surface.")}
             </p>
           </div>
@@ -168,17 +168,17 @@ export default function BackendsPanel() {
             </button>
           </div>
         </div>
-        <div className="grid gap-3 sm:grid-cols-3 text-sm">
+        <div className="grid gap-3 sm:grid-cols-3 text-xs">
           <Metric label={tx("Default Strategy")} value={String(data?.strategy || "-")} />
           <Metric label={tx("Runtime Storage")} value={String(data?.storage || data?.path || "-")} mono />
           <Metric label={tx("Last Refresh")} value={formatTime(data?.updated_at, locale)} />
         </div>
-        {notice ? <div className="rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">{notice}</div> : null}
-        {error ? <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div> : null}
+        {notice ? <div className="rounded border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800">{notice}</div> : null}
+        {error ? <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800">{error}</div> : null}
       </section>
 
       <div className="app-table-shell">
-        <table className="app-table min-w-full text-sm">
+        <table className="app-table min-w-full text-xs">
           <thead className="app-table-head">
             <tr>
               <th>{tx("Backend")}</th>

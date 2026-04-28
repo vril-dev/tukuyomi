@@ -370,7 +370,7 @@ export default function CacheRulePanel() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Cache Rules")}</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-xs text-neutral-500">
             {tx("Manage default and per-host cache policy rules with structured controls.")}
           </p>
         </div>
@@ -410,7 +410,7 @@ export default function CacheRulePanel() {
                 checked={storeConfig.enabled}
                 onChange={(e) => setStoreConfig((prev) => ({ ...prev, enabled: e.target.checked }))}
               />
-              <span className="text-sm">{tx("Enable internal cache")}</span>
+              <span className="text-xs">{tx("Enable internal cache")}</span>
             </label>
           </Field>
           <Field label={tx("Store Directory")}>
@@ -443,7 +443,7 @@ export default function CacheRulePanel() {
                 checked={storeConfig.memory_enabled}
                 onChange={(e) => setStoreConfig((prev) => ({ ...prev, memory_enabled: e.target.checked }))}
               />
-              <span className="text-sm">{tx("Enable bounded L1 memory cache")}</span>
+              <span className="text-xs">{tx("Enable bounded L1 memory cache")}</span>
             </label>
           </Field>
           <Field label={tx("Memory Max Bytes")}>
@@ -476,7 +476,7 @@ export default function CacheRulePanel() {
 
         <div className="space-y-2">
           <h3 className="text-xs font-semibold uppercase text-neutral-500">{tx("Current Store")}</h3>
-          <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-5 text-sm">
+          <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-5 text-xs">
             <StatBox label={tx("Disk Entries")} value={String(storeStats.entry_count ?? 0)} />
             <StatBox label={tx("Disk Size")} value={String(storeStats.size_bytes ?? 0)} />
             <StatBox label={tx("L1 Enabled")} value={String(storeStats.memory_enabled ?? false)} />
@@ -487,7 +487,7 @@ export default function CacheRulePanel() {
 
         <div className="space-y-2">
           <h3 className="text-xs font-semibold uppercase text-neutral-500">{tx("Runtime Counters")}</h3>
-          <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6 text-sm">
+          <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6 text-xs">
             <StatBox label={tx("Total Hits")} value={String(storeStats.hits_total ?? 0)} />
             <StatBox label={tx("Total Misses")} value={String(storeStats.misses_total ?? 0)} />
             <StatBox label={tx("Total Stores")} value={String(storeStats.stores_total ?? 0)} />
@@ -665,7 +665,7 @@ function CacheRulesTable({
   return (
     <div className="app-table-shell">
       <div className="app-table-scroll-shell overflow-auto">
-        <table className="app-table min-w-[980px] w-full text-sm">
+        <table className="app-table min-w-[980px] w-full text-xs">
           <thead className="app-table-head">
             <tr>
               <th className="p-2 text-left border-b">{tx("Kind")}</th>

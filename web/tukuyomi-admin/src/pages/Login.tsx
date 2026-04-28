@@ -31,19 +31,19 @@ export default function Login() {
             TUKUYOMI
           </p>
           <h1 className="text-3xl font-semibold">{tx("Admin Sign In")}</h1>
-          <p className="text-sm text-neutral-600">
+          <p className="text-xs text-neutral-600">
             {tx("Sign in with your admin user to create a browser session.")}
           </p>
         </div>
 
         <form className="space-y-4" onSubmit={onSubmit}>
           <label className="block space-y-2">
-            <span className="text-sm font-medium text-neutral-700">
+            <span className="text-xs font-medium text-neutral-700">
               {tx("Username or email")}
             </span>
             <input
               type="text"
-              className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-neutral-900/10"
+              className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-neutral-900/10"
               value={identifier}
               onChange={(event) => setIdentifier(event.target.value)}
               autoComplete="username"
@@ -52,12 +52,12 @@ export default function Login() {
           </label>
 
           <label className="block space-y-2">
-            <span className="text-sm font-medium text-neutral-700">
+            <span className="text-xs font-medium text-neutral-700">
               {tx("Password")}
             </span>
             <input
               type="password"
-              className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-neutral-900/10"
+              className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-neutral-900/10"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               autoComplete="current-password"
@@ -66,7 +66,7 @@ export default function Login() {
           </label>
 
           {error ? (
-            <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
+            <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800">
               {error}
             </div>
           ) : null}
@@ -76,7 +76,7 @@ export default function Login() {
             disabled={
               loading || identifier.trim() === "" || password.trim() === ""
             }
-            className="w-full rounded-xl bg-neutral-950 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+            className="w-full rounded-xl bg-neutral-950 px-4 py-2.5 text-xs font-medium text-white disabled:opacity-50"
           >
             {loading ? tx("Signing in...") : tx("Sign In")}
           </button>

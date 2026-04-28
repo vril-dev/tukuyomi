@@ -554,22 +554,22 @@ export default function OptionsPanel() {
       <header className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Options")}</h1>
-          <p className="text-sm text-neutral-500">{tx("Review built runtime inventory, module baselines, readiness, and process state from one place.")}</p>
+          <p className="text-xs text-neutral-500">{tx("Review built runtime inventory, module baselines, readiness, and process state from one place.")}</p>
         </div>
       </header>
 
       <div className="rounded-xl border border-neutral-200 p-4 space-y-4">
         <div>
           <h2 className="text-sm font-semibold">{tx("Country Block Support")}</h2>
-          <p className="text-sm text-neutral-500">{tx("Manage the country database artifact and the optional MaxMind updater workflow used by Country Block and country-aware policy.")}</p>
+          <p className="text-xs text-neutral-500">{tx("Manage the country database artifact and the optional MaxMind updater workflow used by Country Block and country-aware policy.")}</p>
         </div>
 
           <div className="space-y-3">
             <div>
               <h3 className="text-sm font-semibold">{tx("Country DB")}</h3>
-              <p className="text-sm text-neutral-500">{tx("Upload the managed .mmdb country database here. In DB mode the artifact is stored in runtime DB authority, not as a persistent file.")}</p>
+              <p className="text-xs text-neutral-500">{tx("Upload the managed .mmdb country database here. In DB mode the artifact is stored in runtime DB authority, not as a persistent file.")}</p>
             </div>
-            <div className="grid gap-3 md:grid-cols-2 text-sm">
+            <div className="grid gap-3 md:grid-cols-2 text-xs">
               <div>
                 <div className="text-xs text-neutral-500">{tx("Storage")}</div>
                 <code className="break-all">{requestCountryDB?.managed_path || "db:request_country_mmdb_asset"}</code>
@@ -617,9 +617,9 @@ export default function OptionsPanel() {
           <div className="border-t border-neutral-200 pt-4 space-y-3">
             <div>
               <h3 className="text-sm font-semibold">{tx("GeoIP Update")}</h3>
-              <p className="text-sm text-neutral-500">{tx("Upload the managed GeoIP.conf here, then run Update now manually or from Scheduled Tasks. In DB mode the config and update state are stored in DB authority.")}</p>
+              <p className="text-xs text-neutral-500">{tx("Upload the managed GeoIP.conf here, then run Update now manually or from Scheduled Tasks. In DB mode the config and update state are stored in DB authority.")}</p>
             </div>
-            <div className="grid gap-3 md:grid-cols-2 text-sm">
+            <div className="grid gap-3 md:grid-cols-2 text-xs">
               <div>
                 <div className="text-xs text-neutral-500">{tx("Config Storage")}</div>
                 <code className="break-all">{requestCountryUpdate?.managed_config_path || "db:request_country_geoip_config"}</code>
@@ -690,11 +690,11 @@ export default function OptionsPanel() {
           <div className="border-t border-neutral-200 pt-4 space-y-3">
             <div>
               <h3 className="text-sm font-semibold">{tx("Country Resolution Mode")}</h3>
-              <p className="text-sm text-neutral-500">
+              <p className="text-xs text-neutral-500">
                 {tx("Choose whether request country comes from a trusted frontend header or from the installed local country database artifact. This updates DB app_config and takes effect after restart.")}
               </p>
             </div>
-            <div className="grid gap-3 text-sm">
+            <div className="grid gap-3 text-xs">
               <div>
                 <div className="text-xs text-neutral-500">{tx("Configured / Effective Mode")}</div>
                 <div>{[requestCountryDB?.configured_mode || "-", requestCountryDB?.effective_mode || "-"].join(" / ")}</div>
@@ -731,7 +731,7 @@ export default function OptionsPanel() {
 
       <div id="runtime-inventory" className="rounded-xl border border-neutral-200 p-4 space-y-3">
         <h2 className="text-sm font-semibold">{tx("Runtime Inventory")}</h2>
-        <p className="text-sm text-neutral-500">{tx("Runtime entries are managed here for visibility, readiness, and PHP-FPM process controls.")}</p>
+        <p className="text-xs text-neutral-500">{tx("Runtime entries are managed here for visibility, readiness, and PHP-FPM process controls.")}</p>
         {runtimeNotice ? <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900">{runtimeNotice}</div> : null}
         {runtimeError ? <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">{runtimeError}</div> : null}
         {availableRuntimeCount === 0 ? (
@@ -747,7 +747,7 @@ export default function OptionsPanel() {
           </div>
         )}
         {runtimes.length === 0 ? (
-          <div className="rounded border border-dashed border-neutral-200 px-3 py-6 text-sm text-neutral-500">{tx("No built runtimes detected.")}</div>
+          <div className="rounded border border-dashed border-neutral-200 px-3 py-6 text-xs text-neutral-500">{tx("No built runtimes detected.")}</div>
         ) : (
           <div className="space-y-3">
             {runtimes.map((runtime) => {
@@ -806,7 +806,7 @@ export default function OptionsPanel() {
                     ) : null}
                   </div>
 
-                  <div className="grid gap-3 md:grid-cols-2 text-sm">
+                  <div className="grid gap-3 md:grid-cols-2 text-xs">
                     <div>
                       <div className="text-xs text-neutral-500">{tx("Binary Path")}</div>
                       <code className="break-all">{runtime.binary_path}</code>
@@ -870,7 +870,7 @@ export default function OptionsPanel() {
 
       <div id="psgi-runtime-inventory" className="rounded-xl border border-neutral-200 p-4 space-y-3">
         <h2 className="text-sm font-semibold">{tx("PSGI Runtime Inventory")}</h2>
-        <p className="text-sm text-neutral-500">{tx("Perl/Starman runtime entries are managed here for PSGI Runtime Apps and per-app process controls.")}</p>
+        <p className="text-xs text-neutral-500">{tx("Perl/Starman runtime entries are managed here for PSGI Runtime Apps and per-app process controls.")}</p>
         {psgiAvailableRuntimeCount === 0 ? (
           <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
             {tx("No built PSGI runtimes are available yet. Build a PSGI runtime bundle first, then bind it from Runtime Apps.")}
@@ -884,7 +884,7 @@ export default function OptionsPanel() {
           </div>
         )}
         {psgiRuntimes.length === 0 ? (
-          <div className="rounded border border-dashed border-neutral-200 px-3 py-6 text-sm text-neutral-500">{tx("No built PSGI runtimes detected.")}</div>
+          <div className="rounded border border-dashed border-neutral-200 px-3 py-6 text-xs text-neutral-500">{tx("No built PSGI runtimes detected.")}</div>
         ) : (
           <div className="space-y-3">
             {psgiRuntimes.map((runtime) => (
@@ -900,7 +900,7 @@ export default function OptionsPanel() {
                     {runtime.available ? tx("ready") : tx("not built")}
                   </span>
                 </div>
-                <div className="grid gap-3 md:grid-cols-2 text-sm">
+                <div className="grid gap-3 md:grid-cols-2 text-xs">
                   <div>
                     <div className="text-xs text-neutral-500">{tx("Perl Path")}</div>
                     <code className="break-all">{runtime.perl_path}</code>
@@ -925,9 +925,9 @@ export default function OptionsPanel() {
         )}
 
         <div className="space-y-3">
-          <h3 className="text-sm font-semibold">{tx("PSGI Processes")}</h3>
+          <h3 className="text-xs font-semibold">{tx("PSGI Processes")}</h3>
           {psgiMaterialized.length === 0 ? (
-            <div className="rounded border border-dashed border-neutral-200 px-3 py-6 text-sm text-neutral-500">{tx("No PSGI Runtime Apps are materialized.")}</div>
+            <div className="rounded border border-dashed border-neutral-200 px-3 py-6 text-xs text-neutral-500">{tx("No PSGI Runtime Apps are materialized.")}</div>
           ) : (
             psgiMaterialized.map((entry) => {
               const process = psgiProcessMap.get(entry.vhost_name);
@@ -956,7 +956,7 @@ export default function OptionsPanel() {
                       {busy && psgiAction?.action === "reload" ? tx("Working...") : tx("Reload")}
                     </button>
                   </div>
-                  <div className="grid gap-3 md:grid-cols-2 text-sm">
+                  <div className="grid gap-3 md:grid-cols-2 text-xs">
                     <div><div className="text-xs text-neutral-500">{tx("PID")}</div><div>{process?.pid || "-"}</div></div>
                     <div><div className="text-xs text-neutral-500">{tx("Listen Port")}</div><div>{entry.listen_port || "-"}</div></div>
                     <div><div className="text-xs text-neutral-500">{tx("App Root")}</div><code className="break-all">{entry.app_root || "-"}</code></div>

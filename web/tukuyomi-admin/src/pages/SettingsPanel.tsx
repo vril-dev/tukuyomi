@@ -2135,7 +2135,7 @@ export default function SettingsPanel() {
                   )}
                 </p>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 text-sm">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 text-xs">
                 <SecretMetric
                   label={tx("Admin Session Secret")}
                   configured={secretStatus.admin_session_secret_configured}
@@ -2550,7 +2550,7 @@ export default function SettingsPanel() {
                     )}
                   </div>
                 ) : null}
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 text-sm">
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 text-xs">
                   <RuntimeMetric
                     label={tx("Current Listen Address")}
                     value={runtime.listen_addr}
@@ -2667,7 +2667,7 @@ export default function SettingsPanel() {
           <div className="text-sm font-medium">
             {tx("Verification Manifest")}
           </div>
-          <p className="text-sm text-neutral-600">
+          <p className="text-xs text-neutral-600">
             {tx(
               "Export the current verify manifest scaffold for external WAF test runners before running browser and attack scenarios.",
             )}
@@ -2687,7 +2687,7 @@ export default function SettingsPanel() {
 
         <hr className="border-neutral-200" />
 
-        <p className="text-sm text-neutral-600">
+        <p className="text-xs text-neutral-600">
           {tx(
             "Browser access now uses a signed admin session cookie. Sign in once on the login page, then use this panel to manage optional operator identity metadata and verify the current session.",
           )}
@@ -2815,7 +2815,7 @@ function SecretMetric({
   return (
     <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2">
       <div className="text-xs text-neutral-500">{label}</div>
-      <div className="mt-1 font-mono text-sm">
+      <div className="mt-1 font-mono text-xs">
         {configured ? "configured" : "not configured"}
       </div>
     </div>
@@ -2826,7 +2826,7 @@ function RuntimeMetric({ label, value }: { label: string; value: unknown }) {
   return (
     <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2">
       <div className="text-xs text-neutral-500">{label}</div>
-      <div className="mt-1 font-mono text-sm">{String(value ?? "-")}</div>
+      <div className="mt-1 font-mono text-xs">{String(value ?? "-")}</div>
     </div>
   );
 }

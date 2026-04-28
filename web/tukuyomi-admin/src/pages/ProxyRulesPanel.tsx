@@ -511,7 +511,7 @@ export default function ProxyRulesPanel() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Proxy Rules")}</h1>
-          <p className="text-sm text-neutral-500">{tx("Edit route-aware direct upstream selection, path/query rewrites, header operations, and transport knobs with structured controls.")}</p>
+          <p className="text-xs text-neutral-500">{tx("Edit route-aware direct upstream selection, path/query rewrites, header operations, and transport knobs with structured controls.")}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <Badge color={structuredError ? "red" : "green"}>{structuredError ? tx("Structured editor conflict") : tx("Structured editor synced")}</Badge>
@@ -528,7 +528,7 @@ export default function ProxyRulesPanel() {
         </NoticeBar>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+      <div className="space-y-4">
         <div className="space-y-4">
           <SectionCard
             title="Workflow"
@@ -597,7 +597,7 @@ export default function ProxyRulesPanel() {
                     <div className="flex items-center gap-3">
                       <button
                         type="button"
-                        className="text-sm text-neutral-700 underline"
+                        className="text-xs text-neutral-700 underline"
                         disabled={loading || saving || upstream.discovery.enabled || !upstream.name.trim() || !upstream.url.trim()}
                         onClick={() => void probeUpstream(index, upstream)}
                       >
@@ -605,7 +605,7 @@ export default function ProxyRulesPanel() {
                       </button>
                       <button
                         type="button"
-                        className="text-sm text-red-700 underline"
+                        className="text-xs text-red-700 underline"
                         disabled={readOnly}
                         onClick={() => {
                           if (upstreamProbeResult?.index === index) {
@@ -650,7 +650,7 @@ export default function ProxyRulesPanel() {
                       />
                     </Field>
                     <Field label="Enabled">
-                      <label className="flex items-center gap-2 text-sm">
+                      <label className="flex items-center gap-2 text-xs">
                         <input
                           type="checkbox"
                           checked={upstream.enabled}
@@ -661,7 +661,7 @@ export default function ProxyRulesPanel() {
                     </Field>
                   </div>
                   <div className="rounded-xl border border-neutral-200 bg-white p-3 space-y-3">
-                    <label className="flex items-center gap-2 text-sm font-medium">
+                    <label className="flex items-center gap-2 text-xs font-medium">
                       <input
                         type="checkbox"
                         checked={upstream.discovery.enabled}
@@ -1097,14 +1097,14 @@ export default function ProxyRulesPanel() {
               </Field>
             </div>
             {dryRunMessages.length > 0 ? (
-              <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
                 {dryRunMessages.map((message, index) => (
                   <div key={`dry-run-message-${index}`}>{message}</div>
                 ))}
               </div>
             ) : null}
             {dryRunResult ? (
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 text-sm">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 text-xs">
                 <StatBox label="Source" value={dryRunResult.source || "-"} />
                 <StatBox label="Route" value={dryRunResult.route_name || "-"} />
                 <StatBox label="Upstream" value={dryRunResult.selected_upstream || "-"} />
@@ -1122,7 +1122,7 @@ export default function ProxyRulesPanel() {
                 label="Expose WAF Debug Headers"
                 hint="Controls whether proxied responses include X-WAF-Hit and X-WAF-RuleIDs."
               >
-                <label className="flex h-10 items-center gap-2 text-sm">
+                <label className="flex h-10 items-center gap-2 text-xs">
                   <input
                     type="checkbox"
                     checked={routingState.exposeWAFDebugHeaders}
@@ -1151,7 +1151,7 @@ export default function ProxyRulesPanel() {
                 label="Emit X-Tukuyomi-Upstream-Name"
                 hint="When enabled, named upstream requests carry X-Tukuyomi-Upstream-Name to the backend. Direct URLs and generated Runtime App targets do not receive it."
               >
-                <label className="flex h-10 items-center gap-2 text-sm">
+                <label className="flex h-10 items-center gap-2 text-xs">
                   <input
                     type="checkbox"
                     checked={routingState.emitUpstreamNameRequestHeader}
@@ -1189,7 +1189,7 @@ export default function ProxyRulesPanel() {
           <SectionCard title="Upstream Health">
             {health ? (
               <div className="space-y-3">
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 text-sm">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 text-xs">
                   <StatBox label="Status" value={health.status || "-"} />
                   <StatBox label="Endpoint" value={health.endpoint || "-"} />
                   <StatBox label="Last status" value={typeof health.last_status_code === "number" ? String(health.last_status_code) : "-"} />
@@ -1215,7 +1215,7 @@ export default function ProxyRulesPanel() {
 
         <div className="space-y-4">
           <SectionCard title="Recent changes" subtitle="Successful proxy-rules apply and rollback operations are recorded here.">
-            <div className="mb-3 grid gap-3 sm:grid-cols-2">
+            <div className={recentChangesFilterGridClass}>
               <Field label="Limit">
                 <select
                   className={inputClass}
@@ -1235,11 +1235,6 @@ export default function ProxyRulesPanel() {
                   placeholder="alice@example.com"
                 />
               </Field>
-              <div className="flex items-end sm:justify-end">
-                <ActionButton onClick={exportAuditEntries} disabled={auditLoading || visibleAuditEntries.length === 0}>
-                  {tx("Export")}
-                </ActionButton>
-              </div>
               <Field label="Action filter">
                 <select
                   className={inputClass}
@@ -1251,8 +1246,13 @@ export default function ProxyRulesPanel() {
                   <option value="rollback">{tx("rollback")}</option>
                 </select>
               </Field>
+              <div className="flex items-end">
+                <ActionButton onClick={exportAuditEntries} disabled={auditLoading || visibleAuditEntries.length === 0}>
+                  {tx("Export")}
+                </ActionButton>
+              </div>
             </div>
-            {auditLoading ? <div className="text-sm text-neutral-500">{tx("Loading recent changes...")}</div> : null}
+            {auditLoading ? <div className="text-xs text-neutral-500">{tx("Loading recent changes...")}</div> : null}
             {!auditLoading && auditError ? (
               <NoticeBar tone="error">{auditError}</NoticeBar>
             ) : null}
@@ -1287,7 +1287,7 @@ export default function ProxyRulesPanel() {
                       </div>
                       <span className="shrink-0 text-xs text-neutral-500">{formatTimestamp(entry.ts)}</span>
                     </div>
-                    <div className="mt-2 min-w-0 break-all text-sm font-medium text-neutral-900">
+                    <div className="mt-2 min-w-0 break-all text-xs font-medium text-neutral-900">
                       {entry.actor || tx("unknown")}
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-neutral-500">
@@ -1389,7 +1389,7 @@ function RouteEditorCard({
           <div className="text-xs text-neutral-500">{tx("Priority decides order. The first matching route wins.")}</div>
         </div>
         {onRemove ? (
-          <button type="button" className="text-sm text-red-700 underline" onClick={onRemove}>
+          <button type="button" className="text-xs text-red-700 underline" onClick={onRemove}>
             {tx("Remove")}
           </button>
         ) : null}
@@ -1410,11 +1410,11 @@ function RouteEditorCard({
           </Field>
         ) : (
           <Field label="Priority">
-            <div className="flex h-10 items-center rounded-xl border border-dashed border-neutral-300 px-3 text-sm text-neutral-500">{tx("Not used for default route")}</div>
+            <div className="flex h-10 items-center rounded-xl border border-dashed border-neutral-300 px-3 text-xs text-neutral-500">{tx("Not used for default route")}</div>
           </Field>
         )}
         <Field label="Enabled">
-          <label className="flex items-center gap-2 text-sm">
+          <label className="flex items-center gap-2 text-xs">
             <input type="checkbox" checked={route.enabled} onChange={(e) => onChange({ ...route, enabled: e.target.checked })} />
             <span>{route.enabled ? tx("Enabled") : tx("Disabled")}</span>
           </label>
@@ -1476,7 +1476,7 @@ function RouteEditorCard({
         </div>
       ) : null}
 
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className={routeTargetGridClass}>
         <Field label="Backend pool" hint="Standard balancing path. Select a named backend pool to scope target selection to that pool only.">
           <select
             className={inputClass}
@@ -1538,7 +1538,7 @@ function RouteEditorCard({
         onChange={(next) => setAction({ ...route.action, queryRewrite: next })}
       />
 
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className={routeCanaryHashGridClass}>
         <Field label="Canary upstream" hint="Optional secondary upstream name for weighted canary routing.">
           <input
             className={inputClass}
@@ -1630,13 +1630,13 @@ function BackendPoolEditorCard({
           <div className="text-xs text-neutral-500">{tx("Pools scope balancing to selected named upstream members. Routes bind to pools; Backends keeps runtime node controls.")}</div>
         </div>
         {onRemove ? (
-          <button type="button" className="text-sm text-red-700 underline" onClick={onRemove}>
+          <button type="button" className="text-xs text-red-700 underline" onClick={onRemove}>
             {tx("Remove")}
           </button>
         ) : null}
       </div>
 
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className={backendPoolCoreGridClass}>
         <Field label="Name">
           <input className={inputClass} value={pool.name} onChange={(e) => onChange({ ...pool, name: e.target.value })} placeholder="site-api" />
         </Field>
@@ -1681,18 +1681,20 @@ function BackendPoolEditorCard({
         </Field>
       </div>
 
-      <Field label="Members" hint="One named upstream per line. Direct upstreams and generated Runtime App targets are valid members.">
-        <MultilineTextArea
-          className={textAreaClass}
-          value={pool.members}
-          onValueChange={(next) => onChange({ ...pool, members: next })}
-          serialize={stringListToMultiline}
-          parse={multilineToStringList}
-          equals={stringListEqual}
-          spellCheck={false}
-          placeholder={upstreamOptions.length > 0 ? upstreamOptions.join("\n") : "upstream-1\nupstream-2"}
-        />
-      </Field>
+      <div className="max-w-[42rem]">
+        <Field label="Members" hint="One named upstream per line. Direct upstreams and generated Runtime App targets are valid members.">
+          <MultilineTextArea
+            className={textAreaClass}
+            value={pool.members}
+            onValueChange={(next) => onChange({ ...pool, members: next })}
+            serialize={stringListToMultiline}
+            parse={multilineToStringList}
+            equals={stringListEqual}
+            spellCheck={false}
+            placeholder={upstreamOptions.length > 0 ? upstreamOptions.join("\n") : "upstream-1\nupstream-2"}
+          />
+        </Field>
+      </div>
 
       <div className="rounded-xl border border-neutral-200 bg-white p-3 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1700,7 +1702,7 @@ function BackendPoolEditorCard({
             <div className="text-sm font-medium">{tx("Sticky session")}</div>
             <div className="text-xs text-neutral-500">{tx("Issue a signed affinity cookie so clients return to the same selectable backend in this pool.")}</div>
           </div>
-          <label className="flex items-center gap-2 text-sm">
+          <label className="flex items-center gap-2 text-xs">
             <input
               type="checkbox"
               checked={pool.stickySession.enabled}
@@ -1772,7 +1774,7 @@ function BackendPoolEditorCard({
             </select>
           </Field>
           <Field label="Secure">
-            <label className="flex h-10 items-center gap-2 text-sm">
+            <label className="flex h-10 items-center gap-2 text-xs">
               <input
                 type="checkbox"
                 checked={pool.stickySession.secure}
@@ -1783,7 +1785,7 @@ function BackendPoolEditorCard({
             </label>
           </Field>
           <Field label="HttpOnly">
-            <label className="flex h-10 items-center gap-2 text-sm">
+            <label className="flex h-10 items-center gap-2 text-xs">
               <input
                 type="checkbox"
                 checked={pool.stickySession.httpOnly}
@@ -1832,7 +1834,7 @@ function ResponseHeaderSanitizeEditor({
           </select>
         </Field>
         <Field label="Debug log" hint="Logs removed header names only.">
-          <label className="flex h-10 items-center gap-2 text-sm">
+          <label className="flex h-10 items-center gap-2 text-xs">
             <input
               type="checkbox"
               checked={value.debugLog}
@@ -2072,7 +2074,7 @@ function SectionCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold">{tx(title)}</h2>
-          {subtitle ? <p className="text-sm text-neutral-500">{tx(subtitle)}</p> : null}
+          {subtitle ? <p className="text-xs text-neutral-500">{tx(subtitle)}</p> : null}
         </div>
         {actions ? <div>{actions}</div> : null}
       </div>
@@ -2093,7 +2095,7 @@ function Field({
   const tx = translateCurrent;
   return (
     <label className="grid gap-1">
-      <span className="text-sm font-medium">{tx(label)}</span>
+      <span className="text-xs font-medium">{tx(label)}</span>
       {children}
       {hint ? <span className="text-xs text-neutral-500">{tx(hint)}</span> : null}
     </label>
@@ -2105,7 +2107,7 @@ function StatBox({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2">
       <div className="text-xs uppercase tracking-wide text-neutral-500">{tx(label)}</div>
-      <div className="text-sm font-medium break-all">{value}</div>
+      <div className="text-xs font-medium break-all">{value}</div>
     </div>
   );
 }
@@ -2180,7 +2182,7 @@ function MultilineTextArea<T>({
 }
 
 function EmptyState({ children }: { children: React.ReactNode }) {
-  return <div className="rounded-xl border border-dashed border-neutral-300 bg-neutral-50 px-4 py-6 text-sm text-neutral-500">{children}</div>;
+  return <div className="rounded-xl border border-dashed border-neutral-300 bg-neutral-50 px-4 py-6 text-xs text-neutral-500">{children}</div>;
 }
 
 function Badge({ color, children }: { color: "gray" | "green" | "red" | "amber"; children: React.ReactNode }) {
@@ -2243,10 +2245,10 @@ function DiffPreviewModal({
         <div className="flex items-start justify-between gap-4 border-b border-neutral-200 px-5 py-4">
           <div>
             <h2 className="text-lg font-semibold">{preview.title}</h2>
-            <p className="text-sm text-neutral-500">{preview.description}</p>
+            <p className="text-xs text-neutral-500">{preview.description}</p>
             {preview.note ? <p className="mt-1 text-xs text-amber-700">{preview.note}</p> : null}
           </div>
-          <button type="button" className="text-sm underline" onClick={onCancel} disabled={applying}>
+          <button type="button" className="text-xs underline" onClick={onCancel} disabled={applying}>
             {tx("close")}
           </button>
         </div>
@@ -2256,16 +2258,16 @@ function DiffPreviewModal({
               {preview.metadata.map((item) => (
                 <div key={`${item.label}-${item.value}`} className="rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2">
                   <div className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">{item.label}</div>
-                  <div className="mt-1 break-all text-sm text-neutral-900">{item.value}</div>
+                  <div className="mt-1 break-all text-xs text-neutral-900">{item.value}</div>
                 </div>
               ))}
             </div>
           ) : null}
           {preview.parseError ? (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 whitespace-pre-wrap">{preview.parseError}</div>
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800 whitespace-pre-wrap">{preview.parseError}</div>
           ) : null}
           {!preview.parseError && preview.lines.length === 0 ? (
-            <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-neutral-600">{tx("No visible diff.")}</div>
+            <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-xs text-neutral-600">{tx("No visible diff.")}</div>
           ) : null}
           {!preview.parseError ? (
             <div className="max-h-[60vh] overflow-auto rounded-xl border border-neutral-200 bg-neutral-950">
@@ -2319,7 +2321,7 @@ function ActionButton({
   onClick: () => void;
 }) {
   return (
-    <button type="button" className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border disabled:opacity-50" onClick={onClick} disabled={disabled}>
+    <button type="button" className="px-3 py-1.5 rounded-xl shadow text-xs hover:bg-neutral-50 border disabled:opacity-50" onClick={onClick} disabled={disabled}>
       {children}
     </button>
   );
@@ -2342,11 +2344,19 @@ function PrimaryButton({
   onClick: () => void;
 }) {
   return (
-    <button type="button" className="px-3 py-1.5 rounded-xl shadow text-sm bg-black text-white disabled:opacity-50" onClick={onClick} disabled={disabled}>
+    <button type="button" className="px-3 py-1.5 rounded-xl shadow text-xs bg-black text-white disabled:opacity-50" onClick={onClick} disabled={disabled}>
       {children}
     </button>
   );
 }
 
-const inputClass = "w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/20";
-const textAreaClass = "w-full min-h-24 rounded-xl border px-3 py-2 font-mono text-sm outline-none focus:ring-2 focus:ring-black/20";
+const backendPoolCoreGridClass =
+  "grid max-w-[54rem] items-start gap-4 lg:grid-cols-[minmax(10rem,14rem)_minmax(12rem,15rem)_minmax(10rem,12rem)_minmax(10rem,12rem)]";
+const routeTargetGridClass =
+  "grid max-w-[64rem] items-start gap-4 lg:grid-cols-[minmax(14rem,18rem)_minmax(20rem,28rem)_minmax(14rem,20rem)]";
+const routeCanaryHashGridClass =
+  "grid max-w-[66rem] items-start gap-4 lg:grid-cols-[minmax(14rem,18rem)_minmax(8rem,10rem)_minmax(16rem,22rem)_minmax(10rem,14rem)]";
+const recentChangesFilterGridClass =
+  "mb-3 grid max-w-[72rem] items-end gap-3 md:grid-cols-[minmax(8rem,12rem)_minmax(18rem,28rem)_minmax(12rem,18rem)_auto]";
+const inputClass = "w-full rounded-xl border px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-black/20";
+const textAreaClass = "w-full min-h-24 rounded-xl border px-3 py-2 font-mono text-xs outline-none focus:ring-2 focus:ring-black/20";

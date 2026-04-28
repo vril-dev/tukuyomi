@@ -263,7 +263,7 @@ export default function OverrideRulesPanel() {
                 <header className="flex items-center justify-between">
                     <div>
                         <h1 className="text-xl font-semibold">Override Rules</h1>
-                        <p className="text-sm text-neutral-500">
+                        <p className="text-xs text-neutral-500">
                             Managed bypass `extra_rule` bodies are stored in DB. Accepted references are <code className="px-1 bg-neutral-100 rounded">name.conf</code> or <code className="px-1 bg-neutral-100 rounded">{overrideDir}/name.conf</code>.
                         </p>
                     </div>
@@ -275,15 +275,15 @@ export default function OverrideRulesPanel() {
                 </header>
 
                 {overrideError && (
-                    <div className="border border-red-300 bg-red-50 rounded-xl p-3 text-sm">
+                    <div className="border border-red-300 bg-red-50 rounded-xl p-3 text-xs">
                         {overrideError}
                     </div>
                 )}
 
                 <div className="flex flex-wrap items-center gap-2">
-                    <label className="text-sm text-neutral-600">{tx("Managed rule")}</label>
+                    <label className="text-xs text-neutral-600">{tx("Managed rule")}</label>
                     <select
-                        className="border rounded px-2 py-1 text-sm min-w-[260px]"
+                        className="border rounded px-2 py-1 text-xs min-w-[260px]"
                         value={selectedOverrideName}
                         onChange={(e) => {
                             const name = e.target.value;
@@ -302,7 +302,7 @@ export default function OverrideRulesPanel() {
                     </select>
                     <button
                         type="button"
-                        className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border"
+                        className="px-3 py-1.5 rounded-xl shadow text-xs hover:bg-neutral-50 border"
                         onClick={() => void loadOverrides()}
                         disabled={overrideLoading}
                     >
@@ -310,7 +310,7 @@ export default function OverrideRulesPanel() {
                     </button>
                     <button
                         type="button"
-                        className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border"
+                        className="px-3 py-1.5 rounded-xl shadow text-xs hover:bg-neutral-50 border"
                         onClick={beginNewOverride}
                         disabled={overrideSaving || overrideDeleting}
                     >
@@ -318,7 +318,7 @@ export default function OverrideRulesPanel() {
                     </button>
                     <button
                         type="button"
-                        className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border"
+                        className="px-3 py-1.5 rounded-xl shadow text-xs hover:bg-neutral-50 border"
                         onClick={() => fileImportRef.current?.click()}
                         disabled={overrideSaving || overrideDeleting}
                     >
@@ -333,7 +333,7 @@ export default function OverrideRulesPanel() {
                     />
                     <button
                         type="button"
-                        className="px-3 py-1.5 rounded-xl shadow text-sm bg-black text-white disabled:opacity-50"
+                        className="px-3 py-1.5 rounded-xl shadow text-xs bg-black text-white disabled:opacity-50"
                         onClick={() => void doSaveOverride()}
                         disabled={readOnly || overrideSaving || !overrideDirty || !overrideName.trim()}
                     >
@@ -341,7 +341,7 @@ export default function OverrideRulesPanel() {
                     </button>
                     <button
                         type="button"
-                        className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border disabled:opacity-50"
+                        className="px-3 py-1.5 rounded-xl shadow text-xs hover:bg-neutral-50 border disabled:opacity-50"
                         onClick={() => void doDeleteOverride()}
                         disabled={readOnly || overrideDeleting || !overrideIsExisting}
                     >
@@ -356,7 +356,7 @@ export default function OverrideRulesPanel() {
 
                 <div className="grid gap-3 md:grid-cols-[280px_1fr]">
                     <div className="space-y-2">
-                        <label className="text-sm font-medium text-neutral-700">File name</label>
+                        <label className="text-xs font-medium text-neutral-700">File name</label>
                         <input
                             value={overrideName}
                             onChange={(e) => setOverrideName(e.target.value)}
@@ -367,7 +367,7 @@ export default function OverrideRulesPanel() {
                             DB asset reference: <code className="px-1 bg-neutral-100 rounded">{overrideName.trim() ? `${overrideDir}/${overrideName.trim()}` : `${overrideDir}/<name>.conf`}</code>
                         </div>
                         {overrideLoadError && (
-                            <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">
+                            <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">
                                 {tx("Load failed: {error}", { error: overrideLoadError })}
                             </div>
                         )}
@@ -376,7 +376,7 @@ export default function OverrideRulesPanel() {
                         </div>
                     </div>
                     <textarea
-                        className="w-full h-[320px] p-3 border rounded-xl font-mono text-sm leading-5 outline-none focus:ring-2 focus:ring-black/20"
+                        className="w-full h-[320px] p-3 border rounded-xl font-mono text-xs leading-5 outline-none focus:ring-2 focus:ring-black/20"
                         value={overrideRaw}
                         onChange={(e) => setOverrideRaw(e.target.value)}
                         spellCheck={false}

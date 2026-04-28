@@ -183,6 +183,57 @@ function runtimeIdentity(process: PHPRuntimeProcessStatus | undefined, runtime: 
   return [process?.effective_user || runtime.run_user, process?.effective_group || runtime.run_group].filter(Boolean).join(":") || "-";
 }
 
+type RuntimeModuleListProps = {
+  modules?: string[];
+  defaultDisabledModules?: string[];
+  availabilityMessage?: string;
+  tx: (key: string, vars?: Record<string, string | number | boolean | null | undefined>) => string;
+};
+
+function RuntimeModuleList({ modules = [], defaultDisabledModules = [], availabilityMessage, tx }: RuntimeModuleListProps) {
+  const defaultDisabled = useMemo(() => new Set(defaultDisabledModules), [defaultDisabledModules]);
+  const defaultOffCount = modules.filter((module) => defaultDisabled.has(module)).length;
+
+  if (modules.length === 0) {
+    return (
+      <div className="space-y-2">
+        <div className="text-xs text-neutral-500">{tx("Modules")}</div>
+        <div className="rounded border border-dashed border-neutral-200 px-3 py-2 text-xs text-neutral-500">
+          {availabilityMessage || tx("No built modules detected.")}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <details className="rounded border border-neutral-200 bg-neutral-50/40">
+      <summary className="cursor-pointer select-none px-3 py-2 text-xs text-neutral-600">
+        <span className="font-semibold text-neutral-700">{tx("Modules")}</span>
+        <span className="ml-2">{tx("{count} installed", { count: modules.length })}</span>
+        {defaultOffCount > 0 ? <span className="ml-2 text-amber-800">{tx("{count} default off", { count: defaultOffCount })}</span> : null}
+      </summary>
+      <div className="border-t border-neutral-200 p-3">
+        <div className="max-h-52 overflow-y-auto pr-1">
+          <div className="flex flex-wrap gap-2">
+            {modules.map((module) => {
+              const defaultOff = defaultDisabled.has(module);
+              return (
+                <span
+                  key={module}
+                  className={`rounded-full border px-2 py-1 text-xs ${defaultOff ? "border-amber-200 bg-amber-50 text-amber-900" : "bg-white text-neutral-700"}`}
+                >
+                  {module}
+                  {defaultOff ? ` · ${tx("default off")}` : ""}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </details>
+  );
+}
+
 export default function OptionsPanel() {
   const { tx } = useI18n();
   const [runtimes, setRuntimes] = useState<PHPRuntimeRecord[]>([]);
@@ -798,29 +849,12 @@ export default function OptionsPanel() {
                     </div>
                   </div>
 
-                  <div className="space-y-2">
-                    <div className="text-xs text-neutral-500">{tx("Modules")}</div>
-                    {(runtime.modules ?? []).length === 0 ? (
-                      <div className="rounded border border-dashed border-neutral-200 px-3 py-2 text-xs text-neutral-500">
-                        {runtime.availability_message || tx("No built modules detected.")}
-                      </div>
-                    ) : (
-                      <div className="flex flex-wrap gap-2">
-                        {(runtime.modules ?? []).map((module) => {
-                          const defaultOff = (runtime.default_disabled_modules ?? []).includes(module);
-                          return (
-                            <span
-                              key={module}
-                              className={`rounded-full border px-2 py-1 text-xs ${defaultOff ? "border-amber-200 bg-amber-50 text-amber-900" : "bg-neutral-50 text-neutral-700"}`}
-                            >
-                              {module}
-                              {defaultOff ? ` · ${tx("default off")}` : ""}
-                            </span>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
+                  <RuntimeModuleList
+                    modules={runtime.modules}
+                    defaultDisabledModules={runtime.default_disabled_modules}
+                    availabilityMessage={runtime.availability_message}
+                    tx={tx}
+                  />
 
                   {process?.last_error ? (
                     <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
@@ -884,22 +918,7 @@ export default function OptionsPanel() {
                     <div>{[runtime.run_user, runtime.run_group].filter(Boolean).join(":") || "-"}</div>
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <div className="text-xs text-neutral-500">{tx("Modules")}</div>
-                  {(runtime.modules ?? []).length === 0 ? (
-                    <div className="rounded border border-dashed border-neutral-200 px-3 py-2 text-xs text-neutral-500">
-                      {runtime.availability_message || tx("No built modules detected.")}
-                    </div>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {(runtime.modules ?? []).map((module) => (
-                        <span key={module} className="rounded-full border bg-neutral-50 px-2 py-1 text-xs text-neutral-700">
-                          {module}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <RuntimeModuleList modules={runtime.modules} availabilityMessage={runtime.availability_message} tx={tx} />
               </article>
             ))}
           </div>

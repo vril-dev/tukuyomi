@@ -303,7 +303,7 @@ export default function IPReputationPanel() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("IP Reputation")}</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-xs text-neutral-500">
             {tx("Manage default and per-host IP reputation scopes with structured controls.")}
           </p>
         </div>
@@ -477,7 +477,7 @@ function IPReputationScopeEditor({
       <div className="space-y-4">
         <div className="text-sm font-medium">{tx("Global Settings")}</div>
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
-          <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+          <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
             <input
               type="checkbox"
               checked={scope.enabled}
@@ -485,7 +485,7 @@ function IPReputationScopeEditor({
             />
             <span>{tx("Enable IP reputation for this scope")}</span>
           </label>
-          <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+          <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
             <input
               type="checkbox"
               checked={scope.failOpen}

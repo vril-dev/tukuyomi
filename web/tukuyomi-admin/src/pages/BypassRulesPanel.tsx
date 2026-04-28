@@ -298,7 +298,7 @@ export default function BypassRulesPanel() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Bypass Rules")}</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-xs text-neutral-500">
             {tx("Edit default and host-scoped bypass entries with structured controls.")}
           </p>
         </div>
@@ -538,7 +538,7 @@ function BypassEntriesTable({
   return (
     <div className="app-table-shell">
       <div className="app-table-scroll-shell overflow-auto">
-        <table className="app-table min-w-[760px] w-full text-sm">
+        <table className="app-table min-w-[760px] w-full text-xs">
           <thead className="app-table-head">
             <tr>
               <th className="p-2 text-left border-b">{tx("Path")}</th>

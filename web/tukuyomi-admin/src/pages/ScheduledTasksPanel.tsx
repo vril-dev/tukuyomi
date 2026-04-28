@@ -275,7 +275,7 @@ export default function ScheduledTasksPanel() {
     <div className="w-full p-4 space-y-4">
       <header>
         <h1 className="text-xl font-semibold">{tx("Scheduled Tasks")}</h1>
-        <p className="text-sm text-neutral-500">
+        <p className="text-xs text-neutral-500">
           {tx("Store cron-style command lines here, then execute them from cron, a Docker sidecar, or a systemd timer outside the request path.")}
         </p>
       </header>
@@ -319,7 +319,7 @@ export default function ScheduledTasksPanel() {
         </div>
 
         {tasks.length === 0 ? (
-          <div className="rounded border border-dashed border-neutral-200 px-3 py-6 text-sm text-neutral-500">
+          <div className="rounded border border-dashed border-neutral-200 px-3 py-6 text-xs text-neutral-500">
             {tx("No scheduled tasks configured yet.")}
           </div>
         ) : (
@@ -350,7 +350,7 @@ export default function ScheduledTasksPanel() {
                   </div>
 
                   <div className="grid gap-3 md:grid-cols-2">
-                    <label className="space-y-1 text-sm">
+                    <label className="space-y-1 text-xs">
                       <span>{tx("Name")}</span>
                       <input
                         className="w-full"
@@ -359,10 +359,10 @@ export default function ScheduledTasksPanel() {
                         onChange={(event) => updateTask(index, { name: event.target.value })}
                       />
                     </label>
-                    <div className="space-y-1 text-sm">
+                    <div className="space-y-1 text-xs">
                       <span>{tx("Enabled")}</span>
                       <div className="flex min-h-[34px] items-center">
-                        <label className="inline-flex items-center gap-2 text-sm">
+                        <label className="inline-flex items-center gap-2 text-xs">
                           <input
                             type="checkbox"
                             checked={task.enabled}
@@ -372,7 +372,7 @@ export default function ScheduledTasksPanel() {
                         </label>
                       </div>
                     </div>
-                    <label className="space-y-1 text-sm">
+                    <label className="space-y-1 text-xs">
                       <span>{tx("Schedule")}</span>
                       <input
                         className="w-full"
@@ -380,7 +380,7 @@ export default function ScheduledTasksPanel() {
                         onChange={(event) => updateTask(index, { schedule: event.target.value })}
                       />
                     </label>
-                    <label className="space-y-1 text-sm">
+                    <label className="space-y-1 text-xs">
                       <span>{tx("Timezone")}</span>
                       <input
                         className="w-full"
@@ -389,7 +389,7 @@ export default function ScheduledTasksPanel() {
                         onChange={(event) => updateTask(index, { timezone: event.target.value })}
                       />
                     </label>
-                    <label className="space-y-1 text-sm md:col-span-2">
+                    <label className="space-y-1 text-xs md:col-span-2">
                       <span>{tx("Command")}</span>
                       <p className="text-xs text-neutral-500">
                         {tx("Full command line. Use absolute paths for predictable execution. App jobs inside Docker need the app tree mounted into both coraza and scheduled-task-runner.")}
@@ -401,7 +401,7 @@ export default function ScheduledTasksPanel() {
                         onChange={(event) => updateTask(index, { command: event.target.value })}
                       />
                     </label>
-                    <label className="space-y-1 text-sm">
+                    <label className="space-y-1 text-xs">
                       <span>{tx("Timeout Seconds")}</span>
                       <input
                         className="w-full"
@@ -409,7 +409,7 @@ export default function ScheduledTasksPanel() {
                         onChange={(event) => updateTask(index, { timeoutSec: event.target.value })}
                       />
                     </label>
-                    <label className="space-y-1 text-sm md:col-span-2">
+                    <label className="space-y-1 text-xs md:col-span-2">
                       <span>{tx("Environment (KEY=value per line)")}</span>
                       <textarea className="w-full" rows={3} value={task.envText} onChange={(event) => updateTask(index, { envText: event.target.value })} />
                     </label>

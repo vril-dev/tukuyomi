@@ -157,28 +157,26 @@ select {
   display: flex;
   align-items: center;
   text-decoration: none;
-  border: 1px solid transparent;
-  border-radius: 8px;
+  border: 0;
+  border-radius: 0;
   padding: 8px 10px;
   background: transparent;
   color: #334155;
-  transition: background 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out;
+  transition: background 120ms ease-out, color 120ms ease-out;
 }
 
 .app-nav-link:hover {
-  border-color: #d7e3fb;
   background: #f6f9fe;
   color: #1d4ed8;
 }
 
 .app-nav-link.active {
-  border-color: #dbe7ff;
   background: #eaf1ff;
   color: #1744b3;
 }
 
 .app-nav-label {
-  font-size: 12px;
+  @apply text-xs;
   font-weight: 600;
 }
 
@@ -265,7 +263,7 @@ select {
   display: grid;
   gap: 10px;
   justify-items: end;
-  font-size: 12px;
+  @apply text-xs;
   color: var(--muted);
 }
 
@@ -319,7 +317,7 @@ select {
   border-radius: 999px;
   padding: 4px 10px;
   background: #f8fbff;
-  font-size: 12px;
+  @apply text-xs;
   max-width: min(34vw, 360px);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -352,16 +350,15 @@ button {
   padding: 0.5rem 0.92rem;
   background: linear-gradient(180deg, #ffffff, #f7fbf9);
   color: var(--ink);
-  font-size: 12px;
+  @apply text-xs;
   line-height: 1rem;
   font-weight: 600;
   white-space: nowrap;
   transition: transform 100ms ease-out, box-shadow 120ms ease-out, border-color 120ms ease-out;
 }
 
-button.text-xs,
-button.text-sm {
-  font-size: 12px;
+button.text-xs {
+  @apply text-xs;
   line-height: 1rem;
 }
 
@@ -394,7 +391,7 @@ button:disabled {
 input,
 select,
 textarea {
-  font-size: 12px;
+  @apply text-xs;
   padding: 6px;
   border: 1px solid color-mix(in srgb, var(--edge) 75%, white);
   border-radius: 6px;
@@ -461,7 +458,7 @@ tr:nth-child(even) td {
 
 .app-table th {
   color: #526070;
-  font-size: 12px;
+  @apply text-xs;
   font-weight: 700;
   line-height: 1.4;
   letter-spacing: 0.01em;
@@ -469,7 +466,7 @@ tr:nth-child(even) td {
 
 .app-table td {
   color: #374151;
-  font-size: 12px;
+  @apply text-xs;
   line-height: 1.4;
 }
 
@@ -501,7 +498,7 @@ pre {
   background: transparent;
   color: #334155;
   padding: 16px;
-  font-size: 12px;
+  @apply text-xs;
   line-height: 1.65;
 }
 
@@ -548,7 +545,7 @@ pre {
   }
 
   .app-nav-label {
-    font-size: 12px;
+    @apply text-xs;
   }
 
   .app-nav-group-meta {

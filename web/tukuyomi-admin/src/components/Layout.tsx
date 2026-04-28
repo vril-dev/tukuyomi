@@ -345,7 +345,7 @@ export default function Layout() {
 
         <section className="app-content">
           {readOnly ? (
-            <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900">
               {tx("This deployment is admin read-only. Inspect, validate, and dry-run actions remain available, but apply/save/rollback actions are disabled. Roll out config changes from source control or image updates instead.")}
             </div>
           ) : null}

@@ -318,14 +318,14 @@ export default function FPTunerPanel() {
       </header>
 
       {error && (
-        <div className="border border-red-300 bg-red-50 rounded-xl p-3 text-sm">
+        <div className="border border-red-300 bg-red-50 rounded-xl p-3 text-xs">
           {tx("Error")}: {error}
         </div>
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="rounded-xl border bg-white p-3 space-y-3">
-          <h2 className="text-sm font-semibold">{tx("Propose Input")}</h2>
+          <h2 className="text-xs font-semibold">{tx("Propose Input")}</h2>
 
           <label className="text-xs text-neutral-600 block">
             {tx("Target Path")}
@@ -338,7 +338,7 @@ export default function FPTunerPanel() {
           </label>
 
           <div className="flex flex-wrap items-center gap-3">
-            <label className="inline-flex items-center gap-2 text-sm">
+            <label className="inline-flex items-center gap-2 text-xs">
               <input
                 type="checkbox"
                 checked={useLatestEvent}
@@ -478,7 +478,7 @@ export default function FPTunerPanel() {
           )}
 
           <button
-            className="px-3 py-1.5 rounded-xl shadow text-sm bg-black text-white disabled:opacity-50"
+            className="px-3 py-1.5 rounded-xl shadow text-xs bg-black text-white disabled:opacity-50"
             onClick={() => void onPropose()}
             disabled={proposing || !canPropose}
           >
@@ -487,9 +487,9 @@ export default function FPTunerPanel() {
         </section>
 
         <section className="rounded-xl border bg-white p-3 space-y-3">
-          <h2 className="text-sm font-semibold">{tx("Apply")}</h2>
+          <h2 className="text-xs font-semibold">{tx("Apply")}</h2>
 
-          <label className="inline-flex items-center gap-2 text-sm">
+          <label className="inline-flex items-center gap-2 text-xs">
             <input
               type="checkbox"
               checked={simulate}
@@ -511,7 +511,7 @@ export default function FPTunerPanel() {
           )}
 
           <button
-            className="px-3 py-1.5 rounded-xl shadow text-sm bg-black text-white disabled:opacity-50"
+            className="px-3 py-1.5 rounded-xl shadow text-xs bg-black text-white disabled:opacity-50"
             onClick={() => void onApply()}
             disabled={readOnly || !canApply || applying}
           >
@@ -527,12 +527,12 @@ export default function FPTunerPanel() {
       </div>
 
       <section className="rounded-xl border bg-white p-3 space-y-2">
-        <h2 className="text-sm font-semibold">{tx("Proposal")}</h2>
+        <h2 className="text-xs font-semibold">{tx("Proposal")}</h2>
 
-        {!proposal && !proposeResult?.no_proposal && <div className="text-sm text-neutral-500">{tx("No proposal yet.")}</div>}
+        {!proposal && !proposeResult?.no_proposal && <div className="text-xs text-neutral-500">{tx("No proposal yet.")}</div>}
 
         {!proposal && proposeResult?.no_proposal && (
-          <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 space-y-1">
+          <div className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 space-y-1">
             <div className="font-medium">{tx("No safe exclusion proposed.")}</div>
             <div>{proposeResult.no_proposal.reason || tx("Provider could not justify a safe scoped exclusion.")}</div>
             {typeof proposeResult.no_proposal.confidence === "number" && proposeResult.no_proposal.confidence > 0 && (
@@ -571,7 +571,7 @@ export default function FPTunerPanel() {
 
       {proposeResult && (
         <section className="rounded-xl border bg-white p-3 space-y-2">
-          <h2 className="text-sm font-semibold">{tx("Last Propose Response")}</h2>
+          <h2 className="text-xs font-semibold">{tx("Last Propose Response")}</h2>
           <div className="app-code-shell">
             <pre className="app-code-block">{JSON.stringify(proposeResult, null, 2)}</pre>
           </div>
@@ -580,7 +580,7 @@ export default function FPTunerPanel() {
 
       <section className="rounded-xl border bg-white p-3 space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold">{tx("Recent actions")}</h2>
+          <h2 className="text-xs font-semibold">{tx("Recent actions")}</h2>
           <button className="border rounded px-2 py-0.5 text-xs bg-white" onClick={() => void loadAudit()} disabled={auditLoading}>
             {auditLoading ? tx("Loading...") : tx("Reload")}
           </button>
@@ -593,7 +593,7 @@ export default function FPTunerPanel() {
         )}
 
         {!auditError && auditEntries.length === 0 && (
-          <div className="text-sm text-neutral-500">{tx("No FP Tuner audit entries yet.")}</div>
+          <div className="text-xs text-neutral-500">{tx("No FP Tuner audit entries yet.")}</div>
         )}
 
         {auditEntries.length > 0 && (
@@ -607,7 +607,7 @@ export default function FPTunerPanel() {
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium text-neutral-900">
+                    <span className="text-xs font-medium text-neutral-900">
                       {formatFPTunerAuditAction(entry.event)}
                     </span>
                     <Badge color={statusBadgeColor(formatFPTunerAuditStatus(entry.event))}>
@@ -616,7 +616,7 @@ export default function FPTunerPanel() {
                   </div>
                   <span className="text-xs text-neutral-500">{formatTimestamp(entry.ts, locale)}</span>
                 </div>
-                <div className="mt-2 text-sm text-neutral-900">{entry.actor || tx("unknown")}</div>
+                <div className="mt-2 text-xs text-neutral-900">{entry.actor || tx("unknown")}</div>
                 <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-neutral-600">
                   <span>{entry.target_path || "-"}</span>
                   <span>{formatFPTunerProposalSummary(entry)}</span>
@@ -722,11 +722,11 @@ function FPTunerAuditDetailModal({
         <div className="flex items-start justify-between gap-4 border-b border-neutral-200 px-5 py-4">
           <div>
             <h2 className="text-lg font-semibold">{tx("FP Tuner audit detail")}</h2>
-            <p className="text-sm text-neutral-500">
+            <p className="text-xs text-neutral-500">
               {formatFPTunerAuditAction(entry.event)} / {formatFPTunerAuditStatus(entry.event)}
             </p>
           </div>
-          <button type="button" className="text-sm underline" onClick={onClose}>
+          <button type="button" className="text-xs underline" onClick={onClose}>
             {tx("close")}
           </button>
         </div>
@@ -734,12 +734,12 @@ function FPTunerAuditDetailModal({
           {details.map((detail) => (
             <div key={`${detail.label}:${detail.value}`} className="rounded bg-neutral-50 p-3">
               <div className="text-xs uppercase tracking-wide text-neutral-500">{detail.label}</div>
-              <div className="mt-1 break-all font-mono text-sm text-neutral-900">{detail.value}</div>
+              <div className="mt-1 break-all font-mono text-xs text-neutral-900">{detail.value}</div>
             </div>
           ))}
         </div>
         <div className="flex justify-end border-t border-neutral-200 px-5 py-4">
-          <button type="button" className="border rounded px-3 py-1.5 text-sm" onClick={onClose}>
+          <button type="button" className="border rounded px-3 py-1.5 text-xs" onClick={onClose}>
             {tx("Close")}
           </button>
         </div>

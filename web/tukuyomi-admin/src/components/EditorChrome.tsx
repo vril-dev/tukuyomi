@@ -23,7 +23,7 @@ export function SectionCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold">{title}</h2>
-          {subtitle ? <p className="text-sm text-neutral-500">{subtitle}</p> : null}
+          {subtitle ? <p className="text-xs text-neutral-500">{subtitle}</p> : null}
         </div>
         {actions ? <div>{actions}</div> : null}
       </div>
@@ -43,7 +43,7 @@ export function Field({
 }) {
   return (
     <label className="grid gap-1">
-      <span className="text-sm font-medium">{label}</span>
+      <span className="text-xs font-medium">{label}</span>
       {children}
       {hint ? <span className="text-xs text-neutral-500">{hint}</span> : null}
     </label>
@@ -104,13 +104,13 @@ export function StatBox({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2">
       <div className="text-xs uppercase tracking-wide text-neutral-500">{label}</div>
-      <div className="text-sm font-medium break-all">{value}</div>
+      <div className="text-xs font-medium break-all">{value}</div>
     </div>
   );
 }
 
 export function EmptyState({ children }: { children: ReactNode }) {
-  return <div className="rounded-xl border border-dashed border-neutral-300 bg-neutral-50 px-4 py-6 text-sm text-neutral-500">{children}</div>;
+  return <div className="rounded-xl border border-dashed border-neutral-300 bg-neutral-50 px-4 py-6 text-xs text-neutral-500">{children}</div>;
 }
 
 export function Badge({ color, children }: { color: "gray" | "green" | "red" | "amber"; children: ReactNode }) {
@@ -184,7 +184,7 @@ export function ActionButton({
   onClick: () => void;
 }) {
   return (
-    <button type="button" className="px-3 py-1.5 rounded-xl shadow text-sm hover:bg-neutral-50 border disabled:opacity-50" onClick={onClick} disabled={disabled}>
+    <button type="button" className="px-3 py-1.5 rounded-xl shadow text-xs hover:bg-neutral-50 border disabled:opacity-50" onClick={onClick} disabled={disabled}>
       {children}
     </button>
   );
@@ -221,7 +221,7 @@ export function PrimaryButton({
   onClick: () => void;
 }) {
   return (
-    <button type="button" className="px-3 py-1.5 rounded-xl shadow text-sm bg-black text-white disabled:opacity-50" onClick={onClick} disabled={disabled}>
+    <button type="button" className="px-3 py-1.5 rounded-xl shadow text-xs bg-black text-white disabled:opacity-50" onClick={onClick} disabled={disabled}>
       {children}
     </button>
   );
@@ -242,7 +242,7 @@ export function Alert({
 }) {
   const cls = kind === "error" ? "border-red-300 bg-red-50" : "border-blue-300 bg-blue-50";
   return (
-    <div className={`border ${cls} rounded-xl p-3 text-sm flex items-start gap-3`}>
+    <div className={`border ${cls} rounded-xl p-3 text-xs flex items-start gap-3`}>
       <div className="font-semibold">{title}</div>
       <div className="flex-1 whitespace-pre-wrap">{message}</div>
       {onClose ? (
@@ -254,5 +254,5 @@ export function Alert({
   );
 }
 
-export const inputClass = "w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/20";
-export const textareaClass = "w-full min-h-24 rounded-xl border px-3 py-2 font-mono text-sm outline-none focus:ring-2 focus:ring-black/20";
+export const inputClass = "w-full rounded-xl border px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-black/20";
+export const textareaClass = "w-full min-h-24 rounded-xl border px-3 py-2 font-mono text-xs outline-none focus:ring-2 focus:ring-black/20";

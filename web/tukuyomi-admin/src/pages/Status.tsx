@@ -106,7 +106,7 @@ export default function Status() {
     if (error) {
         return (
             <div className="w-full p-4">
-                <div className="border border-red-300 bg-red-50 rounded-xl p-3 text-sm">{tx("Error")}: {error}</div>
+                <div className="border border-red-300 bg-red-50 rounded-xl p-3 text-xs">{tx("Error")}: {error}</div>
             </div>
         );
     }
@@ -160,7 +160,7 @@ export default function Status() {
                         </div>
                     </div>
 
-                    <div className="grid gap-3 sm:grid-cols-3 text-sm">
+                    <div className="grid gap-3 sm:grid-cols-3 text-xs">
                         <Metric label={tx("Blocked (Last 1h)")} value={formatCount(wafBlock?.last_1h)} />
                         <Metric label={tx("Blocked (Last 24h)")} value={formatCount(wafBlock?.last_24h)} />
                         <Metric label={tx("Blocked (In Scan Window)")} value={formatCount(wafBlock?.total_in_scan)} />
@@ -195,7 +195,7 @@ export default function Status() {
                 </div>
             ) : null}
 
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-xs">
                 <Metric label={tx("Listener Mode")} value={listenerMode} />
                 <Metric label={tx("Public Listener")} value={String(data.public_listener_addr ?? data.listen_addr ?? "-")} />
                 <Metric label={tx("Admin Listener Enabled")} value={String(adminListenerEnabled)} />
@@ -224,7 +224,7 @@ export default function Status() {
                 <Metric label={tx("DB Last Sync Scan Lines")} value={String(data.db_last_sync_scanned_lines ?? "-")} />
             </div>
 
-      <section className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
+            <section className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
                 <div className="flex items-center justify-between gap-2">
                     <h2 className="text-sm font-semibold">{tx("Rendered JSON")}</h2>
                     <span className="text-xs text-neutral-500">{tx("Latest status payload")}</span>

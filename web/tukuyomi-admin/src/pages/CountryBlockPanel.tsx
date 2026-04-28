@@ -55,6 +55,8 @@ const exampleState: CountryBlockEditorState = {
 };
 
 const exampleRaw = serializeCountryBlockEditor(exampleState);
+const countryCodeListGridClass = "grid items-start gap-4 lg:grid-cols-[minmax(9rem,13rem)_1fr]";
+const hostScopeGridClass = "grid items-start gap-4 lg:grid-cols-[minmax(14rem,18rem)_minmax(9rem,13rem)_1fr]";
 
 export default function CountryBlockPanel() {
   const { locale, tx } = useI18n();
@@ -220,7 +222,7 @@ export default function CountryBlockPanel() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Country Block")}</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-xs text-neutral-500">
             {tx("Manage default and per-host blocked country lists with structured controls.")}
           </p>
         </div>
@@ -275,23 +277,25 @@ export default function CountryBlockPanel() {
       </SectionCard>
 
       <SectionCard title={tx("Default Scope")} subtitle={tx("These country codes apply when no more specific host scope matches.")}>
-        <Field label={tx("Blocked countries")} hint={tx("One country code per line. `UNKNOWN` is allowed for unresolved lookups.")}>
-          <ParsedTextArea
-            className={`${textareaClass} min-h-32`}
-            value={editorState.defaultBlockedCountries}
-            onValueChange={(next) =>
-              applyStructuredState({
-                ...editorState,
-                defaultBlockedCountries: next,
-              })
-            }
-            serialize={countryCodesToMultiline}
-            parse={multilineToCountryCodes}
-            equals={stringListEqual}
-            placeholder={"US\nCN\nUNKNOWN"}
-            spellCheck={false}
-          />
-        </Field>
+        <div className={countryCodeListGridClass}>
+          <Field label={tx("Blocked countries")} hint={tx("One country code per line. `UNKNOWN` is allowed for unresolved lookups.")}>
+            <ParsedTextArea
+              className={`${textareaClass} min-h-32`}
+              value={editorState.defaultBlockedCountries}
+              onValueChange={(next) =>
+                applyStructuredState({
+                  ...editorState,
+                  defaultBlockedCountries: next,
+                })
+              }
+              serialize={countryCodesToMultiline}
+              parse={multilineToCountryCodes}
+              equals={stringListEqual}
+              placeholder={"US\nCN\nUNKNOWN"}
+              spellCheck={false}
+            />
+          </Field>
+        </div>
       </SectionCard>
 
       <SectionCard
@@ -329,7 +333,7 @@ export default function CountryBlockPanel() {
                   {tx("Remove")}
                 </ActionButton>
               </div>
-              <div className="grid gap-3 lg:grid-cols-[minmax(240px,1fr)_minmax(0,2fr)]">
+              <div className={hostScopeGridClass}>
                 <Field label={tx("Host")} hint={tx("Examples: `example.com`, `admin.example.com`, `example.com:8443`.")}>
                   <input
                     className={inputClass}

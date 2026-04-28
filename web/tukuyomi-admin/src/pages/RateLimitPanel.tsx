@@ -88,6 +88,12 @@ const exampleState: RateLimitEditorState = {
 };
 
 const exampleRaw = serializeRateLimitEditor(exampleState);
+const toggleCardClass = "flex min-h-9 items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs";
+const globalSettingsGridClass = "grid max-w-[58rem] items-start gap-4 lg:grid-cols-[minmax(14rem,18rem)_minmax(16rem,22rem)_minmax(9rem,13rem)]";
+const identityGridClass = "grid max-w-[64rem] items-start gap-4 lg:grid-cols-[minmax(14rem,20rem)_minmax(16rem,22rem)_minmax(14rem,20rem)]";
+const adaptiveGridClass = "grid max-w-[64rem] items-start gap-4 lg:grid-cols-[minmax(14rem,18rem)_minmax(10rem,13rem)_minmax(12rem,15rem)_minmax(12rem,15rem)]";
+const feedbackGridClass = "grid max-w-[70rem] items-start gap-4 xl:grid-cols-[minmax(12rem,16rem)_minmax(10rem,12rem)_minmax(12rem,15rem)_minmax(11rem,14rem)_minmax(10rem,13rem)]";
+const policyGridClass = "grid max-w-[58rem] items-start gap-4 lg:grid-cols-[minmax(12rem,16rem)_minmax(10rem,13rem)_minmax(10rem,13rem)]";
 
 export default function RateLimitPanel() {
   const { locale, tx } = useI18n();
@@ -316,7 +322,7 @@ export default function RateLimitPanel() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Rate Limit")}</h1>
-          <p className="text-sm text-neutral-500">
+          <p className="text-xs text-neutral-500">
             {tx("Edit default and per-host rate-limit policy scopes with structured controls.")}
           </p>
         </div>
@@ -512,29 +518,30 @@ function RateLimitScopeEditor({
     <div className="space-y-6">
       <div className="space-y-4">
         <div className="text-sm font-medium">{tx("Global Settings")}</div>
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <div className="space-y-4">
-            <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
+        <div className={globalSettingsGridClass}>
+          <div className="grid gap-1">
+            <span className="text-xs font-medium">{tx("Scope status")}</span>
+            <label className={toggleCardClass}>
               <input
                 type="checkbox"
                 checked={scope.enabled}
                 onChange={(event) => applyScope({ ...scope, enabled: event.target.checked })}
               />
-              <span>{tx("Enable rate limiting for this scope")}</span>
+              <span className="min-w-0 leading-5">{tx("Enable rate limiting for this scope")}</span>
             </label>
-            <Field label={tx("Allowlist IPs")} hint={tx("One CIDR or IP per line. These clients bypass rate limiting before policy matching.")}>
-              <ParsedTextArea
-                className={`${textareaClass} min-h-32`}
-                value={scope.allowlistIPs}
-                onValueChange={(next) => applyScope({ ...scope, allowlistIPs: next })}
-                serialize={listToMultiline}
-                parse={multilineToList}
-                equals={stringListEqual}
-                placeholder={"127.0.0.1/32\n10.0.0.0/8"}
-                spellCheck={false}
-              />
-            </Field>
           </div>
+          <Field label={tx("Allowlist IPs")} hint={tx("One CIDR or IP per line. These clients bypass rate limiting before policy matching.")}>
+            <ParsedTextArea
+              className={`${textareaClass} min-h-32`}
+              value={scope.allowlistIPs}
+              onValueChange={(next) => applyScope({ ...scope, allowlistIPs: next })}
+              serialize={listToMultiline}
+              parse={multilineToList}
+              equals={stringListEqual}
+              placeholder={"127.0.0.1/32\n10.0.0.0/8"}
+              spellCheck={false}
+            />
+          </Field>
           <Field label={tx("Allowlist countries")} hint={tx("One ISO-3166 alpha-2 code per line. These countries bypass rate limiting when country metadata is available.")}>
             <ParsedTextArea
               className={`${textareaClass} min-h-32`}
@@ -552,7 +559,7 @@ function RateLimitScopeEditor({
 
       <div className="space-y-4">
         <div className="text-sm font-medium">{tx("Identity & Adaptive")}</div>
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
+        <div className={identityGridClass}>
           <Field label={tx("Session cookie names")} hint={tx("When `key_by` uses `session`, these cookie names are checked in order.")}>
             <ParsedTextArea
               className={textareaClass}
@@ -587,15 +594,18 @@ function RateLimitScopeEditor({
             />
           </Field>
         </div>
-        <div className="grid gap-4 lg:grid-cols-4">
-          <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
-            <input
-              type="checkbox"
-              checked={scope.adaptiveEnabled}
-              onChange={(event) => applyScope({ ...scope, adaptiveEnabled: event.target.checked })}
-            />
-            <span>{tx("Enable adaptive shrinking")}</span>
-          </label>
+        <div className={adaptiveGridClass}>
+          <div className="grid gap-1">
+            <span className="text-xs font-medium">{tx("Adaptive shrinking")}</span>
+            <label className={toggleCardClass}>
+              <input
+                type="checkbox"
+                checked={scope.adaptiveEnabled}
+                onChange={(event) => applyScope({ ...scope, adaptiveEnabled: event.target.checked })}
+              />
+              <span className="min-w-0 leading-5">{tx("Enable adaptive shrinking")}</span>
+            </label>
+          </div>
           <Field label={tx("Adaptive score threshold")}>
             <input
               type="number"
@@ -628,20 +638,23 @@ function RateLimitScopeEditor({
 
       <div className="space-y-4">
         <div className="text-sm font-medium">{tx("Feedback Promotion")}</div>
-        <div className="grid gap-4 lg:grid-cols-5">
-          <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
-            <input
-              type="checkbox"
-              checked={scope.feedback.enabled}
-              onChange={(event) =>
-                applyScope({
-                  ...scope,
-                  feedback: { ...scope.feedback, enabled: event.target.checked },
-                })
-              }
-            />
-            <span>{tx("Enable feedback")}</span>
-          </label>
+        <div className={feedbackGridClass}>
+          <div className="grid gap-1">
+            <span className="text-xs font-medium">{tx("Feedback status")}</span>
+            <label className={toggleCardClass}>
+              <input
+                type="checkbox"
+                checked={scope.feedback.enabled}
+                onChange={(event) =>
+                  applyScope({
+                    ...scope,
+                    feedback: { ...scope.feedback, enabled: event.target.checked },
+                  })
+                }
+              />
+              <span className="min-w-0 leading-5">{tx("Enable feedback")}</span>
+            </label>
+          </div>
           <Field label={tx("Strikes required")}>
             <input
               type="number"
@@ -670,32 +683,38 @@ function RateLimitScopeEditor({
               }
             />
           </Field>
-          <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
-            <input
-              type="checkbox"
-              checked={scope.feedback.adaptiveOnly}
-              onChange={(event) =>
-                applyScope({
-                  ...scope,
-                  feedback: { ...scope.feedback, adaptiveOnly: event.target.checked },
-                })
-              }
-            />
-            <span>{tx("Adaptive only")}</span>
-          </label>
-          <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
-            <input
-              type="checkbox"
-              checked={scope.feedback.dryRun}
-              onChange={(event) =>
-                applyScope({
-                  ...scope,
-                  feedback: { ...scope.feedback, dryRun: event.target.checked },
-                })
-              }
-            />
-            <span>{tx("Dry run")}</span>
-          </label>
+          <div className="grid gap-1">
+            <span className="text-xs font-medium">{tx("Promotion mode")}</span>
+            <label className={toggleCardClass}>
+              <input
+                type="checkbox"
+                checked={scope.feedback.adaptiveOnly}
+                onChange={(event) =>
+                  applyScope({
+                    ...scope,
+                    feedback: { ...scope.feedback, adaptiveOnly: event.target.checked },
+                  })
+                }
+              />
+              <span className="min-w-0 leading-5">{tx("Adaptive only")}</span>
+            </label>
+          </div>
+          <div className="grid gap-1">
+            <span className="text-xs font-medium">{tx("Enforcement mode")}</span>
+            <label className={toggleCardClass}>
+              <input
+                type="checkbox"
+                checked={scope.feedback.dryRun}
+                onChange={(event) =>
+                  applyScope({
+                    ...scope,
+                    feedback: { ...scope.feedback, dryRun: event.target.checked },
+                  })
+                }
+              />
+              <span className="min-w-0 leading-5">{tx("Dry run")}</span>
+            </label>
+          </div>
         </div>
       </div>
 
@@ -777,23 +796,25 @@ function RateLimitScopeEditor({
                   />
                 </Field>
               </div>
-              <Field label={tx("Methods")} hint={tx("One HTTP method per line or separated by commas. Leave empty to match any method.")}>
-                <ParsedTextArea
-                  className={textareaClass}
-                  value={rule.methods}
-                  onValueChange={(next) =>
-                    updateRule(index, (current) => ({
-                      ...current,
-                      methods: next,
-                    }))
-                  }
-                  serialize={listToMultiline}
-                  parse={multilineToList}
-                  equals={stringListEqual}
-                  placeholder={"POST\nGET"}
-                  spellCheck={false}
-                />
-              </Field>
+              <div className="max-w-[14rem]">
+                <Field label={tx("Methods")} hint={tx("One HTTP method per line or separated by commas. Leave empty to match any method.")}>
+                  <ParsedTextArea
+                    className={textareaClass}
+                    value={rule.methods}
+                    onValueChange={(next) =>
+                      updateRule(index, (current) => ({
+                        ...current,
+                        methods: next,
+                      }))
+                    }
+                    serialize={listToMultiline}
+                    parse={multilineToList}
+                    equals={stringListEqual}
+                    placeholder={"POST\nGET"}
+                    spellCheck={false}
+                  />
+                </Field>
+              </div>
               <RateLimitPolicyEditor
                 tx={tx}
                 policy={rule.policy}
@@ -822,11 +843,14 @@ function RateLimitPolicyEditor({
   onChange: (policy: RateLimitPolicyDraft) => void;
 }) {
   return (
-    <div className="grid gap-4 lg:grid-cols-3">
-      <label className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm">
-        <input type="checkbox" checked={policy.enabled} onChange={(event) => onChange({ ...policy, enabled: event.target.checked })} />
-        <span>{tx("Policy enabled")}</span>
-      </label>
+    <div className={policyGridClass}>
+      <div className="grid gap-1">
+        <span className="text-xs font-medium">{tx("Policy status")}</span>
+        <label className={toggleCardClass}>
+          <input type="checkbox" checked={policy.enabled} onChange={(event) => onChange({ ...policy, enabled: event.target.checked })} />
+          <span className="min-w-0 leading-5">{tx("Policy enabled")}</span>
+        </label>
+      </div>
       <Field label={tx("Limit")}>
         <input type="number" min={0} className={inputClass} value={policy.limit} onChange={(event) => onChange({ ...policy, limit: readIntInput(event.target.value, 0) })} />
       </Field>

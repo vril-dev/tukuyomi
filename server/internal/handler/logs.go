@@ -42,6 +42,8 @@ var (
 	defaultStatsRangeHours = 24
 	maxStatsRangeHours     = 14 * 24
 	statsTopN              = 5
+	maxLogSearchQueryBytes = 256
+	maxLogSearchTerms      = 8
 )
 
 const (
@@ -232,11 +234,19 @@ func LogsRead(c *gin.Context) {
 		cursor = &off
 	}
 	countryFilter := requestmeta.NormalizeCountryFilter(c.Query("country"))
+	searchQuery, err := normalizeLogSearchQuery(c.Query("q"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if reqIDFilter != "" && searchQuery != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "q cannot be combined with req_id"})
+		return
+	}
 
 	if reqIDFilter != "" {
 		var (
 			lines []logLine
-			err   error
 		)
 		if src == "waf" {
 			lines, err = store.ReadWAFRequestLogs(path, reqIDFilter, countryFilter)
@@ -272,11 +282,14 @@ func LogsRead(c *gin.Context) {
 		lines            []logLine
 		nextCur          *int64
 		hasPrev, hasNext bool
-		err              error
 	)
 	if src == "waf" {
-		lines, nextCur, hasPrev, hasNext, err = store.ReadWAFLogs(path, tail, cursor, dir, countryFilter)
+		lines, nextCur, hasPrev, hasNext, err = store.ReadWAFLogs(path, tail, cursor, dir, countryFilter, searchQuery)
 	} else {
+		if searchQuery != "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "q is supported only for waf logs"})
+			return
+		}
 		lines, nextCur, hasPrev, hasNext, err = readByLine(path, tail, cursor, dir)
 	}
 	if err != nil {
@@ -356,6 +369,11 @@ func LogsDownload(c *gin.Context) {
 		to = time.Now().Add(1 * time.Second)
 	}
 	countryFilter := requestmeta.NormalizeCountryFilter(c.Query("country"))
+	searchQuery, err := normalizeLogSearchQuery(c.Query("q"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	c.Header("Content-Type", "application/x-ndjson")
 	filename := fmt.Sprintf("%s-%s.ndjson.gz", src, time.Now().Format("20060102"))
@@ -366,7 +384,7 @@ func LogsDownload(c *gin.Context) {
 	defer gw.Close()
 
 	if src == "waf" {
-		if err := store.DownloadWAFLogs(path, gw, from, to, countryFilter); err != nil {
+		if err := store.DownloadWAFLogs(path, gw, from, to, countryFilter, searchQuery); err != nil {
 			c.Status(http.StatusInternalServerError)
 		}
 		return
@@ -384,7 +402,7 @@ func LogsDownload(c *gin.Context) {
 		if len(b) > 0 {
 			var m map[string]any
 			if json.Unmarshal(b, &m) == nil {
-				if ts, ok := m["ts"].(string); ok && tsInRange(ts, from, to) && requestmeta.CountryMatchesFilter(m["country"], countryFilter) {
+				if ts, ok := m["ts"].(string); ok && tsInRange(ts, from, to) && requestmeta.CountryMatchesFilter(m["country"], countryFilter) && logRawMatchesSearch(b, searchQuery) {
 					if _, err := gw.Write(b); err != nil {
 						break
 					}
@@ -400,6 +418,38 @@ func LogsDownload(c *gin.Context) {
 			break
 		}
 	}
+}
+
+func normalizeLogSearchQuery(raw string) (string, error) {
+	query := strings.TrimSpace(raw)
+	if query == "" {
+		return "", nil
+	}
+	if len(query) > maxLogSearchQueryBytes {
+		return "", fmt.Errorf("q is too long: max %d bytes", maxLogSearchQueryBytes)
+	}
+	if len(logSearchTerms(query)) > maxLogSearchTerms {
+		return "", fmt.Errorf("q has too many terms: max %d", maxLogSearchTerms)
+	}
+	return query, nil
+}
+
+func logSearchTerms(query string) []string {
+	return strings.Fields(strings.ToLower(strings.TrimSpace(query)))
+}
+
+func logRawMatchesSearch(raw []byte, query string) bool {
+	terms := logSearchTerms(query)
+	if len(terms) == 0 {
+		return true
+	}
+	haystack := strings.ToLower(string(raw))
+	for _, term := range terms {
+		if !strings.Contains(haystack, term) {
+			return false
+		}
+	}
+	return true
 }
 
 func LogsStats(c *gin.Context) {

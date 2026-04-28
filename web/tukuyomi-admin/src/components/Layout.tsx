@@ -41,6 +41,7 @@ type WAFEngineCapability = {
 };
 
 type StatusNavResponse = {
+  app_version?: string;
   waf_engine_mode?: string;
   waf_engine_modes?: WAFEngineCapability[];
 };
@@ -139,6 +140,14 @@ function hasAvailableWAFEngine(mode: string, engines: WAFEngineCapability[]) {
   return engines.some((engine) => normalizeWAFEngineMode(engine.mode) === mode && engine.available === true);
 }
 
+function formatAppVersion(version: string) {
+  const normalized = version.trim();
+  if (/^\d+\.\d+\.\d+/.test(normalized)) {
+    return `v${normalized}`;
+  }
+  return normalized;
+}
+
 export default function Layout() {
   const { locale, setLocale, tx } = useI18n();
   const { pathname } = useLocation();
@@ -147,6 +156,8 @@ export default function Layout() {
   const [hasBuiltRuntime, setHasBuiltRuntime] = useState(false);
   const [wafEngineMode, setWAFEngineMode] = useState("coraza");
   const [wafEngineModes, setWAFEngineModes] = useState<WAFEngineCapability[]>([]);
+  const [appVersion, setAppVersion] = useState("");
+  const formattedAppVersion = formatAppVersion(appVersion);
 
   useEffect(() => {
     let active = true;
@@ -176,6 +187,7 @@ export default function Layout() {
         if (!active) {
           return;
         }
+        setAppVersion(typeof data.app_version === "string" ? data.app_version : "");
         setWAFEngineMode(normalizeWAFEngineMode(data.waf_engine_mode));
         setWAFEngineModes(Array.isArray(data.waf_engine_modes) ? data.waf_engine_modes : []);
       })
@@ -183,6 +195,7 @@ export default function Layout() {
         if (!active) {
           return;
         }
+        setAppVersion("");
         setWAFEngineMode("coraza");
         setWAFEngineModes([]);
       });
@@ -235,7 +248,7 @@ export default function Layout() {
     <div className="app-shell">
       <aside className="app-sidebar">
         <div className="app-brand">
-          <p className="app-brand-tag">TUKUYOMI</p>
+          <p className="app-brand-tag">TUKUYOMI{formattedAppVersion ? ` ${formattedAppVersion}` : ""}</p>
           <h1>{tx("Control Room")}</h1>
           <p className="app-brand-sub">{tx("Coraza + CRS Security Gateway")}</p>
         </div>

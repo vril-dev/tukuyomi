@@ -47,7 +47,7 @@ const (
 	defaultProxyExpectContinueSec        = 1
 	defaultProxyMaxIdleConns             = 100
 	defaultProxyMaxIdleConnsPerHost      = 100
-	defaultProxyMaxConnsPerHost          = 200
+	defaultProxyMaxConnsPerHost          = 600
 	defaultProxyHealthCheckIntervalSec   = 15
 	defaultProxyHealthCheckTimeoutSec    = 2
 	defaultProxyHealthCheckBodyLimit     = 64 * 1024

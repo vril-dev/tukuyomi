@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib/proxy_api.sh
 source "${SCRIPT_DIR}/lib/proxy_api.sh"
+# shellcheck source=./lib/benchmark_runtime.sh
+source "${SCRIPT_DIR}/lib/benchmark_runtime.sh"
 
 GO_BIN="${GO:-go}"
 BENCH_REQUESTS="${BENCH_REQUESTS:-600}"
@@ -21,6 +23,7 @@ BENCH_CLIENT_KEEPALIVE="${BENCH_CLIENT_KEEPALIVE:-1}"
 BENCH_PROXY_MODE="${BENCH_PROXY_MODE:-current}"
 BENCH_PROXY_ENGINE="${BENCH_PROXY_ENGINE:-tukuyomi_proxy}"
 BENCH_RUNNER="${BENCH_RUNNER:-docker}"
+BENCH_ISOLATED_RUNTIME="${BENCH_ISOLATED_RUNTIME:-1}"
 BENCH_PROFILE="${BENCH_PROFILE:-0}"
 BENCH_PROFILE_ADDR="${BENCH_PROFILE_ADDR:-127.0.0.1:6060}"
 BENCH_PROFILE_SECONDS="${BENCH_PROFILE_SECONDS:-10}"
@@ -72,6 +75,7 @@ fi
 need_cmd curl
 need_cmd jq
 need_cmd ab
+need_cmd make
 need_cmd "${GO_BIN}"
 
 validate_uint_at_least() {
@@ -202,6 +206,7 @@ if [[ "${BENCH_PROFILE}" == "1" ]]; then
   validate_profile_addr "${BENCH_PROFILE_ADDR}"
 fi
 
+benchmark_runtime_init "proxy"
 proxy_api_init
 
 tmp_dir="$(mktemp -d)"
@@ -234,6 +239,7 @@ cleanup() {
     )
   fi
   restore_config_file_backups || true
+  benchmark_runtime_cleanup || true
   rm -rf "${tmp_dir}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -489,7 +495,8 @@ restore_proxy_rules() {
 }
 
 rate_limit_get_snapshot() {
-  curl -fsS -H "${PROXY_AUTH_HEADER}" "${PROXY_API_URL}/rate-limit-rules"
+  proxy_api_set_admin_auth_args
+  curl -fsS "${PROXY_ADMIN_AUTH_ARGS[@]}" "${PROXY_API_URL}/rate-limit-rules"
 }
 
 rate_limit_apply_raw() {
@@ -505,8 +512,10 @@ rate_limit_apply_raw() {
   fi
 
   body="$(jq -n --arg raw "${raw}" '{raw: $raw}')"
+  proxy_api_set_admin_auth_args
   code="$(curl -sS -o "${response_file}" -w "%{http_code}" \
-    -H "${PROXY_AUTH_HEADER}" -H "If-Match: ${etag}" -H "Content-Type: application/json" \
+    "${PROXY_ADMIN_AUTH_ARGS[@]}" \
+    -H "If-Match: ${etag}" -H "Content-Type: application/json" \
     -X PUT --data "${body}" "${PROXY_API_URL}/rate-limit-rules")"
   if [[ "${code}" != "200" ]]; then
     echo "[proxy-bench][ERROR] failed to apply rate-limit rules: ${code}" >&2
@@ -843,15 +852,20 @@ benchmark_upstream_url() {
 start_proxy_runtime() {
   local server_bin
   local pprof_env=""
+  local runtime_config_file="${WAF_CONFIG_FILE:-conf/config.json}"
+  local runtime_db_path=""
 
   case "${BENCH_RUNNER}" in
     docker)
       if [[ "${BENCH_PROFILE}" == "1" ]]; then
         compose_pprof_addr="${BENCH_PROFILE_ADDR}"
       fi
+      runtime_db_path="$(benchmark_runtime_docker_db_path)"
       (
         cd "${ROOT_DIR}"
         CORAZA_PORT="${HOST_CORAZA_PORT}" WAF_LISTEN_PORT="${WAF_LISTEN_PORT}" \
+        WAF_CONFIG_FILE="${runtime_config_file}" \
+        WAF_STORAGE_DB_PATH="${runtime_db_path}" \
         TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${WAF_ADMIN_USERNAME}" \
         TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${WAF_ADMIN_PASSWORD}" \
         TUKUYOMI_PPROF_ADDR="${compose_pprof_addr}" docker compose up -d --build --force-recreate coraza >/dev/null
@@ -863,13 +877,16 @@ start_proxy_runtime() {
       if [[ "${BENCH_PROFILE}" == "1" ]]; then
         pprof_env="${BENCH_PROFILE_ADDR}"
       fi
+      runtime_config_file="$(benchmark_runtime_local_config_path)"
+      runtime_db_path="$(benchmark_runtime_local_db_path)"
       (
         cd "${ROOT_DIR}/server"
         "${GO_BIN}" build -o "${server_bin}" ./cmd/server
       )
       (
         cd "${ROOT_DIR}/data"
-        WAF_CONFIG_FILE="conf/config.json" \
+        WAF_CONFIG_FILE="${runtime_config_file}" \
+        WAF_STORAGE_DB_PATH="${runtime_db_path}" \
         TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${WAF_ADMIN_USERNAME}" \
         TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${WAF_ADMIN_PASSWORD}" \
         TUKUYOMI_PPROF_ADDR="${pprof_env}" "${server_bin}"
@@ -1044,6 +1061,7 @@ if [[ "${BENCH_PROXY_MODE}" == "proxy-only" ]]; then
   backup_config_file "${bypass_host_file}"
   enable_waf_bypass_for_proxy_only_mode
 fi
+benchmark_runtime_seed_db "[proxy-bench]"
 
 json_rows_file="${tmp_dir}/proxy_benchmark_rows.jsonl"
 prepare_profile_artifacts

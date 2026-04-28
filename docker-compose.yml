@@ -24,6 +24,8 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-}
     environment:
       - WAF_CONFIG_FILE=${WAF_CONFIG_FILE:-conf/config.json}
       - WAF_STORAGE_DB_DRIVER=${WAF_STORAGE_DB_DRIVER:-}
@@ -60,6 +62,8 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-}
     environment:
       - WAF_CONFIG_FILE=${WAF_CONFIG_FILE:-conf/config.json}
       - WAF_STORAGE_DB_DRIVER=${WAF_STORAGE_DB_DRIVER:-}

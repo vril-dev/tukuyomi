@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib/proxy_api.sh
 source "${SCRIPT_DIR}/lib/proxy_api.sh"
+# shellcheck source=./lib/benchmark_runtime.sh
+source "${SCRIPT_DIR}/lib/benchmark_runtime.sh"
 
 GO_BIN="${GO:-go}"
 BENCH_REQUESTS="${BENCH_REQUESTS:-300}"
@@ -16,6 +18,7 @@ BENCH_MAX_FAIL_RATE_PCT="${BENCH_MAX_FAIL_RATE_PCT:-}"
 BENCH_MIN_RPS="${BENCH_MIN_RPS:-}"
 BENCH_DISABLE_RATE_LIMIT="${BENCH_DISABLE_RATE_LIMIT:-1}"
 BENCH_DISABLE_REQUEST_GUARDS="${BENCH_DISABLE_REQUEST_GUARDS:-1}"
+BENCH_ISOLATED_RUNTIME="${BENCH_ISOLATED_RUNTIME:-1}"
 WAF_BENCH_SCENARIOS="${WAF_BENCH_SCENARIOS:-allow,block-xss}"
 UPSTREAM_PORT="${UPSTREAM_PORT:-}"
 OUTPUT_FILE="${OUTPUT_FILE:-data/tmp/reports/proxy/waf-benchmark-summary.md}"
@@ -103,6 +106,7 @@ if [[ -n "${UPSTREAM_PORT}" && ( "${UPSTREAM_PORT}" -lt 1 || "${UPSTREAM_PORT}" 
   exit 1
 fi
 
+benchmark_runtime_init "waf"
 proxy_api_init
 
 tmp_dir="$(mktemp -d)"
@@ -125,6 +129,7 @@ cleanup() {
     PUID="${HOST_PUID}" GUID="${HOST_GUID}" CORAZA_PORT="${HOST_CORAZA_PORT}" docker compose down --remove-orphans >/dev/null 2>&1 || true
   )
   restore_config_file_backups || true
+  benchmark_runtime_cleanup || true
   rm -rf "${tmp_dir}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -318,7 +323,8 @@ restore_proxy_rules() {
 }
 
 rate_limit_get_snapshot() {
-  curl -fsS -H "${PROXY_AUTH_HEADER}" "${PROXY_API_URL}/rate-limit-rules"
+  proxy_api_set_admin_auth_args
+  curl -fsS "${PROXY_ADMIN_AUTH_ARGS[@]}" "${PROXY_API_URL}/rate-limit-rules"
 }
 
 rate_limit_apply_raw() {
@@ -334,8 +340,10 @@ rate_limit_apply_raw() {
   fi
 
   body="$(jq -n --arg raw "${raw}" '{raw: $raw}')"
+  proxy_api_set_admin_auth_args
   code="$(curl -sS -o "${response_file}" -w "%{http_code}" \
-    -H "${PROXY_AUTH_HEADER}" -H "If-Match: ${etag}" -H "Content-Type: application/json" \
+    "${PROXY_ADMIN_AUTH_ARGS[@]}" \
+    -H "If-Match: ${etag}" -H "Content-Type: application/json" \
     -X PUT --data "${body}" "${PROXY_API_URL}/rate-limit-rules")"
   if [[ "${code}" != "200" ]]; then
     echo "[waf-bench][ERROR] failed to apply rate-limit rules: ${code}" >&2
@@ -723,8 +731,7 @@ if [[ "${BENCH_DISABLE_REQUEST_GUARDS}" == "1" ]]; then
   disable_request_guard_files_for_benchmark
 fi
 
-echo "[waf-bench] ensuring DB-backed WAF rule assets"
-(cd "${ROOT_DIR}" && make crs-install)
+benchmark_runtime_seed_db "[waf-bench]"
 
 json_rows_file="${tmp_dir}/waf_benchmark_rows.jsonl"
 mkdir -p "$(dirname "${OUTPUT_FILE}")" "$(dirname "${OUTPUT_JSON_FILE}")"
@@ -735,6 +742,8 @@ start_benchmark_upstream
 (
   cd "${ROOT_DIR}"
   PUID="${HOST_PUID}" GUID="${HOST_GUID}" CORAZA_PORT="${HOST_CORAZA_PORT}" WAF_LISTEN_PORT="${WAF_LISTEN_PORT}" \
+  WAF_CONFIG_FILE="${WAF_CONFIG_FILE:-conf/config.json}" \
+  WAF_STORAGE_DB_PATH="$(benchmark_runtime_docker_db_path)" \
   TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${WAF_ADMIN_USERNAME}" \
   TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${WAF_ADMIN_PASSWORD}" \
   docker compose up -d --build --force-recreate coraza >/dev/null

@@ -27,7 +27,7 @@ type startupBootstrapProfileSpec struct {
 	PolicyRaw map[string]string
 }
 
-const minimalPresetProxySeedRaw = "{\n  \"upstreams\": [\n    {\n      \"name\": \"primary\",\n      \"url\": \"http://host.docker.internal:18080\",\n      \"weight\": 1,\n      \"enabled\": true\n    }\n  ],\n  \"load_balancing_strategy\": \"round_robin\",\n  \"routes\": [],\n  \"dial_timeout\": 5,\n  \"response_header_timeout\": 10,\n  \"idle_conn_timeout\": 90,\n  \"upstream_keepalive_sec\": 30,\n  \"max_idle_conns\": 100,\n  \"max_idle_conns_per_host\": 100,\n  \"max_conns_per_host\": 200,\n  \"force_http2\": true,\n  \"disable_compression\": false,\n  \"expose_waf_debug_headers\": false,\n  \"expect_continue_timeout\": 1,\n  \"tls_insecure_skip_verify\": false,\n  \"tls_ca_bundle\": \"\",\n  \"tls_min_version\": \"\",\n  \"tls_max_version\": \"\",\n  \"tls_client_cert\": \"\",\n  \"tls_client_key\": \"\",\n  \"buffer_request_body\": true,\n  \"max_response_buffer_bytes\": 1048576,\n  \"flush_interval_ms\": 25,\n  \"health_check_path\": \"/bench\",\n  \"health_check_headers\": {},\n  \"health_check_expected_body\": \"\",\n  \"health_check_expected_body_regex\": \"\",\n  \"health_check_interval_sec\": 15,\n  \"health_check_timeout_sec\": 2,\n  \"default_route\": null,\n  \"error_html_file\": \"\",\n  \"error_redirect_url\": \"\"\n}\n"
+const minimalPresetProxySeedRaw = "{\n  \"upstreams\": [\n    {\n      \"name\": \"primary\",\n      \"url\": \"http://host.docker.internal:18080\",\n      \"weight\": 1,\n      \"enabled\": true\n    }\n  ],\n  \"load_balancing_strategy\": \"round_robin\",\n  \"routes\": [],\n  \"dial_timeout\": 5,\n  \"response_header_timeout\": 10,\n  \"idle_conn_timeout\": 90,\n  \"upstream_keepalive_sec\": 30,\n  \"max_idle_conns\": 100,\n  \"max_idle_conns_per_host\": 100,\n  \"max_conns_per_host\": 600,\n  \"force_http2\": true,\n  \"disable_compression\": false,\n  \"expose_waf_debug_headers\": false,\n  \"expect_continue_timeout\": 1,\n  \"tls_insecure_skip_verify\": false,\n  \"tls_ca_bundle\": \"\",\n  \"tls_min_version\": \"\",\n  \"tls_max_version\": \"\",\n  \"tls_client_cert\": \"\",\n  \"tls_client_key\": \"\",\n  \"buffer_request_body\": true,\n  \"max_response_buffer_bytes\": 1048576,\n  \"flush_interval_ms\": 25,\n  \"health_check_path\": \"/bench\",\n  \"health_check_headers\": {},\n  \"health_check_expected_body\": \"\",\n  \"health_check_expected_body_regex\": \"\",\n  \"health_check_interval_sec\": 15,\n  \"health_check_timeout_sec\": 2,\n  \"default_route\": null,\n  \"error_html_file\": \"\",\n  \"error_redirect_url\": \"\"\n}\n"
 
 const apiGatewayBootstrapProxyRaw = `{
   "upstreams": [
@@ -65,7 +65,7 @@ const apiGatewayBootstrapProxyRaw = `{
   "idle_conn_timeout": 90,
   "max_idle_conns": 100,
   "max_idle_conns_per_host": 100,
-  "max_conns_per_host": 200,
+  "max_conns_per_host": 600,
   "force_http2": false,
   "disable_compression": false,
   "response_compression": {
@@ -281,7 +281,7 @@ const nextJSBootstrapProxyRaw = `{
   "idle_conn_timeout": 90,
   "max_idle_conns": 100,
   "max_idle_conns_per_host": 100,
-  "max_conns_per_host": 200,
+  "max_conns_per_host": 600,
   "force_http2": false,
   "disable_compression": false,
   "response_compression": {
@@ -416,7 +416,7 @@ const wordPressBootstrapProxyRaw = `{
   "idle_conn_timeout": 90,
   "max_idle_conns": 100,
   "max_idle_conns_per_host": 100,
-  "max_conns_per_host": 200,
+  "max_conns_per_host": 600,
   "force_http2": false,
   "disable_compression": false,
   "response_compression": {
@@ -591,7 +591,7 @@ const releaseBinaryBootstrapProxyRaw = `{
   "idle_conn_timeout": 90,
   "max_idle_conns": 100,
   "max_idle_conns_per_host": 100,
-  "max_conns_per_host": 200,
+  "max_conns_per_host": 600,
   "force_http2": false,
   "disable_compression": false,
   "response_compression": {

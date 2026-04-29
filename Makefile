@@ -77,7 +77,8 @@ export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_ADMIN_USERNAME
 	go-test go-fuzz-short go-build db-migrate db-import db-import-waf-rule-assets build \
 	release-linux-amd64 release-linux-arm64 release-linux-all \
 	ui-install ui-test ui-build ui-sync ui-build-sync \
-	ui-preview-up ui-preview-down ui-preview-smoke php-fpm-build php-fpm-copy php-fpm-prune php-fpm-remove php-fpm-up php-fpm-down php-fpm-reload php-fpm-test php-fpm-smoke \
+	fleet-preview-up fleet-preview-down gateway-preview-up gateway-preview-down gateway-preview-smoke center-preview-up center-preview-down \
+	php-fpm-build php-fpm-copy php-fpm-prune php-fpm-remove php-fpm-up php-fpm-down php-fpm-reload php-fpm-test php-fpm-smoke \
 	psgi-build psgi-up psgi-down psgi-reload psgi-test \
 	scheduled-tasks-smoke container-platform-smoke dual-listener-smoke \
 	compose-config compose-config-mysql compose-config-scheduled-tasks compose-up compose-up-scheduled-tasks compose-down mysql-up mysql-down \
@@ -113,10 +114,15 @@ help:
 	@echo "  make ui-build                   Build admin UI static assets"
 	@echo "  make ui-sync                    Sync web dist -> go:embed assets"
 	@echo "  make ui-build-sync              Build and sync embedded UI assets"
-	@echo "  make ui-preview-up              Build/sync UI and start preview runtime + scheduled-task sidecar"
-	@echo "    - optional: UI_PREVIEW_PERSIST=1 keeps preview DB state across down/up"
-	@echo "  make ui-preview-down            Stop screenshot preview runtime and remove temp override"
-	@echo "  make ui-preview-smoke           Validate preview persistence, split-port publish, and loopback reject"
+	@echo "  make fleet-preview-up           Start gateway and Center preview runtimes"
+	@echo "  make gateway-preview-up         Build/sync gateway UI and start preview runtime + scheduled-task sidecar"
+	@echo "  make center-preview-up          Start Center preview runtime"
+	@echo "    - optional: GATEWAY_PREVIEW_PERSIST=1 keeps preview DB state across down/up"
+	@echo "    - optional: CENTER_PREVIEW_PERSIST=1 keeps Center preview DB state across down/up"
+	@echo "  make fleet-preview-down         Stop Center and gateway preview runtimes"
+	@echo "  make gateway-preview-down       Stop gateway preview runtime and remove temp override"
+	@echo "  make center-preview-down        Stop Center preview runtime and remove temp override"
+	@echo "  make gateway-preview-smoke      Validate gateway preview persistence, split-port publish, and loopback reject"
 	@echo "  make php-fpm-build VER=8.3      Build PHP-FPM runtime bundle under data/php-fpm/binaries/php83"
 	@echo "    - alias: RUNTIME=php83|php84|php85"
 	@echo "  make php-fpm-copy RUNTIME=php83 Stage built PHP-FPM runtime bundle into /opt/tukuyomi"
@@ -482,14 +488,26 @@ ui-sync:
 
 ui-build-sync: ui-build ui-sync
 
-ui-preview-up: go-build ui-build-sync
-	bash ./scripts/ui_preview.sh up
+fleet-preview-up: gateway-preview-up
+	$(MAKE) center-preview-up
 
-ui-preview-down:
-	bash ./scripts/ui_preview.sh down
+fleet-preview-down: center-preview-down
+	$(MAKE) gateway-preview-down
 
-ui-preview-smoke:
-	bash ./scripts/run_ui_preview_smoke.sh
+gateway-preview-up: go-build ui-build-sync
+	bash ./scripts/gateway_preview.sh up
+
+gateway-preview-down:
+	bash ./scripts/gateway_preview.sh down
+
+center-preview-up: go-build
+	bash ./scripts/center_preview.sh up
+
+center-preview-down:
+	bash ./scripts/center_preview.sh down
+
+gateway-preview-smoke:
+	bash ./scripts/run_gateway_preview_smoke.sh
 
 php-fpm-build:
 	VER="$(VER)" RUNTIME="$(RUNTIME)" ./scripts/php_fpm_runtime_build.sh

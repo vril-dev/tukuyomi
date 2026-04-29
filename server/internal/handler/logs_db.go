@@ -209,6 +209,18 @@ func getLogsStatsStore() *wafEventStore {
 	return logStatsStore
 }
 
+func WithConfigDBStore(fn func(*sql.DB, string) error) error {
+	if fn == nil {
+		return nil
+	}
+	logStatsStoreMu.RLock()
+	defer logStatsStoreMu.RUnlock()
+	if logStatsStore == nil || logStatsStore.db == nil {
+		return errConfigDBStoreRequired
+	}
+	return fn(logStatsStore.db, logStatsStore.dbDriver)
+}
+
 func openGORMDatabase(driver, dbPath, dbDSN string) (*gorm.DB, *sql.DB, error) {
 	gormConfig := &gorm.Config{
 		DisableForeignKeyConstraintWhenMigrating: true,

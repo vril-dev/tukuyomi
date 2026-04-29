@@ -22,18 +22,40 @@ type adminLoginRequest struct {
 }
 
 func RegisterAdminAuthRoutes(r *gin.Engine) {
+	RegisterAdminAuthRoutesAt(r, config.APIBasePath)
+}
+
+func RegisterAdminAuthRoutesAt(r *gin.Engine, apiBasePath string) {
 	if r == nil {
 		return
 	}
 
 	api := r.Group(
-		config.APIBasePath,
+		normalizeAdminAuthAPIBasePath(apiBasePath),
 		AdminAccessMiddleware("api"),
 		AdminRateLimitMiddleware(),
 	)
 	api.GET("/auth/session", GetAdminSessionHandler)
 	api.POST("/auth/login", PostAdminLoginHandler)
 	api.POST("/auth/logout", PostAdminLogoutHandler)
+}
+
+func normalizeAdminAuthAPIBasePath(apiBasePath string) string {
+	apiBasePath = strings.TrimSpace(apiBasePath)
+	if apiBasePath == "" {
+		apiBasePath = config.APIBasePath
+	}
+	if apiBasePath == "" {
+		return "/tukuyomi-api"
+	}
+	if !strings.HasPrefix(apiBasePath, "/") {
+		apiBasePath = "/" + apiBasePath
+	}
+	apiBasePath = strings.TrimRight(apiBasePath, "/")
+	if apiBasePath == "" {
+		return "/tukuyomi-api"
+	}
+	return apiBasePath
 }
 
 func GetAdminSessionHandler(c *gin.Context) {

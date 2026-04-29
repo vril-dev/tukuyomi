@@ -135,7 +135,7 @@ PUID="$(id -u)" GUID="$(id -g)" docker compose --profile scheduled-tasks up -d -
 
 failure policy も明示的です。`run-scheduled-tasks` が non-zero を返したら sidecar も non-zero で終了し、fault を握り潰さずに container restart policy へ渡します。
 
-request を捌く main proxy container に `crond` を同居させるより、scheduler を分離する方を推奨します。`make ui-preview-up` でも preview 専用の scheduler sidecar を起動します。恒久的な scheduler fault は sidecar logs と restart 回数で追ってください。
+request を捌く main proxy container に `crond` を同居させるより、scheduler を分離する方を推奨します。`make gateway-preview-up` でも preview 専用の scheduler sidecar を起動します。恒久的な scheduler fault は sidecar logs と restart 回数で追ってください。
 
 ### 2. 将来の guarded shape: replicated frontend + dedicated singleton scheduler
 
@@ -165,24 +165,24 @@ request を捌く main proxy container に `crond` を同居させるより、sc
 scheduler を含めた preview 経路を確認したい時はこれです。
 
 ```bash
-make ui-preview-up
-make ui-preview-down
+make gateway-preview-up
+make gateway-preview-down
 ```
 
 preview は通常系とは別の preview 専用 DB-backed scheduled-task config を使うので、preview UI からの変更は通常の runtime config を汚しません。
 
-既定では `ui-preview-up` のたびに preview 専用 SQLite DB を作り直します。以前の preview task や DB row は引き継ぎません。
+既定では `gateway-preview-up` のたびに preview 専用 SQLite DB を作り直します。以前の preview task や DB row は引き継ぎません。
 
 `down/up` をまたいで preview 編集結果を残したい時は、preview 用 DB state を保持します。
 
 ```bash
-UI_PREVIEW_PERSIST=1 make ui-preview-up
-UI_PREVIEW_PERSIST=1 make ui-preview-down
+GATEWAY_PREVIEW_PERSIST=1 make gateway-preview-up
+GATEWAY_PREVIEW_PERSIST=1 make gateway-preview-down
 ```
 
-`UI_PREVIEW_PERSIST=1` では preview SQLite DB を保持するので、`Settings` で保存した listener 変更を preview の `down/up` で確認できます。
+`GATEWAY_PREVIEW_PERSIST=1` では preview SQLite DB を保持するので、`Settings` で保存した listener 変更を preview の `down/up` で確認できます。
 
-split preview listener も使えますが、preview listener 設定の bind は `:80`, `:9090` のような host 到達可能な形にしてください。`localhost:80`, `127.0.0.1:80`, `[::1]:9090` のような loopback bind は Docker publish と噛み合わないため、`ui-preview-up` は明示エラーで止めます。
+split preview listener も使えますが、preview listener 設定の bind は `:80`, `:9090` のような host 到達可能な形にしてください。`localhost:80`, `127.0.0.1:80`, `[::1]:9090` のような loopback bind は Docker publish と噛み合わないため、`gateway-preview-up` は明示エラーで止めます。
 
 binary、Docker sidecar、preview sidecar の 3 経路をまとめて回す回帰確認はこれです。
 
@@ -193,7 +193,7 @@ make scheduled-tasks-smoke
 preview persistence と split-port parity だけを個別に回すならこれです。
 
 ```bash
-make ui-preview-smoke
+make gateway-preview-smoke
 ```
 
 ## Bundled PHP CLI

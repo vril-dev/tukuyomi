@@ -428,31 +428,31 @@ docker compose \
   --profile scheduled-tasks up -d --build coraza scheduled-task-runner
 ```
 
-- `make ui-preview-up` では preview 専用の scheduler sidecar も一緒に起動します
+- `make gateway-preview-up` では preview 専用の scheduler sidecar も一緒に起動します
 - 既定の preview は毎回初期化されます
-  - `ui-preview-up` のたびに preview 専用 SQLite DB を作り直すため、古い preview task、listener 変更、DB row は引き継ぎません
+  - `gateway-preview-up` のたびに preview 専用 SQLite DB を作り直すため、古い preview task、listener 変更、DB row は引き継ぎません
 - preview 用 DB state を保持したい時はこれです
 
 ```bash
-UI_PREVIEW_PERSIST=1 make ui-preview-up
-UI_PREVIEW_PERSIST=1 make ui-preview-down
+GATEWAY_PREVIEW_PERSIST=1 make gateway-preview-up
+GATEWAY_PREVIEW_PERSIST=1 make gateway-preview-down
 ```
 
-- `UI_PREVIEW_PERSIST=1` では次を保持します
-  - `data/<dirname(storage.db_path)>/tukuyomi-ui-preview.db`
-  - 例えば `storage.db_path` が `db/tukuyomi.db` なら preview DB は `data/db/tukuyomi-ui-preview.db` です
-- `ui-preview-up` は preview DB に保存された active preview `app_config` から publish port を導出します
-  - 初回起動時だけ `conf/config.json` と `UI_PREVIEW_PUBLIC_ADDR` / `UI_PREVIEW_ADMIN_ADDR` override を土台にします
+- `GATEWAY_PREVIEW_PERSIST=1` では次を保持します
+  - `data/<dirname(storage.db_path)>/tukuyomi-gateway-preview.db`
+  - 例えば `storage.db_path` が `db/tukuyomi.db` なら preview DB は `data/db/tukuyomi-gateway-preview.db` です
+- `gateway-preview-up` は preview DB に保存された active preview `app_config` から publish port を導出します
+  - 初回起動時だけ `conf/config.json` と `GATEWAY_PREVIEW_PUBLIC_ADDR` / `GATEWAY_PREVIEW_ADMIN_ADDR` override を土台にします
   - single listener なら public listener port を publish
   - split listener なら public/admin の両方を publish
   - healthcheck は split 時は admin listener を優先
 - split preview の bootstrap 例:
 
 ```bash
-UI_PREVIEW_PERSIST=1 \
-UI_PREVIEW_PUBLIC_ADDR=:80 \
-UI_PREVIEW_ADMIN_ADDR=:9090 \
-make ui-preview-up
+GATEWAY_PREVIEW_PERSIST=1 \
+GATEWAY_PREVIEW_PUBLIC_ADDR=:80 \
+GATEWAY_PREVIEW_ADMIN_ADDR=:9090 \
+make gateway-preview-up
 ```
 
 - この場合の確認先はこうです
@@ -461,7 +461,7 @@ make ui-preview-up
   - admin API: `http://127.0.0.1:9090/tukuyomi-api`
 - preview listener 設定で `localhost:80`, `127.0.0.1:80`, `[::1]:9090` のような loopback bind は使わないでください
   - container 内 loopback bind と host publish が噛み合わないため、preview は明示エラーで止めます
-- `Settings` から listener を保存した後に preview で反映を確認する時は、`UI_PREVIEW_PERSIST=1 make ui-preview-down && UI_PREVIEW_PERSIST=1 make ui-preview-up` を使ってください
+- `Settings` から listener を保存した後に preview で反映を確認する時は、`GATEWAY_PREVIEW_PERSIST=1 make gateway-preview-down && GATEWAY_PREVIEW_PERSIST=1 make gateway-preview-up` を使ってください
   - listener 変更自体は preview DB に残りますが、`docker compose restart` では changed port publish は作り直されません
 - scheduler fault は sidecar の exit/restart と container logs で追います。恒久 fault は restart churn として見える想定です
 - scheduled task の command line が `/app/data/php-fpm/binaries/php85/php` のような bundled PHP path を指す場合は、その scheduler container に `/app/data/php-fpm` も mount してください
@@ -470,4 +470,4 @@ make ui-preview-up
 - rollout 前にこの sample container 導線をローカルで検証するなら `make container-deployment-smoke` を使ってください
 - rollout 前に container platform 全体の契約まで確認するなら `make container-platform-smoke` を使ってください
   ここでは scheduled-task ownership、replicated read-only prerequisite、sample artifact parse まで見ます
-- preview persistence と split-port parity の確認だけを個別に回すなら `make ui-preview-smoke` を使ってください
+- preview persistence と split-port parity の確認だけを個別に回すなら `make gateway-preview-smoke` を使ってください

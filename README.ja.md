@@ -95,10 +95,10 @@ make install TARGET=linux-systemd
 
 ```bash
 make preset-apply PRESET=minimal
-make ui-preview-up
+make gateway-preview-up
 ```
 
-`make ui-preview-up` は CRS の ensure フローを自動的に実行します。  
+`make gateway-preview-up` は CRS の ensure フローを自動的に実行します。  
 このフローでは、`make db-migrate` の実行、CRS シードファイルが存在しない場合の配置、および WAFルールアセットのDBへのインポートまでをまとめて行います。
 
 その後、既定では以下へアクセスします。
@@ -106,8 +106,8 @@ make ui-preview-up
 - 管理 UI: `http://localhost:9090/tukuyomi-ui`
 - 管理 API: `http://localhost:9090/tukuyomi-api`
 
-デフォルトでは、`make ui-preview-up` はプレビュー専用の SQLite DB を使用し、起動のたびにその DB とプレビュー専用の設定ファイルを初期化します。
-`UI_PREVIEW_PERSIST=1` を指定すると、プレビュー用の設定と DB の状態を ui-preview-down と ui-preview-up の間で保持できます。
+デフォルトでは、`make gateway-preview-up` はプレビュー専用の SQLite DB を使用し、起動のたびにその DB とプレビュー専用の設定ファイルを初期化します。
+`GATEWAY_PREVIEW_PERSIST=1` を指定すると、プレビュー用の設定と DB の状態を gateway-preview-down と gateway-preview-up の間で保持できます。
 
 ### Runtime 設定モデル
 

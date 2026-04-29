@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+const latestSchemaMigrationVersionForTest = 15
+
 func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
 
@@ -75,6 +77,8 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		"admin_api_tokens",
 		"admin_sessions",
 		"admin_auth_audit",
+		"center_devices",
+		"center_device_enrollments",
 	} {
 		var name string
 		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
@@ -88,8 +92,8 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("query migration version: %v", err)
 	}
-	if version != 14 || dirty != 0 {
-		t.Fatalf("migration version=%d dirty=%d want version=14 dirty=0", version, dirty)
+	if version != latestSchemaMigrationVersionForTest || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=%d dirty=0", version, dirty, latestSchemaMigrationVersionForTest)
 	}
 	var wafRuleAssetEnabledColumns int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('waf_rule_assets') WHERE name = 'enabled'`).Scan(&wafRuleAssetEnabledColumns); err != nil {
@@ -165,8 +169,8 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteReplacesLegacyMigrationTable(t *t
 	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("query migration version: %v", err)
 	}
-	if version != 14 || dirty != 0 {
-		t.Fatalf("migration version=%d dirty=%d want version=14 dirty=0", version, dirty)
+	if version != latestSchemaMigrationVersionForTest || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=%d dirty=0", version, dirty, latestSchemaMigrationVersionForTest)
 	}
 
 	var legacyColumns int

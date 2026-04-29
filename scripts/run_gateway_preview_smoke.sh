@@ -3,13 +3,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-UI_PREVIEW_SMOKE_SKIP_BUILD="${UI_PREVIEW_SMOKE_SKIP_BUILD:-0}"
-UI_PREVIEW_SMOKE_AUTO_DOWN="${UI_PREVIEW_SMOKE_AUTO_DOWN:-1}"
-UI_PREVIEW_SMOKE_WAIT_SECONDS="${UI_PREVIEW_SMOKE_WAIT_SECONDS:-60}"
-UI_PREVIEW_SMOKE_SINGLE_PORT="${UI_PREVIEW_SMOKE_SINGLE_PORT:-19108}"
-UI_PREVIEW_SMOKE_PUBLIC_PORT="${UI_PREVIEW_SMOKE_PUBLIC_PORT:-19109}"
-UI_PREVIEW_SMOKE_ADMIN_PORT="${UI_PREVIEW_SMOKE_ADMIN_PORT:-19110}"
-UI_PREVIEW_SMOKE_PROJECT="tukuyomi-ui-preview-smoke-$$"
+GATEWAY_PREVIEW_SMOKE_SKIP_BUILD="${GATEWAY_PREVIEW_SMOKE_SKIP_BUILD:-0}"
+GATEWAY_PREVIEW_SMOKE_AUTO_DOWN="${GATEWAY_PREVIEW_SMOKE_AUTO_DOWN:-1}"
+GATEWAY_PREVIEW_SMOKE_WAIT_SECONDS="${GATEWAY_PREVIEW_SMOKE_WAIT_SECONDS:-60}"
+GATEWAY_PREVIEW_SMOKE_SINGLE_PORT="${GATEWAY_PREVIEW_SMOKE_SINGLE_PORT:-19108}"
+GATEWAY_PREVIEW_SMOKE_PUBLIC_PORT="${GATEWAY_PREVIEW_SMOKE_PUBLIC_PORT:-19109}"
+GATEWAY_PREVIEW_SMOKE_ADMIN_PORT="${GATEWAY_PREVIEW_SMOKE_ADMIN_PORT:-19110}"
+GATEWAY_PREVIEW_SMOKE_PROJECT="tukuyomi-gateway-preview-smoke-$$"
 
 PUID_VALUE="${PUID:-$(id -u)}"
 GUID_VALUE="${GUID:-$(id -g)}"
@@ -17,17 +17,17 @@ WORKSPACE=""
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
-    echo "[ui-preview-smoke][ERROR] missing command: $1" >&2
+    echo "[gateway-preview-smoke][ERROR] missing command: $1" >&2
     exit 1
   fi
 }
 
 log() {
-  echo "[ui-preview-smoke] $*"
+  echo "[gateway-preview-smoke] $*"
 }
 
 fail() {
-  echo "[ui-preview-smoke][ERROR] $*" >&2
+  echo "[gateway-preview-smoke][ERROR] $*" >&2
   exit 1
 }
 
@@ -55,7 +55,7 @@ parts = pathlib.PurePosixPath(db_path).parts
 if any(part in ("", ".", "..") for part in parts):
     raise SystemExit(f"preview storage.db_path contains unsafe path segment: {db_path}")
 parent = pathlib.PurePosixPath(*parts[:-1]) if len(parts) > 1 else pathlib.PurePosixPath(".")
-print(pathlib.PurePosixPath(parent, "tukuyomi-ui-preview.db").as_posix())
+print(pathlib.PurePosixPath(parent, "tukuyomi-gateway-preview.db").as_posix())
 PY
 }
 
@@ -65,7 +65,7 @@ wait_for_http_code() {
   local code=""
   local i
 
-  for i in $(seq 1 "${UI_PREVIEW_SMOKE_WAIT_SECONDS}"); do
+  for i in $(seq 1 "${GATEWAY_PREVIEW_SMOKE_WAIT_SECONDS}"); do
     code="$(curl -sS -o /dev/null -w "%{http_code}" "${url}" 2>/dev/null || true)"
     if [[ "${code}" == "${expected_code}" ]]; then
       return 0
@@ -82,13 +82,13 @@ preview_up() {
   local admin_addr="${3:-}"
   (
     cd "${WORKSPACE}"
-    COMPOSE_PROJECT_NAME="${UI_PREVIEW_SMOKE_PROJECT}" \
+    COMPOSE_PROJECT_NAME="${GATEWAY_PREVIEW_SMOKE_PROJECT}" \
     PUID="${PUID_VALUE}" \
     GUID="${GUID_VALUE}" \
-    UI_PREVIEW_PERSIST="${persist}" \
-    UI_PREVIEW_PUBLIC_ADDR="${public_addr}" \
-    UI_PREVIEW_ADMIN_ADDR="${admin_addr}" \
-    bash ./scripts/ui_preview.sh up
+    GATEWAY_PREVIEW_PERSIST="${persist}" \
+    GATEWAY_PREVIEW_PUBLIC_ADDR="${public_addr}" \
+    GATEWAY_PREVIEW_ADMIN_ADDR="${admin_addr}" \
+    bash ./scripts/gateway_preview.sh up
   )
 }
 
@@ -98,13 +98,13 @@ preview_down() {
   local admin_addr="${3:-}"
   (
     cd "${WORKSPACE}"
-    COMPOSE_PROJECT_NAME="${UI_PREVIEW_SMOKE_PROJECT}" \
+    COMPOSE_PROJECT_NAME="${GATEWAY_PREVIEW_SMOKE_PROJECT}" \
     PUID="${PUID_VALUE}" \
     GUID="${GUID_VALUE}" \
-    UI_PREVIEW_PERSIST="${persist}" \
-    UI_PREVIEW_PUBLIC_ADDR="${public_addr}" \
-    UI_PREVIEW_ADMIN_ADDR="${admin_addr}" \
-    bash ./scripts/ui_preview.sh down >/dev/null 2>&1 || true
+    GATEWAY_PREVIEW_PERSIST="${persist}" \
+    GATEWAY_PREVIEW_PUBLIC_ADDR="${public_addr}" \
+    GATEWAY_PREVIEW_ADMIN_ADDR="${admin_addr}" \
+    bash ./scripts/gateway_preview.sh down >/dev/null 2>&1 || true
   )
 }
 
@@ -138,6 +138,10 @@ assert_no_preview_seed_files() {
     "${WORKSPACE}/data/conf/scheduled-tasks.ui-preview.json"
     "${WORKSPACE}/data/php-fpm/inventory.ui-preview.json"
     "${WORKSPACE}/data/php-fpm/vhosts.ui-preview.json"
+    "${WORKSPACE}/data/conf/proxy.gateway-preview.json"
+    "${WORKSPACE}/data/conf/scheduled-tasks.gateway-preview.json"
+    "${WORKSPACE}/data/php-fpm/inventory.gateway-preview.json"
+    "${WORKSPACE}/data/php-fpm/vhosts.gateway-preview.json"
   )
   local path
   for path in "${paths[@]}"; do
@@ -197,14 +201,14 @@ cleanup() {
     if [[ "${status}" -ne 0 ]]; then
       (
         cd "${WORKSPACE}"
-        COMPOSE_PROJECT_NAME="${UI_PREVIEW_SMOKE_PROJECT}" docker compose logs coraza scheduled-task-runner 2>/dev/null || true
+        COMPOSE_PROJECT_NAME="${GATEWAY_PREVIEW_SMOKE_PROJECT}" docker compose logs coraza scheduled-task-runner 2>/dev/null || true
       ) >&2
     fi
     preview_down 1 || true
     preview_down 0 || true
   fi
 
-  if [[ "${UI_PREVIEW_SMOKE_AUTO_DOWN}" == "1" && -n "${WORKSPACE}" ]]; then
+  if [[ "${GATEWAY_PREVIEW_SMOKE_AUTO_DOWN}" == "1" && -n "${WORKSPACE}" ]]; then
     rm -rf "${WORKSPACE}" >/dev/null 2>&1 || true
   fi
 }
@@ -217,41 +221,41 @@ need_cmd python3
 need_cmd rsync
 need_cmd install
 
-if [[ "${UI_PREVIEW_SMOKE_SKIP_BUILD}" != "1" ]]; then
-  log "building embedded admin UI"
-  (cd "${ROOT_DIR}" && make ui-build-sync)
+if [[ "${GATEWAY_PREVIEW_SMOKE_SKIP_BUILD}" != "1" ]]; then
+  log "building gateway preview binary and embedded admin UI"
+  (cd "${ROOT_DIR}" && make build)
 else
   log "skipping build by request"
 fi
 
-WORKSPACE="$(mktemp -d "${ROOT_DIR}/.tmp-ui-preview-smoke.XXXXXX")"
+WORKSPACE="$(mktemp -d "${ROOT_DIR}/.tmp-gateway-preview-smoke.XXXXXX")"
 stage_workspace
 write_minimal_config
 
-log "verifying default reset/remove behavior without UI_PREVIEW_PERSIST"
+log "verifying default reset/remove behavior without GATEWAY_PREVIEW_PERSIST"
 write_stale_preview_db
-preview_up 0 ":${UI_PREVIEW_SMOKE_SINGLE_PORT}" "" >/dev/null
-wait_for_http_code "200" "http://127.0.0.1:${UI_PREVIEW_SMOKE_SINGLE_PORT}/healthz" || fail "single-listener ui-preview did not become healthy"
+preview_up 0 ":${GATEWAY_PREVIEW_SMOKE_SINGLE_PORT}" "" >/dev/null
+wait_for_http_code "200" "http://127.0.0.1:${GATEWAY_PREVIEW_SMOKE_SINGLE_PORT}/healthz" || fail "single-listener gateway-preview did not become healthy"
 assert_no_preview_seed_files
-preview_down 0 ":${UI_PREVIEW_SMOKE_SINGLE_PORT}" ""
+preview_down 0 ":${GATEWAY_PREVIEW_SMOKE_SINGLE_PORT}" ""
 assert_no_preview_seed_files
 assert_preview_db_removed
 
-log "verifying UI_PREVIEW_PERSIST=1 with split public/admin ports"
-preview_up 1 ":${UI_PREVIEW_SMOKE_PUBLIC_PORT}" ":${UI_PREVIEW_SMOKE_ADMIN_PORT}" >/dev/null
-wait_for_http_code "200" "http://127.0.0.1:${UI_PREVIEW_SMOKE_PUBLIC_PORT}/healthz" || fail "split public listener did not become healthy"
-wait_for_http_code "200" "http://127.0.0.1:${UI_PREVIEW_SMOKE_ADMIN_PORT}/healthz" || fail "split admin listener did not become healthy"
-[[ "$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1:${UI_PREVIEW_SMOKE_PUBLIC_PORT}/tukuyomi-ui" || true)" == "404" ]] || fail "public preview listener should not serve admin UI path in split mode"
-[[ "$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1:${UI_PREVIEW_SMOKE_ADMIN_PORT}/tukuyomi-ui" || true)" == "200" ]] || fail "admin preview listener should serve admin UI path in split mode"
+log "verifying GATEWAY_PREVIEW_PERSIST=1 with split public/admin ports"
+preview_up 1 ":${GATEWAY_PREVIEW_SMOKE_PUBLIC_PORT}" ":${GATEWAY_PREVIEW_SMOKE_ADMIN_PORT}" >/dev/null
+wait_for_http_code "200" "http://127.0.0.1:${GATEWAY_PREVIEW_SMOKE_PUBLIC_PORT}/healthz" || fail "split public listener did not become healthy"
+wait_for_http_code "200" "http://127.0.0.1:${GATEWAY_PREVIEW_SMOKE_ADMIN_PORT}/healthz" || fail "split admin listener did not become healthy"
+[[ "$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1:${GATEWAY_PREVIEW_SMOKE_PUBLIC_PORT}/tukuyomi-ui" || true)" == "404" ]] || fail "public preview listener should not serve admin UI path in split mode"
+[[ "$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1:${GATEWAY_PREVIEW_SMOKE_ADMIN_PORT}/tukuyomi-ui" || true)" == "200" ]] || fail "admin preview listener should serve admin UI path in split mode"
 assert_no_preview_seed_files
-preview_down 1 ":${UI_PREVIEW_SMOKE_PUBLIC_PORT}" ":${UI_PREVIEW_SMOKE_ADMIN_PORT}"
+preview_down 1 ":${GATEWAY_PREVIEW_SMOKE_PUBLIC_PORT}" ":${GATEWAY_PREVIEW_SMOKE_ADMIN_PORT}"
 assert_no_preview_seed_files
 assert_preview_db_exists
 
 log "verifying split preview can come back up from persisted DB without preview env files"
 preview_up 1 "" "" >/dev/null
-wait_for_http_code "200" "http://127.0.0.1:${UI_PREVIEW_SMOKE_PUBLIC_PORT}/healthz" || fail "preserved split public listener did not come back healthy"
-wait_for_http_code "200" "http://127.0.0.1:${UI_PREVIEW_SMOKE_ADMIN_PORT}/healthz" || fail "preserved split admin listener did not come back healthy"
+wait_for_http_code "200" "http://127.0.0.1:${GATEWAY_PREVIEW_SMOKE_PUBLIC_PORT}/healthz" || fail "preserved split public listener did not come back healthy"
+wait_for_http_code "200" "http://127.0.0.1:${GATEWAY_PREVIEW_SMOKE_ADMIN_PORT}/healthz" || fail "preserved split admin listener did not come back healthy"
 preview_down 1 "" ""
 assert_no_preview_seed_files
 
@@ -260,13 +264,13 @@ remove_preview_db
 set +e
 loopback_output="$(
   cd "${WORKSPACE}" && \
-  COMPOSE_PROJECT_NAME="${UI_PREVIEW_SMOKE_PROJECT}" \
+  COMPOSE_PROJECT_NAME="${GATEWAY_PREVIEW_SMOKE_PROJECT}" \
   PUID="${PUID_VALUE}" \
   GUID="${GUID_VALUE}" \
-  UI_PREVIEW_PERSIST="0" \
-  UI_PREVIEW_PUBLIC_ADDR="localhost:${UI_PREVIEW_SMOKE_PUBLIC_PORT}" \
-  UI_PREVIEW_ADMIN_ADDR=":${UI_PREVIEW_SMOKE_ADMIN_PORT}" \
-  bash ./scripts/ui_preview.sh up 2>&1
+  GATEWAY_PREVIEW_PERSIST="0" \
+  GATEWAY_PREVIEW_PUBLIC_ADDR="localhost:${GATEWAY_PREVIEW_SMOKE_PUBLIC_PORT}" \
+  GATEWAY_PREVIEW_ADMIN_ADDR=":${GATEWAY_PREVIEW_SMOKE_ADMIN_PORT}" \
+  bash ./scripts/gateway_preview.sh up 2>&1
 )"
 loopback_status="$?"
 set -e
@@ -278,4 +282,4 @@ if [[ "${loopback_output}" != *"uses loopback host"* ]]; then
   fail "loopback listener rejection message should mention loopback host"
 fi
 
-log "OK ui-preview smoke passed"
+log "OK gateway-preview smoke passed"

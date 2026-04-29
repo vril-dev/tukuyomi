@@ -88,16 +88,43 @@ join_dest() {
   fi
 }
 
-copy_file_preserve() {
+install_config_preserve() {
   local src="$1"
   local dst="$2"
   local mode="$3"
   local overwrite="$4"
+  local tmp
   if [[ -e "${dst}" ]] && ! is_enabled "${overwrite}"; then
     log "preserve existing ${dst}"
     return
   fi
-  run_priv install -m "${mode}" "${src}" "${dst}"
+  tmp="$(mktemp)"
+  if ! python3 - "$src" "$tmp" <<'PY'
+import json
+import secrets
+import sys
+
+src, dst = sys.argv[1:3]
+with open(src, encoding="utf-8") as fh:
+    data = json.load(fh)
+
+admin = data.setdefault("admin", {})
+if not str(admin.get("session_secret") or "").strip():
+    admin["session_secret"] = secrets.token_urlsafe(48)
+
+with open(dst, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, indent=2)
+    fh.write("\n")
+PY
+  then
+    rm -f "${tmp}"
+    return 1
+  fi
+  run_priv install -m "${mode}" "${tmp}" "${dst}" || {
+    rm -f "${tmp}"
+    return 1
+  }
+  rm -f "${tmp}"
 }
 
 render_env_preserve() {
@@ -427,7 +454,7 @@ install_files() {
   run_priv install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${RUNTIME_DIR}/bin/tukuyomi"
   run_priv install -m 755 "${ROOT_DIR}/scripts/update_country_db.sh" "${RUNTIME_DIR}/scripts/update_country_db.sh"
   run_priv cp -R "${ROOT_DIR}/seeds/conf/." "${RUNTIME_DIR}/seeds/conf/"
-  copy_file_preserve "${ROOT_DIR}/data/conf/config.json" "${RUNTIME_DIR}/conf/config.json" 644 "${INSTALL_OVERWRITE_CONFIG}"
+  install_config_preserve "${ROOT_DIR}/data/conf/config.json" "${RUNTIME_DIR}/conf/config.json" 644 "${INSTALL_OVERWRITE_CONFIG}"
   render_env_preserve "${ROOT_DIR}/docs/build/tukuyomi.env.example" "${env_dir}/tukuyomi.env" "${INSTALL_OVERWRITE_ENV}"
 
   if [[ ! -e "${RUNTIME_DIR}/conf/crs-disabled.conf" ]]; then

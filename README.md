@@ -103,10 +103,10 @@ target:
 
 ```bash
 make preset-apply PRESET=minimal
-make ui-preview-up
+make gateway-preview-up
 ```
 
-`make ui-preview-up` runs the CRS ensure flow automatically; that flow runs
+`make gateway-preview-up` runs the CRS ensure flow automatically; that flow runs
 `make db-migrate`, installs CRS seed files when missing, and imports WAF rule
 assets into DB.
 
@@ -115,10 +115,10 @@ Then open:
 - Admin UI: `http://localhost:9090/tukuyomi-ui`
 - Admin API: `http://localhost:9090/tukuyomi-api`
 
-By default, `make ui-preview-up` uses an isolated preview SQLite DB and resets
+By default, `make gateway-preview-up` uses an isolated preview SQLite DB and resets
 that DB plus preview config files on each start. If you use
-`UI_PREVIEW_PERSIST=1`, preview-specific config and DB state are kept across
-`ui-preview-down` / `ui-preview-up`.
+`GATEWAY_PREVIEW_PERSIST=1`, preview-specific config and DB state are kept across
+`gateway-preview-down` / `gateway-preview-up`.
 
 ### Runtime Config Model
 

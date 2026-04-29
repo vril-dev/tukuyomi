@@ -2,15 +2,15 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PREVIEW_OVERRIDE="$ROOT_DIR/.tmp/ui-preview/docker-compose.override.yml"
-PREVIEW_SOURCE_CONFIG="${UI_PREVIEW_SOURCE_CONFIG:-conf/config.json}"
-PREVIEW_BOOTSTRAP_CONFIG="${UI_PREVIEW_CONFIG:-conf/config.ui-preview.json}"
-LEGACY_PREVIEW_SQLITE_DB_PATH="logs/coraza/tukuyomi-ui-preview.db"
+PREVIEW_OVERRIDE="$ROOT_DIR/.tmp/gateway-preview/docker-compose.override.yml"
+PREVIEW_SOURCE_CONFIG="${GATEWAY_PREVIEW_SOURCE_CONFIG:-conf/config.json}"
+PREVIEW_BOOTSTRAP_CONFIG="${GATEWAY_PREVIEW_CONFIG:-conf/config.gateway-preview.json}"
+LEGACY_UI_PREVIEW_SQLITE_DB_PATH="logs/coraza/tukuyomi-ui-preview.db"
 PUID_VALUE="${PUID:-$(id -u)}"
 GUID_VALUE="${GUID:-$(id -g)}"
-UI_PREVIEW_PERSIST_VALUE="${UI_PREVIEW_PERSIST:-0}"
-UI_PREVIEW_PUBLIC_ADDR_VALUE="${UI_PREVIEW_PUBLIC_ADDR:-}"
-UI_PREVIEW_ADMIN_ADDR_VALUE="${UI_PREVIEW_ADMIN_ADDR:-}"
+GATEWAY_PREVIEW_PERSIST_VALUE="${GATEWAY_PREVIEW_PERSIST:-0}"
+GATEWAY_PREVIEW_PUBLIC_ADDR_VALUE="${GATEWAY_PREVIEW_PUBLIC_ADDR:-}"
+GATEWAY_PREVIEW_ADMIN_ADDR_VALUE="${GATEWAY_PREVIEW_ADMIN_ADDR:-}"
 
 preview_config_host_path() {
   local config_ref="$1"
@@ -44,7 +44,7 @@ write_preview_bootstrap_config() {
   source_path="$(preview_config_host_path "$PREVIEW_SOURCE_CONFIG" "preview source config")"
   target_path="$(preview_config_host_path "$PREVIEW_BOOTSTRAP_CONFIG" "preview bootstrap config")"
   if [[ "$source_path" == "$target_path" ]]; then
-    echo "[ui-preview][ERROR] preview bootstrap config must differ from preview source config" >&2
+    echo "[gateway-preview][ERROR] preview bootstrap config must differ from preview source config" >&2
     return 1
   fi
   python3 - "$source_path" "$target_path" <<'PY'
@@ -68,9 +68,9 @@ if not isinstance(admin, dict):
     admin = {}
     payload["admin"] = admin
 
-env_secret = os.environ.get("UI_PREVIEW_SESSION_SECRET", "").strip()
+env_secret = os.environ.get("GATEWAY_PREVIEW_SESSION_SECRET", "").strip()
 if env_secret and len(env_secret) < 16:
-    raise SystemExit("UI_PREVIEW_SESSION_SECRET must be 16+ chars")
+    raise SystemExit("GATEWAY_PREVIEW_SESSION_SECRET must be 16+ chars")
 
 existing_secret = str(admin.get("session_secret") or "").strip()
 if env_secret:
@@ -114,7 +114,7 @@ preview_db_relative_path() {
   elif [[ -f "$source_path" ]]; then
     config_path="$source_path"
   else
-    echo "[ui-preview][ERROR] preview config not found" >&2
+    echo "[gateway-preview][ERROR] preview config not found" >&2
     return 1
   fi
   python3 - "$config_path" <<'PY'
@@ -141,7 +141,7 @@ if any(part in ("", ".", "..") for part in parts):
 if len(parts) == 0:
     raise SystemExit("preview storage.db_path is empty")
 parent = pathlib.PurePosixPath(*parts[:-1]) if len(parts) > 1 else pathlib.PurePosixPath(".")
-preview_path = pathlib.PurePosixPath(parent, "tukuyomi-ui-preview.db")
+preview_path = pathlib.PurePosixPath(parent, "tukuyomi-gateway-preview.db")
 if str(preview_path) in ("", "."):
     raise SystemExit(f"preview db path is invalid: {preview_path}")
 print(preview_path.as_posix())
@@ -156,19 +156,24 @@ preview_db_container_path() {
 
 cleanup_legacy_preview_artifacts() {
   rm -f \
+    "$ROOT_DIR/data/conf/config.ui-preview.json" \
     "$ROOT_DIR/data/conf/proxy.ui-preview.json" \
     "$ROOT_DIR/data/conf/scheduled-tasks.ui-preview.json" \
     "$ROOT_DIR/data/php-fpm/inventory.ui-preview.json" \
     "$ROOT_DIR/data/php-fpm/vhosts.ui-preview.json" \
-    "$ROOT_DIR/data/php-fpm/vhosts.ui-preview.json".*.bak
-  local preview_db_rel=""
-  preview_db_rel="$(preview_db_relative_path)"
-  if [[ "$preview_db_rel" != "$LEGACY_PREVIEW_SQLITE_DB_PATH" ]]; then
-    rm -f \
-      "$ROOT_DIR/data/$LEGACY_PREVIEW_SQLITE_DB_PATH" \
-      "$ROOT_DIR/data/$LEGACY_PREVIEW_SQLITE_DB_PATH-wal" \
-      "$ROOT_DIR/data/$LEGACY_PREVIEW_SQLITE_DB_PATH-shm"
-  fi
+    "$ROOT_DIR/data/php-fpm/vhosts.ui-preview.json".*.bak \
+    "$ROOT_DIR/data/conf/proxy.gateway-preview.json" \
+    "$ROOT_DIR/data/conf/scheduled-tasks.gateway-preview.json" \
+    "$ROOT_DIR/data/php-fpm/inventory.gateway-preview.json" \
+    "$ROOT_DIR/data/php-fpm/vhosts.gateway-preview.json" \
+    "$ROOT_DIR/data/php-fpm/vhosts.gateway-preview.json".*.bak
+  rm -f \
+    "$ROOT_DIR/data/$LEGACY_UI_PREVIEW_SQLITE_DB_PATH" \
+    "$ROOT_DIR/data/$LEGACY_UI_PREVIEW_SQLITE_DB_PATH-wal" \
+    "$ROOT_DIR/data/$LEGACY_UI_PREVIEW_SQLITE_DB_PATH-shm" \
+    "$ROOT_DIR/data/db/tukuyomi-ui-preview.db" \
+    "$ROOT_DIR/data/db/tukuyomi-ui-preview.db-wal" \
+    "$ROOT_DIR/data/db/tukuyomi-ui-preview.db-shm"
 }
 
 preview_db_host_paths() {
@@ -201,7 +206,7 @@ reset_preview_database() {
   local db_paths=()
   mapfile -t db_paths < <(preview_db_host_paths)
   if [[ "${#db_paths[@]}" -eq 0 ]]; then
-    echo "[ui-preview][ERROR] failed to resolve preview database path" >&2
+    echo "[gateway-preview][ERROR] failed to resolve preview database path" >&2
     return 1
   fi
   mkdir -p "$(dirname "${db_paths[0]}")"
@@ -224,7 +229,7 @@ run_preview_command() {
   local bin="$ROOT_DIR/bin/tukuyomi"
   local preview_db_rel=""
   if [[ ! -x "$bin" ]]; then
-    echo "[ui-preview][ERROR] missing executable: $bin" >&2
+    echo "[gateway-preview][ERROR] missing executable: $bin" >&2
     return 1
   fi
   preview_db_rel="$(preview_db_relative_path)"
@@ -235,8 +240,8 @@ run_preview_command() {
     WAF_STORAGE_DB_DRIVER="sqlite" \
     WAF_STORAGE_DB_DSN="" \
     WAF_STORAGE_DB_PATH="$preview_db_rel" \
-    UI_PREVIEW_PUBLIC_ADDR="$UI_PREVIEW_PUBLIC_ADDR_VALUE" \
-    UI_PREVIEW_ADMIN_ADDR="$UI_PREVIEW_ADMIN_ADDR_VALUE" \
+    GATEWAY_PREVIEW_PUBLIC_ADDR="$GATEWAY_PREVIEW_PUBLIC_ADDR_VALUE" \
+    GATEWAY_PREVIEW_ADMIN_ADDR="$GATEWAY_PREVIEW_ADMIN_ADDR_VALUE" \
       "$bin" "$command" "$@"
   )
 }
@@ -261,7 +266,7 @@ load_preview_topology() {
   assignments="$(
     run_preview_command preview-print-topology
   )" || {
-    echo "[ui-preview][ERROR] failed to derive preview topology" >&2
+    echo "[gateway-preview][ERROR] failed to derive preview topology" >&2
     return 1
   }
   eval "$assignments"
@@ -269,7 +274,7 @@ load_preview_topology() {
 
 write_preview_override() {
   rm -f "$PREVIEW_OVERRIDE"
-  if [[ "${UI_PREVIEW_SPLIT_ADMIN:-0}" != "1" ]]; then
+  if [[ "${GATEWAY_PREVIEW_SPLIT_ADMIN:-0}" != "1" ]]; then
     return
   fi
   mkdir -p "$(dirname "$PREVIEW_OVERRIDE")"
@@ -319,7 +324,7 @@ case "${1:-}" in
   up)
     write_preview_bootstrap_config
     cleanup_legacy_preview_artifacts
-    if [[ "$UI_PREVIEW_PERSIST_VALUE" != "1" ]]; then
+    if [[ "$GATEWAY_PREVIEW_PERSIST_VALUE" != "1" ]]; then
       run_preview_compose down --remove-orphans >/dev/null 2>&1 || true
       reset_preview_database
       seed_preview_database
@@ -332,14 +337,14 @@ case "${1:-}" in
     write_preview_override
     ensure_preview_runtime_dirs
     run_preview_compose up -d --build coraza scheduled-task-runner
-    echo "[ui-preview] public: ${UI_PREVIEW_PUBLIC_URL}"
-    echo "[ui-preview] admin ui: ${UI_PREVIEW_ADMIN_UI_URL}"
-    echo "[ui-preview] admin api: ${UI_PREVIEW_ADMIN_API_URL}"
-    echo "[ui-preview] scheduled-task runner is started by ui-preview-up"
-    if [[ "$UI_PREVIEW_PERSIST_VALUE" == "1" ]]; then
-      echo "[ui-preview] UI_PREVIEW_PERSIST=1 keeps preview DB state across down/up"
+    echo "[gateway-preview] public: ${GATEWAY_PREVIEW_PUBLIC_URL}"
+    echo "[gateway-preview] admin ui: ${GATEWAY_PREVIEW_ADMIN_UI_URL}"
+    echo "[gateway-preview] admin api: ${GATEWAY_PREVIEW_ADMIN_API_URL}"
+    echo "[gateway-preview] scheduled-task runner is started by gateway-preview-up"
+    if [[ "$GATEWAY_PREVIEW_PERSIST_VALUE" == "1" ]]; then
+      echo "[gateway-preview] GATEWAY_PREVIEW_PERSIST=1 keeps preview DB state across down/up"
     else
-      echo "[ui-preview] preview SQLite DB resets on each ui-preview-up"
+      echo "[gateway-preview] preview SQLite DB resets on each gateway-preview-up"
     fi
     ;;
   down)
@@ -362,11 +367,11 @@ case "${1:-}" in
     run_preview_compose down --remove-orphans >/dev/null 2>&1 || true
     rm -f "$PREVIEW_OVERRIDE"
     cleanup_legacy_preview_artifacts
-    if [[ "$UI_PREVIEW_PERSIST_VALUE" != "1" ]]; then
+    if [[ "$GATEWAY_PREVIEW_PERSIST_VALUE" != "1" ]]; then
       reset_preview_database || true
       remove_preview_bootstrap_config
     fi
-    echo "[ui-preview] stopped"
+    echo "[gateway-preview] stopped"
     ;;
   *)
     echo "usage: $0 <up|down>" >&2

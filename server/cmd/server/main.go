@@ -23,32 +23,47 @@ import (
 )
 
 func main() {
-	if len(os.Args) > 1 {
-		switch strings.TrimSpace(os.Args[1]) {
-		case "db-migrate":
-			runDBMigrateCommand()
-			return
-		case "db-import":
-			runDBImportCommand()
-			return
-		case "db-import-preview":
-			runDBImportPreviewCommand()
-			return
-		case "db-import-waf-rule-assets":
-			runDBImportWAFRuleAssetsCommand()
-			return
-		case "preview-print-topology":
-			runPreviewPrintTopologyCommand()
-			return
-		case "run-scheduled-tasks":
-			runScheduledTasksCommand()
-			return
-		case "update-country-db":
-			runUpdateCountryDBCommand()
-			return
-		}
-	}
+	runMain(os.Args)
+}
 
+func runMain(args []string) {
+	cmd, err := parseServerCommand(args)
+	if err != nil {
+		log.Fatalf("[FATAL] %v", err)
+	}
+	switch cmd.kind {
+	case serverCommandCenter:
+		runCenterCommand()
+	case serverCommandDBMigrate:
+		runDBMigrateCommand()
+	case serverCommandDBImport:
+		runDBImportCommand()
+	case serverCommandDBImportPreview:
+		runDBImportPreviewCommand()
+	case serverCommandDBImportWAFRuleAssets:
+		runDBImportWAFRuleAssetsCommand()
+	case serverCommandPreviewPrintTopology:
+		runPreviewPrintTopologyCommand()
+	case serverCommandRunScheduledTasks:
+		runScheduledTasksCommand()
+	case serverCommandUpdateCountryDB:
+		runUpdateCountryDBCommand()
+	case serverCommandSupervisor:
+		if err := runSupervisorServer(); err != nil {
+			log.Fatalf("[SUPERVISOR][FATAL] %v", err)
+		}
+	case serverCommandWorker:
+		notifier, err := newWorkerReadinessFromEnv()
+		if err != nil {
+			log.Fatalf("[WORKER][FATAL] readiness setup failed: %v", err)
+		}
+		runServer(notifier)
+	default:
+		runServer(nil)
+	}
+}
+
+func runServer(workerReady *workerReadyNotifier) {
 	config.LoadEnv()
 	initRuntimeDBStoreOrFatal("[DB][BOOTSTRAP]")
 	if err := handler.SyncAppConfigStorage(); err != nil {
@@ -408,6 +423,9 @@ func main() {
 			return publicSrv.ServeTLS(publicListener, tlsConfig)
 		}, publicSrv.Shutdown, publicSrv.Close)
 		activation.CloseUnused()
+		if err := notifyWorkerReady(workerReady); err != nil {
+			log.Fatalf("[WORKER][FATAL] readiness notify failed: %v", err)
+		}
 		if err := lifecycle.Wait(); err != nil {
 			log.Fatalf("[FATAL] server lifecycle stopped: %v", err)
 		}
@@ -429,6 +447,9 @@ func main() {
 		return publicSrv.Serve(publicListener)
 	}, publicSrv.Shutdown, publicSrv.Close)
 	activation.CloseUnused()
+	if err := notifyWorkerReady(workerReady); err != nil {
+		log.Fatalf("[WORKER][FATAL] readiness notify failed: %v", err)
+	}
 	if err := lifecycle.Wait(); err != nil {
 		log.Fatalf("[FATAL] server lifecycle stopped: %v", err)
 	}

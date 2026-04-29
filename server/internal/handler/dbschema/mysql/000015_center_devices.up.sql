@@ -1,0 +1,40 @@
+CREATE TABLE IF NOT EXISTS center_devices (
+    device_pk BIGINT NOT NULL AUTO_INCREMENT,
+    device_id VARCHAR(191) NOT NULL,
+    key_id VARCHAR(191) NOT NULL,
+    public_key_pem TEXT NOT NULL,
+    public_key_fingerprint_sha256 CHAR(64) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    approved_enrollment_id BIGINT NOT NULL DEFAULT 0,
+    approved_at_unix BIGINT NOT NULL DEFAULT 0,
+    approved_by VARCHAR(191) NOT NULL DEFAULT '',
+    created_at_unix BIGINT NOT NULL,
+    updated_at_unix BIGINT NOT NULL,
+    last_seen_at_unix BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (device_pk),
+    UNIQUE KEY uq_center_devices_device_id (device_id),
+    KEY idx_center_devices_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS center_device_enrollments (
+    enrollment_id BIGINT NOT NULL AUTO_INCREMENT,
+    device_id VARCHAR(191) NOT NULL,
+    key_id VARCHAR(191) NOT NULL,
+    public_key_pem TEXT NOT NULL,
+    public_key_fingerprint_sha256 CHAR(64) NOT NULL,
+    license_key_hash CHAR(64) NOT NULL DEFAULT '',
+    nonce_hash CHAR(64) NOT NULL,
+    body_hash CHAR(64) NOT NULL,
+    signature_b64 TEXT NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    requested_at_unix BIGINT NOT NULL,
+    decided_at_unix BIGINT NOT NULL DEFAULT 0,
+    decided_by VARCHAR(191) NOT NULL DEFAULT '',
+    decision_reason VARCHAR(1024) NOT NULL DEFAULT '',
+    remote_addr VARCHAR(191) NOT NULL DEFAULT '',
+    user_agent VARCHAR(512) NOT NULL DEFAULT '',
+    PRIMARY KEY (enrollment_id),
+    UNIQUE KEY uq_center_device_enrollments_nonce (device_id, key_id, nonce_hash),
+    KEY idx_center_device_enrollments_status (status),
+    KEY idx_center_device_enrollments_device (device_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

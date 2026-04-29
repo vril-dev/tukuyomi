@@ -59,6 +59,12 @@ func TestGetSettingsListenerAdmin(t *testing.T) {
 	if out.Config.Admin.ListenAddr != ":19090" {
 		t.Fatalf("admin.listen_addr=%q want=:19090", out.Config.Admin.ListenAddr)
 	}
+	if out.Config.Edge.Enabled {
+		t.Fatal("edge.enabled must default to false")
+	}
+	if !out.Config.Edge.DeviceAuth.Enabled {
+		t.Fatal("edge.device_auth.enabled must default to true")
+	}
 	if !out.Secrets.AdminSessionSecretConfigured {
 		t.Fatal("expected session secret configured metadata")
 	}
@@ -165,6 +171,8 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	next.Proxy.RollbackHistorySize = 12
 	next.Proxy.Engine.Mode = config.ProxyEngineModeTukuyomiProxy
 	next.WAF.Engine.Mode = config.WAFEngineModeCoraza
+	next.Edge.Enabled = true
+	next.Edge.DeviceAuth.Enabled = false
 	next.CRS.Enable = false
 	next.FPTuner.Endpoint = "https://fp.example.test/api"
 	next.FPTuner.Model = "gpt-test"
@@ -263,6 +271,12 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	}
 	if saved.WAF.Engine.Mode != config.WAFEngineModeCoraza {
 		t.Fatalf("saved waf.engine.mode=%q want=%q", saved.WAF.Engine.Mode, config.WAFEngineModeCoraza)
+	}
+	if !saved.Edge.Enabled {
+		t.Fatal("expected edge.enabled=true after save")
+	}
+	if saved.Edge.DeviceAuth.Enabled {
+		t.Fatal("expected edge.device_auth.enabled=false after save")
 	}
 	if saved.CRS.Enable {
 		t.Fatal("expected crs.enable=false after save")
@@ -519,6 +533,12 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 		WAF: settingsListenerAdminWAFConfig{
 			Engine: settingsListenerAdminWAFEngineConfig{
 				Mode: config.WAFEngineModeCoraza,
+			},
+		},
+		Edge: settingsListenerAdminEdgeConfig{
+			Enabled: false,
+			DeviceAuth: settingsListenerAdminEdgeDeviceAuthConfig{
+				Enabled: true,
 			},
 		},
 		CRS: settingsListenerAdminCRSConfig{

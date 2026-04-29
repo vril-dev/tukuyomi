@@ -156,6 +156,15 @@ type settingsListenerAdminWAFConfig struct {
 	Engine settingsListenerAdminWAFEngineConfig `json:"engine"`
 }
 
+type settingsListenerAdminEdgeDeviceAuthConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+type settingsListenerAdminEdgeConfig struct {
+	Enabled    bool                                      `json:"enabled"`
+	DeviceAuth settingsListenerAdminEdgeDeviceAuthConfig `json:"device_auth"`
+}
+
 type settingsListenerAdminCRSConfig struct {
 	Enable bool `json:"enable"`
 }
@@ -212,6 +221,7 @@ type settingsListenerAdminConfig struct {
 	Paths         settingsListenerAdminPathsConfig             `json:"paths"`
 	Proxy         settingsListenerAdminProxyConfig             `json:"proxy"`
 	WAF           settingsListenerAdminWAFConfig               `json:"waf"`
+	Edge          settingsListenerAdminEdgeConfig              `json:"edge"`
 	CRS           settingsListenerAdminCRSConfig               `json:"crs"`
 	FPTuner       settingsListenerAdminFPTunerConfig           `json:"fp_tuner"`
 	Observability settingsListenerAdminObservabilityConfig     `json:"observability"`
@@ -273,6 +283,8 @@ type settingsListenerAdminRuntimeStatus struct {
 	ProxyEngineMode                   string                 `json:"proxy_engine_mode"`
 	WAFEngineMode                     string                 `json:"waf_engine_mode"`
 	WAFEngineModes                    []wafengine.Capability `json:"waf_engine_modes"`
+	EdgeEnabled                       bool                   `json:"edge_enabled"`
+	EdgeDeviceAuthEnabled             bool                   `json:"edge_device_auth_enabled"`
 	StorageDBDriver                   string                 `json:"storage_db_driver"`
 	StorageDBPath                     string                 `json:"storage_db_path"`
 	StorageDBRetentionDays            int                    `json:"storage_db_retention_days"`
@@ -589,6 +601,12 @@ func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListener
 				Mode: cfg.WAF.Engine.Mode,
 			},
 		},
+		Edge: settingsListenerAdminEdgeConfig{
+			Enabled: cfg.Edge.Enabled,
+			DeviceAuth: settingsListenerAdminEdgeDeviceAuthConfig{
+				Enabled: cfg.Edge.DeviceAuth.Enabled,
+			},
+		},
 		CRS: settingsListenerAdminCRSConfig{
 			Enable: cfg.CRS.Enable,
 		},
@@ -711,6 +729,8 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 	cfg.Proxy.RollbackHistorySize = next.Proxy.RollbackHistorySize
 	cfg.Proxy.Engine.Mode = next.Proxy.Engine.Mode
 	cfg.WAF.Engine.Mode = next.WAF.Engine.Mode
+	cfg.Edge.Enabled = next.Edge.Enabled
+	cfg.Edge.DeviceAuth.Enabled = next.Edge.DeviceAuth.Enabled
 	cfg.CRS.Enable = next.CRS.Enable
 
 	cfg.FPTuner.Mode = ""
@@ -778,6 +798,8 @@ func buildSettingsListenerAdminRuntimeStatus() settingsListenerAdminRuntimeStatu
 		ProxyEngineMode:                   normalizeProxyEngineMode(config.ProxyEngineMode),
 		WAFEngineMode:                     normalizeSettingsWAFEngineMode(config.WAFEngineMode),
 		WAFEngineModes:                    wafengine.Capabilities(),
+		EdgeEnabled:                       config.EdgeEnabled,
+		EdgeDeviceAuthEnabled:             config.EdgeDeviceAuthEnabled,
 		StorageDBDriver:                   config.DBDriver,
 		StorageDBPath:                     config.DBPath,
 		StorageDBRetentionDays:            config.DBRetentionDays,

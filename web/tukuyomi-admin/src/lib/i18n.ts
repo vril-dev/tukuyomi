@@ -801,6 +801,16 @@ const JA_STRINGS: Record<string, string> = {
     "DB app_config に保存される listener、runtime、storage policy、observability 設定を編集します。DB 接続項目は引き続き bootstrap 設定ファイルから読みます。",
   "Listener, runtime, storage policy, and observability settings here are restart-required startup config. Saving updates DB app_config; db_driver, db_path, and db_dsn stay bootstrap-only in config.json.":
     "ここにある listener、runtime、storage policy、observability は再起動が必要な startup 設定です。保存先は DB app_config です。db_driver、db_path、db_dsn は config.json の bootstrap 専用項目です。",
+  "IoT / Edge Mode": "IoT / Edge Mode",
+  "Enable this only for IoT deployments that need edge-only request controls such as device authentication. Web/VPS deployments should leave it off.":
+    "device authentication など edge 専用の request control が必要な IoT deployment でのみ有効化してください。Web/VPS deployment では OFF のままにします。",
+  "Enable IoT / Edge mode": "IoT / Edge mode を有効化",
+  "Enable device authentication when IoT mode is on":
+    "IoT mode が ON のとき device authentication を有効化",
+  "The left menu shows IoT ON only after the running process has loaded edge.enabled=true. Save and restart to apply this startup setting.":
+    "左メニューの IoT ON は、実行中 process が edge.enabled=true を読み込んだ後に表示されます。この startup 設定を反映するには保存後に再起動してください。",
+  "IoT ON": "IoT ON",
+  "IoT OFF": "IoT OFF",
   "Database storage policy and bootstrap connection status. Driver, path, and DSN are read from the bootstrap config file before DB is opened.":
     "DB storage policy と bootstrap 接続状態です。driver、path、DSN は DB を開く前に bootstrap 設定ファイルから読みます。",
   "DB connection is bootstrap-only. Current DSN status: {state}. Change db_driver, db_path, or db_dsn in the bootstrap config file, run migrations/import as needed, then restart.":
@@ -1256,6 +1266,12 @@ const JA_STRINGS: Record<string, string> = {
     "build 済み PSGI runtime はまだありません。先に PSGI runtime bundle を build し、Runtime Apps から紐付けてください。",
   "Built PSGI runtimes are available. Bind each PSGI app from Runtime Apps.":
     "build 済み PSGI runtime があります。各 PSGI app は Runtime Apps から紐付けます。",
+  "Use this parent switch only for IoT deployments. Web/VPS deployments should leave edge mode off.":
+    "この親スイッチは IoT deployment 専用です。Web/VPS deployment では edge mode を OFF にしてください。",
+  "IoT / Edge mode saved. Restart the process to apply the new mode.":
+    "IoT / Edge mode を保存しました。新しい mode を反映するには process を再起動してください。",
+  "Saving updates DB app_config. Restart tukuyomi before relying on the menu IoT state or request-path edge controls.":
+    "保存先は DB app_config です。メニューの IoT 状態や request-path edge control に依存する前に tukuyomi を再起動してください。",
   "No PSGI Runtime Apps are materialized.":
     "materialize 済み PSGI Runtime Apps はありません。",
   "app(s)": "app",

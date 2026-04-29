@@ -148,6 +148,12 @@ type ListenerAdminConfig = {
       mode: string;
     };
   };
+  edge: {
+    enabled: boolean;
+    device_auth: {
+      enabled: boolean;
+    };
+  };
   crs: {
     enable: boolean;
   };
@@ -217,6 +223,8 @@ type ListenerAdminRuntime = {
   proxy_engine_mode?: string;
   waf_engine_mode?: string;
   waf_engine_modes?: EngineCapability[];
+  edge_enabled?: boolean;
+  edge_device_auth_enabled?: boolean;
   storage_db_driver?: string;
   storage_db_path?: string;
   storage_db_retention_days?: number;
@@ -402,6 +410,12 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
         mode: "coraza",
       },
     },
+    edge: {
+      enabled: false,
+      device_auth: {
+        enabled: true,
+      },
+    },
     crs: {
       enable: true,
     },
@@ -539,6 +553,14 @@ function normalizeListenerAdminConfig(
       engine: {
         ...base.waf.engine,
         ...value.waf?.engine,
+      },
+    },
+    edge: {
+      ...base.edge,
+      ...value.edge,
+      device_auth: {
+        ...base.edge.device_auth,
+        ...value.edge?.device_auth,
       },
     },
     crs: {
@@ -2012,6 +2034,63 @@ export default function SettingsPanel() {
                 </label>
               </section>
             </div>
+
+            <section className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">{tx("IoT / Edge Mode")}</div>
+                  <p className="text-xs text-neutral-500">
+                    {tx("Enable this only for IoT deployments that need edge-only request controls such as device authentication. Web/VPS deployments should leave it off.")}
+                  </p>
+                </div>
+                <span className={`rounded px-2 py-1 text-xs ${listenerAdminConfig.edge.enabled ? "bg-green-100 text-green-800" : "bg-neutral-100 text-neutral-700"}`}>
+                  {listenerAdminConfig.edge.enabled ? tx("IoT ON") : tx("IoT OFF")}
+                </span>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="flex items-center gap-2 rounded border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-700">
+                  <input
+                    type="checkbox"
+                    checked={listenerAdminConfig.edge.enabled}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        edge: {
+                          ...current.edge,
+                          enabled: e.target.checked,
+                        },
+                      }))
+                    }
+                    disabled={readOnly || configSaving}
+                  />
+                  {tx("Enable IoT / Edge mode")}
+                </label>
+                <label className="flex items-center gap-2 rounded border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-700">
+                  <input
+                    type="checkbox"
+                    checked={listenerAdminConfig.edge.device_auth.enabled}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        edge: {
+                          ...current.edge,
+                          device_auth: {
+                            ...current.edge.device_auth,
+                            enabled: e.target.checked,
+                          },
+                        },
+                      }))
+                    }
+                    disabled={readOnly || configSaving}
+                  />
+                  {tx("Enable device authentication when IoT mode is on")}
+                </label>
+              </div>
+              <p className="text-xs text-neutral-500">
+                {tx("The left menu shows IoT ON only after the running process has loaded edge.enabled=true. Save and restart to apply this startup setting.")}
+              </p>
+            </section>
 
             <section className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
               <div>

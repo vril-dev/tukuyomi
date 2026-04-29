@@ -147,6 +147,27 @@ type RequestCountryUpdateStatus = {
   last_error?: string;
 };
 
+type EdgeModeConfig = {
+  enabled?: boolean;
+  device_auth?: {
+    enabled?: boolean;
+  };
+};
+
+type EdgeSettingsConfig = Record<string, unknown> & {
+  edge?: EdgeModeConfig;
+};
+
+type EdgeSettingsResponse = {
+  etag?: string;
+  restart_required?: boolean;
+  config?: EdgeSettingsConfig;
+  runtime?: {
+    edge_enabled?: boolean;
+    edge_device_auth_enabled?: boolean;
+  };
+};
+
 function runtimeDisplayName(runtime: PHPRuntimeRecord) {
   return runtime.display_name || runtime.detected_version || runtime.runtime_id;
 }
@@ -265,6 +286,13 @@ export default function OptionsPanel() {
   const [runtimeError, setRuntimeError] = useState("");
   const [runtimeAction, setRuntimeAction] = useState<{ runtimeID: string; action: "up" | "down" | "reload" } | null>(null);
   const [psgiAction, setPSGIAction] = useState<{ appName: string; action: "up" | "down" | "reload" } | null>(null);
+  const [edgeSettings, setEdgeSettings] = useState<EdgeSettingsConfig | null>(null);
+  const [edgeETag, setEdgeETag] = useState("");
+  const [edgeEnabled, setEdgeEnabled] = useState(false);
+  const [edgeRuntimeEnabled, setEdgeRuntimeEnabled] = useState(false);
+  const [edgeSaving, setEdgeSaving] = useState(false);
+  const [edgeNotice, setEdgeNotice] = useState("");
+  const [edgeError, setEdgeError] = useState("");
   const { readOnly } = useAdminRuntime();
 
   const availableRuntimeCount = useMemo(
@@ -309,15 +337,20 @@ export default function OptionsPanel() {
     setLoading(true);
     setError("");
     try {
-      const [data, psgiData, countryDB, countryUpdate] = await Promise.all([
+      const [data, psgiData, countryDB, countryUpdate, settings] = await Promise.all([
         apiGetJson<PHPRuntimesResponse>("/php-runtimes"),
         apiGetJson<PSGIRuntimesResponse>("/psgi-runtimes"),
         apiGetJson<RequestCountryDBStatus>("/request-country-db"),
         apiGetJson<RequestCountryUpdateStatus>("/request-country-update"),
+        apiGetJson<EdgeSettingsResponse>("/settings/listener-admin"),
       ]);
       applyRuntimeState(data, psgiData);
       setRequestCountryDB(countryDB);
       setRequestCountryUpdate(countryUpdate);
+      setEdgeSettings(settings.config ?? null);
+      setEdgeETag(settings.etag ?? "");
+      setEdgeEnabled(settings.config?.edge?.enabled === true);
+      setEdgeRuntimeEnabled(settings.runtime?.edge_enabled === true);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -477,6 +510,48 @@ export default function OptionsPanel() {
     }
   }
 
+  async function onSaveEdgeMode() {
+    if (!edgeSettings || !edgeETag) return;
+    setEdgeSaving(true);
+    setEdgeNotice("");
+    setEdgeError("");
+    try {
+      const nextConfig: EdgeSettingsConfig = {
+        ...edgeSettings,
+        edge: {
+          ...(edgeSettings.edge ?? {}),
+          enabled: edgeEnabled,
+          device_auth: {
+            enabled: edgeSettings.edge?.device_auth?.enabled !== false,
+          },
+        },
+      };
+      const next = await apiPutJson<EdgeSettingsResponse>(
+        "/settings/listener-admin",
+        { config: nextConfig },
+        { headers: { "If-Match": edgeETag } },
+      );
+      setEdgeSettings(next.config ?? nextConfig);
+      setEdgeETag(next.etag ?? "");
+      setEdgeEnabled(next.config?.edge?.enabled === true);
+      setEdgeRuntimeEnabled(next.runtime?.edge_enabled === true);
+      setEdgeNotice(tx("IoT / Edge mode saved. Restart the process to apply the new mode."));
+    } catch (err: unknown) {
+      setEdgeError(err instanceof Error ? err.message : String(err));
+      try {
+        const current = await apiGetJson<EdgeSettingsResponse>("/settings/listener-admin");
+        setEdgeSettings(current.config ?? null);
+        setEdgeETag(current.etag ?? "");
+        setEdgeEnabled(current.config?.edge?.enabled === true);
+        setEdgeRuntimeEnabled(current.runtime?.edge_enabled === true);
+      } catch {
+        //
+      }
+    } finally {
+      setEdgeSaving(false);
+    }
+  }
+
   async function onRuntimeAction(runtimeID: string, action: "up" | "down" | "reload") {
     setRuntimeAction({ runtimeID, action });
     setRuntimeNotice("");
@@ -557,6 +632,43 @@ export default function OptionsPanel() {
           <p className="text-xs text-neutral-500">{tx("Review built runtime inventory, module baselines, readiness, and process state from one place.")}</p>
         </div>
       </header>
+
+      <div className="rounded-xl border border-neutral-200 p-4 space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">{tx("IoT / Edge Mode")}</h2>
+            <p className="text-xs text-neutral-500">
+              {tx("Use this parent switch only for IoT deployments. Web/VPS deployments should leave edge mode off.")}
+            </p>
+          </div>
+          <span className={`rounded px-2 py-1 text-xs ${edgeRuntimeEnabled ? "bg-green-100 text-green-800" : "bg-neutral-100 text-neutral-700"}`}>
+            {edgeRuntimeEnabled ? tx("IoT ON") : tx("IoT OFF")}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex min-h-10 items-center gap-2 rounded border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-700">
+            <input
+              type="checkbox"
+              checked={edgeEnabled}
+              onChange={(e) => setEdgeEnabled(e.target.checked)}
+              disabled={readOnly || edgeSaving || !edgeSettings || !edgeETag}
+            />
+            {tx("Enable IoT / Edge mode")}
+          </label>
+          <button
+            type="button"
+            onClick={() => void onSaveEdgeMode()}
+            disabled={readOnly || edgeSaving || !edgeSettings || !edgeETag || edgeEnabled === (edgeSettings.edge?.enabled === true)}
+          >
+            {edgeSaving ? tx("Working...") : tx("Save mode")}
+          </button>
+        </div>
+        <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          {tx("Saving updates DB app_config. Restart tukuyomi before relying on the menu IoT state or request-path edge controls.")}
+        </div>
+        {edgeNotice ? <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900">{edgeNotice}</div> : null}
+        {edgeError ? <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">{edgeError}</div> : null}
+      </div>
 
       <div className="rounded-xl border border-neutral-200 p-4 space-y-4">
         <div>

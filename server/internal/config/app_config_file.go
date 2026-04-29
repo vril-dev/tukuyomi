@@ -33,6 +33,7 @@ type appConfigFile struct {
 	Paths         appPathsConfig             `json:"paths"`
 	Proxy         appProxyConfig             `json:"proxy"`
 	WAF           appWAFConfig               `json:"waf"`
+	Edge          appEdgeConfig              `json:"edge"`
 	SecurityAudit appSecurityAuditConfig     `json:"security_audit"`
 	CRS           appCRSConfig               `json:"crs"`
 	FPTuner       appFPTunerConfig           `json:"fp_tuner"`
@@ -170,6 +171,15 @@ type appWAFConfig struct {
 
 type appWAFEngineConfig struct {
 	Mode string `json:"mode"`
+}
+
+type appEdgeConfig struct {
+	Enabled    bool                    `json:"enabled"`
+	DeviceAuth appEdgeDeviceAuthConfig `json:"device_auth"`
+}
+
+type appEdgeDeviceAuthConfig struct {
+	Enabled bool `json:"enabled"`
 }
 
 type appSecurityAuditConfig struct {
@@ -377,6 +387,12 @@ func defaultAppConfigFile() appConfigFile {
 		WAF: appWAFConfig{
 			Engine: appWAFEngineConfig{
 				Mode: DefaultWAFEngineMode,
+			},
+		},
+		Edge: appEdgeConfig{
+			Enabled: false,
+			DeviceAuth: appEdgeDeviceAuthConfig{
+				Enabled: true,
 			},
 		},
 		SecurityAudit: appSecurityAuditConfig{

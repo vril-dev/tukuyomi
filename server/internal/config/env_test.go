@@ -324,6 +324,12 @@ func TestLoadAppConfigFile(t *testing.T) {
 	if cfg.Persistent.Local.BaseDir != DefaultPersistentStorageLocalDir {
 		t.Fatalf("unexpected persistent storage local base dir: %s", cfg.Persistent.Local.BaseDir)
 	}
+	if cfg.Edge.Enabled {
+		t.Fatal("edge.enabled must default to false")
+	}
+	if !cfg.Edge.DeviceAuth.Enabled {
+		t.Fatal("edge.device_auth.enabled must default to true under dormant edge mode")
+	}
 	if err := ReloadFromConfigFile(cfgPath); err != nil {
 		t.Fatalf("ReloadFromConfigFile returned error: %v", err)
 	}
@@ -338,6 +344,59 @@ func TestLoadAppConfigFile(t *testing.T) {
 	}
 	if PersistentStorageLocalBaseDir != DefaultPersistentStorageLocalDir {
 		t.Fatalf("unexpected runtime persistent storage local base dir: %s", PersistentStorageLocalBaseDir)
+	}
+	if EdgeEnabled {
+		t.Fatal("runtime EdgeEnabled must default to false")
+	}
+	if EdgeDeviceAuthEnabled {
+		t.Fatal("runtime EdgeDeviceAuthEnabled must be false while edge.enabled=false")
+	}
+}
+
+func TestLoadAppConfigFileAcceptsEdgeMode(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	raw := `{
+		"server": {"listen_addr": ":9090"},
+		"admin": {
+			"api_base_path": "/tukuyomi-api",
+			"ui_base_path": "/tukuyomi-ui",
+			"session_secret": "very-strong-random-session-secret-12345"
+		},
+		"edge": {
+			"enabled": true,
+			"device_auth": {"enabled": true}
+		},
+		"paths": {
+			"proxy_config_file": "conf/proxy.json",
+			"security_audit_file": "audit/security-audit.ndjson",
+			"security_audit_blob_dir": "audit/security-audit-blobs",
+			"rules_file": "tukuyomi.conf"
+		},
+		"proxy": {"rollback_history_size": 8},
+		"fp_tuner": {"timeout_sec": 15, "approval_ttl_sec": 600},
+		"storage": {"db_driver": "sqlite"}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := loadAppConfigFile(cfgPath)
+	if err != nil {
+		t.Fatalf("loadAppConfigFile returned error: %v", err)
+	}
+	if !cfg.Edge.Enabled {
+		t.Fatal("edge.enabled should load true")
+	}
+	if !cfg.Edge.DeviceAuth.Enabled {
+		t.Fatal("edge.device_auth.enabled should load true")
+	}
+	if err := ReloadFromConfigFile(cfgPath); err != nil {
+		t.Fatalf("ReloadFromConfigFile returned error: %v", err)
+	}
+	if !EdgeEnabled {
+		t.Fatal("runtime EdgeEnabled should be true")
+	}
+	if !EdgeDeviceAuthEnabled {
+		t.Fatal("runtime EdgeDeviceAuthEnabled should be true")
 	}
 }
 

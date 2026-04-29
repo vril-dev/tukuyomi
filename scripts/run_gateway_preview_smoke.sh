@@ -222,7 +222,7 @@ need_cmd rsync
 need_cmd install
 
 if [[ "${GATEWAY_PREVIEW_SMOKE_SKIP_BUILD}" != "1" ]]; then
-  log "building gateway preview binary and embedded admin UI"
+  log "building gateway preview binary and embedded Gateway/Center UI"
   (cd "${ROOT_DIR}" && make build)
 else
   log "skipping build by request"

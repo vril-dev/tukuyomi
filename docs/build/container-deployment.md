@@ -140,14 +140,16 @@ There are two practical choices.
 
 ### 1. Use the repository Dockerfile directly
 
-Refresh the embedded Admin UI first:
+Refresh the embedded Gateway and Center UI first:
 
 ```bash
-make ui-build-sync
+make build
 docker build -f server/Dockerfile -t tukuyomi:local server
 ```
 
-This path uses the repository Dockerfile and the prepared `server/internal/handler/admin_ui_dist` tree.
+This path uses the repository Dockerfile and the prepared
+`server/internal/handler/admin_ui_dist` and
+`server/internal/center/center_ui_dist` trees.
 
 ### 2. Use a deployment Dockerfile that builds UI and binary from scratch
 
@@ -161,7 +163,7 @@ Build:
 docker build -f docs/build/Dockerfile.example -t tukuyomi:deploy .
 ```
 
-This path builds the Admin UI in-image, builds the Go binary, copies runtime config, and installs CRS during the image build.
+This path builds the Gateway and Center UI in-image, builds the Go binary, copies runtime config, and installs CRS during the image build.
 
 ## Deployment Artifact Render
 
@@ -418,7 +420,7 @@ If `tukuyomi` itself is the direct public entrypoint and built-in HTTP/3 is enab
 
 ## Notes
 
-- the embedded Admin UI is produced during image build, not at runtime
+- the embedded Gateway and Center UI are produced during image build, not at runtime
 - `scripts/install_crs.sh` can be run at image build time or startup time depending on your policy
 - for mutable runtime policy files, mount `/app/conf`; WAF/CRS assets are imported from `/app/data/tmp` staging into DB
 - the repository `docker-compose.yml` now provides a real scheduler sidecar service named `scheduled-task-runner` behind the `scheduled-tasks` profile

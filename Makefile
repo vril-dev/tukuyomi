@@ -42,6 +42,8 @@ UPSTREAM_PORT ?=
 SERVER_DIR := server
 UI_DIR := web/tukuyomi-admin
 UI_EMBED_DIR := server/internal/handler/admin_ui_dist
+CENTER_UI_DIR := web/tukuyomi-center
+CENTER_UI_EMBED_DIR := server/internal/center/center_ui_dist
 BIN_DIR ?= bin
 APP_NAME ?= tukuyomi
 APP_PKG ?= ./cmd/server
@@ -76,7 +78,7 @@ export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_ADMIN_USERNAME
 	install deploy-render install-smoke deploy-render-smoke \
 	go-test go-fuzz-short go-build db-migrate db-import db-import-waf-rule-assets build \
 	release-linux-amd64 release-linux-arm64 release-linux-all \
-	ui-install ui-test ui-build ui-sync ui-build-sync \
+	ui-install ui-test ui-build ui-sync ui-build-sync center-ui-install center-ui-test center-ui-build center-ui-sync center-ui-build-sync \
 	fleet-preview-up fleet-preview-down gateway-preview-up gateway-preview-down gateway-preview-smoke center-preview-up center-preview-down \
 	php-fpm-build php-fpm-copy php-fpm-prune php-fpm-remove php-fpm-up php-fpm-down php-fpm-reload php-fpm-test php-fpm-smoke \
 	psgi-build psgi-up psgi-down psgi-reload psgi-test \
@@ -104,16 +106,18 @@ help:
 	@echo "  make db-migrate                 Build binary and apply configured DB schema migrations"
 	@echo "  make db-import                  Import startup seed/export files into DB"
 	@echo "  make db-import-waf-rule-assets  Import base WAF and CRS rule/data assets into DB"
-	@echo "  make build                      One-shot build (ui-build-sync + go-build)"
+	@echo "  make build                      One-shot build (Gateway UI + Center UI + Go binary)"
 	@echo "  make release-linux-amd64        Build release tarball for linux/amd64 via docker buildx"
 	@echo "  make release-linux-arm64        Build release tarball for linux/arm64 via docker buildx"
 	@echo "  make release-linux-all          Build linux/amd64 + linux/arm64 and combined checksums"
 	@echo ""
-	@echo "  make ui-install                 Install admin UI dependencies"
-	@echo "  make ui-test                    Run admin UI tests"
-	@echo "  make ui-build                   Build admin UI static assets"
-	@echo "  make ui-sync                    Sync web dist -> go:embed assets"
-	@echo "  make ui-build-sync              Build and sync embedded UI assets"
+	@echo "  make ui-install                 Install Gateway UI dependencies"
+	@echo "  make ui-test                    Run Gateway UI tests"
+	@echo "  make ui-build                   Build Gateway UI static assets"
+	@echo "  make ui-sync                    Sync Gateway UI dist -> go:embed assets"
+	@echo "  make ui-build-sync              Build and sync embedded Gateway UI assets"
+	@echo "  make center-ui-build            Build Center UI static assets"
+	@echo "  make center-ui-build-sync       Build and sync embedded Center UI assets"
 	@echo "  make fleet-preview-up           Start gateway and Center preview runtimes"
 	@echo "  make gateway-preview-up         Build/sync gateway UI and start preview runtime + scheduled-task sidecar"
 	@echo "  make center-preview-up          Start Center preview runtime"
@@ -420,7 +424,7 @@ db-import-waf-rule-assets: db-migrate
 	cd "$$workdir"; \
 	WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import-waf-rule-assets
 
-build: ui-build-sync go-build
+build: ui-build-sync center-ui-build-sync go-build
 
 release-linux-amd64:
 	@set -euo pipefail; \
@@ -488,19 +492,43 @@ ui-sync:
 
 ui-build-sync: ui-build ui-sync
 
+center-ui-install:
+	cd $(CENTER_UI_DIR) && $(NPM) ci
+
+center-ui-test: center-ui-install
+	cd $(CENTER_UI_DIR) && $(NPM) test
+
+center-ui-build: center-ui-install
+	cd $(CENTER_UI_DIR) && $(NPM) run build
+
+center-ui-sync:
+	@if [[ ! -d "$(CENTER_UI_DIR)/dist" ]]; then \
+		echo "[center-ui-sync] missing $(CENTER_UI_DIR)/dist (run: make center-ui-build)"; \
+		exit 1; \
+	fi
+	@mkdir -p $(CENTER_UI_EMBED_DIR)
+	find "$(CENTER_UI_EMBED_DIR)" -mindepth 1 \
+		! -name '.gitignore' \
+		! -name 'placeholder.html' \
+		-exec rm -rf {} +
+	cp -a $(CENTER_UI_DIR)/dist/. $(CENTER_UI_EMBED_DIR)/
+	@echo "[center-ui-sync] synced $(CENTER_UI_DIR)/dist -> $(CENTER_UI_EMBED_DIR)"
+
+center-ui-build-sync: center-ui-build center-ui-sync
+
 fleet-preview-up: gateway-preview-up
-	$(MAKE) center-preview-up
+	@$(MAKE) --no-print-directory center-preview-up
 
 fleet-preview-down: center-preview-down
-	$(MAKE) gateway-preview-down
+	@$(MAKE) --no-print-directory gateway-preview-down
 
-gateway-preview-up: go-build ui-build-sync
+gateway-preview-up: ui-build-sync go-build
 	bash ./scripts/gateway_preview.sh up
 
 gateway-preview-down:
 	bash ./scripts/gateway_preview.sh down
 
-center-preview-up: go-build
+center-preview-up: center-ui-build-sync go-build
 	bash ./scripts/center_preview.sh up
 
 center-preview-down:
@@ -533,7 +561,7 @@ php-fpm-reload:
 php-fpm-test:
 	cd $(SERVER_DIR) && $(GO) test ./internal/handler -run 'Test(PHPRuntimeInventoryListsOnlyBuiltArtifacts|PHPRuntimeInventoryDBAutoDiscoveryReflectsBuiltArtifactsAfterStartup|PHPRuntimeInventoryDBExplicitEmptyDoesNotAutoDiscover|PHPRuntimeInventoryDBLegacyImportWithoutStateAutoDiscovers|PHPRuntimeInventoryDBLoadsWithoutInventoryOrManifestJSON|ApplyPHPRuntimeInventoryRawDoesNotDeadlockOnMaterializationRefresh|GetPHPRuntimesAndRuntimeAppsHandlers|ValidatePHPRuntimeInventoryRawIgnoresLegacyPHPSupportFlag|DefaultPHPRuntimeInventoryStartsEmptyUntilRuntimeIsBuilt|ValidatePHPRuntimeInventoryRawLoadsBuiltArtifactModulesAndDefaults|ValidateVhostConfigRawRequiresKnownRuntime|ValidateVhostConfigRawAcceptsKnownRuntimeWithoutSupportToggle|ApplyAndRollbackVhostConfigRaw|PHPRuntimeSupervisorStartsRestartsAndStopsRuntime|ResolvePHPRuntimeIdentityUsesConfiguredCurrentUserAndGroup|ValidatePHPRuntimeLaunchRejectsPrivilegeTransitionWithoutRoot|ValidatePHPRuntimeLaunchRejectsUnreadableDocumentRoot|ServeProxyServesStaticVhostAssets|ServeProxyRunsFastCGIOverUnixSocket|ServeProxyRunsFastCGITryFilesAndStaticAssets|ServeProxyAppliesVhostRewriteAccessAndBasicAuth|BuildPHPRuntimePoolConfigIncludesINIOverrides|ValidateVhostConfigRejectsPlaintextBasicAuthHash)'
 
-php-fpm-smoke: ui-build-sync
+php-fpm-smoke: ui-build-sync center-ui-build-sync
 	VER="$(VER)" CORAZA_PORT="$(CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" WAF_ADMIN_USERNAME="$(WAF_ADMIN_USERNAME)" WAF_ADMIN_PASSWORD="$(WAF_ADMIN_PASSWORD)" ./scripts/run_php_fpm_smoke.sh
 
 psgi-build:
@@ -569,10 +597,10 @@ compose-config-scheduled-tasks:
 	docker compose --profile scheduled-tasks config >/dev/null
 	@echo "[compose-config-scheduled-tasks] ok"
 
-compose-up: ui-build-sync
+compose-up: ui-build-sync center-ui-build-sync
 	PUID="$(PUID)" GUID="$(GUID)" CORAZA_PORT="$(CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" docker compose up -d --build coraza
 
-compose-up-scheduled-tasks: ui-build-sync
+compose-up-scheduled-tasks: ui-build-sync center-ui-build-sync
 	PUID="$(PUID)" GUID="$(GUID)" CORAZA_PORT="$(CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" docker compose --profile scheduled-tasks up -d --build coraza scheduled-task-runner
 
 compose-down:
@@ -590,7 +618,7 @@ migrate-proxy-config:
 migrate-proxy-config-check:
 	./scripts/migrate_proxy_config.sh --check
 
-smoke: db-import ui-build-sync
+smoke: db-import ui-build-sync center-ui-build-sync
 	@set -euo pipefail; \
 	backup="$$(mktemp)"; \
 	had_proxy_seed=0; \
@@ -645,7 +673,7 @@ gotestwaf:
 	mv "$$tmp_proxy" data/conf/proxy.json; \
 	HOST_CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" ./scripts/run_gotestwaf.sh
 
-check: go-test ui-test compose-config compose-config-mysql preset-check-minimal
+check: go-test ui-test center-ui-test compose-config compose-config-mysql preset-check-minimal
 
 ci-local: check smoke
 

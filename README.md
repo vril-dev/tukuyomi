@@ -84,7 +84,7 @@ For a direct Linux host install, start with the install target:
 make install TARGET=linux-systemd
 ```
 
-This builds the embedded Admin UI and Go binary, creates the runtime tree, runs
+This builds the embedded Gateway/Center UI and Go binary, creates the runtime tree, runs
 DB migration, imports WAF/CRS assets, seeds first-run DB config, and installs
 systemd units for the local host. The scheduled-task timer is enabled by
 default; set `INSTALL_ENABLE_SCHEDULED_TASKS=0` if this host should not execute
@@ -98,7 +98,7 @@ units, or container/platform deployment instead of host install, see:
 
 ### Local Test Preview
 
-If you only want to test the Admin UI and local runtime flow, use the preview
+If you only want to test the Gateway UI and local runtime flow, use the preview
 target:
 
 ```bash
@@ -112,8 +112,8 @@ assets into DB.
 
 Then open:
 
-- Admin UI: `http://localhost:9090/tukuyomi-ui`
-- Admin API: `http://localhost:9090/tukuyomi-api`
+- Gateway UI: `http://localhost:9090/tukuyomi-ui`
+- Gateway API: `http://localhost:9090/tukuyomi-api`
 
 By default, `make gateway-preview-up` uses an isolated preview SQLite DB and resets
 that DB plus preview config files on each start. If you use
@@ -320,7 +320,7 @@ family used by nginx. See [LICENSE](LICENSE).
 
 Third-party dependency notices are listed in [NOTICE](NOTICE). Dependency
 license metadata is available through `server/go.mod` / `server/go.sum`
-and `web/tukuyomi-admin/package-lock.json`.
+and the `web/tukuyomi-admin` / `web/tukuyomi-center` package lock files.
 
 ## What Is tukuyomi?
 

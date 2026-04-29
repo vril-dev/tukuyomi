@@ -397,7 +397,7 @@ need_cmd rsync
 need_cmd install
 
 if [[ "${SCHEDULED_TASKS_SMOKE_SKIP_BUILD}" != "1" ]]; then
-  log "building embedded admin UI and binary"
+  log "building embedded Gateway/Center UI and binary"
   (cd "${ROOT_DIR}" && make build)
 else
   log "skipping build by request"

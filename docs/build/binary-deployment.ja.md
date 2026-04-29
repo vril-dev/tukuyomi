@@ -20,7 +20,7 @@ make build
 
 生成物は `bin/tukuyomi` です。
 
-埋め込み Admin UI をすでに更新済みで、Go バイナリだけ欲しい場合は:
+埋め込み Gateway / Center UI をすでに更新済みで、Go バイナリだけ欲しい場合は:
 
 ```bash
 make go-build

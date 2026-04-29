@@ -2,7 +2,6 @@ package center
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -188,6 +187,8 @@ func registerCenterAPI(r *gin.Engine, apiBase string) {
 				apiBase + "/auth/session",
 				apiBase + "/auth/login",
 				apiBase + "/auth/logout",
+				apiBase + "/auth/account",
+				apiBase + "/auth/password",
 				apiBase + "/devices",
 				apiBase + "/devices/enrollments",
 			},
@@ -209,36 +210,10 @@ func registerCenterAPI(r *gin.Engine, apiBase string) {
 			"rejected_enrollments": counts.RejectedEnrollments,
 		})
 	})
+	api.GET("/auth/account", handler.GetAdminAccount)
+	api.PUT("/auth/account", handler.PutAdminAccount)
+	api.PUT("/auth/password", handler.PutAdminPassword)
 	registerCenterDeviceAdminRoutes(api)
-}
-
-func registerCenterUI(r *gin.Engine, apiBase, uiBase string) {
-	serve := func(c *gin.Context) {
-		if !handler.CheckAdminUIAccess(c.Request) {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
-			return
-		}
-		decision := handler.EvaluateAdminUIRateLimit(c.Request)
-		if !decision.Allowed {
-			if decision.RetryAfterSeconds > 0 {
-				c.Header("Retry-After", fmt.Sprintf("%d", decision.RetryAfterSeconds))
-			}
-			c.AbortWithStatusJSON(decision.StatusCode, gin.H{"error": "admin rate limit exceeded"})
-			return
-		}
-		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(centerHTML(apiBase)))
-	}
-	r.GET(uiBase, serve)
-	r.HEAD(uiBase, serve)
-	r.GET(uiBase+"/*filepath", serve)
-	r.HEAD(uiBase+"/*filepath", serve)
-}
-
-func centerHTML(apiBase string) string {
-	settings, _ := json.Marshal(map[string]string{
-		"apiBasePath": apiBase,
-	})
-	return strings.Replace(centerHTMLTemplate, "__CENTER_SETTINGS__", string(settings), 1)
 }
 
 func normalizeBasePath(raw, fallback string) (string, error) {

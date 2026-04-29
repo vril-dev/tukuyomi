@@ -234,6 +234,79 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	}
 }
 
+func TestCenterAccountManagementFlow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restore := configureCenterAuthTest(t)
+	defer restore()
+
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer handler.InitLogsStatsStore(false, "", 0)
+
+	t.Setenv(handler.AdminBootstrapUsernameEnv, "center-admin")
+	t.Setenv(handler.AdminBootstrapPasswordEnv, "center-admin-password")
+	if created, err := handler.EnsureAdminBootstrapOwnerFromEnv(); err != nil {
+		t.Fatalf("EnsureAdminBootstrapOwnerFromEnv: %v", err)
+	} else if !created {
+		t.Fatal("bootstrap admin was not created")
+	}
+	if err := handler.InitAdminGuards(); err != nil {
+		t.Fatalf("InitAdminGuards: %v", err)
+	}
+
+	engine, err := NewEngine(RuntimeConfig{
+		APIBasePath: "/center-api",
+		UIBasePath:  "/center-ui",
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	cookies, csrfCookie := loginCenterForTest(t, engine)
+	account := performRequestWithCookies(engine, http.MethodGet, "/center-api/auth/account", "", nil, cookies)
+	if account.Code != http.StatusOK {
+		t.Fatalf("account code=%d body=%s", account.Code, account.Body.String())
+	}
+	if !strings.Contains(account.Body.String(), `"username":"center-admin"`) {
+		t.Fatalf("account body missing username: %s", account.Body.String())
+	}
+
+	updateBody := `{"username":"center-admin2","email":"center-admin@example.test","current_password":"center-admin-password"}`
+	update := performRequestWithCookies(engine, http.MethodPut, "/center-api/auth/account", updateBody, map[string]string{
+		"Content-Type":           "application/json",
+		adminauth.CSRFHeaderName: csrfCookie.Value,
+	}, cookies)
+	if update.Code != http.StatusOK {
+		t.Fatalf("update account code=%d body=%s", update.Code, update.Body.String())
+	}
+	if !strings.Contains(update.Body.String(), `"username":"center-admin2"`) || !strings.Contains(update.Body.String(), `"email":"center-admin@example.test"`) {
+		t.Fatalf("updated account body missing identity: %s", update.Body.String())
+	}
+
+	passwordBody := `{"current_password":"center-admin-password","new_password":"new center password"}`
+	password := performRequestWithCookies(engine, http.MethodPut, "/center-api/auth/password", passwordBody, map[string]string{
+		"Content-Type":           "application/json",
+		adminauth.CSRFHeaderName: csrfCookie.Value,
+	}, cookies)
+	if password.Code != http.StatusOK {
+		t.Fatalf("password code=%d body=%s", password.Code, password.Body.String())
+	}
+	if !strings.Contains(password.Body.String(), `"reauth_required":true`) {
+		t.Fatalf("password response missing reauth_required: %s", password.Body.String())
+	}
+
+	oldSession := performRequestWithCookies(engine, http.MethodGet, "/center-api/auth/session", "", nil, cookies)
+	if oldSession.Code != http.StatusOK {
+		t.Fatalf("old session code=%d body=%s", oldSession.Code, oldSession.Body.String())
+	}
+	if authenticatedBool(t, oldSession.Body.Bytes()) {
+		t.Fatal("old session remained authenticated after password change")
+	}
+
+	loginCenterWithCredentialsForTest(t, engine, "center-admin2", "new center password")
+}
+
 func configureCenterAuthTest(t *testing.T) func() {
 	t.Helper()
 	old := struct {
@@ -300,8 +373,19 @@ func performRequestWithCookies(engine http.Handler, method, target, body string,
 
 func loginCenterForTest(t *testing.T, engine http.Handler) ([]*http.Cookie, *http.Cookie) {
 	t.Helper()
-	loginBody := `{"identifier":"center-admin","password":"center-admin-password"}`
-	login := performRequest(engine, http.MethodPost, "/center-api/auth/login", loginBody, map[string]string{
+	return loginCenterWithCredentialsForTest(t, engine, "center-admin", "center-admin-password")
+}
+
+func loginCenterWithCredentialsForTest(t *testing.T, engine http.Handler, identifier string, password string) ([]*http.Cookie, *http.Cookie) {
+	t.Helper()
+	loginPayload, err := json.Marshal(map[string]string{
+		"identifier": identifier,
+		"password":   password,
+	})
+	if err != nil {
+		t.Fatalf("marshal login payload: %v", err)
+	}
+	login := performRequest(engine, http.MethodPost, "/center-api/auth/login", string(loginPayload), map[string]string{
 		"Content-Type": "application/json",
 	})
 	if login.Code != http.StatusOK {

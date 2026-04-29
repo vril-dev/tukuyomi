@@ -20,7 +20,7 @@ make build
 
 This produces `bin/tukuyomi`.
 
-If you only need the Go binary and already refreshed the embedded Admin UI, use:
+If you only need the Go binary and already refreshed the embedded Gateway and Center UI, use:
 
 ```bash
 make go-build

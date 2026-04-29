@@ -131,14 +131,16 @@ dedicated scheduler role:
 
 ### 1. repository の Dockerfile をそのまま使う
 
-先に埋め込み Admin UI を更新します。
+先に埋め込み Gateway / Center UI を更新します。
 
 ```bash
-make ui-build-sync
+make build
 docker build -f server/Dockerfile -t tukuyomi:local server
 ```
 
-この方法では、repository の Dockerfile と、更新済み `server/internal/handler/admin_ui_dist` をそのまま使います。
+この方法では、repository の Dockerfile と、更新済み
+`server/internal/handler/admin_ui_dist` と
+`server/internal/center/center_ui_dist` をそのまま使います。
 
 ### 2. UI とバイナリを image 内で build する deployment Dockerfile を使う
 
@@ -152,7 +154,7 @@ build:
 docker build -f docs/build/Dockerfile.example -t tukuyomi:deploy .
 ```
 
-この方法では Admin UI build、Go build、runtime config copy、CRS install まで image build 内で完結します。
+この方法では Gateway / Center UI build、Go build、runtime config copy、CRS install まで image build 内で完結します。
 
 ## Deployment artifact render
 
@@ -394,7 +396,7 @@ cloud では通常:
 
 ## Notes
 
-- 埋め込み Admin UI は image build 時に生成され、runtime では build しません
+- 埋め込み Gateway / Center UI は image build 時に生成され、runtime では build しません
 - `scripts/install_crs.sh` は image build 時でも startup 時でも実行できます
 - runtime で policy file を変更したい場合は `/app/conf` を mount してください。WAF/CRS asset は `/app/data/tmp` staging から DB へ import します
 - repository 同梱の `docker-compose.yml` には、`scheduled-tasks` profile 配下で `scheduled-task-runner` sidecar が入ります

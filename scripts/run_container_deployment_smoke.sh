@@ -88,6 +88,7 @@ install -d -m 755 \
   "${BUILD_CONTEXT}/docs/build"
 rsync -a "${ROOT_DIR}/server/" "${BUILD_CONTEXT}/server/"
 rsync -a --exclude 'node_modules' --exclude 'dist' "${ROOT_DIR}/web/tukuyomi-admin/" "${BUILD_CONTEXT}/web/tukuyomi-admin/"
+rsync -a --exclude 'node_modules' --exclude 'dist' "${ROOT_DIR}/web/tukuyomi-center/" "${BUILD_CONTEXT}/web/tukuyomi-center/"
 rsync -a --exclude '*.bak' "${ROOT_DIR}/data/conf/" "${BUILD_CONTEXT}/data/conf/"
 install -m 755 "${ROOT_DIR}/scripts/install_crs.sh" "${BUILD_CONTEXT}/scripts/install_crs.sh"
 install -m 755 "${ROOT_DIR}/scripts/stage_waf_rule_assets.sh" "${BUILD_CONTEXT}/scripts/stage_waf_rule_assets.sh"

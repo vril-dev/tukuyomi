@@ -140,14 +140,16 @@ There are two practical choices.
 
 ### 1. Use the repository Dockerfile directly
 
-Refresh the embedded Admin UI first:
+Refresh the embedded Gateway and Center UI first:
 
 ```bash
-make ui-build-sync
+make build
 docker build -f server/Dockerfile -t tukuyomi:local server
 ```
 
-This path uses the repository Dockerfile and the prepared `server/internal/handler/admin_ui_dist` tree.
+This path uses the repository Dockerfile and the prepared
+`server/internal/handler/admin_ui_dist` and
+`server/internal/center/center_ui_dist` trees.
 
 ### 2. Use a deployment Dockerfile that builds UI and binary from scratch
 
@@ -161,7 +163,7 @@ Build:
 docker build -f docs/build/Dockerfile.example -t tukuyomi:deploy .
 ```
 
-This path builds the Admin UI in-image, builds the Go binary, copies runtime config, and installs CRS during the image build.
+This path builds the Gateway and Center UI in-image, builds the Go binary, copies runtime config, and installs CRS during the image build.
 
 ## Deployment Artifact Render
 
@@ -418,7 +420,7 @@ If `tukuyomi` itself is the direct public entrypoint and built-in HTTP/3 is enab
 
 ## Notes
 
-- the embedded Admin UI is produced during image build, not at runtime
+- the embedded Gateway and Center UI are produced during image build, not at runtime
 - `scripts/install_crs.sh` can be run at image build time or startup time depending on your policy
 - for mutable runtime policy files, mount `/app/conf`; WAF/CRS assets are imported from `/app/data/tmp` staging into DB
 - the repository `docker-compose.yml` now provides a real scheduler sidecar service named `scheduled-task-runner` behind the `scheduled-tasks` profile
@@ -451,31 +453,31 @@ docker compose \
   --profile scheduled-tasks up -d --build coraza scheduled-task-runner
 ```
 
-- `make ui-preview-up` starts the preview-scoped scheduler sidecar too
+- `make gateway-preview-up` starts the preview-scoped scheduler sidecar too
 - default preview behavior is reset-on-start:
-  `ui-preview-up` recreates the isolated preview SQLite DB on each start, so old preview tasks, listener changes, and DB rows do not carry over
+  `gateway-preview-up` recreates the isolated preview SQLite DB on each start, so old preview tasks, listener changes, and DB rows do not carry over
 - opt into retained preview DB state with:
 
 ```bash
-UI_PREVIEW_PERSIST=1 make ui-preview-up
-UI_PREVIEW_PERSIST=1 make ui-preview-down
+GATEWAY_PREVIEW_PERSIST=1 make gateway-preview-up
+GATEWAY_PREVIEW_PERSIST=1 make gateway-preview-down
 ```
 
-- when `UI_PREVIEW_PERSIST=1` is set, `ui-preview-up/down` keeps:
-  - `data/<dirname(storage.db_path)>/tukuyomi-ui-preview.db`
-  - for example, when `storage.db_path` is `db/tukuyomi.db`, the preview DB is `data/db/tukuyomi-ui-preview.db`
-- `ui-preview-up` derives published ports from the active preview `app_config` stored in the preview DB
-  - on first boot, preview starts from `conf/config.json` plus optional `UI_PREVIEW_PUBLIC_ADDR` / `UI_PREVIEW_ADMIN_ADDR` overrides
+- when `GATEWAY_PREVIEW_PERSIST=1` is set, `gateway-preview-up/down` keeps:
+  - `data/<dirname(storage.db_path)>/tukuyomi-gateway-preview.db`
+  - for example, when `storage.db_path` is `db/tukuyomi.db`, the preview DB is `data/db/tukuyomi-gateway-preview.db`
+- `gateway-preview-up` derives published ports from the active preview `app_config` stored in the preview DB
+  - on first boot, preview starts from `conf/config.json` plus optional `GATEWAY_PREVIEW_PUBLIC_ADDR` / `GATEWAY_PREVIEW_ADMIN_ADDR` overrides
   - single listener preview publishes the public listener port
   - split listener preview publishes both public and admin listener ports
   - healthcheck follows the admin listener in split mode
 - example split preview bootstrap:
 
 ```bash
-UI_PREVIEW_PERSIST=1 \
-UI_PREVIEW_PUBLIC_ADDR=:80 \
-UI_PREVIEW_ADMIN_ADDR=:9090 \
-make ui-preview-up
+GATEWAY_PREVIEW_PERSIST=1 \
+GATEWAY_PREVIEW_PUBLIC_ADDR=:80 \
+GATEWAY_PREVIEW_ADMIN_ADDR=:9090 \
+make gateway-preview-up
 ```
 
 - that yields:
@@ -484,7 +486,7 @@ make ui-preview-up
   - admin API: `http://127.0.0.1:9090/tukuyomi-api`
 - do not use loopback listener binds such as `localhost:80`, `127.0.0.1:80`, or `[::1]:9090` in preview listener settings
   - preview rejects them because container-local loopback bind does not match host-published ports
-- when you save listener changes through `Settings`, use `UI_PREVIEW_PERSIST=1 make ui-preview-down` then `UI_PREVIEW_PERSIST=1 make ui-preview-up`
+- when you save listener changes through `Settings`, use `GATEWAY_PREVIEW_PERSIST=1 make gateway-preview-down` then `GATEWAY_PREVIEW_PERSIST=1 make gateway-preview-up`
   - preview persists those listener changes in the preview DB, but plain `docker compose restart` does not recreate changed published ports
 - operational signal for scheduler faults is container exit/restart plus sidecar logs; persistent faults should show up as restart churn
 - if a scheduled task command line points at a bundled PHP path such as `/app/data/php-fpm/binaries/php85/php`, mount `/app/data/php-fpm` into that scheduler container too
@@ -493,4 +495,4 @@ make ui-preview-up
 - to validate this sample container path locally before rollout, run `make container-deployment-smoke`
 - to validate the wider container-platform contract before rollout, run `make container-platform-smoke`
   this also checks scheduled-task ownership, replicated read-only prerequisites, and sample platform artifacts
-- to validate preview persistence and split-port parity locally, run `make ui-preview-smoke`
+- to validate preview persistence and split-port parity locally, run `make gateway-preview-smoke`

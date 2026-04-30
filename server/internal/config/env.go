@@ -30,6 +30,10 @@ var (
 	ProxyAuditFile                      string
 	ProxyEngineMode                     string
 	WAFEngineMode                       string
+	EdgeEnabled                         bool
+	EdgeDeviceAuthEnabled               bool
+	EdgeRequireDeviceApproval           bool
+	EdgeDeviceStatusRefreshInterval     time.Duration
 	SecurityAuditEnabled                bool
 	SecurityAuditCaptureMode            string
 	SecurityAuditCaptureHeaders         bool
@@ -222,6 +226,14 @@ func applyAppConfig(cfg appConfigFile) {
 	ProxyAuditFile = strings.TrimSpace(cfg.Proxy.AuditFile)
 	ProxyEngineMode = normalizeAppProxyEngineMode(cfg.Proxy.Engine.Mode)
 	WAFEngineMode = normalizeAppWAFEngineMode(cfg.WAF.Engine.Mode)
+	EdgeEnabled = cfg.Edge.Enabled
+	EdgeDeviceAuthEnabled = cfg.Edge.Enabled && cfg.Edge.DeviceAuth.Enabled
+	EdgeRequireDeviceApproval = cfg.Edge.Enabled && cfg.Edge.RequireDeviceApproval
+	if cfg.Edge.Enabled && cfg.Edge.DeviceAuth.Enabled && cfg.Edge.DeviceAuth.StatusRefreshIntervalSec > 0 {
+		EdgeDeviceStatusRefreshInterval = time.Duration(cfg.Edge.DeviceAuth.StatusRefreshIntervalSec) * time.Second
+	} else {
+		EdgeDeviceStatusRefreshInterval = 0
+	}
 	if override := strings.TrimSpace(os.Getenv("WAF_PROXY_AUDIT_FILE")); override != "" {
 		ProxyAuditFile = override
 	}

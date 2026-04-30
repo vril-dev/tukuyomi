@@ -80,8 +80,8 @@ PY
     "${ROOT_DIR}/scripts/stage_waf_rule_assets.sh" "${stage_root}"
     ./bin/tukuyomi db-migrate
     WAF_RULE_ASSET_FS_ROOT="${stage_root}" ./bin/tukuyomi db-import-waf-rule-assets
-    UI_PREVIEW_PUBLIC_ADDR=":${BINARY_DEPLOYMENT_PROXY_PORT}" \
-    UI_PREVIEW_ADMIN_ADDR="" \
+    GATEWAY_PREVIEW_PUBLIC_ADDR=":${BINARY_DEPLOYMENT_PROXY_PORT}" \
+    GATEWAY_PREVIEW_ADMIN_ADDR="" \
     ./bin/tukuyomi db-import-preview
   )
   rm -rf "${stage_root}"
@@ -141,7 +141,7 @@ need_cmd rsync
 need_cmd install
 
 if [[ "${BINARY_DEPLOYMENT_SKIP_BUILD}" != "1" ]]; then
-  log "building embedded admin UI and binary"
+  log "building embedded Gateway/Center UI and binary"
   (cd "${ROOT_DIR}" && make build)
 else
   log "skipping build by request"
@@ -229,7 +229,23 @@ log "running admin + proxy-rules smoke through staged binary"
 )
 
 if [[ ! -f "${RUNTIME_DIR}/audit/proxy-rules-audit.ndjson" ]]; then
-  fail "expected staged runtime to create audit/proxy-rules-audit.ndjson"
+  proxy_history_count="$(python3 - "${RUNTIME_DIR}/db/tukuyomi.db" <<'PY'
+import sqlite3
+import sys
+
+path = sys.argv[1]
+conn = sqlite3.connect(path)
+try:
+    cur = conn.cursor()
+    cur.execute("select count(*) from config_versions where domain = 'proxy'")
+    print(cur.fetchone()[0])
+finally:
+    conn.close()
+PY
+)"
+  if [[ "${proxy_history_count}" -lt 2 ]]; then
+    fail "expected staged runtime to create file audit or DB proxy config history"
+  fi
 fi
 
 log "OK binary deployment smoke passed"

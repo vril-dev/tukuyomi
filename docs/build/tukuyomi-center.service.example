@@ -1,0 +1,21 @@
+[Unit]
+Description=tukuyomi center
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tukuyomi
+Group=tukuyomi
+WorkingDirectory=/opt/tukuyomi
+EnvironmentFile=/etc/tukuyomi/tukuyomi-center.env
+ExecStart=/opt/tukuyomi/bin/tukuyomi center
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=35
+NoNewPrivileges=true
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

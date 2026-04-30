@@ -155,9 +155,21 @@ func prepareAdminUsersSeed(raw []byte) ([]preparedAdminUserSeedRecord, error) {
 }
 
 func resolveDBAdminAuth(c *gin.Context) (middleware.AdminAuthResult, bool, error) {
+	return resolveDBAdminAuthWithCookieNames(c, adminauth.DefaultCookieNames())
+}
+
+func DBAdminAuthResolverWithCookieNames(cookieNames adminauth.CookieNames) middleware.AdminAuthResolver {
+	cookieNames = cookieNames.Normalized()
+	return func(c *gin.Context) (middleware.AdminAuthResult, bool, error) {
+		return resolveDBAdminAuthWithCookieNames(c, cookieNames)
+	}
+}
+
+func resolveDBAdminAuthWithCookieNames(c *gin.Context, cookieNames adminauth.CookieNames) (middleware.AdminAuthResult, bool, error) {
 	if c == nil || c.Request == nil {
 		return middleware.AdminAuthResult{}, false, nil
 	}
+	cookieNames = cookieNames.Normalized()
 	store := getLogsStatsStore()
 	if store == nil {
 		return middleware.AdminAuthResult{}, false, nil
@@ -179,11 +191,11 @@ func resolveDBAdminAuth(c *gin.Context) (middleware.AdminAuthResult, bool, error
 		}, true, nil
 	}
 
-	sessionToken, presented := adminSessionTokenFromRequest(c.Request)
+	sessionToken, presented := adminSessionTokenFromRequestWithCookieNames(c.Request, cookieNames)
 	if !presented {
 		return middleware.AdminAuthResult{}, false, nil
 	}
-	session, ok, err := store.authenticateAdminSessionRequest(c.Request, sessionToken, now)
+	session, ok, err := store.authenticateAdminSessionRequestWithCookieNames(c.Request, sessionToken, now, cookieNames)
 	if err != nil {
 		return middleware.AdminAuthResult{}, false, err
 	}
@@ -562,11 +574,15 @@ func (s *wafEventStore) authenticateAdminPersonalAccessToken(token string, peppe
 }
 
 func (s *wafEventStore) authenticateAdminSessionRequest(r *http.Request, sessionToken string, now time.Time) (adminSessionRecord, bool, error) {
+	return s.authenticateAdminSessionRequestWithCookieNames(r, sessionToken, now, adminauth.DefaultCookieNames())
+}
+
+func (s *wafEventStore) authenticateAdminSessionRequestWithCookieNames(r *http.Request, sessionToken string, now time.Time, cookieNames adminauth.CookieNames) (adminSessionRecord, bool, error) {
 	session, ok, err := s.loadAdminSession(sessionToken, now)
 	if err != nil || !ok {
 		return adminSessionRecord{}, ok, err
 	}
-	if err := s.validateAdminSessionCSRF(r, session); err != nil {
+	if err := s.validateAdminSessionCSRFWithCookieNames(r, session, cookieNames); err != nil {
 		return adminSessionRecord{}, false, err
 	}
 	if _, err := s.exec(
@@ -628,10 +644,15 @@ func (s *wafEventStore) loadAdminSession(sessionToken string, now time.Time) (ad
 }
 
 func (s *wafEventStore) ensureAdminSessionCSRFCookie(c *gin.Context, session adminSessionRecord, now time.Time) (string, error) {
+	return s.ensureAdminSessionCSRFCookieWithNames(c, session, now, adminauth.DefaultCookieNames())
+}
+
+func (s *wafEventStore) ensureAdminSessionCSRFCookieWithNames(c *gin.Context, session adminSessionRecord, now time.Time, cookieNames adminauth.CookieNames) (string, error) {
 	if c == nil || c.Request == nil {
 		return "", nil
 	}
-	current, err := c.Request.Cookie(adminauth.CSRFCookieName)
+	cookieNames = cookieNames.Normalized()
+	current, err := c.Request.Cookie(cookieNames.CSRF)
 	if err == nil && current != nil {
 		value := strings.TrimSpace(current.Value)
 		if value != "" && len(value) <= maxAdminCSRFCookieBytes && secureHashEqual(adminAuthSecretHash(value, config.AdminSessionSecret), session.CSRFTokenHash) {
@@ -656,7 +677,7 @@ func (s *wafEventStore) ensureAdminSessionCSRFCookie(c *gin.Context, session adm
 		return "", err
 	}
 	http.SetCookie(c.Writer, &http.Cookie{
-		Name:     adminauth.CSRFCookieName,
+		Name:     cookieNames.CSRF,
 		Value:    next,
 		Path:     "/",
 		HttpOnly: false,
@@ -692,10 +713,15 @@ func (s *wafEventStore) revokeAdminSession(sessionToken string, now time.Time) e
 }
 
 func (s *wafEventStore) validateAdminSessionCSRF(r *http.Request, session adminSessionRecord) error {
+	return s.validateAdminSessionCSRFWithCookieNames(r, session, adminauth.DefaultCookieNames())
+}
+
+func (s *wafEventStore) validateAdminSessionCSRFWithCookieNames(r *http.Request, session adminSessionRecord, cookieNames adminauth.CookieNames) error {
 	if r == nil || adminAuthSafeMethod(r.Method) {
 		return nil
 	}
-	cookie, err := r.Cookie(adminauth.CSRFCookieName)
+	cookieNames = cookieNames.Normalized()
+	cookie, err := r.Cookie(cookieNames.CSRF)
 	if err != nil || cookie == nil {
 		return adminauth.ErrCSRFRequired
 	}
@@ -706,7 +732,7 @@ func (s *wafEventStore) validateAdminSessionCSRF(r *http.Request, session adminS
 	if !secureHashEqual(adminAuthSecretHash(csrf, config.AdminSessionSecret), session.CSRFTokenHash) {
 		return adminauth.ErrCSRFMismatch
 	}
-	return adminauth.ValidateCSRF(r, adminauth.Session{ExpiresAt: session.ExpiresAt, CSRFToken: csrf})
+	return adminauth.ValidateCSRFWithCookieNames(r, adminauth.Session{ExpiresAt: session.ExpiresAt, CSRFToken: csrf}, cookieNames)
 }
 
 func (s *wafEventStore) loadAdminUserForLogin(identifier string) (adminUserRecord, bool, error) {
@@ -771,10 +797,15 @@ func adminPrincipalForUser(user adminUserRecord, kind adminauth.AuthKind, creden
 }
 
 func adminSessionTokenFromRequest(r *http.Request) (string, bool) {
+	return adminSessionTokenFromRequestWithCookieNames(r, adminauth.DefaultCookieNames())
+}
+
+func adminSessionTokenFromRequestWithCookieNames(r *http.Request, cookieNames adminauth.CookieNames) (string, bool) {
 	if r == nil {
 		return "", false
 	}
-	cookie, err := r.Cookie(adminauth.SessionCookieName)
+	cookieNames = cookieNames.Normalized()
+	cookie, err := r.Cookie(cookieNames.Session)
 	if err != nil || cookie == nil {
 		return "", false
 	}

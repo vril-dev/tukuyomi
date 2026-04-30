@@ -147,12 +147,80 @@ type RequestCountryUpdateStatus = {
   last_error?: string;
 };
 
+type EdgeModeConfig = {
+  enabled?: boolean;
+  require_device_approval?: boolean;
+  device_auth?: {
+    enabled?: boolean;
+    status_refresh_interval_sec?: number;
+  };
+};
+
+type EdgeSettingsConfig = Record<string, unknown> & {
+  edge?: EdgeModeConfig;
+};
+
+type EdgeSettingsResponse = {
+  etag?: string;
+  restart_required?: boolean;
+  config?: EdgeSettingsConfig;
+  runtime?: {
+    edge_enabled?: boolean;
+    edge_device_auth_enabled?: boolean;
+    edge_device_status_refresh_interval_sec?: number;
+  };
+};
+
+type EdgeDeviceAuthStatus = {
+  store_available?: boolean;
+  edge_enabled?: boolean;
+  device_auth_enabled?: boolean;
+  require_device_approval?: boolean;
+  proxy_locked?: boolean;
+  proxy_lock_reason?: string;
+  identity_configured?: boolean;
+  device_id?: string;
+  key_id?: string;
+  public_key_fingerprint_sha256?: string;
+  enrollment_status?: string;
+  center_url?: string;
+  center_product_id?: string;
+  center_status_checked_at_unix?: number;
+  center_status_error?: string;
+  last_enrollment_at_unix?: number;
+  last_enrollment_error?: string;
+};
+
 function runtimeDisplayName(runtime: PHPRuntimeRecord) {
   return runtime.display_name || runtime.detected_version || runtime.runtime_id;
 }
 
 function psgiRuntimeDisplayName(runtime: PSGIRuntimeRecord) {
   return runtime.display_name || runtime.detected_version || runtime.runtime_id;
+}
+
+function formatUnixTimestamp(value: number | undefined, locale: "en" | "ja") {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value * 1000);
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  return date.toLocaleString(locale === "ja" ? "ja-JP" : "en-US");
+}
+
+function edgeStatusRefreshIntervalFromConfig(config: EdgeSettingsConfig | null | undefined) {
+  const raw = config?.edge?.device_auth?.status_refresh_interval_sec;
+  return Number.isFinite(raw) && raw !== undefined && raw >= 0 ? String(Math.trunc(raw)) : "30";
+}
+
+function normalizeEdgeStatusRefreshInterval(value: string) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 30;
+  }
+  return Math.min(parsed, 3600);
 }
 
 function processActionLabel(process: PHPRuntimeProcessStatus | undefined, materialized: boolean) {
@@ -235,7 +303,7 @@ function RuntimeModuleList({ modules = [], defaultDisabledModules = [], availabi
 }
 
 export default function OptionsPanel() {
-  const { tx } = useI18n();
+  const { locale, tx } = useI18n();
   const [runtimes, setRuntimes] = useState<PHPRuntimeRecord[]>([]);
   const [materialized, setMaterialized] = useState<PHPRuntimeMaterializedStatus[]>([]);
   const [processes, setProcesses] = useState<PHPRuntimeProcessStatus[]>([]);
@@ -265,6 +333,25 @@ export default function OptionsPanel() {
   const [runtimeError, setRuntimeError] = useState("");
   const [runtimeAction, setRuntimeAction] = useState<{ runtimeID: string; action: "up" | "down" | "reload" } | null>(null);
   const [psgiAction, setPSGIAction] = useState<{ appName: string; action: "up" | "down" | "reload" } | null>(null);
+  const [edgeSettings, setEdgeSettings] = useState<EdgeSettingsConfig | null>(null);
+  const [edgeETag, setEdgeETag] = useState("");
+  const [edgeEnabled, setEdgeEnabled] = useState(false);
+  const [edgeRuntimeEnabled, setEdgeRuntimeEnabled] = useState(false);
+  const [edgeStatusRefreshIntervalSec, setEdgeStatusRefreshIntervalSec] = useState("30");
+  const [edgeSaving, setEdgeSaving] = useState(false);
+  const [edgeNotice, setEdgeNotice] = useState("");
+  const [edgeError, setEdgeError] = useState("");
+  const [edgeDeviceStatus, setEdgeDeviceStatus] = useState<EdgeDeviceAuthStatus | null>(null);
+  const [edgeEnrollForm, setEdgeEnrollForm] = useState({
+    centerURL: "",
+    enrollmentToken: "",
+    deviceID: "",
+    keyID: "default",
+  });
+  const [edgeEnrollSaving, setEdgeEnrollSaving] = useState(false);
+  const [edgeStatusRefreshSaving, setEdgeStatusRefreshSaving] = useState(false);
+  const [edgeEnrollNotice, setEdgeEnrollNotice] = useState("");
+  const [edgeEnrollError, setEdgeEnrollError] = useState("");
   const { readOnly } = useAdminRuntime();
 
   const availableRuntimeCount = useMemo(
@@ -298,26 +385,42 @@ export default function OptionsPanel() {
   }, []);
 
   const refreshRuntimeState = useCallback(async () => {
-    const [data, psgiData] = await Promise.all([
+    const [data, psgiData, edgeAuthStatus] = await Promise.all([
       apiGetJson<PHPRuntimesResponse>("/php-runtimes"),
       apiGetJson<PSGIRuntimesResponse>("/psgi-runtimes"),
+      apiGetJson<EdgeDeviceAuthStatus>("/edge/device-auth"),
     ]);
     applyRuntimeState(data, psgiData);
+    setEdgeDeviceStatus(edgeAuthStatus);
   }, [applyRuntimeState]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [data, psgiData, countryDB, countryUpdate] = await Promise.all([
+      const [data, psgiData, countryDB, countryUpdate, settings, edgeAuthStatus] = await Promise.all([
         apiGetJson<PHPRuntimesResponse>("/php-runtimes"),
         apiGetJson<PSGIRuntimesResponse>("/psgi-runtimes"),
         apiGetJson<RequestCountryDBStatus>("/request-country-db"),
         apiGetJson<RequestCountryUpdateStatus>("/request-country-update"),
+        apiGetJson<EdgeSettingsResponse>("/settings/listener-admin"),
+        apiGetJson<EdgeDeviceAuthStatus>("/edge/device-auth"),
       ]);
       applyRuntimeState(data, psgiData);
       setRequestCountryDB(countryDB);
       setRequestCountryUpdate(countryUpdate);
+      setEdgeSettings(settings.config ?? null);
+      setEdgeETag(settings.etag ?? "");
+      setEdgeEnabled(settings.config?.edge?.enabled === true);
+      setEdgeRuntimeEnabled(settings.runtime?.edge_enabled === true);
+      setEdgeStatusRefreshIntervalSec(edgeStatusRefreshIntervalFromConfig(settings.config));
+      setEdgeDeviceStatus(edgeAuthStatus);
+      setEdgeEnrollForm((current) => ({
+        centerURL: current.centerURL || edgeAuthStatus.center_url || "",
+        enrollmentToken: "",
+        deviceID: current.deviceID || edgeAuthStatus.device_id || "",
+        keyID: current.keyID || edgeAuthStatus.key_id || "default",
+      }));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -477,6 +580,114 @@ export default function OptionsPanel() {
     }
   }
 
+  async function onSaveEdgeMode() {
+    if (!edgeSettings || !edgeETag) return;
+    setEdgeSaving(true);
+    setEdgeNotice("");
+    setEdgeError("");
+    try {
+      const nextConfig: EdgeSettingsConfig = {
+        ...edgeSettings,
+        edge: {
+          ...(edgeSettings.edge ?? {}),
+          enabled: edgeEnabled,
+          require_device_approval: edgeSettings.edge?.require_device_approval !== false,
+          device_auth: {
+            enabled: edgeSettings.edge?.device_auth?.enabled !== false,
+            status_refresh_interval_sec: normalizeEdgeStatusRefreshInterval(edgeStatusRefreshIntervalSec),
+          },
+        },
+      };
+      const next = await apiPutJson<EdgeSettingsResponse>(
+        "/settings/listener-admin",
+        { config: nextConfig },
+        { headers: { "If-Match": edgeETag } },
+      );
+      setEdgeSettings(next.config ?? nextConfig);
+      setEdgeETag(next.etag ?? "");
+      setEdgeEnabled(next.config?.edge?.enabled === true);
+      setEdgeRuntimeEnabled(next.runtime?.edge_enabled === true);
+      setEdgeStatusRefreshIntervalSec(edgeStatusRefreshIntervalFromConfig(next.config ?? nextConfig));
+      setEdgeNotice(tx("IoT / Edge mode saved. Restart the process to apply the new mode and polling interval."));
+    } catch (err: unknown) {
+      setEdgeError(err instanceof Error ? err.message : String(err));
+      try {
+        const current = await apiGetJson<EdgeSettingsResponse>("/settings/listener-admin");
+        setEdgeSettings(current.config ?? null);
+        setEdgeETag(current.etag ?? "");
+        setEdgeEnabled(current.config?.edge?.enabled === true);
+        setEdgeRuntimeEnabled(current.runtime?.edge_enabled === true);
+        setEdgeStatusRefreshIntervalSec(edgeStatusRefreshIntervalFromConfig(current.config));
+      } catch {
+        //
+      }
+    } finally {
+      setEdgeSaving(false);
+    }
+  }
+
+  async function onEnrollEdgeDevice() {
+    setEdgeEnrollSaving(true);
+    setEdgeEnrollNotice("");
+    setEdgeEnrollError("");
+    try {
+      const centerURL = edgeEnrollForm.centerURL.trim();
+      const enrollmentToken = edgeEnrollForm.enrollmentToken.trim();
+      if (!centerURL) {
+        throw new Error(tx("Center URL is required."));
+      }
+      if (!enrollmentToken) {
+        throw new Error(tx("Enrollment token is required."));
+      }
+      const next = await apiPostJson<EdgeDeviceAuthStatus>("/edge/device-auth/enroll", {
+        center_url: centerURL,
+        enrollment_token: enrollmentToken,
+        device_id: edgeEnrollForm.deviceID.trim(),
+        key_id: edgeEnrollForm.keyID.trim(),
+      });
+      setEdgeDeviceStatus(next);
+      setEdgeEnrollForm((current) => ({
+        ...current,
+        centerURL: next.center_url || centerURL,
+        enrollmentToken: "",
+        deviceID: next.device_id || current.deviceID,
+        keyID: next.key_id || current.keyID || "default",
+      }));
+      setEdgeEnrollNotice(tx("Center enrollment request sent. Approve the pending device in Center."));
+    } catch (err: unknown) {
+      setEdgeEnrollError(getErrorMessage(err, tx("Center enrollment request failed.")));
+      try {
+        const current = await apiGetJson<EdgeDeviceAuthStatus>("/edge/device-auth");
+        setEdgeDeviceStatus(current);
+      } catch {
+        //
+      }
+    } finally {
+      setEdgeEnrollSaving(false);
+    }
+  }
+
+  async function onRefreshEdgeDeviceStatus() {
+    setEdgeStatusRefreshSaving(true);
+    setEdgeEnrollNotice("");
+    setEdgeEnrollError("");
+    try {
+      const next = await apiPostJson<EdgeDeviceAuthStatus>("/edge/device-auth/refresh", {});
+      setEdgeDeviceStatus(next);
+      setEdgeEnrollNotice(tx("Center device status refreshed."));
+    } catch (err: unknown) {
+      setEdgeEnrollError(getErrorMessage(err, tx("Center device status refresh failed.")));
+      try {
+        const current = await apiGetJson<EdgeDeviceAuthStatus>("/edge/device-auth");
+        setEdgeDeviceStatus(current);
+      } catch {
+        //
+      }
+    } finally {
+      setEdgeStatusRefreshSaving(false);
+    }
+  }
+
   async function onRuntimeAction(runtimeID: string, action: "up" | "down" | "reload") {
     setRuntimeAction({ runtimeID, action });
     setRuntimeNotice("");
@@ -549,6 +760,14 @@ export default function OptionsPanel() {
     return <div className="w-full p-4 text-neutral-500">{tx("Loading options...")}</div>;
   }
 
+  const edgeEnrollmentStatus = (edgeDeviceStatus?.enrollment_status || "").toLowerCase();
+  const edgeReapprovalStatuses = new Set(["revoked", "archived", "failed", "product_changed"]);
+  const edgeRequestableStatuses = new Set(["", "unconfigured", "local", "failed", "revoked", "archived", "product_changed"]);
+  const edgeNeedsReapproval = edgeDeviceStatus?.identity_configured === true && edgeReapprovalStatuses.has(edgeEnrollmentStatus);
+  const edgeCanRequestApproval =
+    edgeDeviceStatus?.identity_configured === true ? edgeRequestableStatuses.has(edgeEnrollmentStatus) : edgeDeviceStatus?.identity_configured !== undefined;
+  const edgeEnrollButtonText = edgeNeedsReapproval ? tx("Request re-approval") : tx("Request Center approval");
+
   return (
     <div className="w-full p-4 space-y-4">
       <header className="flex items-center justify-between gap-3">
@@ -557,6 +776,233 @@ export default function OptionsPanel() {
           <p className="text-xs text-neutral-500">{tx("Review built runtime inventory, module baselines, readiness, and process state from one place.")}</p>
         </div>
       </header>
+
+      <div className="rounded-xl border border-neutral-200 p-4 space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">{tx("IoT / Edge Mode")}</h2>
+            <p className="text-xs text-neutral-500">
+              {tx("Use this parent switch only for IoT deployments. Web/VPS deployments should leave edge mode off.")}
+            </p>
+          </div>
+          <span className={`rounded px-2 py-1 text-xs ${edgeRuntimeEnabled ? "bg-green-100 text-green-800" : "bg-neutral-100 text-neutral-700"}`}>
+            {edgeRuntimeEnabled ? tx("IoT ON") : tx("IoT OFF")}
+          </span>
+        </div>
+        <div className="grid gap-3 md:grid-cols-[minmax(220px,260px)_minmax(220px,260px)_auto]">
+          <div className="grid grid-rows-[16px_36px_16px] gap-1">
+            <span aria-hidden="true" />
+            <label className="flex h-9 items-center gap-2 rounded border border-neutral-200 bg-white px-3 text-xs text-neutral-700">
+              <input
+                type="checkbox"
+                checked={edgeEnabled}
+                onChange={(e) => setEdgeEnabled(e.target.checked)}
+                disabled={readOnly || edgeSaving || !edgeSettings || !edgeETag}
+              />
+              {tx("Enable IoT / Edge mode")}
+            </label>
+            <span aria-hidden="true" />
+          </div>
+          <label className="grid grid-rows-[16px_36px_16px] gap-1 text-xs">
+            <span className="text-xs font-semibold leading-4">{tx("Center status poll interval seconds")}</span>
+            <input
+              className="h-9"
+              type="number"
+              min={0}
+              max={3600}
+              value={edgeStatusRefreshIntervalSec}
+              onChange={(e) => setEdgeStatusRefreshIntervalSec(e.target.value)}
+              disabled={readOnly || edgeSaving || !edgeSettings || !edgeETag}
+            />
+            <span className="text-xs leading-4 text-neutral-500">{tx("0 disables automatic Center status polling.")}</span>
+          </label>
+          <div className="grid grid-rows-[16px_36px_16px] gap-1 md:w-28">
+            <span aria-hidden="true" />
+            <button
+              className="h-9"
+              type="button"
+              onClick={() => void onSaveEdgeMode()}
+              disabled={
+                readOnly ||
+                edgeSaving ||
+                !edgeSettings ||
+                !edgeETag ||
+                (edgeEnabled === (edgeSettings.edge?.enabled === true) &&
+                  normalizeEdgeStatusRefreshInterval(edgeStatusRefreshIntervalSec) ===
+                    normalizeEdgeStatusRefreshInterval(edgeStatusRefreshIntervalFromConfig(edgeSettings)))
+              }
+            >
+              {edgeSaving ? tx("Working...") : tx("Save mode")}
+            </button>
+            <span aria-hidden="true" />
+          </div>
+        </div>
+        <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          {tx("Saving updates DB app_config. Restart tukuyomi before relying on the menu IoT state or request-path edge controls.")}
+        </div>
+        {edgeNotice ? <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900">{edgeNotice}</div> : null}
+        {edgeError ? <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">{edgeError}</div> : null}
+
+        <div className="border-t border-neutral-200 pt-4 space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold">{tx("Center Enrollment")}</h3>
+              <p className="text-xs text-neutral-500">
+                {tx("Request Center approval for this Gateway. The enrollment token is sent once and is not stored locally.")}
+              </p>
+              {edgeNeedsReapproval ? (
+                <p className="mt-1 text-xs text-amber-800">
+                {tx("This Gateway is no longer approved. Enter a new enrollment token to request re-approval with the same device identity.")}
+                </p>
+              ) : null}
+              {edgeEnrollmentStatus === "approved" ? (
+                <p className="mt-1 text-xs text-green-800">{tx("This Gateway is approved. New enrollment requests are disabled until Center removes approval.")}</p>
+              ) : null}
+              {edgeEnrollmentStatus === "pending" ? (
+                <p className="mt-1 text-xs text-amber-800">{tx("Approval is pending in Center. Use Check Center status after approving it.")}</p>
+              ) : null}
+            </div>
+            <span
+              className={`rounded px-2 py-1 text-xs ${
+                edgeDeviceStatus?.proxy_locked
+                  ? "bg-red-100 text-red-800"
+                  : edgeDeviceStatus?.identity_configured
+                    ? "bg-green-100 text-green-800"
+                    : "bg-neutral-100 text-neutral-700"
+              }`}
+            >
+              {edgeDeviceStatus?.proxy_locked ? tx("Proxy locked") : edgeDeviceStatus?.identity_configured ? tx("Identity ready") : tx("No identity")}
+            </span>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-4 text-xs">
+            <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2">
+              <div className="text-xs text-neutral-500">{tx("Runtime")}</div>
+              <div>{edgeDeviceStatus?.edge_enabled && edgeDeviceStatus?.device_auth_enabled ? tx("enabled") : tx("disabled")}</div>
+            </div>
+            <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2">
+              <div className="text-xs text-neutral-500">{tx("Proxy")}</div>
+              <div>{edgeDeviceStatus?.proxy_locked ? tx("locked") : tx("available")}</div>
+            </div>
+            <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2">
+              <div className="text-xs text-neutral-500">{tx("Enrollment status")}</div>
+              <div>{edgeDeviceStatus?.enrollment_status || "-"}</div>
+            </div>
+            <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2">
+              <div className="text-xs text-neutral-500">{tx("DB store")}</div>
+              <div>{edgeDeviceStatus?.store_available ? tx("available") : tx("unavailable")}</div>
+            </div>
+            <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2">
+              <div className="text-xs text-neutral-500">{tx("Last request")}</div>
+              <div>{formatUnixTimestamp(edgeDeviceStatus?.last_enrollment_at_unix, locale)}</div>
+            </div>
+            <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2">
+              <div className="text-xs text-neutral-500">{tx("Last Center check")}</div>
+              <div>{formatUnixTimestamp(edgeDeviceStatus?.center_status_checked_at_unix, locale)}</div>
+            </div>
+            <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 md:col-span-2">
+              <div className="text-xs text-neutral-500">{tx("Product ID")}</div>
+              <div className="break-all">{edgeDeviceStatus?.center_product_id || "-"}</div>
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2 text-xs">
+            <label className="grid gap-1">
+              <span className="text-xs font-semibold">{tx("Center URL")}</span>
+              <input
+                value={edgeEnrollForm.centerURL}
+                onChange={(e) => setEdgeEnrollForm((current) => ({ ...current, centerURL: e.target.value }))}
+                placeholder="https://center.example.com"
+                disabled={readOnly || edgeEnrollSaving || !edgeCanRequestApproval}
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-xs font-semibold">{tx("Enrollment token")}</span>
+              <input
+                type="password"
+                value={edgeEnrollForm.enrollmentToken}
+                onChange={(e) => setEdgeEnrollForm((current) => ({ ...current, enrollmentToken: e.target.value }))}
+                placeholder={tx("one-time token")}
+                autoComplete="off"
+                disabled={readOnly || edgeEnrollSaving || !edgeCanRequestApproval}
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-xs font-semibold">{tx("Device ID")}</span>
+              <input
+                value={edgeEnrollForm.deviceID}
+                onChange={(e) => setEdgeEnrollForm((current) => ({ ...current, deviceID: e.target.value }))}
+                placeholder={tx("auto generated")}
+                disabled={readOnly || edgeEnrollSaving || edgeDeviceStatus?.identity_configured}
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-xs font-semibold">{tx("Key ID")}</span>
+              <input
+                value={edgeEnrollForm.keyID}
+                onChange={(e) => setEdgeEnrollForm((current) => ({ ...current, keyID: e.target.value }))}
+                placeholder="default"
+                disabled={readOnly || edgeEnrollSaving || edgeDeviceStatus?.identity_configured}
+              />
+            </label>
+          </div>
+
+          {edgeDeviceStatus?.device_id || edgeDeviceStatus?.public_key_fingerprint_sha256 ? (
+            <div className="grid gap-3 md:grid-cols-2 text-xs">
+              <div>
+                <div className="text-xs text-neutral-500">{tx("Device ID")}</div>
+                <code className="break-all">{edgeDeviceStatus.device_id || "-"}</code>
+              </div>
+              <div>
+                <div className="text-xs text-neutral-500">{tx("Public key fingerprint")}</div>
+                <code className="break-all">{edgeDeviceStatus.public_key_fingerprint_sha256 || "-"}</code>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void onEnrollEdgeDevice()}
+              disabled={
+                readOnly ||
+                edgeEnrollSaving ||
+                edgeStatusRefreshSaving ||
+                !edgeCanRequestApproval ||
+                !edgeDeviceStatus?.store_available ||
+                !edgeDeviceStatus?.edge_enabled ||
+                !edgeDeviceStatus?.device_auth_enabled
+              }
+            >
+              {edgeEnrollSaving ? tx("Working...") : edgeEnrollButtonText}
+            </button>
+            <button
+              type="button"
+              onClick={() => void onRefreshEdgeDeviceStatus()}
+              disabled={
+                readOnly ||
+                edgeEnrollSaving ||
+                edgeStatusRefreshSaving ||
+                !edgeDeviceStatus?.store_available ||
+                !edgeDeviceStatus?.edge_enabled ||
+                !edgeDeviceStatus?.device_auth_enabled ||
+                !edgeDeviceStatus?.identity_configured
+              }
+            >
+              {edgeStatusRefreshSaving ? tx("Working...") : tx("Check Center status")}
+            </button>
+            {edgeDeviceStatus?.edge_enabled && edgeDeviceStatus?.device_auth_enabled ? null : (
+              <span className="text-xs text-neutral-500">{tx("Enable IoT / Edge mode and restart before requesting Center approval.")}</span>
+            )}
+          </div>
+          {edgeEnrollNotice ? <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900">{edgeEnrollNotice}</div> : null}
+          {edgeEnrollError || edgeDeviceStatus?.last_enrollment_error || edgeDeviceStatus?.center_status_error ? (
+            <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">
+              {edgeEnrollError || edgeDeviceStatus?.last_enrollment_error || edgeDeviceStatus?.center_status_error}
+            </div>
+          ) : null}
+        </div>
+      </div>
 
       <div className="rounded-xl border border-neutral-200 p-4 space-y-4">
         <div>

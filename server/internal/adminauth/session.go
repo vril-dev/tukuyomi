@@ -9,10 +9,12 @@ import (
 )
 
 const (
-	SessionCookieName = "tukuyomi_admin_session"
-	CSRFCookieName    = "tukuyomi_admin_csrf"
-	CSRFHeaderName    = "X-CSRF-Token"
-	cookiePath        = "/"
+	SessionCookieName       = "tukuyomi_admin_session"
+	CSRFCookieName          = "tukuyomi_admin_csrf"
+	CenterSessionCookieName = "tukuyomi_center_session"
+	CenterCSRFCookieName    = "tukuyomi_center_csrf"
+	CSRFHeaderName          = "X-CSRF-Token"
+	cookiePath              = "/"
 )
 
 var (
@@ -25,17 +27,53 @@ type Session struct {
 	CSRFToken string
 }
 
+type CookieNames struct {
+	Session string
+	CSRF    string
+}
+
+func DefaultCookieNames() CookieNames {
+	return CookieNames{
+		Session: SessionCookieName,
+		CSRF:    CSRFCookieName,
+	}
+}
+
+func CenterCookieNames() CookieNames {
+	return CookieNames{
+		Session: CenterSessionCookieName,
+		CSRF:    CenterCSRFCookieName,
+	}
+}
+
+func (names CookieNames) Normalized() CookieNames {
+	names.Session = strings.TrimSpace(names.Session)
+	names.CSRF = strings.TrimSpace(names.CSRF)
+	if names.Session == "" {
+		names.Session = SessionCookieName
+	}
+	if names.CSRF == "" {
+		names.CSRF = CSRFCookieName
+	}
+	return names
+}
+
 func ValidateCSRF(r *http.Request, session Session) error {
+	return ValidateCSRFWithCookieNames(r, session, DefaultCookieNames())
+}
+
+func ValidateCSRFWithCookieNames(r *http.Request, session Session, names CookieNames) error {
 	if r == nil || isSafeMethod(r.Method) {
 		return nil
 	}
+	names = names.Normalized()
 
 	headerToken := strings.TrimSpace(r.Header.Get(CSRFHeaderName))
 	if headerToken == "" {
 		return ErrCSRFRequired
 	}
 
-	cookie, err := r.Cookie(CSRFCookieName)
+	cookie, err := r.Cookie(names.CSRF)
 	if err != nil || strings.TrimSpace(cookie.Value) == "" {
 		return ErrCSRFRequired
 	}
@@ -49,12 +87,17 @@ func ValidateCSRF(r *http.Request, session Session) error {
 }
 
 func SetCookies(w http.ResponseWriter, sessionToken, csrfToken string, expiresAt time.Time, secure bool) {
+	SetCookiesWithNames(w, DefaultCookieNames(), sessionToken, csrfToken, expiresAt, secure)
+}
+
+func SetCookiesWithNames(w http.ResponseWriter, names CookieNames, sessionToken, csrfToken string, expiresAt time.Time, secure bool) {
 	if w == nil {
 		return
 	}
+	names = names.Normalized()
 
 	http.SetCookie(w, &http.Cookie{
-		Name:     SessionCookieName,
+		Name:     names.Session,
 		Value:    sessionToken,
 		Path:     cookiePath,
 		HttpOnly: true,
@@ -64,7 +107,7 @@ func SetCookies(w http.ResponseWriter, sessionToken, csrfToken string, expiresAt
 		MaxAge:   int(time.Until(expiresAt.UTC()).Seconds()),
 	})
 	http.SetCookie(w, &http.Cookie{
-		Name:     CSRFCookieName,
+		Name:     names.CSRF,
 		Value:    csrfToken,
 		Path:     cookiePath,
 		HttpOnly: false,
@@ -76,16 +119,21 @@ func SetCookies(w http.ResponseWriter, sessionToken, csrfToken string, expiresAt
 }
 
 func ClearCookies(w http.ResponseWriter, secure bool) {
+	ClearCookiesWithNames(w, DefaultCookieNames(), secure)
+}
+
+func ClearCookiesWithNames(w http.ResponseWriter, names CookieNames, secure bool) {
 	if w == nil {
 		return
 	}
+	names = names.Normalized()
 
-	for _, name := range []string{SessionCookieName, CSRFCookieName} {
+	for _, name := range []string{names.Session, names.CSRF} {
 		http.SetCookie(w, &http.Cookie{
 			Name:     name,
 			Value:    "",
 			Path:     cookiePath,
-			HttpOnly: name == SessionCookieName,
+			HttpOnly: name == names.Session,
 			Secure:   secure,
 			SameSite: http.SameSiteLaxMode,
 			MaxAge:   -1,

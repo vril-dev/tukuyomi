@@ -28,6 +28,7 @@ import (
 
 	"tukuyomi/internal/buildinfo"
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/edgeconfigsnapshot"
 )
 
 const (
@@ -569,6 +570,129 @@ func centerDeviceConfigSnapshotURL(centerBaseURL string) (string, error) {
 	return u.String(), nil
 }
 
+type edgeConfigSnapshotRuleAsset struct {
+	Path      string `json:"path"`
+	Kind      string `json:"kind"`
+	ETag      string `json:"etag"`
+	Disabled  bool   `json:"disabled"`
+	SizeBytes int    `json:"size_bytes"`
+}
+
+func buildEdgeConfigSnapshot(identity edgeDeviceIdentityRecord) (edgeconfigsnapshot.Build, error) {
+	builder := edgeconfigsnapshot.New(identity.DeviceID, identity.KeyID, buildinfo.Version, goruntime.Version())
+	addGatewayConfigSnapshotDomains(builder)
+	return builder.Build()
+}
+
+func addGatewayConfigSnapshotDomains(builder *edgeconfigsnapshot.Builder) {
+	if builder == nil {
+		return
+	}
+
+	if raw, etag, _, err := loadAppConfigStorage(false); err == nil {
+		redacted, paths, redactErr := edgeconfigsnapshot.RedactAppConfigRaw(raw)
+		if redactErr != nil {
+			builder.AddDomainError(appConfigDomain, redactErr)
+		} else {
+			builder.AddRedactedPaths(paths...)
+			builder.AddRawDomain(appConfigDomain, etag, redacted)
+		}
+	} else {
+		builder.AddDomainError(appConfigDomain, err)
+	}
+
+	proxyRaw, proxyETag, proxyCfg, _, _ := ProxyRulesSnapshot()
+	if strings.TrimSpace(proxyRaw) == "" {
+		proxyRaw = mustJSON(normalizeProxyRulesConfig(proxyCfg))
+	}
+	builder.AddRawDomain(proxyConfigDomain, proxyETag, []byte(proxyRaw))
+
+	siteRaw, siteETag, _, _, _ := SiteConfigSnapshot()
+	builder.AddRawDomain(siteConfigDomain, siteETag, []byte(siteRaw))
+
+	vhostRaw, vhostETag, _, _ := VhostConfigSnapshot()
+	builder.AddRawDomain(vhostConfigDomain, vhostETag, []byte(vhostRaw))
+
+	phpRaw, phpETag, _, _ := PHPRuntimeInventorySnapshot()
+	builder.AddRawDomain(phpRuntimeInventoryConfigDomain, phpETag, []byte(phpRaw))
+
+	psgiRaw, psgiETag, _, _ := PSGIRuntimeInventorySnapshot()
+	builder.AddRawDomain(psgiRuntimeInventoryConfigDomain, psgiETag, []byte(psgiRaw))
+
+	taskRaw, taskETag, _, _, _ := ScheduledTaskConfigSnapshot()
+	builder.AddRawDomain(scheduledTaskConfigDomain, taskETag, []byte(taskRaw))
+
+	cacheRaw, cacheETag, cacheCfg, _ := ResponseCacheSnapshot()
+	if strings.TrimSpace(cacheRaw) == "" {
+		cacheRaw = mustJSON(cacheCfg)
+	}
+	builder.AddRawDomain(responseCacheConfigBlobKey, cacheETag, []byte(cacheRaw))
+
+	if raw, etag, _, err := snapshotUpstreamRuntimeFile(proxyCfg); err == nil {
+		builder.AddRawDomain(upstreamRuntimeConfigDomain, etag, []byte(raw))
+	} else {
+		builder.AddDomainError(upstreamRuntimeConfigDomain, err)
+	}
+
+	store := getLogsStatsStore()
+	if store == nil {
+		builder.AddWarning("config DB store is not initialized")
+		return
+	}
+	for _, spec := range []policyJSONConfigSpec{
+		{Domain: cacheConfigBlobKey},
+		{Domain: bypassConfigBlobKey},
+		{Domain: countryBlockConfigBlobKey},
+		{Domain: rateLimitConfigBlobKey},
+		{Domain: botDefenseConfigBlobKey},
+		{Domain: semanticConfigBlobKey},
+		{Domain: notificationConfigBlobKey},
+		{Domain: ipReputationConfigBlobKey},
+	} {
+		raw, rec, found, err := store.loadActivePolicyJSONConfig(spec)
+		if err != nil {
+			builder.AddDomainError(spec.Domain, err)
+			continue
+		}
+		if found {
+			builder.AddRawDomain(spec.Domain, rec.ETag, raw)
+		}
+	}
+	if names, rec, found, err := store.loadActiveCRSDisabledConfig(); err != nil {
+		builder.AddDomainError(crsDisabledConfigDomain, err)
+	} else if found {
+		builder.AddValueDomain(crsDisabledConfigDomain, rec.ETag, map[string]any{"disabled_rules": names})
+	}
+	if rules, rec, found, err := store.loadActiveManagedOverrideRules(); err != nil {
+		builder.AddDomainError(overrideRulesConfigDomain, err)
+	} else if found {
+		out := make([]map[string]any, 0, len(rules))
+		for _, rule := range rules {
+			out = append(out, map[string]any{
+				"name": rule.Name,
+				"etag": rule.ETag,
+				"raw":  string(rule.Raw),
+			})
+		}
+		builder.AddValueDomain(overrideRulesConfigDomain, rec.ETag, out)
+	}
+	if assets, rec, found, err := store.loadActiveWAFRuleAssets(); err != nil {
+		builder.AddDomainError(wafRuleAssetsConfigDomain, err)
+	} else if found {
+		out := make([]edgeConfigSnapshotRuleAsset, 0, len(assets))
+		for _, asset := range assets {
+			out = append(out, edgeConfigSnapshotRuleAsset{
+				Path:      asset.Path,
+				Kind:      asset.Kind,
+				ETag:      asset.ETag,
+				Disabled:  asset.Disabled,
+				SizeBytes: len(asset.Raw),
+			})
+		}
+		builder.AddValueDomain(wafRuleAssetsConfigDomain, rec.ETag, out)
+	}
+}
+
 func loadEdgeDeviceIdentity(store *wafEventStore) (edgeDeviceIdentityRecord, bool, error) {
 	if store == nil {
 		return edgeDeviceIdentityRecord{}, false, nil
@@ -834,7 +958,7 @@ func signedEdgeDeviceStatusRequest(identity edgeDeviceIdentityRecord) (edgeDevic
 	return req, nil
 }
 
-func signedEdgeDeviceConfigSnapshotRequest(identity edgeDeviceIdentityRecord, snapshot edgeConfigSnapshotBuild) (edgeDeviceConfigSnapshotWireRequest, error) {
+func signedEdgeDeviceConfigSnapshotRequest(identity edgeDeviceIdentityRecord, snapshot edgeconfigsnapshot.Build) (edgeDeviceConfigSnapshotWireRequest, error) {
 	privateKey, _, err := parseEdgeDevicePrivateKey(identity.PrivateKeyPEM)
 	if err != nil {
 		return edgeDeviceConfigSnapshotWireRequest{}, err

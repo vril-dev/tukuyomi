@@ -1,4 +1,4 @@
-package handler
+package edgeconfigsnapshot
 
 import (
 	"encoding/json"
@@ -6,32 +6,32 @@ import (
 	"testing"
 )
 
-func TestEdgeConfigSnapshotRevisionIgnoresGeneratedFields(t *testing.T) {
-	base := edgeConfigSnapshotPayload{
-		SchemaVersion:  edgeConfigSnapshotSchemaVersion,
+func TestRevisionIgnoresGeneratedFields(t *testing.T) {
+	base := Payload{
+		SchemaVersion:  SchemaVersion,
 		ConfigRevision: "old",
 		GeneratedAt:    "2026-04-30T00:00:00Z",
 		DeviceID:       "edge-1",
 		KeyID:          "default",
-		Domains: map[string]edgeConfigSnapshotDomain{
+		Domains: map[string]Domain{
 			"proxy": {ETag: "etag-a", Raw: json.RawMessage(`{"routes":[]}`)},
 		},
 	}
-	rev1, err := edgeConfigSnapshotRevision(base)
+	rev1, err := Revision(base)
 	if err != nil {
 		t.Fatalf("revision 1: %v", err)
 	}
 	base.ConfigRevision = "new"
 	base.GeneratedAt = "2026-04-30T00:01:00Z"
-	rev2, err := edgeConfigSnapshotRevision(base)
+	rev2, err := Revision(base)
 	if err != nil {
 		t.Fatalf("revision 2: %v", err)
 	}
 	if rev1 != rev2 {
 		t.Fatalf("revision changed for generated fields: %q != %q", rev1, rev2)
 	}
-	base.Domains["proxy"] = edgeConfigSnapshotDomain{ETag: "etag-b", Raw: json.RawMessage(`{"routes":[{"id":"changed"}]}`)}
-	rev3, err := edgeConfigSnapshotRevision(base)
+	base.Domains["proxy"] = Domain{ETag: "etag-b", Raw: json.RawMessage(`{"routes":[{"id":"changed"}]}`)}
+	rev3, err := Revision(base)
 	if err != nil {
 		t.Fatalf("revision 3: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestEdgeConfigSnapshotRevisionIgnoresGeneratedFields(t *testing.T) {
 	}
 }
 
-func TestRedactAppConfigSnapshotRaw(t *testing.T) {
+func TestRedactAppConfigRaw(t *testing.T) {
 	raw := `{
 		"admin":{"session_secret":"secret"},
 		"security_audit":{"encryption_key":"enc","hmac_key":"hmac"},
@@ -48,7 +48,7 @@ func TestRedactAppConfigSnapshotRaw(t *testing.T) {
 		"storage":{"db_dsn":"db"},
 		"keep":"value"
 	}`
-	redacted, paths, err := redactAppConfigSnapshotRaw(raw)
+	redacted, paths, err := RedactAppConfigRaw(raw)
 	if err != nil {
 		t.Fatalf("redact: %v", err)
 	}

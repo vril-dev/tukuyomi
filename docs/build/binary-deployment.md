@@ -20,6 +20,12 @@ make build
 
 This produces `bin/tukuyomi`.
 
+Gateway and Center UI builds require Node.js 22.12+ and npm 10+. The Makefile
+uses `tools/npm-node22.sh` by default, so build targets use a local Node 22/npm
+10 runtime when available and otherwise fall back to Docker image
+`node:22-alpine`. Set `NPM=/path/to/npm` only when you intentionally want to
+override that wrapper.
+
 If you only need the Go binary and already refreshed the embedded Gateway and Center UI, use:
 
 ```bash

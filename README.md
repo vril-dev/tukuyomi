@@ -25,13 +25,14 @@ It is designed for operators who want one product to cover:
 
 ## IoT / Edge Device Enrollment
 
-The Gateway now includes an optional IoT / Edge mode for deployments that need a
-local device identity approved by a Tukuyomi Center. The current implementation
-covers the enrollment workflow: Center issues an enrollment token, Gateway
-generates an Ed25519 device identity and sends a signed enrollment request, and
-Center records the request for operator approval. In IoT / Edge mode, public
-proxy traffic stays locked until the Gateway refreshes an `approved` Center
-device status.
+The Gateway includes an optional IoT / Edge mode for deployments that need a
+local device identity approved by a Tukuyomi Center. Center issues an enrollment
+token, Gateway generates an Ed25519 device identity and sends a signed
+enrollment request, and Center records the request for operator approval. In IoT
+/ Edge mode, public proxy traffic stays locked until the Gateway refreshes an
+`approved` Center device status. After approval, Gateway also publishes a signed
+redacted configuration snapshot to Center on the next status refresh whenever
+the snapshot revision changes.
 
 Web/VPS deployments should leave IoT / Edge mode off. For the operator flow,
 preview URL caveats, and public key fingerprint format, see

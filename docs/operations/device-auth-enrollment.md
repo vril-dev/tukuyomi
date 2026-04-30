@@ -6,8 +6,9 @@ This document covers the current Tukuyomi Gateway to Tukuyomi Center device
 enrollment workflow.
 
 The current implementation registers a Gateway-owned device identity with
-Center approval. It does not mean every Web/VPS deployment should enable IoT /
-Edge mode; leave it off unless the deployment needs edge/device-oriented
+Center approval and lets the Gateway publish a signed configuration snapshot to
+Center after approval. It does not mean every Web/VPS deployment should enable
+IoT / Edge mode; leave it off unless the deployment needs edge/device-oriented
 controls.
 
 ## Roles
@@ -141,6 +142,29 @@ the first interval before its initial Center status check.
 
 Use a short interval for interactive approval/revocation workflows. Use a longer
 interval if many Gateways report to one Center.
+
+## Configuration Snapshot Sync
+
+When the refreshed Center status is `approved`, Gateway builds a bounded,
+redacted JSON snapshot of the current Gateway configuration and sends it to
+Center over the same signed device channel. The snapshot is pushed only when its
+revision changes.
+
+This sync is deliberately outside the proxy hot path:
+
+- Gateway does not call Center per request.
+- The proxy request path reads only the local cached approval state.
+- Snapshot push runs during the Center status refresh path after approval.
+- A failed snapshot push records an error in Gateway device-auth status, but it
+does not bypass device approval or unlock proxy traffic.
+
+Center stores the latest snapshot per registered device. Operators can download
+it from Center `Device Approvals > Registered devices > Manage > Config
+download` when the device has published a snapshot.
+
+The snapshot payload is capped at 2 MiB. It includes runtime/config domains that
+are useful for fleet inspection and avoids storing enrollment tokens or local
+device private keys.
 
 ## Troubleshooting
 

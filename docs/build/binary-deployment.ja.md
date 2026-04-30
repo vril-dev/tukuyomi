@@ -20,6 +20,11 @@ make build
 
 生成物は `bin/tukuyomi` です。
 
+Gateway / Center UI build は Node.js 22.12+ と npm 10+ が必要です。Makefile は
+既定で `tools/npm-node22.sh` を使うため、local に Node 22/npm 10 があればそれを使い、
+無ければ Docker image `node:22-alpine` に fallback します。この wrapper を意図的に
+差し替える場合だけ `NPM=/path/to/npm` を指定してください。
+
 埋め込み Gateway / Center UI をすでに更新済みで、Go バイナリだけ欲しい場合は:
 
 ```bash

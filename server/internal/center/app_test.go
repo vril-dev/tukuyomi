@@ -391,6 +391,22 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 		t.Fatalf("approved status body=%s", approvedStatus.Body.String())
 	}
 
+	configRevision := strings.Repeat("a", 64)
+	configSnapshotReq := signedDeviceConfigSnapshotForTest(t, enrollmentFixture, "nonce-config-approved", time.Now().UTC(), configRevision, []byte(`{"schema_version":1,"domains":{"proxy":{"etag":"test","raw":{"routes":[]}}}}`))
+	configSnapshotBody, err := json.Marshal(configSnapshotReq)
+	if err != nil {
+		t.Fatalf("marshal config snapshot: %v", err)
+	}
+	configSnapshot := performRequest(engine, http.MethodPost, "/v1/device-config-snapshot", string(configSnapshotBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if configSnapshot.Code != http.StatusOK {
+		t.Fatalf("config snapshot code=%d body=%s", configSnapshot.Code, configSnapshot.Body.String())
+	}
+	if !strings.Contains(configSnapshot.Body.String(), `"config_revision":"`+configRevision+`"`) {
+		t.Fatalf("config snapshot response missing revision: %s", configSnapshot.Body.String())
+	}
+
 	after := performRequestWithCookies(engine, http.MethodGet, "/center-api/status", "", nil, cookies)
 	if after.Code != http.StatusOK {
 		t.Fatalf("status after code=%d body=%s", after.Code, after.Body.String())
@@ -411,6 +427,17 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 		!strings.Contains(devices.Body.String(), `"build_version":"v1.2.0-test"`) ||
 		!strings.Contains(devices.Body.String(), `"go_version":"go1.26.2-test"`) {
 		t.Fatalf("approved device missing runtime inventory: %s", devices.Body.String())
+	}
+	if !strings.Contains(devices.Body.String(), `"config_snapshot_revision":"`+configRevision+`"`) ||
+		!strings.Contains(devices.Body.String(), `"config_snapshot_bytes":`) {
+		t.Fatalf("approved device missing config snapshot metadata: %s", devices.Body.String())
+	}
+	download := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/edge-device-1/config-snapshot", "", nil, cookies)
+	if download.Code != http.StatusOK {
+		t.Fatalf("config snapshot download code=%d body=%s", download.Code, download.Body.String())
+	}
+	if !strings.Contains(download.Body.String(), `"schema_version":1`) || !strings.Contains(download.Header().Get("Content-Disposition"), "edge-device-1-config-aaaaaaaaaaaa.json") {
+		t.Fatalf("config snapshot download unexpected: disposition=%q body=%s", download.Header().Get("Content-Disposition"), download.Body.String())
 	}
 
 	revokeApprovedToken := performRequestWithCookies(engine, http.MethodPost, "/center-api/enrollment-tokens/"+strconv.FormatInt(createdToken.Record.TokenID, 10)+"/revoke", "", map[string]string{
@@ -869,6 +896,24 @@ func signedDeviceStatusForTest(t *testing.T, fixture signedEnrollmentFixture, no
 		GoVersion:                  "go1.26.2-test",
 	}
 	req.BodyHash = deviceStatusBodyHash(req)
+	req.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(fixture.PrivateKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash))))
+	return req
+}
+
+func signedDeviceConfigSnapshotForTest(t *testing.T, fixture signedEnrollmentFixture, nonce string, ts time.Time, revision string, payload []byte) DeviceConfigSnapshotRequest {
+	t.Helper()
+	sum := sha256.Sum256(payload)
+	req := DeviceConfigSnapshotRequest{
+		DeviceID:                   fixture.Request.DeviceID,
+		KeyID:                      fixture.Request.KeyID,
+		PublicKeyFingerprintSHA256: fixture.Fingerprint,
+		Timestamp:                  ts.UTC().Format(time.RFC3339Nano),
+		Nonce:                      nonce,
+		ConfigRevision:             revision,
+		PayloadHash:                hex.EncodeToString(sum[:]),
+		Snapshot:                   append(json.RawMessage(nil), payload...),
+	}
+	req.BodyHash = deviceConfigSnapshotBodyHash(req)
 	req.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(fixture.PrivateKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash))))
 	return req
 }

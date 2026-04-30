@@ -28,12 +28,14 @@ type enrollmentTokenCreateRequest struct {
 func registerDeviceEnrollmentRoutes(r *gin.Engine) {
 	r.POST("/v1/enroll", postDeviceEnrollment)
 	r.POST("/v1/device-status", postDeviceStatus)
+	r.POST("/v1/device-config-snapshot", postDeviceConfigSnapshot)
 }
 
 func registerCenterDeviceAdminRoutes(api *gin.RouterGroup) {
 	api.GET("/devices", getCenterDevices)
 	api.POST("/devices/:device_id/revoke", postCenterDeviceRevoke)
 	api.POST("/devices/:device_id/archive", postCenterDeviceArchive)
+	api.GET("/devices/:device_id/config-snapshot", getCenterDeviceConfigSnapshot)
 	api.GET("/devices/enrollments", getCenterDeviceEnrollments)
 	api.POST("/devices/enrollments/:enrollment_id/approve", postCenterDeviceEnrollmentApprove)
 	api.POST("/devices/enrollments/:enrollment_id/reject", postCenterDeviceEnrollmentReject)
@@ -149,6 +151,73 @@ func postDeviceStatus(c *gin.Context) {
 	})
 }
 
+func postDeviceConfigSnapshot(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxDeviceConfigSnapshotBodyBytes)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req DeviceConfigSnapshotRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid config snapshot payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid config snapshot payload"})
+		return
+	}
+	normalizedReq, _, _, err := normalizeDeviceConfigSnapshotRequest(req, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	req = normalizedReq
+	record, err := LookupDeviceStatus(c.Request.Context(), req.DeviceID, req.KeyID, req.PublicKeyFingerprintSHA256)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrDeviceStatusNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "device status not found"})
+		case errors.Is(err, ErrDeviceStatusKeyMismatch):
+			c.JSON(http.StatusForbidden, gin.H{"error": "device key mismatch"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load device status"})
+		}
+		return
+	}
+	if !record.FromApprovedDevice || record.Status != DeviceStatusApproved {
+		c.JSON(http.StatusForbidden, gin.H{"error": "device is not approved"})
+		return
+	}
+	verified, err := VerifyDeviceConfigSnapshotRequest(req, record.PublicKeyPEM, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	receivedAt := time.Now().UTC().Unix()
+	snapshot, err := StoreDeviceConfigSnapshot(c.Request.Context(), DeviceConfigSnapshotInsert{
+		DeviceID:       verified.DeviceID,
+		Revision:       verified.ConfigRevision,
+		PayloadHash:    verified.PayloadHash,
+		PayloadJSON:    verified.PayloadJSON,
+		ReceivedAtUnix: receivedAt,
+	})
+	if err != nil {
+		if errors.Is(err, ErrDeviceStatusNotFound) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "device is not approved"})
+			return
+		}
+		if errors.Is(err, ErrInvalidEnrollment) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "invalid config snapshot payload"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store config snapshot"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"status":           "stored",
+		"config_revision":  snapshot.Revision,
+		"received_at_unix": snapshot.CreatedAtUnix,
+	})
+}
+
 func getCenterDevices(c *gin.Context) {
 	devices, err := ListDevices(c.Request.Context(), parseBoolQuery(c.Query("include_archived")))
 	if err != nil {
@@ -173,6 +242,25 @@ func postCenterDeviceRevoke(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"device": record})
+}
+
+func getCenterDeviceConfigSnapshot(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	snapshot, err := LoadLatestDeviceConfigSnapshot(c.Request.Context(), deviceID)
+	if err != nil {
+		if errors.Is(err, ErrDeviceStatusNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "config snapshot not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load config snapshot"})
+		return
+	}
+	name := safeConfigSnapshotFilename(snapshot.DeviceID, snapshot.Revision)
+	c.Header("Content-Disposition", `attachment; filename="`+name+`"`)
+	c.Data(http.StatusOK, "application/json; charset=utf-8", snapshot.PayloadJSON)
 }
 
 func postCenterDeviceArchive(c *gin.Context) {
@@ -329,6 +417,39 @@ func parseDeviceIDParam(c *gin.Context) (string, bool) {
 		return "", false
 	}
 	return deviceID, true
+}
+
+func safeConfigSnapshotFilename(deviceID string, revision string) string {
+	deviceID = strings.TrimSpace(deviceID)
+	var b strings.Builder
+	for _, r := range deviceID {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+		if b.Len() >= 64 {
+			break
+		}
+	}
+	if b.Len() == 0 {
+		b.WriteString("device")
+	}
+	revision = strings.ToLower(strings.TrimSpace(revision))
+	if len(revision) > 12 {
+		revision = revision[:12]
+	}
+	if revision == "" {
+		revision = "snapshot"
+	}
+	return b.String() + "-config-" + revision + ".json"
 }
 
 func centerAdminActor(c *gin.Context) string {

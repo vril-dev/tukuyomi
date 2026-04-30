@@ -2,10 +2,10 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := help
 
-GO ?= go
-NPM ?= npm
-DOCKER ?= docker
 ROOT_DIR := $(abspath .)
+GO ?= go
+DOCKER ?= docker
+NPM ?= $(ROOT_DIR)/tools/npm-node22.sh
 
 PUID ?= $(shell id -u)
 GUID ?= $(shell id -g)

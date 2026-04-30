@@ -53,6 +53,9 @@ type DeviceRecord struct {
 	RuntimeRole                string `json:"runtime_role"`
 	BuildVersion               string `json:"build_version"`
 	GoVersion                  string `json:"go_version"`
+	ConfigSnapshotRevision     string `json:"config_snapshot_revision"`
+	ConfigSnapshotAtUnix       int64  `json:"config_snapshot_at_unix"`
+	ConfigSnapshotBytes        int64  `json:"config_snapshot_bytes"`
 }
 
 type EnrollmentRecord struct {
@@ -104,6 +107,24 @@ type DeviceRuntimeInventory struct {
 	RuntimeRole  string
 	BuildVersion string
 	GoVersion    string
+}
+
+type DeviceConfigSnapshotInsert struct {
+	DeviceID       string
+	Revision       string
+	PayloadHash    string
+	PayloadJSON    []byte
+	ReceivedAtUnix int64
+}
+
+type DeviceConfigSnapshotRecord struct {
+	DeviceID      string `json:"device_id"`
+	Revision      string `json:"revision"`
+	PayloadHash   string `json:"payload_hash"`
+	PayloadJSON   []byte `json:"-"`
+	SizeBytes     int64  `json:"size_bytes"`
+	CreatedAtUnix int64  `json:"created_at_unix"`
+	CreatedAt     string `json:"created_at"`
 }
 
 func CreatePendingEnrollment(ctx context.Context, in enrollmentInsert) (EnrollmentRecord, error) {
@@ -436,6 +457,111 @@ UPDATE center_devices
 	})
 }
 
+func StoreDeviceConfigSnapshot(ctx context.Context, in DeviceConfigSnapshotInsert) (DeviceConfigSnapshotRecord, error) {
+	in.DeviceID = strings.TrimSpace(in.DeviceID)
+	in.Revision = strings.ToLower(strings.TrimSpace(in.Revision))
+	in.PayloadHash = strings.ToLower(strings.TrimSpace(in.PayloadHash))
+	if !deviceIDPattern.MatchString(in.DeviceID) || !hex64Pattern.MatchString(in.Revision) || !hex64Pattern.MatchString(in.PayloadHash) {
+		return DeviceConfigSnapshotRecord{}, ErrDeviceStatusNotFound
+	}
+	if len(in.PayloadJSON) == 0 || len(in.PayloadJSON) > MaxDeviceConfigSnapshotPayloadBytes {
+		return DeviceConfigSnapshotRecord{}, ErrInvalidEnrollment
+	}
+	if in.ReceivedAtUnix <= 0 {
+		in.ReceivedAtUnix = time.Now().UTC().Unix()
+	}
+	sizeBytes := int64(len(in.PayloadJSON))
+	createdAt := time.Unix(in.ReceivedAtUnix, 0).UTC().Format(time.RFC3339)
+	out := DeviceConfigSnapshotRecord{
+		DeviceID:      in.DeviceID,
+		Revision:      in.Revision,
+		PayloadHash:   in.PayloadHash,
+		PayloadJSON:   append([]byte(nil), in.PayloadJSON...),
+		SizeBytes:     sizeBytes,
+		CreatedAtUnix: in.ReceivedAtUnix,
+		CreatedAt:     createdAt,
+	}
+	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		var device DeviceRecord
+		if err := loadDeviceByIDTx(ctx, tx, driver, in.DeviceID, &device); err != nil {
+			return err
+		}
+		if device.Status != DeviceStatusApproved {
+			return ErrDeviceStatusNotFound
+		}
+
+		if err := upsertDeviceConfigSnapshotTx(ctx, tx, driver, out); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `
+UPDATE center_devices
+   SET config_snapshot_revision = `+placeholder(driver, 1)+`,
+       config_snapshot_at_unix = `+placeholder(driver, 2)+`,
+       config_snapshot_bytes = `+placeholder(driver, 3)+`,
+       updated_at_unix = `+placeholder(driver, 4)+`
+ WHERE device_id = `+placeholder(driver, 5)+`
+   AND status = `+placeholder(driver, 6),
+			out.Revision,
+			out.CreatedAtUnix,
+			out.SizeBytes,
+			out.CreatedAtUnix,
+			out.DeviceID,
+			DeviceStatusApproved,
+		)
+		if err != nil {
+			return err
+		}
+		if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+			return ErrDeviceStatusNotFound
+		}
+		return tx.Commit()
+	})
+	return out, err
+}
+
+func LoadLatestDeviceConfigSnapshot(ctx context.Context, deviceID string) (DeviceConfigSnapshotRecord, error) {
+	deviceID = strings.TrimSpace(deviceID)
+	if !deviceIDPattern.MatchString(deviceID) {
+		return DeviceConfigSnapshotRecord{}, ErrDeviceStatusNotFound
+	}
+	var out DeviceConfigSnapshotRecord
+	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		row := db.QueryRowContext(ctx, `
+SELECT s.device_id, s.revision, s.payload_hash, s.payload_json, s.size_bytes, s.created_at_unix, s.created_at
+  FROM center_device_config_snapshots s
+  JOIN center_devices d
+    ON d.device_id = s.device_id
+   AND d.config_snapshot_revision = s.revision
+ WHERE s.device_id = `+placeholder(driver, 1),
+			deviceID,
+		)
+		var payload string
+		if err := row.Scan(
+			&out.DeviceID,
+			&out.Revision,
+			&out.PayloadHash,
+			&payload,
+			&out.SizeBytes,
+			&out.CreatedAtUnix,
+			&out.CreatedAt,
+		); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrDeviceStatusNotFound
+			}
+			return err
+		}
+		out.PayloadJSON = []byte(payload)
+		return nil
+	})
+	return out, err
+}
+
 func ApproveEnrollment(ctx context.Context, enrollmentID int64, actor string) (EnrollmentRecord, error) {
 	return decideEnrollment(ctx, enrollmentID, actor, EnrollmentStatusApproved, "")
 }
@@ -555,7 +681,8 @@ SELECT d.device_id, d.key_id, d.public_key_fingerprint_sha256, d.status, d.produ
        d.approved_enrollment_id, d.approved_at_unix, d.approved_by,
        d.created_at_unix, d.updated_at_unix, d.revoked_at_unix, d.revoked_by,
        d.archived_at_unix, d.archived_by, d.last_seen_at_unix,
-       d.runtime_role, d.build_version, d.go_version
+       d.runtime_role, d.build_version, d.go_version,
+       d.config_snapshot_revision, d.config_snapshot_at_unix, d.config_snapshot_bytes
   FROM center_devices d
   LEFT JOIN center_device_enrollments e ON e.enrollment_id = d.approved_enrollment_id
   LEFT JOIN center_enrollment_tokens t ON t.token_hash = e.license_key_hash`
@@ -584,6 +711,9 @@ func scanDeviceRecord(scanner rowScanner, rec *DeviceRecord) error {
 		&rec.RuntimeRole,
 		&rec.BuildVersion,
 		&rec.GoVersion,
+		&rec.ConfigSnapshotRevision,
+		&rec.ConfigSnapshotAtUnix,
+		&rec.ConfigSnapshotBytes,
 	)
 }
 
@@ -788,6 +918,75 @@ ON CONFLICT(device_id) DO UPDATE SET
 			actor,
 			now,
 			now,
+		)
+		return err
+	}
+}
+
+func upsertDeviceConfigSnapshotTx(ctx context.Context, tx *sql.Tx, driver string, rec DeviceConfigSnapshotRecord) error {
+	payload := string(rec.PayloadJSON)
+	switch driver {
+	case "mysql":
+		_, err := tx.ExecContext(ctx, `
+INSERT INTO center_device_config_snapshots
+    (device_id, revision, payload_hash, payload_json, size_bytes, created_at_unix, created_at)
+VALUES
+    (?, ?, ?, ?, ?, ?, ?)
+ON DUPLICATE KEY UPDATE
+    payload_hash = VALUES(payload_hash),
+    payload_json = VALUES(payload_json),
+    size_bytes = VALUES(size_bytes),
+    created_at_unix = VALUES(created_at_unix),
+    created_at = VALUES(created_at)`,
+			rec.DeviceID,
+			rec.Revision,
+			rec.PayloadHash,
+			payload,
+			rec.SizeBytes,
+			rec.CreatedAtUnix,
+			rec.CreatedAt,
+		)
+		return err
+	case "pgsql":
+		_, err := tx.ExecContext(ctx, `
+INSERT INTO center_device_config_snapshots
+    (device_id, revision, payload_hash, payload_json, size_bytes, created_at_unix, created_at)
+VALUES
+    ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (device_id, revision) DO UPDATE SET
+    payload_hash = EXCLUDED.payload_hash,
+    payload_json = EXCLUDED.payload_json,
+    size_bytes = EXCLUDED.size_bytes,
+    created_at_unix = EXCLUDED.created_at_unix,
+    created_at = EXCLUDED.created_at`,
+			rec.DeviceID,
+			rec.Revision,
+			rec.PayloadHash,
+			payload,
+			rec.SizeBytes,
+			rec.CreatedAtUnix,
+			rec.CreatedAt,
+		)
+		return err
+	default:
+		_, err := tx.ExecContext(ctx, `
+INSERT INTO center_device_config_snapshots
+    (device_id, revision, payload_hash, payload_json, size_bytes, created_at_unix, created_at)
+VALUES
+    (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(device_id, revision) DO UPDATE SET
+    payload_hash = excluded.payload_hash,
+    payload_json = excluded.payload_json,
+    size_bytes = excluded.size_bytes,
+    created_at_unix = excluded.created_at_unix,
+    created_at = excluded.created_at`,
+			rec.DeviceID,
+			rec.Revision,
+			rec.PayloadHash,
+			payload,
+			rec.SizeBytes,
+			rec.CreatedAtUnix,
+			rec.CreatedAt,
 		)
 		return err
 	}

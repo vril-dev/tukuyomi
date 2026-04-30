@@ -23,7 +23,7 @@ Gateway から **Tukuyomi Center へ device identity を登録する** ための
 ための機能です。Web の前段に WAF + reverse proxy として置く一般用途では、
 本章の手順は読み飛ばして構いません。
 
-![Center login 画面](images/ui-samples/22-center-login.png)
+![Center login 画面](../../images/ui-samples/22-center-login.png)
 
 ## 16.2　役割
 
@@ -47,7 +47,7 @@ Gateway を信用するかどうか**」を決める、という分担です。
 `Center` 側と `Gateway` 側を行ったり来たりするので、順番を間違えないよう
 注意してください。
 
-![Center の Device Approvals 画面](images/ui-samples/24-center-device-approvals.png)
+![Center の Device Approvals 画面](../../images/ui-samples/24-center-device-approvals.png)
 
 1. Center を起動または開く
 2. `Device Approvals` を開く
@@ -89,7 +89,7 @@ proxy は local Center status が `approved` のときだけ開きます**。
 
 ### 16.3.2　承認後の status refresh
 
-![Center の Status 画面](images/ui-samples/23-center-status.png)
+![Center の Status 画面](../../images/ui-samples/23-center-status.png)
 
 Center で device を承認したあとは、Gateway の `Options > Center Enrollment`
 に戻り、**`Check Center status`** を実行してください。Gateway は Center へ

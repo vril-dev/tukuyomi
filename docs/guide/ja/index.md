@@ -121,7 +121,7 @@ build: "pandoc → HTML → Chrome headless で PDF 化"
 - **付録B　リリースノート（v1.2.0 / v1.1.0）** — Center 追加、IoT / Edge
   enrollment、`INSTALL_ROLE`、device approval lifecycle（v1.2.0）と、
   DB-backed runtime authority、admin 認証刷新、`make install` 整備（v1.1.0）。
-  （source: docs/releases/1.2.0.ja.md, docs/releases/1.1.0.ja.md）
+  （source: GitHub Releases の release tag）
 
 ## ファイル配置
 
@@ -133,10 +133,11 @@ books/tukuyomi/
 ├── 02-quickstart.md    … 第2章
 ├── 03-...〜18-...md   … 第3〜18章
 ├── A-operator-reference.md
-├── B-release-notes.md
-└── images/
-    └── ui-samples/     … tukuyomi/docs/images/ui-samples/ から複製済み
+└── B-release-notes.md
 ```
+
+画面サンプル画像は、共通の `docs/images/ui-samples/` を相対パス
+`../../images/ui-samples/` で参照します。
 
 ## ビルド方針（メモ）
 

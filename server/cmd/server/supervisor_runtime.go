@@ -91,6 +91,32 @@ func runSupervisorServer() error {
 	if err := handler.SyncAppConfigStorage(); err != nil {
 		return fmt.Errorf("sync supervisor app config: %w", err)
 	}
+	if err := initRuntimeAppsProcessOwner(); err != nil {
+		return fmt.Errorf("initialize supervisor runtime apps owner: %w", err)
+	}
+	defer shutdownRuntimeAppSupervisors()
+	controlServer, err := startRuntimeAppsControlServer()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := controlServer.Close(ctx); err != nil {
+			log.Printf("[RUNTIME_APPS][CONTROL][WARN] close: %v", err)
+		}
+	}()
+	prevControlSocket, hadControlSocket := os.LookupEnv(runtimeAppsControlSocketEnv)
+	if err := os.Setenv(runtimeAppsControlSocketEnv, controlServer.SocketPath()); err != nil {
+		return fmt.Errorf("export runtime apps control socket: %w", err)
+	}
+	defer func() {
+		if hadControlSocket {
+			_ = os.Setenv(runtimeAppsControlSocketEnv, prevControlSocket)
+		} else {
+			_ = os.Unsetenv(runtimeAppsControlSocketEnv)
+		}
+	}()
 	activation, err := loadSystemdActivationFromEnv()
 	if err != nil {
 		return fmt.Errorf("load supervisor listener activation: %w", err)

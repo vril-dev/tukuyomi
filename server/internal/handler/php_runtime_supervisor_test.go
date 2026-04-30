@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"encoding/json"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,6 +11,92 @@ import (
 	"testing"
 	"time"
 )
+
+func TestRuntimeAppHTTPProcessControllerUsesUnixSocket(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "control.sock")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen unix: %v", err)
+	}
+	defer ln.Close()
+
+	actionCh := make(chan runtimeAppProcessActionRequest, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/php/processes", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method=%s want GET", r.Method)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"processes": []PHPRuntimeProcessStatus{{RuntimeID: "php85", Running: true, PID: 123}},
+		})
+	})
+	mux.HandleFunc("/v1/php/action", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method=%s want POST", r.Method)
+		}
+		var in runtimeAppProcessActionRequest
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Fatalf("decode action: %v", err)
+		}
+		actionCh <- in
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	})
+	srv := &http.Server{Handler: mux}
+	go func() {
+		_ = srv.Serve(ln)
+	}()
+	t.Cleanup(func() {
+		_ = srv.Close()
+		_ = os.Remove(socketPath)
+	})
+
+	controller, err := NewRuntimeAppProcessHTTPController(socketPath)
+	if err != nil {
+		t.Fatalf("NewRuntimeAppProcessHTTPController: %v", err)
+	}
+	processes := controller.PHPRuntimeProcessSnapshot()
+	if len(processes) != 1 || processes[0].RuntimeID != "php85" || !processes[0].Running || processes[0].PID != 123 {
+		t.Fatalf("processes=%+v", processes)
+	}
+	if err := controller.ReloadPHPRuntimeProcess("php85"); err != nil {
+		t.Fatalf("ReloadPHPRuntimeProcess: %v", err)
+	}
+	got := <-actionCh
+	if got.Action != "reload" || got.RuntimeID != "php85" {
+		t.Fatalf("action=%+v", got)
+	}
+}
+
+func TestRuntimeAppHTTPProcessControllerReturnsServerError(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "control.sock")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen unix: %v", err)
+	}
+	defer ln.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/psgi/action", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "process is not materialized"})
+	})
+	srv := &http.Server{Handler: mux}
+	go func() {
+		_ = srv.Serve(ln)
+	}()
+	t.Cleanup(func() {
+		_ = srv.Close()
+		_ = os.Remove(socketPath)
+	})
+
+	controller, err := NewRuntimeAppProcessHTTPController(socketPath)
+	if err != nil {
+		t.Fatalf("NewRuntimeAppProcessHTTPController: %v", err)
+	}
+	if err := controller.StartPSGIProcess("app-1"); err == nil || err.Error() != "runtime app process control failed: process is not materialized" {
+		t.Fatalf("StartPSGIProcess error=%v", err)
+	}
+}
 
 func TestPHPRuntimeSupervisorStartsRestartsAndStopsRuntime(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)

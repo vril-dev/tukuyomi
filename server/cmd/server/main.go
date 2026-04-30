@@ -82,6 +82,10 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 	if !configLoaded {
 		config.LoadEnv()
 	}
+	if err := configureRuntimeAppProcessControllerForWorker(); err != nil {
+		log.Fatalf("[RUNTIME_APPS][FATAL] configure process controller: %v", err)
+	}
+	runtimeAppsLocalOwner := runtimeAppsLocalProcessOwnerFromEnv(os.Environ())
 	initRuntimeDBStoreOrFatal("[DB][BOOTSTRAP]")
 	if err := handler.SyncAppConfigStorage(); err != nil {
 		log.Fatalf("[CONFIG][DB][FATAL] sync failed: %v", err)
@@ -117,22 +121,24 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 		runtimeAppsShutdown()
 		log.Fatalf(format, args...)
 	}
-	if err := handler.InitPHPRuntimeSupervisor(); err != nil {
-		if shutdownErr := handler.ShutdownPHPRuntimeSupervisor(); shutdownErr != nil {
-			log.Printf("[RUNTIME_APPS][WARN] shutdown php runtime supervisor after init failure: %v", shutdownErr)
+	if runtimeAppsLocalOwner {
+		if err := handler.InitPHPRuntimeSupervisor(); err != nil {
+			if shutdownErr := handler.ShutdownPHPRuntimeSupervisor(); shutdownErr != nil {
+				log.Printf("[RUNTIME_APPS][WARN] shutdown php runtime supervisor after init failure: %v", shutdownErr)
+			}
+			log.Fatalf("[FATAL] failed to initialize php runtime supervisor: %v", err)
 		}
-		log.Fatalf("[FATAL] failed to initialize php runtime supervisor: %v", err)
+		if err := handler.InitPSGIRuntimeSupervisor(); err != nil {
+			if shutdownErr := handler.ShutdownPSGIRuntimeSupervisor(); shutdownErr != nil {
+				log.Printf("[RUNTIME_APPS][WARN] shutdown psgi runtime supervisor after init failure: %v", shutdownErr)
+			}
+			if shutdownErr := handler.ShutdownPHPRuntimeSupervisor(); shutdownErr != nil {
+				log.Printf("[RUNTIME_APPS][WARN] shutdown php runtime supervisor after psgi init failure: %v", shutdownErr)
+			}
+			log.Fatalf("[FATAL] failed to initialize psgi runtime supervisor: %v", err)
+		}
+		runtimeAppsShutdown = shutdownRuntimeAppSupervisors
 	}
-	if err := handler.InitPSGIRuntimeSupervisor(); err != nil {
-		if shutdownErr := handler.ShutdownPSGIRuntimeSupervisor(); shutdownErr != nil {
-			log.Printf("[RUNTIME_APPS][WARN] shutdown psgi runtime supervisor after init failure: %v", shutdownErr)
-		}
-		if shutdownErr := handler.ShutdownPHPRuntimeSupervisor(); shutdownErr != nil {
-			log.Printf("[RUNTIME_APPS][WARN] shutdown php runtime supervisor after psgi init failure: %v", shutdownErr)
-		}
-		log.Fatalf("[FATAL] failed to initialize psgi runtime supervisor: %v", err)
-	}
-	runtimeAppsShutdown = shutdownRuntimeAppSupervisors
 	defer runtimeAppsShutdown()
 	if err := handler.InitSiteRuntime(config.SiteConfigFile, config.ProxyRollbackMax); err != nil {
 		fatalf("[FATAL] failed to initialize site runtime: %v", err)

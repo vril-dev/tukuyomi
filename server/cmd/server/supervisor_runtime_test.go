@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/handler"
 )
 
 func TestBuildWorkerCommand(t *testing.T) {
@@ -91,6 +92,63 @@ func TestWorkerProcessEnvDropsInheritedActivation(t *testing.T) {
 	})
 	if len(got) != 1 || got[0] != "KEEP=value" {
 		t.Fatalf("env=%#v want only KEEP", got)
+	}
+}
+
+func TestWorkerProcessEnvPreservesRuntimeAppsControlSocket(t *testing.T) {
+	t.Parallel()
+
+	got := workerProcessEnv([]string{
+		runtimeAppsControlSocketEnv + "=/tmp/tukuyomi-runtime-apps.sock",
+		"KEEP=value",
+	})
+	if !envContains(got, runtimeAppsControlSocketEnv+"=/tmp/tukuyomi-runtime-apps.sock") {
+		t.Fatalf("env=%#v missing runtime apps control socket", got)
+	}
+	if !envContains(got, "KEEP=value") {
+		t.Fatalf("env=%#v missing KEEP", got)
+	}
+}
+
+func TestConfigureRuntimeAppProcessControllerForWorkerRequiresSocket(t *testing.T) {
+	t.Setenv(serverInternalProcessRoleEnv, internalProcessRoleWorker)
+	t.Setenv(runtimeAppsControlSocketEnv, "")
+	t.Cleanup(handler.ResetRuntimeAppProcessController)
+
+	err := configureRuntimeAppProcessControllerForWorker()
+	if err == nil || !strings.Contains(err.Error(), runtimeAppsControlSocketEnv+" is required") {
+		t.Fatalf("error=%v want missing runtime apps control socket", err)
+	}
+}
+
+func TestValidateRuntimeAppsControlToken(t *testing.T) {
+	t.Parallel()
+
+	got, err := validateRuntimeAppsControlToken("runtime_id", " PHP85_1 ")
+	if err != nil {
+		t.Fatalf("validateRuntimeAppsControlToken: %v", err)
+	}
+	if got != "php85_1" {
+		t.Fatalf("token=%q want php85_1", got)
+	}
+	for _, value := range []string{"", "bad/name", strings.Repeat("a", 129)} {
+		if _, err := validateRuntimeAppsControlToken("runtime_id", value); err == nil {
+			t.Fatalf("value %q accepted, want error", value)
+		}
+	}
+}
+
+func TestRuntimeAppsLocalProcessOwnerFromEnv(t *testing.T) {
+	t.Parallel()
+
+	if !runtimeAppsLocalProcessOwnerFromEnv(nil) {
+		t.Fatal("default server process should own local Runtime Apps processes")
+	}
+	if runtimeAppsLocalProcessOwnerFromEnv([]string{serverInternalProcessRoleEnv + "=" + internalProcessRoleWorker}) {
+		t.Fatal("worker process must not own local Runtime Apps processes")
+	}
+	if !runtimeAppsLocalProcessOwnerFromEnv([]string{serverInternalProcessRoleEnv + "=" + internalProcessRoleSupervisor}) {
+		t.Fatal("supervisor process should own local Runtime Apps processes")
 	}
 }
 

@@ -369,6 +369,8 @@ func TestProxyCacheCookieBypassIgnoresOnlyAdminCookies(t *testing.T) {
 	adminOnly := httptest.NewRequest(http.MethodGet, "http://example.test/static/app.js", nil)
 	adminOnly.AddCookie(&http.Cookie{Name: adminauth.SessionCookieName, Value: "admin-session"})
 	adminOnly.AddCookie(&http.Cookie{Name: adminauth.CSRFCookieName, Value: "admin-csrf"})
+	adminOnly.AddCookie(&http.Cookie{Name: adminauth.CenterSessionCookieName, Value: "center-session"})
+	adminOnly.AddCookie(&http.Cookie{Name: adminauth.CenterCSRFCookieName, Value: "center-csrf"})
 	stripAdminAuthCookiesFromProxyRequest(adminOnly)
 	if got := adminOnly.Header.Get("Cookie"); got != "" {
 		t.Fatalf("admin cookie header after strip=%q want empty", got)

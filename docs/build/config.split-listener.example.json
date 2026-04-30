@@ -31,5 +31,13 @@
       "172.16.0.0/12",
       "192.168.0.0/16"
     ]
+  },
+  "edge": {
+    "enabled": false,
+    "require_device_approval": true,
+    "device_auth": {
+      "enabled": true,
+      "status_refresh_interval_sec": 30
+    }
   }
 }

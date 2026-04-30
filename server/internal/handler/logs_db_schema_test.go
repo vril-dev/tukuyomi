@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+const latestSchemaMigrationVersionForTest = 20
+
 func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
 
@@ -75,6 +77,10 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		"admin_api_tokens",
 		"admin_sessions",
 		"admin_auth_audit",
+		"center_devices",
+		"center_device_enrollments",
+		"center_enrollment_tokens",
+		"edge_device_identities",
 	} {
 		var name string
 		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
@@ -88,8 +94,8 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("query migration version: %v", err)
 	}
-	if version != 14 || dirty != 0 {
-		t.Fatalf("migration version=%d dirty=%d want version=14 dirty=0", version, dirty)
+	if version != latestSchemaMigrationVersionForTest || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=%d dirty=0", version, dirty, latestSchemaMigrationVersionForTest)
 	}
 	var wafRuleAssetEnabledColumns int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('waf_rule_assets') WHERE name = 'enabled'`).Scan(&wafRuleAssetEnabledColumns); err != nil {
@@ -123,6 +129,27 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		}
 		if count != 1 {
 			t.Fatalf("index %s count=%d want 1", indexName, count)
+		}
+	}
+	for _, tc := range []struct {
+		table  string
+		column string
+	}{
+		{table: "center_devices", column: "product_id"},
+		{table: "center_devices", column: "revoked_at_unix"},
+		{table: "center_devices", column: "revoked_by"},
+		{table: "center_devices", column: "archived_at_unix"},
+		{table: "center_devices", column: "archived_by"},
+		{table: "edge_device_identities", column: "center_product_id"},
+		{table: "edge_device_identities", column: "center_status_checked_at_unix"},
+		{table: "edge_device_identities", column: "center_status_error"},
+	} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('`+tc.table+`') WHERE name = ?`, tc.column).Scan(&count); err != nil {
+			t.Fatalf("query %s.%s column: %v", tc.table, tc.column, err)
+		}
+		if count != 1 {
+			t.Fatalf("%s.%s column count=%d want 1", tc.table, tc.column, count)
 		}
 	}
 }
@@ -165,8 +192,8 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteReplacesLegacyMigrationTable(t *t
 	if err := db.QueryRow(`SELECT version, CASE WHEN dirty THEN 1 ELSE 0 END FROM schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("query migration version: %v", err)
 	}
-	if version != 14 || dirty != 0 {
-		t.Fatalf("migration version=%d dirty=%d want version=14 dirty=0", version, dirty)
+	if version != latestSchemaMigrationVersionForTest || dirty != 0 {
+		t.Fatalf("migration version=%d dirty=%d want version=%d dirty=0", version, dirty, latestSchemaMigrationVersionForTest)
 	}
 
 	var legacyColumns int

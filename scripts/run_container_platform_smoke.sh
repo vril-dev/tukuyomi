@@ -80,7 +80,7 @@ need_cmd rsync
 need_cmd install
 
 if [[ "${CONTAINER_PLATFORM_SMOKE_SKIP_BUILD}" != "1" ]]; then
-  log "building embedded admin UI and binary"
+  log "building embedded Gateway/Center UI and binary"
   (
     cd "${ROOT_DIR}"
     make build

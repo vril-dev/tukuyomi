@@ -801,6 +801,18 @@ const JA_STRINGS: Record<string, string> = {
     "DB app_config に保存される listener、runtime、storage policy、observability 設定を編集します。DB 接続項目は引き続き bootstrap 設定ファイルから読みます。",
   "Listener, runtime, storage policy, and observability settings here are restart-required startup config. Saving updates DB app_config; db_driver, db_path, and db_dsn stay bootstrap-only in config.json.":
     "ここにある listener、runtime、storage policy、observability は再起動が必要な startup 設定です。保存先は DB app_config です。db_driver、db_path、db_dsn は config.json の bootstrap 専用項目です。",
+  "IoT / Edge Mode": "IoT / Edge Mode",
+  "Enable this only for IoT deployments that need edge-only request controls such as device authentication. Web/VPS deployments should leave it off.":
+    "device authentication など edge 専用の request control が必要な IoT deployment でのみ有効化してください。Web/VPS deployment では OFF のままにします。",
+  "Enable IoT / Edge mode": "IoT / Edge mode を有効化",
+  "Center status poll interval seconds": "Center 状態 polling 間隔秒数",
+  "0 disables automatic Center status polling.": "0 にすると Center 状態の自動 polling を無効化します。",
+  "Enable device authentication when IoT mode is on":
+    "IoT mode が ON のとき device authentication を有効化",
+  "The left menu shows IoT ON only after the running process has loaded edge.enabled=true. Save and restart to apply this startup setting.":
+    "左メニューの IoT ON は、実行中 process が edge.enabled=true を読み込んだ後に表示されます。この startup 設定を反映するには保存後に再起動してください。",
+  "IoT ON": "IoT ON",
+  "IoT OFF": "IoT OFF",
   "Database storage policy and bootstrap connection status. Driver, path, and DSN are read from the bootstrap config file before DB is opened.":
     "DB storage policy と bootstrap 接続状態です。driver、path、DSN は DB を開く前に bootstrap 設定ファイルから読みます。",
   "DB connection is bootstrap-only. Current DSN status: {state}. Change db_driver, db_path, or db_dsn in the bootstrap config file, run migrations/import as needed, then restart.":
@@ -1256,6 +1268,50 @@ const JA_STRINGS: Record<string, string> = {
     "build 済み PSGI runtime はまだありません。先に PSGI runtime bundle を build し、Runtime Apps から紐付けてください。",
   "Built PSGI runtimes are available. Bind each PSGI app from Runtime Apps.":
     "build 済み PSGI runtime があります。各 PSGI app は Runtime Apps から紐付けます。",
+  "Use this parent switch only for IoT deployments. Web/VPS deployments should leave edge mode off.":
+    "この親スイッチは IoT deployment 専用です。Web/VPS deployment では edge mode を OFF にしてください。",
+  "IoT / Edge mode saved. Restart the process to apply the new mode and polling interval.":
+    "IoT / Edge mode を保存しました。新しい mode と polling 間隔を反映するには process を再起動してください。",
+  "Saving updates DB app_config. Restart tukuyomi before relying on the menu IoT state or request-path edge controls.":
+    "保存先は DB app_config です。メニューの IoT 状態や request-path edge control に依存する前に tukuyomi を再起動してください。",
+  "Center Enrollment": "Center 登録申請",
+  "Request Center approval for this Gateway. The enrollment token is sent once and is not stored locally.":
+    "この Gateway の Center 承認を申請します。登録トークンは一度だけ送信され、ローカルには保存されません。",
+  "This Gateway is no longer approved. Enter a new enrollment token to request re-approval with the same device identity.":
+    "この Gateway は現在承認されていません。同じ device identity のまま再承認を申請するには、新しい登録トークンを入力してください。",
+  "This Gateway is approved. New enrollment requests are disabled until Center removes approval.":
+    "この Gateway は承認済みです。Center 側で承認解除されるまで新しい登録申請は無効です。",
+  "Approval is pending in Center. Use Check Center status after approving it.":
+    "Center 側で承認待ちです。承認後に Center 状態を確認してください。",
+  "Identity ready": "Identity ready",
+  "No identity": "Identity なし",
+  "Proxy locked": "Proxy locked",
+  locked: "locked",
+  "Enrollment status": "登録状態",
+  "Last request": "最終申請",
+  "Last Center check": "最終 Center 確認",
+  "Product ID": "Product ID",
+  "DB store": "DB store",
+  available: "利用可能",
+  "Center URL": "Center URL",
+  "Center URL is required.": "Center URL は必須です。",
+  "Enrollment token": "登録トークン",
+  "Enrollment token is required.": "登録トークンは必須です。",
+  "one-time token": "一回限りのトークン",
+  "Device ID": "Device ID",
+  "Key ID": "Key ID",
+  "auto generated": "自動生成",
+  "Public key fingerprint": "公開鍵 fingerprint",
+  "Request Center approval": "Center 承認を申請",
+  "Request re-approval": "再承認を申請",
+  "Check Center status": "Center 状態を確認",
+  "Enable IoT / Edge mode and restart before requesting Center approval.":
+    "Center 承認申請の前に IoT / Edge mode を有効化して再起動してください。",
+  "Center enrollment request sent. Approve the pending device in Center.":
+    "Center 登録申請を送信しました。Center 側で pending device を承認してください。",
+  "Center enrollment request failed.": "Center 登録申請に失敗しました。",
+  "Center device status refreshed.": "Center device status を更新しました。",
+  "Center device status refresh failed.": "Center device status の更新に失敗しました。",
   "No PSGI Runtime Apps are materialized.":
     "materialize 済み PSGI Runtime Apps はありません。",
   "app(s)": "app",

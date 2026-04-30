@@ -135,7 +135,7 @@ The current sidecar execution model is explicit: a shell loop invokes the image'
 
 Failure policy is explicit too: if `run-scheduled-tasks` returns non-zero, the sidecar exits non-zero and relies on container restart policy instead of hiding the fault.
 
-Keep the scheduler separate from the main proxy container instead of embedding `crond` into the request-serving process. `make ui-preview-up` now starts a preview-scoped scheduler sidecar as well. Watch sidecar logs and restart count when debugging persistent scheduler faults.
+Keep the scheduler separate from the main proxy container instead of embedding `crond` into the request-serving process. `make gateway-preview-up` now starts a preview-scoped scheduler sidecar as well. Watch sidecar logs and restart count when debugging persistent scheduler faults.
 
 ### 2. Guarded future shape: replicated frontend plus dedicated singleton scheduler
 
@@ -167,24 +167,24 @@ See also:
 Use this when you want to verify the preview path with its own isolated scheduler sidecar:
 
 ```bash
-make ui-preview-up
-make ui-preview-down
+make gateway-preview-up
+make gateway-preview-down
 ```
 
 Preview keeps its own isolated DB-backed scheduled-task config, so edits made through the preview UI do not mutate the normal runtime config.
 
-By default, `ui-preview-up` recreates the isolated preview SQLite DB on each start, so previously saved preview tasks and DB rows do not keep running by accident.
+By default, `gateway-preview-up` recreates the isolated preview SQLite DB on each start, so previously saved preview tasks and DB rows do not keep running by accident.
 
 If you want preview edits to survive `down/up`, opt into retained preview DB state:
 
 ```bash
-UI_PREVIEW_PERSIST=1 make ui-preview-up
-UI_PREVIEW_PERSIST=1 make ui-preview-down
+GATEWAY_PREVIEW_PERSIST=1 make gateway-preview-up
+GATEWAY_PREVIEW_PERSIST=1 make gateway-preview-down
 ```
 
-When `UI_PREVIEW_PERSIST=1` is set, preview keeps its own preview SQLite DB. That means you can save listener changes in `Settings`, then confirm them with `ui-preview-down/up` without losing the preview state stored in DB.
+When `GATEWAY_PREVIEW_PERSIST=1` is set, preview keeps its own preview SQLite DB. That means you can save listener changes in `Settings`, then confirm them with `gateway-preview-down/up` without losing the preview state stored in DB.
 
-Split preview listeners are supported as long as the preview listener settings use host-reachable binds such as `:80` and `:9090`. Do not use `localhost:80`, `127.0.0.1:80`, or `[::1]:9090` in preview listener settings; `ui-preview-up` rejects loopback binds because they do not match Docker-published ports.
+Split preview listeners are supported as long as the preview listener settings use host-reachable binds such as `:80` and `:9090`. Do not use `localhost:80`, `127.0.0.1:80`, or `[::1]:9090` in preview listener settings; `gateway-preview-up` rejects loopback binds because they do not match Docker-published ports.
 
 For a repeatable local regression run across binary, Docker sidecar, and preview-sidecar paths, use:
 
@@ -195,7 +195,7 @@ make scheduled-tasks-smoke
 For preview persistence and split-port parity only, use:
 
 ```bash
-make ui-preview-smoke
+make gateway-preview-smoke
 ```
 
 ## Bundled PHP CLI

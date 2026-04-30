@@ -105,6 +105,19 @@ select {
   color: #7b8798;
 }
 
+.app-brand-mode {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin: 8px 0 0;
+  padding: 2px 7px;
+  background: #dcfce7;
+  color: #166534;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 .app-nav {
   display: grid;
   gap: 8px;
@@ -397,6 +410,7 @@ textarea {
   border-radius: 6px;
   background: #fcfffe;
   color: var(--ink);
+  font-weight: 400;
 }
 
 input:focus,

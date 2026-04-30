@@ -1413,7 +1413,7 @@ func stripAdminAuthCookiesFromProxyRequest(r *http.Request) {
 				name = part
 			}
 			switch strings.TrimSpace(name) {
-			case adminauth.SessionCookieName, adminauth.CSRFCookieName:
+			case adminauth.SessionCookieName, adminauth.CSRFCookieName, adminauth.CenterSessionCookieName, adminauth.CenterCSRFCookieName:
 				changed = true
 				continue
 			default:

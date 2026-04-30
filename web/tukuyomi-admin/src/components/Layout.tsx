@@ -44,6 +44,8 @@ type StatusNavResponse = {
   app_version?: string;
   waf_engine_mode?: string;
   waf_engine_modes?: WAFEngineCapability[];
+  edge_enabled?: boolean;
+  edge_device_auth_enabled?: boolean;
 };
 
 const baseNavGroups: NavGroup[] = [
@@ -157,6 +159,7 @@ export default function Layout() {
   const [wafEngineMode, setWAFEngineMode] = useState("coraza");
   const [wafEngineModes, setWAFEngineModes] = useState<WAFEngineCapability[]>([]);
   const [appVersion, setAppVersion] = useState("");
+  const [edgeEnabled, setEdgeEnabled] = useState(false);
   const formattedAppVersion = formatAppVersion(appVersion);
 
   useEffect(() => {
@@ -190,6 +193,7 @@ export default function Layout() {
         setAppVersion(typeof data.app_version === "string" ? data.app_version : "");
         setWAFEngineMode(normalizeWAFEngineMode(data.waf_engine_mode));
         setWAFEngineModes(Array.isArray(data.waf_engine_modes) ? data.waf_engine_modes : []);
+        setEdgeEnabled(data.edge_enabled === true);
       })
       .catch(() => {
         if (!active) {
@@ -198,6 +202,7 @@ export default function Layout() {
         setAppVersion("");
         setWAFEngineMode("coraza");
         setWAFEngineModes([]);
+        setEdgeEnabled(false);
       });
     return () => {
       active = false;
@@ -251,6 +256,7 @@ export default function Layout() {
           <p className="app-brand-tag">TUKUYOMI{formattedAppVersion ? ` ${formattedAppVersion}` : ""}</p>
           <h1>{tx("Control Room")}</h1>
           <p className="app-brand-sub">{tx("Coraza + CRS Security Gateway")}</p>
+          {edgeEnabled ? <p className="app-brand-mode">{tx("IoT ON")}</p> : null}
         </div>
 
         <nav className="app-nav" aria-label="primary">

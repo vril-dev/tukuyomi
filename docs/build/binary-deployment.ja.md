@@ -20,7 +20,7 @@ make build
 
 生成物は `bin/tukuyomi` です。
 
-埋め込み Admin UI をすでに更新済みで、Go バイナリだけ欲しい場合は:
+埋め込み Gateway / Center UI をすでに更新済みで、Go バイナリだけ欲しい場合は:
 
 ```bash
 make go-build
@@ -36,15 +36,23 @@ make release-linux-all VERSION=v0.8.0
 
 Linux host へ直接入れる場合は、次で build、runtime tree 作成、DB migrate、
 WAF/CRS asset import、初回 DB seed、systemd unit 配置まで実行できます。
+`INSTALL_ROLE` 省略時は `gateway` です。
 
 ```bash
 make install TARGET=linux-systemd
+```
+
+Center を control plane ホストに入れる場合:
+
+```bash
+make install TARGET=linux-systemd INSTALL_ROLE=center
 ```
 
 主な override:
 
 ```bash
 make install TARGET=linux-systemd \
+  INSTALL_ROLE=gateway \
   PREFIX=/opt/tukuyomi \
   INSTALL_ENABLE_SCHEDULED_TASKS=0 \
   INSTALL_DB_SEED=auto
@@ -53,15 +61,21 @@ make install TARGET=linux-systemd \
 挙動:
 
 - `PREFIX` 既定は `/opt/tukuyomi`
+- `INSTALL_ROLE=gateway` は `tukuyomi.service`、`tukuyomi.env`、
+  `conf/config.json`、WAF/CRS asset import、初回 gateway DB seed、
+  scheduled-task timer を対象にします
+- `INSTALL_ROLE=center` は `tukuyomi-center.service`、
+  `tukuyomi-center.env`、`conf/config.center.json` を対象にし、DB migration
+  のみを実行します。WAF/CRS import、gateway seed、scheduled tasks は実行しません
 - `PREFIX` が実行ユーザの home 配下の場合、`INSTALL_CREATE_USER=auto` は実行ユーザを runtime user にし、`useradd` は実行しません
 - home 配下へ install した runtime tree は、その login user / primary group 所有になります
 - `/opt/tukuyomi` など system path の場合、既定では `tukuyomi` system user/group を作成または再利用します
 - system path の service account 運用では、deployment root と `bin/`, `scripts/`, `conf/` は root 管理、`db/`, `audit/`, `cache/`, `data/` は runtime user 書き込み可になります
-- `config.json` と `/etc/tukuyomi/tukuyomi.env` は既存 file を既定で上書きしません
+- role ごとの config/env file は既定で上書きしません
 - host install の権限が必要な操作だけ `sudo` を使います。build は通常 user のまま実行できます
-- 初回作成する `/etc/tukuyomi/tukuyomi.env` と systemd unit は `PREFIX` に合わせて render されます
-- `conf/config.json` は root-owned `0640` とし、service group に読み取りだけ渡します
-- `/etc/tukuyomi/tukuyomi.env` は secret を含める前提で root-owned `0640` のまま保持します
+- 初回作成する env file と systemd unit は `PREFIX` に合わせて render されます
+- role config file は root-owned `0640` とし、service group に読み取りだけ渡します
+- env file は secret を含める前提で root-owned `0640` のまま保持します
 - `INSTALL_DB_SEED=auto` は SQLite DB がまだ無い初回だけ `db-import` を実行します
 - 初回 DB seed では `primary` という default upstream が作成されます。proxy に
   traffic を流す前に、実際の backend endpoint へ調整してください
@@ -365,14 +379,18 @@ overload 制御は DB `app_config` の `server` 配下で調整します:
 sample unit:
 
 - [tukuyomi.service.example](tukuyomi.service.example)
+- [tukuyomi-center.service.example](tukuyomi-center.service.example)
 - [tukuyomi.socket.example](tukuyomi.socket.example)
 - [tukuyomi-admin.socket.example](tukuyomi-admin.socket.example)
 - [tukuyomi-redirect.socket.example](tukuyomi-redirect.socket.example)
 - [tukuyomi-http3.socket.example](tukuyomi-http3.socket.example)
 - [tukuyomi-scheduled-tasks.service.example](tukuyomi-scheduled-tasks.service.example)
 - [tukuyomi-scheduled-tasks.timer.example](tukuyomi-scheduled-tasks.timer.example)
+- [tukuyomi.env.example](tukuyomi.env.example)
+- [tukuyomi-center.env.example](tukuyomi-center.env.example)
 
-sample unit は `User=tukuyomi` のまま `AmbientCapabilities=CAP_NET_BIND_SERVICE` を付け、`:80` / `:443` のような low port bind を root 常駐なしで行う前提です。
+gateway sample unit は `User=tukuyomi` のまま `AmbientCapabilities=CAP_NET_BIND_SERVICE` を付け、`:80` / `:443` のような low port bind を root 常駐なしで行う前提です。
+Center unit は `tukuyomi center` を起動し、既定では low port bind capability を必要としません。
 graceful binary replacement が必要な場合は systemd socket activation を推奨します。
 socket unit が public/admin/redirect/HTTP3 listener を保持するため、service process
 の shutdown / restart と listener bind race を分離できます。
@@ -389,6 +407,17 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now tukuyomi
 sudo systemctl enable --now tukuyomi-scheduled-tasks.timer
 sudo systemctl status tukuyomi
+```
+
+Center 登録例:
+
+```bash
+sudo install -d -m 755 /etc/tukuyomi
+sudo install -m 640 docs/build/tukuyomi-center.env.example /etc/tukuyomi/tukuyomi-center.env
+sudo install -m 644 docs/build/tukuyomi-center.service.example /etc/systemd/system/tukuyomi-center.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now tukuyomi-center
+sudo systemctl status tukuyomi-center
 ```
 
 socket activation 登録例:

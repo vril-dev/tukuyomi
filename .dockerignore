@@ -15,3 +15,4 @@ data/scheduled-tasks/*
 examples/*/data/logs
 examples/*/data/rules/crs
 web/tukuyomi-admin/node_modules
+web/tukuyomi-center/node_modules

@@ -83,7 +83,7 @@ if not db_path:
 pure = pathlib.PurePosixPath(db_path)
 if preview_mode:
     parent = pathlib.PurePosixPath(*pure.parts[:-1]) if len(pure.parts) > 1 else pathlib.PurePosixPath(".")
-    pure = pathlib.PurePosixPath(parent, "tukuyomi-ui-preview.db")
+    pure = pathlib.PurePosixPath(parent, "tukuyomi-gateway-preview.db")
 
 if pure.is_absolute():
     target = pathlib.Path(str(pure))
@@ -363,7 +363,7 @@ cleanup() {
     fi
     (
       cd "${PREVIEW_WORKSPACE}"
-      COMPOSE_PROJECT_NAME="${PREVIEW_PROJECT}" PUID="${PUID_VALUE}" GUID="${GUID_VALUE}" bash ./scripts/ui_preview.sh down >/dev/null 2>&1 || true
+      COMPOSE_PROJECT_NAME="${PREVIEW_PROJECT}" PUID="${PUID_VALUE}" GUID="${GUID_VALUE}" bash ./scripts/gateway_preview.sh down >/dev/null 2>&1 || true
     )
   fi
 
@@ -397,7 +397,7 @@ need_cmd rsync
 need_cmd install
 
 if [[ "${SCHEDULED_TASKS_SMOKE_SKIP_BUILD}" != "1" ]]; then
-  log "building embedded admin UI and binary"
+  log "building embedded Gateway/Center UI and binary"
   (cd "${ROOT_DIR}" && make build)
 else
   log "skipping build by request"
@@ -484,24 +484,24 @@ run_preview_smoke() {
   task_log="${PREVIEW_WORKSPACE}/data/scheduled-tasks/logs/scheduled-task-preview-smoke.log"
   write_smoke_logger "${PREVIEW_WORKSPACE}/data/scheduled-tasks/bin/scheduled-task-smoke-logger"
 
-  log "starting ui-preview scheduled-task smoke on port ${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}"
+  log "starting gateway-preview scheduled-task smoke on port ${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}"
   (
     cd "${PREVIEW_WORKSPACE}"
     COMPOSE_PROJECT_NAME="${PREVIEW_PROJECT}" \
     PUID="${PUID_VALUE}" \
     GUID="${GUID_VALUE}" \
-    UI_PREVIEW_PUBLIC_ADDR=":${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}" \
+    GATEWAY_PREVIEW_PUBLIC_ADDR=":${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}" \
     TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${SCHEDULED_TASKS_SMOKE_ADMIN_USERNAME}" \
     TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${SCHEDULED_TASKS_SMOKE_ADMIN_PASSWORD}" \
-    bash ./scripts/ui_preview.sh up >/dev/null
+    bash ./scripts/gateway_preview.sh up >/dev/null
   )
-  wait_for_http_code "200" "http://127.0.0.1:${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}/healthz" || fail "ui-preview scheduled-task smoke runtime did not become healthy"
+  wait_for_http_code "200" "http://127.0.0.1:${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}/healthz" || fail "gateway-preview scheduled-task smoke runtime did not become healthy"
 
   put_task_config_via_preview_api "${SCHEDULED_TASKS_SMOKE_PREVIEW_PORT}" "scheduled-task-preview-smoke" "/app/data/scheduled-tasks/bin/scheduled-task-smoke-logger scheduled-task-preview-smoke"
   wait_for_task_success "${db_path}" "scheduled-task-preview-smoke" "${task_log}" "scheduled-task-preview-smoke" || fail "preview scheduled-task smoke did not produce expected state/log/output"
   (
     cd "${PREVIEW_WORKSPACE}"
-    COMPOSE_PROJECT_NAME="${PREVIEW_PROJECT}" bash ./scripts/ui_preview.sh down >/dev/null
+    COMPOSE_PROJECT_NAME="${PREVIEW_PROJECT}" bash ./scripts/gateway_preview.sh down >/dev/null
   )
 }
 

@@ -33,8 +33,8 @@ func runPreviewPrintTopologyCommand() {
 
 func previewBootstrapOptionsFromEnv() handler.PreviewBootstrapOptions {
 	return handler.PreviewBootstrapOptions{
-		PublicListenAddr: strings.TrimSpace(os.Getenv("UI_PREVIEW_PUBLIC_ADDR")),
-		AdminListenAddr:  strings.TrimSpace(os.Getenv("UI_PREVIEW_ADMIN_ADDR")),
+		PublicListenAddr: strings.TrimSpace(os.Getenv("GATEWAY_PREVIEW_PUBLIC_ADDR")),
+		AdminListenAddr:  strings.TrimSpace(os.Getenv("GATEWAY_PREVIEW_ADMIN_ADDR")),
 	}
 }
 
@@ -50,24 +50,24 @@ func printPreviewTopology(topology handler.PreviewTopology) {
 	fmt.Printf("WAF_LISTEN_PORT=%d\n", topology.PublicPort)
 	fmt.Printf("CORAZA_PORT=%d\n", topology.PublicPort)
 	fmt.Printf("WAF_HEALTHCHECK_PORT=%d\n", topology.HealthPort)
-	fmt.Printf("UI_PREVIEW_PUBLIC_PORT=%d\n", topology.PublicPort)
-	fmt.Printf("UI_PREVIEW_PUBLIC_URL=%s\n", topology.PublicURL)
+	fmt.Printf("GATEWAY_PREVIEW_PUBLIC_PORT=%d\n", topology.PublicPort)
+	fmt.Printf("GATEWAY_PREVIEW_PUBLIC_URL=%s\n", topology.PublicURL)
 	if topology.SplitAdmin {
-		fmt.Printf("UI_PREVIEW_SPLIT_ADMIN=1\n")
+		fmt.Printf("GATEWAY_PREVIEW_SPLIT_ADMIN=1\n")
 	} else {
-		fmt.Printf("UI_PREVIEW_SPLIT_ADMIN=0\n")
+		fmt.Printf("GATEWAY_PREVIEW_SPLIT_ADMIN=0\n")
 	}
-	fmt.Printf("UI_PREVIEW_ADMIN_API_PATH=%s\n", topology.APIBasePath)
-	fmt.Printf("UI_PREVIEW_ADMIN_UI_PATH=%s\n", topology.UIBasePath)
+	fmt.Printf("GATEWAY_PREVIEW_ADMIN_API_PATH=%s\n", topology.APIBasePath)
+	fmt.Printf("GATEWAY_PREVIEW_ADMIN_UI_PATH=%s\n", topology.UIBasePath)
 	if topology.SplitAdmin {
 		fmt.Printf("WAF_ADMIN_LISTEN_PORT=%d\n", topology.AdminPort)
 		fmt.Printf("CORAZA_ADMIN_PORT=%d\n", topology.AdminPort)
-		fmt.Printf("UI_PREVIEW_ADMIN_PORT=%d\n", topology.AdminPort)
+		fmt.Printf("GATEWAY_PREVIEW_ADMIN_PORT=%d\n", topology.AdminPort)
 	} else {
 		fmt.Printf("WAF_ADMIN_LISTEN_PORT=\n")
 		fmt.Printf("CORAZA_ADMIN_PORT=\n")
-		fmt.Printf("UI_PREVIEW_ADMIN_PORT=\n")
+		fmt.Printf("GATEWAY_PREVIEW_ADMIN_PORT=\n")
 	}
-	fmt.Printf("UI_PREVIEW_ADMIN_UI_URL=%s\n", topology.AdminUIURL)
-	fmt.Printf("UI_PREVIEW_ADMIN_API_URL=%s\n", topology.AdminAPIURL)
+	fmt.Printf("GATEWAY_PREVIEW_ADMIN_UI_URL=%s\n", topology.AdminUIURL)
+	fmt.Printf("GATEWAY_PREVIEW_ADMIN_API_URL=%s\n", topology.AdminAPIURL)
 }

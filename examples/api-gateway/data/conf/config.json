@@ -5,5 +5,11 @@
     "db_dsn": "",
     "db_retention_days": 30,
     "db_sync_interval_sec": 0
+  },
+  "edge": {
+    "enabled": false,
+    "device_auth": {
+      "enabled": true
+    }
   }
 }

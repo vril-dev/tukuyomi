@@ -31,13 +31,22 @@ func SetAdminAuthResolver(resolver AdminAuthResolver) {
 }
 
 func AdminAuth() gin.HandlerFunc {
+	return AdminAuthWithResolver(resolveConfiguredAdminAuth)
+}
+
+func AdminAuthWithResolver(resolver AdminAuthResolver) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if config.APIAuthDisable {
 			c.Next()
 			return
 		}
 
-		if result, ok, err := resolveConfiguredAdminAuth(c); err != nil {
+		if resolver == nil {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+
+		if result, ok, err := resolver(c); err != nil {
 			if errors.Is(err, adminauth.ErrCSRFRequired) || errors.Is(err, adminauth.ErrCSRFMismatch) {
 				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": err.Error()})
 				return

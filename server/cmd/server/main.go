@@ -59,12 +59,29 @@ func runMain(args []string) {
 		}
 		runServer(notifier)
 	default:
-		runServer(nil)
+		runGatewayCommand()
 	}
 }
 
 func runServer(workerReady *workerReadyNotifier) {
+	runServerWithConfig(workerReady, false)
+}
+
+func runGatewayCommand() {
 	config.LoadEnv()
+	if config.RuntimeProcessModel == config.RuntimeProcessModelSupervised {
+		if err := runSupervisorServer(); err != nil {
+			log.Fatalf("[SUPERVISOR][FATAL] %v", err)
+		}
+		return
+	}
+	runServerWithConfig(nil, true)
+}
+
+func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
+	if !configLoaded {
+		config.LoadEnv()
+	}
 	initRuntimeDBStoreOrFatal("[DB][BOOTSTRAP]")
 	if err := handler.SyncAppConfigStorage(); err != nil {
 		log.Fatalf("[CONFIG][DB][FATAL] sync failed: %v", err)
@@ -95,17 +112,33 @@ func runServer(workerReady *workerReadyNotifier) {
 			log.Fatalf("[FATAL] failed to initialize runtime apps: %v", err)
 		}
 	}
+	runtimeAppsShutdown := func() {}
+	fatalf := func(format string, args ...any) {
+		runtimeAppsShutdown()
+		log.Fatalf(format, args...)
+	}
 	if err := handler.InitPHPRuntimeSupervisor(); err != nil {
+		if shutdownErr := handler.ShutdownPHPRuntimeSupervisor(); shutdownErr != nil {
+			log.Printf("[RUNTIME_APPS][WARN] shutdown php runtime supervisor after init failure: %v", shutdownErr)
+		}
 		log.Fatalf("[FATAL] failed to initialize php runtime supervisor: %v", err)
 	}
 	if err := handler.InitPSGIRuntimeSupervisor(); err != nil {
+		if shutdownErr := handler.ShutdownPSGIRuntimeSupervisor(); shutdownErr != nil {
+			log.Printf("[RUNTIME_APPS][WARN] shutdown psgi runtime supervisor after init failure: %v", shutdownErr)
+		}
+		if shutdownErr := handler.ShutdownPHPRuntimeSupervisor(); shutdownErr != nil {
+			log.Printf("[RUNTIME_APPS][WARN] shutdown php runtime supervisor after psgi init failure: %v", shutdownErr)
+		}
 		log.Fatalf("[FATAL] failed to initialize psgi runtime supervisor: %v", err)
 	}
+	runtimeAppsShutdown = shutdownRuntimeAppSupervisors
+	defer runtimeAppsShutdown()
 	if err := handler.InitSiteRuntime(config.SiteConfigFile, config.ProxyRollbackMax); err != nil {
-		log.Fatalf("[FATAL] failed to initialize site runtime: %v", err)
+		fatalf("[FATAL] failed to initialize site runtime: %v", err)
 	}
 	if err := handler.InitProxyRuntime(config.ProxyConfigFile, config.ProxyRollbackMax); err != nil {
-		log.Fatalf("[FATAL] failed to initialize proxy runtime: %v", err)
+		fatalf("[FATAL] failed to initialize proxy runtime: %v", err)
 	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -115,26 +148,26 @@ func runServer(workerReady *workerReadyNotifier) {
 		}
 	}()
 	if err := handler.InitSecurityAuditRuntime(); err != nil {
-		log.Fatalf("[SECURITY_AUDIT][FATAL] failed to initialize runtime: %v", err)
+		fatalf("[SECURITY_AUDIT][FATAL] failed to initialize runtime: %v", err)
 	}
 	if err := handler.SyncRuleFilesStorage(); err != nil {
-		log.Fatalf("[RULES][DB][FATAL] sync failed: %v", err)
+		fatalf("[RULES][DB][FATAL] sync failed: %v", err)
 	}
 	if err := handler.SyncManagedOverrideRulesStorage(); err != nil {
-		log.Fatalf("[OVERRIDE_RULES][DB][FATAL] sync failed: %v", err)
+		fatalf("[OVERRIDE_RULES][DB][FATAL] sync failed: %v", err)
 	}
 	waf.InitWAF()
 	if err := handler.SyncCRSDisabledStorage(); err != nil {
-		log.Fatalf("[CRS][DB][FATAL] sync failed: %v", err)
+		fatalf("[CRS][DB][FATAL] sync failed: %v", err)
 	}
 	if err := handler.SyncBypassStorage(); err != nil {
-		log.Fatalf("[BYPASS][DB][FATAL] sync failed: %v", err)
+		fatalf("[BYPASS][DB][FATAL] sync failed: %v", err)
 	}
 	if err := handler.InitCountryBlock(config.CountryBlockFile, config.LegacyCompatPath(config.CountryBlockFile, config.DefaultCountryBlockFilePath, config.LegacyDefaultCountryBlockPath)); err != nil {
 		log.Printf("[COUNTRY_BLOCK][INIT][ERR] %v (path=%s)", err, config.CountryBlockFile)
 	} else {
 		if err := handler.SyncCountryBlockStorage(); err != nil {
-			log.Fatalf("[COUNTRY_BLOCK][DB][FATAL] sync failed: %v", err)
+			fatalf("[COUNTRY_BLOCK][DB][FATAL] sync failed: %v", err)
 		}
 		log.Printf("[COUNTRY_BLOCK][INIT] configured=%s active=%s countries=%d", config.CountryBlockFile, handler.GetCountryBlockActivePath(), len(handler.GetBlockedCountries()))
 	}
@@ -142,7 +175,7 @@ func runServer(workerReady *workerReadyNotifier) {
 		log.Printf("[RATE_LIMIT][INIT][ERR] %v (path=%s)", err, config.RateLimitFile)
 	} else {
 		if err := handler.SyncRateLimitStorage(); err != nil {
-			log.Fatalf("[RATE_LIMIT][DB][FATAL] sync failed: %v", err)
+			fatalf("[RATE_LIMIT][DB][FATAL] sync failed: %v", err)
 		}
 		log.Printf("[RATE_LIMIT][INIT] loaded")
 	}
@@ -150,7 +183,7 @@ func runServer(workerReady *workerReadyNotifier) {
 		log.Printf("[BOT_DEFENSE][INIT][ERR] %v (path=%s)", err, config.BotDefenseFile)
 	} else {
 		if err := handler.SyncBotDefenseStorage(); err != nil {
-			log.Fatalf("[BOT_DEFENSE][DB][FATAL] sync failed: %v", err)
+			fatalf("[BOT_DEFENSE][DB][FATAL] sync failed: %v", err)
 		}
 		log.Printf("[BOT_DEFENSE][INIT] loaded")
 	}
@@ -158,7 +191,7 @@ func runServer(workerReady *workerReadyNotifier) {
 		log.Printf("[SEMANTIC][INIT][ERR] %v (path=%s)", err, config.SemanticFile)
 	} else {
 		if err := handler.SyncSemanticStorage(); err != nil {
-			log.Fatalf("[SEMANTIC][DB][FATAL] sync failed: %v", err)
+			fatalf("[SEMANTIC][DB][FATAL] sync failed: %v", err)
 		}
 		log.Printf("[SEMANTIC][INIT] loaded")
 	}
@@ -167,7 +200,7 @@ func runServer(workerReady *workerReadyNotifier) {
 		log.Printf("[NOTIFY][INIT][ERR] %v (path=%s)", err, config.NotificationFile)
 	} else {
 		if err := handler.SyncNotificationStorage(); err != nil {
-			log.Fatalf("[NOTIFY][DB][FATAL] sync failed: %v", err)
+			fatalf("[NOTIFY][DB][FATAL] sync failed: %v", err)
 		}
 		log.Printf("[NOTIFY][INIT] loaded")
 	}
@@ -175,12 +208,12 @@ func runServer(workerReady *workerReadyNotifier) {
 		log.Printf("[IP_REPUTATION][INIT][ERR] %v (path=%s)", err, config.IPReputationFile)
 	} else {
 		if err := handler.SyncIPReputationStorage(); err != nil {
-			log.Fatalf("[IP_REPUTATION][DB][FATAL] sync failed: %v", err)
+			fatalf("[IP_REPUTATION][DB][FATAL] sync failed: %v", err)
 		}
 		log.Printf("[IP_REPUTATION][INIT] loaded")
 	}
 	if err := handler.InitAdminGuards(); err != nil {
-		log.Fatalf("[ADMIN][FATAL] failed to initialize admin guards: %v", err)
+		fatalf("[ADMIN][FATAL] failed to initialize admin guards: %v", err)
 	}
 	shutdownTracing, err := observability.SetupTracing(context.Background(), observability.TracingConfig{
 		Enabled:      config.TracingEnabled,
@@ -190,7 +223,7 @@ func runServer(workerReady *workerReadyNotifier) {
 		SampleRatio:  config.TracingSampleRatio,
 	})
 	if err != nil {
-		log.Fatalf("[TRACING][FATAL] initialize tracing: %v", err)
+		fatalf("[TRACING][FATAL] initialize tracing: %v", err)
 	}
 	defer func() {
 		if err := shutdownTracing(context.Background()); err != nil {
@@ -199,7 +232,7 @@ func runServer(workerReady *workerReadyNotifier) {
 	}()
 	shutdownPprof, err := startOptionalPprofServerFromEnv()
 	if err != nil {
-		log.Fatalf("[PPROF][FATAL] initialize pprof server: %v", err)
+		fatalf("[PPROF][FATAL] initialize pprof server: %v", err)
 	}
 	defer func() {
 		if err := shutdownPprof(context.Background()); err != nil {
@@ -258,14 +291,14 @@ func runServer(workerReady *workerReadyNotifier) {
 	})
 
 	if err := handler.InitResponseCacheRuntime(config.CacheStoreFile); err != nil {
-		log.Fatalf("[CACHE][FATAL] failed to initialize response cache runtime: %v", err)
+		fatalf("[CACHE][FATAL] failed to initialize response cache runtime: %v", err)
 	}
 	if err := handler.SyncResponseCacheStoreStorage(); err != nil {
-		log.Fatalf("[CACHE][DB][FATAL] sync failed: %v", err)
+		fatalf("[CACHE][DB][FATAL] sync failed: %v", err)
 	}
 
 	if err := handler.SyncCacheRulesStorage(); err != nil {
-		log.Fatalf("[CACHE][DB][FATAL] sync failed: %v", err)
+		fatalf("[CACHE][DB][FATAL] sync failed: %v", err)
 	}
 	if config.DBSyncInterval > 0 {
 		handler.StartStorageSyncLoop(config.DBSyncInterval)
@@ -296,13 +329,13 @@ func runServer(workerReady *workerReadyNotifier) {
 	}
 	publicHandler, err := buildPublicHandler(globalConcurrencyGuard, proxyConcurrencyGuard, splitAdminListener)
 	if err != nil {
-		log.Fatalf("failed to build public handler: %v", err)
+		fatalf("failed to build public handler: %v", err)
 	}
 	var adminEngine *gin.Engine
 	if splitAdminListener {
 		adminEngine, err = buildAdminEngine(globalConcurrencyGuard)
 		if err != nil {
-			log.Fatalf("failed to build admin engine: %v", err)
+			fatalf("failed to build admin engine: %v", err)
 		}
 	}
 	publicListenerRuntime := listenerProxyProtocolRuntime{
@@ -317,12 +350,17 @@ func runServer(workerReady *workerReadyNotifier) {
 	}
 	activation, err := loadSystemdActivationFromEnv()
 	if err != nil {
-		log.Fatalf("[FATAL] load systemd socket activation: %v", err)
+		fatalf("[FATAL] load systemd socket activation: %v", err)
 	}
 	if activation.Active() {
 		log.Printf("[SERVER] systemd socket activation enabled fds=%d", len(activation.fds))
 	}
 	lifecycle := newManagedServerLifecycle(config.ServerGracefulShutdownTimeout)
+	sigCh, cleanupSignals, err := newServerSignalChannel()
+	if err != nil {
+		fatalf("[FATAL] initialize server signals: %v", err)
+	}
+	defer cleanupSignals()
 
 	publicSrv := &handler.NativeHTTP1Server{
 		Handler:           publicHandler,
@@ -337,7 +375,7 @@ func runServer(workerReady *workerReadyNotifier) {
 	if splitAdminListener {
 		adminListener, inherited, err := buildManagedTCPListenerForRole("admin", config.AdminListenAddr, adminListenerRuntime, activation)
 		if err != nil {
-			log.Fatalf("[FATAL] create admin listener: %v", err)
+			fatalf("[FATAL] create admin listener: %v", err)
 		}
 		adminListener = lifecycle.TrackListener("admin", adminListener)
 		adminSrv := &http.Server{
@@ -360,18 +398,18 @@ func runServer(workerReady *workerReadyNotifier) {
 
 	publicListener, publicInherited, err := buildManagedTCPListenerForRole("public", config.ListenAddr, publicListenerRuntime, activation)
 	if err != nil {
-		log.Fatalf("[FATAL] create public listener: %v", err)
+		fatalf("[FATAL] create public listener: %v", err)
 	}
 	publicListener = lifecycle.TrackListener("public", publicListener)
 
 	if config.ServerTLSEnabled {
 		tlsConfig, redirectSrv, err := buildManagedServerTLSConfig()
 		if err != nil {
-			log.Fatalf("[FATAL] build server tls config: %v", err)
+			fatalf("[FATAL] build server tls config: %v", err)
 		}
 		http3Srv, altSvc, err := buildManagedServerHTTP3Server(tlsConfig, publicHandler)
 		if err != nil {
-			log.Fatalf("[FATAL] build server http3 config: %v", err)
+			fatalf("[FATAL] build server http3 config: %v", err)
 		}
 		if altSvc != "" {
 			publicSrv.Handler = wrapHTTP3AltSvcHandler(publicHandler, altSvc)
@@ -379,7 +417,7 @@ func runServer(workerReady *workerReadyNotifier) {
 		if redirectSrv != nil {
 			redirectListener, redirectInherited, err := buildManagedTCPListenerForRole("redirect", config.ServerTLSHTTPRedirectAddr, publicListenerRuntime, activation)
 			if err != nil {
-				log.Fatalf("[FATAL] create redirect listener: %v", err)
+				fatalf("[FATAL] create redirect listener: %v", err)
 			}
 			redirectListener = lifecycle.TrackListener("redirect", redirectListener)
 			lifecycle.Go("redirect", func() error {
@@ -391,7 +429,7 @@ func runServer(workerReady *workerReadyNotifier) {
 			}, redirectSrv.Shutdown, redirectSrv.Close)
 		}
 		if err := runHTTP3Server(lifecycle, activation, http3Srv); err != nil {
-			log.Fatalf("[FATAL] start HTTP/3 server: %v", err)
+			fatalf("[FATAL] start HTTP/3 server: %v", err)
 		}
 		log.Printf("[INFO] starting HTTPS server on %s inherited=%t engine=native_http1", config.ListenAddr, publicInherited)
 		log.Printf("[SERVER] tls enabled source=%s cert_file=%s acme_domains=%s min_version=%s redirect_http=%t redirect_addr=%s",
@@ -425,10 +463,10 @@ func runServer(workerReady *workerReadyNotifier) {
 		}, publicSrv.Shutdown, publicSrv.Close)
 		activation.CloseUnused()
 		if err := notifyWorkerReady(workerReady); err != nil {
-			log.Fatalf("[WORKER][FATAL] readiness notify failed: %v", err)
+			fatalf("[WORKER][FATAL] readiness notify failed: %v", err)
 		}
-		if err := lifecycle.Wait(); err != nil {
-			log.Fatalf("[FATAL] server lifecycle stopped: %v", err)
+		if err := lifecycle.WaitWithSignals(sigCh); err != nil {
+			fatalf("[FATAL] server lifecycle stopped: %v", err)
 		}
 		return
 	}
@@ -449,10 +487,10 @@ func runServer(workerReady *workerReadyNotifier) {
 	}, publicSrv.Shutdown, publicSrv.Close)
 	activation.CloseUnused()
 	if err := notifyWorkerReady(workerReady); err != nil {
-		log.Fatalf("[WORKER][FATAL] readiness notify failed: %v", err)
+		fatalf("[WORKER][FATAL] readiness notify failed: %v", err)
 	}
-	if err := lifecycle.Wait(); err != nil {
-		log.Fatalf("[FATAL] server lifecycle stopped: %v", err)
+	if err := lifecycle.WaitWithSignals(sigCh); err != nil {
+		fatalf("[FATAL] server lifecycle stopped: %v", err)
 	}
 }
 
@@ -543,6 +581,15 @@ func initRuntimeDBStoreOrFatal(prefix string) {
 		log.Fatalf("%s[FATAL] failed to initialize db store: %v", prefix, err)
 	}
 	log.Printf("%s db store enabled (driver=%s path=%s retention_days=%d)", prefix, config.DBDriver, config.DBPath, config.DBRetentionDays)
+}
+
+func shutdownRuntimeAppSupervisors() {
+	if err := handler.ShutdownPSGIRuntimeSupervisor(); err != nil {
+		log.Printf("[RUNTIME_APPS][WARN] shutdown psgi runtime supervisor: %v", err)
+	}
+	if err := handler.ShutdownPHPRuntimeSupervisor(); err != nil {
+		log.Printf("[RUNTIME_APPS][WARN] shutdown php runtime supervisor: %v", err)
+	}
 }
 
 func queueTimeoutLogValue(timeout time.Duration) string {

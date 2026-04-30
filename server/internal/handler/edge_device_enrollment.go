@@ -19,12 +19,14 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"tukuyomi/internal/buildinfo"
 	"tukuyomi/internal/config"
 )
 
@@ -121,6 +123,9 @@ type edgeDeviceStatusWireRequest struct {
 	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
 	Timestamp                  string `json:"timestamp"`
 	Nonce                      string `json:"nonce"`
+	RuntimeRole                string `json:"runtime_role,omitempty"`
+	BuildVersion               string `json:"build_version,omitempty"`
+	GoVersion                  string `json:"go_version,omitempty"`
 	BodyHash                   string `json:"body_hash"`
 	SignatureB64               string `json:"signature_b64"`
 }
@@ -758,6 +763,9 @@ func signedEdgeDeviceStatusRequest(identity edgeDeviceIdentityRecord) (edgeDevic
 		PublicKeyFingerprintSHA256: identity.PublicKeyFingerprintSHA256,
 		Timestamp:                  timestamp,
 		Nonce:                      nonce,
+		RuntimeRole:                "gateway",
+		BuildVersion:               clampEdgeText(buildinfo.Version, 128),
+		GoVersion:                  clampEdgeText(goruntime.Version(), 64),
 	}
 	req.BodyHash = edgeDeviceStatusBodyHash(req)
 	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)))
@@ -898,7 +906,10 @@ func edgeDeviceStatusBodyHash(req edgeDeviceStatusWireRequest) string {
 			req.KeyID + "\n" +
 			req.PublicKeyFingerprintSHA256 + "\n" +
 			req.Timestamp + "\n" +
-			req.Nonce,
+			req.Nonce + "\n" +
+			req.RuntimeRole + "\n" +
+			req.BuildVersion + "\n" +
+			req.GoVersion,
 	))
 	return hex.EncodeToString(sum[:])
 }

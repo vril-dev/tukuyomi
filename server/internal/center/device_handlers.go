@@ -131,7 +131,11 @@ func postDeviceStatus(c *gin.Context) {
 	}
 	checkedAt := time.Now().UTC().Unix()
 	if record.FromApprovedDevice {
-		if err := TouchApprovedDeviceLastSeen(c.Request.Context(), verified.DeviceID, checkedAt); err != nil {
+		if err := TouchApprovedDeviceHeartbeat(c.Request.Context(), verified.DeviceID, checkedAt, DeviceRuntimeInventory{
+			RuntimeRole:  verified.RuntimeRole,
+			BuildVersion: verified.BuildVersion,
+			GoVersion:    verified.GoVersion,
+		}); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update device last seen"})
 			return
 		}

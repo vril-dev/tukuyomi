@@ -64,6 +64,12 @@ Behavior:
 - `INSTALL_ROLE=gateway` installs `tukuyomi.service`, `tukuyomi.env`,
   `conf/config.json`, WAF/CRS asset import, first-run gateway DB seed, and the
   optional scheduled-task timer
+- Gateway installs write `runtime.process_model=supervised`. The supervisor
+  owns TCP listeners and activates the initial worker after readiness. Existing
+  Gateway configs are migrated with a targeted `runtime.process_model` update
+  during install. The first migration from a legacy single-process Gateway still
+  needs a normal service restart because listener ownership changes. HTTP/3 is
+  rejected until UDP handoff is implemented.
 - `INSTALL_ROLE=center` installs `tukuyomi-center.service`,
   `tukuyomi-center.env`, and `conf/config.center.json`; it runs DB migration
   only and skips WAF/CRS import, gateway seed, and scheduled tasks

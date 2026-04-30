@@ -64,6 +64,11 @@ make install TARGET=linux-systemd \
 - `INSTALL_ROLE=gateway` は `tukuyomi.service`、`tukuyomi.env`、
   `conf/config.json`、WAF/CRS asset import、初回 gateway DB seed、
   scheduled-task timer を対象にします
+- Gateway install は `runtime.process_model=supervised` を書き込みます。
+  supervisor が TCP listener を所有し、readiness 後に初期 worker を activate します。
+  既存 Gateway config は install 時に `runtime.process_model` だけを targeted update
+  します。legacy single-process Gateway からの初回移行は、listener 所有者が変わるため
+  通常の service restart が必要です。HTTP/3 は UDP handoff 実装まで拒否されます
 - `INSTALL_ROLE=center` は `tukuyomi-center.service`、
   `tukuyomi-center.env`、`conf/config.center.json` を対象にし、DB migration
   のみを実行します。WAF/CRS import、gateway seed、scheduled tasks は実行しません

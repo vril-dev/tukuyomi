@@ -35,6 +35,11 @@ func buildManagedTCPListenerForRole(role string, addr string, runtime listenerPr
 			if err != nil {
 				return nil, ok, err
 			}
+			ln, gateErr := wrapWorkerActivationListenerIfNeeded(ln)
+			if gateErr != nil {
+				_ = ln.Close()
+				return nil, ok, gateErr
+			}
 			wrapped, wrapErr := wrapManagedTCPListener(ln, runtime)
 			if wrapErr != nil {
 				_ = ln.Close()
@@ -45,6 +50,9 @@ func buildManagedTCPListenerForRole(role string, addr string, runtime listenerPr
 		return nil, false, fmt.Errorf("systemd activation is enabled but no fd exists for role %q", role)
 	}
 	ln, err := buildManagedTCPListener(addr, runtime)
+	if err == nil {
+		ln, err = wrapWorkerActivationListenerIfNeeded(ln)
+	}
 	return ln, false, err
 }
 

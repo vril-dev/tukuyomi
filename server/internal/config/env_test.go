@@ -349,6 +349,9 @@ func TestLoadAppConfigFile(t *testing.T) {
 	if PersistentStorageLocalBaseDir != DefaultPersistentStorageLocalDir {
 		t.Fatalf("unexpected runtime persistent storage local base dir: %s", PersistentStorageLocalBaseDir)
 	}
+	if RuntimeProcessModel != RuntimeProcessModelSingle {
+		t.Fatalf("unexpected runtime process model: %s", RuntimeProcessModel)
+	}
 	if EdgeEnabled {
 		t.Fatal("runtime EdgeEnabled must default to false")
 	}
@@ -373,6 +376,7 @@ func TestLoadAppConfigFileAcceptsEdgeMode(t *testing.T) {
 			"enabled": true,
 			"device_auth": {"enabled": true}
 		},
+		"runtime": {"process_model": "supervised"},
 		"paths": {
 			"proxy_config_file": "conf/proxy.json",
 			"security_audit_file": "audit/security-audit.ndjson",
@@ -410,6 +414,9 @@ func TestLoadAppConfigFileAcceptsEdgeMode(t *testing.T) {
 	}
 	if EdgeDeviceStatusRefreshInterval != DefaultEdgeDeviceStatusRefreshSec*time.Second {
 		t.Fatalf("runtime edge status refresh interval=%s", EdgeDeviceStatusRefreshInterval)
+	}
+	if RuntimeProcessModel != RuntimeProcessModelSupervised {
+		t.Fatalf("runtime process model=%s", RuntimeProcessModel)
 	}
 }
 

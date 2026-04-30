@@ -77,6 +77,9 @@ func TestStatusHandlerIncludesOverloadState(t *testing.T) {
 	if got := body["app_version"]; got != "" {
 		t.Fatalf("app_version=%#v want empty", got)
 	}
+	if got := body["runtime_process_model"]; got != config.RuntimeProcessModel {
+		t.Fatalf("runtime_process_model=%#v want %q", got, config.RuntimeProcessModel)
+	}
 	if got := int(body["server_queued_proxy_request_timeout_ms"].(float64)); got != 100 {
 		t.Fatalf("server_queued_proxy_request_timeout_ms=%d want=100", got)
 	}

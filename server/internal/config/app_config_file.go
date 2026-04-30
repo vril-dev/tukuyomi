@@ -25,6 +25,9 @@ const (
 	PersistentStorageBackendGCS       = "gcs"
 	DefaultPersistentStorageBackend   = PersistentStorageBackendLocal
 	DefaultPersistentStorageLocalDir  = "data/persistent"
+	RuntimeProcessModelSingle         = "single"
+	RuntimeProcessModelSupervised     = "supervised"
+	DefaultRuntimeProcessModel        = RuntimeProcessModelSingle
 )
 
 type appConfigFile struct {
@@ -87,8 +90,9 @@ type appServerHTTP3Config struct {
 }
 
 type appRuntimeConfig struct {
-	GOMAXPROCS    int `json:"gomaxprocs"`
-	MemoryLimitMB int `json:"memory_limit_mb"`
+	GOMAXPROCS    int    `json:"gomaxprocs"`
+	MemoryLimitMB int    `json:"memory_limit_mb"`
+	ProcessModel  string `json:"process_model"`
 }
 
 type appRequestMetaConfig struct {
@@ -323,6 +327,7 @@ func defaultAppConfigFile() appConfigFile {
 		Runtime: appRuntimeConfig{
 			GOMAXPROCS:    0,
 			MemoryLimitMB: 0,
+			ProcessModel:  DefaultRuntimeProcessModel,
 		},
 		RequestMeta: appRequestMetaConfig{
 			Country: appRequestMetaCountryConfig{
@@ -505,6 +510,7 @@ func normalizeAppConfigFile(cfg *appConfigFile) {
 	cfg.Admin.ListenAddr = strings.TrimSpace(cfg.Admin.ListenAddr)
 	cfg.Admin.SessionSecret = strings.TrimSpace(cfg.Admin.SessionSecret)
 	cfg.Admin.ExternalMode = strings.ToLower(strings.TrimSpace(cfg.Admin.ExternalMode))
+	cfg.Runtime.ProcessModel = normalizeRuntimeProcessModel(cfg.Runtime.ProcessModel)
 	for i := range cfg.Server.ProxyProtocol.TrustedCIDRs {
 		cfg.Server.ProxyProtocol.TrustedCIDRs[i] = strings.TrimSpace(cfg.Server.ProxyProtocol.TrustedCIDRs[i])
 	}
@@ -749,6 +755,11 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	if cfg.Runtime.GOMAXPROCS < 0 || cfg.Runtime.MemoryLimitMB < 0 {
 		return fmt.Errorf("runtime resource limits must be >= 0")
 	}
+	switch cfg.Runtime.ProcessModel {
+	case RuntimeProcessModelSingle, RuntimeProcessModelSupervised:
+	default:
+		return fmt.Errorf("runtime.process_model must be single or supervised")
+	}
 	switch cfg.Storage.Backend {
 	case "", "db":
 	case "file":
@@ -885,6 +896,14 @@ func normalizeAppProxyEngineMode(mode string) string {
 
 func normalizeAppWAFEngineMode(mode string) string {
 	return wafengine.Normalize(mode)
+}
+
+func normalizeRuntimeProcessModel(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		return DefaultRuntimeProcessModel
+	}
+	return mode
 }
 
 func validateAppAdminListenerConfig(cfg appConfigFile) error {

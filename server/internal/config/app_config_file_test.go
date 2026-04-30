@@ -148,6 +148,32 @@ func TestValidateAppEdgeDeviceStatusRefreshInterval(t *testing.T) {
 	})
 }
 
+func TestValidateAppRuntimeProcessModel(t *testing.T) {
+	t.Run("accepts supported models", func(t *testing.T) {
+		for _, model := range []string{RuntimeProcessModelSingle, RuntimeProcessModelSupervised} {
+			cfg := defaultAppConfigFile()
+			cfg.Runtime.ProcessModel = model
+
+			if err := validateAppConfigFile(cfg); err != nil {
+				t.Fatalf("validateAppConfigFile(%s) error = %v", model, err)
+			}
+		}
+	})
+
+	t.Run("rejects unsupported model", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.Runtime.ProcessModel = "forking"
+
+		err := validateAppConfigFile(cfg)
+		if err == nil {
+			t.Fatal("expected runtime process model error")
+		}
+		if got := err.Error(); got != "runtime.process_model must be single or supervised" {
+			t.Fatalf("error=%q want runtime process model error", got)
+		}
+	})
+}
+
 func TestListenAddrsCollide(t *testing.T) {
 	cases := []struct {
 		name string

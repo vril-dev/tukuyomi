@@ -23,6 +23,9 @@ type DeviceRecord = {
   public_key_fingerprint_sha256: string;
   status: string;
   product_id?: string;
+  runtime_role?: string;
+  build_version?: string;
+  go_version?: string;
   enrollment_token_prefix?: string;
   enrollment_token_label?: string;
   enrollment_token_status?: string;
@@ -479,6 +482,8 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                 <th>{tx("Key")}</th>
                 <th>{tx("Fingerprint")}</th>
                 <th>{tx("Product ID")}</th>
+                <th>{tx("Runtime")}</th>
+                <th>{tx("Version")}</th>
                 <th>{tx("Enrollment token")}</th>
                 <th>{tx("Token status")}</th>
                 <th>{tx("Status")}</th>
@@ -495,6 +500,11 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                   <td title={device.key_id}>{device.key_id}</td>
                   <td title={device.public_key_fingerprint_sha256}>{device.public_key_fingerprint_sha256}</td>
                   <td title={device.product_id || undefined}>{device.product_id || "-"}</td>
+                  <td title={device.runtime_role || undefined}>{device.runtime_role || "-"}</td>
+                  <td title={[device.build_version, device.go_version].filter(Boolean).join(" / ") || undefined}>
+                    {device.build_version || "-"}
+                    {device.go_version ? <span className="table-subvalue">{device.go_version}</span> : null}
+                  </td>
                   <td title={device.enrollment_token_label || device.enrollment_token_prefix || undefined}>
                     {device.enrollment_token_label || device.enrollment_token_prefix || "-"}
                   </td>

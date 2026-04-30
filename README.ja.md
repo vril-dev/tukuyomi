@@ -94,6 +94,11 @@ Center を control plane ホストに入れる場合は、同じ `TARGET` に ro
 make install TARGET=linux-systemd INSTALL_ROLE=center
 ```
 
+Gateway install は内部的に supervisor / worker runtime を使います。supervisor が
+TCP listener を所有し、readiness 後に初期 worker を activate します。Center は
+別の control-plane role として入り、Gateway の request-path supervisor は使いません。
+HTTP/3 は UDP handoff 実装まで Gateway supervisor では拒否されます。
+
 `PREFIX`、`INSTALL_USER`、スケジュールタスク用ユニットの詳細、およびホストへのインストールではなくコンテナ／プラットフォームへのデプロイを利用する場合の詳細については、以下を参照してください。
 
 - [docs/build/binary-deployment.ja.md](docs/build/binary-deployment.ja.md)

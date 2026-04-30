@@ -26,6 +26,7 @@ var (
 	keyIDPattern    = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 	noncePattern    = regexp.MustCompile(`^[A-Za-z0-9._:-]{8,128}$`)
 	hex64Pattern    = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	metadataPattern = regexp.MustCompile(`^[ -~]{0,128}$`)
 
 	ErrInvalidEnrollment = errors.New("invalid device enrollment")
 )
@@ -47,6 +48,9 @@ type DeviceStatusRequest struct {
 	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
 	Timestamp                  string `json:"timestamp"`
 	Nonce                      string `json:"nonce"`
+	RuntimeRole                string `json:"runtime_role,omitempty"`
+	BuildVersion               string `json:"build_version,omitempty"`
+	GoVersion                  string `json:"go_version,omitempty"`
 	BodyHash                   string `json:"body_hash"`
 	SignatureB64               string `json:"signature_b64"`
 }
@@ -67,6 +71,9 @@ type verifiedDeviceStatusRequest struct {
 	KeyID                      string
 	PublicKeyFingerprintSHA256 string
 	Timestamp                  time.Time
+	RuntimeRole                string
+	BuildVersion               string
+	GoVersion                  string
 	BodyHash                   string
 	SignatureB64               string
 }
@@ -164,8 +171,7 @@ func VerifyDeviceStatusRequest(req DeviceStatusRequest, publicKeyPEM string, now
 	if !secureEqualHex(hex.EncodeToString(fingerprint[:]), req.PublicKeyFingerprintSHA256) {
 		return verifiedDeviceStatusRequest{}, fmt.Errorf("%w: public key fingerprint mismatch", ErrInvalidEnrollment)
 	}
-	bodyHash := deviceStatusBodyHash(req)
-	if !secureEqualHex(bodyHash, req.BodyHash) {
+	if !deviceStatusBodyHashMatches(req) {
 		return verifiedDeviceStatusRequest{}, fmt.Errorf("%w: body_hash mismatch", ErrInvalidEnrollment)
 	}
 	signature, err := base64.StdEncoding.DecodeString(req.SignatureB64)
@@ -180,6 +186,9 @@ func VerifyDeviceStatusRequest(req DeviceStatusRequest, publicKeyPEM string, now
 		KeyID:                      req.KeyID,
 		PublicKeyFingerprintSHA256: req.PublicKeyFingerprintSHA256,
 		Timestamp:                  ts.UTC(),
+		RuntimeRole:                req.RuntimeRole,
+		BuildVersion:               req.BuildVersion,
+		GoVersion:                  req.GoVersion,
 		BodyHash:                   req.BodyHash,
 		SignatureB64:               req.SignatureB64,
 	}, nil
@@ -191,6 +200,9 @@ func normalizeDeviceStatusRequest(req DeviceStatusRequest, now time.Time) (Devic
 	req.PublicKeyFingerprintSHA256 = strings.ToLower(strings.TrimSpace(req.PublicKeyFingerprintSHA256))
 	req.Timestamp = strings.TrimSpace(req.Timestamp)
 	req.Nonce = strings.TrimSpace(req.Nonce)
+	req.RuntimeRole = strings.TrimSpace(req.RuntimeRole)
+	req.BuildVersion = strings.TrimSpace(req.BuildVersion)
+	req.GoVersion = strings.TrimSpace(req.GoVersion)
 	req.BodyHash = strings.ToLower(strings.TrimSpace(req.BodyHash))
 	req.SignatureB64 = strings.TrimSpace(req.SignatureB64)
 
@@ -208,6 +220,15 @@ func normalizeDeviceStatusRequest(req DeviceStatusRequest, now time.Time) (Devic
 	}
 	if !hex64Pattern.MatchString(req.BodyHash) {
 		return DeviceStatusRequest{}, time.Time{}, fmt.Errorf("%w: invalid body_hash", ErrInvalidEnrollment)
+	}
+	if !metadataPattern.MatchString(req.RuntimeRole) || len(req.RuntimeRole) > 64 {
+		return DeviceStatusRequest{}, time.Time{}, fmt.Errorf("%w: invalid runtime_role", ErrInvalidEnrollment)
+	}
+	if !metadataPattern.MatchString(req.BuildVersion) || len(req.BuildVersion) > 128 {
+		return DeviceStatusRequest{}, time.Time{}, fmt.Errorf("%w: invalid build_version", ErrInvalidEnrollment)
+	}
+	if !metadataPattern.MatchString(req.GoVersion) || len(req.GoVersion) > 64 {
+		return DeviceStatusRequest{}, time.Time{}, fmt.Errorf("%w: invalid go_version", ErrInvalidEnrollment)
 	}
 	if req.SignatureB64 == "" || len(req.SignatureB64) > 4096 {
 		return DeviceStatusRequest{}, time.Time{}, fmt.Errorf("%w: invalid signature", ErrInvalidEnrollment)
@@ -271,6 +292,30 @@ func enrollmentBodyHash(req EnrollmentRequest) string {
 }
 
 func deviceStatusBodyHash(req DeviceStatusRequest) string {
+	sum := sha256.Sum256([]byte(
+		req.DeviceID + "\n" +
+			req.KeyID + "\n" +
+			req.PublicKeyFingerprintSHA256 + "\n" +
+			req.Timestamp + "\n" +
+			req.Nonce + "\n" +
+			req.RuntimeRole + "\n" +
+			req.BuildVersion + "\n" +
+			req.GoVersion,
+	))
+	return hex.EncodeToString(sum[:])
+}
+
+func deviceStatusBodyHashMatches(req DeviceStatusRequest) bool {
+	if secureEqualHex(deviceStatusBodyHash(req), req.BodyHash) {
+		return true
+	}
+	if req.RuntimeRole != "" || req.BuildVersion != "" || req.GoVersion != "" {
+		return false
+	}
+	return secureEqualHex(legacyDeviceStatusBodyHash(req), req.BodyHash)
+}
+
+func legacyDeviceStatusBodyHash(req DeviceStatusRequest) string {
 	sum := sha256.Sum256([]byte(
 		req.DeviceID + "\n" +
 			req.KeyID + "\n" +

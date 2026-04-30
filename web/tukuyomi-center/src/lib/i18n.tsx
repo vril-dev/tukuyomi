@@ -94,6 +94,8 @@ const JA_STRINGS: Record<string, string> = {
   Key: "キー",
   Fingerprint: "フィンガープリント",
   "Product ID": "プロダクトID",
+  Runtime: "ランタイム",
+  Version: "バージョン",
   "Registered devices": "登録済みデバイス",
   "Show archived devices": "アーカイブ済みデバイスを表示",
   "Enrollment token": "登録トークン",

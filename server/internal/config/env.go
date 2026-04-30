@@ -76,6 +76,7 @@ var (
 	ServerTLSACMEStaging                bool
 	RuntimeGOMAXPROCS                   int
 	RuntimeMemoryLimitMB                int
+	RuntimeProcessModel                 string
 	RequestCountryMode                  string
 	RulesFile                           string
 	OverrideRulesDir                    string
@@ -325,6 +326,7 @@ func applyAppConfig(cfg appConfigFile) {
 	ServerTLSACMEStaging = cfg.Server.TLS.ACME.Staging
 	RuntimeGOMAXPROCS = parseRuntimeGOMAXPROCS(strconv.Itoa(cfg.Runtime.GOMAXPROCS))
 	RuntimeMemoryLimitMB = parseRuntimeMemoryLimitMB(strconv.Itoa(cfg.Runtime.MemoryLimitMB))
+	RuntimeProcessModel = cfg.Runtime.ProcessModel
 	RequestCountryMode = strings.ToLower(strings.TrimSpace(cfg.RequestMeta.Country.Mode))
 	if RequestCountryMode == "" {
 		RequestCountryMode = "header"

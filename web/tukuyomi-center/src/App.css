@@ -975,7 +975,7 @@ button.danger {
 }
 
 .registered-device-table table {
-  min-width: 1420px;
+  min-width: 1660px;
 }
 
 .registered-device-table th:nth-child(1) {
@@ -997,8 +997,18 @@ button.danger {
 .registered-device-table th:nth-child(8),
 .registered-device-table th:nth-child(9),
 .registered-device-table th:nth-child(10),
-.registered-device-table th:nth-child(11) {
+.registered-device-table th:nth-child(11),
+.registered-device-table th:nth-child(12),
+.registered-device-table th:nth-child(13) {
   width: 12%;
+}
+
+.table-subvalue {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1rem;
 }
 
 .token-status {

@@ -407,6 +407,11 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	if !strings.Contains(devices.Body.String(), `"status":"approved"`) {
 		t.Fatalf("approved device missing: %s", devices.Body.String())
 	}
+	if !strings.Contains(devices.Body.String(), `"runtime_role":"gateway"`) ||
+		!strings.Contains(devices.Body.String(), `"build_version":"v1.2.0-test"`) ||
+		!strings.Contains(devices.Body.String(), `"go_version":"go1.26.2-test"`) {
+		t.Fatalf("approved device missing runtime inventory: %s", devices.Body.String())
+	}
 
 	revokeApprovedToken := performRequestWithCookies(engine, http.MethodPost, "/center-api/enrollment-tokens/"+strconv.FormatInt(createdToken.Record.TokenID, 10)+"/revoke", "", map[string]string{
 		adminauth.CSRFHeaderName: csrfCookie.Value,
@@ -859,6 +864,9 @@ func signedDeviceStatusForTest(t *testing.T, fixture signedEnrollmentFixture, no
 		PublicKeyFingerprintSHA256: fixture.Fingerprint,
 		Timestamp:                  ts.UTC().Format(time.RFC3339Nano),
 		Nonce:                      nonce,
+		RuntimeRole:                "gateway",
+		BuildVersion:               "v1.2.0-test",
+		GoVersion:                  "go1.26.2-test",
 	}
 	req.BodyHash = deviceStatusBodyHash(req)
 	req.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(fixture.PrivateKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash))))

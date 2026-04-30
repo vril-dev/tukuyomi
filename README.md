@@ -100,6 +100,12 @@ role:
 make install TARGET=linux-systemd INSTALL_ROLE=center
 ```
 
+Gateway installs use the supervisor/worker runtime internally: the supervisor
+owns TCP listeners and activates the initial worker after readiness. Center is
+installed as a separate control-plane role and does not use the Gateway
+request-path supervisor. HTTP/3 is rejected by the Gateway supervisor until UDP
+handoff lands.
+
 For detailed install options such as `PREFIX`, `INSTALL_USER`, scheduled task
 units, or container/platform deployment instead of host install, see:
 

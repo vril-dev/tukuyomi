@@ -94,6 +94,13 @@ func (l *managedServerLifecycle) Wait() error {
 	return l.wait(sigCh)
 }
 
+func (l *managedServerLifecycle) WaitWithSignals(sigCh <-chan os.Signal) error {
+	if sigCh == nil {
+		return fmt.Errorf("signal channel is required")
+	}
+	return l.wait(sigCh)
+}
+
 func (l *managedServerLifecycle) wait(sigCh <-chan os.Signal) error {
 	select {
 	case err := <-l.errCh:

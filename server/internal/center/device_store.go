@@ -50,6 +50,9 @@ type DeviceRecord struct {
 	ArchivedAtUnix             int64  `json:"archived_at_unix"`
 	ArchivedBy                 string `json:"archived_by"`
 	LastSeenAtUnix             int64  `json:"last_seen_at_unix"`
+	RuntimeRole                string `json:"runtime_role"`
+	BuildVersion               string `json:"build_version"`
+	GoVersion                  string `json:"go_version"`
 }
 
 type EnrollmentRecord struct {
@@ -95,6 +98,12 @@ type DeviceStatusRecord struct {
 	Status                     string
 	ProductID                  string
 	FromApprovedDevice         bool
+}
+
+type DeviceRuntimeInventory struct {
+	RuntimeRole  string
+	BuildVersion string
+	GoVersion    string
 }
 
 func CreatePendingEnrollment(ctx context.Context, in enrollmentInsert) (EnrollmentRecord, error) {
@@ -402,7 +411,7 @@ SELECT device_id, key_id, public_key_pem, public_key_fingerprint_sha256, status
 	return out, err
 }
 
-func TouchApprovedDeviceLastSeen(ctx context.Context, deviceID string, seenAtUnix int64) error {
+func TouchApprovedDeviceHeartbeat(ctx context.Context, deviceID string, seenAtUnix int64, inventory DeviceRuntimeInventory) error {
 	deviceID = strings.TrimSpace(deviceID)
 	if deviceID == "" || seenAtUnix <= 0 {
 		return nil
@@ -411,9 +420,15 @@ func TouchApprovedDeviceLastSeen(ctx context.Context, deviceID string, seenAtUni
 		_, err := db.ExecContext(ctx, `
 UPDATE center_devices
    SET last_seen_at_unix = `+placeholder(driver, 1)+`,
-       updated_at_unix = `+placeholder(driver, 2)+`
- WHERE device_id = `+placeholder(driver, 3),
+       runtime_role = `+placeholder(driver, 2)+`,
+       build_version = `+placeholder(driver, 3)+`,
+       go_version = `+placeholder(driver, 4)+`,
+       updated_at_unix = `+placeholder(driver, 5)+`
+ WHERE device_id = `+placeholder(driver, 6),
 			seenAtUnix,
+			inventory.RuntimeRole,
+			inventory.BuildVersion,
+			inventory.GoVersion,
 			seenAtUnix,
 			deviceID,
 		)
@@ -539,7 +554,8 @@ SELECT d.device_id, d.key_id, d.public_key_fingerprint_sha256, d.status, d.produ
        COALESCE(t.token_prefix, ''), COALESCE(t.label, ''), COALESCE(t.status, ''),
        d.approved_enrollment_id, d.approved_at_unix, d.approved_by,
        d.created_at_unix, d.updated_at_unix, d.revoked_at_unix, d.revoked_by,
-       d.archived_at_unix, d.archived_by, d.last_seen_at_unix
+       d.archived_at_unix, d.archived_by, d.last_seen_at_unix,
+       d.runtime_role, d.build_version, d.go_version
   FROM center_devices d
   LEFT JOIN center_device_enrollments e ON e.enrollment_id = d.approved_enrollment_id
   LEFT JOIN center_enrollment_tokens t ON t.token_hash = e.license_key_hash`
@@ -565,6 +581,9 @@ func scanDeviceRecord(scanner rowScanner, rec *DeviceRecord) error {
 		&rec.ArchivedAtUnix,
 		&rec.ArchivedBy,
 		&rec.LastSeenAtUnix,
+		&rec.RuntimeRole,
+		&rec.BuildVersion,
+		&rec.GoVersion,
 	)
 }
 

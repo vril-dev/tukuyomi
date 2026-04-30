@@ -5,6 +5,7 @@ import { ActionResultNotice } from "@/components/EditorChrome";
 import { getErrorMessage } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
 import { parseSavedAt } from "@/lib/savedAt";
+import { revisionTagParts } from "@/lib/revision";
 
 type RuleAssetKind = "base" | "crs_setup" | "crs_asset" | "bypass_extra_rule";
 
@@ -959,10 +960,13 @@ function Badge({ color, children }: { color: "gray" | "green" | "red" | "amber";
 }
 
 function MonoTag({ label, value }: { label: string; value: string }) {
+    const tag = revisionTagParts(label, value);
     return (
         <div className="hidden md:flex items-center gap-1 text-xs">
-            <span className="text-neutral-500">{label}:</span>
-            <code className="px-2 py-0.5 bg-neutral-100 rounded max-w-[420px] truncate">{value}</code>
+            <span className="text-neutral-500">{tag.label}:</span>
+            <code className="px-2 py-0.5 bg-neutral-100 rounded max-w-[420px] truncate" title={tag.title}>
+                {tag.value}
+            </code>
         </div>
     );
 }

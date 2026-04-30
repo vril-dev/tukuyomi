@@ -1,4 +1,5 @@
 import { buildDiffLines, normalizeJSONForDiff, type DiffLine } from "./jsonDiff.js";
+import { formatRevisionTransition, shortRevision } from "./revision.js";
 
 export type ProxyRulesAuditRestoredFrom = {
   etag?: string;
@@ -46,7 +47,7 @@ export function formatProxyRulesAuditAction(event: string | undefined): string {
 export function formatProxyRulesAuditTransition(entry: ProxyRulesAuditEntry): string {
   const prev = String(entry.prev_etag ?? "").trim() || "-";
   const next = String(entry.next_etag ?? "").trim() || "-";
-  return `${prev} -> ${next}`;
+  return formatRevisionTransition(prev, next);
 }
 
 export function filterProxyRulesAuditEntries(
@@ -80,7 +81,7 @@ export function formatProxyRulesAuditSummary(entry: ProxyRulesAuditEntry): strin
     formatProxyRulesAuditAction(entry.event),
     `actor=${String(entry.actor ?? "").trim() || "unknown"}`,
     `time=${String(entry.ts ?? "").trim() || "-"}`,
-    `etag=${formatProxyRulesAuditTransition(entry)}`,
+    `revision=${formatProxyRulesAuditTransition(entry)}`,
   ];
   const ip = String(entry.ip ?? "").trim();
   if (ip) {
@@ -98,7 +99,7 @@ export function buildProxyRulesAuditMetadata(entry: ProxyRulesAuditEntry): Array
     { label: "Action", value: formatProxyRulesAuditAction(entry.event) },
     { label: "Actor", value: String(entry.actor ?? "").trim() || "unknown" },
     { label: "Time", value: String(entry.ts ?? "").trim() || "-" },
-    { label: "ETag", value: formatProxyRulesAuditTransition(entry) },
+    { label: "R", value: formatProxyRulesAuditTransition(entry) },
   ];
   const ip = String(entry.ip ?? "").trim();
   if (ip) {
@@ -106,7 +107,7 @@ export function buildProxyRulesAuditMetadata(entry: ProxyRulesAuditEntry): Array
   }
   const restoredETag = String(entry.restored_from?.etag ?? "").trim();
   if (restoredETag) {
-    metadata.push({ label: "Restored ETag", value: restoredETag });
+    metadata.push({ label: "Restored R", value: shortRevision(restoredETag) });
   }
   const restoredAt = String(entry.restored_from?.timestamp ?? "").trim();
   if (restoredAt) {

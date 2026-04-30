@@ -6,6 +6,7 @@ import {
   type ReactNode,
   type TextareaHTMLAttributes,
 } from "react";
+import { revisionTagParts } from "@/lib/revision";
 
 export function SectionCard({
   title,
@@ -166,10 +167,13 @@ export function ActionResultNotice({
 }
 
 export function MonoTag({ label, value }: { label: string; value: string }) {
+  const tag = revisionTagParts(label, value);
   return (
     <div className="hidden md:flex items-center gap-1 text-xs">
-      <span className="text-neutral-500">{label}:</span>
-      <code className="px-2 py-0.5 bg-neutral-100 rounded max-w-[420px] truncate">{value}</code>
+      <span className="text-neutral-500">{tag.label}:</span>
+      <code className="px-2 py-0.5 bg-neutral-100 rounded max-w-[420px] truncate" title={tag.title}>
+        {tag.value}
+      </code>
     </div>
   );
 }

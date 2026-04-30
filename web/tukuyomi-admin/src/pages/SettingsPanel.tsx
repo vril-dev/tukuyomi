@@ -12,6 +12,7 @@ import { useAuth } from "@/lib/auth";
 import { useAdminRuntime } from "@/lib/adminRuntime";
 import { ParsedTextArea, stringListEqual } from "@/components/EditorChrome";
 import { useI18n } from "@/lib/i18n";
+import { formatRevision } from "@/lib/revision";
 import { computeSettingsRuntimeDrift } from "@/lib/settingsConfig";
 
 type ListenerAdminConfig = {
@@ -881,8 +882,8 @@ export default function SettingsPanel() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-            <span className="rounded bg-neutral-100 px-2 py-1">
-              ETag {etag || "-"}
+            <span className="rounded bg-neutral-100 px-2 py-1" title={etag || undefined}>
+              {formatRevision(etag)}
             </span>
             <span className="rounded bg-neutral-100 px-2 py-1">
               {tx("Bootstrap Config")}: {configFile || "-"}

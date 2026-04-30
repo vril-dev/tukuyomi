@@ -4,6 +4,7 @@ import { useAdminRuntime } from "@/lib/adminRuntime";
 import { ParsedTextArea, stringListEqual } from "@/components/EditorChrome";
 import { getErrorMessage } from "@/lib/errors";
 import { useI18n } from "@/lib/i18n";
+import { formatRevision } from "@/lib/revision";
 
 type SiteTLSMode = "legacy" | "manual" | "acme";
 type SiteACMEEnvironment = "production" | "staging";
@@ -243,7 +244,7 @@ export default function SitesPanel() {
           <p className="text-xs text-neutral-500">{tx("Manage hostname ownership, default upstreams, and TLS binding as first-class protected sites.")}</p>
         </div>
         <div className="flex items-center gap-2 text-xs text-neutral-500">
-          <span className="rounded bg-neutral-100 px-2 py-1">ETag {etag || "-"}</span>
+          <span className="rounded bg-neutral-100 px-2 py-1" title={etag || undefined}>{formatRevision(etag)}</span>
           <span className="rounded bg-neutral-100 px-2 py-1">{tx("Rollback depth")} {rollbackDepth}</span>
         </div>
       </header>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiDeleteJson, apiGetJson, apiPutJson } from "@/lib/api";
 import { useAdminRuntime } from "@/lib/adminRuntime";
 import { useI18n } from "@/lib/i18n";
+import { revisionTagParts } from "@/lib/revision";
 
 type BackendRecord = {
   key: string;
@@ -350,9 +351,10 @@ function Metric({ label, value, mono = false }: { label: string; value: string; 
 }
 
 function MonoTag({ label, value }: { label: string; value: string }) {
+  const tag = revisionTagParts(label, value);
   return (
-    <span className="rounded bg-neutral-100 px-2 py-1 font-mono text-xs text-neutral-700">
-      {label} {value}
+    <span className="rounded bg-neutral-100 px-2 py-1 font-mono text-xs text-neutral-700" title={tag.title}>
+      {tag.label}: {tag.value}
     </span>
   );
 }

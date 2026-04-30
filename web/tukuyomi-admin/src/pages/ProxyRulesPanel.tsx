@@ -3,6 +3,7 @@ import { apiGetJson, apiPostJson, apiPutJson } from "@/lib/api";
 import { useAdminRuntime } from "@/lib/adminRuntime";
 import { getErrorMessage } from "@/lib/errors";
 import { getCurrentLocale, useI18n, translateCurrent } from "@/lib/i18n";
+import { shortRevision, revisionTagParts } from "@/lib/revision";
 import {
   createEmptyBackendPool,
   createEmptyDefaultRoute,
@@ -1280,8 +1281,8 @@ export default function ProxyRulesPanel() {
                           {formatProxyRulesAuditAction(entry.event)}
                         </Badge>
                         {entry.restored_from?.etag ? (
-                          <span className="max-w-full break-all whitespace-normal rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
-                            {tx("restored")} {entry.restored_from.etag}
+                          <span className="max-w-full break-all whitespace-normal rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800" title={entry.restored_from.etag}>
+                            {tx("restored")} R: {shortRevision(entry.restored_from.etag)}
                           </span>
                         ) : null}
                       </div>
@@ -2217,10 +2218,14 @@ function NoticeBar({
 
 function MonoTag({ label, value }: { label: string; value: string }) {
   const tx = translateCurrent;
+  const translatedLabel = tx(label);
+  const tag = revisionTagParts(translatedLabel, value);
   return (
     <div className="hidden md:flex items-center gap-1 text-xs">
-      <span className="text-neutral-500">{tx(label)}:</span>
-      <code className="px-2 py-0.5 bg-neutral-100 rounded max-w-[420px] truncate">{value}</code>
+      <span className="text-neutral-500">{tag.label}:</span>
+      <code className="px-2 py-0.5 bg-neutral-100 rounded max-w-[420px] truncate" title={tag.title}>
+        {tag.value}
+      </code>
     </div>
   );
 }

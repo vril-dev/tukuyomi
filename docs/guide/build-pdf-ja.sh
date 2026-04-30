@@ -11,7 +11,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BOOK="$ROOT/guide/ja"
 DIST="$ROOT/dist"
 TMP="$ROOT/.tmp/build-pdf"
-CSS="$ROOT/scripts/book.css"
+CSS="$ROOT/guide/book.css"
 
 mkdir -p "$DIST" "$TMP"
 

@@ -21,9 +21,9 @@ const navGroups: NavGroup[] = [
   {
     id: "center",
     label: "Center",
-    hint: "Fleet control plane status and device enrollment approvals.",
+    hint: "Fleet control plane.",
     items: [
-      { to: "/status", label: "Status", hint: "Fleet control plane status and device enrollment approvals." },
+      { to: "/status", label: "Status", hint: "Fleet control plane status." },
       { to: "/device-approvals", label: "Device Approvals", hint: "Pending device enrollment approvals." },
     ],
   },
@@ -45,10 +45,7 @@ function formatSessionTime(value: string | undefined, locale: string) {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleTimeString(locale === "ja" ? "ja-JP" : "en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return date.toLocaleTimeString(locale === "ja" ? "ja-JP" : "en-US");
 }
 
 export default function Layout() {
@@ -120,9 +117,10 @@ export default function Layout() {
           </div>
           <div className="app-top-meta">
             <div className="app-top-meta-cluster">
-              <label className="app-pill">
+              <label className="app-pill inline-flex items-center gap-2">
                 <span>{tx("Language")}</span>
                 <select
+                  className="bg-transparent outline-none"
                   value={locale}
                   onChange={(event) => setLocale(event.target.value === "ja" ? "ja" : "en")}
                   aria-label={tx("Language")}

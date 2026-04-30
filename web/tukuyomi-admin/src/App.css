@@ -410,6 +410,7 @@ textarea {
   border-radius: 6px;
   background: #fcfffe;
   color: var(--ink);
+  font-weight: 400;
 }
 
 input:focus,

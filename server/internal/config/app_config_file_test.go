@@ -111,6 +111,43 @@ func TestValidateAppListenerProxyProtocolConfig(t *testing.T) {
 	})
 }
 
+func TestValidateAppEdgeDeviceStatusRefreshInterval(t *testing.T) {
+	t.Run("accepts zero to disable polling", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.Edge.DeviceAuth.StatusRefreshIntervalSec = 0
+
+		if err := validateAppConfigFile(cfg); err != nil {
+			t.Fatalf("validateAppConfigFile() error = %v", err)
+		}
+	})
+
+	t.Run("rejects negative interval", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.Edge.DeviceAuth.StatusRefreshIntervalSec = -1
+
+		err := validateAppConfigFile(cfg)
+		if err == nil {
+			t.Fatal("expected edge device status refresh interval error")
+		}
+		if got := err.Error(); got != "edge.device_auth.status_refresh_interval_sec must be between 0 and 3600" {
+			t.Fatalf("error=%q want edge status refresh interval error", got)
+		}
+	})
+
+	t.Run("rejects excessive interval", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.Edge.DeviceAuth.StatusRefreshIntervalSec = MaxEdgeDeviceStatusRefreshSec + 1
+
+		err := validateAppConfigFile(cfg)
+		if err == nil {
+			t.Fatal("expected edge device status refresh interval error")
+		}
+		if got := err.Error(); got != "edge.device_auth.status_refresh_interval_sec must be between 0 and 3600" {
+			t.Fatalf("error=%q want edge status refresh interval error", got)
+		}
+	})
+}
+
 func TestListenAddrsCollide(t *testing.T) {
 	cases := []struct {
 		name string

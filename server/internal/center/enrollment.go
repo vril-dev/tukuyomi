@@ -41,6 +41,16 @@ type EnrollmentRequest struct {
 	SignatureB64               string `json:"signature_b64"`
 }
 
+type DeviceStatusRequest struct {
+	DeviceID                   string `json:"device_id"`
+	KeyID                      string `json:"key_id"`
+	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string `json:"timestamp"`
+	Nonce                      string `json:"nonce"`
+	BodyHash                   string `json:"body_hash"`
+	SignatureB64               string `json:"signature_b64"`
+}
+
 type verifiedEnrollment struct {
 	DeviceID                   string
 	KeyID                      string
@@ -48,6 +58,15 @@ type verifiedEnrollment struct {
 	PublicKeyFingerprintSHA256 string
 	Timestamp                  time.Time
 	NonceHash                  string
+	BodyHash                   string
+	SignatureB64               string
+}
+
+type verifiedDeviceStatusRequest struct {
+	DeviceID                   string
+	KeyID                      string
+	PublicKeyFingerprintSHA256 string
+	Timestamp                  time.Time
 	BodyHash                   string
 	SignatureB64               string
 }
@@ -130,6 +149,83 @@ func VerifyEnrollmentRequest(req EnrollmentRequest, now time.Time) (verifiedEnro
 	}, nil
 }
 
+func VerifyDeviceStatusRequest(req DeviceStatusRequest, publicKeyPEM string, now time.Time) (verifiedDeviceStatusRequest, error) {
+	normalized, ts, err := normalizeDeviceStatusRequest(req, now)
+	if err != nil {
+		return verifiedDeviceStatusRequest{}, err
+	}
+	req = normalized
+
+	publicKeyDER, publicKey, err := parseStoredEnrollmentPublicKey(publicKeyPEM)
+	if err != nil {
+		return verifiedDeviceStatusRequest{}, err
+	}
+	fingerprint := sha256.Sum256(publicKeyDER)
+	if !secureEqualHex(hex.EncodeToString(fingerprint[:]), req.PublicKeyFingerprintSHA256) {
+		return verifiedDeviceStatusRequest{}, fmt.Errorf("%w: public key fingerprint mismatch", ErrInvalidEnrollment)
+	}
+	bodyHash := deviceStatusBodyHash(req)
+	if !secureEqualHex(bodyHash, req.BodyHash) {
+		return verifiedDeviceStatusRequest{}, fmt.Errorf("%w: body_hash mismatch", ErrInvalidEnrollment)
+	}
+	signature, err := base64.StdEncoding.DecodeString(req.SignatureB64)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return verifiedDeviceStatusRequest{}, fmt.Errorf("%w: invalid signature", ErrInvalidEnrollment)
+	}
+	if !ed25519.Verify(publicKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)), signature) {
+		return verifiedDeviceStatusRequest{}, fmt.Errorf("%w: signature verification failed", ErrInvalidEnrollment)
+	}
+	return verifiedDeviceStatusRequest{
+		DeviceID:                   req.DeviceID,
+		KeyID:                      req.KeyID,
+		PublicKeyFingerprintSHA256: req.PublicKeyFingerprintSHA256,
+		Timestamp:                  ts.UTC(),
+		BodyHash:                   req.BodyHash,
+		SignatureB64:               req.SignatureB64,
+	}, nil
+}
+
+func normalizeDeviceStatusRequest(req DeviceStatusRequest, now time.Time) (DeviceStatusRequest, time.Time, error) {
+	req.DeviceID = strings.TrimSpace(req.DeviceID)
+	req.KeyID = strings.TrimSpace(req.KeyID)
+	req.PublicKeyFingerprintSHA256 = strings.ToLower(strings.TrimSpace(req.PublicKeyFingerprintSHA256))
+	req.Timestamp = strings.TrimSpace(req.Timestamp)
+	req.Nonce = strings.TrimSpace(req.Nonce)
+	req.BodyHash = strings.ToLower(strings.TrimSpace(req.BodyHash))
+	req.SignatureB64 = strings.TrimSpace(req.SignatureB64)
+
+	if !deviceIDPattern.MatchString(req.DeviceID) {
+		return DeviceStatusRequest{}, time.Time{}, fmt.Errorf("%w: invalid device_id", ErrInvalidEnrollment)
+	}
+	if !keyIDPattern.MatchString(req.KeyID) {
+		return DeviceStatusRequest{}, time.Time{}, fmt.Errorf("%w: invalid key_id", ErrInvalidEnrollment)
+	}
+	if !noncePattern.MatchString(req.Nonce) {
+		return DeviceStatusRequest{}, time.Time{}, fmt.Errorf("%w: invalid nonce", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.PublicKeyFingerprintSHA256) {
+		return DeviceStatusRequest{}, time.Time{}, fmt.Errorf("%w: invalid public key fingerprint", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.BodyHash) {
+		return DeviceStatusRequest{}, time.Time{}, fmt.Errorf("%w: invalid body_hash", ErrInvalidEnrollment)
+	}
+	if req.SignatureB64 == "" || len(req.SignatureB64) > 4096 {
+		return DeviceStatusRequest{}, time.Time{}, fmt.Errorf("%w: invalid signature", ErrInvalidEnrollment)
+	}
+
+	ts, err := time.Parse(time.RFC3339Nano, req.Timestamp)
+	if err != nil {
+		return DeviceStatusRequest{}, time.Time{}, fmt.Errorf("%w: invalid timestamp", ErrInvalidEnrollment)
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if ts.After(now.Add(enrollmentFreshness)) || ts.Before(now.Add(-enrollmentFreshness)) {
+		return DeviceStatusRequest{}, time.Time{}, fmt.Errorf("%w: stale timestamp", ErrInvalidEnrollment)
+	}
+	return req, ts.UTC(), nil
+}
+
 func parseEnrollmentPublicKey(publicKeyPEMB64 string) ([]byte, []byte, ed25519.PublicKey, error) {
 	pemBytes, err := base64.StdEncoding.DecodeString(publicKeyPEMB64)
 	if err != nil {
@@ -153,8 +249,35 @@ func parseEnrollmentPublicKey(publicKeyPEMB64 string) ([]byte, []byte, ed25519.P
 	return pemBytes, block.Bytes, pub, nil
 }
 
+func parseStoredEnrollmentPublicKey(publicKeyPEM string) ([]byte, ed25519.PublicKey, error) {
+	block, rest := pem.Decode([]byte(publicKeyPEM))
+	if block == nil || len(strings.TrimSpace(string(rest))) != 0 {
+		return nil, nil, fmt.Errorf("%w: public key must be a single PEM block", ErrInvalidEnrollment)
+	}
+	pubAny, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: parse public key", ErrInvalidEnrollment)
+	}
+	pub, ok := pubAny.(ed25519.PublicKey)
+	if !ok || len(pub) != ed25519.PublicKeySize {
+		return nil, nil, fmt.Errorf("%w: public key must be Ed25519", ErrInvalidEnrollment)
+	}
+	return block.Bytes, pub, nil
+}
+
 func enrollmentBodyHash(req EnrollmentRequest) string {
 	sum := sha256.Sum256([]byte(enrollmentBodyCanonical(req)))
+	return hex.EncodeToString(sum[:])
+}
+
+func deviceStatusBodyHash(req DeviceStatusRequest) string {
+	sum := sha256.Sum256([]byte(
+		req.DeviceID + "\n" +
+			req.KeyID + "\n" +
+			req.PublicKeyFingerprintSHA256 + "\n" +
+			req.Timestamp + "\n" +
+			req.Nonce,
+	))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -175,12 +298,17 @@ func enrollmentLicenseKeyHash(r *http.Request) string {
 	if r == nil {
 		return ""
 	}
-	raw := strings.TrimSpace(r.Header.Get("X-License-Key"))
+	raw := strings.TrimSpace(r.Header.Get("X-Enrollment-Token"))
+	if raw == "" {
+		raw = strings.TrimSpace(r.Header.Get("X-License-Key"))
+	}
 	if raw == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(sum[:])
+	if len(raw) > enrollmentTokenMaxBytes {
+		return ""
+	}
+	return enrollmentTokenHash(raw)
 }
 
 func secureEqualHex(a, b string) bool {

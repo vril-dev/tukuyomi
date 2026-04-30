@@ -3,6 +3,7 @@ package center
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -18,15 +19,27 @@ type enrollmentDecisionRequest struct {
 	Reason string `json:"reason"`
 }
 
+type enrollmentTokenCreateRequest struct {
+	Label         string `json:"label"`
+	MaxUses       int64  `json:"max_uses"`
+	ExpiresAtUnix int64  `json:"expires_at_unix"`
+}
+
 func registerDeviceEnrollmentRoutes(r *gin.Engine) {
 	r.POST("/v1/enroll", postDeviceEnrollment)
+	r.POST("/v1/device-status", postDeviceStatus)
 }
 
 func registerCenterDeviceAdminRoutes(api *gin.RouterGroup) {
 	api.GET("/devices", getCenterDevices)
+	api.POST("/devices/:device_id/revoke", postCenterDeviceRevoke)
+	api.POST("/devices/:device_id/archive", postCenterDeviceArchive)
 	api.GET("/devices/enrollments", getCenterDeviceEnrollments)
 	api.POST("/devices/enrollments/:enrollment_id/approve", postCenterDeviceEnrollmentApprove)
 	api.POST("/devices/enrollments/:enrollment_id/reject", postCenterDeviceEnrollmentReject)
+	api.GET("/enrollment-tokens", getCenterEnrollmentTokens)
+	api.POST("/enrollment-tokens", postCenterEnrollmentToken)
+	api.POST("/enrollment-tokens/:token_id/revoke", postCenterEnrollmentTokenRevoke)
 }
 
 func postDeviceEnrollment(c *gin.Context) {
@@ -58,7 +71,14 @@ func postDeviceEnrollment(c *gin.Context) {
 		RequestedAt:                time.Now().UTC(),
 	})
 	if err != nil {
-		if errors.Is(err, ErrEnrollmentReplay) {
+		switch {
+		case errors.Is(err, ErrEnrollmentTokenRequired):
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "enrollment token required"})
+			return
+		case errors.Is(err, ErrEnrollmentTokenInvalid):
+			c.JSON(http.StatusForbidden, gin.H{"error": "invalid enrollment token"})
+			return
+		case errors.Is(err, ErrEnrollmentReplay):
 			c.JSON(http.StatusConflict, gin.H{"error": "enrollment replay rejected"})
 			return
 		}
@@ -73,13 +93,102 @@ func postDeviceEnrollment(c *gin.Context) {
 	})
 }
 
+func postDeviceStatus(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8*1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req DeviceStatusRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid device status payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid device status payload"})
+		return
+	}
+	normalizedReq, _, err := normalizeDeviceStatusRequest(req, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	req = normalizedReq
+	record, err := LookupDeviceStatus(c.Request.Context(), req.DeviceID, req.KeyID, req.PublicKeyFingerprintSHA256)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrDeviceStatusNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "device status not found"})
+		case errors.Is(err, ErrDeviceStatusKeyMismatch):
+			c.JSON(http.StatusForbidden, gin.H{"error": "device key mismatch"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load device status"})
+		}
+		return
+	}
+	verified, err := VerifyDeviceStatusRequest(req, record.PublicKeyPEM, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	checkedAt := time.Now().UTC().Unix()
+	if record.FromApprovedDevice {
+		if err := TouchApprovedDeviceLastSeen(c.Request.Context(), verified.DeviceID, checkedAt); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update device last seen"})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"status":          record.Status,
+		"device_id":       verified.DeviceID,
+		"key_id":          verified.KeyID,
+		"product_id":      record.ProductID,
+		"checked_at_unix": checkedAt,
+	})
+}
+
 func getCenterDevices(c *gin.Context) {
-	devices, err := ListDevices(c.Request.Context())
+	devices, err := ListDevices(c.Request.Context(), parseBoolQuery(c.Query("include_archived")))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list devices"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"devices": devices})
+}
+
+func postCenterDeviceRevoke(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	record, err := RevokeDeviceApproval(c.Request.Context(), deviceID, centerAdminActor(c))
+	if err != nil {
+		if errors.Is(err, ErrDeviceStatusNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "device not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke device approval"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"device": record})
+}
+
+func postCenterDeviceArchive(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	record, err := ArchiveDeviceApproval(c.Request.Context(), deviceID, centerAdminActor(c))
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrDeviceStatusNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "device not found"})
+		case errors.Is(err, ErrDeviceArchiveInvalid):
+			c.JSON(http.StatusConflict, gin.H{"error": "device must be revoked before archive"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to archive device"})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"device": record})
 }
 
 func getCenterDeviceEnrollments(c *gin.Context) {
@@ -94,6 +203,62 @@ func getCenterDeviceEnrollments(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"enrollments": enrollments})
+}
+
+func getCenterEnrollmentTokens(c *gin.Context) {
+	limit := parseBoundedInt(c.Query("limit"), 100, 1, 500)
+	tokens, err := ListEnrollmentTokens(c.Request.Context(), limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list enrollment tokens"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"tokens": tokens})
+}
+
+func postCenterEnrollmentToken(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8*1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req enrollmentTokenCreateRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid enrollment token payload"})
+		return
+	}
+	record, token, err := CreateEnrollmentToken(c.Request.Context(), EnrollmentTokenCreate{
+		Label:         req.Label,
+		MaxUses:       req.MaxUses,
+		ExpiresAtUnix: req.ExpiresAtUnix,
+		CreatedBy:     centerAdminActor(c),
+	})
+	if err != nil {
+		if errors.Is(err, ErrEnrollmentTokenRequest) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid enrollment token payload"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create enrollment token"})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{
+		"token":  token,
+		"record": record,
+	})
+}
+
+func postCenterEnrollmentTokenRevoke(c *gin.Context) {
+	id, ok := parseTokenIDParam(c)
+	if !ok {
+		return
+	}
+	record, err := RevokeEnrollmentToken(c.Request.Context(), id, centerAdminActor(c))
+	if err != nil {
+		if errors.Is(err, ErrEnrollmentTokenNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "enrollment token not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke enrollment token"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"token": record})
 }
 
 func postCenterDeviceEnrollmentApprove(c *gin.Context) {
@@ -143,6 +308,25 @@ func parseEnrollmentIDParam(c *gin.Context) (int64, bool) {
 	return id, true
 }
 
+func parseTokenIDParam(c *gin.Context) (int64, bool) {
+	raw := strings.TrimSpace(c.Param("token_id"))
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid token_id"})
+		return 0, false
+	}
+	return id, true
+}
+
+func parseDeviceIDParam(c *gin.Context) (string, bool) {
+	deviceID := strings.TrimSpace(c.Param("device_id"))
+	if !deviceIDPattern.MatchString(deviceID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid device_id"})
+		return "", false
+	}
+	return deviceID, true
+}
+
 func centerAdminActor(c *gin.Context) string {
 	if c == nil {
 		return "unknown"
@@ -187,4 +371,13 @@ func parseBoundedInt(raw string, def int, min int, max int) int {
 		return max
 	}
 	return n
+}
+
+func parseBoolQuery(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }

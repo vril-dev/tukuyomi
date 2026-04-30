@@ -36,16 +36,23 @@ make release-linux-all VERSION=v0.8.0
 
 For a direct Linux host install, this builds the binary, creates the runtime
 tree, runs DB migration, imports WAF/CRS assets, seeds a first DB, and installs
-systemd units:
+systemd units. `INSTALL_ROLE` defaults to `gateway`:
 
 ```bash
 make install TARGET=linux-systemd
+```
+
+Install Center on a control-plane host:
+
+```bash
+make install TARGET=linux-systemd INSTALL_ROLE=center
 ```
 
 Common overrides:
 
 ```bash
 make install TARGET=linux-systemd \
+  INSTALL_ROLE=gateway \
   PREFIX=/opt/tukuyomi \
   INSTALL_ENABLE_SCHEDULED_TASKS=0 \
   INSTALL_DB_SEED=auto
@@ -54,6 +61,12 @@ make install TARGET=linux-systemd \
 Behavior:
 
 - `PREFIX` defaults to `/opt/tukuyomi`
+- `INSTALL_ROLE=gateway` installs `tukuyomi.service`, `tukuyomi.env`,
+  `conf/config.json`, WAF/CRS asset import, first-run gateway DB seed, and the
+  optional scheduled-task timer
+- `INSTALL_ROLE=center` installs `tukuyomi-center.service`,
+  `tukuyomi-center.env`, and `conf/config.center.json`; it runs DB migration
+  only and skips WAF/CRS import, gateway seed, and scheduled tasks
 - when `PREFIX` is under the invoking user's home directory,
   `INSTALL_CREATE_USER=auto` uses that user as the runtime user and skips
   `useradd`
@@ -63,15 +76,14 @@ Behavior:
 - for service-account installs on system paths, the deployment root, `bin/`,
   `scripts/`, and `conf/` stay root-managed, while `db/`, `audit/`, `cache/`,
   and `data/` are writable by the runtime user
-- existing `config.json` and `/etc/tukuyomi/tukuyomi.env` are preserved by default
+- existing role config/env files are preserved by default
 - host install uses `sudo` only for privileged filesystem/systemd operations, so
   the build can run as the invoking user
-- newly created `/etc/tukuyomi/tukuyomi.env` and systemd units are rendered for
-  the selected `PREFIX`
-- `conf/config.json` is root-owned `0640` with read access granted only through
+- newly created env files and systemd units are rendered for the selected
+  `PREFIX`
+- role config files are root-owned `0640` with read access granted only through
   the service group
-- `/etc/tukuyomi/tukuyomi.env` stays root-owned `0640` because it is expected to
-  carry secrets
+- env files stay root-owned `0640` because they are expected to carry secrets
 - `INSTALL_DB_SEED=auto` runs `db-import` only when the SQLite DB is not present yet
 - the first DB seed creates a default upstream named `primary`; update it to
   the real backend endpoint before exposing the proxy to traffic
@@ -382,14 +394,20 @@ Keep overload controls in DB `app_config` under `server`:
 Sample unit:
 
 - [tukuyomi.service.example](tukuyomi.service.example)
+- [tukuyomi-center.service.example](tukuyomi-center.service.example)
 - [tukuyomi.socket.example](tukuyomi.socket.example)
 - [tukuyomi-admin.socket.example](tukuyomi-admin.socket.example)
 - [tukuyomi-redirect.socket.example](tukuyomi-redirect.socket.example)
 - [tukuyomi-http3.socket.example](tukuyomi-http3.socket.example)
 - [tukuyomi-scheduled-tasks.service.example](tukuyomi-scheduled-tasks.service.example)
 - [tukuyomi-scheduled-tasks.timer.example](tukuyomi-scheduled-tasks.timer.example)
+- [tukuyomi.env.example](tukuyomi.env.example)
+- [tukuyomi-center.env.example](tukuyomi-center.env.example)
 
-The sample unit keeps `User=tukuyomi` and adds `AmbientCapabilities=CAP_NET_BIND_SERVICE`, so `:80` / `:443` binds work without running the service as root full-time.
+The gateway sample unit keeps `User=tukuyomi` and adds
+`AmbientCapabilities=CAP_NET_BIND_SERVICE`, so `:80` / `:443` binds work without
+running the service as root full-time. The Center unit starts `tukuyomi center`
+and does not require low-port bind capabilities by default.
 For graceful binary replacement, prefer systemd socket activation. The socket
 units hold the public/admin/redirect/HTTP3 listeners while the service process
 shuts down and restarts.
@@ -406,6 +424,17 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now tukuyomi
 sudo systemctl enable --now tukuyomi-scheduled-tasks.timer
 sudo systemctl status tukuyomi
+```
+
+Center install:
+
+```bash
+sudo install -d -m 755 /etc/tukuyomi
+sudo install -m 640 docs/build/tukuyomi-center.env.example /etc/tukuyomi/tukuyomi-center.env
+sudo install -m 644 docs/build/tukuyomi-center.service.example /etc/systemd/system/tukuyomi-center.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now tukuyomi-center
+sudo systemctl status tukuyomi-center
 ```
 
 Socket activation install:

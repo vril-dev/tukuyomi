@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIsWeakAPIKey(t *testing.T) {
@@ -330,6 +331,9 @@ func TestLoadAppConfigFile(t *testing.T) {
 	if !cfg.Edge.DeviceAuth.Enabled {
 		t.Fatal("edge.device_auth.enabled must default to true under dormant edge mode")
 	}
+	if cfg.Edge.DeviceAuth.StatusRefreshIntervalSec != DefaultEdgeDeviceStatusRefreshSec {
+		t.Fatalf("unexpected edge device status refresh interval: %d", cfg.Edge.DeviceAuth.StatusRefreshIntervalSec)
+	}
 	if err := ReloadFromConfigFile(cfgPath); err != nil {
 		t.Fatalf("ReloadFromConfigFile returned error: %v", err)
 	}
@@ -350,6 +354,9 @@ func TestLoadAppConfigFile(t *testing.T) {
 	}
 	if EdgeDeviceAuthEnabled {
 		t.Fatal("runtime EdgeDeviceAuthEnabled must be false while edge.enabled=false")
+	}
+	if EdgeDeviceStatusRefreshInterval != 0 {
+		t.Fatalf("runtime edge status refresh interval must be disabled while edge.enabled=false: %s", EdgeDeviceStatusRefreshInterval)
 	}
 }
 
@@ -389,6 +396,9 @@ func TestLoadAppConfigFileAcceptsEdgeMode(t *testing.T) {
 	if !cfg.Edge.DeviceAuth.Enabled {
 		t.Fatal("edge.device_auth.enabled should load true")
 	}
+	if cfg.Edge.DeviceAuth.StatusRefreshIntervalSec != DefaultEdgeDeviceStatusRefreshSec {
+		t.Fatalf("unexpected default edge status refresh interval: %d", cfg.Edge.DeviceAuth.StatusRefreshIntervalSec)
+	}
 	if err := ReloadFromConfigFile(cfgPath); err != nil {
 		t.Fatalf("ReloadFromConfigFile returned error: %v", err)
 	}
@@ -397,6 +407,9 @@ func TestLoadAppConfigFileAcceptsEdgeMode(t *testing.T) {
 	}
 	if !EdgeDeviceAuthEnabled {
 		t.Fatal("runtime EdgeDeviceAuthEnabled should be true")
+	}
+	if EdgeDeviceStatusRefreshInterval != DefaultEdgeDeviceStatusRefreshSec*time.Second {
+		t.Fatalf("runtime edge status refresh interval=%s", EdgeDeviceStatusRefreshInterval)
 	}
 }
 

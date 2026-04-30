@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS center_enrollment_tokens (
+    token_id BIGINT NOT NULL AUTO_INCREMENT,
+    token_hash CHAR(64) NOT NULL,
+    token_prefix VARCHAR(32) NOT NULL,
+    label VARCHAR(191) NOT NULL DEFAULT '',
+    status VARCHAR(32) NOT NULL,
+    max_uses BIGINT NOT NULL DEFAULT 1,
+    use_count BIGINT NOT NULL DEFAULT 0,
+    expires_at_unix BIGINT NOT NULL DEFAULT 0,
+    created_at_unix BIGINT NOT NULL,
+    created_by VARCHAR(191) NOT NULL DEFAULT '',
+    revoked_at_unix BIGINT NOT NULL DEFAULT 0,
+    revoked_by VARCHAR(191) NOT NULL DEFAULT '',
+    last_used_at_unix BIGINT NOT NULL DEFAULT 0,
+    last_used_by_device VARCHAR(191) NOT NULL DEFAULT '',
+    PRIMARY KEY (token_id),
+    UNIQUE KEY uq_center_enrollment_tokens_hash (token_hash),
+    KEY idx_center_enrollment_tokens_status (status),
+    KEY idx_center_enrollment_tokens_expires (expires_at_unix)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

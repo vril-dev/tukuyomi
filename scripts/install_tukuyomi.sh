@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${TARGET:-${INSTALL_TARGET:-linux-systemd}}"
 PREFIX="${PREFIX:-${INSTALL_PREFIX:-/opt/tukuyomi}}"
 DESTDIR="${DESTDIR:-}"
+INSTALL_ROLE="${INSTALL_ROLE:-gateway}"
 INSTALL_USER="${INSTALL_USER:-}"
 INSTALL_GROUP="${INSTALL_GROUP:-}"
 INSTALL_ENV_DIR="${INSTALL_ENV_DIR:-/etc/tukuyomi}"
@@ -22,6 +23,10 @@ INSTALL_REFRESH_WAF_ASSETS="${INSTALL_REFRESH_WAF_ASSETS:-1}"
 INSTALL_DB_SEED="${INSTALL_DB_SEED:-auto}"
 INSTALL_DRY_RUN="${INSTALL_DRY_RUN:-0}"
 CRS_VERSION="${CRS_VERSION:-v4.23.0}"
+
+INSTALL_CONFIG_REL=""
+INSTALL_ENV_BASENAME=""
+INSTALL_SERVICE_BASENAME=""
 
 log() {
   echo "[install] $*"
@@ -41,6 +46,28 @@ is_enabled() {
 
 use_service_account() {
   [[ -z "${DESTDIR}" && -n "${INSTALL_USER}" ]]
+}
+
+install_role_is_gateway() {
+  [[ "${INSTALL_ROLE}" == "gateway" ]]
+}
+
+configure_install_role() {
+  case "${INSTALL_ROLE}" in
+    gateway)
+      INSTALL_CONFIG_REL="conf/config.json"
+      INSTALL_ENV_BASENAME="tukuyomi.env"
+      INSTALL_SERVICE_BASENAME="tukuyomi.service"
+      ;;
+    center)
+      INSTALL_CONFIG_REL="conf/config.center.json"
+      INSTALL_ENV_BASENAME="tukuyomi-center.env"
+      INSTALL_SERVICE_BASENAME="tukuyomi-center.service"
+      ;;
+    *)
+      die "INSTALL_ROLE must be gateway or center"
+      ;;
+  esac
 }
 
 use_login_user_home_install() {
@@ -93,24 +120,31 @@ install_config_preserve() {
   local dst="$2"
   local mode="$3"
   local overwrite="$4"
+  local role="$5"
   local tmp
   if [[ -e "${dst}" ]] && ! is_enabled "${overwrite}"; then
     log "preserve existing ${dst}"
     return
   fi
   tmp="$(mktemp)"
-  if ! python3 - "$src" "$tmp" <<'PY'
+  if ! python3 - "$src" "$tmp" "$role" <<'PY'
 import json
 import secrets
 import sys
 
-src, dst = sys.argv[1:3]
+src, dst, role = sys.argv[1:4]
 with open(src, encoding="utf-8") as fh:
     data = json.load(fh)
 
 admin = data.setdefault("admin", {})
 if not str(admin.get("session_secret") or "").strip():
     admin["session_secret"] = secrets.token_urlsafe(48)
+
+if role == "center":
+    storage = data.setdefault("storage", {})
+    storage["db_driver"] = "sqlite"
+    storage["db_dsn"] = ""
+    storage["db_path"] = "db/tukuyomi-center.db"
 
 with open(dst, "w", encoding="utf-8") as fh:
     json.dump(data, fh, indent=2)
@@ -161,19 +195,21 @@ PY
 render_systemd_unit() {
   local src="$1"
   local dst="$2"
+  local env_basename="$3"
   local tmp
   tmp="$(mktemp)"
-  if ! python3 - "$src" "$tmp" "$PREFIX" "$INSTALL_ENV_DIR" "$INSTALL_USER" "$INSTALL_GROUP" <<'PY'
+  if ! python3 - "$src" "$tmp" "$PREFIX" "$INSTALL_ENV_DIR" "$env_basename" "$INSTALL_USER" "$INSTALL_GROUP" <<'PY'
 import sys
 
-src, dst, prefix, env_dir, user, group = sys.argv[1:7]
+src, dst, prefix, env_dir, env_basename, user, group = sys.argv[1:8]
 with open(src, encoding="utf-8") as fh:
     data = fh.read()
 
 data = data.replace("User=tukuyomi", f"User={user}")
 data = data.replace("Group=tukuyomi", f"Group={group}")
 data = data.replace("WorkingDirectory=/opt/tukuyomi", f"WorkingDirectory={prefix}")
-data = data.replace("EnvironmentFile=/etc/tukuyomi/tukuyomi.env", f"EnvironmentFile={env_dir}/tukuyomi.env")
+data = data.replace("EnvironmentFile=/etc/tukuyomi/tukuyomi.env", f"EnvironmentFile={env_dir}/{env_basename}")
+data = data.replace("EnvironmentFile=/etc/tukuyomi/tukuyomi-center.env", f"EnvironmentFile={env_dir}/{env_basename}")
 data = data.replace("ExecStart=/opt/tukuyomi/bin/tukuyomi", f"ExecStart={prefix}/bin/tukuyomi")
 
 with open(dst, "w", encoding="utf-8") as fh:
@@ -294,12 +330,14 @@ set_runtime_permissions() {
   if ! use_service_account; then
     return
   fi
-  local conf_file
+  local conf_file config_file
+  config_file="${RUNTIME_DIR}/${INSTALL_CONFIG_REL}"
   if use_login_user_home_install; then
     run_priv chown -R "${INSTALL_USER}:${INSTALL_GROUP}" "${RUNTIME_DIR}"
     run_priv chmod 755 "${RUNTIME_DIR}"
     run_priv chmod 750 "${RUNTIME_DIR}/conf"
-    for conf_file in "${RUNTIME_DIR}/conf/config.json" "${RUNTIME_DIR}/conf/crs-disabled.conf"; do
+    for conf_file in "${config_file}" "${RUNTIME_DIR}/conf/crs-disabled.conf"; do
+      [[ -e "${conf_file}" ]] || continue
       if [[ -L "${conf_file}" ]]; then
         log "preserve symlink permissions for ${conf_file}"
         continue
@@ -309,10 +347,14 @@ set_runtime_permissions() {
     return
   fi
   run_priv chown root:root "${RUNTIME_DIR}"
-  run_priv chown -R root:root "${RUNTIME_DIR}/bin" "${RUNTIME_DIR}/scripts"
+  run_priv chown -R root:root "${RUNTIME_DIR}/bin"
+  if [[ -d "${RUNTIME_DIR}/scripts" ]]; then
+    run_priv chown -R root:root "${RUNTIME_DIR}/scripts"
+  fi
   run_priv chown root:"${INSTALL_GROUP}" "${RUNTIME_DIR}/conf"
   run_priv chmod 750 "${RUNTIME_DIR}/conf"
-  for conf_file in "${RUNTIME_DIR}/conf/config.json" "${RUNTIME_DIR}/conf/crs-disabled.conf"; do
+  for conf_file in "${config_file}" "${RUNTIME_DIR}/conf/crs-disabled.conf"; do
+    [[ -e "${conf_file}" ]] || continue
     if [[ -L "${conf_file}" ]]; then
       log "preserve symlink permissions for ${conf_file}"
       continue
@@ -320,18 +362,18 @@ set_runtime_permissions() {
     run_priv chown root:"${INSTALL_GROUP}" "${conf_file}"
     run_priv chmod 640 "${conf_file}"
   done
-  run_priv chown -R "${INSTALL_USER}:${INSTALL_GROUP}" \
-    "${RUNTIME_DIR}/db" \
-    "${RUNTIME_DIR}/audit" \
-    "${RUNTIME_DIR}/cache" \
-    "${RUNTIME_DIR}/data"
+  local writable_paths=("${RUNTIME_DIR}/db" "${RUNTIME_DIR}/audit" "${RUNTIME_DIR}/data")
+  if [[ -d "${RUNTIME_DIR}/cache" ]]; then
+    writable_paths+=("${RUNTIME_DIR}/cache")
+  fi
+  run_priv chown -R "${INSTALL_USER}:${INSTALL_GROUP}" "${writable_paths[@]}"
 }
 
 assert_runtime_accessible() {
   if ! use_service_account || is_enabled "${INSTALL_DRY_RUN}"; then
     return
   fi
-  local -a cmd=(test -x "${RUNTIME_DIR}" -a -r "${RUNTIME_DIR}/conf/config.json" -a -w "${RUNTIME_DIR}/db")
+  local -a cmd=(test -x "${RUNTIME_DIR}" -a -r "${RUNTIME_DIR}/${INSTALL_CONFIG_REL}" -a -w "${RUNTIME_DIR}/db")
   if [[ "${EUID}" -eq 0 && -x /sbin/runuser ]]; then
     /sbin/runuser -u "${INSTALL_USER}" -- "${cmd[@]}" || die "runtime path is not accessible to ${INSTALL_USER}: ${RUNTIME_DIR}; choose INSTALL_USER=$(invoking_user) for a home-directory PREFIX or install under /opt/tukuyomi"
     return
@@ -345,7 +387,7 @@ assert_runtime_accessible() {
 }
 
 run_runtime() {
-  local -a env_args=("WAF_CONFIG_FILE=conf/config.json")
+  local -a env_args=("WAF_CONFIG_FILE=${INSTALL_CONFIG_REL}")
   while [[ "$#" -gt 0 && "$1" == *=* ]]; do
     env_args+=("$1")
     shift
@@ -376,7 +418,7 @@ run_runtime() {
 
 read_storage_field() {
   local field="$1"
-  python3 - "$RUNTIME_DIR/conf/config.json" "$field" <<'PY'
+  python3 - "$RUNTIME_DIR/${INSTALL_CONFIG_REL}" "$field" <<'PY'
 import json
 import sys
 
@@ -449,15 +491,23 @@ install_files() {
 
   [[ -x "${ROOT_DIR}/bin/tukuyomi" ]] || die "missing built binary: ${ROOT_DIR}/bin/tukuyomi"
   [[ -f "${ROOT_DIR}/data/conf/config.json" ]] || die "missing bootstrap config: data/conf/config.json"
-  [[ -d "${ROOT_DIR}/seeds/conf" ]] || die "missing runtime seeds: seeds/conf"
+  if install_role_is_gateway; then
+    [[ -d "${ROOT_DIR}/seeds/conf" ]] || die "missing runtime seeds: seeds/conf"
+  fi
 
   run_priv install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${RUNTIME_DIR}/bin/tukuyomi"
-  run_priv install -m 755 "${ROOT_DIR}/scripts/update_country_db.sh" "${RUNTIME_DIR}/scripts/update_country_db.sh"
-  run_priv cp -R "${ROOT_DIR}/seeds/conf/." "${RUNTIME_DIR}/seeds/conf/"
-  install_config_preserve "${ROOT_DIR}/data/conf/config.json" "${RUNTIME_DIR}/conf/config.json" 644 "${INSTALL_OVERWRITE_CONFIG}"
-  render_env_preserve "${ROOT_DIR}/docs/build/tukuyomi.env.example" "${env_dir}/tukuyomi.env" "${INSTALL_OVERWRITE_ENV}"
+  if install_role_is_gateway; then
+    run_priv install -m 755 "${ROOT_DIR}/scripts/update_country_db.sh" "${RUNTIME_DIR}/scripts/update_country_db.sh"
+    run_priv cp -R "${ROOT_DIR}/seeds/conf/." "${RUNTIME_DIR}/seeds/conf/"
+  fi
+  install_config_preserve "${ROOT_DIR}/data/conf/config.json" "${RUNTIME_DIR}/${INSTALL_CONFIG_REL}" 644 "${INSTALL_OVERWRITE_CONFIG}" "${INSTALL_ROLE}"
+  if install_role_is_gateway; then
+    render_env_preserve "${ROOT_DIR}/docs/build/tukuyomi.env.example" "${env_dir}/${INSTALL_ENV_BASENAME}" "${INSTALL_OVERWRITE_ENV}"
+  else
+    render_env_preserve "${ROOT_DIR}/docs/build/tukuyomi-center.env.example" "${env_dir}/${INSTALL_ENV_BASENAME}" "${INSTALL_OVERWRITE_ENV}"
+  fi
 
-  if [[ ! -e "${RUNTIME_DIR}/conf/crs-disabled.conf" ]]; then
+  if install_role_is_gateway && [[ ! -e "${RUNTIME_DIR}/conf/crs-disabled.conf" ]]; then
     run_priv touch "${RUNTIME_DIR}/conf/crs-disabled.conf"
   fi
 
@@ -465,13 +515,23 @@ install_files() {
 
   if is_enabled "${INSTALL_ENABLE_SYSTEMD}"; then
     run_priv install -d -m 755 "${systemd_dir}"
-    render_systemd_unit "${ROOT_DIR}/docs/build/tukuyomi.service.example" "${systemd_dir}/tukuyomi.service"
-    render_systemd_unit "${ROOT_DIR}/docs/build/tukuyomi-scheduled-tasks.service.example" "${systemd_dir}/tukuyomi-scheduled-tasks.service"
-    run_priv install -m 644 "${ROOT_DIR}/docs/build/tukuyomi-scheduled-tasks.timer.example" "${systemd_dir}/tukuyomi-scheduled-tasks.timer"
+    if install_role_is_gateway; then
+      render_systemd_unit "${ROOT_DIR}/docs/build/tukuyomi.service.example" "${systemd_dir}/tukuyomi.service" "${INSTALL_ENV_BASENAME}"
+      render_systemd_unit "${ROOT_DIR}/docs/build/tukuyomi-scheduled-tasks.service.example" "${systemd_dir}/tukuyomi-scheduled-tasks.service" "${INSTALL_ENV_BASENAME}"
+      run_priv install -m 644 "${ROOT_DIR}/docs/build/tukuyomi-scheduled-tasks.timer.example" "${systemd_dir}/tukuyomi-scheduled-tasks.timer"
+    else
+      render_systemd_unit "${ROOT_DIR}/docs/build/tukuyomi-center.service.example" "${systemd_dir}/tukuyomi-center.service" "${INSTALL_ENV_BASENAME}"
+    fi
   fi
 }
 
 initialize_db() {
+  if ! install_role_is_gateway; then
+    run_runtime db-migrate
+    log "center role skips WAF/CRS asset import and gateway DB seed"
+    return
+  fi
+
   local seed_db="0"
   if should_seed_db; then
     seed_db="1"
@@ -504,14 +564,21 @@ activate_systemd() {
   run_priv systemctl daemon-reload
 
   if is_enabled "${INSTALL_ENABLE_BOOT}"; then
-    run_priv systemctl enable tukuyomi.service
+    run_priv systemctl enable "${INSTALL_SERVICE_BASENAME}"
   fi
   if is_enabled "${INSTALL_START}"; then
-    if systemctl is-active --quiet tukuyomi.service; then
-      run_priv systemctl restart tukuyomi.service
+    if systemctl is-active --quiet "${INSTALL_SERVICE_BASENAME}"; then
+      run_priv systemctl restart "${INSTALL_SERVICE_BASENAME}"
     else
-      run_priv systemctl start tukuyomi.service
+      run_priv systemctl start "${INSTALL_SERVICE_BASENAME}"
     fi
+  fi
+
+  if ! install_role_is_gateway; then
+    if is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
+      log "center role does not install scheduled-task timer"
+    fi
+    return
   fi
 
   if is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
@@ -525,6 +592,7 @@ activate_systemd() {
 }
 
 ensure_linux_systemd_target
+configure_install_role
 resolve_install_account
 build_if_needed
 ensure_user_group
@@ -533,4 +601,4 @@ assert_runtime_accessible
 initialize_db
 activate_systemd
 
-log "completed TARGET=${TARGET} PREFIX=${PREFIX} INSTALL_USER=${INSTALL_USER} INSTALL_CREATE_USER=${INSTALL_CREATE_USER}${DESTDIR:+ DESTDIR=${DESTDIR}}"
+log "completed TARGET=${TARGET} INSTALL_ROLE=${INSTALL_ROLE} PREFIX=${PREFIX} INSTALL_USER=${INSTALL_USER} INSTALL_CREATE_USER=${INSTALL_CREATE_USER}${DESTDIR:+ DESTDIR=${DESTDIR}}"

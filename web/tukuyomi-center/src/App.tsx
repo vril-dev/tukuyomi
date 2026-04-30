@@ -5,6 +5,7 @@ import Layout from "@/components/Layout";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { getUIBasePath } from "@/lib/runtime";
+import DeviceApprovalsPage from "@/pages/DeviceApprovalsPage";
 import Login from "@/pages/Login";
 import StatusPage from "@/pages/StatusPage";
 import UserPage from "@/pages/UserPage";
@@ -67,7 +68,7 @@ function CenterRoutes() {
       <Route path="/" element={<ProtectedLayout />}>
         <Route index element={<Navigate to="/status" replace />} />
         <Route path="status" element={<StatusPage />} />
-        <Route path="device-approvals" element={<StatusPage focusApprovals />} />
+        <Route path="device-approvals" element={<DeviceApprovalsPage focusApprovals />} />
         <Route
           path="user"
           element={<UserPage onPasswordChanged={() => setLoginNoticeKey("Password changed. Sign in again.")} />}

@@ -8,9 +8,10 @@ Coraza + CRS WAF reverse proxy / API gateway
 
 ## Overview
 
-`tukuyomi` is the general-purpose reverse proxy / API gateway in the Tukuyomi family.
-It combines Coraza WAF + OWASP CRS with built-in route management, embedded admin UI/API,
-optional static and PHP-FPM hosting, cache, and app-edge policy controls.
+`tukuyomi` is a single-binary application-edge control plane. It combines
+Coraza WAF + OWASP CRS, reverse proxy routing, request security controls,
+optional Runtime Apps, scheduled jobs, Center mode, and IoT / Edge device
+enrollment in one product.
 
 It is designed for operators who want one product to cover:
 
@@ -19,21 +20,22 @@ It is designed for operators who want one product to cover:
 - rate, country, bot, semantic, and IP reputation controls
 - built-in admin UI/API
 - optional static hosting, PHP-FPM, and scheduled jobs
+- optional IoT / Edge device identity enrollment with Center approval
 - single-binary or Docker deployment
 
-## Product Positioning
+## IoT / Edge Device Enrollment
 
-`tukuyomi` is now the canonical application-edge WAF / reverse proxy product.
-The former `tukuyomi-proxy` line has been integrated into this repository and
-continues here under the `tukuyomi` product name.
+The Gateway now includes an optional IoT / Edge mode for deployments that need a
+local device identity approved by a Tukuyomi Center. The current implementation
+covers the enrollment workflow: Center issues an enrollment token, Gateway
+generates an Ed25519 device identity and sends a signed enrollment request, and
+Center records the request for operator approval. In IoT / Edge mode, public
+proxy traffic stays locked until the Gateway refreshes an `approved` Center
+device status.
 
-Archived `tukuyomi-proxy` binary releases remain available from
-`tukuyomi-releases`, but that repository is no longer the update channel for
-proxy/WAF development. New proxy, routing, cache, WAF tuning, PHP-FPM, and
-scheduled task work belongs to `tukuyomi`.
-
-See [docs/product-comparison.md](docs/product-comparison.md) for the current
-family comparison.
+Web/VPS deployments should leave IoT / Edge mode off. For the operator flow,
+preview URL caveats, and public key fingerprint format, see
+[docs/operations/device-auth-enrollment.md](docs/operations/device-auth-enrollment.md).
 
 ## Rule Files and First Setup
 
@@ -84,11 +86,19 @@ For a direct Linux host install, start with the install target:
 make install TARGET=linux-systemd
 ```
 
-This builds the embedded Gateway/Center UI and Go binary, creates the runtime tree, runs
-DB migration, imports WAF/CRS assets, seeds first-run DB config, and installs
-systemd units for the local host. The scheduled-task timer is enabled by
-default; set `INSTALL_ENABLE_SCHEDULED_TASKS=0` if this host should not execute
-scheduled tasks.
+This is the Gateway install path. It builds the embedded Gateway/Center UI and
+Go binary, creates the runtime tree, runs DB migration, imports WAF/CRS assets,
+seeds first-run DB config, and installs systemd units for the local host. The
+scheduled-task timer is enabled by default; set
+`INSTALL_ENABLE_SCHEDULED_TASKS=0` if this host should not execute scheduled
+tasks.
+
+Install Center on a control-plane host with the same target and a different
+role:
+
+```bash
+make install TARGET=linux-systemd INSTALL_ROLE=center
+```
 
 For detailed install options such as `PREFIX`, `INSTALL_USER`, scheduled task
 units, or container/platform deployment instead of host install, see:

@@ -17,6 +17,8 @@ const (
 	DefaultProxyEngineMode            = ProxyEngineModeTukuyomiProxy
 	WAFEngineModeCoraza               = wafengine.ModeCoraza
 	DefaultWAFEngineMode              = wafengine.DefaultMode
+	DefaultEdgeDeviceStatusRefreshSec = 30
+	MaxEdgeDeviceStatusRefreshSec     = 3600
 	PersistentStorageBackendLocal     = "local"
 	PersistentStorageBackendS3        = "s3"
 	PersistentStorageBackendAzureBlob = "azure_blob"
@@ -174,12 +176,14 @@ type appWAFEngineConfig struct {
 }
 
 type appEdgeConfig struct {
-	Enabled    bool                    `json:"enabled"`
-	DeviceAuth appEdgeDeviceAuthConfig `json:"device_auth"`
+	Enabled               bool                    `json:"enabled"`
+	RequireDeviceApproval bool                    `json:"require_device_approval"`
+	DeviceAuth            appEdgeDeviceAuthConfig `json:"device_auth"`
 }
 
 type appEdgeDeviceAuthConfig struct {
-	Enabled bool `json:"enabled"`
+	Enabled                  bool `json:"enabled"`
+	StatusRefreshIntervalSec int  `json:"status_refresh_interval_sec"`
 }
 
 type appSecurityAuditConfig struct {
@@ -390,9 +394,11 @@ func defaultAppConfigFile() appConfigFile {
 			},
 		},
 		Edge: appEdgeConfig{
-			Enabled: false,
+			Enabled:               false,
+			RequireDeviceApproval: true,
 			DeviceAuth: appEdgeDeviceAuthConfig{
-				Enabled: true,
+				Enabled:                  true,
+				StatusRefreshIntervalSec: DefaultEdgeDeviceStatusRefreshSec,
 			},
 		},
 		SecurityAudit: appSecurityAuditConfig{
@@ -758,6 +764,9 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	}
 	if cfg.Storage.DBSyncIntervalSec < 0 {
 		return fmt.Errorf("storage.db_sync_interval_sec must be >= 0")
+	}
+	if cfg.Edge.DeviceAuth.StatusRefreshIntervalSec < 0 || cfg.Edge.DeviceAuth.StatusRefreshIntervalSec > MaxEdgeDeviceStatusRefreshSec {
+		return fmt.Errorf("edge.device_auth.status_refresh_interval_sec must be between 0 and %d", MaxEdgeDeviceStatusRefreshSec)
 	}
 	if cfg.Storage.FileRotateBytes < 0 || cfg.Storage.FileMaxBytes < 0 || cfg.Storage.FileRetentionDays < 0 {
 		return fmt.Errorf("storage.file_* values must be >= 0")

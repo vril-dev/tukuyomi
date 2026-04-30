@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"tukuyomi/internal/adminauth"
 	"tukuyomi/internal/buildinfo"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/handler"
@@ -31,6 +32,8 @@ const (
 	APIBasePathEnv = "TUKUYOMI_CENTER_API_BASE_PATH"
 	UIBasePathEnv  = "TUKUYOMI_CENTER_UI_BASE_PATH"
 )
+
+var centerAdminAuthCookieNames = adminauth.CenterCookieNames()
 
 type RuntimeConfig struct {
 	ListenAddr  string
@@ -111,7 +114,7 @@ func NewEngine(cfg RuntimeConfig) (*gin.Engine, error) {
 	})
 
 	registerDeviceEnrollmentRoutes(r)
-	handler.RegisterAdminAuthRoutesAt(r, apiBase)
+	handler.RegisterAdminAuthRoutesAtWithCookieNames(r, apiBase, centerAdminAuthCookieNames)
 	registerCenterAPI(r, apiBase)
 	registerCenterUI(r, apiBase, uiBase)
 	return r, nil
@@ -177,7 +180,8 @@ func registerCenterAPI(r *gin.Engine, apiBase string) {
 		apiBase,
 		handler.AdminAccessMiddleware("api"),
 		handler.AdminRateLimitMiddleware(),
-		middleware.AdminAuth(),
+		handler.AdminAuthCookieNamesMiddleware(centerAdminAuthCookieNames),
+		middleware.AdminAuthWithResolver(handler.DBAdminAuthResolverWithCookieNames(centerAdminAuthCookieNames)),
 	)
 	api.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -191,6 +195,7 @@ func registerCenterAPI(r *gin.Engine, apiBase string) {
 				apiBase + "/auth/password",
 				apiBase + "/devices",
 				apiBase + "/devices/enrollments",
+				apiBase + "/enrollment-tokens",
 			},
 		})
 	})

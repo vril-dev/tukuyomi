@@ -271,6 +271,7 @@ func runServer(workerReady *workerReadyNotifier) {
 		handler.StartStorageSyncLoop(config.DBSyncInterval)
 		log.Printf("[DB][SYNC] periodic sync loop enabled interval=%s", config.DBSyncInterval)
 	}
+	handler.StartEdgeDeviceStatusRefreshLoop(config.EdgeDeviceStatusRefreshInterval)
 	if !handler.DBStorageActive() {
 		cacheConfPath := strings.TrimSpace(config.CacheRulesFile)
 		if cacheConfPath == "" {

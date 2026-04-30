@@ -1,6 +1,6 @@
 import { getAPIBasePath } from "@/lib/runtime";
 
-const DEFAULT_CSRF_COOKIE_NAME = "tukuyomi_admin_csrf";
+const DEFAULT_CSRF_COOKIE_NAME = "tukuyomi_center_csrf";
 const DEFAULT_CSRF_HEADER_NAME = "X-CSRF-Token";
 
 export const AUTH_REQUIRED_EVENT = "tukuyomi-center-auth-required";

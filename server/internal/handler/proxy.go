@@ -614,6 +614,14 @@ func serveProxyRequest(c *proxyServeContext) {
 	if c == nil || c.Writer == nil || c.Request == nil {
 		return
 	}
+	if gate := currentEdgeProxyGateState(); gate.Locked {
+		c.JSON(http.StatusServiceUnavailable, map[string]any{
+			"error":  "edge device is not approved by Center",
+			"reason": gate.Reason,
+		})
+		c.Abort()
+		return
+	}
 	reqID := ensureProxyRequestID(c)
 	clientIP := requestmeta.ClientIPFromHTTP(c.Request)
 	requestMetadataCtx := requestmeta.NewResolverContext(clientIP)

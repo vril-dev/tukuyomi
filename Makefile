@@ -59,6 +59,7 @@ PRESET_DIR := presets/$(PRESET)
 PRESET_OVERWRITE ?= 0
 TARGET ?=
 INSTALL_TARGET ?= linux-systemd
+INSTALL_ROLE ?= gateway
 INSTALL_PREFIX ?= $(if $(PREFIX),$(PREFIX),/opt/tukuyomi)
 INSTALL_USER ?=
 INSTALL_GROUP ?=
@@ -95,7 +96,7 @@ help:
 	@echo "  make env-init                   Create .env from .env.example if missing"
 	@echo "  make crs-install                Run db-migrate, install OWASP CRS seed files, and import WAF rule assets into DB"
 	@echo "  make crs-ensure                 Run db-migrate, install CRS only when missing, and import WAF rule assets into DB"
-	@echo "  make install TARGET=linux-systemd Install binary runtime onto this Linux host"
+	@echo "  make install TARGET=linux-systemd INSTALL_ROLE=gateway|center Install binary runtime onto this Linux host"
 	@echo "    - optional: PREFIX=/opt/tukuyomi INSTALL_USER=<user> INSTALL_ENABLE_SCHEDULED_TASKS=0(disable) INSTALL_DB_SEED=auto|always|never"
 	@echo "  make deploy-render TARGET=ecs|kubernetes|azure-container-apps|container-image IMAGE_URI=... Render deploy artifacts"
 	@echo "    - optional: DEPLOY_RENDER_OUT_DIR=dist/deploy DEPLOY_RENDER_OVERWRITE=1"
@@ -279,6 +280,7 @@ preset-check-minimal:
 
 install:
 	@TARGET="$(or $(TARGET),$(INSTALL_TARGET))" \
+	INSTALL_ROLE="$(INSTALL_ROLE)" \
 	PREFIX="$(INSTALL_PREFIX)" \
 	INSTALL_USER="$(INSTALL_USER)" \
 	INSTALL_GROUP="$(INSTALL_GROUP)" \
@@ -300,16 +302,42 @@ install-smoke: build
 	tmp="$$(mktemp -d "$(ROOT_DIR)/.tmp-install-smoke.XXXXXX")"; \
 	trap 'rm -rf "$$tmp"' EXIT; \
 	TARGET=linux-systemd \
+	INSTALL_ROLE=gateway \
 	DESTDIR="$$tmp" \
 	PREFIX=/opt/tukuyomi \
 	INSTALL_SKIP_BUILD=1 \
-	INSTALL_ENABLE_SYSTEMD=0 \
+	INSTALL_ENABLE_BOOT=0 \
+	INSTALL_START=0 \
 	INSTALL_DB_SEED=always \
 	./scripts/install_tukuyomi.sh; \
 	test -x "$$tmp/opt/tukuyomi/bin/tukuyomi"; \
 	test -f "$$tmp/opt/tukuyomi/conf/config.json"; \
+	test -f "$$tmp/etc/tukuyomi/tukuyomi.env"; \
+	test -f "$$tmp/etc/systemd/system/tukuyomi.service"; \
+	test -f "$$tmp/etc/systemd/system/tukuyomi-scheduled-tasks.service"; \
+	test -f "$$tmp/etc/systemd/system/tukuyomi-scheduled-tasks.timer"; \
 	test -d "$$tmp/opt/tukuyomi/data/persistent"; \
 	test -f "$$tmp/opt/tukuyomi/db/tukuyomi.db"; \
+	TARGET=linux-systemd \
+	INSTALL_ROLE=center \
+	DESTDIR="$$tmp" \
+	PREFIX=/opt/tukuyomi \
+	INSTALL_SKIP_BUILD=1 \
+	INSTALL_ENABLE_BOOT=0 \
+	INSTALL_START=0 \
+	INSTALL_DB_SEED=never \
+	./scripts/install_tukuyomi.sh; \
+	test -x "$$tmp/opt/tukuyomi/bin/tukuyomi"; \
+	test -f "$$tmp/opt/tukuyomi/conf/config.center.json"; \
+	test -f "$$tmp/etc/tukuyomi/tukuyomi-center.env"; \
+	test -f "$$tmp/etc/systemd/system/tukuyomi-center.service"; \
+	grep -q "ExecStart=/opt/tukuyomi/bin/tukuyomi center" "$$tmp/etc/systemd/system/tukuyomi-center.service"; \
+	grep -q "WAF_CONFIG_FILE=/opt/tukuyomi/conf/config.center.json" "$$tmp/etc/tukuyomi/tukuyomi-center.env"; \
+	test -f "$$tmp/opt/tukuyomi/db/tukuyomi-center.db"; \
+	if TARGET=linux-systemd INSTALL_ROLE=bad DESTDIR="$$tmp" INSTALL_SKIP_BUILD=1 ./scripts/install_tukuyomi.sh >/dev/null 2>&1; then \
+		echo "[install-smoke][ERROR] invalid INSTALL_ROLE unexpectedly succeeded" >&2; \
+		exit 1; \
+	fi; \
 	echo "[install-smoke] ok"
 
 deploy-render-smoke:

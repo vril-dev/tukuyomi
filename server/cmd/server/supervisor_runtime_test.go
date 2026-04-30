@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -360,6 +361,172 @@ func TestSupervisorRuntimeReplaceStopsCandidateWhenActivationFails(t *testing.T)
 	}
 }
 
+func TestSupervisorWorkerStateStoreRoundTrip(t *testing.T) {
+	store := newSupervisorWorkerStateStore(filepath.Join(t.TempDir(), "releases", "worker_runtime_state.json"))
+	state := supervisorWorkerRuntimeState{
+		Active: supervisorWorkerGenerationState{
+			GenerationID: 7,
+			Executable:   "/opt/tukuyomi/releases/current/tukuyomi",
+			PID:          700,
+			Status:       "active",
+			ActivatedAt:  "2026-04-30T00:00:00Z",
+		},
+		Previous: &supervisorWorkerGenerationState{
+			GenerationID: 6,
+			Executable:   "/opt/tukuyomi/releases/previous/tukuyomi",
+			Status:       "previous",
+		},
+		LastActivation: &supervisorWorkerActivationResult{
+			Action:               "replace",
+			Success:              true,
+			ActiveGenerationID:   7,
+			PreviousGenerationID: 6,
+			StartedAt:            "2026-04-30T00:00:00Z",
+			CompletedAt:          "2026-04-30T00:00:01Z",
+		},
+		UpdatedAt: "2026-04-30T00:00:01Z",
+	}
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	info, err := os.Stat(store.path)
+	if err != nil {
+		t.Fatalf("stat state file: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("mode=%#o want 0600", mode)
+	}
+	got, found, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !found {
+		t.Fatal("state not found")
+	}
+	if got.SchemaVersion != supervisorWorkerStateSchemaVersion || got.Active.GenerationID != 7 || got.Previous == nil || got.Previous.GenerationID != 6 {
+		t.Fatalf("state=%+v", got)
+	}
+}
+
+func TestSupervisorRuntimeStartInitialPersistsStateAndSeedsGeneration(t *testing.T) {
+	now := time.Date(2026, 4, 30, 1, 2, 3, 0, time.UTC)
+	store := newSupervisorWorkerStateStore(filepath.Join(t.TempDir(), "worker_runtime_state.json"))
+	if err := store.Save(supervisorWorkerRuntimeState{
+		Active: supervisorWorkerGenerationState{
+			GenerationID: 7,
+			Executable:   "/opt/tukuyomi/releases/current/tukuyomi",
+			Status:       "active",
+			ActivatedAt:  now.Add(-time.Minute).Format(time.RFC3339Nano),
+		},
+		Previous: &supervisorWorkerGenerationState{
+			GenerationID: 6,
+			Executable:   "/opt/tukuyomi/releases/previous/tukuyomi",
+			Status:       "previous",
+		},
+		UpdatedAt: now.Add(-time.Minute).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	worker := newFakeSupervisorWorker(808)
+	runtime := &supervisorRuntime{
+		executable:   "/opt/tukuyomi/releases/current/tukuyomi",
+		readyTimeout: time.Second,
+		stopTimeout:  time.Second,
+		stateStore:   store,
+		timeNow:      func() time.Time { return now },
+		startWorker: func(context.Context, string, *supervisorListenerSet, time.Duration) (supervisorWorker, workerReadyMessage, error) {
+			return worker, workerReadyMessage{Protocol: workerReadinessProtocol, PID: worker.ProcessID(), GoVersion: "go-test", ListenAddr: "127.0.0.1:9090"}, nil
+		},
+	}
+	active, err := runtime.StartInitial(context.Background())
+	if err != nil {
+		t.Fatalf("StartInitial: %v", err)
+	}
+	if active.id != 8 {
+		t.Fatalf("generation=%d want 8", active.id)
+	}
+	got, found, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !found || got.Active.GenerationID != 8 || got.Active.PID != 808 || got.Previous == nil || got.Previous.GenerationID != 6 {
+		t.Fatalf("state=%+v found=%t", got, found)
+	}
+}
+
+func TestSupervisorRuntimeReplacePersistsPreviousGeneration(t *testing.T) {
+	now := time.Date(2026, 4, 30, 1, 2, 3, 0, time.UTC)
+	store := newSupervisorWorkerStateStore(filepath.Join(t.TempDir(), "worker_runtime_state.json"))
+	activeWorker := newFakeSupervisorWorker(101)
+	candidateWorker := newFakeSupervisorWorker(202)
+	runtime := &supervisorRuntime{
+		executable:     "/opt/tukuyomi/releases/current/tukuyomi",
+		readyTimeout:   time.Second,
+		stopTimeout:    time.Second,
+		enableReplace:  true,
+		stateStore:     store,
+		rollbackWindow: time.Minute,
+		timeNow:        func() time.Time { return now },
+		startWorker: func(context.Context, string, *supervisorListenerSet, time.Duration) (supervisorWorker, workerReadyMessage, error) {
+			return candidateWorker, workerReadyMessage{Protocol: workerReadinessProtocol, PID: candidateWorker.ProcessID(), GoVersion: "go-test", ListenAddr: "127.0.0.1:9090"}, nil
+		},
+	}
+	active := &supervisorWorkerGeneration{
+		id:         1,
+		executable: "/opt/tukuyomi/releases/previous/tukuyomi",
+		worker:     activeWorker,
+		activated:  now.Add(-time.Second),
+		ready:      workerReadyMessage{Protocol: workerReadinessProtocol, PID: activeWorker.ProcessID(), GoVersion: "go-test", ListenAddr: "127.0.0.1:9090"},
+	}
+	next, err := runtime.Replace(context.Background(), active)
+	if err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	if next.id != 2 {
+		t.Fatalf("candidate generation=%d want 2", next.id)
+	}
+	got, found, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !found || got.Active.GenerationID != 2 || got.Previous == nil || got.Previous.GenerationID != 1 || got.LastActivation == nil || !got.LastActivation.Success {
+		t.Fatalf("state=%+v found=%t", got, found)
+	}
+}
+
+func TestSupervisorRuntimeReplaceRecordsCandidateFailure(t *testing.T) {
+	now := time.Date(2026, 4, 30, 1, 2, 3, 0, time.UTC)
+	store := newSupervisorWorkerStateStore(filepath.Join(t.TempDir(), "worker_runtime_state.json"))
+	activeWorker := newFakeSupervisorWorker(101)
+	runtime := &supervisorRuntime{
+		executable:    "/opt/tukuyomi/releases/current/tukuyomi",
+		readyTimeout:  time.Second,
+		stopTimeout:   time.Second,
+		enableReplace: true,
+		stateStore:    store,
+		timeNow:       func() time.Time { return now },
+		startWorker: func(context.Context, string, *supervisorListenerSet, time.Duration) (supervisorWorker, workerReadyMessage, error) {
+			return nil, workerReadyMessage{}, errors.New("candidate failed")
+		},
+	}
+	active := &supervisorWorkerGeneration{
+		id:         3,
+		executable: "/opt/tukuyomi/releases/current/tukuyomi",
+		worker:     activeWorker,
+		activated:  now.Add(-time.Second),
+	}
+	if _, err := runtime.Replace(context.Background(), active); err == nil {
+		t.Fatal("expected Replace error")
+	}
+	got, found, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !found || got.Active.GenerationID != 3 || got.LastActivation == nil || got.LastActivation.Success || !strings.Contains(got.LastActivation.Error, "candidate failed") {
+		t.Fatalf("state=%+v found=%t", got, found)
+	}
+}
+
 func TestSupervisorRuntimeReplaceDisabledByDefault(t *testing.T) {
 	activeWorker := newFakeSupervisorWorker(101)
 	startedCandidate := false
@@ -416,6 +583,141 @@ func TestSupervisorRuntimeRunSIGHUPDrainsActiveWorker(t *testing.T) {
 	}
 	if startedCandidate {
 		t.Fatal("SIGHUP must not launch an unstaged candidate worker")
+	}
+}
+
+func TestSupervisorRuntimeRunRollsBackRecentActiveCrash(t *testing.T) {
+	now := time.Date(2026, 4, 30, 1, 2, 3, 0, time.UTC)
+	store := newSupervisorWorkerStateStore(filepath.Join(t.TempDir(), "worker_runtime_state.json"))
+	if err := store.Save(supervisorWorkerRuntimeState{
+		Active: supervisorWorkerGenerationState{
+			GenerationID: 2,
+			Executable:   "/opt/tukuyomi/releases/current/tukuyomi",
+			Status:       "active",
+			ActivatedAt:  now.Add(-time.Second).Format(time.RFC3339Nano),
+		},
+		Previous: &supervisorWorkerGenerationState{
+			GenerationID: 1,
+			Executable:   "/opt/tukuyomi/releases/previous/tukuyomi",
+			Status:       "previous",
+		},
+		UpdatedAt: now.Add(-time.Second).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	activeWorker := newFakeSupervisorWorker(202)
+	rollbackWorker := newFakeSupervisorWorker(101)
+	rollbackActivated := make(chan struct{})
+	rollbackWorker.activateCh = rollbackActivated
+	startedExecutable := make(chan string, 1)
+	runtime := &supervisorRuntime{
+		executable:     "/opt/tukuyomi/releases/current/tukuyomi",
+		readyTimeout:   time.Second,
+		stopTimeout:    time.Second,
+		rollbackWindow: time.Minute,
+		stateStore:     store,
+		timeNow:        func() time.Time { return now },
+		startWorker: func(_ context.Context, executable string, _ *supervisorListenerSet, _ time.Duration) (supervisorWorker, workerReadyMessage, error) {
+			startedExecutable <- executable
+			return rollbackWorker, workerReadyMessage{Protocol: workerReadinessProtocol, PID: rollbackWorker.ProcessID(), GoVersion: "go-test", ListenAddr: "127.0.0.1:9090"}, nil
+		},
+	}
+	active := &supervisorWorkerGeneration{
+		id:         2,
+		executable: "/opt/tukuyomi/releases/current/tukuyomi",
+		worker:     activeWorker,
+		activated:  now.Add(-time.Second),
+	}
+	sigCh := make(chan os.Signal, 1)
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- runtime.Run(active, sigCh)
+	}()
+	activeWorker.waitCh <- errors.New("active crashed")
+
+	select {
+	case executable := <-startedExecutable:
+		if executable != "/opt/tukuyomi/releases/previous/tukuyomi" {
+			t.Fatalf("rollback executable=%q", executable)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("rollback worker was not started")
+	}
+	select {
+	case <-rollbackActivated:
+	case <-time.After(time.Second):
+		t.Fatal("rollback worker was not activated")
+	}
+	got := waitForSupervisorWorkerState(t, store, func(state supervisorWorkerRuntimeState, found bool) bool {
+		return found &&
+			state.Active.GenerationID == 3 &&
+			state.Active.Executable == "/opt/tukuyomi/releases/previous/tukuyomi" &&
+			state.Previous != nil &&
+			state.Previous.Status == "crashed"
+	})
+	if got.Active.GenerationID != 3 {
+		t.Fatalf("state=%+v", got)
+	}
+	sigCh <- syscall.SIGTERM
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not stop after signal")
+	}
+	if !rollbackWorker.drained {
+		t.Fatal("rollback worker was not drained on shutdown signal")
+	}
+}
+
+func TestSupervisorRuntimeRunDoesNotRollbackOutsideWindow(t *testing.T) {
+	now := time.Date(2026, 4, 30, 1, 2, 3, 0, time.UTC)
+	store := newSupervisorWorkerStateStore(filepath.Join(t.TempDir(), "worker_runtime_state.json"))
+	if err := store.Save(supervisorWorkerRuntimeState{
+		Active: supervisorWorkerGenerationState{
+			GenerationID: 2,
+			Executable:   "/opt/tukuyomi/releases/current/tukuyomi",
+			Status:       "active",
+			ActivatedAt:  now.Add(-10 * time.Minute).Format(time.RFC3339Nano),
+		},
+		Previous: &supervisorWorkerGenerationState{
+			GenerationID: 1,
+			Executable:   "/opt/tukuyomi/releases/previous/tukuyomi",
+			Status:       "previous",
+		},
+		UpdatedAt: now.Add(-10 * time.Minute).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	activeWorker := newFakeSupervisorWorker(202)
+	startedCandidate := false
+	runtime := &supervisorRuntime{
+		executable:     "/opt/tukuyomi/releases/current/tukuyomi",
+		readyTimeout:   time.Second,
+		stopTimeout:    time.Second,
+		rollbackWindow: time.Minute,
+		stateStore:     store,
+		timeNow:        func() time.Time { return now },
+		startWorker: func(context.Context, string, *supervisorListenerSet, time.Duration) (supervisorWorker, workerReadyMessage, error) {
+			startedCandidate = true
+			return newFakeSupervisorWorker(101), workerReadyMessage{}, nil
+		},
+	}
+	active := &supervisorWorkerGeneration{
+		id:         2,
+		executable: "/opt/tukuyomi/releases/current/tukuyomi",
+		worker:     activeWorker,
+		activated:  now.Add(-10 * time.Minute),
+	}
+	activeWorker.waitCh <- errors.New("active crashed")
+	err := runtime.Run(active, make(chan os.Signal))
+	if err == nil || !strings.Contains(err.Error(), "worker stopped unexpectedly") {
+		t.Fatalf("Run error=%v", err)
+	}
+	if startedCandidate {
+		t.Fatal("rollback candidate should not start outside rollback window")
 	}
 }
 
@@ -545,9 +847,31 @@ func saveSupervisorListenerConfig() func() {
 	}
 }
 
+func waitForSupervisorWorkerState(t *testing.T, store *supervisorWorkerStateStore, accept func(supervisorWorkerRuntimeState, bool) bool) supervisorWorkerRuntimeState {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	var last supervisorWorkerRuntimeState
+	var found bool
+	for time.Now().Before(deadline) {
+		state, stateFound, err := store.Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		last = state
+		found = stateFound
+		if accept(state, stateFound) {
+			return state
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("state did not reach expected condition; last=%+v found=%t", last, found)
+	return supervisorWorkerRuntimeState{}
+}
+
 type fakeSupervisorWorker struct {
 	pid         int
 	waitCh      chan error
+	activateCh  chan struct{}
 	activated   bool
 	drained     bool
 	stopped     bool
@@ -562,6 +886,10 @@ func newFakeSupervisorWorker(pid int) *fakeSupervisorWorker {
 
 func (w *fakeSupervisorWorker) Activate() error {
 	w.activated = true
+	if w.activateCh != nil {
+		close(w.activateCh)
+		w.activateCh = nil
+	}
 	return w.activateErr
 }
 

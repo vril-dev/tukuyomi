@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"strconv"
@@ -146,4 +147,26 @@ func (l *activationGateListener) Accept() (net.Conn, error) {
 		}
 	}
 	return l.Listener.Accept()
+}
+
+func runAfterWorkerActivation(name string, start func()) error {
+	if start == nil {
+		return nil
+	}
+	gate, err := currentWorkerActivationGate()
+	if err != nil {
+		return err
+	}
+	if gate == nil {
+		start()
+		return nil
+	}
+	go func() {
+		if err := gate.wait(); err != nil {
+			log.Printf("[WORKER][ACTIVATION][WARN] %s not started: %v", name, err)
+			return
+		}
+		start()
+	}()
+	return nil
 }

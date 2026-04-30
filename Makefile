@@ -317,6 +317,8 @@ install-smoke: build
 	test -f "$$tmp/etc/systemd/system/tukuyomi-scheduled-tasks.service"; \
 	test -f "$$tmp/etc/systemd/system/tukuyomi-scheduled-tasks.timer"; \
 	test -d "$$tmp/opt/tukuyomi/data/persistent"; \
+	test -d "$$tmp/opt/tukuyomi/data/releases"; \
+	test -d "$$tmp/opt/tukuyomi/data/run"; \
 	test -f "$$tmp/opt/tukuyomi/db/tukuyomi.db"; \
 	python3 -c 'import json, sys; assert json.load(open(sys.argv[1], encoding="utf-8"))["runtime"]["process_model"] == "supervised"' "$$tmp/opt/tukuyomi/conf/config.json"; \
 	python3 -c 'import json, sys; path=sys.argv[1]; obj=json.load(open(path, encoding="utf-8")); obj.setdefault("runtime", {})["process_model"]="single"; json.dump(obj, open(path, "w", encoding="utf-8"), indent=2)' "$$tmp/opt/tukuyomi/conf/config.json"; \

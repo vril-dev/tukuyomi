@@ -541,6 +541,8 @@ install_files() {
     "${RUNTIME_DIR}/audit" \
     "${RUNTIME_DIR}/cache/response" \
     "${RUNTIME_DIR}/data/persistent" \
+    "${RUNTIME_DIR}/data/releases" \
+    "${RUNTIME_DIR}/data/run" \
     "${RUNTIME_DIR}/data/tmp" \
     "${RUNTIME_DIR}/seeds/conf" \
     "${RUNTIME_DIR}/scripts" \

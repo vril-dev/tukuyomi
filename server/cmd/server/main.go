@@ -34,6 +34,12 @@ func runMain(args []string) {
 	switch cmd.kind {
 	case serverCommandCenter:
 		runCenterCommand()
+	case serverCommandReleaseMetadata:
+		runReleaseMetadataCommand()
+	case serverCommandValidateConfig:
+		runValidateConfigCommand()
+	case serverCommandReleaseStatus, serverCommandReleaseStage, serverCommandReleaseActivate, serverCommandReleaseRollback:
+		runSupervisorReleaseClientCommand(cmd.kind, cmd.args)
 	case serverCommandDBMigrate:
 		runDBMigrateCommand()
 	case serverCommandDBImport:
@@ -307,10 +313,18 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 		fatalf("[CACHE][DB][FATAL] sync failed: %v", err)
 	}
 	if config.DBSyncInterval > 0 {
-		handler.StartStorageSyncLoop(config.DBSyncInterval)
-		log.Printf("[DB][SYNC] periodic sync loop enabled interval=%s", config.DBSyncInterval)
+		if err := runAfterWorkerActivation("storage sync loop", func() {
+			handler.StartStorageSyncLoop(config.DBSyncInterval)
+			log.Printf("[DB][SYNC] periodic sync loop enabled interval=%s", config.DBSyncInterval)
+		}); err != nil {
+			fatalf("[WORKER][ACTIVATION][FATAL] storage sync loop activation setup failed: %v", err)
+		}
 	}
-	handler.StartEdgeDeviceStatusRefreshLoop(config.EdgeDeviceStatusRefreshInterval)
+	if err := runAfterWorkerActivation("edge device status refresh loop", func() {
+		handler.StartEdgeDeviceStatusRefreshLoop(config.EdgeDeviceStatusRefreshInterval)
+	}); err != nil {
+		fatalf("[WORKER][ACTIVATION][FATAL] edge status refresh loop activation setup failed: %v", err)
+	}
 	if !handler.DBStorageActive() {
 		cacheConfPath := strings.TrimSpace(config.CacheRulesFile)
 		if cacheConfPath == "" {

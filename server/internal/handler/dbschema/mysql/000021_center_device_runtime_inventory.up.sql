@@ -1,0 +1,3 @@
+ALTER TABLE center_devices ADD COLUMN runtime_role VARCHAR(64) NOT NULL DEFAULT '';
+ALTER TABLE center_devices ADD COLUMN build_version VARCHAR(128) NOT NULL DEFAULT '';
+ALTER TABLE center_devices ADD COLUMN go_version VARCHAR(64) NOT NULL DEFAULT '';

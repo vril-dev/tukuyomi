@@ -19,13 +19,16 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"tukuyomi/internal/buildinfo"
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/edgeconfigsnapshot"
 )
 
 const (
@@ -71,6 +74,9 @@ type edgeDeviceIdentityRecord struct {
 	CenterProductID            string
 	CenterStatusCheckedAtUnix  int64
 	CenterStatusError          string
+	ConfigSnapshotRevision     string
+	ConfigSnapshotPushedAtUnix int64
+	ConfigSnapshotError        string
 	LastEnrollmentAtUnix       int64
 	LastEnrollmentError        string
 	CreatedAtUnix              int64
@@ -93,6 +99,9 @@ type edgeDeviceAuthStatusResponse struct {
 	CenterProductID            string `json:"center_product_id"`
 	CenterStatusCheckedAtUnix  int64  `json:"center_status_checked_at_unix"`
 	CenterStatusError          string `json:"center_status_error"`
+	ConfigSnapshotRevision     string `json:"config_snapshot_revision"`
+	ConfigSnapshotPushedAtUnix int64  `json:"config_snapshot_pushed_at_unix"`
+	ConfigSnapshotError        string `json:"config_snapshot_error"`
 	LastEnrollmentAtUnix       int64  `json:"last_enrollment_at_unix"`
 	LastEnrollmentError        string `json:"last_enrollment_error"`
 }
@@ -121,8 +130,24 @@ type edgeDeviceStatusWireRequest struct {
 	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
 	Timestamp                  string `json:"timestamp"`
 	Nonce                      string `json:"nonce"`
+	RuntimeRole                string `json:"runtime_role,omitempty"`
+	BuildVersion               string `json:"build_version,omitempty"`
+	GoVersion                  string `json:"go_version,omitempty"`
 	BodyHash                   string `json:"body_hash"`
 	SignatureB64               string `json:"signature_b64"`
+}
+
+type edgeDeviceConfigSnapshotWireRequest struct {
+	DeviceID                   string          `json:"device_id"`
+	KeyID                      string          `json:"key_id"`
+	PublicKeyFingerprintSHA256 string          `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string          `json:"timestamp"`
+	Nonce                      string          `json:"nonce"`
+	ConfigRevision             string          `json:"config_revision"`
+	PayloadHash                string          `json:"payload_hash"`
+	BodyHash                   string          `json:"body_hash"`
+	SignatureB64               string          `json:"signature_b64"`
+	Snapshot                   json.RawMessage `json:"snapshot"`
 }
 
 type edgeDeviceCenterStatusResponse struct {
@@ -131,6 +156,12 @@ type edgeDeviceCenterStatusResponse struct {
 	KeyID         string `json:"key_id"`
 	ProductID     string `json:"product_id"`
 	CheckedAtUnix int64  `json:"checked_at_unix"`
+}
+
+type edgeDeviceConfigSnapshotResponse struct {
+	Status         string `json:"status"`
+	ConfigRevision string `json:"config_revision"`
+	ReceivedAtUnix int64  `json:"received_at_unix"`
 }
 
 type edgeProxyGateState struct {
@@ -266,6 +297,9 @@ func currentEdgeDeviceAuthStatus() (edgeDeviceAuthStatusResponse, error) {
 	status.CenterProductID = rec.CenterProductID
 	status.CenterStatusCheckedAtUnix = rec.CenterStatusCheckedAtUnix
 	status.CenterStatusError = rec.CenterStatusError
+	status.ConfigSnapshotRevision = rec.ConfigSnapshotRevision
+	status.ConfigSnapshotPushedAtUnix = rec.ConfigSnapshotPushedAtUnix
+	status.ConfigSnapshotError = rec.ConfigSnapshotError
 	status.LastEnrollmentAtUnix = rec.LastEnrollmentAtUnix
 	status.LastEnrollmentError = rec.LastEnrollmentError
 	applyEdgeProxyGateStatus(&status)
@@ -405,6 +439,9 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 	identity.EnrollmentStatus = nextStatus
 	identity.CenterProductID = clampEdgeText(payload.ProductID, 191)
 	identity.CenterStatusError = ""
+	if identity.EnrollmentStatus == edgeEnrollmentStatusApproved {
+		pushEdgeConfigSnapshotIfChanged(ctx, &identity)
+	}
 	if err := upsertEdgeDeviceIdentity(store, identity); err != nil {
 		return edgeDeviceAuthStatusResponse{}, err
 	}
@@ -517,6 +554,145 @@ func centerDeviceStatusURL(centerBaseURL string) (string, error) {
 	return u.String(), nil
 }
 
+func centerDeviceConfigSnapshotURL(centerBaseURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("center URL is not configured")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("center URL is invalid")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("center URL scheme must be http or https")
+	}
+	u.Path = "/v1/device-config-snapshot"
+	u.RawPath = ""
+	return u.String(), nil
+}
+
+type edgeConfigSnapshotRuleAsset struct {
+	Path      string `json:"path"`
+	Kind      string `json:"kind"`
+	ETag      string `json:"etag"`
+	Disabled  bool   `json:"disabled"`
+	SizeBytes int    `json:"size_bytes"`
+}
+
+func buildEdgeConfigSnapshot(identity edgeDeviceIdentityRecord) (edgeconfigsnapshot.Build, error) {
+	builder := edgeconfigsnapshot.New(identity.DeviceID, identity.KeyID, buildinfo.Version, goruntime.Version())
+	addGatewayConfigSnapshotDomains(builder)
+	return builder.Build()
+}
+
+func addGatewayConfigSnapshotDomains(builder *edgeconfigsnapshot.Builder) {
+	if builder == nil {
+		return
+	}
+
+	if raw, etag, _, err := loadAppConfigStorage(false); err == nil {
+		redacted, paths, redactErr := edgeconfigsnapshot.RedactAppConfigRaw(raw)
+		if redactErr != nil {
+			builder.AddDomainError(appConfigDomain, redactErr)
+		} else {
+			builder.AddRedactedPaths(paths...)
+			builder.AddRawDomain(appConfigDomain, etag, redacted)
+		}
+	} else {
+		builder.AddDomainError(appConfigDomain, err)
+	}
+
+	proxyRaw, proxyETag, proxyCfg, _, _ := ProxyRulesSnapshot()
+	if strings.TrimSpace(proxyRaw) == "" {
+		proxyRaw = mustJSON(normalizeProxyRulesConfig(proxyCfg))
+	}
+	builder.AddRawDomain(proxyConfigDomain, proxyETag, []byte(proxyRaw))
+
+	siteRaw, siteETag, _, _, _ := SiteConfigSnapshot()
+	builder.AddRawDomain(siteConfigDomain, siteETag, []byte(siteRaw))
+
+	vhostRaw, vhostETag, _, _ := VhostConfigSnapshot()
+	builder.AddRawDomain(vhostConfigDomain, vhostETag, []byte(vhostRaw))
+
+	phpRaw, phpETag, _, _ := PHPRuntimeInventorySnapshot()
+	builder.AddRawDomain(phpRuntimeInventoryConfigDomain, phpETag, []byte(phpRaw))
+
+	psgiRaw, psgiETag, _, _ := PSGIRuntimeInventorySnapshot()
+	builder.AddRawDomain(psgiRuntimeInventoryConfigDomain, psgiETag, []byte(psgiRaw))
+
+	taskRaw, taskETag, _, _, _ := ScheduledTaskConfigSnapshot()
+	builder.AddRawDomain(scheduledTaskConfigDomain, taskETag, []byte(taskRaw))
+
+	cacheRaw, cacheETag, cacheCfg, _ := ResponseCacheSnapshot()
+	if strings.TrimSpace(cacheRaw) == "" {
+		cacheRaw = mustJSON(cacheCfg)
+	}
+	builder.AddRawDomain(responseCacheConfigBlobKey, cacheETag, []byte(cacheRaw))
+
+	if raw, etag, _, err := snapshotUpstreamRuntimeFile(proxyCfg); err == nil {
+		builder.AddRawDomain(upstreamRuntimeConfigDomain, etag, []byte(raw))
+	} else {
+		builder.AddDomainError(upstreamRuntimeConfigDomain, err)
+	}
+
+	store := getLogsStatsStore()
+	if store == nil {
+		builder.AddWarning("config DB store is not initialized")
+		return
+	}
+	for _, spec := range []policyJSONConfigSpec{
+		{Domain: cacheConfigBlobKey},
+		{Domain: bypassConfigBlobKey},
+		{Domain: countryBlockConfigBlobKey},
+		{Domain: rateLimitConfigBlobKey},
+		{Domain: botDefenseConfigBlobKey},
+		{Domain: semanticConfigBlobKey},
+		{Domain: notificationConfigBlobKey},
+		{Domain: ipReputationConfigBlobKey},
+	} {
+		raw, rec, found, err := store.loadActivePolicyJSONConfig(spec)
+		if err != nil {
+			builder.AddDomainError(spec.Domain, err)
+			continue
+		}
+		if found {
+			builder.AddRawDomain(spec.Domain, rec.ETag, raw)
+		}
+	}
+	if names, rec, found, err := store.loadActiveCRSDisabledConfig(); err != nil {
+		builder.AddDomainError(crsDisabledConfigDomain, err)
+	} else if found {
+		builder.AddValueDomain(crsDisabledConfigDomain, rec.ETag, map[string]any{"disabled_rules": names})
+	}
+	if rules, rec, found, err := store.loadActiveManagedOverrideRules(); err != nil {
+		builder.AddDomainError(overrideRulesConfigDomain, err)
+	} else if found {
+		out := make([]map[string]any, 0, len(rules))
+		for _, rule := range rules {
+			out = append(out, map[string]any{
+				"name": rule.Name,
+				"etag": rule.ETag,
+				"raw":  string(rule.Raw),
+			})
+		}
+		builder.AddValueDomain(overrideRulesConfigDomain, rec.ETag, out)
+	}
+	if assets, rec, found, err := store.loadActiveWAFRuleAssets(); err != nil {
+		builder.AddDomainError(wafRuleAssetsConfigDomain, err)
+	} else if found {
+		out := make([]edgeConfigSnapshotRuleAsset, 0, len(assets))
+		for _, asset := range assets {
+			out = append(out, edgeConfigSnapshotRuleAsset{
+				Path:      asset.Path,
+				Kind:      asset.Kind,
+				ETag:      asset.ETag,
+				Disabled:  asset.Disabled,
+				SizeBytes: len(asset.Raw),
+			})
+		}
+		builder.AddValueDomain(wafRuleAssetsConfigDomain, rec.ETag, out)
+	}
+}
+
 func loadEdgeDeviceIdentity(store *wafEventStore) (edgeDeviceIdentityRecord, bool, error) {
 	if store == nil {
 		return edgeDeviceIdentityRecord{}, false, nil
@@ -531,6 +707,7 @@ func loadEdgeDeviceIdentityUnlocked(store *wafEventStore) (edgeDeviceIdentityRec
 	err := store.queryRow(`
 SELECT device_id, key_id, private_key_pem, public_key_fingerprint_sha256, enrollment_status,
        center_url, center_product_id, center_status_checked_at_unix, center_status_error,
+       config_snapshot_revision, config_snapshot_pushed_at_unix, config_snapshot_error,
        last_enrollment_at_unix, last_enrollment_error, created_at_unix, updated_at_unix
   FROM edge_device_identities
  WHERE identity_id = ?`, edgeDeviceIdentityID).Scan(
@@ -543,6 +720,9 @@ SELECT device_id, key_id, private_key_pem, public_key_fingerprint_sha256, enroll
 		&rec.CenterProductID,
 		&rec.CenterStatusCheckedAtUnix,
 		&rec.CenterStatusError,
+		&rec.ConfigSnapshotRevision,
+		&rec.ConfigSnapshotPushedAtUnix,
+		&rec.ConfigSnapshotError,
 		&rec.LastEnrollmentAtUnix,
 		&rec.LastEnrollmentError,
 		&rec.CreatedAtUnix,
@@ -590,6 +770,9 @@ UPDATE edge_device_identities
        center_product_id = ?,
        center_status_checked_at_unix = ?,
        center_status_error = ?,
+       config_snapshot_revision = ?,
+       config_snapshot_pushed_at_unix = ?,
+       config_snapshot_error = ?,
        last_enrollment_at_unix = ?,
        last_enrollment_error = ?,
        updated_at_unix = ?
@@ -603,6 +786,9 @@ UPDATE edge_device_identities
 		rec.CenterProductID,
 		rec.CenterStatusCheckedAtUnix,
 		rec.CenterStatusError,
+		rec.ConfigSnapshotRevision,
+		rec.ConfigSnapshotPushedAtUnix,
+		rec.ConfigSnapshotError,
 		rec.LastEnrollmentAtUnix,
 		rec.LastEnrollmentError,
 		rec.UpdatedAtUnix,
@@ -619,9 +805,10 @@ UPDATE edge_device_identities
 INSERT INTO edge_device_identities
     (identity_id, device_id, key_id, private_key_pem, public_key_fingerprint_sha256,
      enrollment_status, center_url, center_product_id, center_status_checked_at_unix, center_status_error,
+     config_snapshot_revision, config_snapshot_pushed_at_unix, config_snapshot_error,
      last_enrollment_at_unix, last_enrollment_error,
      created_at_unix, updated_at_unix)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		edgeDeviceIdentityID,
 		rec.DeviceID,
 		rec.KeyID,
@@ -632,6 +819,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.CenterProductID,
 		rec.CenterStatusCheckedAtUnix,
 		rec.CenterStatusError,
+		rec.ConfigSnapshotRevision,
+		rec.ConfigSnapshotPushedAtUnix,
+		rec.ConfigSnapshotError,
 		rec.LastEnrollmentAtUnix,
 		rec.LastEnrollmentError,
 		rec.CreatedAtUnix,
@@ -758,8 +948,37 @@ func signedEdgeDeviceStatusRequest(identity edgeDeviceIdentityRecord) (edgeDevic
 		PublicKeyFingerprintSHA256: identity.PublicKeyFingerprintSHA256,
 		Timestamp:                  timestamp,
 		Nonce:                      nonce,
+		RuntimeRole:                "gateway",
+		BuildVersion:               clampEdgeText(buildinfo.Version, 128),
+		GoVersion:                  clampEdgeText(goruntime.Version(), 64),
 	}
 	req.BodyHash = edgeDeviceStatusBodyHash(req)
+	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)))
+	req.SignatureB64 = base64.StdEncoding.EncodeToString(signature)
+	return req, nil
+}
+
+func signedEdgeDeviceConfigSnapshotRequest(identity edgeDeviceIdentityRecord, snapshot edgeconfigsnapshot.Build) (edgeDeviceConfigSnapshotWireRequest, error) {
+	privateKey, _, err := parseEdgeDevicePrivateKey(identity.PrivateKeyPEM)
+	if err != nil {
+		return edgeDeviceConfigSnapshotWireRequest{}, err
+	}
+	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	nonce, err := randomEdgeIdentifier("nonce")
+	if err != nil {
+		return edgeDeviceConfigSnapshotWireRequest{}, err
+	}
+	req := edgeDeviceConfigSnapshotWireRequest{
+		DeviceID:                   identity.DeviceID,
+		KeyID:                      identity.KeyID,
+		PublicKeyFingerprintSHA256: identity.PublicKeyFingerprintSHA256,
+		Timestamp:                  timestamp,
+		Nonce:                      nonce,
+		ConfigRevision:             snapshot.Revision,
+		PayloadHash:                snapshot.PayloadHash,
+		Snapshot:                   append(json.RawMessage(nil), snapshot.PayloadRaw...),
+	}
+	req.BodyHash = edgeDeviceConfigSnapshotBodyHash(req)
 	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)))
 	req.SignatureB64 = base64.StdEncoding.EncodeToString(signature)
 	return req, nil
@@ -838,6 +1057,79 @@ func sendEdgeDeviceStatus(ctx context.Context, statusURL string, wireReq edgeDev
 	return res.StatusCode, resBody, nil
 }
 
+func sendEdgeDeviceConfigSnapshot(ctx context.Context, snapshotURL string, wireReq edgeDeviceConfigSnapshotWireRequest) (int, []byte, error) {
+	body, err := json.Marshal(wireReq)
+	if err != nil {
+		return 0, nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, edgeEnrollmentHTTPTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, snapshotURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer res.Body.Close()
+	resBody, readErr := io.ReadAll(io.LimitReader(res.Body, 8*1024))
+	if readErr != nil {
+		return res.StatusCode, nil, readErr
+	}
+	return res.StatusCode, resBody, nil
+}
+
+func pushEdgeConfigSnapshotIfChanged(ctx context.Context, identity *edgeDeviceIdentityRecord) {
+	if identity == nil {
+		return
+	}
+	snapshot, err := buildEdgeConfigSnapshot(*identity)
+	if err != nil {
+		identity.ConfigSnapshotError = clampEdgeText(err.Error(), 2048)
+		return
+	}
+	if snapshot.Revision == strings.TrimSpace(identity.ConfigSnapshotRevision) {
+		identity.ConfigSnapshotError = ""
+		return
+	}
+	snapshotURL, err := centerDeviceConfigSnapshotURL(identity.CenterURL)
+	if err != nil {
+		identity.ConfigSnapshotError = clampEdgeText(err.Error(), 2048)
+		return
+	}
+	wireReq, err := signedEdgeDeviceConfigSnapshotRequest(*identity, snapshot)
+	if err != nil {
+		identity.ConfigSnapshotError = clampEdgeText(err.Error(), 2048)
+		return
+	}
+	centerHTTPStatus, centerBody, err := sendEdgeDeviceConfigSnapshot(ctx, snapshotURL, wireReq)
+	if err != nil {
+		identity.ConfigSnapshotError = clampEdgeText(err.Error(), 2048)
+		return
+	}
+	if centerHTTPStatus < 200 || centerHTTPStatus >= 300 {
+		identity.ConfigSnapshotError = clampEdgeText(centerEnrollmentErrorMessage(centerHTTPStatus, centerBody), 2048)
+		return
+	}
+	var payload edgeDeviceConfigSnapshotResponse
+	if err := json.Unmarshal(centerBody, &payload); err != nil {
+		identity.ConfigSnapshotError = "center config snapshot response is invalid JSON"
+		return
+	}
+	if payload.ConfigRevision != snapshot.Revision {
+		identity.ConfigSnapshotError = "center config snapshot response revision mismatch"
+		return
+	}
+	identity.ConfigSnapshotRevision = snapshot.Revision
+	identity.ConfigSnapshotPushedAtUnix = time.Now().UTC().Unix()
+	if payload.ReceivedAtUnix > 0 {
+		identity.ConfigSnapshotPushedAtUnix = payload.ReceivedAtUnix
+	}
+	identity.ConfigSnapshotError = ""
+}
+
 func centerEnrollmentErrorMessage(status int, body []byte) string {
 	var payload struct {
 		Error   string `json:"error"`
@@ -873,6 +1165,9 @@ func edgeDeviceStatusFromIdentity(identity edgeDeviceIdentityRecord) edgeDeviceA
 		CenterProductID:            identity.CenterProductID,
 		CenterStatusCheckedAtUnix:  identity.CenterStatusCheckedAtUnix,
 		CenterStatusError:          identity.CenterStatusError,
+		ConfigSnapshotRevision:     identity.ConfigSnapshotRevision,
+		ConfigSnapshotPushedAtUnix: identity.ConfigSnapshotPushedAtUnix,
+		ConfigSnapshotError:        identity.ConfigSnapshotError,
 		LastEnrollmentAtUnix:       identity.LastEnrollmentAtUnix,
 		LastEnrollmentError:        identity.LastEnrollmentError,
 	}
@@ -898,7 +1193,23 @@ func edgeDeviceStatusBodyHash(req edgeDeviceStatusWireRequest) string {
 			req.KeyID + "\n" +
 			req.PublicKeyFingerprintSHA256 + "\n" +
 			req.Timestamp + "\n" +
-			req.Nonce,
+			req.Nonce + "\n" +
+			req.RuntimeRole + "\n" +
+			req.BuildVersion + "\n" +
+			req.GoVersion,
+	))
+	return hex.EncodeToString(sum[:])
+}
+
+func edgeDeviceConfigSnapshotBodyHash(req edgeDeviceConfigSnapshotWireRequest) string {
+	sum := sha256.Sum256([]byte(
+		req.DeviceID + "\n" +
+			req.KeyID + "\n" +
+			req.PublicKeyFingerprintSHA256 + "\n" +
+			req.Timestamp + "\n" +
+			req.Nonce + "\n" +
+			req.ConfigRevision + "\n" +
+			req.PayloadHash,
 	))
 	return hex.EncodeToString(sum[:])
 }

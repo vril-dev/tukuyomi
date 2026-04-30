@@ -22,6 +22,20 @@ test("formatProxyRulesAuditAction and transition summarize audit rows", () => {
     }),
     "etag-old -> etag-new"
   );
+  assert.equal(
+    formatProxyRulesAuditTransition({
+      prev_etag: 'W/"sha256:abcdef1234567890"',
+      next_etag: 'W/"sha256:0123456789abcdef"',
+    }),
+    "abcdef12 -> 01234567"
+  );
+  assert.equal(
+    formatProxyRulesAuditTransition({
+      prev_etag: "bypass_rules:1:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      next_etag: "bypass_rules:2:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+    }),
+    "fedcba98 -> 00112233"
+  );
 });
 
 test("buildProxyRulesAuditPreview derives read-only diff preview from audit snapshots", () => {
@@ -111,11 +125,11 @@ test("formatProxyRulesAuditSummary and metadata include rollback context", () =>
 
   assert.equal(
     formatProxyRulesAuditSummary(entry),
-    "rollback | actor=ops@example.com | time=2026-04-01T00:00:00Z | etag=etag-2 -> etag-1 | ip=203.0.113.10 | restored_at=2026-03-31T23:59:00Z"
+    "rollback | actor=ops@example.com | time=2026-04-01T00:00:00Z | revision=etag-2 -> etag-1 | ip=203.0.113.10 | restored_at=2026-03-31T23:59:00Z"
   );
   assert.deepEqual(
     buildProxyRulesAuditMetadata(entry).map((item) => item.label),
-    ["Action", "Actor", "Time", "ETag", "IP", "Restored ETag", "Restored At"]
+    ["Action", "Actor", "Time", "R", "IP", "Restored R", "Restored At"]
   );
 });
 

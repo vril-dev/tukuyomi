@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const latestSchemaMigrationVersionForTest = 20
+const latestSchemaMigrationVersionForTest = 22
 
 func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
@@ -80,6 +80,7 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		"center_devices",
 		"center_device_enrollments",
 		"center_enrollment_tokens",
+		"center_device_config_snapshots",
 		"edge_device_identities",
 	} {
 		var name string
@@ -140,9 +141,15 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		{table: "center_devices", column: "revoked_by"},
 		{table: "center_devices", column: "archived_at_unix"},
 		{table: "center_devices", column: "archived_by"},
+		{table: "center_devices", column: "config_snapshot_revision"},
+		{table: "center_devices", column: "config_snapshot_at_unix"},
+		{table: "center_devices", column: "config_snapshot_bytes"},
 		{table: "edge_device_identities", column: "center_product_id"},
 		{table: "edge_device_identities", column: "center_status_checked_at_unix"},
 		{table: "edge_device_identities", column: "center_status_error"},
+		{table: "edge_device_identities", column: "config_snapshot_revision"},
+		{table: "edge_device_identities", column: "config_snapshot_pushed_at_unix"},
+		{table: "edge_device_identities", column: "config_snapshot_error"},
 	} {
 		var count int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('`+tc.table+`') WHERE name = ?`, tc.column).Scan(&count); err != nil {

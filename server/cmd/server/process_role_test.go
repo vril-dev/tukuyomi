@@ -12,6 +12,12 @@ func TestParseServerCommandRoles(t *testing.T) {
 	}{
 		{name: "default serve", args: []string{"tukuyomi"}, want: serverCommandServe},
 		{name: "center", args: []string{"tukuyomi", "center"}, want: serverCommandCenter},
+		{name: "release metadata", args: []string{"tukuyomi", "release-metadata"}, want: serverCommandReleaseMetadata},
+		{name: "validate config", args: []string{"tukuyomi", "validate-config"}, want: serverCommandValidateConfig},
+		{name: "release status", args: []string{"tukuyomi", "release-status"}, want: serverCommandReleaseStatus},
+		{name: "release stage", args: []string{"tukuyomi", "release-stage", "artifact.tar.gz", "abc"}, want: serverCommandReleaseStage},
+		{name: "release activate", args: []string{"tukuyomi", "release-activate", "v1.2.3"}, want: serverCommandReleaseActivate},
+		{name: "release rollback", args: []string{"tukuyomi", "release-rollback"}, want: serverCommandReleaseRollback},
 		{
 			name: "internal supervisor",
 			args: []string{"tukuyomi"},

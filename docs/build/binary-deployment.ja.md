@@ -20,6 +20,11 @@ make build
 
 生成物は `bin/tukuyomi` です。
 
+Gateway / Center UI build は Node.js 22.12+ と npm 10+ が必要です。Makefile は
+既定で `tools/npm-node22.sh` を使うため、local に Node 22/npm 10 があればそれを使い、
+無ければ Docker image `node:22-alpine` に fallback します。この wrapper を意図的に
+差し替える場合だけ `NPM=/path/to/npm` を指定してください。
+
 埋め込み Gateway / Center UI をすでに更新済みで、Go バイナリだけ欲しい場合は:
 
 ```bash
@@ -64,6 +69,11 @@ make install TARGET=linux-systemd \
 - `INSTALL_ROLE=gateway` は `tukuyomi.service`、`tukuyomi.env`、
   `conf/config.json`、WAF/CRS asset import、初回 gateway DB seed、
   scheduled-task timer を対象にします
+- Gateway install は `runtime.process_model=supervised` を書き込みます。
+  supervisor が TCP listener を所有し、readiness 後に初期 worker を activate します。
+  既存 Gateway config は install 時に `runtime.process_model` だけを targeted update
+  します。legacy single-process Gateway からの初回移行は、listener 所有者が変わるため
+  通常の service restart が必要です。HTTP/3 は UDP handoff 実装まで拒否されます
 - `INSTALL_ROLE=center` は `tukuyomi-center.service`、
   `tukuyomi-center.env`、`conf/config.center.json` を対象にし、DB migration
   のみを実行します。WAF/CRS import、gateway seed、scheduled tasks は実行しません

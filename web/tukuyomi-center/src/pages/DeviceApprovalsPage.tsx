@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 
 import { apiGetJson, apiPostJson } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { getAPIBasePath } from "@/lib/runtime";
 
 type EnrollmentRecord = {
   enrollment_id: number;
@@ -23,6 +24,9 @@ type DeviceRecord = {
   public_key_fingerprint_sha256: string;
   status: string;
   product_id?: string;
+  runtime_role?: string;
+  build_version?: string;
+  go_version?: string;
   enrollment_token_prefix?: string;
   enrollment_token_label?: string;
   enrollment_token_status?: string;
@@ -34,6 +38,9 @@ type DeviceRecord = {
   revoked_by: string;
   archived_at_unix: number;
   archived_by: string;
+  config_snapshot_revision?: string;
+  config_snapshot_at_unix: number;
+  config_snapshot_bytes: number;
 };
 
 type DeviceListResponse = {
@@ -129,6 +136,28 @@ function deviceProxyAllowed(device: DeviceRecord) {
   return device.status === "approved";
 }
 
+function shortRevision(value?: string) {
+  const trimmed = (value || "").trim();
+  return trimmed ? trimmed.slice(0, 8) : "-";
+}
+
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "-";
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function configSnapshotDownloadPath(device: DeviceRecord) {
+  return `${getAPIBasePath()}/devices/${encodeURIComponent(device.device_id)}/config-snapshot`;
+}
+
 export default function DeviceApprovalsPage({ focusApprovals = false }: { focusApprovals?: boolean }) {
   const { locale, tx } = useI18n();
   const approvalRef = useRef<HTMLElement | null>(null);
@@ -147,6 +176,7 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
   const [tokenMessageTone, setTokenMessageTone] = useState<"success" | "error">("success");
   const [showInactiveTokens, setShowInactiveTokens] = useState(false);
   const [showArchivedDevices, setShowArchivedDevices] = useState(false);
+  const [managedDevice, setManagedDevice] = useState<DeviceRecord | null>(null);
   const [tokenForm, setTokenForm] = useState({
     label: "",
     maxUses: "1",
@@ -252,6 +282,7 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
     try {
       await apiPostJson<DeviceRevokeResponse>(`/devices/${encodeURIComponent(deviceID)}/revoke`, {});
       await load();
+      setManagedDevice(null);
     } catch (err) {
       const fallback = tx("Failed to revoke device approval");
       setMessage(err instanceof Error ? err.message || fallback : fallback);
@@ -266,6 +297,7 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
     try {
       await apiPostJson<DeviceArchiveResponse>(`/devices/${encodeURIComponent(deviceID)}/archive`, {});
       await load();
+      setManagedDevice(null);
     } catch (err) {
       const fallback = tx("Failed to archive device");
       setMessage(err instanceof Error ? err.message || fallback : fallback);
@@ -479,6 +511,9 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                 <th>{tx("Key")}</th>
                 <th>{tx("Fingerprint")}</th>
                 <th>{tx("Product ID")}</th>
+                <th>{tx("Runtime")}</th>
+                <th>{tx("Version")}</th>
+                <th>{tx("Config")}</th>
                 <th>{tx("Enrollment token")}</th>
                 <th>{tx("Token status")}</th>
                 <th>{tx("Status")}</th>
@@ -495,6 +530,21 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                   <td title={device.key_id}>{device.key_id}</td>
                   <td title={device.public_key_fingerprint_sha256}>{device.public_key_fingerprint_sha256}</td>
                   <td title={device.product_id || undefined}>{device.product_id || "-"}</td>
+                  <td title={device.runtime_role || undefined}>{device.runtime_role || "-"}</td>
+                  <td title={[device.build_version, device.go_version].filter(Boolean).join(" / ") || undefined}>
+                    {device.build_version || "-"}
+                    {device.go_version ? <span className="table-subvalue">{device.go_version}</span> : null}
+                  </td>
+                  <td title={device.config_snapshot_revision || undefined}>
+                    {device.config_snapshot_revision ? (
+                      <>
+                        <span>R: {shortRevision(device.config_snapshot_revision)}</span>
+                        <span className="table-subvalue">{formatUnixTime(device.config_snapshot_at_unix, locale)}</span>
+                      </>
+                    ) : (
+                      "-"
+                    )}
+                  </td>
                   <td title={device.enrollment_token_label || device.enrollment_token_prefix || undefined}>
                     {device.enrollment_token_label || device.enrollment_token_prefix || "-"}
                   </td>
@@ -516,26 +566,9 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                   <td title={device.approved_by || undefined}>{formatUnixTime(device.approved_at_unix, locale)}</td>
                   <td>{formatUnixTime(device.last_seen_at_unix, locale)}</td>
                   <td className="actions-cell">
-                    {device.status === "approved" ? (
-                      <button
-                        type="button"
-                        className="danger"
-                        onClick={() => void revokeDevice(device.device_id)}
-                        disabled={revokingDeviceID === device.device_id}
-                      >
-                        {revokingDeviceID === device.device_id ? tx("Revoking...") : tx("Revoke approval")}
-                      </button>
-                    ) : device.status === "revoked" ? (
-                      <button
-                        type="button"
-                        onClick={() => void archiveDevice(device.device_id)}
-                        disabled={archivingDeviceID === device.device_id}
-                      >
-                        {archivingDeviceID === device.device_id ? tx("Archiving...") : tx("Archive")}
-                      </button>
-                    ) : (
-                      "-"
-                    )}
+                    <button type="button" onClick={() => setManagedDevice(device)}>
+                      {tx("Manage")}
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -544,6 +577,76 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
           {devices.length === 0 ? <div className="empty">{tx("No registered devices.")}</div> : null}
         </div>
       </section>
+
+      {managedDevice ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setManagedDevice(null)}>
+          <div className="modal-panel device-action-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h2 className="section-title">{tx("Device actions")}</h2>
+                <p className="section-note">{managedDevice.device_id}</p>
+              </div>
+              <button type="button" className="secondary" onClick={() => setManagedDevice(null)}>
+                {tx("Close")}
+              </button>
+            </div>
+            <div className="summary-grid">
+              <div>
+                <span>{tx("Status")}</span>
+                <strong>{tx(managedDevice.status || "-")}</strong>
+              </div>
+              <div>
+                <span>{tx("Proxy access")}</span>
+                <strong>{deviceProxyAllowed(managedDevice) ? tx("Proxy allowed") : tx("Proxy locked")}</strong>
+              </div>
+              <div>
+                <span>{tx("Config revision")}</span>
+                <strong>{shortRevision(managedDevice.config_snapshot_revision)}</strong>
+              </div>
+              <div>
+                <span>{tx("Config size")}</span>
+                <strong>{formatBytes(managedDevice.config_snapshot_bytes)}</strong>
+              </div>
+              <div>
+                <span>{tx("Config received")}</span>
+                <strong>{formatUnixTime(managedDevice.config_snapshot_at_unix, locale)}</strong>
+              </div>
+              <div>
+                <span>{tx("Last seen")}</span>
+                <strong>{formatUnixTime(managedDevice.last_seen_at_unix, locale)}</strong>
+              </div>
+            </div>
+            <div className="modal-actions">
+              {managedDevice.config_snapshot_revision ? (
+                <a className="button-link" href={configSnapshotDownloadPath(managedDevice)}>
+                  {tx("Config download")}
+                </a>
+              ) : (
+                <span className="section-note">{tx("No config snapshot received.")}</span>
+              )}
+              {managedDevice.status === "approved" ? (
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={() => void revokeDevice(managedDevice.device_id)}
+                  disabled={revokingDeviceID === managedDevice.device_id}
+                >
+                  {revokingDeviceID === managedDevice.device_id ? tx("Revoking...") : tx("Revoke approval")}
+                </button>
+              ) : null}
+              {managedDevice.status === "revoked" ? (
+                <button
+                  type="button"
+                  onClick={() => void archiveDevice(managedDevice.device_id)}
+                  disabled={archivingDeviceID === managedDevice.device_id}
+                >
+                  {archivingDeviceID === managedDevice.device_id ? tx("Archiving...") : tx("Archive")}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

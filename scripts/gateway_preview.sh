@@ -84,6 +84,12 @@ admin["session_secret"] = session_secret
 admin["api_auth_disable"] = False
 admin["allow_insecure_defaults"] = False
 
+runtime = payload.get("runtime")
+if not isinstance(runtime, dict):
+    runtime = {}
+    payload["runtime"] = runtime
+runtime["process_model"] = "supervised"
+
 target.parent.mkdir(parents=True, exist_ok=True)
 tmp = target.with_name(target.name + ".tmp")
 with tmp.open("w", encoding="utf-8") as fh:

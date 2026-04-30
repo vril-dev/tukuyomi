@@ -928,8 +928,8 @@ const JA_STRINGS: Record<string, string> = {
   "Listen Host": "待ち受け Host",
   "Listen Port": "待ち受け Port",
   "Runtime App Basic Auth Realm": "Runtime App Basic Auth Realm",
-  "Server-side Runtime Apps ETag was refreshed; the editor values were kept. Review the error and apply again.":
-    "サーバ側の Runtime Apps ETag を更新しました。編集中の値は保持しています。エラー内容を確認してから再度適用してください。",
+  "Server-side Runtime Apps revision was refreshed; the editor values were kept. Review the error and apply again.":
+    "サーバ側の Runtime Apps revision を更新しました。編集中の値は保持しています。エラー内容を確認してから再度適用してください。",
   "Server-side Runtime Apps config changed; load before applying to avoid overwriting another change.":
     "サーバ側の Runtime Apps 設定が変更されています。別の変更を上書きしないよう、適用前に読み込み直してください。",
   cert_file: "cert_file",

@@ -7,6 +7,7 @@ TARGET="${TARGET:-${INSTALL_TARGET:-linux-systemd}}"
 PREFIX="${PREFIX:-${INSTALL_PREFIX:-/opt/tukuyomi}}"
 DESTDIR="${DESTDIR:-}"
 INSTALL_ROLE="${INSTALL_ROLE:-gateway}"
+INSTALL_PROCESS_MODEL="${INSTALL_PROCESS_MODEL:-}"
 INSTALL_USER="${INSTALL_USER:-}"
 INSTALL_GROUP="${INSTALL_GROUP:-}"
 INSTALL_ENV_DIR="${INSTALL_ENV_DIR:-/etc/tukuyomi}"
@@ -27,6 +28,7 @@ CRS_VERSION="${CRS_VERSION:-v4.23.0}"
 INSTALL_CONFIG_REL=""
 INSTALL_ENV_BASENAME=""
 INSTALL_SERVICE_BASENAME=""
+INSTALL_DERIVED_PROCESS_MODEL=""
 
 log() {
   echo "[install] $*"
@@ -68,6 +70,15 @@ configure_install_role() {
       die "INSTALL_ROLE must be gateway or center"
       ;;
   esac
+
+  if [[ -n "${INSTALL_PROCESS_MODEL}" ]]; then
+    die "INSTALL_PROCESS_MODEL is no longer supported; use INSTALL_ROLE=gateway or INSTALL_ROLE=center"
+  fi
+  if install_role_is_gateway; then
+    INSTALL_DERIVED_PROCESS_MODEL="supervised"
+  else
+    INSTALL_DERIVED_PROCESS_MODEL="single"
+  fi
 }
 
 use_login_user_home_install() {
@@ -115,6 +126,48 @@ join_dest() {
   fi
 }
 
+migrate_config_process_model() {
+  local dst="$1"
+  local mode="$2"
+  local process_model="$3"
+  local tmp
+  local changed
+  tmp="$(mktemp)"
+  if ! changed="$(python3 - "$dst" "$tmp" "$process_model" <<'PY'
+import json
+import sys
+
+src, dst, process_model = sys.argv[1:4]
+with open(src, encoding="utf-8") as fh:
+    data = json.load(fh)
+if not isinstance(data, dict):
+    raise SystemExit("config root must be a JSON object")
+runtime = data.setdefault("runtime", {})
+if not isinstance(runtime, dict):
+    runtime = {}
+    data["runtime"] = runtime
+if runtime.get("process_model") == process_model:
+    raise SystemExit(0)
+runtime["process_model"] = process_model
+with open(dst, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, indent=2)
+    fh.write("\n")
+print("changed")
+PY
+  )"; then
+    rm -f "${tmp}"
+    return 1
+  fi
+  if [[ "${changed}" == "changed" ]]; then
+    log "update existing config runtime.process_model=${process_model}"
+    run_priv install -m "${mode}" "${tmp}" "${dst}" || {
+      rm -f "${tmp}"
+      return 1
+    }
+  fi
+  rm -f "${tmp}"
+}
+
 install_config_preserve() {
   local src="$1"
   local dst="$2"
@@ -124,21 +177,25 @@ install_config_preserve() {
   local tmp
   if [[ -e "${dst}" ]] && ! is_enabled "${overwrite}"; then
     log "preserve existing ${dst}"
+    migrate_config_process_model "${dst}" "${mode}" "${INSTALL_DERIVED_PROCESS_MODEL}"
     return
   fi
   tmp="$(mktemp)"
-  if ! python3 - "$src" "$tmp" "$role" <<'PY'
+  if ! python3 - "$src" "$tmp" "$role" "$INSTALL_DERIVED_PROCESS_MODEL" <<'PY'
 import json
 import secrets
 import sys
 
-src, dst, role = sys.argv[1:4]
+src, dst, role, process_model = sys.argv[1:5]
 with open(src, encoding="utf-8") as fh:
     data = json.load(fh)
 
 admin = data.setdefault("admin", {})
 if not str(admin.get("session_secret") or "").strip():
     admin["session_secret"] = secrets.token_urlsafe(48)
+
+runtime = data.setdefault("runtime", {})
+runtime["process_model"] = process_model
 
 if role == "center":
     storage = data.setdefault("storage", {})
@@ -484,6 +541,8 @@ install_files() {
     "${RUNTIME_DIR}/audit" \
     "${RUNTIME_DIR}/cache/response" \
     "${RUNTIME_DIR}/data/persistent" \
+    "${RUNTIME_DIR}/data/releases" \
+    "${RUNTIME_DIR}/data/run" \
     "${RUNTIME_DIR}/data/tmp" \
     "${RUNTIME_DIR}/seeds/conf" \
     "${RUNTIME_DIR}/scripts" \
@@ -601,4 +660,4 @@ assert_runtime_accessible
 initialize_db
 activate_systemd
 
-log "completed TARGET=${TARGET} INSTALL_ROLE=${INSTALL_ROLE} PREFIX=${PREFIX} INSTALL_USER=${INSTALL_USER} INSTALL_CREATE_USER=${INSTALL_CREATE_USER}${DESTDIR:+ DESTDIR=${DESTDIR}}"
+log "completed TARGET=${TARGET} INSTALL_ROLE=${INSTALL_ROLE} PROCESS_MODEL=${INSTALL_DERIVED_PROCESS_MODEL} PREFIX=${PREFIX} INSTALL_USER=${INSTALL_USER} INSTALL_CREATE_USER=${INSTALL_CREATE_USER}${DESTDIR:+ DESTDIR=${DESTDIR}}"

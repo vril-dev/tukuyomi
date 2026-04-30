@@ -2,10 +2,10 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := help
 
-GO ?= go
-NPM ?= npm
-DOCKER ?= docker
 ROOT_DIR := $(abspath .)
+GO ?= go
+DOCKER ?= docker
+NPM ?= $(ROOT_DIR)/tools/npm-node22.sh
 
 PUID ?= $(shell id -u)
 GUID ?= $(shell id -g)
@@ -317,7 +317,22 @@ install-smoke: build
 	test -f "$$tmp/etc/systemd/system/tukuyomi-scheduled-tasks.service"; \
 	test -f "$$tmp/etc/systemd/system/tukuyomi-scheduled-tasks.timer"; \
 	test -d "$$tmp/opt/tukuyomi/data/persistent"; \
+	test -d "$$tmp/opt/tukuyomi/data/releases"; \
+	test -d "$$tmp/opt/tukuyomi/data/run"; \
 	test -f "$$tmp/opt/tukuyomi/db/tukuyomi.db"; \
+	python3 -c 'import json, sys; assert json.load(open(sys.argv[1], encoding="utf-8"))["runtime"]["process_model"] == "supervised"' "$$tmp/opt/tukuyomi/conf/config.json"; \
+	python3 -c 'import json, sys; path=sys.argv[1]; obj=json.load(open(path, encoding="utf-8")); obj.setdefault("runtime", {})["process_model"]="single"; json.dump(obj, open(path, "w", encoding="utf-8"), indent=2)' "$$tmp/opt/tukuyomi/conf/config.json"; \
+	TARGET=linux-systemd \
+	INSTALL_ROLE=gateway \
+	DESTDIR="$$tmp" \
+	PREFIX=/opt/tukuyomi \
+	INSTALL_SKIP_BUILD=1 \
+	INSTALL_ENABLE_BOOT=0 \
+	INSTALL_START=0 \
+	INSTALL_DB_SEED=never \
+	INSTALL_REFRESH_WAF_ASSETS=0 \
+	./scripts/install_tukuyomi.sh; \
+	python3 -c 'import json, sys; assert json.load(open(sys.argv[1], encoding="utf-8"))["runtime"]["process_model"] == "supervised"' "$$tmp/opt/tukuyomi/conf/config.json"; \
 	TARGET=linux-systemd \
 	INSTALL_ROLE=center \
 	DESTDIR="$$tmp" \
@@ -334,8 +349,13 @@ install-smoke: build
 	grep -q "ExecStart=/opt/tukuyomi/bin/tukuyomi center" "$$tmp/etc/systemd/system/tukuyomi-center.service"; \
 	grep -q "WAF_CONFIG_FILE=/opt/tukuyomi/conf/config.center.json" "$$tmp/etc/tukuyomi/tukuyomi-center.env"; \
 	test -f "$$tmp/opt/tukuyomi/db/tukuyomi-center.db"; \
+	python3 -c 'import json, sys; assert json.load(open(sys.argv[1], encoding="utf-8"))["runtime"]["process_model"] == "single"' "$$tmp/opt/tukuyomi/conf/config.center.json"; \
 	if TARGET=linux-systemd INSTALL_ROLE=bad DESTDIR="$$tmp" INSTALL_SKIP_BUILD=1 ./scripts/install_tukuyomi.sh >/dev/null 2>&1; then \
 		echo "[install-smoke][ERROR] invalid INSTALL_ROLE unexpectedly succeeded" >&2; \
+		exit 1; \
+	fi; \
+	if TARGET=linux-systemd INSTALL_PROCESS_MODEL=single DESTDIR="$$tmp" INSTALL_SKIP_BUILD=1 ./scripts/install_tukuyomi.sh >/dev/null 2>&1; then \
+		echo "[install-smoke][ERROR] INSTALL_PROCESS_MODEL unexpectedly succeeded" >&2; \
 		exit 1; \
 	fi; \
 	echo "[install-smoke] ok"

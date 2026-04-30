@@ -738,6 +738,22 @@ button.danger {
   color: #991b1b;
 }
 
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--edge) 72%, white);
+  border-radius: 6px;
+  padding: 0.5rem 0.92rem;
+  background: linear-gradient(180deg, #ffffff, #f7fbf9);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
 .content-panel {
   width: 100%;
   padding: 16px;
@@ -917,6 +933,76 @@ button.danger {
   justify-content: flex-end;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.28);
+}
+
+.modal-panel {
+  width: min(720px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 1px solid #d6dde8;
+  border-radius: 12px;
+  padding: 16px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.summary-grid > div {
+  min-width: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 10px;
+  background: #fbfdff;
+}
+
+.summary-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1rem;
+}
+
+.summary-grid strong {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .token-created {
   margin-top: 12px;
   border: 1px solid #bfdbfe;
@@ -975,7 +1061,7 @@ button.danger {
 }
 
 .registered-device-table table {
-  min-width: 1420px;
+  min-width: 1780px;
 }
 
 .registered-device-table th:nth-child(1) {
@@ -997,8 +1083,19 @@ button.danger {
 .registered-device-table th:nth-child(8),
 .registered-device-table th:nth-child(9),
 .registered-device-table th:nth-child(10),
-.registered-device-table th:nth-child(11) {
+.registered-device-table th:nth-child(11),
+.registered-device-table th:nth-child(12),
+.registered-device-table th:nth-child(13),
+.registered-device-table th:nth-child(14) {
   width: 12%;
+}
+
+.table-subvalue {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1rem;
 }
 
 .token-status {

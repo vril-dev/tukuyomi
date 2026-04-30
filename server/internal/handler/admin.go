@@ -446,6 +446,7 @@ func StatusHandler(c *gin.Context) {
 		"server_http3_last_error":                             serverHTTP3Status.LastError,
 		"runtime_gomaxprocs":                                  config.RuntimeGOMAXPROCS,
 		"runtime_memory_limit_mb":                             config.RuntimeMemoryLimitMB,
+		"runtime_process_model":                               config.RuntimeProcessModel,
 		"proxy_config_file":                                   config.ProxyConfigFile,
 		"proxy_engine_mode":                                   normalizeProxyEngineMode(config.ProxyEngineMode),
 		"waf_engine_mode":                                     normalizeSettingsWAFEngineMode(config.WAFEngineMode),

@@ -1,0 +1,333 @@
+/* tukuyomi 運用ガイド ── PDF 用スタイル */
+
+@page {
+  size: A4;
+  margin: 18mm 16mm 18mm;
+  @bottom-center {
+    content: counter(page);
+    font-family: "Noto Sans CJK JP", "IPAexGothic", sans-serif;
+    font-size: 8pt;
+    color: #888;
+  }
+}
+
+@page :first {
+  margin: 0;
+  @bottom-center { content: none; }
+}
+
+html {
+  font-family: "Noto Sans CJK JP", "IPAexGothic", "Noto Sans", sans-serif;
+  font-size: 9pt;
+  line-height: 1.55;
+  color: #1a1a1a;
+  background: #fff;
+}
+
+body {
+  margin: 0 !important;
+  padding: 0 !important;
+  max-width: none !important;
+  width: 100% !important;
+  font-size: 9pt;
+  line-height: 1.55;
+  hyphens: none;
+  text-rendering: optimizeLegibility;
+}
+
+/* 表紙 */
+.cover {
+  width: 210mm;
+  height: 297mm;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  page-break-after: always;
+  background: linear-gradient(160deg, #0c1626 0%, #1a2940 45%, #2c4a7a 100%);
+  color: #f4f6fa !important;
+  padding: 50mm 25mm;
+  box-sizing: border-box;
+  margin: 0;
+}
+
+.cover .eyebrow {
+  font-size: 10pt;
+  font-weight: 400;
+  letter-spacing: 0.5em;
+  color: #d6dde8 !important;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  padding: 4pt 18pt 4pt 22pt;
+  margin-bottom: 5em;
+  text-transform: none;
+}
+
+.cover h1 {
+  font-size: 64pt;
+  margin: 0;
+  border: none !important;
+  padding: 0 !important;
+  page-break-before: avoid;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  color: #ffffff !important;
+  line-height: 1;
+}
+
+.cover .tagline {
+  font-size: 22pt;
+  font-weight: 500;
+  color: #ffffff !important;
+  margin: 0.5em 0 0;
+  letter-spacing: 0.08em;
+}
+
+.cover .subtitle {
+  font-size: 11pt;
+  font-weight: 400;
+  color: #c9d1de !important;
+  margin: 3.5em 0 0;
+  max-width: 140mm;
+  line-height: 1.75;
+}
+
+.cover .meta {
+  font-size: 11pt;
+  color: #aab4c5 !important;
+  line-height: 2;
+  margin-top: auto;
+  padding-top: 3em;
+}
+
+/* 見出し */
+h1 {
+  font-size: 17pt;
+  font-weight: 800;
+  page-break-before: always;
+  border-bottom: 2px solid #2c4a7a;
+  padding-bottom: 0.25em;
+  margin: 0 0 0.8em;
+  line-height: 1.3;
+  color: #1a2940;
+}
+
+h1#title-block-header,
+h1.title {
+  page-break-before: avoid;
+}
+
+h2 {
+  font-size: 12pt;
+  font-weight: 700;
+  margin: 1.2em 0 0.4em;
+  padding-bottom: 0.15em;
+  border-bottom: 1px solid #d0d7de;
+  color: #1a2940;
+  line-height: 1.35;
+}
+
+h3 {
+  font-size: 10.5pt;
+  font-weight: 700;
+  margin: 1em 0 0.35em;
+  color: #2c4a7a;
+}
+
+h4 {
+  font-size: 9.5pt;
+  font-weight: 700;
+  margin: 0.8em 0 0.3em;
+  color: #2c4a7a;
+}
+
+/* 段落 */
+p {
+  margin: 0.4em 0;
+  text-align: justify;
+  text-justify: inter-ideograph;
+}
+
+/* リスト */
+ul, ol {
+  margin: 0.3em 0 0.5em;
+  padding-left: 1.4em;
+}
+
+li {
+  margin: 0.1em 0;
+}
+
+li > p {
+  margin: 0.15em 0;
+}
+
+/* code / pre */
+code {
+  font-family: "IPAexGothic", "Noto Sans Mono CJK JP", "DejaVu Sans Mono", monospace;
+  font-size: 0.88em;
+  background: #f3f4f6;
+  padding: 0.05em 0.3em;
+  border-radius: 3px;
+  border: 1px solid #e5e7eb;
+}
+
+pre {
+  font-family: "IPAexGothic", "Noto Sans Mono CJK JP", "DejaVu Sans Mono", monospace;
+  font-size: 7.8pt;
+  line-height: 1.45;
+  background: #f6f8fa;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  padding: 0.55em 0.7em;
+  margin: 0.6em 0;
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  page-break-inside: avoid;
+}
+
+pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* 表 */
+table {
+  border-collapse: collapse;
+  margin: 0.6em 0;
+  font-size: 8.2pt;
+  line-height: 1.45;
+  width: 100%;
+  page-break-inside: avoid;
+}
+
+th, td {
+  border: 1px solid #d0d7de;
+  padding: 3pt 6pt;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: #eaeef3;
+  font-weight: 700;
+  color: #1a2940;
+}
+
+tr:nth-child(even) td {
+  background: #f9fafb;
+}
+
+/* 引用 */
+blockquote {
+  border-left: 3px solid #2c4a7a;
+  background: #f0f4f9;
+  margin: 0.6em 0;
+  padding: 0.4em 0.8em;
+  color: #2a2a2a;
+}
+
+blockquote p { margin: 0.2em 0; }
+
+/* 画像 */
+img {
+  max-width: 75%;
+  height: auto;
+  page-break-inside: avoid;
+  display: block;
+  margin: 0.8em auto;
+  border: 1px solid #d0d7de;
+  border-radius: 3px;
+}
+
+/* 水平線 */
+hr {
+  border: none;
+  border-top: 1px solid #d0d7de;
+  margin: 1.4em 0;
+}
+
+/* リンク */
+a {
+  color: #0a58ca;
+  text-decoration: none;
+}
+
+/* 強調 */
+strong {
+  font-weight: 700;
+  color: #1a2940;
+}
+
+em {
+  font-style: normal;
+  background: linear-gradient(to bottom, transparent 60%, #ffe8a3 60%);
+  padding: 0 0.1em;
+}
+
+/* 目次 */
+nav#TOC {
+  page-break-before: always;
+  page-break-after: always;
+}
+
+nav#TOC h1,
+nav#TOC h2 {
+  page-break-before: avoid;
+  border: none;
+  font-size: 17pt;
+  margin-bottom: 0.8em;
+}
+
+nav#TOC ul {
+  list-style: none;
+  padding-left: 0;
+  margin: 0.2em 0;
+}
+
+nav#TOC ul ul {
+  padding-left: 1.2em;
+  font-size: 0.92em;
+}
+
+nav#TOC ul ul ul {
+  font-size: 0.88em;
+  color: #555;
+}
+
+nav#TOC li {
+  margin: 0.1em 0;
+  line-height: 1.4;
+}
+
+nav#TOC a {
+  color: #1a2940;
+}
+
+/* TOC 内の見出しタイトル */
+nav#TOC::before {
+  content: "目次";
+  display: block;
+  font-size: 17pt;
+  font-weight: 800;
+  color: #1a2940;
+  border-bottom: 2px solid #2c4a7a;
+  padding-bottom: 0.25em;
+  margin-bottom: 0.8em;
+}
+
+/* 部見出しに使う div は無いので、章扉は h1 で */
+
+/* 印刷時の widow/orphan 制御 */
+p, li, td {
+  orphans: 3;
+  widows: 3;
+}
+
+h1, h2, h3, h4 {
+  page-break-after: avoid;
+  page-break-inside: avoid;
+}

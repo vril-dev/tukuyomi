@@ -29,6 +29,7 @@ go.work.sum
 dist/
 /bin/
 runtime/
+/.npm-cache/
 
 # Editor/IDE
 # .idea/

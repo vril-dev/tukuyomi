@@ -15,6 +15,9 @@
       "http_redirect_addr": ":80"
     }
   },
+  "runtime": {
+    "process_model": "supervised"
+  },
   "admin": {
     "listen_addr": ":9091",
     "api_base_path": "/tukuyomi-api",

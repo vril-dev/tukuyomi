@@ -34,6 +34,7 @@ func TestPostEdgeDeviceEnrollmentCreatesIdentityAndSendsSignedRequest(t *testing
 
 	centerCalls := 0
 	statusCalls := 0
+	snapshotCalls := 0
 	centerDeviceStatus := "approved"
 	var capturedPublicKey ed25519.PublicKey
 	var capturedFingerprint string
@@ -72,6 +73,14 @@ func TestPostEdgeDeviceEnrollmentCreatesIdentityAndSendsSignedRequest(t *testing
 			}
 			verifySignedEdgeStatusForTest(t, req, capturedPublicKey, capturedFingerprint)
 			_, _ = w.Write([]byte(`{"status":"` + centerDeviceStatus + `","device_id":"edge-device-1","key_id":"default","product_id":"product-a","checked_at_unix":1700000000}`))
+		case "/v1/device-config-snapshot":
+			snapshotCalls++
+			var req edgeDeviceConfigSnapshotWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode config snapshot: %v", err)
+			}
+			verifySignedEdgeConfigSnapshotForTest(t, req, capturedPublicKey, capturedFingerprint)
+			_, _ = w.Write([]byte(`{"status":"stored","config_revision":` + quoteJSON(req.ConfigRevision) + `,"received_at_unix":1700000001}`))
 		default:
 			t.Fatalf("path=%q", r.URL.Path)
 		}
@@ -126,8 +135,12 @@ func TestPostEdgeDeviceEnrollmentCreatesIdentityAndSendsSignedRequest(t *testing
 	}
 	if !strings.Contains(refresh.Body.String(), `"enrollment_status":"approved"`) ||
 		!strings.Contains(refresh.Body.String(), `"center_product_id":"product-a"`) ||
+		!strings.Contains(refresh.Body.String(), `"config_snapshot_revision":"`) ||
 		!strings.Contains(refresh.Body.String(), `"proxy_locked":false`) {
 		t.Fatalf("unexpected refresh response: %s", refresh.Body.String())
+	}
+	if snapshotCalls != 1 {
+		t.Fatalf("snapshotCalls=%d want 1", snapshotCalls)
 	}
 	if gate := currentEdgeProxyGateState(); gate.Locked {
 		t.Fatalf("approved identity should unlock proxy, gate=%+v", gate)
@@ -200,6 +213,7 @@ func TestEdgeDeviceStatusAutoRefreshUpdatesCachedApproval(t *testing.T) {
 	defer InitLogsStatsStore(false, "", 0)
 
 	statusCalls := 0
+	snapshotCalls := 0
 	var capturedPublicKey ed25519.PublicKey
 	var capturedFingerprint string
 	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -221,6 +235,14 @@ func TestEdgeDeviceStatusAutoRefreshUpdatesCachedApproval(t *testing.T) {
 			}
 			verifySignedEdgeStatusForTest(t, req, capturedPublicKey, capturedFingerprint)
 			_, _ = w.Write([]byte(`{"status":"approved","device_id":"edge-device-1","key_id":"default","product_id":"product-a","checked_at_unix":1700000000}`))
+		case "/v1/device-config-snapshot":
+			snapshotCalls++
+			var req edgeDeviceConfigSnapshotWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode config snapshot: %v", err)
+			}
+			verifySignedEdgeConfigSnapshotForTest(t, req, capturedPublicKey, capturedFingerprint)
+			_, _ = w.Write([]byte(`{"status":"stored","config_revision":` + quoteJSON(req.ConfigRevision) + `,"received_at_unix":1700000001}`))
 		default:
 			t.Fatalf("path=%q", r.URL.Path)
 		}
@@ -249,6 +271,9 @@ func TestEdgeDeviceStatusAutoRefreshUpdatesCachedApproval(t *testing.T) {
 	if status.EnrollmentStatus != edgeEnrollmentStatusApproved || status.ProxyLocked {
 		t.Fatalf("unexpected auto refresh status: %+v", status)
 	}
+	if snapshotCalls != 1 || status.ConfigSnapshotRevision == "" {
+		t.Fatalf("config snapshot not pushed, calls=%d status=%+v", snapshotCalls, status)
+	}
 	if gate := currentEdgeProxyGateState(); gate.Locked {
 		t.Fatalf("approved identity should unlock proxy, gate=%+v", gate)
 	}
@@ -271,6 +296,7 @@ func TestEdgeDeviceStatusRefreshLoopWakesAfterEnrollment(t *testing.T) {
 	}()
 
 	statusSeen := make(chan struct{}, 1)
+	snapshotSeen := make(chan struct{}, 1)
 	var capturedPublicKey ed25519.PublicKey
 	var capturedFingerprint string
 	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -295,6 +321,17 @@ func TestEdgeDeviceStatusRefreshLoopWakesAfterEnrollment(t *testing.T) {
 			default:
 			}
 			_, _ = w.Write([]byte(`{"status":"approved","device_id":"edge-device-1","key_id":"default","product_id":"product-a","checked_at_unix":1700000000}`))
+		case "/v1/device-config-snapshot":
+			var req edgeDeviceConfigSnapshotWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode config snapshot: %v", err)
+			}
+			verifySignedEdgeConfigSnapshotForTest(t, req, capturedPublicKey, capturedFingerprint)
+			select {
+			case snapshotSeen <- struct{}{}:
+			default:
+			}
+			_, _ = w.Write([]byte(`{"status":"stored","config_revision":` + quoteJSON(req.ConfigRevision) + `,"received_at_unix":1700000001}`))
 		default:
 			t.Fatalf("path=%q", r.URL.Path)
 		}
@@ -315,6 +352,11 @@ func TestEdgeDeviceStatusRefreshLoopWakesAfterEnrollment(t *testing.T) {
 	case <-statusSeen:
 	case <-time.After(2 * time.Second):
 		t.Fatal("status refresh loop was not woken after enrollment")
+	}
+	select {
+	case <-snapshotSeen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("config snapshot was not pushed after approval")
 	}
 	deadline := time.After(2 * time.Second)
 	for {
@@ -461,6 +503,36 @@ func verifySignedEdgeStatusForTest(t *testing.T, req edgeDeviceStatusWireRequest
 	}
 	if !ed25519.Verify(pub, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)), signature) {
 		t.Fatalf("status signature verification failed")
+	}
+}
+
+func verifySignedEdgeConfigSnapshotForTest(t *testing.T, req edgeDeviceConfigSnapshotWireRequest, pub ed25519.PublicKey, fingerprint string) {
+	t.Helper()
+	if len(pub) != ed25519.PublicKeySize {
+		t.Fatalf("public key was not captured")
+	}
+	if req.BodyHash != edgeDeviceConfigSnapshotBodyHash(req) {
+		t.Fatalf("config snapshot body_hash mismatch")
+	}
+	if req.PublicKeyFingerprintSHA256 != fingerprint {
+		t.Fatalf("fingerprint=%q want %q", req.PublicKeyFingerprintSHA256, fingerprint)
+	}
+	if !json.Valid(req.Snapshot) {
+		t.Fatalf("config snapshot is not valid JSON")
+	}
+	sum := sha256.Sum256(req.Snapshot)
+	if hex.EncodeToString(sum[:]) != req.PayloadHash {
+		t.Fatalf("config snapshot payload_hash mismatch")
+	}
+	if req.ConfigRevision == "" {
+		t.Fatalf("config snapshot revision is empty")
+	}
+	signature, err := base64.StdEncoding.DecodeString(req.SignatureB64)
+	if err != nil {
+		t.Fatalf("signature b64: %v", err)
+	}
+	if !ed25519.Verify(pub, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)), signature) {
+		t.Fatalf("config snapshot signature verification failed")
 	}
 }
 

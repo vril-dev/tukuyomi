@@ -5,9 +5,10 @@
 この文書は、Tukuyomi Gateway から Tukuyomi Center へ device identity を登録する
 現在の enrollment workflow をまとめます。
 
-現時点の実装は、Gateway が所有する device identity を Center 承認付きで登録する
-範囲です。すべての Web/VPS deployment で IoT / Edge mode を有効にするものでは
-ありません。edge/device 向け control が必要な deployment だけ有効にしてください。
+現時点の実装は、Gateway が所有する device identity を Center 承認付きで登録し、
+承認後に Gateway が署名付き config snapshot を Center へ送る範囲です。すべての
+Web/VPS deployment で IoT / Edge mode を有効にするものではありません。
+edge/device 向け control が必要な deployment だけ有効にしてください。
 
 ## 役割
 
@@ -128,6 +129,27 @@ poller は起動時に 1 回即時実行し、enrollment request 成功直後に
 
 承認や revoke を操作しながら確認する場合は短い interval、多数の Gateway を 1 つの Center
 へ集約する場合は長めの interval にしてください。
+
+## Config Snapshot Sync
+
+refresh した Center status が `approved` の場合、Gateway は現在の Gateway 設定から
+bounded / redacted な JSON snapshot を作成し、同じ署名付き device channel で Center へ送信します。
+snapshot は revision が変わった場合だけ push されます。
+
+この同期は proxy hot path から切り離しています。
+
+- Gateway は request ごとに Center へ問い合わせません。
+- proxy request path は local cache の approval state だけを参照します。
+- snapshot push は承認後の Center status refresh 経路で実行されます。
+- snapshot push に失敗した場合は Gateway の device-auth status に error を記録しますが、
+  device approval を迂回したり proxy traffic を unlock したりはしません。
+
+Center は registered device ごとに最新 snapshot を保持します。device が snapshot を
+publish 済みであれば、Center の `Device Approvals > Registered devices > Manage >
+Config download` から download できます。
+
+snapshot payload は 2 MiB 上限です。fleet inspection に必要な runtime/config domain を
+含めますが、enrollment token や local device private key は保存しません。
 
 ## Troubleshooting
 

@@ -1,10 +1,15 @@
 package handler
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +19,235 @@ import (
 	"syscall"
 	"time"
 )
+
+const (
+	runtimeAppProcessControlSnapshotTimeout = 5 * time.Second
+	runtimeAppProcessControlMutationTimeout = 60 * time.Second
+)
+
+type RuntimeAppProcessController interface {
+	PHPRuntimeProcessSnapshot() []PHPRuntimeProcessStatus
+	ReconcilePHPRuntimeSupervisor() error
+	StartPHPRuntimeProcess(runtimeID string) error
+	StopPHPRuntimeProcess(runtimeID string) error
+	ReloadPHPRuntimeProcess(runtimeID string) error
+	PSGIRuntimeProcessSnapshot() []PSGIRuntimeProcessStatus
+	ReconcilePSGIRuntimeSupervisor() error
+	StartPSGIProcess(processID string) error
+	StopPSGIProcess(processID string) error
+	ReloadPSGIProcess(processID string) error
+}
+
+type localRuntimeAppProcessController struct{}
+
+var (
+	runtimeAppProcessControllerMu sync.RWMutex
+	runtimeAppProcessControllerRt RuntimeAppProcessController = localRuntimeAppProcessController{}
+)
+
+func SetRuntimeAppProcessController(controller RuntimeAppProcessController) {
+	if controller == nil {
+		controller = localRuntimeAppProcessController{}
+	}
+	runtimeAppProcessControllerMu.Lock()
+	runtimeAppProcessControllerRt = controller
+	runtimeAppProcessControllerMu.Unlock()
+}
+
+func ResetRuntimeAppProcessController() {
+	SetRuntimeAppProcessController(localRuntimeAppProcessController{})
+}
+
+func runtimeAppProcessController() RuntimeAppProcessController {
+	runtimeAppProcessControllerMu.RLock()
+	defer runtimeAppProcessControllerMu.RUnlock()
+	if runtimeAppProcessControllerRt == nil {
+		return localRuntimeAppProcessController{}
+	}
+	return runtimeAppProcessControllerRt
+}
+
+func (localRuntimeAppProcessController) PHPRuntimeProcessSnapshot() []PHPRuntimeProcessStatus {
+	return localPHPRuntimeProcessSnapshot()
+}
+
+func (localRuntimeAppProcessController) ReconcilePHPRuntimeSupervisor() error {
+	return localReconcilePHPRuntimeSupervisor()
+}
+
+func (localRuntimeAppProcessController) StartPHPRuntimeProcess(runtimeID string) error {
+	return localStartPHPRuntimeProcess(runtimeID)
+}
+
+func (localRuntimeAppProcessController) StopPHPRuntimeProcess(runtimeID string) error {
+	return localStopPHPRuntimeProcess(runtimeID)
+}
+
+func (localRuntimeAppProcessController) ReloadPHPRuntimeProcess(runtimeID string) error {
+	return localReloadPHPRuntimeProcess(runtimeID)
+}
+
+func (localRuntimeAppProcessController) PSGIRuntimeProcessSnapshot() []PSGIRuntimeProcessStatus {
+	return localPSGIRuntimeProcessSnapshot()
+}
+
+func (localRuntimeAppProcessController) ReconcilePSGIRuntimeSupervisor() error {
+	return localReconcilePSGIRuntimeSupervisor()
+}
+
+func (localRuntimeAppProcessController) StartPSGIProcess(processID string) error {
+	return localStartPSGIProcess(processID)
+}
+
+func (localRuntimeAppProcessController) StopPSGIProcess(processID string) error {
+	return localStopPSGIProcess(processID)
+}
+
+func (localRuntimeAppProcessController) ReloadPSGIProcess(processID string) error {
+	return localReloadPSGIProcess(processID)
+}
+
+type RuntimeAppProcessHTTPController struct {
+	socketPath string
+	client     *http.Client
+}
+
+type runtimeAppProcessActionRequest struct {
+	Action    string `json:"action"`
+	RuntimeID string `json:"runtime_id,omitempty"`
+	ProcessID string `json:"process_id,omitempty"`
+}
+
+type runtimeAppProcessErrorResponse struct {
+	Error    string   `json:"error,omitempty"`
+	Messages []string `json:"messages,omitempty"`
+}
+
+func NewRuntimeAppProcessHTTPController(socketPath string) (*RuntimeAppProcessHTTPController, error) {
+	socketPath = strings.TrimSpace(socketPath)
+	if socketPath == "" {
+		return nil, fmt.Errorf("runtime app process control socket path is empty")
+	}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			dialer := &net.Dialer{}
+			return dialer.DialContext(ctx, "unix", socketPath)
+		},
+	}
+	return &RuntimeAppProcessHTTPController{
+		socketPath: socketPath,
+		client:     &http.Client{Transport: transport},
+	}, nil
+}
+
+func (c *RuntimeAppProcessHTTPController) PHPRuntimeProcessSnapshot() []PHPRuntimeProcessStatus {
+	var out struct {
+		Processes []PHPRuntimeProcessStatus `json:"processes"`
+	}
+	if err := c.doJSON(http.MethodGet, "/v1/php/processes", nil, &out, runtimeAppProcessControlSnapshotTimeout); err != nil {
+		return nil
+	}
+	return out.Processes
+}
+
+func (c *RuntimeAppProcessHTTPController) ReconcilePHPRuntimeSupervisor() error {
+	return c.doJSON(http.MethodPost, "/v1/php/reconcile", nil, nil, runtimeAppProcessControlMutationTimeout)
+}
+
+func (c *RuntimeAppProcessHTTPController) StartPHPRuntimeProcess(runtimeID string) error {
+	return c.doJSON(http.MethodPost, "/v1/php/action", runtimeAppProcessActionRequest{Action: "start", RuntimeID: runtimeID}, nil, runtimeAppProcessControlMutationTimeout)
+}
+
+func (c *RuntimeAppProcessHTTPController) StopPHPRuntimeProcess(runtimeID string) error {
+	return c.doJSON(http.MethodPost, "/v1/php/action", runtimeAppProcessActionRequest{Action: "stop", RuntimeID: runtimeID}, nil, runtimeAppProcessControlMutationTimeout)
+}
+
+func (c *RuntimeAppProcessHTTPController) ReloadPHPRuntimeProcess(runtimeID string) error {
+	return c.doJSON(http.MethodPost, "/v1/php/action", runtimeAppProcessActionRequest{Action: "reload", RuntimeID: runtimeID}, nil, runtimeAppProcessControlMutationTimeout)
+}
+
+func (c *RuntimeAppProcessHTTPController) PSGIRuntimeProcessSnapshot() []PSGIRuntimeProcessStatus {
+	var out struct {
+		Processes []PSGIRuntimeProcessStatus `json:"processes"`
+	}
+	if err := c.doJSON(http.MethodGet, "/v1/psgi/processes", nil, &out, runtimeAppProcessControlSnapshotTimeout); err != nil {
+		return nil
+	}
+	return out.Processes
+}
+
+func (c *RuntimeAppProcessHTTPController) ReconcilePSGIRuntimeSupervisor() error {
+	return c.doJSON(http.MethodPost, "/v1/psgi/reconcile", nil, nil, runtimeAppProcessControlMutationTimeout)
+}
+
+func (c *RuntimeAppProcessHTTPController) StartPSGIProcess(processID string) error {
+	return c.doJSON(http.MethodPost, "/v1/psgi/action", runtimeAppProcessActionRequest{Action: "start", ProcessID: processID}, nil, runtimeAppProcessControlMutationTimeout)
+}
+
+func (c *RuntimeAppProcessHTTPController) StopPSGIProcess(processID string) error {
+	return c.doJSON(http.MethodPost, "/v1/psgi/action", runtimeAppProcessActionRequest{Action: "stop", ProcessID: processID}, nil, runtimeAppProcessControlMutationTimeout)
+}
+
+func (c *RuntimeAppProcessHTTPController) ReloadPSGIProcess(processID string) error {
+	return c.doJSON(http.MethodPost, "/v1/psgi/action", runtimeAppProcessActionRequest{Action: "reload", ProcessID: processID}, nil, runtimeAppProcessControlMutationTimeout)
+}
+
+func (c *RuntimeAppProcessHTTPController) doJSON(method string, path string, in any, out any, timeout time.Duration) error {
+	if c == nil || c.client == nil {
+		return fmt.Errorf("runtime app process controller is not initialized")
+	}
+	if timeout <= 0 {
+		timeout = runtimeAppProcessControlMutationTimeout
+	}
+	var body io.Reader
+	if in != nil {
+		raw, err := json.Marshal(in)
+		if err != nil {
+			return fmt.Errorf("marshal runtime app process control request: %w", err)
+		}
+		body = bytes.NewReader(raw)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, "http://runtime-apps.local"+path, body)
+	if err != nil {
+		return err
+	}
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("runtime app process control request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("read runtime app process control response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		msg := strings.TrimSpace(string(raw))
+		var errResp runtimeAppProcessErrorResponse
+		if json.Unmarshal(raw, &errResp) == nil {
+			if strings.TrimSpace(errResp.Error) != "" {
+				msg = errResp.Error
+			} else if len(errResp.Messages) > 0 {
+				msg = strings.Join(errResp.Messages, "; ")
+			}
+		}
+		if msg == "" {
+			msg = resp.Status
+		}
+		return fmt.Errorf("runtime app process control failed: %s", msg)
+	}
+	if out == nil || len(raw) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("decode runtime app process control response: %w", err)
+	}
+	return nil
+}
 
 type PHPRuntimeProcessStatus struct {
 	RuntimeID        string   `json:"runtime_id"`
@@ -87,6 +321,26 @@ func phpRuntimeSupervisorInstance() *phpRuntimeSupervisor {
 }
 
 func PHPRuntimeProcessSnapshot() []PHPRuntimeProcessStatus {
+	return runtimeAppProcessController().PHPRuntimeProcessSnapshot()
+}
+
+func ReconcilePHPRuntimeSupervisor() error {
+	return runtimeAppProcessController().ReconcilePHPRuntimeSupervisor()
+}
+
+func StartPHPRuntimeProcess(runtimeID string) error {
+	return runtimeAppProcessController().StartPHPRuntimeProcess(runtimeID)
+}
+
+func StopPHPRuntimeProcess(runtimeID string) error {
+	return runtimeAppProcessController().StopPHPRuntimeProcess(runtimeID)
+}
+
+func ReloadPHPRuntimeProcess(runtimeID string) error {
+	return runtimeAppProcessController().ReloadPHPRuntimeProcess(runtimeID)
+}
+
+func localPHPRuntimeProcessSnapshot() []PHPRuntimeProcessStatus {
 	sup := phpRuntimeSupervisorInstance()
 	if sup == nil {
 		return nil
@@ -106,7 +360,7 @@ func PHPRuntimeProcessSnapshot() []PHPRuntimeProcessStatus {
 	return out
 }
 
-func ReconcilePHPRuntimeSupervisor() error {
+func localReconcilePHPRuntimeSupervisor() error {
 	sup := phpRuntimeSupervisorInstance()
 	if sup == nil {
 		return nil
@@ -114,7 +368,7 @@ func ReconcilePHPRuntimeSupervisor() error {
 	return sup.reconcile(PHPRuntimeMaterializationSnapshot())
 }
 
-func StartPHPRuntimeProcess(runtimeID string) error {
+func localStartPHPRuntimeProcess(runtimeID string) error {
 	sup := phpRuntimeSupervisorInstance()
 	if sup == nil {
 		return fmt.Errorf("php runtime supervisor is not initialized")
@@ -122,7 +376,7 @@ func StartPHPRuntimeProcess(runtimeID string) error {
 	return sup.startRuntime(normalizeConfigToken(runtimeID))
 }
 
-func StopPHPRuntimeProcess(runtimeID string) error {
+func localStopPHPRuntimeProcess(runtimeID string) error {
 	sup := phpRuntimeSupervisorInstance()
 	if sup == nil {
 		return fmt.Errorf("php runtime supervisor is not initialized")
@@ -130,7 +384,7 @@ func StopPHPRuntimeProcess(runtimeID string) error {
 	return sup.stopRuntime(normalizeConfigToken(runtimeID))
 }
 
-func ReloadPHPRuntimeProcess(runtimeID string) error {
+func localReloadPHPRuntimeProcess(runtimeID string) error {
 	sup := phpRuntimeSupervisorInstance()
 	if sup == nil {
 		return fmt.Errorf("php runtime supervisor is not initialized")
@@ -594,6 +848,26 @@ func psgiRuntimeSupervisorInstance() *psgiRuntimeSupervisor {
 }
 
 func PSGIRuntimeProcessSnapshot() []PSGIRuntimeProcessStatus {
+	return runtimeAppProcessController().PSGIRuntimeProcessSnapshot()
+}
+
+func ReconcilePSGIRuntimeSupervisor() error {
+	return runtimeAppProcessController().ReconcilePSGIRuntimeSupervisor()
+}
+
+func StartPSGIProcess(vhostName string) error {
+	return runtimeAppProcessController().StartPSGIProcess(vhostName)
+}
+
+func StopPSGIProcess(vhostName string) error {
+	return runtimeAppProcessController().StopPSGIProcess(vhostName)
+}
+
+func ReloadPSGIProcess(vhostName string) error {
+	return runtimeAppProcessController().ReloadPSGIProcess(vhostName)
+}
+
+func localPSGIRuntimeProcessSnapshot() []PSGIRuntimeProcessStatus {
 	sup := psgiRuntimeSupervisorInstance()
 	if sup == nil {
 		return nil
@@ -610,7 +884,7 @@ func PSGIRuntimeProcessSnapshot() []PSGIRuntimeProcessStatus {
 	return out
 }
 
-func ReconcilePSGIRuntimeSupervisor() error {
+func localReconcilePSGIRuntimeSupervisor() error {
 	sup := psgiRuntimeSupervisorInstance()
 	if sup == nil {
 		return nil
@@ -618,7 +892,7 @@ func ReconcilePSGIRuntimeSupervisor() error {
 	return sup.reconcile(PSGIRuntimeMaterializationSnapshot())
 }
 
-func StartPSGIProcess(vhostName string) error {
+func localStartPSGIProcess(vhostName string) error {
 	sup := psgiRuntimeSupervisorInstance()
 	if sup == nil {
 		return fmt.Errorf("psgi runtime supervisor is not initialized")
@@ -626,7 +900,7 @@ func StartPSGIProcess(vhostName string) error {
 	return sup.startProcess(normalizeConfigToken(vhostName))
 }
 
-func StopPSGIProcess(vhostName string) error {
+func localStopPSGIProcess(vhostName string) error {
 	sup := psgiRuntimeSupervisorInstance()
 	if sup == nil {
 		return fmt.Errorf("psgi runtime supervisor is not initialized")
@@ -634,7 +908,7 @@ func StopPSGIProcess(vhostName string) error {
 	return sup.stopProcess(normalizeConfigToken(vhostName))
 }
 
-func ReloadPSGIProcess(vhostName string) error {
+func localReloadPSGIProcess(vhostName string) error {
 	sup := psgiRuntimeSupervisorInstance()
 	if sup == nil {
 		return fmt.Errorf("psgi runtime supervisor is not initialized")

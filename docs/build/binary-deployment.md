@@ -20,6 +20,12 @@ make build
 
 This produces `bin/tukuyomi`.
 
+Gateway and Center UI builds require Node.js 22.12+ and npm 10+. The Makefile
+uses `tools/npm-node22.sh` by default, so build targets use a local Node 22/npm
+10 runtime when available and otherwise fall back to Docker image
+`node:22-alpine`. Set `NPM=/path/to/npm` only when you intentionally want to
+override that wrapper.
+
 If you only need the Go binary and already refreshed the embedded Gateway and Center UI, use:
 
 ```bash
@@ -64,6 +70,12 @@ Behavior:
 - `INSTALL_ROLE=gateway` installs `tukuyomi.service`, `tukuyomi.env`,
   `conf/config.json`, WAF/CRS asset import, first-run gateway DB seed, and the
   optional scheduled-task timer
+- Gateway installs write `runtime.process_model=supervised`. The supervisor
+  owns TCP listeners and activates the initial worker after readiness. Existing
+  Gateway configs are migrated with a targeted `runtime.process_model` update
+  during install. The first migration from a legacy single-process Gateway still
+  needs a normal service restart because listener ownership changes. HTTP/3 is
+  rejected until UDP handoff is implemented.
 - `INSTALL_ROLE=center` installs `tukuyomi-center.service`,
   `tukuyomi-center.env`, and `conf/config.center.json`; it runs DB migration
   only and skips WAF/CRS import, gateway seed, and scheduled tasks

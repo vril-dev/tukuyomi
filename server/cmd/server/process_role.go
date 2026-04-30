@@ -13,6 +13,12 @@ const (
 	serverCommandCenter                serverCommandKind = "center"
 	serverCommandSupervisor            serverCommandKind = "supervisor"
 	serverCommandWorker                serverCommandKind = "worker"
+	serverCommandReleaseMetadata       serverCommandKind = "release-metadata"
+	serverCommandValidateConfig        serverCommandKind = "validate-config"
+	serverCommandReleaseStatus         serverCommandKind = "release-status"
+	serverCommandReleaseStage          serverCommandKind = "release-stage"
+	serverCommandReleaseActivate       serverCommandKind = "release-activate"
+	serverCommandReleaseRollback       serverCommandKind = "release-rollback"
 	serverCommandDBMigrate             serverCommandKind = "db-migrate"
 	serverCommandDBImport              serverCommandKind = "db-import"
 	serverCommandDBImportPreview       serverCommandKind = "db-import-preview"
@@ -30,6 +36,7 @@ const (
 
 type serverCommand struct {
 	kind serverCommandKind
+	args []string
 }
 
 func parseServerCommand(args []string) (serverCommand, error) {
@@ -60,6 +67,18 @@ func parseServerCommandWithEnv(args []string, env []string) (serverCommand, erro
 		return serverCommand{kind: serverCommandServe}, nil
 	case "center":
 		return serverCommand{kind: serverCommandCenter}, nil
+	case "release-metadata":
+		return serverCommand{kind: serverCommandReleaseMetadata, args: args[2:]}, nil
+	case "validate-config":
+		return serverCommand{kind: serverCommandValidateConfig, args: args[2:]}, nil
+	case "release-status":
+		return serverCommand{kind: serverCommandReleaseStatus, args: args[2:]}, nil
+	case "release-stage":
+		return serverCommand{kind: serverCommandReleaseStage, args: args[2:]}, nil
+	case "release-activate":
+		return serverCommand{kind: serverCommandReleaseActivate, args: args[2:]}, nil
+	case "release-rollback":
+		return serverCommand{kind: serverCommandReleaseRollback, args: args[2:]}, nil
 	case "db-migrate":
 		return serverCommand{kind: serverCommandDBMigrate}, nil
 	case "db-import":

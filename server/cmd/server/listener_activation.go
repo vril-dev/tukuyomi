@@ -24,11 +24,49 @@ type systemdActivation struct {
 }
 
 func loadSystemdActivationFromEnv() (*systemdActivation, error) {
+	if internalProcessRoleFromEnv(os.Environ()) == internalProcessRoleWorker && strings.TrimSpace(os.Getenv(workerListenFDsEnv)) != "" {
+		activation, err := loadWorkerListenerActivation(os.Getenv)
+		os.Unsetenv(workerListenFDsEnv)
+		os.Unsetenv(workerListenFDNamesEnv)
+		return activation, err
+	}
+
 	activation, err := loadSystemdActivation(os.Getenv, os.Getpid())
 	os.Unsetenv("LISTEN_PID")
 	os.Unsetenv("LISTEN_FDS")
 	os.Unsetenv("LISTEN_FDNAMES")
 	return activation, err
+}
+
+func loadWorkerListenerActivation(getenv func(string) string) (*systemdActivation, error) {
+	rawFDS := strings.TrimSpace(getenv(workerListenFDsEnv))
+	if rawFDS == "" || rawFDS == "0" {
+		return &systemdActivation{}, nil
+	}
+	count, err := strconv.Atoi(rawFDS)
+	if err != nil {
+		return nil, fmt.Errorf("%s is invalid: %w", workerListenFDsEnv, err)
+	}
+	if count < 0 || count > 16 {
+		return nil, fmt.Errorf("%s must be between 0 and 16", workerListenFDsEnv)
+	}
+	names := splitSystemdFDNames(getenv(workerListenFDNamesEnv))
+	out := &systemdActivation{
+		active: count > 0,
+		fds:    make([]systemdActivatedFD, 0, count),
+		used:   make(map[int]struct{}, count),
+	}
+	for i := 0; i < count; i++ {
+		name := ""
+		if i < len(names) {
+			name = names[i]
+		}
+		out.fds = append(out.fds, systemdActivatedFD{
+			fd:   workerListenFDStart + i,
+			name: name,
+		})
+	}
+	return out, nil
 }
 
 func loadSystemdActivation(getenv func(string) string, pid int) (*systemdActivation, error) {

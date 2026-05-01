@@ -248,7 +248,7 @@ single-instance で local backend を使うなら `/app/data/persistent` を mou
 mount** を使ってください。Azure Blob Storage / Google Cloud Storage backend
 は、provider adapter が入るまで fail-closed です。
 
-proxy engine 選択は、systemd 配備と同じく restart-required な surface です。
+proxy engine 設定は、systemd 配備と同じく現在 `tukuyomi_proxy` 固定です。
 
 ```json
 {

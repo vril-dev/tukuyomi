@@ -2416,24 +2416,9 @@ export default function SettingsPanel() {
 
                     <section className="rounded border border-neutral-200 bg-neutral-50 p-4 space-y-3">
                       <div className="text-sm font-medium">
-                        {tx("Proxy Engine, CRS, Rollback, and FP Tuner")}
+                        {tx("CRS, Rollback, and FP Tuner")}
                       </div>
                       <div className="grid gap-3 sm:grid-cols-2">
-                        <Field label={tx("Proxy Engine")}>
-                          <input
-                            value={
-                              listenerAdminConfig.proxy.engine.mode ||
-                              "tukuyomi_proxy"
-                            }
-                            readOnly
-                            className="w-full rounded border border-neutral-200 bg-neutral-100 text-neutral-700"
-                          />
-                          <p className="mt-1 text-[11px] text-neutral-500">
-                            {tx(
-                              "tukuyomi_proxy is the built-in proxy engine. The legacy net_http bridge has been removed. Restart required after config file changes.",
-                            )}
-                          </p>
-                        </Field>
                         <Field label={tx("WAF Engine")}>
                           <select
                             value={
@@ -2694,10 +2679,6 @@ export default function SettingsPanel() {
                   <RuntimeMetric
                     label={tx("Current Max Queued Proxy")}
                     value={runtime.server_max_queued_proxy_requests}
-                  />
-                  <RuntimeMetric
-                    label={tx("Current Proxy Engine")}
-                    value={runtime.proxy_engine_mode}
                   />
                   <RuntimeMetric
                     label={tx("Current WAF Engine")}

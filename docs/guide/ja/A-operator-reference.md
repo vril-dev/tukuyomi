@@ -317,8 +317,7 @@ routing model:
   transport を使う。HTTPS `force_attempt` は ALPN で `h2` が選ばれない
   場合だけ native HTTP/1.1 へ fallback
 - Upgrade / WebSocket handshake は `tukuyomi_proxy` 内で処理
-- runtime visibility: `/tukuyomi-api/status` の `proxy_engine_mode` と
-  `Settings → Runtime Inventory`
+- runtime visibility: `/tukuyomi-api/status` の `proxy_engine_mode`
 
 ### A.3.2　WAF Engine
 

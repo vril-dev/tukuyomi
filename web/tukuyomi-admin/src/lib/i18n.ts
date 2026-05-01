@@ -37,18 +37,13 @@ const JA_STRINGS: Record<string, string> = {
   Observe: "Observe",
   Security: "Security",
   Proxy: "Proxy",
-  "Proxy Engine": "Proxy Engine",
   "WAF Engine": "WAF Engine",
   "Current WAF Engine": "現在のWAF Engine",
   unavailable: "利用不可",
   Unavailable: "利用不可",
   "Select a registered WAF engine. Unavailable engines are shown for planning but cannot be saved in this build.":
     "登録済みの WAF engine を選択します。利用不可の engine は計画用に表示されますが、この build では保存できません。",
-  "Proxy Engine, CRS, Rollback, and FP Tuner":
-    "Proxy Engine、CRS、ロールバック、FP Tuner",
-  "Current Proxy Engine": "現在のProxy Engine",
-  "tukuyomi_proxy is the built-in proxy engine. The legacy net_http bridge has been removed. Restart required after config file changes.":
-    "tukuyomi_proxy は built-in の proxy engine です。legacy net_http bridge は削除済みです。config file 変更後は再起動が必要です。",
+  "CRS, Rollback, and FP Tuner": "CRS、ロールバック、FP Tuner",
   Operations: "Operations",
   Coraza: "Coraza",
   "Request Controls": "リクエスト制御",

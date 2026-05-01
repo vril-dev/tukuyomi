@@ -299,8 +299,10 @@ Routing model:
 
 ### Proxy Engine
 
-DB `app_config` exposes the process-wide proxy engine under `proxy.engine.mode`.
-Only Tukuyomi's native proxy engine is supported. Changing it requires a process restart.
+DB `app_config` exposes the process-wide proxy engine under `proxy.engine.mode`
+for schema compatibility. Current builds support only Tukuyomi's native proxy
+engine, so the setting is fixed to `tukuyomi_proxy` and is not operator-selectable
+in Settings.
 
 ```json
 {
@@ -316,7 +318,7 @@ Only Tukuyomi's native proxy engine is supported. Changing it requires a process
 - The legacy `net_http` bridge has been removed; setting `proxy.engine.mode` to any value other than `tukuyomi_proxy` is rejected during config validation.
 - HTTP/1.1 and explicit upstream HTTP/2 modes use Tukuyomi native upstream transports; HTTPS `force_attempt` falls back to native HTTP/1.1 only when ALPN does not select `h2`.
 - Upgrade/WebSocket handshake requests stay inside `tukuyomi_proxy`; WebSocket frame payloads after `101 Switching Protocols` are tunnel data and are not HTTP WAF inspection input.
-- Runtime visibility is exposed through `/tukuyomi-api/status` as `proxy_engine_mode` and through `Settings -> Runtime Inventory`.
+- Runtime visibility is exposed through `/tukuyomi-api/status` as `proxy_engine_mode`.
 
 ### WAF Engine
 

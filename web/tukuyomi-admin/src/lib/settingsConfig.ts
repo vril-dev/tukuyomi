@@ -119,7 +119,6 @@ export function computeSettingsRuntimeDrift(
   if ((runtime.tracing_enabled ?? false) !== config.observability.tracing.enabled) drift.push(label("Tracing Enabled"));
   if ((runtime.tracing_service_name ?? "") !== config.observability.tracing.service_name) drift.push(label("Tracing Service Name"));
   if ((runtime.tracing_otlp_endpoint ?? "") !== config.observability.tracing.otlp_endpoint) drift.push(label("OTLP Endpoint"));
-  if ((runtime.proxy_engine_mode ?? "tukuyomi_proxy") !== (config.proxy.engine.mode || "tukuyomi_proxy")) drift.push(label("Proxy Engine"));
   if ((runtime.waf_engine_mode ?? "coraza") !== (config.waf.engine.mode || "coraza")) drift.push(label("WAF Engine"));
   return drift;
 }

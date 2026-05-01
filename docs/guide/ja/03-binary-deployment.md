@@ -337,7 +337,7 @@ account email は任意です。HTTP-01 challenge を使うため、
 `server.tls.redirect_http=true` と `server.tls.http_redirect_addr=:80`、
 または同等の port 80 forwarding を用意してください。
 
-proxy engine 選択は、restart-required な DB `app_config` 設定です。
+proxy engine 設定は、現在 DB `app_config` 上で `tukuyomi_proxy` 固定です。
 
 ```json
 {

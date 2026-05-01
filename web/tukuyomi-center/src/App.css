@@ -1077,6 +1077,11 @@ button.danger {
   width: 100%;
 }
 
+.runtime-build-controls option:disabled {
+  background: #eef2f7;
+  color: var(--muted);
+}
+
 .runtime-build-message {
   align-self: center;
   margin: 0;

@@ -1,56 +1,56 @@
-# tukuyomi Reuse-Port Host Matrix and Policy
+# tukuyomi SO_REUSEPORT ホスト別評価方針
 
-この文書は、`tukuyomi` で listener fan-out を将来再評価する場合の policy を定義したものです。
+この文書では、`tukuyomi` で `SO_REUSEPORT` / リスナー分散を将来再評価する場合の方針を定義します。
 
-feature を再開する文書ではありません。どの host/runtime の評価を意味のあるものとして扱うか、どの topology を scope に入れるか、再開前にどの benchmark/smoke gate を通すべきかを定めます。
+この文書は、機能再開を決めるものではありません。どのホスト / ランタイムでの評価を有効な根拠として扱うか、どの構成を評価対象に含めるか、再開前にどのベンチマーク / smoke を通すべきかを定めます。
 
 ## 方針の要約
 
-- listener fan-out は引き続き supported runtime の外に置く
-- 将来の再開は、実装したい気持ちではなく host/runtime policy から始める
-- Docker bridge の published-port 挙動は、再開条件の必須要件にはしない
-- もし Docker published-port support 自体が欲しいなら、それは別 deliverable として切る
+- リスナー分散は、引き続きサポート対象の実行構成には含めない
+- 将来再評価する場合は、実装都合ではなくホスト / ランタイム方針から始める
+- Docker bridge のポート公開挙動は、再評価の必須条件にはしない
+- Docker のポート公開サポート自体が必要な場合は、別の作業項目として扱う
 
-## Host/runtime matrix
+## ホスト / ランタイム別マトリクス
 
-| Tier | Host/runtime class | 例 | Policy status | 理由 |
+| Tier | ホスト / ランタイム種別 | 例 | 方針 | 理由 |
 | --- | --- | --- | --- | --- |
-| A | Linux VM または bare metal の direct host bind | `:443` を直接公開する entrypoint | Required | listener accept fan-out を評価する最も信頼できるケース |
-| A | host networking か同等の direct socket ownership を持つ Linux container | host-network container で bridge publish を使わない | containerized direct entrypoint が target なら Required | direct socket ownership に近い |
-| B | 外部 LB/CDN の背後だが、`tukuyomi` 自体は local listener を直接持つ | LB -> VM / host-network container -> `tukuyomi` | Optional | 想定 deployment shape に合うなら確認価値がある |
-| C | Docker bridge + published host port | `docker compose` の `19090:9090` 形式 | reopen gate としては Out of scope | local DX にはよいが、listener fan-out の性能 gate としては信用しにくい |
-| C | Desktop VM forwarding などの non-Linux host-network abstraction | Docker Desktop や nested forwarding | Out of scope | client と listener の間に変数が多すぎる |
+| A | Linux VM または bare metal での direct host bind | `:443` を直接公開する entrypoint | 必須 | listener accept 分散を評価するうえで最も信頼できるケース |
+| A | host networking か同等の direct socket ownership を持つ Linux container | host-network container で bridge publish を使わない | containerized direct entrypoint を対象にするなら必須 | direct socket ownership に近い |
+| B | 外部 LB/CDN の背後だが、`tukuyomi` 自体は local listener を直接持つ | LB -> VM / host-network container -> `tukuyomi` | 任意 | 想定する配置構成に合うなら確認価値がある |
+| C | Docker bridge + published host port | `docker compose` の `19090:9090` 形式 | 再評価の判定条件としては対象外 | ローカル開発体験には有用だが、リスナー分散の性能判断には使いにくい |
+| C | Desktop VM forwarding などの non-Linux host-network abstraction | Docker Desktop や nested forwarding | 対象外 | client と listener の間に変数が多すぎる |
 
-## 「Required」の意味
+## 「必須」の意味
 
-再開の議論は、Tier A の根拠が無い限り前に進めません。
+再評価の議論は、Tier A の根拠がない限り前に進めません。
 
 必要なこと:
 
-- 少なくとも 1 つの Tier A host/runtime class で benchmark 改善が再現できる
-- 同じ class で単純な listener smoke が clean に通る
-- その改善が `tukuyomi` の実 runtime shape を有効にした後でも残る
+- 少なくとも 1 つの Tier A ホスト / ランタイム種別でベンチマーク改善を再現できる
+- 同じ種別で単純なリスナー smoke が安定して通る
+- その改善が `tukuyomi` の実際の実行構成を有効にした後でも残る
   - WAF
   - routing
   - retry/health logic
   - compression
   - cache
 
-## Docker published-port policy
+## Docker ポート公開の扱い
 
-Docker bridge の published-port 挙動は別論点として扱います。
+Docker bridge のポート公開挙動は、リスナー分散の再評価とは別論点として扱います。
 
-現時点の policy:
+現時点の方針:
 
-- Docker published-port が不安定でも、それだけで将来の再開可能性を完全否定しない
-- 逆に、Docker published-port が通っただけで再開根拠にもならない
-- bridge-published local/container runtime を product requirement にしたいなら、独立した task と smoke contract を持たせる
+- Docker のポート公開が不安定でも、それだけで将来の再評価可能性を完全には否定しない
+- 逆に、Docker のポート公開が通っただけでは採用根拠にしない
+- bridge 経由でポート公開する local/container runtime を製品要件にする場合は、独立した作業項目と smoke テスト仕様を持たせる
 
-これにより、local 開発体験の都合だけで production-grade listener の判断が引きずられないようにします。
+これにより、ローカル開発体験の都合だけで本番向けリスナーの判断が引きずられないようにします。
 
-## Benchmark gate shape
+## ベンチマーク判定条件
 
-将来の再開では、既存 benchmark harness を使った固定レシピの比較を必須にします。
+将来再評価する場合は、既存のベンチマーク用スクリプトを使い、固定レシピでの比較を必須にします。
 
 基本コマンド:
 
@@ -66,45 +66,45 @@ BENCH_DISABLE_RATE_LIMIT=1 \
 ./scripts/benchmark_proxy_tuning.sh
 ```
 
-比較するもの:
+比較対象:
 
-- single-listener baseline
-- fan-out 候補 topology
+- 単一リスナー baseline
+- リスナー分散の候補構成
 
 再開の最低条件:
 
-- target topology で connection-reset 症状が出ない
-- preset / concurrency のどの row でも fail-rate が `0%` を超えない
-- candidate topology で全 row が non-2xx に崩れるような現象がない
-- target concurrency で意味のある改善が少なくとも 1 つある
+- 対象構成で connection-reset 症状が出ない
+- preset / concurrency のどの行でも fail-rate が `0%` を超えない
+- 候補構成で全行が non-2xx に崩れるような現象がない
+- 対象 concurrency で意味のある改善が少なくとも 1 つある
   - RPS が明確に良い
   - または p95 / p99 が明確に良い
-- 改善しない row で大きな regression が出ない
+- 改善しない行で大きな性能低下が出ない
 
-ここは意図的に厳しめです。listener fan-out は platform complexity を増やすので、僅差の勝ちは採用理由になりません。
+ここは意図的に厳しめです。リスナー分散は実行基盤の複雑さを増やすため、僅差の勝ちは採用理由になりません。
 
-## Smoke gate shape
+## Smoke 判定条件
 
-最低限、対象 topology で次を通す必要があります。
+最低限、対象構成で次を通す必要があります。
 
 ```bash
 curl -fsS http://127.0.0.1:19090/healthz
 ```
 
-評価 topology に TLS が含まれるなら、実 listener port への HTTPS smoke と、必要に応じて admin/API path の sanity も追加します。
+評価構成に TLS が含まれる場合は、実 listener port への HTTPS smoke と、必要に応じて admin/API path の疎通確認も追加します。
 
-smoke の目的は feature coverage ではありません。listener topology 自体が安定していると示すことです。
+smoke の目的は機能網羅ではありません。listener topology 自体が安定していることを示すためのものです。
 
-## 再開 checklist
+## 再評価チェックリスト
 
-listener fan-out を再開してよいのは、次をすべて満たした時だけです。
+リスナー分散を再評価してよいのは、次をすべて満たした時だけです。
 
-1. 想定 deployment topology を先に文書化している
+1. 想定する deployment topology を先に文書化している
 2. 評価対象が Tier A である
    - もしくは Tier B を含める明確な理由がある
-3. benchmark 比較が固定レシピで行われている
-4. 同じ topology で smoke が clean
-5. bottleneck が upstream/WAF ではなく listener accept 分散にあると説明できる
+3. ベンチマーク比較が固定レシピで行われている
+4. 同じ構成で smoke が安定して通る
+5. ボトルネックが upstream/WAF ではなく listener accept 分散にあると説明できる
 
 ## 関連文書
 

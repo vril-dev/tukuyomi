@@ -9,7 +9,7 @@ build: "pandoc → HTML → Chrome headless で PDF 化"
 
 # tukuyomi 運用ガイド（日本語版）
 
-本書は、上流リポジトリ `/home/ky491/git/vril/tukuyomi` に置かれた日本語ドキュメント
+本書は、tukuyomi リポジトリに置かれた日本語ドキュメント
 （`README.ja.md` および `docs/**/*.ja.md`）を再編し、日本のエンジニアが上から順に
 読み通せる **書籍** として再構成したものです。
 
@@ -96,8 +96,9 @@ build: "pandoc → HTML → Chrome headless で PDF 化"
 - **第15章　HTTP/3 と TLS** — built-in TLS termination、ACME 自動 TLS、
   HTTP/3 の専用 listener、`server.tls.redirect_http`、HTTP/3 public-entry smoke。
   （source: operator-reference.ja.md, docs/operations/http3-public-entry-smoke.ja.md）
-- **第16章　IoT / Edge デバイス登録** — 役割、運用フロー、preview URL、
-  Center URL ルール、Identity と fingerprint、token の扱い、troubleshooting。
+- **第16章　IoT / Edge デバイス登録** — 役割、運用フロー、Center 管理の
+  device 画面、runtime deployment、preview URL、Center URL ルール、
+  Identity と fingerprint、token の扱い、troubleshooting。
   （source: docs/operations/device-auth-enrollment.ja.md）
 
 ### 第VII部　性能と回帰検証
@@ -121,7 +122,7 @@ build: "pandoc → HTML → Chrome headless で PDF 化"
 - **付録B　リリースノート（v1.2.0 / v1.1.0）** — Center 追加、IoT / Edge
   enrollment、`INSTALL_ROLE`、device approval lifecycle（v1.2.0）と、
   DB-backed runtime authority、admin 認証刷新、`make install` 整備（v1.1.0）。
-  （source: docs/releases/1.2.0.ja.md, docs/releases/1.1.0.ja.md）
+  （source: GitHub Releases の release tag）
 
 ## ファイル配置
 
@@ -133,10 +134,11 @@ books/tukuyomi/
 ├── 02-quickstart.md    … 第2章
 ├── 03-...〜18-...md   … 第3〜18章
 ├── A-operator-reference.md
-├── B-release-notes.md
-└── images/
-    └── ui-samples/     … tukuyomi/docs/images/ui-samples/ から複製済み
+└── B-release-notes.md
 ```
+
+画面サンプル画像は、共通の `docs/images/ui-samples/` を相対パス
+`../../images/ui-samples/` で参照します。
 
 ## ビルド方針（メモ）
 

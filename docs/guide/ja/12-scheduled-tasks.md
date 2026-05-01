@@ -5,7 +5,7 @@
 管理する仕組みです。Laravel の `artisan schedule:run`、Movable Type の
 背景処理、GeoIP DB 自動更新、独自の集計バッチなどが想定用途です。
 
-![Scheduled Tasks 画面](images/ui-samples/19-scheduled-tasks.png)
+![Scheduled Tasks 画面](../../images/ui-samples/19-scheduled-tasks.png)
 
 ## 12.1　責務分離 ── 「定義」と「起動」を分ける
 

@@ -23,7 +23,7 @@ Gateway から **Tukuyomi Center へ device identity を登録する** ための
 ための機能です。Web の前段に WAF + reverse proxy として置く一般用途では、
 本章の手順は読み飛ばして構いません。
 
-![Center login 画面](images/ui-samples/22-center-login.png)
+![Center login 画面](../../images/ui-samples/22-center-login.png)
 
 ## 16.2　役割
 
@@ -47,7 +47,7 @@ Gateway を信用するかどうか**」を決める、という分担です。
 `Center` 側と `Gateway` 側を行ったり来たりするので、順番を間違えないよう
 注意してください。
 
-![Center の Device Approvals 画面](images/ui-samples/24-center-device-approvals.png)
+![Center の Device Approvals 画面](../../images/ui-samples/24-center-device-approvals.png)
 
 1. Center を起動または開く
 2. `Device Approvals` を開く
@@ -87,18 +87,39 @@ proxy は local Center status が `approved` のときだけ開きます**。
 通常の Web / VPS deployment は `IoT / Edge Mode` を OFF のままにするため、
 この `503` には **当たりません**。
 
-### 16.3.2　承認後の status refresh
+### 16.3.2　承認後のステータス更新
 
-![Center の Status 画面](images/ui-samples/23-center-status.png)
+![Center の Status 画面](../../images/ui-samples/23-center-status.png)
 
-Center で device を承認したあとは、Gateway の `Options > Center Enrollment`
+Center でデバイスを承認したあとは、Gateway が Center をポーリングし、
+ローカルにキャッシュしているデバイスステータスを更新します。既定の間隔は
+30 秒です。すぐ反映したい場合は、Gateway の `Options > Center Enrollment`
 に戻り、**`Check Center status`** を実行してください。Gateway は Center へ
-**署名付き status request** を送り、local に cache している device status
-を更新します。
+**署名付きステータスリクエスト** を送り、ローカルキャッシュを更新します。
 
-この status 経路は、今後の **承認解除** や **product ID / token 切り替え**
-にも使います。現在の authorization state を **Center が所有** し、Gateway は
-refresh 後に `approved` 以外の status なら proxy を **ロック** します。
+このステータス更新経路は、今後の **承認解除** や **product ID / token
+切り替え** にも使います。現在の認可状態は **Center が所有** します。
+Gateway は更新後のステータスが `approved` 以外であれば、プロキシを
+**ロック** します。
+
+### 16.3.3　Center 管理のデバイス画面
+
+登録済みデバイスを管理するには、**`Device Approvals > Registered devices > Manage`** を開きます。
+対象デバイスを選択すると、左メニューの `Device Approvals` 配下に、そのデバイス専用の管理画面が表示されます。
+
+![Center の Device Status 画面](../../images/ui-samples/26-center-device-status.png)
+
+`Device Status` では、承認状態、最後のステータス確認時刻、Gateway から報告されたプラットフォーム情報、設定スナップショットの履歴を確認できます。
+snapshot table には、マスク済みの Gateway JSON payload が上限付きで保存され、必要に応じて表示またはダウンロードできます。
+
+![Center の Runtime 画面](../../images/ui-samples/27-center-runtime.png)
+
+`Runtime` では、Gateway から報告された platform target に対応するランタイム配布物を管理します。Center は、その target 向けに PHP-FPM または PSGI のランタイム配布物を build し、圧縮済み artifact として保存したうえで Gateway に割り当てることができます。
+同じ platform target 向けの artifact がすでに作成済みであれば、再ビルドせずに既存の artifact を選択して割り当てることもできます。
+
+Runtime の変更は、Center UI/API の操作だけでは Gateway に即時反映されません。Center には **pending runtime requests** として登録され、Gateway が署名付きステータスポーリングで取得したタイミングで処理されます。
+Gateway は、受け取った変更要求の artifact metadata と platform target を検証し、圧縮済み artifact をダウンロードしたうえで、Gateway ローカルの runtime をインストールまたは削除します。pending request は、Gateway が取得する前であれば Center から取り消せます。
+runtime の削除は、Center と Gateway の両側で安全確認を行います。Center UI は最新の runtime inventory をもとに危険な削除要求を無効化し、Gateway 側でも local runtime file を削除する直前に、Runtime App からの参照と実行中プロセスの有無を再確認します。
 
 ## 16.4　Preview URL
 

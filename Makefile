@@ -5,7 +5,7 @@ SHELL := /bin/bash
 ROOT_DIR := $(abspath .)
 GO ?= go
 DOCKER ?= docker
-NPM ?= $(ROOT_DIR)/tools/npm-node22.sh
+NPM ?= $(ROOT_DIR)/tools/npm-node24.sh
 
 PUID ?= $(shell id -u)
 GUID ?= $(shell id -g)
@@ -520,7 +520,7 @@ ui-install:
 	cd $(UI_DIR) && $(NPM) ci
 
 ui-test: ui-install
-	cd $(UI_DIR) && $(NPM) test -- --runInBand
+	cd $(UI_DIR) && $(NPM) test
 
 ui-build: ui-install
 	cd $(UI_DIR) && $(NPM) run build

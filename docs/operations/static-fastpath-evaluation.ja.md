@@ -1,67 +1,67 @@
-# static fast-path 評価
+# 静的配信高速化の評価
 
-`tukuyomi` は `nginx` のような純粋な file-serving proxy ではありません。この文書では、現在の runtime 責務を踏まえたうえで、static fast-path や zero-copy 戦略を進める価値があるかを整理します。
+`tukuyomi` は、`nginx` の `sendfile` 的な意味での純粋なファイル配信プロキシではありません。この文書では、実行時に担っている処理を踏まえたうえで、静的配信の高速化や zero-copy 戦略を進める価値があるかを整理します。
 
 ## 判断
 
-現時点では、general な static fast-path / zero-copy 実装は進めません。
+現時点では、汎用的な静的配信用 fast-path / zero-copy 実装は進めません。
 
 ## 理由
 
-`tukuyomi` のレスポンス処理は、今も user space で扱うのが自然な layer を複数持っています。
+`tukuyomi` のレスポンス処理には、今もユーザー空間で扱うのが自然な処理層が複数あります。
 
-- request 側の WAF inspection は upstream へ流す前に必ず走る
-- route selection、retry、health、circuit の判断が upstream 選択に入る
-- response header sanitation は live response と cached replay の両方に適用される
-- client-facing compression は transform 対象レスポンスで body buffering を必要とする
-- cache replay でも `X-Request-ID` や WAF hit metadata のような request-scoped header を再注入する
+- リクエスト側の WAF 検査は、上流サーバーへ流す前に必ず実行される
+- ルート選択、リトライ、ヘルス判定、サーキットブレーカーの判定が上流サーバーの選択に入る
+- レスポンスヘッダーのサニタイズは、上流からの応答とキャッシュ応答の両方に適用される
+- クライアント向け圧縮は、変換対象レスポンスで body のバッファリングを必要とする
+- キャッシュ応答でも `X-Request-ID` や WAF ヒットのメタデータのようなリクエスト単位のヘッダーを再注入する
 
-このため、`nginx` の `sendfile` 的な generic fast-path は、ごく一部のレスポンスにしか効かない一方で、通常 runtime の複雑さだけを増やしやすいです。
+このため、`nginx` の `sendfile` 的な汎用 fast-path は、ごく一部のレスポンスにしか効かない一方で、通常の実行時処理を複雑にしやすいです。
 
-## zero-copy が噛み合いにくい場所
+## zero-copy が効きにくい箇所
 
-### live upstream response
+### 上流からの応答
 
-- body は通常 local file ではなく upstream socket から届く
-- `tukuyomi` はその周辺で buffering、compression、sanitize、retry を行うことがある
-- その layer を通したあとに clean な zero-copy handoff を作るのは難しい
+- レスポンス body は通常、ローカルファイルではなく上流サーバー側のソケットから届く
+- `tukuyomi` はその周辺でバッファリング、圧縮、サニタイズ、リトライを行うことがある
+- これらの処理層を通した後に、zero-copy でそのまま渡す経路を作るのは難しい
 
-### cache replay を general 戦略にすること
+### キャッシュ応答を汎用高速化の軸にすること
 
-- cached replay 自体はすでに upstream latency を避けている
-- 現在の cache design は
-  - bounded な L1 memory replay
-  - file-backed な L2 replay
-  の 2 段になった
-- L1 を有効化した後は、disk hit だけに効く最適化の対象は以前より狭い
+- キャッシュ応答自体は、すでに上流サーバーへの往復によるレイテンシを避けている
+- 現在のキャッシュ設計は
+  - 上限付きの L1 メモリキャッシュからの応答
+  - ファイルを実体に持つ L2 キャッシュからの応答
+  の 2 段構成になっている
+- L1 を有効化した後は、ディスク上のキャッシュに当たる場合だけに効く最適化の対象は以前より狭い
 
-## すでにある bounded fast-path
+## 既存の限定的な高速経路
 
-`tukuyomi` には、generic な static-file fast-path より workload に合った小さな最適化がすでにあります。
+`tukuyomi` には、汎用的な静的ファイル fast-path よりワークロードに合った小さな最適化がすでにあります。
 
-- cache hit は in-memory front cache から replay でき、disk read を避けられる
-- file-backed cache hit でも upstream call 自体は回避できる
-- upgrade / websocket 系トラフィックは buffering や response compression を通らない
-- runtime preset で low-latency / buffered-control を切り替えられる
+- キャッシュヒットはメモリ上のフロントキャッシュから返せるため、ディスク読み取りを避けられる
+- ファイルを実体に持つキャッシュヒットでも、上流サーバーへの問い合わせ自体は回避できる
+- Upgrade / WebSocket 系トラフィックはバッファリングやレスポンス圧縮を通らない
+- 実行時プリセットで low-latency / buffered-control を切り替えられる
 
 ## 再検討する条件
 
-今後これを reopen するのは、現在の cache / compression 方針を入れた後でも cached body replay が実測ボトルネックだと分かった時だけです。
+今後これを再検討するのは、現在のキャッシュ / 圧縮方針を入れた後でも、キャッシュ済み body の返送処理が実測上のボトルネックだと分かった時だけです。
 
 少なくとも次のどれかが必要です。
 
-- large immutable asset の cache hit body transfer が request latency の支配要因になっている
-- CPU time が WAF / routing / compression ではなく cache replay copy path に集中している
-- 対象 workload の大半が cache-hit static delivery で、security / rewrite layer がほぼ no-op になっている
+- immutable 指定された大きな静的アセットのキャッシュヒット時に、body 転送がリクエストレイテンシの支配要因になっている
+- CPU 時間が WAF / routing / compression ではなく、キャッシュ応答時のコピー処理に集中している
+- 対象ワークロードの大半がキャッシュヒットする静的配信で、security / rewrite 層がほぼ no-op になっている
 
-## reopen 時の narrow slice
+## 再検討時の対象範囲
 
-将来 reopen する場合でも、slice は極小に限定します。
+将来再検討する場合でも、対象範囲は極小に限定します。
 
-- 対象は file-backed cache replay の body path だけ
-- live upstream proxying は変えない
-- request WAF inspection は bypass しない
-- response header sanitation は bypass しない
-- auth / cookie / API path / `Set-Cookie` に関する cache safety rule は弱めない
+- 対象は、ファイルを実体に持つキャッシュ応答の body 転送経路だけ
+- 上流サーバーへの通常プロキシ処理は変えない
+- リクエスト WAF 検査はバイパスしない
+- レスポンスヘッダーのサニタイズはバイパスしない
+- auth / cookie / API path / `Set-Cookie` に関するキャッシュ安全ルールは弱めない
 
-この slice は architectural promise ではなく、benchmark 付きの実験として扱うべきです。
+この範囲は設計上の約束ではなく、ベンチマーク付きの実験として扱うべきです。

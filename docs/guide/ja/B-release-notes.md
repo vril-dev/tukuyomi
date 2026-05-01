@@ -1,8 +1,9 @@
 # 付録B　リリースノート
 
-本付録には、本書の基準バージョンを含む直近 2 リリースのリリースノートを
+本付録には、本書の基準バージョンを含む直近 2 リリースのリリースノート抜粋を
 書籍向けに整文して収録します。新しい順に **v1.2.0** → **v1.1.0** の順で
-並べています。
+並べています。以後の正式なリリースノートは、GitHub Releases の release tag
+を一次情報としてください。
 
 本書は **v1.2.0 を基準** に書いています。Center / IoT・Edge enrollment が
 登場するのは v1.2.0 からです。v1.1.0 は、その 1 つ前の重要なリリース
@@ -13,7 +14,6 @@
 
 # B 部1　v1.2.0 リリースノート
 
-> 状態: draft  
 > 基準バージョン: v1.1.8
 
 v1.2.0 では、**Tukuyomi Center**、**IoT / Edge enrollment**、**device approval
@@ -111,11 +111,11 @@ workflow** を追加しました。あわせて install role と frontend build 
 
 ## B1.5　Build / Development
 
-- Gateway / Center UI build は **`node >=22.12.0` と `npm >=10`** を要求
+- Gateway / Center UI build は **Node.js 24 LTS** と **`npm >=11`** を要求
   します。
-- **`.nvmrc` は Node 22** を指すようにしました。
-- CI はすでに Node 22 を使用しており、sample deployment Dockerfile も
-  Node 22 で UI を build します。
+- **`.nvmrc` は Node 24** を指すようにしました。
+- CI はすでに Node 24 を使用しており、sample deployment Dockerfile も
+  Node 24 で UI を build します。
 - Gateway UI routes を **lazy load** し、大きな admin page が初期 JavaScript
   bundle を膨らませないようにしました。
 - dependency lock 更新後、Gateway / Center UI の
@@ -148,7 +148,7 @@ workflow** を追加しました。あわせて install role と frontend build 
 - bundled config example には `edge.enabled` を明示し、default は **false**
   です。
 - **Node 18 での UI build はサポート外** です。`.nvmrc` と package
-  `engines` に従い Node 22 を使ってください。
+  `engines` に従い Node 24 LTS を使ってください。
 
 ## B1.8　既知の制限
 
@@ -164,7 +164,6 @@ workflow** を追加しました。あわせて install role と frontend build 
 
 # B 部2　v1.1.0 リリースノート
 
-> 状態: draft  
 > 基準バージョン: v1.0.1
 
 v1.1.0 では、**実行時設定を DB 管理へ移行**し、デプロイ手順の安全性を

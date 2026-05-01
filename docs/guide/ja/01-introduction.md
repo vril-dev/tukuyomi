@@ -22,7 +22,7 @@ tukuyomi は、**Web の前段に置く edge コンポーネント** と、**そ
 これらを単一バイナリに束ねている結果、**tukuyomi を 1 台 deploy すれば、Web の
 前段に必要なものがほぼ揃う**、という構造になっています。
 
-![管理画面トップ](images/ui-samples/01-status.png)
+![管理画面トップ](../../images/ui-samples/01-status.png)
 
 ## 1.2　なぜ「single-binary の application-edge control plane」なのか
 

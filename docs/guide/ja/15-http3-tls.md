@@ -82,7 +82,7 @@ site-managed ACME は、`Sites` 画面で site ごとに **`tls.mode=acme`** を
 選びます。`production` と `staging` は Let's Encrypt の本番 CA / staging CA
 の選択で、account email は任意です。
 
-![Sites 画面](images/ui-samples/16-sites.png)
+![Sites 画面](../../images/ui-samples/16-sites.png)
 
 ACME を使う場合の前提:
 

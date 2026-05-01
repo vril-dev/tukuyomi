@@ -1,20 +1,20 @@
-# tukuyomi Reuse-Port Evaluation
+# tukuyomi SO_REUSEPORT 評価
 
-この文書は、実験的な `SO_REUSEPORT` / multi-listener fan-out の評価結果を記録したものです。
+この文書では、実験的に検証した `SO_REUSEPORT` / 複数リスナー分散の評価結果を記録します。
 
-`tukuyomi` は現時点で listener fan-out を shipped feature として持ちません。この文書は、no-go 判断を記憶ではなく exact command と計測結果で残すためにあります。
+`tukuyomi` は、現時点ではリスナー分散を正式機能として提供していません。この文書は、採用見送りの判断を記憶ではなく、実行したコマンドと計測結果に基づいて残すためのものです。
 
 ## 結論
 
-- 実験的 listener fan-out について、Docker の published-port 挙動は support しない扱いとする
-- 評価した local host では、安定した benchmark 改善は確認できなかった
-- この 2 点が同時に解けるまでは、listener fan-out を supported runtime に戻さない
+- 実験的なリスナー分散について、Docker のポート公開経路はサポート対象とみなさない
+- 評価したローカルホストでは、安定したベンチマーク改善は確認できなかった
+- この 2 点が同時に解消されるまでは、リスナー分散をサポート対象の実行構成へ戻さない
 
-## Docker published-port の症状
+## Docker ポート公開での症状
 
-評価中、実験的 listener fan-out を有効にした Docker port-published runtime は、単純な health probe でも失敗することがありました。
+評価中、実験的なリスナー分散を有効にした実行環境を Docker でポート公開すると、単純なヘルスチェックでも失敗することがありました。
 
-確認に使った probe:
+確認に使ったコマンド:
 
 ```bash
 curl -fsS http://127.0.0.1:19090/healthz
@@ -26,11 +26,11 @@ curl -fsS http://127.0.0.1:19090/healthz
 curl: (56) Recv failure: Connection reset by peer
 ```
 
-これだけで feature を ship しない理由として十分です。direct public listener を目指す機能が、一般的な local Docker publish 経路で不安定なのは許容できません。
+この時点で、正式機能として提供しない理由としては十分です。公開リスナーの直接待ち受けを想定する機能が、一般的なローカル Docker ポート公開経路で不安定になる状態は許容できません。
 
-## review で使った benchmark recipe
+## 評価で使ったベンチマーク手順
 
-review では、同じ host 上で既存の local benchmark harness を使い、listener topology だけを切り替えて比較しました。
+評価では、同じホスト上で既存のローカルベンチマーク用スクリプトを使い、リスナー構成だけを切り替えて比較しました。
 
 実行コマンド:
 
@@ -46,59 +46,59 @@ BENCH_DISABLE_RATE_LIMIT=1 \
 ./scripts/benchmark_proxy_tuning.sh
 ```
 
-比較したもの:
+比較対象:
 
 - single-listener baseline
-- `reuse_port=true` と `listener_count=2` を使う実験的 fan-out
+- `reuse_port=true` と `listener_count=2` を使う実験的なリスナー分散
 
 ## 計測結果
 
-### Single-listener baseline
+### 単一リスナー baseline
 
-記録した run では次の結果でした。
+計測時は次の結果でした。
 
 - `balanced@20`: `fail_rate=0.00%`, `p95=1019ms`, `rps=58.15`
 - `low-latency@20`: `fail_rate=0.00%`, `p95=1017ms`, `rps=57.88`
 - `buffered-guard@20`: `fail_rate=0.00%`, `p95=1173ms`, `rps=99.23`
 
-### 実験的 fan-out (`reuse_port=true`, `listener_count=2`)
+### 実験的なリスナー分散 (`reuse_port=true`, `listener_count=2`)
 
-記録した run では次の結果でした。
+計測時は次の結果でした。
 
 - `balanced@20`: `fail_rate=28.33%`, `p95=5002ms`, `rps=19.81`
 - `low-latency@1`: `fail_rate=100.00%` で全応答が non-2xx
 - `low-latency@20`: `fail_rate=100.00%` で全応答が non-2xx
 - `buffered-guard@1`: `fail_rate=6.67%`, `p95=3083ms`, `rps=4.34`
-- `buffered-guard@20`: single-listener baseline に対して明確な改善なし
+- `buffered-guard@20`: 単一リスナー baseline に対して明確な改善なし
 
-これは「小さい regression」や「host noise」ではなく、明確な no-go 判定です。
+これは「小さな性能低下」や「ホスト側の揺らぎ」として扱える範囲ではなく、明確な採用見送りの結果です。
 
 ## 解釈
 
-評価した host では、TCP accept fan-out が本当の bottleneck だという根拠は得られませんでした。
+評価したホストでは、TCP accept の分散が実際のボトルネック解消につながる根拠は得られませんでした。
 
-むしろ見えたのは次です。
+むしろ確認できたのは次の点です。
 
-- Docker published-port 挙動の不安定さ
-- workload 依存で大きく崩れる benchmark
-- listener 複雑化を正当化できる一貫した throughput / latency 改善がないこと
+- Docker ポート公開時の挙動が不安定であること
+- 負荷条件によってベンチマーク結果が大きく崩れること
+- リスナー構成を複雑化するだけの、一貫したスループット / レイテンシ改善がないこと
 
 そのため、優先順位は今のままです。
 
-1. upstream transport tuning
-2. metrics / observability
-3. backpressure / queueing
-4. cache / compression / runtime tuning
-5. listener fan-out は host/runtime の根拠が十分に揃った時だけ再検討
+1. upstream transport の調整
+2. メトリクス / 可観測性
+3. バックプレッシャー / キューイング
+4. cache / compression / runtime の調整
+5. リスナー分散は、ホスト / ランタイムの根拠が十分に揃った時だけ再検討
 
 ## 再開条件
 
-listener fan-out を再開するなら、少なくとも次を満たす必要があります。
+リスナー分散を再検討する場合は、少なくとも次の条件を満たす必要があります。
 
-- 対象 host class で benchmark 改善が再現できる
-- Docker published-port の smoke が clean である
-  - もしくは Docker-published local runtime を support 範囲外にすることを明示する
-- 想定 deployment topology を先に文書化する
+- 対象となるホスト構成でベンチマーク改善を再現できる
+- Docker ポート公開の smoke が安定して通る
+  - もしくは Docker でポート公開するローカル実行環境をサポート範囲外にすることを明示する
+- 想定する配置トポロジーを先に文書化する
 - bottleneck が upstream/WAF ではなく listener accept 分散にあると説明できる
 
 ## 関連文書

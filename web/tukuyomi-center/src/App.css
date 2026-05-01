@@ -149,6 +149,11 @@ select {
   gap: 1px;
 }
 
+.app-nav-item-block {
+  display: grid;
+  gap: 1px;
+}
+
 .app-nav-section {
   display: grid;
   gap: 1px;
@@ -191,6 +196,62 @@ select {
 .app-nav-label {
   @apply text-xs;
   font-weight: 600;
+}
+
+.app-nav-sublink {
+  align-items: flex-start;
+  min-width: 0;
+  margin-left: 10px;
+  border-left: 2px solid #bfd3ff;
+  padding: 6px 8px;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-nav-sublink .app-nav-label {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-nav-sublabel {
+  width: 100%;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.app-device-menu {
+  display: grid;
+  gap: 1px;
+  margin-top: 1px;
+}
+
+.app-device-menu-heading {
+  min-width: 0;
+  margin-left: 10px;
+  border-left: 2px solid #94a3b8;
+  padding: 6px 8px;
+}
+
+.app-device-menu-heading .app-nav-label {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 11px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-sidebar-footer {
@@ -929,45 +990,115 @@ button.danger {
 
 .inline-actions {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
 }
 
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(15, 23, 42, 0.28);
+.runtime-page .table-wrap td.actions-cell {
+  text-align: left;
 }
 
-.modal-panel {
-  width: min(720px, 100%);
-  max-height: calc(100vh - 48px);
-  overflow: auto;
-  border: 1px solid #d6dde8;
-  border-radius: 12px;
-  padding: 16px;
-  background: #ffffff;
-  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+.runtime-page .inline-actions {
+  justify-content: flex-start;
 }
 
-.modal-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
+.runtime-summary-table .inline-actions {
+  flex-wrap: nowrap;
 }
 
-.modal-actions {
+.device-detail-page {
+  max-width: 1160px;
+}
+
+.device-detail-id {
+  max-width: min(86vw, 920px);
+  overflow-wrap: anywhere;
+}
+
+.device-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin-top: 14px;
+}
+
+.runtime-page .content-section {
+  max-width: 1160px;
+}
+
+.runtime-platform-grid {
+  margin-top: 10px;
+}
+
+.device-detail-section {
+  margin-top: 16px;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 14px;
+}
+
+.device-detail-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.device-detail-section-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.runtime-build-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) max-content minmax(0, 1fr);
+  gap: 10px;
+  align-items: end;
+}
+
+.runtime-build-controls label {
+  display: block;
+  min-width: 0;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.runtime-build-controls label > span {
+  display: inline-block;
+  margin-bottom: 8px;
+}
+
+.runtime-build-controls select {
+  width: 100%;
+}
+
+.runtime-build-message {
+  align-self: center;
+  margin: 0;
+  min-width: 0;
+}
+
+.runtime-build-job-table {
+  margin-top: 12px;
+}
+
+.runtime-build-job {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+  color: #475569;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.runtime-build-error {
+  color: #991b1b;
 }
 
 .summary-grid {
@@ -1001,6 +1132,10 @@ button.danger {
   line-height: 1rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.platform-detail-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .token-created {
@@ -1065,7 +1200,12 @@ button.danger {
 }
 
 .registered-device-table th:nth-child(1) {
-  width: 14%;
+  width: 10%;
+}
+
+.registered-device-table th:first-child,
+.registered-device-table td.actions-cell:first-child {
+  text-align: left;
 }
 
 .registered-device-table th:nth-child(2) {
@@ -1088,6 +1228,123 @@ button.danger {
 .registered-device-table th:nth-child(13),
 .registered-device-table th:nth-child(14) {
   width: 12%;
+}
+
+.config-snapshot-table table {
+  min-width: 820px;
+}
+
+.runtime-summary-table table {
+  min-width: 1180px;
+}
+
+.runtime-assignment-table table,
+.runtime-artifact-table table {
+  min-width: 1080px;
+}
+
+.runtime-summary-table th:nth-child(1) {
+  width: 18%;
+}
+
+.runtime-summary-table th:nth-child(2),
+.runtime-summary-table th:nth-child(3),
+.runtime-summary-table th:nth-child(5),
+.runtime-summary-table th:nth-child(6),
+.runtime-summary-table th:nth-child(7),
+.runtime-summary-table th:nth-child(8),
+.runtime-summary-table th:nth-child(9) {
+  width: 10%;
+}
+
+.runtime-summary-table th:nth-child(4) {
+  width: 16%;
+}
+
+.runtime-summary-table th:nth-child(10) {
+  width: 12%;
+}
+
+.runtime-assignment-table th:nth-child(1),
+.runtime-artifact-table th:nth-child(1) {
+  width: 14%;
+}
+
+.runtime-assignment-table th:nth-child(2),
+.runtime-assignment-table th:nth-child(3),
+.runtime-assignment-table th:nth-child(6),
+.runtime-artifact-table th:nth-child(2),
+.runtime-artifact-table th:nth-child(3),
+.runtime-artifact-table th:nth-child(8) {
+  width: 10%;
+}
+
+.runtime-assignment-table th:nth-child(4),
+.runtime-assignment-table th:nth-child(5),
+.runtime-assignment-table th:nth-child(7),
+.runtime-artifact-table th:nth-child(4),
+.runtime-artifact-table th:nth-child(5),
+.runtime-artifact-table th:nth-child(6),
+.runtime-artifact-table th:nth-child(7) {
+  width: 14%;
+}
+
+.config-snapshot-table th:nth-child(1) {
+  width: 25%;
+}
+
+.config-snapshot-table th:nth-child(2),
+.config-snapshot-table th:nth-child(3),
+.config-snapshot-table th:nth-child(5) {
+  width: 22%;
+}
+
+.config-snapshot-table th:nth-child(4) {
+  width: 9%;
+}
+
+.config-snapshot-table th:first-child,
+.config-snapshot-table td.actions-cell:first-child {
+  text-align: left;
+}
+
+.config-snapshot-table td.actions-cell {
+  overflow: visible;
+}
+
+.config-snapshot-table .inline-actions {
+  justify-content: flex-start;
+}
+
+.snapshot-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.snapshot-viewer {
+  margin-top: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 12px;
+  background: #fbfdff;
+}
+
+.snapshot-viewer pre {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 10px;
+  background: #0f172a;
+  color: #f8fafc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
 }
 
 .table-subvalue {
@@ -1203,6 +1460,11 @@ button.danger {
 @media (max-width: 980px) {
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .runtime-build-controls {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 
   .facts {

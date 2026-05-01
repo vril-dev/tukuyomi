@@ -4,6 +4,7 @@ FROM php:${PHP_VERSION}-fpm-bookworm
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN set -eux; \
+    savedAptMark="$(apt-mark showmanual)"; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       autoconf \
@@ -42,5 +43,20 @@ RUN set -eux; \
     php -m >/tmp/php-modules.txt; \
     php -r 'echo PHP_VERSION;' >/tmp/php-version.txt; \
     docker-php-source delete; \
+    apt-mark auto '.*' >/dev/null; \
+    if [ -n "${savedAptMark}" ]; then apt-mark manual ${savedAptMark} >/dev/null; fi; \
+    apt-mark manual \
+      ca-certificates \
+      imagemagick \
+      libfreetype6 \
+      libjpeg62-turbo \
+      libmagickcore-6.q16-6 \
+      libmagickwand-6.q16-6 \
+      libonig5 \
+      libpng16-16 \
+      libpq5 \
+      libsqlite3-0 \
+      >/dev/null; \
+    apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
     apt-get clean; \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /tmp/pear ~/.pearrc /var/lib/apt/lists/*

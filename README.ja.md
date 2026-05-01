@@ -1,6 +1,6 @@
 # tukuyomi
 
-Coraza + CRS WAF reverse proxy / API gateway
+Coraza + CRS WAF 搭載のリバースプロキシ／API Gateway
 
 [English](README.md) | [日本語](README.ja.md)
 
@@ -8,106 +8,83 @@ Coraza + CRS WAF reverse proxy / API gateway
 
 ## 概要
 
-`tukuyomi` は single-binary の application-edge control plane です。Coraza WAF +
-OWASP CRS、reverse proxy routing、request security controls、optional Runtime Apps、
-scheduled jobs、Center mode、IoT / Edge device enrollment を 1 つの製品として統合しています。
+`tukuyomi` は、シングルバイナリで動作するアプリケーションエッジ向けのコントロールプレーンです。Coraza WAF と OWASP CRS、リバースプロキシのルーティング、リクエストセキュリティ制御、オプションの Runtime Apps、スケジュールジョブ、Center モード、IoT／Edge デバイス登録までを 1 つの製品として統合しています。
 
 主な用途は次のとおりです。
 
-- reverse proxy と route 管理
+- リバースプロキシとルート管理
 - WAF と誤検知チューニング
-- rate / country / bot / semantic / IP reputation 制御
-- built-in の管理 UI/API
-- optional な static hosting / PHP-FPM / scheduled jobs
-- Center 承認付きの optional IoT / Edge device identity 登録
-- single binary または Docker 配備
+- レート／国別／ボット／セマンティック／IP レピュテーション制御
+- 組み込みの管理 UI／API
+- オプションの静的ホスティング／PHP-FPM／スケジュールジョブ
+- Center 承認付きのオプションの IoT／Edge デバイス識別子登録
+- シングルバイナリまたは Docker 配備
 
-## IoT / Edge デバイス登録
+## IoT／Edge デバイス登録
 
-Gateway には、Tukuyomi Center で承認されたローカル device identity が必要な
-IoT / Edge deployment 向けの optional mode が入っています。Center が enrollment token
-を発行し、Gateway が Ed25519 の device identity を生成して署名付き登録申請を送り、
-Center 側で operator が承認します。IoT / Edge mode では、Gateway が Center の
-`approved` device status を refresh するまで public proxy traffic はロックされます。
-承認後は、status refresh のタイミングで revision が変わった場合に、Gateway が署名付きの
-redacted config snapshot を Center へ publish します。
+Gateway には、Tukuyomi Center で承認されたローカルのデバイス識別子を必須とする IoT／Edge 配備向けのオプションモードがあります。Center が登録トークンを発行し、Gateway が Ed25519 のデバイス識別子を生成して署名付きの登録申請を送信し、Center 側でオペレーターが承認します。IoT／Edge モードでは、Gateway が Center から `approved` のデバイスステータスを取得するまで、公開プロキシのトラフィックはロックされたままです。承認後は、ステータス更新時にリビジョンが変化したタイミングで、Gateway がマスク済みの設定スナップショットに署名して Center へ送信します。
 
-Web/VPS deployment では IoT / Edge mode は OFF のままにしてください。運用フロー、
-preview URL の注意点、public key fingerprint の形式は
-[docs/operations/device-auth-enrollment.ja.md](docs/operations/device-auth-enrollment.ja.md)
-を参照してください。
+Web／VPS 配備では IoT／Edge モードは無効のままにしてください。運用フロー、プレビュー URL の注意点、公開鍵フィンガープリントの形式は [docs/operations/device-auth-enrollment.ja.md](docs/operations/device-auth-enrollment.ja.md) を参照してください。
 
 ## ルールファイルと初期セットアップ
 
-本リポジトリには、ライセンス順守のため OWASP CRS 本体は同梱していません。
-代わりに、最小の起動用ベースルール seed を `seeds/waf/rules/` に同梱しています。
+本リポジトリには、ライセンス順守の都合上、OWASP CRS 本体は同梱していません。代わりに、最小の起動用ベースルールのシードを `seeds/waf/rules/` に同梱しています。
 
-通常 runtime 用には、先に DB schema を作り、その後 CRS seed file を配置して
-WAF rule asset を DB へ import してください。
+通常のランタイム用には、まず DB スキーマを作成し、続けて CRS シードファイルを配置したうえで、WAF ルールアセットを DB へインポートしてください。
 
 ```bash
 make db-migrate
 make crs-install
 ```
 
-埋め込み管理 UI と既定 upstream を含む最小構成で始める場合は、preset を適用します。
+組み込み管理 UI と既定のアップストリームを含む最小構成で始める場合は、プリセットを適用します。
 
 ```bash
 make preset-apply PRESET=minimal
 make preset-check PRESET=minimal
 ```
 
-bundled の `minimal` preset が配置するのは `.env` と
-`data/conf/config.json` だけです。`conf/proxy.json` / `conf/sites.json`
-が無ければ、`make db-import` は `seeds/conf/` を読んでから互換 default に
-fallback します。
+同梱の `minimal` プリセットが配置するのは `.env` と `data/conf/config.json` のみです。`conf/proxy.json` ／ `conf/sites.json` が無い場合、`make db-import` は `seeds/conf/` を読み込んだうえで、互換性のあるデフォルトへフォールバックします。
 
-初回 DB import 前には、bootstrap したい seed file を実値へ差し替えてください。
+初回の DB インポート前に、ブートストラップしたいシードファイルを実値へ差し替えてください。
 
-- `data/conf/config.json`: DB 接続 bootstrap
-- `seeds/conf/*.json`: 空 DB 向けに同梱される本番 seed set
-- `data/conf/proxy.json`: proxy rules の初期 seed/import file
-- `data/conf/sites.json`: site ownership / TLS を使う場合の初期 seed/import file
-- `data/conf/scheduled-tasks.json`: scheduled tasks を使う場合の初期 seed/import file
+- `data/conf/config.json`: DB 接続のブートストラップ
+- `seeds/conf/*.json`: 空 DB 向けに同梱される本番用シード一式
+- `data/conf/proxy.json`: プロキシルールの初期シード／インポートファイル
+- `data/conf/sites.json`: サイトオーナーシップ／TLS を使う場合の初期シード／インポートファイル
+- `data/conf/scheduled-tasks.json`: スケジュールタスクを使う場合の初期シード／インポートファイル
 
-その後、本番起動前に `make db-import` を実行し、残りの設定 seed を DB へ
-取り込みます。`make crs-install` は `make db-migrate` 後に動き、WAF/CRS
-rule asset を DB へ import します。import 後の本番起動で必要なのは DB
-接続 bootstrap 用の `data/conf/config.json` と DB row であり、その他の seed
-JSON/rule file は runtime authority ではありません。
+その後、本番起動前に `make db-import` を実行し、残りの設定シードを DB に取り込みます。`make crs-install` は `make db-migrate` 後に動作し、WAF／CRS のルールアセットを DB へインポートします。インポート後の本番起動で必要なのは、DB 接続のブートストラップ用 `data/conf/config.json` と DB 上のレコードのみです。ランタイムの設定として正となるのは DB であり、その他のシード JSON やルールファイルはランタイムの参照元ではありません。
 
 ## クイックスタート
 
 ### インストール
 
-Linux host へ直接入れる場合は、まず install target から始めます。
+Linux ホストへ直接導入する場合は、まずインストールターゲットから実行します。
 
 ```bash
 make install TARGET=linux-systemd
 ```
 
-これは Gateway のインストール経路です。Gateway / Center UI を埋め込んだ Go バイナリをビルドし、ランタイムツリーを作成したうえで、DBマイグレーション、WAF/CRSアセットのインポート、初回DB設定のシード投入、ローカルホスト向けsystemdユニットのインストールまでを一括で実行します。
-スケジュールタスク用タイマーはデフォルトで有効になります。このホストでスケジュールタスクを実行しない場合は、`INSTALL_ENABLE_SCHEDULED_TASKS=0` を指定してください。
+これが Gateway のインストール経路です。Gateway／Center UI を埋め込んだ Go バイナリをビルドし、ランタイムツリーを作成したうえで、DB マイグレーション、WAF／CRS アセットのインポート、初回 DB 設定のシード投入、ローカルホスト向け systemd ユニットのインストールまでを一括で実行します。
+スケジュールタスク用タイマーは既定で有効になります。このホストでスケジュールタスクを実行しない場合は、`INSTALL_ENABLE_SCHEDULED_TASKS=0` を指定してください。
 
-Center を control plane ホストに入れる場合は、同じ `TARGET` に role を指定します。
+Center をコントロールプレーンホストへ導入する場合は、同じ `TARGET` にロールを指定します。
 
 ```bash
 make install TARGET=linux-systemd INSTALL_ROLE=center
 ```
 
-Gateway install は内部的に supervisor / worker runtime を使います。supervisor が
-TCP listener を所有し、readiness 後に初期 worker を activate します。Center は
-別の control-plane role として入り、Gateway の request-path supervisor は使いません。
-HTTP/3 は UDP handoff 実装まで Gateway supervisor では拒否されます。
+Gateway のインストールでは、内部的にスーパーバイザー／ワーカーランタイムを使用します。スーパーバイザーが TCP リスナーを所有し、レディネス確認後に初期ワーカーをアクティブ化します。Center は別のコントロールプレーンロールとして導入され、Gateway のリクエストパス向けスーパーバイザーは使用しません。HTTP/3 は UDP ハンドオフ実装が完了するまで、Gateway のスーパーバイザーでは拒否されます。
 
-`PREFIX`、`INSTALL_USER`、スケジュールタスク用ユニットの詳細、およびホストへのインストールではなくコンテナ／プラットフォームへのデプロイを利用する場合の詳細については、以下を参照してください。
+`PREFIX`、`INSTALL_USER`、スケジュールタスク用ユニットの詳細、およびホストへ直接インストールするのではなくコンテナ／プラットフォームへ配備する場合の詳細は、以下を参照してください。
 
 - [docs/build/binary-deployment.ja.md](docs/build/binary-deployment.ja.md)
 - [docs/build/container-deployment.ja.md](docs/build/container-deployment.ja.md)
 
-### ローカルテスト preview
+### ローカルテストプレビュー
 
-Gateway UI とローカルランタイムのフローだけを試したい場合は、`preview` ターゲットを使用してください。
+Gateway UI とローカルランタイムの一連のフローだけを試したい場合は、`preview` ターゲットを使用してください。
 
 ```bash
 make preset-apply PRESET=minimal
@@ -115,100 +92,78 @@ make gateway-preview-up
 ```
 
 `make gateway-preview-up` は CRS の ensure フローを自動的に実行します。
-このフローでは、`make db-migrate` の実行、CRS シードファイルが存在しない場合の配置、および WAFルールアセットのDBへのインポートまでをまとめて行います。
+このフローでは、`make db-migrate` の実行、CRS シードファイルが存在しない場合の配置、および WAF ルールアセットの DB へのインポートまでをまとめて行います。
 
-その後、既定では以下へアクセスします。
+その後、既定では以下にアクセスします。
 
 - Gateway UI: `http://localhost:9090/tukuyomi-ui`
 - Gateway API: `http://localhost:9090/tukuyomi-api`
 
-デフォルトでは、`make gateway-preview-up` はプレビュー専用の SQLite DB を使用し、起動のたびにその DB とプレビュー専用の設定ファイルを初期化します。
-`GATEWAY_PREVIEW_PERSIST=1` を指定すると、プレビュー用の設定と DB の状態を gateway-preview-down と gateway-preview-up の間で保持できます。
+既定では、`make gateway-preview-up` はプレビュー専用の SQLite DB を使用し、起動のたびにその DB とプレビュー専用の設定ファイルを初期化します。
+`GATEWAY_PREVIEW_PERSIST=1` を指定すると、プレビュー用の設定と DB の状態を `gateway-preview-down` と `gateway-preview-up` の間で保持できます。
 
-### Runtime 設定モデル
+### ランタイム設定モデル
 
-`tukuyomi` は責務ごとに設定を分けています。
+`tukuyomi` は責務ごとに設定を分離しています。
 
-- `.env`: Docker 実行差分のみ
-- `data/conf/config.json`: DB 接続 bootstrap。bundled config は `storage` block だけを保持
-- DB `app_config_*`: global runtime / listener / admin / storage policy / path 設定
-- DB `proxy_*`: live の proxy transport / routing 設定
-- `seeds/conf/*`: configured seed file が無い時に使う同梱の空 DB 向け本番 seed
-- `data/conf/proxy.json`: proxy rules の seed/import/export material
-- DB `proxy_backend_pools` / `proxy_backend_pool_members`: named upstream member から作る route 単位の balancing group
-- `data/conf/upstream-runtime.json`: `Proxy Rules > Upstreams` で定義した opt-in runtime override の seed/import/export material
-- `data/conf/sites.json`: site ownership と TLS binding の seed/import/export material
-- DB `vhosts` / `vhost_*`: live Runtime Apps config。storage 名は互換性のため `vhost` のままです
-- DB `waf_rule_assets`: base WAF と CRS の rule/data asset
-- DB `override_rules`: managed bypass `extra_rule` の rule body
-- DB `php_runtime_inventory` / `php_runtime_modules`: PHP-FPM runtime inventory と module metadata
-- DB `psgi_runtime_inventory` / `psgi_runtime_modules`: Perl/Starman runtime inventory と module metadata
-- `data/php-fpm/inventory.json` / `data/php-fpm/vhosts.json`: PHP-FPM と Runtime Apps の seed/import/export material
-- `data/psgi/inventory.json`: PSGI runtime の seed/import/export material
-- `data/conf/scheduled-tasks.json`: scheduled task の seed/import/export material
+- `.env`: Docker 実行時の差分のみ
+- `data/conf/config.json`: DB 接続のブートストラップ。同梱設定は `storage` ブロックのみを保持
+- DB `app_config_*`: グローバルランタイム／リスナー／管理／ストレージポリシー／パス設定
+- DB `proxy_*`: 稼働中のプロキシトランスポート／ルーティング設定
+- `seeds/conf/*`: 設定済みシードファイルが無いときに使う、空 DB 向けの同梱本番シード
+- `data/conf/proxy.json`: プロキシルールのシード／インポート／エクスポート用素材
+- DB `proxy_backend_pools` ／ `proxy_backend_pool_members`: 名前付きアップストリームメンバーから構成する、ルート単位のバランシンググループ
+- `data/conf/upstream-runtime.json`: `Proxy Rules > Upstreams` で定義したオプトイン方式のランタイムオーバーライド用、シード／インポート／エクスポート素材
+- `data/conf/sites.json`: サイトオーナーシップと TLS バインディングのシード／インポート／エクスポート素材
+- DB `vhosts` ／ `vhost_*`: 稼働中の Runtime Apps 設定。ストレージ名は互換性のため `vhost` のままです
+- DB `waf_rule_assets`: ベース WAF と CRS のルール／データアセット
+- DB `override_rules`: 管理されたバイパスである `extra_rule` のルール本体
+- DB `php_runtime_inventory` ／ `php_runtime_modules`: PHP-FPM ランタイムインベントリとモジュールメタデータ
+- DB `psgi_runtime_inventory` ／ `psgi_runtime_modules`: Perl／Starman ランタイムインベントリとモジュールメタデータ
+- `data/php-fpm/inventory.json` ／ `data/php-fpm/vhosts.json`: PHP-FPM と Runtime Apps のシード／インポート／エクスポート素材
+- `data/psgi/inventory.json`: PSGI ランタイムのシード／インポート／エクスポート素材
+- `data/conf/scheduled-tasks.json`: スケジュールタスクのシード／インポート／エクスポート素材
 
-base WAF/CRS asset と managed bypass override は DB-backed です。
-`make crs-install` は rule import material を `data/tmp` 配下へ一時 stage し、
-DB へ import してから stage を削除します。設定された path は logical asset 名および
-互換参照として残りますが、runtime は `data/rules`、`data/conf/rules`、
-`data/geoip` fallback directory を使いません。同じく startup、policy、site、
-Runtime Apps、scheduled task、upstream runtime、response cache、PHP-FPM inventory domain
-も `make db-import` 後は DB から直接読みます。
+ベース WAF／CRS アセットと管理されたバイパスのオーバーライドは、DB を正として保持します。
+`make crs-install` はルールのインポート素材を `data/tmp` 配下に一時ステージングし、DB へのインポート後にステージを削除します。設定上のパスは論理的なアセット名および互換参照として残りますが、ランタイムは `data/rules`、`data/conf/rules`、`data/geoip` のフォールバックディレクトリを使用しません。同様に、起動時設定、ポリシー、サイト、Runtime Apps、スケジュールタスク、アップストリームランタイム、レスポンスキャッシュ、PHP-FPM インベントリ各ドメインも、`make db-import` 実行後は DB から直接読み込みます。
 
 運用面の詳細は以下を参照してください。
 
 - [docs/reference/operator-reference.ja.md](docs/reference/operator-reference.ja.md)
 - [docs/operations/listener-topology.ja.md](docs/operations/listener-topology.ja.md)
 
-`Proxy Rules > Upstreams` は direct backend node catalog、`Proxy Rules >
-Backend Pools` は route から参照できる upstream 名をまとめる route 単位の
-balancing group です。route は通常 `action.backend_pool` に bind し、
-`Backends` は routing で使われる direct upstream backend object を一覧化しつつ、
-runtime 操作は direct named upstream node 自体に対して行います。
+`Proxy Rules > Upstreams` は直接指定のバックエンドノードカタログ、`Proxy Rules > Backend Pools` はルートから参照可能なアップストリーム名をまとめる、ルート単位のバランシンググループです。ルートは通常 `action.backend_pool` にバインドし、`Backends` はルーティングで使用される直接指定のアップストリームバックエンドオブジェクトを一覧化したうえで、ランタイム操作は直接指定された名前付きアップストリームノード自体に対して行います。
 
-structured な `Proxy Rules` editor では、運用フローを次の順で表示します。
+構造化された `Proxy Rules` エディタでは、運用フローを次の順序で表示します。
 
 1. `Upstreams`
 2. `Backend Pools`
-3. `Routes` / `Default route`
+3. `Routes` ／ `Default route`
 
-`Upstreams` の各行には専用の `Probe` があり、panel 全体の曖昧な target ではなく、
-指定した configured upstream に対して疎通確認を行います。
+`Upstreams` の各行には専用の `Probe` があり、パネル全体に対する曖昧なターゲットではなく、指定した設定済みアップストリームに対して疎通確認を行います。
 
-`Proxy Rules > Upstreams` で定義した direct named upstream は
-`Backends` から drain / disable / runtime weight override ができ、
-`proxy.json` を編集せずに運用変更できます。Proxy rule 編集は DB
-`proxy_rules` に保存し、runtime 専用 override は DB `upstream_runtime` に保存します。
-`data/conf/upstream-runtime.json` は seed/import/export material です。
+`Proxy Rules > Upstreams` で定義した直接指定の名前付きアップストリームは、`Backends` からドレイン／無効化／ランタイムでの重みオーバーライドが可能で、`proxy.json` を編集せずに運用変更できます。プロキシルールの編集内容は DB `proxy_rules` に保存し、ランタイム専用のオーバーライドは DB `upstream_runtime` に保存します。
+`data/conf/upstream-runtime.json` はそのシード／インポート／エクスポート素材です。
 
-route 単位の web balancing を使う時は、`upstreams[]` で backend node を定義し、
-`backend_pools[]` で group を作り、route を `action.backend_pool` に bind します。
+ルート単位の Web 負荷分散を使用する場合は、`upstreams[]` でバックエンドノードを定義し、`backend_pools[]` でグループを構成したうえで、ルートを `action.backend_pool` にバインドします。
 
-Runtime Apps 管理 application は、runtime の待ち受け host と port を `Runtime Apps` に定義します。
-runtime はその listen target から generated backend を作り、traffic の routing は
-`Proxy Rules` からその generated upstream target へ向けます。
-`Proxy Rules > Upstreams` の configured upstream URL は Runtime Apps によって差し替えられません。
-runtime enable / drain / disable と runtime weight override は、
-`Backends` に表示される direct named upstream に限定します。
+Runtime Apps の管理アプリケーションでは、ランタイムの待ち受けホストとポートを `Runtime Apps` に定義します。ランタイムはその待ち受けターゲットから生成バックエンドを作成し、トラフィックのルーティングは `Proxy Rules` からその生成アップストリームターゲットへ向けます。
+`Proxy Rules > Upstreams` の設定済みアップストリーム URL が、Runtime Apps によって差し替えられることはありません。
+ランタイムの有効化／ドレイン／無効化、およびランタイムでの重みオーバーライドは、`Backends` に表示される直接指定の名前付きアップストリームに限定されます。
 
-通常の `http://` / `https://` upstream proxy では自動的に:
+通常の `http://` ／ `https://` アップストリームへのプロキシでは、自動的に以下を付与します。
 
 - `X-Forwarded-For`
 - `X-Forwarded-Host`
 - `X-Forwarded-Proto`
 
-を付与します。
-
-さらに `emit_upstream_name_request_header=true` を有効にすると、次も付与できます。
+さらに `emit_upstream_name_request_header=true` を有効にすると、次のヘッダーも付与できます。
 
 - `X-Tukuyomi-Upstream-Name`
 
-この内部 observability header は、最終 target が `Proxy Rules > Upstreams`
-の configured named upstream だった時だけ付与されます。direct route URL と
-generated Runtime Apps target には付きません。また、route-level の
-`request_headers` から override することもできません。
+この内部オブザーバビリティ向けヘッダーは、最終ターゲットが `Proxy Rules > Upstreams` の設定済みの名前付きアップストリームであった場合にのみ付与されます。直接指定したルートの URL や、Runtime Apps が生成するターゲットには付与されません。また、ルートレベルの `request_headers` から上書きすることもできません。
 
-### 最小 route-scoped backend pool 例
+### ルート単位のバックエンドプール最小例
 
 ```json
 {
@@ -231,82 +186,82 @@ generated Runtime Apps target には付きません。また、route-level の
 
 ## 配備ガイド
 
-配備形態に応じて次を参照してください。
+配備形態に応じて以下を参照してください。
 
-- single binary / systemd:
+- シングルバイナリ／systemd:
   - [docs/build/binary-deployment.ja.md](docs/build/binary-deployment.ja.md)
-- Docker / container platform:
+- Docker ／コンテナプラットフォーム:
   - [docs/build/container-deployment.ja.md](docs/build/container-deployment.ja.md)
-- split public/admin listener 例:
+- 公開／管理リスナー分離の例:
   - [docs/build/config.split-listener.example.json](docs/build/config.split-listener.example.json)
 
-container platform 向けサンプル:
+コンテナプラットフォーム向けサンプル:
 
-- ECS single-instance:
+- ECS シングルインスタンス:
   - [docs/build/ecs-single-instance.task-definition.example.json](docs/build/ecs-single-instance.task-definition.example.json)
   - [docs/build/ecs-single-instance.service.example.json](docs/build/ecs-single-instance.service.example.json)
-- Kubernetes single-instance:
+- Kubernetes シングルインスタンス:
   - [docs/build/kubernetes-single-instance.example.yaml](docs/build/kubernetes-single-instance.example.yaml)
-- Azure Container Apps single-instance:
+- Azure Container Apps シングルインスタンス:
   - [docs/build/azure-container-apps-single-instance.example.yaml](docs/build/azure-container-apps-single-instance.example.yaml)
 
 ## ドキュメント索引
 
-### Core Operator Reference
+### コアオペレーターリファレンス
 
-- operator reference:
+- オペレーターリファレンス:
   - [docs/reference/operator-reference.ja.md](docs/reference/operator-reference.ja.md)
 - Admin API OpenAPI:
   - [docs/api/admin-openapi.yaml](docs/api/admin-openapi.yaml)
-- Request security plugin model:
+- リクエストセキュリティプラグインモデル:
   - [docs/request_security_plugins.ja.md](docs/request_security_plugins.ja.md)
 
-### Security と Tuning
+### セキュリティとチューニング
 
-- WAF tuning:
+- WAF チューニング:
   - [docs/operations/waf-tuning.ja.md](docs/operations/waf-tuning.ja.md)
-- FP Tuner API contract:
+- 誤検知チューナー API 仕様:
   - [docs/operations/fp-tuner-api.ja.md](docs/operations/fp-tuner-api.ja.md)
-- upstream HTTP/2 と h2c:
+- アップストリーム HTTP/2 と h2c:
   - [docs/operations/upstream-http2.ja.md](docs/operations/upstream-http2.ja.md)
-- static fastpath evaluation:
+- 静的ファイルファストパス評価:
   - [docs/operations/static-fastpath-evaluation.ja.md](docs/operations/static-fastpath-evaluation.ja.md)
 
-### PHP と Scheduled Tasks
+### PHP とスケジュールタスク
 
-- PHP-FPM runtime と Runtime Apps:
+- PHP-FPM ランタイムと Runtime Apps:
   - [docs/operations/php-fpm-vhosts.ja.md](docs/operations/php-fpm-vhosts.ja.md)
 - PSGI Runtime Apps と Movable Type:
   - [docs/operations/psgi-vhosts.ja.md](docs/operations/psgi-vhosts.ja.md)
-- Scheduled Tasks と scheduler 配備:
+- スケジュールタスクとスケジューラ配備:
   - [docs/operations/php-scheduled-tasks.ja.md](docs/operations/php-scheduled-tasks.ja.md)
 
-### DB / Metrics / Regression
+### DB ／メトリクス／回帰テスト
 
 - DB 運用:
   - [docs/operations/db-ops.ja.md](docs/operations/db-ops.ja.md)
-- benchmark baseline:
+- ベンチマークベースライン:
   - [docs/operations/benchmark-baseline.ja.md](docs/operations/benchmark-baseline.ja.md)
-- regression matrix:
+- 回帰テストマトリクス:
   - [docs/operations/regression-matrix.ja.md](docs/operations/regression-matrix.ja.md)
-- release binary smoke:
+- リリースバイナリスモークテスト:
   - [docs/operations/release-binary-smoke.ja.md](docs/operations/release-binary-smoke.ja.md)
 
 ## 品質ゲート
 
-ローカル確認:
+ローカルでの確認:
 
 ```bash
 make ci-local
 ```
 
-deployment guide 再生まで含めた拡張ローカル回帰:
+配備ガイドの再生成まで含む拡張ローカル回帰テスト:
 
 ```bash
 make ci-local-extended
 ```
 
-典型的な CI required checks は次です。
+代表的な CI 必須チェックは次のとおりです。
 
 - `ci / go-test`
 - `ci / mysql-logstore-test`
@@ -316,12 +271,10 @@ make ci-local-extended
 
 ## ライセンス
 
-tukuyomi は、nginx と同じ permissive license 系列である BSD 2-Clause License
-で公開します。詳細は [LICENSE](LICENSE) を参照してください。
+tukuyomi は、nginx と同じパーミッシブライセンス系列である BSD 2-Clause License で公開しています。詳細は [LICENSE](LICENSE) を参照してください。
 
 サードパーティ依存ライブラリの著作権表示は [NOTICE](NOTICE) を参照してください。
-依存ライセンスの metadata は `server/go.mod` / `server/go.sum` と
-`web/tukuyomi-admin` / `web/tukuyomi-center` の package lock files から確認できます。
+依存ライセンスのメタデータは、`server/go.mod` ／ `server/go.sum` および `web/tukuyomi-admin` ／ `web/tukuyomi-center` のパッケージロックファイルから確認できます。
 
 ## tukuyomi とは？
 

@@ -16,7 +16,7 @@ tukuyomi の Runtime Apps は、
 data の置き場、process lifecycle、Upstream / Runtime App の境界、を整理
 します。
 
-![Runtime Apps 画面](images/ui-samples/18-runtime-apps.png)
+![Runtime Apps 画面](../../images/ui-samples/18-runtime-apps.png)
 
 ## 10.1　役割分担
 

@@ -232,8 +232,8 @@ sudo sysctl --system
 | `/scheduled-tasks` | cron-style command task と last-run status |
 | `/settings` | DB `app_config` 編集（restart-required 設定） |
 
-UI sample は `docs/images/ui-samples/` にあります（本書では `images/ui-samples/`
-に複製済み）。
+UI sample は共通の `docs/images/ui-samples/` にあります。本書からは
+`../../images/ui-samples/` で参照します。
 
 ### A.2.1　起動
 

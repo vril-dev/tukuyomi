@@ -6,7 +6,7 @@ FP Tuner は、観測された WAF block event に対して、**安全に scope 
 Coraza exclusion rule** を AI provider に提案させ、operator の承認のもとで
 適用する仕組みです。
 
-![FP Tuner 画面](images/ui-samples/10-fp-tuner.png)
+![FP Tuner 画面](../../images/ui-samples/10-fp-tuner.png)
 
 本章で扱うのは v1 の API contract です。HTTP provider 経由の Coraza
 false-positive exclusion tuning flow について、Propose と Apply の 2 つの

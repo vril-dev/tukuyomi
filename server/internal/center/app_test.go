@@ -1,10 +1,13 @@
 package center
 
 import (
+	"bytes"
+	"context"
 	"crypto/ed25519"
 	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,7 +25,9 @@ import (
 
 	"tukuyomi/internal/adminauth"
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/edgeartifactbundle"
 	"tukuyomi/internal/handler"
+	"tukuyomi/internal/runtimeartifactbundle"
 )
 
 func TestRuntimeConfigFromEnvDefaults(t *testing.T) {
@@ -150,6 +156,212 @@ func TestCenterLoginFlowUsesIsolatedAdminCookies(t *testing.T) {
 	}
 }
 
+func TestCenterRuntimeBuildStoresArtifactAndAssignsDevice(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restore := configureCenterAuthTest(t)
+	defer restore()
+	restoreBuilder := replaceRuntimeBuildRunnerForTest(fakeRuntimeBuildRunner{})
+	defer restoreBuilder()
+
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer handler.InitLogsStatsStore(false, "", 0)
+
+	t.Setenv(handler.AdminBootstrapUsernameEnv, "center-admin")
+	t.Setenv(handler.AdminBootstrapPasswordEnv, "center-admin-password")
+	if _, err := handler.EnsureAdminBootstrapOwnerFromEnv(); err != nil {
+		t.Fatalf("EnsureAdminBootstrapOwnerFromEnv: %v", err)
+	}
+	if err := handler.InitAdminGuards(); err != nil {
+		t.Fatalf("InitAdminGuards: %v", err)
+	}
+	insertRuntimeBuildDeviceForTest(t)
+
+	engine, err := NewEngine(RuntimeConfig{
+		APIBasePath: "/center-api",
+		UIBasePath:  "/center-ui",
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	cookies, csrfCookie := loginCenterForTest(t, engine)
+
+	capabilities := performRequestWithCookies(engine, http.MethodGet, "/center-api/runtime-builder/capabilities", "", nil, cookies)
+	if capabilities.Code != http.StatusOK ||
+		!strings.Contains(capabilities.Body.String(), `"php_fpm_supported":true`) ||
+		!strings.Contains(capabilities.Body.String(), `"psgi_supported":true`) {
+		t.Fatalf("capabilities code=%d body=%s", capabilities.Code, capabilities.Body.String())
+	}
+	var capabilityView RuntimeBuilderCapabilities
+	if err := json.Unmarshal(capabilities.Body.Bytes(), &capabilityView); err != nil {
+		t.Fatalf("decode runtime builder capabilities: %v", err)
+	}
+	psgiSupported := map[string]bool{}
+	for _, runtime := range capabilityView.Runtimes {
+		if runtime.RuntimeFamily == RuntimeFamilyPSGI && runtime.Supported {
+			psgiSupported[runtime.RuntimeID] = true
+		}
+	}
+	for _, runtimeID := range []string{"perl536", "perl538", "perl540"} {
+		if !psgiSupported[runtimeID] {
+			t.Fatalf("capabilities missing supported PSGI runtime %s: %+v", runtimeID, capabilityView.Runtimes)
+		}
+	}
+	start := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/devices/build-device-1/runtime-builds",
+		`{"runtime_family":"php-fpm","runtime_id":"php83","assign":true,"reason":"test build"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if start.Code != http.StatusAccepted {
+		t.Fatalf("start runtime build code=%d body=%s", start.Code, start.Body.String())
+	}
+	var startResp runtimeBuildJobResponseForTest
+	if err := json.Unmarshal(start.Body.Bytes(), &startResp); err != nil {
+		t.Fatalf("decode start runtime build: %v", err)
+	}
+	if startResp.Job.JobID == "" {
+		t.Fatalf("start response missing job: %+v", startResp)
+	}
+	listStarted := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/build-device-1/runtime-builds", "", nil, cookies)
+	if listStarted.Code != http.StatusOK {
+		t.Fatalf("list runtime builds code=%d body=%s", listStarted.Code, listStarted.Body.String())
+	}
+	var listStartedResp runtimeBuildJobsResponseForTest
+	if err := json.Unmarshal(listStarted.Body.Bytes(), &listStartedResp); err != nil {
+		t.Fatalf("decode runtime build list: %v", err)
+	}
+	if !runtimeBuildJobListContains(listStartedResp.Jobs, startResp.Job.JobID) {
+		t.Fatalf("runtime build list missing started job %q: %+v", startResp.Job.JobID, listStartedResp.Jobs)
+	}
+
+	var job RuntimeBuildJob
+	for i := 0; i < 50; i++ {
+		status := performRequestWithCookies(engine, http.MethodGet, "/center-api/runtime-builds/"+startResp.Job.JobID, "", nil, cookies)
+		if status.Code != http.StatusOK {
+			t.Fatalf("runtime build status code=%d body=%s", status.Code, status.Body.String())
+		}
+		var statusResp runtimeBuildJobResponseForTest
+		if err := json.Unmarshal(status.Body.Bytes(), &statusResp); err != nil {
+			t.Fatalf("decode runtime build status: %v", err)
+		}
+		job = statusResp.Job
+		if job.Status == RuntimeBuildStatusSucceeded || job.Status == RuntimeBuildStatusFailed {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if job.Status != RuntimeBuildStatusSucceeded || job.Artifact == nil || job.Assignment == nil {
+		t.Fatalf("runtime build job=%+v, want succeeded artifact and assignment", job)
+	}
+	if job.Artifact.RuntimeFamily != RuntimeFamilyPHPFPM || job.Artifact.RuntimeID != "php83" {
+		t.Fatalf("artifact identity unexpected: %+v", job.Artifact)
+	}
+	if job.Assignment.DesiredArtifactRevision != job.Artifact.ArtifactRevision || job.Assignment.DesiredState != RuntimeAssignmentDesiredInstalled {
+		t.Fatalf("assignment unexpected: %+v artifact=%+v", job.Assignment, job.Artifact)
+	}
+
+	startPSGI := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/devices/build-device-1/runtime-builds",
+		`{"runtime_family":"psgi","runtime_id":"perl540","assign":true,"reason":"test psgi build"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if startPSGI.Code != http.StatusAccepted {
+		t.Fatalf("start PSGI runtime build code=%d body=%s", startPSGI.Code, startPSGI.Body.String())
+	}
+	var startPSGIResp runtimeBuildJobResponseForTest
+	if err := json.Unmarshal(startPSGI.Body.Bytes(), &startPSGIResp); err != nil {
+		t.Fatalf("decode start PSGI runtime build: %v", err)
+	}
+	var psgiJob RuntimeBuildJob
+	for i := 0; i < 50; i++ {
+		status := performRequestWithCookies(engine, http.MethodGet, "/center-api/runtime-builds/"+startPSGIResp.Job.JobID, "", nil, cookies)
+		if status.Code != http.StatusOK {
+			t.Fatalf("PSGI runtime build status code=%d body=%s", status.Code, status.Body.String())
+		}
+		var statusResp runtimeBuildJobResponseForTest
+		if err := json.Unmarshal(status.Body.Bytes(), &statusResp); err != nil {
+			t.Fatalf("decode PSGI runtime build status: %v", err)
+		}
+		psgiJob = statusResp.Job
+		if psgiJob.Status == RuntimeBuildStatusSucceeded || psgiJob.Status == RuntimeBuildStatusFailed {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if psgiJob.Status != RuntimeBuildStatusSucceeded || psgiJob.Artifact == nil || psgiJob.Assignment == nil {
+		t.Fatalf("PSGI runtime build job=%+v, want succeeded artifact and assignment", psgiJob)
+	}
+	if psgiJob.Artifact.RuntimeFamily != RuntimeFamilyPSGI || psgiJob.Artifact.RuntimeID != "perl540" {
+		t.Fatalf("PSGI artifact identity unexpected: %+v", psgiJob.Artifact)
+	}
+	listCompleted := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/build-device-1/runtime-builds", "", nil, cookies)
+	if listCompleted.Code != http.StatusOK {
+		t.Fatalf("list completed runtime builds code=%d body=%s", listCompleted.Code, listCompleted.Body.String())
+	}
+	var listCompletedResp runtimeBuildJobsResponseForTest
+	if err := json.Unmarshal(listCompleted.Body.Bytes(), &listCompletedResp); err != nil {
+		t.Fatalf("decode completed runtime build list: %v", err)
+	}
+	if !runtimeBuildJobListContains(listCompletedResp.Jobs, job.JobID) || !runtimeBuildJobListContains(listCompletedResp.Jobs, psgiJob.JobID) {
+		t.Fatalf("runtime build list missing completed jobs %q/%q: %+v", job.JobID, psgiJob.JobID, listCompletedResp.Jobs)
+	}
+
+	deployment := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/build-device-1/runtime-deployment", "", nil, cookies)
+	if deployment.Code != http.StatusOK {
+		t.Fatalf("runtime deployment code=%d body=%s", deployment.Code, deployment.Body.String())
+	}
+	if !strings.Contains(deployment.Body.String(), `"artifact_revision":"`+job.Artifact.ArtifactRevision+`"`) ||
+		!strings.Contains(deployment.Body.String(), `"artifact_revision":"`+psgiJob.Artifact.ArtifactRevision+`"`) ||
+		!strings.Contains(deployment.Body.String(), `"desired_state":"installed"`) {
+		t.Fatalf("runtime deployment missing built artifact assignment: %s", deployment.Body.String())
+	}
+}
+
+func TestStoreRuntimeArtifactBundleIsIdempotentForSameRevision(t *testing.T) {
+	restore := configureCenterAuthTest(t)
+	defer restore()
+
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer handler.InitLogsStatsStore(false, "", 0)
+
+	first, err := runtimeArtifactBundleForStoreTest(time.Unix(1000, 0).UTC())
+	if err != nil {
+		t.Fatalf("build first artifact: %v", err)
+	}
+	second, err := runtimeArtifactBundleForStoreTest(time.Unix(2000, 123456789).UTC())
+	if err != nil {
+		t.Fatalf("build second artifact: %v", err)
+	}
+	if first.Revision != second.Revision {
+		t.Fatalf("revision changed for same runtime content: first=%s second=%s", first.Revision, second.Revision)
+	}
+	if first.ArtifactHash == second.ArtifactHash {
+		t.Fatal("test setup expected generated_at to change archive hash")
+	}
+
+	storedFirst, err := StoreRuntimeArtifactBundle(context.Background(), first.Compressed, "test")
+	if err != nil {
+		t.Fatalf("store first artifact: %v", err)
+	}
+	storedSecond, err := StoreRuntimeArtifactBundle(context.Background(), second.Compressed, "test")
+	if err != nil {
+		t.Fatalf("store duplicate artifact: %v", err)
+	}
+	if storedSecond.ArtifactRevision != storedFirst.ArtifactRevision ||
+		storedSecond.ArtifactHash != storedFirst.ArtifactHash {
+		t.Fatalf("duplicate artifact did not return existing record: first=%+v second=%+v", storedFirst, storedSecond)
+	}
+}
+
 func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restore := configureCenterAuthTest(t)
@@ -186,6 +398,23 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	}, cookies)
 	if expiredTokenResp.Code != http.StatusBadRequest {
 		t.Fatalf("expired token code=%d body=%s", expiredTokenResp.Code, expiredTokenResp.Body.String())
+	}
+
+	defaultTokenResp := performRequestWithCookies(engine, http.MethodPost, "/center-api/enrollment-tokens", `{"label":"default max uses"}`, map[string]string{
+		"Content-Type":           "application/json",
+		adminauth.CSRFHeaderName: csrfCookie.Value,
+	}, cookies)
+	if defaultTokenResp.Code != http.StatusCreated {
+		t.Fatalf("create default token code=%d body=%s", defaultTokenResp.Code, defaultTokenResp.Body.String())
+	}
+	var defaultToken struct {
+		Record EnrollmentTokenRecord `json:"record"`
+	}
+	if err := json.Unmarshal(defaultTokenResp.Body.Bytes(), &defaultToken); err != nil {
+		t.Fatalf("decode default token response: %v body=%s", err, defaultTokenResp.Body.String())
+	}
+	if defaultToken.Record.MaxUses != EnrollmentTokenDefaultMaxUses {
+		t.Fatalf("default token max uses=%d want=%d", defaultToken.Record.MaxUses, EnrollmentTokenDefaultMaxUses)
 	}
 
 	tokenResp := performRequestWithCookies(engine, http.MethodPost, "/center-api/enrollment-tokens", `{"label":"factory batch","max_uses":5}`, map[string]string{
@@ -363,6 +592,9 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	if !strings.Contains(list.Body.String(), "edge-device-1") {
 		t.Fatalf("pending list missing device: %s", list.Body.String())
 	}
+	if !strings.Contains(list.Body.String(), `"enrollment_token_id":`+strconv.FormatInt(createdToken.Record.TokenID, 10)) {
+		t.Fatalf("pending list missing linked enrollment token id: %s", list.Body.String())
+	}
 
 	approve := performRequestWithCookies(
 		engine,
@@ -374,6 +606,22 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	)
 	if approve.Code != http.StatusOK {
 		t.Fatalf("approve code=%d body=%s", approve.Code, approve.Body.String())
+	}
+
+	legacyPlatformStatusReq := signedDeviceStatusForTest(t, enrollmentFixture, "nonce-status-platform-compat", time.Now().UTC())
+	legacyPlatformStatusReq.RuntimeDeploymentSupported = false
+	legacyPlatformStatusReq.RuntimeInventory = nil
+	legacyPlatformStatusReq.BodyHash = platformDeviceStatusBodyHash(legacyPlatformStatusReq)
+	legacyPlatformStatusReq.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(enrollmentFixture.PrivateKey, []byte(signedEnvelopeMessage(legacyPlatformStatusReq.DeviceID, legacyPlatformStatusReq.KeyID, legacyPlatformStatusReq.Timestamp, legacyPlatformStatusReq.Nonce, legacyPlatformStatusReq.BodyHash))))
+	legacyPlatformStatusBody, err := json.Marshal(legacyPlatformStatusReq)
+	if err != nil {
+		t.Fatalf("marshal legacy platform status: %v", err)
+	}
+	legacyPlatformStatus := performRequest(engine, http.MethodPost, "/v1/device-status", string(legacyPlatformStatusBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if legacyPlatformStatus.Code != http.StatusOK {
+		t.Fatalf("legacy platform status code=%d body=%s", legacyPlatformStatus.Code, legacyPlatformStatus.Body.String())
 	}
 
 	approvedStatusReq := signedDeviceStatusForTest(t, enrollmentFixture, "nonce-status-approved", time.Now().UTC())
@@ -389,6 +637,365 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	}
 	if !strings.Contains(approvedStatus.Body.String(), `"status":"approved"`) {
 		t.Fatalf("approved status body=%s", approvedStatus.Body.String())
+	}
+
+	runtimeArtifact, err := runtimeartifactbundle.BuildBundle(runtimeartifactbundle.BuildInput{
+		RuntimeFamily:   runtimeartifactbundle.RuntimeFamilyPHPFPM,
+		RuntimeID:       "php83",
+		DisplayName:     "PHP 8.3",
+		DetectedVersion: "8.3.30",
+		Target: runtimeartifactbundle.TargetKey{
+			OS:            "linux",
+			Arch:          "amd64",
+			KernelVersion: "6.8.0-test",
+			DistroID:      "ubuntu",
+			DistroIDLike:  "debian",
+			DistroVersion: "24.04",
+		},
+		BuilderVersion: "test-builder",
+		BuilderProfile: "ubuntu-24.04-amd64",
+		GeneratedAt:    time.Unix(1000, 0).UTC(),
+		Files: []runtimeartifactbundle.File{
+			{
+				ArchivePath: "runtime.json",
+				FileKind:    "metadata",
+				Mode:        0o644,
+				Body:        []byte(`{"runtime_id":"php83","display_name":"PHP 8.3","detected_version":"8.3.30","source":"bundled"}`),
+			},
+			{ArchivePath: "modules.json", FileKind: "metadata", Mode: 0o644, Body: []byte(`["core","date"]`)},
+			{ArchivePath: "php-fpm", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "php", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "rootfs/usr/local/sbin/php-fpm", FileKind: "rootfs", Mode: 0o755, Body: []byte("php-fpm-binary")},
+			{ArchivePath: "rootfs/usr/bin/php", FileKind: "rootfs", Mode: 0o755, Body: []byte("php-binary")},
+			{ArchivePath: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2", FileKind: "rootfs", Mode: 0o755, Body: []byte("loader")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("build runtime artifact: %v", err)
+	}
+	artifactRevision := runtimeArtifact.Revision
+	importRuntime := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/runtime-artifacts/import",
+		`{"artifact_b64":"`+base64.StdEncoding.EncodeToString(runtimeArtifact.Compressed)+`"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if importRuntime.Code != http.StatusCreated {
+		t.Fatalf("import runtime artifact code=%d body=%s", importRuntime.Code, importRuntime.Body.String())
+	}
+	if !strings.Contains(importRuntime.Body.String(), `"artifact_revision":"`+artifactRevision+`"`) ||
+		!strings.Contains(importRuntime.Body.String(), `"storage_state":"stored"`) {
+		t.Fatalf("runtime artifact import response unexpected: %s", importRuntime.Body.String())
+	}
+	runtimeDeployment := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/edge-device-1/runtime-deployment", "", nil, cookies)
+	if runtimeDeployment.Code != http.StatusOK {
+		t.Fatalf("runtime deployment code=%d body=%s", runtimeDeployment.Code, runtimeDeployment.Body.String())
+	}
+	if !strings.Contains(runtimeDeployment.Body.String(), `"artifact_revision":"`+artifactRevision+`"`) ||
+		!strings.Contains(runtimeDeployment.Body.String(), `"storage_state":"stored"`) {
+		t.Fatalf("runtime deployment missing compatible artifact: %s", runtimeDeployment.Body.String())
+	}
+	assignRuntime := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/devices/edge-device-1/runtime-assignments",
+		`{"runtime_family":"php-fpm","runtime_id":"php83","artifact_revision":"`+artifactRevision+`","reason":"test assignment"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if assignRuntime.Code != http.StatusOK {
+		t.Fatalf("assign runtime code=%d body=%s", assignRuntime.Code, assignRuntime.Body.String())
+	}
+	if !strings.Contains(assignRuntime.Body.String(), `"desired_artifact_revision":"`+artifactRevision+`"`) {
+		t.Fatalf("assign runtime response missing revision: %s", assignRuntime.Body.String())
+	}
+	assignedStatusReq := signedDeviceStatusForTest(t, enrollmentFixture, "nonce-status-assigned", time.Now().UTC())
+	assignedStatusBody, err := json.Marshal(assignedStatusReq)
+	if err != nil {
+		t.Fatalf("marshal assigned status: %v", err)
+	}
+	assignedStatus := performRequest(engine, http.MethodPost, "/v1/device-status", string(assignedStatusBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if assignedStatus.Code != http.StatusOK {
+		t.Fatalf("assigned status code=%d body=%s", assignedStatus.Code, assignedStatus.Body.String())
+	}
+	if !strings.Contains(assignedStatus.Body.String(), `"runtime_assignments"`) ||
+		!strings.Contains(assignedStatus.Body.String(), `"artifact_revision":"`+artifactRevision+`"`) {
+		t.Fatalf("assigned status missing runtime assignment: %s", assignedStatus.Body.String())
+	}
+	dispatchedDeployment := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/edge-device-1/runtime-deployment", "", nil, cookies)
+	if dispatchedDeployment.Code != http.StatusOK {
+		t.Fatalf("dispatched deployment code=%d body=%s", dispatchedDeployment.Code, dispatchedDeployment.Body.String())
+	}
+	var dispatchedView RuntimeDeploymentView
+	if err := json.Unmarshal(dispatchedDeployment.Body.Bytes(), &dispatchedView); err != nil {
+		t.Fatalf("decode dispatched deployment: %v body=%s", err, dispatchedDeployment.Body.String())
+	}
+	if len(dispatchedView.Assignments) != 0 {
+		t.Fatalf("dispatched assignment must be hidden from pending queue: %+v", dispatchedView.Assignments)
+	}
+	clearDispatched := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/devices/edge-device-1/runtime-assignments/clear",
+		`{"runtime_family":"php-fpm","runtime_id":"php83"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if clearDispatched.Code != http.StatusConflict {
+		t.Fatalf("clear dispatched runtime code=%d body=%s", clearDispatched.Code, clearDispatched.Body.String())
+	}
+	downloadRuntimeReq := signedRuntimeArtifactDownloadForTest(t, enrollmentFixture, "nonce-runtime-download", time.Now().UTC(), runtimeArtifact)
+	downloadRuntimeBody, err := json.Marshal(downloadRuntimeReq)
+	if err != nil {
+		t.Fatalf("marshal runtime download: %v", err)
+	}
+	downloadRuntime := performRequest(
+		engine,
+		http.MethodPost,
+		"/v1/runtime-artifact-download",
+		string(downloadRuntimeBody),
+		map[string]string{"Content-Type": "application/json"},
+	)
+	if downloadRuntime.Code != http.StatusOK {
+		t.Fatalf("download runtime code=%d body=%s", downloadRuntime.Code, downloadRuntime.Body.String())
+	}
+	if !bytes.Equal(downloadRuntime.Body.Bytes(), runtimeArtifact.Compressed) {
+		t.Fatalf("download runtime body mismatch")
+	}
+	if downloadRuntime.Header().Get("X-Tukuyomi-Runtime-Artifact-Revision") != artifactRevision ||
+		downloadRuntime.Header().Get("X-Tukuyomi-Runtime-Artifact-Hash") != runtimeArtifact.ArtifactHash ||
+		!strings.Contains(downloadRuntime.Header().Get("Content-Disposition"), "php83-"+artifactRevision[:12]+".tar.gz") {
+		t.Fatalf("download runtime headers unexpected: %v", downloadRuntime.Header())
+	}
+	psgiRuntimeArtifact, err := psgiRuntimeArtifactBundleForStoreTest("perl540", time.Unix(1000, 0).UTC())
+	if err != nil {
+		t.Fatalf("build psgi runtime artifact: %v", err)
+	}
+	importPSGIRuntime := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/runtime-artifacts/import",
+		`{"artifact_b64":"`+base64.StdEncoding.EncodeToString(psgiRuntimeArtifact.Compressed)+`"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if importPSGIRuntime.Code != http.StatusCreated {
+		t.Fatalf("import psgi runtime artifact code=%d body=%s", importPSGIRuntime.Code, importPSGIRuntime.Body.String())
+	}
+	assignPSGIRuntime := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/devices/edge-device-1/runtime-assignments",
+		`{"runtime_family":"psgi","runtime_id":"perl540","artifact_revision":"`+psgiRuntimeArtifact.Revision+`","reason":"test psgi assignment"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if assignPSGIRuntime.Code != http.StatusOK {
+		t.Fatalf("assign psgi runtime code=%d body=%s", assignPSGIRuntime.Code, assignPSGIRuntime.Body.String())
+	}
+	downloadPSGIRuntimeReq := signedRuntimeArtifactDownloadForTest(t, enrollmentFixture, "nonce-runtime-download-psgi", time.Now().UTC(), psgiRuntimeArtifact)
+	downloadPSGIRuntimeBody, err := json.Marshal(downloadPSGIRuntimeReq)
+	if err != nil {
+		t.Fatalf("marshal psgi runtime download: %v", err)
+	}
+	downloadPSGIRuntime := performRequest(
+		engine,
+		http.MethodPost,
+		"/v1/runtime-artifact-download",
+		string(downloadPSGIRuntimeBody),
+		map[string]string{"Content-Type": "application/json"},
+	)
+	if downloadPSGIRuntime.Code != http.StatusOK {
+		t.Fatalf("download psgi runtime code=%d body=%s", downloadPSGIRuntime.Code, downloadPSGIRuntime.Body.String())
+	}
+	if downloadPSGIRuntime.Header().Get("X-Tukuyomi-Runtime-Family") != RuntimeFamilyPSGI ||
+		downloadPSGIRuntime.Header().Get("X-Tukuyomi-Runtime-ID") != "perl540" {
+		t.Fatalf("download psgi runtime headers unexpected: %v", downloadPSGIRuntime.Header())
+	}
+	installedStatusReq := signedDeviceStatusForTest(t, enrollmentFixture, "nonce-status-installed", time.Now().UTC())
+	installedStatusReq.RuntimeInventory[0].Source = "center"
+	installedStatusReq.RuntimeInventory[0].ArtifactRevision = artifactRevision
+	installedStatusReq.RuntimeInventory[0].ArtifactHash = runtimeArtifact.ArtifactHash
+	installedStatusReq.RuntimeInventory[0].ApplyState = "installed"
+	installedStatusReq.RuntimeInventory = append(installedStatusReq.RuntimeInventory, DeviceRuntimeSummary{
+		RuntimeFamily:    "psgi",
+		RuntimeID:        "perl540",
+		DisplayName:      "Perl 5.40",
+		DetectedVersion:  "v5.40.0",
+		Source:           "center",
+		Available:        true,
+		ModuleCount:      157,
+		UsageReported:    true,
+		ArtifactRevision: psgiRuntimeArtifact.Revision,
+		ArtifactHash:     psgiRuntimeArtifact.ArtifactHash,
+		ApplyState:       "installed",
+	})
+	resignDeviceStatusForTest(t, enrollmentFixture, &installedStatusReq)
+	installedStatusBody, err := json.Marshal(installedStatusReq)
+	if err != nil {
+		t.Fatalf("marshal installed status: %v", err)
+	}
+	installedStatus := performRequest(engine, http.MethodPost, "/v1/device-status", string(installedStatusBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if installedStatus.Code != http.StatusOK {
+		t.Fatalf("installed status code=%d body=%s", installedStatus.Code, installedStatus.Body.String())
+	}
+	if strings.Contains(installedStatus.Body.String(), `"runtime_assignments"`) {
+		t.Fatalf("installed status should not return completed assignment: %s", installedStatus.Body.String())
+	}
+	removeRuntime := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/devices/edge-device-1/runtime-assignments/remove",
+		`{"runtime_family":"php-fpm","runtime_id":"php83","reason":"test removal"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if removeRuntime.Code != http.StatusOK {
+		t.Fatalf("remove runtime code=%d body=%s", removeRuntime.Code, removeRuntime.Body.String())
+	}
+	if !strings.Contains(removeRuntime.Body.String(), `"desired_state":"removed"`) {
+		t.Fatalf("remove runtime response missing removed state: %s", removeRuntime.Body.String())
+	}
+	removalStatusReq := signedDeviceStatusForTest(t, enrollmentFixture, "nonce-status-removal", time.Now().UTC())
+	removalStatusBody, err := json.Marshal(removalStatusReq)
+	if err != nil {
+		t.Fatalf("marshal removal status: %v", err)
+	}
+	removalStatus := performRequest(engine, http.MethodPost, "/v1/device-status", string(removalStatusBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if removalStatus.Code != http.StatusOK {
+		t.Fatalf("removal status code=%d body=%s", removalStatus.Code, removalStatus.Body.String())
+	}
+	if !strings.Contains(removalStatus.Body.String(), `"desired_state":"removed"`) {
+		t.Fatalf("removal status missing runtime removal assignment: %s", removalStatus.Body.String())
+	}
+	removePSGI := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/devices/edge-device-1/runtime-assignments/remove",
+		`{"runtime_family":"psgi","runtime_id":"perl538","reason":"test psgi removal"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if removePSGI.Code != http.StatusOK {
+		t.Fatalf("remove psgi code=%d body=%s", removePSGI.Code, removePSGI.Body.String())
+	}
+	if !strings.Contains(removePSGI.Body.String(), `"runtime_family":"psgi"`) || !strings.Contains(removePSGI.Body.String(), `"desired_state":"removed"`) {
+		t.Fatalf("remove psgi response unexpected: %s", removePSGI.Body.String())
+	}
+	virtualRemovedReq := signedDeviceStatusForTest(t, enrollmentFixture, "nonce-status-virtual-removed", time.Now().UTC())
+	virtualRemovedReq.RuntimeInventory = []DeviceRuntimeSummary{
+		{
+			RuntimeFamily: "php-fpm",
+			RuntimeID:     "php83",
+			Source:        "center",
+			Available:     false,
+			UsageReported: true,
+			ApplyState:    "removed",
+		},
+		{
+			RuntimeFamily: "psgi",
+			RuntimeID:     "perl538",
+			Source:        "center",
+			Available:     false,
+			UsageReported: true,
+			ApplyState:    "removed",
+		},
+	}
+	virtualRemovedReq.BodyHash = deviceStatusBodyHash(virtualRemovedReq)
+	virtualRemovedReq.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(enrollmentFixture.PrivateKey, []byte(signedEnvelopeMessage(virtualRemovedReq.DeviceID, virtualRemovedReq.KeyID, virtualRemovedReq.Timestamp, virtualRemovedReq.Nonce, virtualRemovedReq.BodyHash))))
+	virtualRemovedBody, err := json.Marshal(virtualRemovedReq)
+	if err != nil {
+		t.Fatalf("marshal virtual removed status: %v", err)
+	}
+	virtualRemovedStatus := performRequest(engine, http.MethodPost, "/v1/device-status", string(virtualRemovedBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if virtualRemovedStatus.Code != http.StatusOK {
+		t.Fatalf("virtual removed status code=%d body=%s", virtualRemovedStatus.Code, virtualRemovedStatus.Body.String())
+	}
+	virtualRemovedDeployment := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/edge-device-1/runtime-deployment", "", nil, cookies)
+	if virtualRemovedDeployment.Code != http.StatusOK {
+		t.Fatalf("virtual removed deployment code=%d body=%s", virtualRemovedDeployment.Code, virtualRemovedDeployment.Body.String())
+	}
+	var virtualRemovedView RuntimeDeploymentView
+	if err := json.Unmarshal(virtualRemovedDeployment.Body.Bytes(), &virtualRemovedView); err != nil {
+		t.Fatalf("decode virtual removed deployment: %v body=%s", err, virtualRemovedDeployment.Body.String())
+	}
+	if len(virtualRemovedView.Assignments) != 0 {
+		t.Fatalf("completed removal assignments must leave pending queue: %+v", virtualRemovedView.Assignments)
+	}
+	for _, runtime := range virtualRemovedView.Device.RuntimeInventory {
+		if runtime.RuntimeFamily == "psgi" && runtime.RuntimeID == "perl538" {
+			t.Fatalf("virtual removed runtime must not remain in runtime inventory: %+v", runtime)
+		}
+	}
+	removedStatusByRuntime := map[string]bool{}
+	for _, status := range virtualRemovedView.ApplyStatus {
+		if status.ApplyState == "removed" {
+			removedStatusByRuntime[status.RuntimeFamily+":"+status.RuntimeID] = true
+		}
+	}
+	if !removedStatusByRuntime["php-fpm:php83"] || !removedStatusByRuntime["psgi:perl538"] {
+		t.Fatalf("virtual removed status did not update apply status: %+v", virtualRemovedView.ApplyStatus)
+	}
+	reassignRuntime := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/devices/edge-device-1/runtime-assignments",
+		`{"runtime_family":"php-fpm","runtime_id":"php83","artifact_revision":"`+artifactRevision+`","reason":"test clear before dispatch"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if reassignRuntime.Code != http.StatusOK {
+		t.Fatalf("reassign runtime code=%d body=%s", reassignRuntime.Code, reassignRuntime.Body.String())
+	}
+	clearRuntime := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/devices/edge-device-1/runtime-assignments/clear",
+		`{"runtime_family":"php-fpm","runtime_id":"php83"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if clearRuntime.Code != http.StatusOK {
+		t.Fatalf("clear runtime code=%d body=%s", clearRuntime.Code, clearRuntime.Body.String())
+	}
+	if !strings.Contains(clearRuntime.Body.String(), `"cleared":true`) {
+		t.Fatalf("clear runtime response unexpected: %s", clearRuntime.Body.String())
+	}
+	downloadClearedReq := signedRuntimeArtifactDownloadForTest(t, enrollmentFixture, "nonce-runtime-download-cleared", time.Now().UTC(), runtimeArtifact)
+	downloadClearedBody, err := json.Marshal(downloadClearedReq)
+	if err != nil {
+		t.Fatalf("marshal cleared runtime download: %v", err)
+	}
+	downloadCleared := performRequest(
+		engine,
+		http.MethodPost,
+		"/v1/runtime-artifact-download",
+		string(downloadClearedBody),
+		map[string]string{"Content-Type": "application/json"},
+	)
+	if downloadCleared.Code != http.StatusNotFound {
+		t.Fatalf("download cleared runtime code=%d body=%s", downloadCleared.Code, downloadCleared.Body.String())
+	}
+	restoredStatusReq := signedDeviceStatusForTest(t, enrollmentFixture, "nonce-status-restored", time.Now().UTC())
+	restoredStatusBody, err := json.Marshal(restoredStatusReq)
+	if err != nil {
+		t.Fatalf("marshal restored status: %v", err)
+	}
+	restoredStatus := performRequest(engine, http.MethodPost, "/v1/device-status", string(restoredStatusBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if restoredStatus.Code != http.StatusOK {
+		t.Fatalf("restored status code=%d body=%s", restoredStatus.Code, restoredStatus.Body.String())
 	}
 
 	configRevision := strings.Repeat("a", 64)
@@ -423,10 +1030,25 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	if !strings.Contains(devices.Body.String(), `"status":"approved"`) {
 		t.Fatalf("approved device missing: %s", devices.Body.String())
 	}
+	if !strings.Contains(devices.Body.String(), `"enrollment_token_id":`+strconv.FormatInt(createdToken.Record.TokenID, 10)) {
+		t.Fatalf("approved device missing linked enrollment token id: %s", devices.Body.String())
+	}
 	if !strings.Contains(devices.Body.String(), `"runtime_role":"gateway"`) ||
 		!strings.Contains(devices.Body.String(), `"build_version":"v1.2.0-test"`) ||
 		!strings.Contains(devices.Body.String(), `"go_version":"go1.26.2-test"`) {
 		t.Fatalf("approved device missing runtime inventory: %s", devices.Body.String())
+	}
+	if !strings.Contains(devices.Body.String(), `"os":"linux"`) ||
+		!strings.Contains(devices.Body.String(), `"arch":"amd64"`) ||
+		!strings.Contains(devices.Body.String(), `"distro_id":"ubuntu"`) ||
+		!strings.Contains(devices.Body.String(), `"distro_version":"24.04"`) {
+		t.Fatalf("approved device missing platform inventory: %s", devices.Body.String())
+	}
+	if !strings.Contains(devices.Body.String(), `"runtime_deployment_supported":true`) ||
+		!strings.Contains(devices.Body.String(), `"runtime_family":"php-fpm"`) ||
+		!strings.Contains(devices.Body.String(), `"runtime_id":"php83"`) ||
+		!strings.Contains(devices.Body.String(), `"module_count":42`) {
+		t.Fatalf("approved device missing runtime summary: %s", devices.Body.String())
 	}
 	if !strings.Contains(devices.Body.String(), `"config_snapshot_revision":"`+configRevision+`"`) ||
 		!strings.Contains(devices.Body.String(), `"config_snapshot_bytes":`) {
@@ -438,6 +1060,105 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	}
 	if !strings.Contains(download.Body.String(), `"schema_version":1`) || !strings.Contains(download.Header().Get("Content-Disposition"), "edge-device-1-config-aaaaaaaaaaaa.json") {
 		t.Fatalf("config snapshot download unexpected: disposition=%q body=%s", download.Header().Get("Content-Disposition"), download.Body.String())
+	}
+
+	configRevision2 := strings.Repeat("b", 64)
+	configSnapshotReq2 := signedDeviceConfigSnapshotForTest(t, enrollmentFixture, "nonce-config-approved-2", time.Now().UTC(), configRevision2, []byte(`{"schema_version":2,"domains":{"proxy":{"etag":"test-2","raw":{"routes":[{"name":"r2"}]}}}}`))
+	configSnapshotBody2, err := json.Marshal(configSnapshotReq2)
+	if err != nil {
+		t.Fatalf("marshal second config snapshot: %v", err)
+	}
+	configSnapshot2 := performRequest(engine, http.MethodPost, "/v1/device-config-snapshot", string(configSnapshotBody2), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if configSnapshot2.Code != http.StatusOK {
+		t.Fatalf("second config snapshot code=%d body=%s", configSnapshot2.Code, configSnapshot2.Body.String())
+	}
+	history := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/edge-device-1/config-snapshots?limit=1&offset=0", "", nil, cookies)
+	if history.Code != http.StatusOK {
+		t.Fatalf("config snapshot history code=%d body=%s", history.Code, history.Body.String())
+	}
+	var historyResp DeviceConfigSnapshotListResult
+	if err := json.Unmarshal(history.Body.Bytes(), &historyResp); err != nil {
+		t.Fatalf("decode config snapshot history: %v body=%s", err, history.Body.String())
+	}
+	if historyResp.Limit != 1 || historyResp.Offset != 0 || historyResp.NextOffset != 1 || len(historyResp.Snapshots) != 1 {
+		t.Fatalf("unexpected config snapshot history paging: %+v", historyResp)
+	}
+	if historyResp.Snapshots[0].Revision != configRevision2 || len(historyResp.Snapshots[0].PayloadJSON) != 0 {
+		t.Fatalf("config snapshot history should expose latest metadata only: %+v", historyResp.Snapshots[0])
+	}
+	if strings.Contains(history.Body.String(), "schema_version") || strings.Contains(history.Body.String(), "routes") {
+		t.Fatalf("config snapshot history leaked payload: %s", history.Body.String())
+	}
+	clampedHistory := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/edge-device-1/config-snapshots?limit=1000", "", nil, cookies)
+	if clampedHistory.Code != http.StatusOK {
+		t.Fatalf("clamped config snapshot history code=%d body=%s", clampedHistory.Code, clampedHistory.Body.String())
+	}
+	if !strings.Contains(clampedHistory.Body.String(), `"limit":6`) {
+		t.Fatalf("config snapshot history did not clamp limit: %s", clampedHistory.Body.String())
+	}
+	revisionDownload := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/edge-device-1/config-snapshots/"+configRevision+"?download=1", "", nil, cookies)
+	if revisionDownload.Code != http.StatusOK {
+		t.Fatalf("config snapshot revision download code=%d body=%s", revisionDownload.Code, revisionDownload.Body.String())
+	}
+	if !strings.Contains(revisionDownload.Body.String(), `"schema_version":1`) || !strings.Contains(revisionDownload.Header().Get("Content-Disposition"), "edge-device-1-config-aaaaaaaaaaaa.json") {
+		t.Fatalf("config snapshot revision download unexpected: disposition=%q body=%s", revisionDownload.Header().Get("Content-Disposition"), revisionDownload.Body.String())
+	}
+	invalidRevision := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/edge-device-1/config-snapshots/not-a-revision", "", nil, cookies)
+	if invalidRevision.Code != http.StatusBadRequest {
+		t.Fatalf("invalid revision code=%d body=%s", invalidRevision.Code, invalidRevision.Body.String())
+	}
+
+	ruleBundle, err := edgeartifactbundle.BuildBundle([]edgeartifactbundle.RuleFile{
+		{Path: "rules/tukuyomi.conf", Kind: "base", ETag: "rule-1", Body: []byte("SecRuleEngine On\n")},
+		{Path: "rules/crs/REQUEST-901.conf", Kind: "crs_asset", ETag: "rule-2", Disabled: true, Body: []byte("SecRule ARGS \"@rx test\" \"id:901\"\n")},
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("build rule artifact bundle: %v", err)
+	}
+	ruleReq := signedRuleArtifactBundleForTest(t, enrollmentFixture, "nonce-rule-artifact", time.Now().UTC(), ruleBundle)
+	ruleBody, err := json.Marshal(ruleReq)
+	if err != nil {
+		t.Fatalf("marshal rule artifact bundle: %v", err)
+	}
+	ruleUpload := performRequest(engine, http.MethodPost, "/v1/rule-artifact-bundle", string(ruleBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if ruleUpload.Code != http.StatusOK {
+		t.Fatalf("rule artifact upload code=%d body=%s", ruleUpload.Code, ruleUpload.Body.String())
+	}
+	if !strings.Contains(ruleUpload.Body.String(), `"status":"stored"`) || !strings.Contains(ruleUpload.Body.String(), `"bundle_revision":"`+ruleBundle.Revision+`"`) {
+		t.Fatalf("rule artifact upload response unexpected: %s", ruleUpload.Body.String())
+	}
+	ruleUploadDuplicate := performRequest(engine, http.MethodPost, "/v1/rule-artifact-bundle", string(ruleBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if ruleUploadDuplicate.Code != http.StatusOK {
+		t.Fatalf("duplicate rule artifact upload code=%d body=%s", ruleUploadDuplicate.Code, ruleUploadDuplicate.Body.String())
+	}
+	if !strings.Contains(ruleUploadDuplicate.Body.String(), `"status":"duplicate"`) {
+		t.Fatalf("duplicate rule artifact response unexpected: %s", ruleUploadDuplicate.Body.String())
+	}
+	var ruleFileCount int
+	if err := withCenterDB(context.Background(), func(db *sql.DB, driver string) error {
+		return db.QueryRow(`SELECT COUNT(*) FROM center_rule_artifact_files WHERE device_id = `+placeholder(driver, 1)+` AND bundle_revision = `+placeholder(driver, 2), "edge-device-1", ruleBundle.Revision).Scan(&ruleFileCount)
+	}); err != nil {
+		t.Fatalf("count rule artifact files: %v", err)
+	}
+	if ruleFileCount != 2 {
+		t.Fatalf("rule artifact file count=%d want 2", ruleFileCount)
+	}
+	malformedRuleReq := signedRuleArtifactBytesForTest(t, enrollmentFixture, "nonce-rule-artifact-bad", time.Now().UTC(), strings.Repeat("c", 64), []byte("not-gzip"))
+	malformedRuleBody, err := json.Marshal(malformedRuleReq)
+	if err != nil {
+		t.Fatalf("marshal malformed rule artifact bundle: %v", err)
+	}
+	malformedRuleUpload := performRequest(engine, http.MethodPost, "/v1/rule-artifact-bundle", string(malformedRuleBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if malformedRuleUpload.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("malformed rule artifact upload code=%d body=%s", malformedRuleUpload.Code, malformedRuleUpload.Body.String())
 	}
 
 	revokeApprovedToken := performRequestWithCookies(engine, http.MethodPost, "/center-api/enrollment-tokens/"+strconv.FormatInt(createdToken.Record.TokenID, 10)+"/revoke", "", map[string]string{
@@ -804,6 +1525,249 @@ func performRequestWithCookies(engine http.Handler, method, target, body string,
 	return rec
 }
 
+type runtimeBuildJobResponseForTest struct {
+	Job RuntimeBuildJob `json:"job"`
+}
+
+type runtimeBuildJobsResponseForTest struct {
+	Jobs []RuntimeBuildJob `json:"jobs"`
+}
+
+func runtimeBuildJobListContains(jobs []RuntimeBuildJob, jobID string) bool {
+	for _, job := range jobs {
+		if job.JobID == jobID {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeArtifactBundleForStoreTest(generatedAt time.Time) (runtimeartifactbundle.Build, error) {
+	return runtimeartifactbundle.BuildBundle(runtimeartifactbundle.BuildInput{
+		RuntimeFamily:   runtimeartifactbundle.RuntimeFamilyPHPFPM,
+		RuntimeID:       "php83",
+		DisplayName:     "PHP 8.3",
+		DetectedVersion: "8.3.30",
+		Target: runtimeartifactbundle.TargetKey{
+			OS:            "linux",
+			Arch:          "amd64",
+			KernelVersion: "6.8.0-test",
+			DistroID:      "ubuntu",
+			DistroIDLike:  "debian",
+			DistroVersion: "24.04",
+		},
+		BuilderVersion: "test-builder",
+		BuilderProfile: "ubuntu-24.04-amd64",
+		GeneratedAt:    generatedAt,
+		Files: []runtimeartifactbundle.File{
+			{
+				ArchivePath: "runtime.json",
+				FileKind:    "metadata",
+				Mode:        0o644,
+				Body:        []byte(`{"runtime_id":"php83","display_name":"PHP 8.3","detected_version":"8.3.30","binary_path":"data/php-fpm/binaries/php83/php-fpm","cli_binary_path":"data/php-fpm/binaries/php83/php","source":"bundled"}`),
+			},
+			{ArchivePath: "modules.json", FileKind: "metadata", Mode: 0o644, Body: []byte(`["core","date"]`)},
+			{ArchivePath: "php-fpm", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "php", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "rootfs/usr/local/sbin/php-fpm", FileKind: "rootfs", Mode: 0o755, Body: []byte("php-fpm-binary")},
+			{ArchivePath: "rootfs/usr/bin/php", FileKind: "rootfs", Mode: 0o755, Body: []byte("php-binary")},
+			{ArchivePath: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2", FileKind: "rootfs", Mode: 0o755, Body: []byte("loader")},
+		},
+	})
+}
+
+func psgiRuntimeArtifactBundleForStoreTest(runtimeID string, generatedAt time.Time) (runtimeartifactbundle.Build, error) {
+	displayName, detectedVersion := fakePSGIRuntimeBuildVersion(runtimeID)
+	return runtimeartifactbundle.BuildBundle(runtimeartifactbundle.BuildInput{
+		RuntimeFamily:   runtimeartifactbundle.RuntimeFamilyPSGI,
+		RuntimeID:       runtimeID,
+		DisplayName:     displayName,
+		DetectedVersion: detectedVersion,
+		Target: runtimeartifactbundle.TargetKey{
+			OS:            "linux",
+			Arch:          "amd64",
+			KernelVersion: "6.8.0-test",
+			DistroID:      "ubuntu",
+			DistroIDLike:  "debian",
+			DistroVersion: "24.04",
+		},
+		BuilderVersion: "test-builder",
+		BuilderProfile: "ubuntu-24.04-amd64",
+		GeneratedAt:    generatedAt,
+		Files: []runtimeartifactbundle.File{
+			{
+				ArchivePath: "runtime.json",
+				FileKind:    "metadata",
+				Mode:        0o644,
+				Body:        []byte(`{"runtime_id":"` + runtimeID + `","display_name":"` + displayName + `","detected_version":"` + detectedVersion + `","perl_path":"data/psgi/binaries/` + runtimeID + `/perl","starman_path":"data/psgi/binaries/` + runtimeID + `/starman","source":"bundled"}`),
+			},
+			{ArchivePath: "modules.json", FileKind: "metadata", Mode: 0o644, Body: []byte(`["plack","starman"]`)},
+			{ArchivePath: "perl", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "starman", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "rootfs/usr/bin/perl", FileKind: "rootfs", Mode: 0o755, Body: []byte("perl-binary")},
+			{ArchivePath: "rootfs/usr/bin/starman", FileKind: "rootfs", Mode: 0o755, Body: []byte("starman-binary")},
+			{ArchivePath: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2", FileKind: "rootfs", Mode: 0o755, Body: []byte("loader")},
+		},
+	})
+}
+
+type fakeRuntimeBuildRunner struct{}
+
+func (fakeRuntimeBuildRunner) Capabilities(context.Context) RuntimeBuilderCapabilities {
+	return RuntimeBuilderCapabilities{
+		Available:       true,
+		DockerAvailable: true,
+		PHPFPMSupported: true,
+		PSGISupported:   true,
+		Runtimes: []RuntimeBuildRuntimeState{
+			{RuntimeFamily: RuntimeFamilyPHPFPM, RuntimeID: "php83", Supported: true},
+			{RuntimeFamily: RuntimeFamilyPHPFPM, RuntimeID: "php84", Supported: true},
+			{RuntimeFamily: RuntimeFamilyPHPFPM, RuntimeID: "php85", Supported: true},
+			{RuntimeFamily: RuntimeFamilyPSGI, RuntimeID: "perl536", Supported: true},
+			{RuntimeFamily: RuntimeFamilyPSGI, RuntimeID: "perl538", Supported: true},
+			{RuntimeFamily: RuntimeFamilyPSGI, RuntimeID: "perl540", Supported: true},
+		},
+	}
+}
+
+func (fakeRuntimeBuildRunner) Build(_ context.Context, req centerRuntimeBuildExecution) (runtimeartifactbundle.Build, string, error) {
+	if req.RuntimeFamily == RuntimeFamilyPSGI {
+		displayName, detectedVersion := fakePSGIRuntimeBuildVersion(req.RuntimeID)
+		built, err := runtimeartifactbundle.BuildBundle(runtimeartifactbundle.BuildInput{
+			RuntimeFamily:   req.RuntimeFamily,
+			RuntimeID:       req.RuntimeID,
+			DisplayName:     displayName,
+			DetectedVersion: detectedVersion,
+			Target: runtimeartifactbundle.TargetKey{
+				OS:            req.Target.OS,
+				Arch:          req.Target.Arch,
+				KernelVersion: req.Target.KernelVersion,
+				DistroID:      req.Target.DistroID,
+				DistroIDLike:  req.Target.DistroIDLike,
+				DistroVersion: req.Target.DistroVersion,
+			},
+			BuilderVersion: "test-builder",
+			BuilderProfile: "test-profile",
+			GeneratedAt:    time.Unix(1000, 0).UTC(),
+			Files: []runtimeartifactbundle.File{
+				{
+					ArchivePath: "runtime.json",
+					FileKind:    "metadata",
+					Mode:        0o644,
+					Body:        []byte(`{"runtime_id":"` + req.RuntimeID + `","display_name":"` + displayName + `","detected_version":"` + detectedVersion + `","perl_path":"data/psgi/binaries/` + req.RuntimeID + `/perl","starman_path":"data/psgi/binaries/` + req.RuntimeID + `/starman","source":"bundled"}`),
+				},
+				{ArchivePath: "modules.json", FileKind: "metadata", Mode: 0o644, Body: []byte(`["plack","starman"]`)},
+				{ArchivePath: "perl", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+				{ArchivePath: "starman", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+				{ArchivePath: "rootfs/usr/bin/perl", FileKind: "rootfs", Mode: 0o755, Body: []byte("perl-binary")},
+				{ArchivePath: "rootfs/usr/bin/starman", FileKind: "rootfs", Mode: 0o755, Body: []byte("starman-binary")},
+				{ArchivePath: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2", FileKind: "rootfs", Mode: 0o755, Body: []byte("loader")},
+			},
+		})
+		return built, "fake psgi build complete", err
+	}
+	built, err := runtimeartifactbundle.BuildBundle(runtimeartifactbundle.BuildInput{
+		RuntimeFamily:   req.RuntimeFamily,
+		RuntimeID:       req.RuntimeID,
+		DisplayName:     "PHP 8.3",
+		DetectedVersion: "8.3.30",
+		Target: runtimeartifactbundle.TargetKey{
+			OS:            req.Target.OS,
+			Arch:          req.Target.Arch,
+			KernelVersion: req.Target.KernelVersion,
+			DistroID:      req.Target.DistroID,
+			DistroIDLike:  req.Target.DistroIDLike,
+			DistroVersion: req.Target.DistroVersion,
+		},
+		BuilderVersion: "test-builder",
+		BuilderProfile: "test-profile",
+		GeneratedAt:    time.Unix(1000, 0).UTC(),
+		Files: []runtimeartifactbundle.File{
+			{
+				ArchivePath: "runtime.json",
+				FileKind:    "metadata",
+				Mode:        0o644,
+				Body:        []byte(`{"runtime_id":"` + req.RuntimeID + `","display_name":"PHP 8.3","detected_version":"8.3.30","binary_path":"data/php-fpm/binaries/php83/php-fpm","cli_binary_path":"data/php-fpm/binaries/php83/php","source":"bundled"}`),
+			},
+			{ArchivePath: "modules.json", FileKind: "metadata", Mode: 0o644, Body: []byte(`["core","date"]`)},
+			{ArchivePath: "php-fpm", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "php", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "rootfs/usr/local/sbin/php-fpm", FileKind: "rootfs", Mode: 0o755, Body: []byte("php-fpm-binary")},
+			{ArchivePath: "rootfs/usr/bin/php", FileKind: "rootfs", Mode: 0o755, Body: []byte("php-binary")},
+			{ArchivePath: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2", FileKind: "rootfs", Mode: 0o755, Body: []byte("loader")},
+		},
+	})
+	return built, "fake build complete", err
+}
+
+func fakePSGIRuntimeBuildVersion(runtimeID string) (string, string) {
+	switch runtimeID {
+	case "perl536":
+		return "Perl 5.36", "v5.36.0"
+	case "perl540":
+		return "Perl 5.40", "v5.40.0"
+	default:
+		return "Perl 5.38", "v5.38.5"
+	}
+}
+
+func replaceRuntimeBuildRunnerForTest(next centerRuntimeBuildRunner) func() {
+	runtimeBuildMu.Lock()
+	oldRunner := runtimeBuildRunner
+	oldJobs := runtimeBuildJobs
+	oldLocks := runtimeBuildLocks
+	runtimeBuildRunner = next
+	runtimeBuildJobs = map[string]RuntimeBuildJob{}
+	runtimeBuildLocks = map[string]string{}
+	runtimeBuildMu.Unlock()
+	return func() {
+		runtimeBuildMu.Lock()
+		runtimeBuildRunner = oldRunner
+		runtimeBuildJobs = oldJobs
+		runtimeBuildLocks = oldLocks
+		runtimeBuildMu.Unlock()
+	}
+}
+
+func insertRuntimeBuildDeviceForTest(t *testing.T) {
+	t.Helper()
+	now := time.Now().UTC().Unix()
+	if err := withCenterDB(context.Background(), func(db *sql.DB, driver string) error {
+		_, err := db.ExecContext(context.Background(), `
+INSERT INTO center_devices
+    (device_id, key_id, public_key_pem, public_key_fingerprint_sha256, status,
+     approved_at_unix, approved_by, created_at_unix, updated_at_unix, last_seen_at_unix,
+     runtime_role, build_version, go_version, os, arch, kernel_version,
+     distro_id, distro_id_like, distro_version, runtime_deployment_supported)
+VALUES
+    (`+placeholders(driver, 20, 1)+`)`,
+			"build-device-1",
+			"default",
+			"test-public-key",
+			strings.Repeat("b", 64),
+			DeviceStatusApproved,
+			now,
+			"test",
+			now,
+			now,
+			now,
+			"gateway",
+			"test-build",
+			"go-test",
+			"linux",
+			goruntime.GOARCH,
+			"6.8.0-test",
+			"ubuntu",
+			"debian",
+			"24.04",
+			1,
+		)
+		return err
+	}); err != nil {
+		t.Fatalf("insert runtime build device: %v", err)
+	}
+}
+
 func loginCenterForTest(t *testing.T, engine http.Handler) ([]*http.Cookie, *http.Cookie) {
 	t.Helper()
 	return loginCenterWithCredentialsForTest(t, engine, "center-admin", "center-admin-password")
@@ -894,10 +1858,45 @@ func signedDeviceStatusForTest(t *testing.T, fixture signedEnrollmentFixture, no
 		RuntimeRole:                "gateway",
 		BuildVersion:               "v1.2.0-test",
 		GoVersion:                  "go1.26.2-test",
+		OS:                         "linux",
+		Arch:                       "amd64",
+		KernelVersion:              "6.8.0-test",
+		DistroID:                   "ubuntu",
+		DistroIDLike:               "debian",
+		DistroVersion:              "24.04",
+		RuntimeDeploymentSupported: true,
+		RuntimeInventory: []DeviceRuntimeSummary{
+			{
+				RuntimeFamily:   "php-fpm",
+				RuntimeID:       "php83",
+				DisplayName:     "PHP 8.3",
+				DetectedVersion: "8.3.30",
+				Source:          "bundled",
+				Available:       true,
+				ModuleCount:     42,
+				UsageReported:   true,
+			},
+			{
+				RuntimeFamily:   "psgi",
+				RuntimeID:       "perl538",
+				DisplayName:     "Perl 5.38",
+				DetectedVersion: "v5.38.5",
+				Source:          "bundled",
+				Available:       true,
+				ModuleCount:     157,
+				UsageReported:   true,
+			},
+		},
 	}
 	req.BodyHash = deviceStatusBodyHash(req)
 	req.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(fixture.PrivateKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash))))
 	return req
+}
+
+func resignDeviceStatusForTest(t *testing.T, fixture signedEnrollmentFixture, req *DeviceStatusRequest) {
+	t.Helper()
+	req.BodyHash = deviceStatusBodyHash(*req)
+	req.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(fixture.PrivateKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash))))
 }
 
 func signedDeviceConfigSnapshotForTest(t *testing.T, fixture signedEnrollmentFixture, nonce string, ts time.Time, revision string, payload []byte) DeviceConfigSnapshotRequest {
@@ -914,6 +1913,54 @@ func signedDeviceConfigSnapshotForTest(t *testing.T, fixture signedEnrollmentFix
 		Snapshot:                   append(json.RawMessage(nil), payload...),
 	}
 	req.BodyHash = deviceConfigSnapshotBodyHash(req)
+	req.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(fixture.PrivateKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash))))
+	return req
+}
+
+func signedRuleArtifactBundleForTest(t *testing.T, fixture signedEnrollmentFixture, nonce string, ts time.Time, bundle edgeartifactbundle.Build) RuleArtifactBundleRequest {
+	t.Helper()
+	return signedRuleArtifactBytesForTest(t, fixture, nonce, ts, bundle.Revision, bundle.Compressed)
+}
+
+func signedRuleArtifactBytesForTest(t *testing.T, fixture signedEnrollmentFixture, nonce string, ts time.Time, revision string, bundle []byte) RuleArtifactBundleRequest {
+	t.Helper()
+	sum := sha256.Sum256(bundle)
+	req := RuleArtifactBundleRequest{
+		DeviceID:                   fixture.Request.DeviceID,
+		KeyID:                      fixture.Request.KeyID,
+		PublicKeyFingerprintSHA256: fixture.Fingerprint,
+		Timestamp:                  ts.UTC().Format(time.RFC3339Nano),
+		Nonce:                      nonce,
+		BundleRevision:             revision,
+		BundleHash:                 hex.EncodeToString(sum[:]),
+		CompressedSize:             int64(len(bundle)),
+		UncompressedSize:           1,
+		FileCount:                  1,
+		BundleB64:                  base64.StdEncoding.EncodeToString(bundle),
+	}
+	if parsed, err := edgeartifactbundle.Parse(bundle); err == nil {
+		req.UncompressedSize = parsed.UncompressedSize
+		req.FileCount = parsed.FileCount
+	}
+	req.BodyHash = ruleArtifactBundleBodyHash(req)
+	req.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(fixture.PrivateKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash))))
+	return req
+}
+
+func signedRuntimeArtifactDownloadForTest(t *testing.T, fixture signedEnrollmentFixture, nonce string, ts time.Time, bundle runtimeartifactbundle.Build) RuntimeArtifactDownloadRequest {
+	t.Helper()
+	req := RuntimeArtifactDownloadRequest{
+		DeviceID:                   fixture.Request.DeviceID,
+		KeyID:                      fixture.Request.KeyID,
+		PublicKeyFingerprintSHA256: fixture.Fingerprint,
+		Timestamp:                  ts.UTC().Format(time.RFC3339Nano),
+		Nonce:                      nonce,
+		RuntimeFamily:              bundle.Manifest.RuntimeFamily,
+		RuntimeID:                  bundle.Manifest.RuntimeID,
+		ArtifactRevision:           bundle.Revision,
+		ArtifactHash:               bundle.ArtifactHash,
+	}
+	req.BodyHash = runtimeArtifactDownloadBodyHash(req)
 	req.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(fixture.PrivateKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash))))
 	return req
 }

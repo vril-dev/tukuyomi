@@ -17,7 +17,7 @@ FROM alpine:3.19
 
 WORKDIR /app
 
-RUN apk add --no-cache bash curl python3 ca-certificates
+RUN apk add --no-cache bash curl python3 ca-certificates docker-cli docker-cli-buildx
 
 COPY --from=builder /app/server .
 COPY --from=builder /go/bin/geoipupdate /app/bin/geoipupdate

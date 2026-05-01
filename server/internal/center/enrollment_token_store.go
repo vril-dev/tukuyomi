@@ -17,6 +17,8 @@ const (
 	EnrollmentTokenStatusActive  = "active"
 	EnrollmentTokenStatusRevoked = "revoked"
 
+	EnrollmentTokenDefaultMaxUses = 10
+
 	enrollmentTokenPlainPrefix = "tky_enroll_"
 	enrollmentTokenRandomBytes = 32
 	enrollmentTokenMaxBytes    = 256
@@ -59,7 +61,7 @@ func CreateEnrollmentToken(ctx context.Context, in EnrollmentTokenCreate) (Enrol
 		in.CreatedBy = "unknown"
 	}
 	if in.MaxUses <= 0 {
-		in.MaxUses = 1
+		in.MaxUses = EnrollmentTokenDefaultMaxUses
 	}
 	if in.MaxUses > 1000000 {
 		in.MaxUses = 1000000

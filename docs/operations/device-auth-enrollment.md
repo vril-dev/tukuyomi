@@ -54,6 +54,32 @@ path is used later for approval revocation and product ID/token switching:
 Center owns the current authorization state, and Gateway locks the proxy for any
 non-`approved` status after it refreshes that state.
 
+## Center Device Views
+
+After a device is registered, Center `Device Approvals > Registered devices >
+Manage` enters a selected-device menu. `Device Status` shows approval state,
+last status check, Gateway platform details, and config snapshot history. Use
+that snapshot table to view or download the bounded, redacted Gateway JSON
+payload.
+
+`Runtime` shows the Gateway runtime deployment target, runtime inventory,
+pending runtime requests, and compatible artifacts. Gateway reports platform
+metadata and runtime inventory during the signed status polling path, so Center
+can match artifacts to the device OS, architecture, distro, and distro version.
+
+Center runtime builds require builder support on the Center host, such as the
+Docker-backed PHP-FPM/PSGI build flow. Gateway does not need Docker for Center
+deployment: it receives a pending request during polling, validates artifact
+metadata and target, downloads the compressed artifact, and installs or removes
+the runtime locally.
+
+Runtime requests are a delivery queue. A request can be canceled before Gateway
+picks it up; after dispatch, the Gateway-side apply status and runtime
+inventory are authoritative. Runtime removal is guarded on both sides: Center
+only enables removal from the latest reported usage state, and Gateway checks
+Runtime App references plus running processes again immediately before deleting
+local runtime files.
+
 ## Preview URLs
 
 For fleet preview, keep both preview databases if you need to preserve Gateway
@@ -158,9 +184,9 @@ This sync is deliberately outside the proxy hot path:
 - A failed snapshot push records an error in Gateway device-auth status, but it
 does not bypass device approval or unlock proxy traffic.
 
-Center stores the latest snapshot per registered device. Operators can download
-it from Center `Device Approvals > Registered devices > Manage > Config
-download` when the device has published a snapshot.
+Center stores the latest snapshots per registered device. Operators can view or
+download them from Center `Device Approvals > Registered devices > Manage >
+Device Status > Config snapshots` when the device has published a snapshot.
 
 The snapshot payload is capped at 2 MiB. It includes runtime/config domains that
 are useful for fleet inspection and avoids storing enrollment tokens or local

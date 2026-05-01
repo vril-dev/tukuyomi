@@ -9,9 +9,9 @@ build: "pandoc → HTML → Chrome headless"
 
 # tukuyomi Operation Guide (English Edition)
 
-This book is a structured edition of the English documentation in the upstream
-repository `/home/ky491/git/vril/tukuyomi` (`README.md` and `docs/**/*.md`),
-re-organized so that an engineer can read it from cover to cover.
+This book is a structured edition of the English documentation in the tukuyomi
+repository (`README.md` and `docs/**/*.md`), re-organized so that an engineer
+can read it from cover to cover.
 
 ## Editorial policy
 
@@ -99,9 +99,10 @@ re-organized so that an engineer can read it from cover to cover.
   TLS, the dedicated HTTP/3 listener, `server.tls.redirect_http`,
   HTTP/3 public-entry smoke.
   (sources: operator-reference.md, docs/operations/http3-public-entry-smoke.md)
-- **Chapter 16. IoT / Edge device enrollment** — Roles, operator flow, preview
-  URL, Center URL rules, identity and fingerprint, token handling,
-  troubleshooting. (source: docs/operations/device-auth-enrollment.md)
+- **Chapter 16. IoT / Edge device enrollment** — Roles, operator flow,
+  Center-managed device views, runtime deployment, preview URL, Center URL
+  rules, identity and fingerprint, token handling, troubleshooting.
+  (source: docs/operations/device-auth-enrollment.md)
 
 ### Part VII — Performance and regression
 

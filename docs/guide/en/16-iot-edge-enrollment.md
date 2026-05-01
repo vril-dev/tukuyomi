@@ -95,15 +95,47 @@ not hit this `503`**.
 
 ![Center Status screen](../../images/ui-samples/23-center-status.png)
 
-After the Center approves the device, return to
-`Options > Center Enrollment` on the Gateway and run **`Check Center
-status`**. The Gateway sends a **signed status request** to the Center
-and updates the locally cached device status.
+After the Center approves the device, the Gateway refreshes the local
+cached status by polling the Center. The default interval is 30 seconds.
+For an immediate refresh, return to `Options > Center Enrollment` on
+the Gateway and run **`Check Center status`**. The Gateway sends a
+**signed status request** to the Center and updates the locally cached
+device status.
 
 This status path is also used for future **revocation** and **product
 ID / token rotation**. The current authorization state is **owned by
 the Center**, and after refresh the Gateway **locks the proxy** if the
 status is anything other than `approved`.
+
+### 16.3.3 Center-managed device views
+
+After a device is registered, use **`Device Approvals > Registered
+devices > Manage`** to enter the selected device menu. The left
+navigation then shows device-specific pages under `Device Approvals`.
+
+![Center Device Status screen](../../images/ui-samples/26-center-device-status.png)
+
+`Device Status` shows the approval state, last status check, platform
+details reported by the Gateway, and the config snapshot history. The
+snapshot table is the place to view or download the bounded, redacted
+Gateway JSON payload.
+
+![Center Runtime screen](../../images/ui-samples/27-center-runtime.png)
+
+`Runtime` uses the Gateway-reported platform target to match runtime
+artifacts. Center can build a PHP-FPM or PSGI runtime artifact for that
+target, store it as a compressed artifact, and assign it to the
+Gateway. Existing compatible artifacts can also be assigned directly.
+
+Runtime changes are not applied by the Center HTTP request itself.
+They become **pending runtime requests**. The Gateway receives those
+requests during the signed status polling path, validates the artifact
+metadata and target, downloads the compressed artifact, and installs or
+removes the runtime locally. A pending request can be canceled only
+before the Gateway has picked it up. Removal is guarded twice: the
+Center UI disables unsafe requests from the latest inventory, and the
+Gateway checks Runtime App references and running processes again
+before deleting local runtime files.
 
 ## 16.4 Preview URLs
 

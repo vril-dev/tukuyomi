@@ -9,7 +9,7 @@ build: "pandoc → HTML → Chrome headless で PDF 化"
 
 # tukuyomi 運用ガイド（日本語版）
 
-本書は、上流リポジトリ `/home/ky491/git/vril/tukuyomi` に置かれた日本語ドキュメント
+本書は、tukuyomi リポジトリに置かれた日本語ドキュメント
 （`README.ja.md` および `docs/**/*.ja.md`）を再編し、日本のエンジニアが上から順に
 読み通せる **書籍** として再構成したものです。
 
@@ -96,8 +96,9 @@ build: "pandoc → HTML → Chrome headless で PDF 化"
 - **第15章　HTTP/3 と TLS** — built-in TLS termination、ACME 自動 TLS、
   HTTP/3 の専用 listener、`server.tls.redirect_http`、HTTP/3 public-entry smoke。
   （source: operator-reference.ja.md, docs/operations/http3-public-entry-smoke.ja.md）
-- **第16章　IoT / Edge デバイス登録** — 役割、運用フロー、preview URL、
-  Center URL ルール、Identity と fingerprint、token の扱い、troubleshooting。
+- **第16章　IoT / Edge デバイス登録** — 役割、運用フロー、Center 管理の
+  device 画面、runtime deployment、preview URL、Center URL ルール、
+  Identity と fingerprint、token の扱い、troubleshooting。
   （source: docs/operations/device-auth-enrollment.ja.md）
 
 ### 第VII部　性能と回帰検証

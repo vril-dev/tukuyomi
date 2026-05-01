@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DOCKERFILE="${ROOT_DIR}/build/Dockerfile.php-fpm-runtime"
+BUILD_CONTEXT="${ROOT_DIR}/build"
+RUNTIME_DATA_DIR="${TUKUYOMI_RUNTIME_DATA_DIR:-${ROOT_DIR}/data}"
 VER="${VER:-}"
 RUNTIME_ID="${RUNTIME:-}"
 ARG1="${1:-}"
@@ -50,7 +52,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 runtime_id="php${VER/./}"
-runtime_dir="${ROOT_DIR}/data/php-fpm/binaries/${runtime_id}"
+runtime_dir="${RUNTIME_DATA_DIR}/php-fpm/binaries/${runtime_id}"
 rootfs_dir="${runtime_dir}/rootfs"
 image_tag="tukuyomi/php-fpm-runtime:${runtime_id}-local"
 container_name=""
@@ -88,7 +90,7 @@ docker build \
   --build-arg "PHP_VERSION=${VER}" \
   -f "${DOCKERFILE}" \
   -t "${image_tag}" \
-  "${ROOT_DIR}" >/dev/null
+  "${BUILD_CONTEXT}" >/dev/null
 
 container_name="$(docker create "${image_tag}")"
 docker export "${container_name}" | tar -C "${rootfs_dir}" -xf -
@@ -104,14 +106,18 @@ modules_raw="$(docker run --rm "${image_tag}" php -m)"
 MODULES_RAW="${modules_raw}" python3 - <<'PY' >"${runtime_dir}/modules.json"
 import json
 import os
+import re
 
 modules = []
 seen = set()
+allowed = re.compile(r"^[a-z0-9._-]{1,128}$")
 for line in os.environ.get("MODULES_RAW", "").splitlines():
     line = line.strip()
     if not line or line.startswith("["):
         continue
     line = line.lower()
+    if not allowed.fullmatch(line):
+        continue
     if line in seen:
         continue
     seen.add(line)

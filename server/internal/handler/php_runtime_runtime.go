@@ -172,6 +172,7 @@ type PHPRuntimeRecord struct {
 	RunUser                string   `json:"run_user,omitempty"`
 	RunGroup               string   `json:"run_group,omitempty"`
 	Source                 string   `json:"source,omitempty"`
+	ArtifactRevision       string   `json:"artifact_revision,omitempty"`
 	SHA256                 string   `json:"sha256,omitempty"`
 }
 
@@ -531,7 +532,8 @@ func normalizePHPRuntimeInventoryFile(in PHPRuntimeInventoryFile) PHPRuntimeInve
 		runtime.RunUser = strings.TrimSpace(runtime.RunUser)
 		runtime.RunGroup = strings.TrimSpace(runtime.RunGroup)
 		runtime.Source = normalizePHPRuntimeSource(runtime.Source)
-		runtime.SHA256 = ""
+		runtime.ArtifactRevision = normalizeEdgeHex64(runtime.ArtifactRevision)
+		runtime.SHA256 = normalizeEdgeHex64(runtime.SHA256)
 		if runtime.DisplayName == "" {
 			switch {
 			case runtime.DetectedVersion != "":
@@ -569,9 +571,9 @@ func validatePHPRuntimeInventoryFile(cfg PHPRuntimeInventoryFile) error {
 			return fmt.Errorf("%s.run_group must contain only [A-Za-z0-9._-]", field)
 		}
 		switch runtime.Source {
-		case "", "bundled":
+		case "", "bundled", "center":
 		default:
-			return fmt.Errorf("%s.source must be empty or bundled", field)
+			return fmt.Errorf("%s.source must be empty, bundled, or center", field)
 		}
 		if err := validatePHPRuntimeDefaultDisabledModules(runtime, field); err != nil {
 			return err
@@ -818,6 +820,8 @@ type phpRuntimeArtifactManifest struct {
 	RunUser                string   `json:"run_user,omitempty"`
 	RunGroup               string   `json:"run_group,omitempty"`
 	Source                 string   `json:"source,omitempty"`
+	ArtifactRevision       string   `json:"artifact_revision,omitempty"`
+	SHA256                 string   `json:"sha256,omitempty"`
 }
 
 func buildPHPRuntimeInventoryConfig(state phpRuntimeInventoryStateFile, inventoryPath string) (PHPRuntimeInventoryFile, error) {
@@ -906,6 +910,8 @@ func readPHPRuntimeArtifactManifest(runtimeDir string) (PHPRuntimeRecord, error)
 		record.RunUser = strings.TrimSpace(meta.RunUser)
 		record.RunGroup = strings.TrimSpace(meta.RunGroup)
 		record.Source = normalizePHPRuntimeSource(meta.Source)
+		record.ArtifactRevision = normalizeEdgeHex64(meta.ArtifactRevision)
+		record.SHA256 = normalizeEdgeHex64(meta.SHA256)
 	} else if !os.IsNotExist(err) {
 		return PHPRuntimeRecord{}, fmt.Errorf("read php runtime manifest (%s): %w", manifestPath, err)
 	}
@@ -1152,6 +1158,7 @@ type PSGIRuntimeRecord struct {
 	RunUser             string   `json:"run_user,omitempty"`
 	RunGroup            string   `json:"run_group,omitempty"`
 	Source              string   `json:"source,omitempty"`
+	ArtifactRevision    string   `json:"artifact_revision,omitempty"`
 	SHA256              string   `json:"sha256,omitempty"`
 }
 
@@ -1509,7 +1516,8 @@ func normalizePSGIRuntimeInventoryFile(in PSGIRuntimeInventoryFile) PSGIRuntimeI
 		runtime.RunUser = strings.TrimSpace(runtime.RunUser)
 		runtime.RunGroup = strings.TrimSpace(runtime.RunGroup)
 		runtime.Source = normalizePSGIRuntimeSource(runtime.Source)
-		runtime.SHA256 = ""
+		runtime.ArtifactRevision = normalizeEdgeHex64(runtime.ArtifactRevision)
+		runtime.SHA256 = normalizeEdgeHex64(runtime.SHA256)
 		if runtime.DisplayName == "" {
 			switch {
 			case runtime.DetectedVersion != "":
@@ -1550,9 +1558,9 @@ func validatePSGIRuntimeInventoryFile(cfg PSGIRuntimeInventoryFile) error {
 			return fmt.Errorf("%s.run_group must contain only [A-Za-z0-9._-]", field)
 		}
 		switch runtime.Source {
-		case "", "bundled":
+		case "", "bundled", "center":
 		default:
-			return fmt.Errorf("%s.source must be empty or bundled", field)
+			return fmt.Errorf("%s.source must be empty, bundled, or center", field)
 		}
 	}
 	return nil
@@ -1646,14 +1654,16 @@ func readPSGIRuntimeModuleManifest(perlPath string) ([]string, error) {
 }
 
 type psgiRuntimeArtifactManifest struct {
-	RuntimeID       string `json:"runtime_id,omitempty"`
-	DisplayName     string `json:"display_name,omitempty"`
-	DetectedVersion string `json:"detected_version,omitempty"`
-	PerlPath        string `json:"perl_path,omitempty"`
-	StarmanPath     string `json:"starman_path,omitempty"`
-	RunUser         string `json:"run_user,omitempty"`
-	RunGroup        string `json:"run_group,omitempty"`
-	Source          string `json:"source,omitempty"`
+	RuntimeID        string `json:"runtime_id,omitempty"`
+	DisplayName      string `json:"display_name,omitempty"`
+	DetectedVersion  string `json:"detected_version,omitempty"`
+	PerlPath         string `json:"perl_path,omitempty"`
+	StarmanPath      string `json:"starman_path,omitempty"`
+	RunUser          string `json:"run_user,omitempty"`
+	RunGroup         string `json:"run_group,omitempty"`
+	Source           string `json:"source,omitempty"`
+	ArtifactRevision string `json:"artifact_revision,omitempty"`
+	SHA256           string `json:"sha256,omitempty"`
 }
 
 func buildPSGIRuntimeInventoryConfig(state psgiRuntimeInventoryStateFile, inventoryPath string) (PSGIRuntimeInventoryFile, error) {
@@ -1740,6 +1750,8 @@ func readPSGIRuntimeArtifactManifest(runtimeDir string) (PSGIRuntimeRecord, erro
 		record.RunUser = strings.TrimSpace(meta.RunUser)
 		record.RunGroup = strings.TrimSpace(meta.RunGroup)
 		record.Source = normalizePSGIRuntimeSource(meta.Source)
+		record.ArtifactRevision = normalizeEdgeHex64(meta.ArtifactRevision)
+		record.SHA256 = normalizeEdgeHex64(meta.SHA256)
 	} else if !os.IsNotExist(err) {
 		return PSGIRuntimeRecord{}, fmt.Errorf("read psgi runtime manifest (%s): %w", manifestPath, err)
 	}

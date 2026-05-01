@@ -49,6 +49,13 @@ type runtimeArtifactImportRequest struct {
 	ArtifactB64 string `json:"artifact_b64"`
 }
 
+type runtimeBuildStartRequest struct {
+	RuntimeFamily string `json:"runtime_family"`
+	RuntimeID     string `json:"runtime_id"`
+	Assign        bool   `json:"assign"`
+	Reason        string `json:"reason"`
+}
+
 func registerDeviceEnrollmentRoutes(r *gin.Engine) {
 	r.POST("/v1/enroll", postDeviceEnrollment)
 	r.POST("/v1/device-status", postDeviceStatus)
@@ -69,6 +76,10 @@ func registerCenterDeviceAdminRoutes(api *gin.RouterGroup) {
 	api.POST("/devices/:device_id/runtime-assignments/remove", postCenterDeviceRuntimeAssignmentRemoval)
 	api.POST("/devices/:device_id/runtime-assignments/clear", postCenterDeviceRuntimeAssignmentClear)
 	api.POST("/runtime-artifacts/import", postCenterRuntimeArtifactImport)
+	api.GET("/runtime-builder/capabilities", getCenterRuntimeBuilderCapabilities)
+	api.GET("/devices/:device_id/runtime-builds", getCenterDeviceRuntimeBuilds)
+	api.POST("/devices/:device_id/runtime-builds", postCenterDeviceRuntimeBuild)
+	api.GET("/runtime-builds/:job_id", getCenterRuntimeBuildJob)
 	api.GET("/devices/enrollments", getCenterDeviceEnrollments)
 	api.POST("/devices/enrollments/:enrollment_id/approve", postCenterDeviceEnrollmentApprove)
 	api.POST("/devices/enrollments/:enrollment_id/reject", postCenterDeviceEnrollmentReject)
@@ -184,7 +195,7 @@ func postDeviceStatus(c *gin.Context) {
 			return
 		}
 		if record.Status == DeviceStatusApproved && verified.RuntimeDeploymentSupported {
-			assignments, err := PendingRuntimeAssignmentsForDevice(c.Request.Context(), verified.DeviceID)
+			assignments, err := PendingRuntimeAssignmentsForDevice(c.Request.Context(), verified.DeviceID, checkedAt)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load runtime assignments"})
 				return
@@ -681,6 +692,70 @@ func postCenterRuntimeArtifactImport(c *gin.Context) {
 	})
 }
 
+func getCenterRuntimeBuilderCapabilities(c *gin.Context) {
+	c.JSON(http.StatusOK, RuntimeBuilderCapabilityStatus(c.Request.Context()))
+}
+
+func getCenterDeviceRuntimeBuilds(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	limit := parseBoundedInt(c.Query("limit"), 20, 1, 100)
+	jobs, err := RuntimeBuildJobsForDevice(deviceID, limit)
+	if err != nil {
+		respondRuntimeBuildError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"jobs": jobs})
+}
+
+func postCenterDeviceRuntimeBuild(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8*1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req runtimeBuildStartRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime build payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime build payload"})
+		return
+	}
+	job, err := StartRuntimeBuild(c.Request.Context(), RuntimeBuildStart{
+		DeviceID:      deviceID,
+		RuntimeFamily: req.RuntimeFamily,
+		RuntimeID:     req.RuntimeID,
+		Assign:        req.Assign,
+		Reason:        req.Reason,
+		Actor:         centerAdminActor(c),
+	})
+	if err != nil {
+		respondRuntimeBuildError(c, err)
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"job": job})
+}
+
+func getCenterRuntimeBuildJob(c *gin.Context) {
+	jobID := strings.TrimSpace(c.Param("job_id"))
+	if len(jobID) < 5 || len(jobID) > 64 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid job_id"})
+		return
+	}
+	job, found := RuntimeBuildJobStatus(jobID)
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "runtime build job not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"job": job})
+}
+
 func respondRuntimeAssignmentError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, ErrDeviceStatusNotFound):
@@ -689,10 +764,29 @@ func respondRuntimeAssignmentError(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "runtime artifact not found"})
 	case errors.Is(err, ErrRuntimeArtifactInvalid):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime assignment payload"})
+	case errors.Is(err, ErrRuntimeAssignmentDispatched):
+		c.JSON(http.StatusConflict, gin.H{"error": "runtime assignment has already been dispatched"})
 	case errors.Is(err, ErrRuntimeArtifactIncompatible):
 		c.JSON(http.StatusConflict, gin.H{"error": "runtime artifact is incompatible with device"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update runtime assignment"})
+	}
+}
+
+func respondRuntimeBuildError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrDeviceStatusNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "device not found"})
+	case errors.Is(err, ErrRuntimeBuildInProgress):
+		c.JSON(http.StatusConflict, gin.H{"error": "runtime build is already running"})
+	case errors.Is(err, ErrRuntimeBuilderUnavailable):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case errors.Is(err, ErrRuntimeArtifactInvalid):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime build payload"})
+	case errors.Is(err, ErrRuntimeArtifactIncompatible):
+		c.JSON(http.StatusConflict, gin.H{"error": "runtime build is incompatible with this device"})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start runtime build"})
 	}
 }
 

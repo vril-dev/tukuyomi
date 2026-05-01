@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DOCKERFILE="${ROOT_DIR}/build/Dockerfile.psgi-runtime"
+BUILD_CONTEXT="${ROOT_DIR}/build"
+RUNTIME_DATA_DIR="${TUKUYOMI_RUNTIME_DATA_DIR:-${ROOT_DIR}/data}"
 VER="${VER:-}"
 RUNTIME_ID="${RUNTIME:-}"
 ARG1="${1:-}"
@@ -50,7 +52,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 runtime_id="perl${VER/./}"
-runtime_dir="${ROOT_DIR}/data/psgi/binaries/${runtime_id}"
+runtime_dir="${RUNTIME_DATA_DIR}/psgi/binaries/${runtime_id}"
 rootfs_dir="${runtime_dir}/rootfs"
 image_tag="tukuyomi/psgi-runtime:${runtime_id}-local"
 container_name=""
@@ -88,7 +90,7 @@ docker build \
   --build-arg "PERL_VERSION=${VER}" \
   -f "${DOCKERFILE}" \
   -t "${image_tag}" \
-  "${ROOT_DIR}"
+  "${BUILD_CONTEXT}"
 
 container_name="$(docker create "${image_tag}")"
 docker export "${container_name}" | tar -C "${rootfs_dir}" -xf -

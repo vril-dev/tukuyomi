@@ -27,6 +27,7 @@ const (
 
 	RuntimeAssignmentDesiredInstalled = "installed"
 	RuntimeAssignmentDesiredRemoved   = "removed"
+	RuntimeAssignmentDispatchLeaseSec = int64(15 * 60)
 
 	MaxRuntimeArtifactCompressedBytes   = runtimeartifactbundle.MaxCompressedBytes
 	MaxRuntimeArtifactUncompressedBytes = runtimeartifactbundle.MaxUncompressedBytes
@@ -39,6 +40,7 @@ var (
 	ErrRuntimeArtifactNotFound     = errors.New("runtime artifact not found")
 	ErrRuntimeArtifactInvalid      = errors.New("invalid runtime artifact")
 	ErrRuntimeArtifactIncompatible = errors.New("runtime artifact is incompatible with device")
+	ErrRuntimeAssignmentDispatched = errors.New("runtime assignment already dispatched")
 
 	runtimeArtifactFileKindPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,64}$`)
 )
@@ -119,6 +121,7 @@ type RuntimeAssignmentRecord struct {
 	AssignedBy              string           `json:"assigned_by"`
 	AssignedAtUnix          int64            `json:"assigned_at_unix"`
 	UpdatedAtUnix           int64            `json:"updated_at_unix"`
+	DispatchedAtUnix        int64            `json:"dispatched_at_unix,omitempty"`
 	ArtifactHash            string           `json:"artifact_hash"`
 	CompressedSize          int64            `json:"compressed_size"`
 	UncompressedSize        int64            `json:"uncompressed_size"`
@@ -159,6 +162,11 @@ type RuntimeDeploymentView struct {
 	Artifacts   []RuntimeArtifactRecord    `json:"artifacts"`
 	Assignments []RuntimeAssignmentRecord  `json:"assignments"`
 	ApplyStatus []RuntimeApplyStatusRecord `json:"apply_status"`
+}
+
+type queryerWithRows interface {
+	queryer
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
 func StoreRuntimeArtifact(ctx context.Context, in RuntimeArtifactInsert) (RuntimeArtifactRecord, error) {
@@ -289,7 +297,7 @@ func RuntimeDeploymentForDevice(ctx context.Context, deviceID string) (RuntimeDe
 		if err != nil {
 			return err
 		}
-		assignments, err := listRuntimeAssignmentsForDeviceTx(ctx, db, driver, deviceID)
+		assignments, err := listVisibleRuntimeAssignmentsForDeviceTx(ctx, db, driver, deviceID)
 		if err != nil {
 			return err
 		}
@@ -350,6 +358,13 @@ func AssignRuntimeArtifactToDevice(ctx context.Context, in RuntimeAssignmentUpda
 		}
 		if artifact.RuntimeFamily != in.RuntimeFamily || artifact.RuntimeID != in.RuntimeID || !runtimeArtifactCompatibleWithDevice(artifact, device) {
 			return ErrRuntimeArtifactIncompatible
+		}
+		payloadReady, err := runtimeArtifactHasRunnablePayloadTx(ctx, tx, driver, artifact.ArtifactRevision, artifact.RuntimeFamily)
+		if err != nil {
+			return err
+		}
+		if !payloadReady {
+			return ErrRuntimeArtifactInvalid
 		}
 		if err := upsertRuntimeAssignmentTx(ctx, tx, driver, in); err != nil {
 			return err
@@ -433,14 +448,29 @@ func ClearRuntimeAssignment(ctx context.Context, deviceID, runtimeFamily, runtim
 	}
 	var cleared bool
 	err = withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
 		var exists int
-		if err := db.QueryRowContext(ctx, `SELECT 1 FROM center_devices WHERE device_id = `+placeholder(driver, 1), deviceID).Scan(&exists); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM center_devices WHERE device_id = `+placeholder(driver, 1), deviceID).Scan(&exists); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrDeviceStatusNotFound
 			}
 			return err
 		}
-		result, err := db.ExecContext(ctx, `
+		assignment, err := loadRuntimeAssignmentTx(ctx, tx, driver, deviceID, family, id)
+		if err != nil {
+			if errors.Is(err, ErrRuntimeArtifactNotFound) {
+				return tx.Commit()
+			}
+			return err
+		}
+		if runtimeAssignmentDispatchActive(assignment, time.Now().UTC().Unix()) {
+			return ErrRuntimeAssignmentDispatched
+		}
+		result, err := tx.ExecContext(ctx, `
 DELETE FROM center_device_runtime_assignments
  WHERE device_id = `+placeholder(driver, 1)+`
    AND runtime_family = `+placeholder(driver, 2)+`
@@ -454,34 +484,49 @@ DELETE FROM center_device_runtime_assignments
 		}
 		affected, err := result.RowsAffected()
 		cleared = err == nil && affected > 0
-		return nil
+		return tx.Commit()
 	})
 	return cleared, err
 }
 
-func PendingRuntimeAssignmentsForDevice(ctx context.Context, deviceID string) ([]RuntimeDeviceAssignment, error) {
+func PendingRuntimeAssignmentsForDevice(ctx context.Context, deviceID string, dispatchedAtUnix int64) ([]RuntimeDeviceAssignment, error) {
 	deviceID = strings.TrimSpace(deviceID)
 	if !deviceIDPattern.MatchString(deviceID) {
 		return nil, ErrDeviceStatusNotFound
 	}
+	if dispatchedAtUnix <= 0 {
+		dispatchedAtUnix = time.Now().UTC().Unix()
+	}
 	out := []RuntimeDeviceAssignment{}
 	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
 		var device DeviceRecord
-		if err := loadDeviceByIDTx(ctx, db, driver, deviceID, &device); err != nil {
+		if err := loadDeviceByIDTx(ctx, tx, driver, deviceID, &device); err != nil {
 			return err
 		}
-		assignments, err := listRuntimeAssignmentsForDeviceTx(ctx, db, driver, deviceID)
+		assignments, err := listRuntimeAssignmentsForDeviceTx(ctx, tx, driver, deviceID)
 		if err != nil {
 			return err
 		}
-		statusByRuntime, err := loadRuntimeApplyStatusMapTx(ctx, db, driver, deviceID)
+		statusByRuntime, err := loadRuntimeApplyStatusMapTx(ctx, tx, driver, deviceID)
 		if err != nil {
 			return err
 		}
+		dispatchKeys := make([]runtimeAssignmentKey, 0, len(assignments))
 		for _, assignment := range assignments {
+			if runtimeAssignmentDispatchActive(assignment, dispatchedAtUnix) {
+				continue
+			}
 			if assignment.DesiredState == RuntimeAssignmentDesiredRemoved {
 				status := statusByRuntime[assignment.RuntimeFamily+"\x00"+assignment.RuntimeID]
 				if status.ApplyState == "removed" {
+					if err := deleteRuntimeAssignmentTx(ctx, tx, driver, assignment.DeviceID, assignment.RuntimeFamily, assignment.RuntimeID); err != nil {
+						return err
+					}
 					continue
 				}
 				out = append(out, RuntimeDeviceAssignment{
@@ -490,6 +535,7 @@ func PendingRuntimeAssignmentsForDevice(ctx context.Context, deviceID string) ([
 					DesiredState:   assignment.DesiredState,
 					AssignedAtUnix: assignment.AssignedAtUnix,
 				})
+				dispatchKeys = append(dispatchKeys, runtimeAssignmentKey{runtimeFamily: assignment.RuntimeFamily, runtimeID: assignment.RuntimeID})
 				continue
 			}
 			artifact := RuntimeArtifactRecord{
@@ -509,6 +555,9 @@ func PendingRuntimeAssignmentsForDevice(ctx context.Context, deviceID string) ([
 			}
 			status := statusByRuntime[assignment.RuntimeFamily+"\x00"+assignment.RuntimeID]
 			if status.LocalArtifactRevision == assignment.DesiredArtifactRevision && status.ApplyState == "installed" {
+				if err := deleteRuntimeAssignmentTx(ctx, tx, driver, assignment.DeviceID, assignment.RuntimeFamily, assignment.RuntimeID); err != nil {
+					return err
+				}
 				continue
 			}
 			out = append(out, RuntimeDeviceAssignment{
@@ -523,10 +572,95 @@ func PendingRuntimeAssignmentsForDevice(ctx context.Context, deviceID string) ([
 				DesiredState:     assignment.DesiredState,
 				AssignedAtUnix:   assignment.AssignedAtUnix,
 			})
+			dispatchKeys = append(dispatchKeys, runtimeAssignmentKey{runtimeFamily: assignment.RuntimeFamily, runtimeID: assignment.RuntimeID})
 		}
-		return nil
+		if err := markRuntimeAssignmentsDispatchedTx(ctx, tx, driver, deviceID, dispatchKeys, dispatchedAtUnix); err != nil {
+			return err
+		}
+		return tx.Commit()
 	})
 	return out, err
+}
+
+type runtimeAssignmentKey struct {
+	runtimeFamily string
+	runtimeID     string
+}
+
+func runtimeAssignmentDispatchActive(assignment RuntimeAssignmentRecord, nowUnix int64) bool {
+	if assignment.DispatchedAtUnix <= 0 {
+		return false
+	}
+	if nowUnix <= assignment.DispatchedAtUnix {
+		return true
+	}
+	return nowUnix-assignment.DispatchedAtUnix < RuntimeAssignmentDispatchLeaseSec
+}
+
+func markRuntimeAssignmentsDispatchedTx(ctx context.Context, tx *sql.Tx, driver string, deviceID string, keys []runtimeAssignmentKey, dispatchedAtUnix int64) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	for _, key := range keys {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE center_device_runtime_assignments
+   SET dispatched_at_unix = `+placeholder(driver, 1)+`
+ WHERE device_id = `+placeholder(driver, 2)+`
+   AND runtime_family = `+placeholder(driver, 3)+`
+   AND runtime_id = `+placeholder(driver, 4),
+			dispatchedAtUnix,
+			deviceID,
+			key.runtimeFamily,
+			key.runtimeID,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func deleteRuntimeAssignmentTx(ctx context.Context, tx *sql.Tx, driver string, deviceID, runtimeFamily, runtimeID string) error {
+	_, err := tx.ExecContext(ctx, `
+DELETE FROM center_device_runtime_assignments
+ WHERE device_id = `+placeholder(driver, 1)+`
+   AND runtime_family = `+placeholder(driver, 2)+`
+   AND runtime_id = `+placeholder(driver, 3),
+		deviceID,
+		runtimeFamily,
+		runtimeID,
+	)
+	return err
+}
+
+func deleteTerminalRuntimeAssignmentForStatusTx(ctx context.Context, tx *sql.Tx, driver string, status RuntimeApplyStatusRecord) error {
+	state := strings.TrimSpace(status.ApplyState)
+	if state != "installed" && state != "removed" && state != "failed" && state != "blocked" {
+		return nil
+	}
+	assignment, err := loadRuntimeAssignmentTx(ctx, tx, driver, status.DeviceID, status.RuntimeFamily, status.RuntimeID)
+	if err != nil {
+		if errors.Is(err, ErrRuntimeArtifactNotFound) {
+			return nil
+		}
+		return err
+	}
+	switch state {
+	case "installed":
+		if assignment.DesiredState != RuntimeAssignmentDesiredInstalled ||
+			status.LocalArtifactRevision != assignment.DesiredArtifactRevision {
+			return nil
+		}
+	case "removed":
+		if assignment.DesiredState != RuntimeAssignmentDesiredRemoved {
+			return nil
+		}
+	default:
+		if assignment.DispatchedAtUnix <= 0 ||
+			status.DesiredArtifactRevision != assignment.DesiredArtifactRevision {
+			return nil
+		}
+	}
+	return deleteRuntimeAssignmentTx(ctx, tx, driver, status.DeviceID, status.RuntimeFamily, status.RuntimeID)
 }
 
 func loadDeviceRuntimeSummaryTx(ctx context.Context, q queryer, driver, deviceID, runtimeFamily, runtimeID string) (DeviceRuntimeSummary, bool, error) {
@@ -613,6 +747,13 @@ func RuntimeArtifactDownloadForDevice(ctx context.Context, deviceID, runtimeFami
 		if !runtimeArtifactCompatibleWithDevice(rec, device) {
 			return ErrRuntimeArtifactIncompatible
 		}
+		payloadReady, err := runtimeArtifactHasRunnablePayloadTx(ctx, db, driver, rec.ArtifactRevision, rec.RuntimeFamily)
+		if err != nil {
+			return err
+		}
+		if !payloadReady {
+			return ErrRuntimeArtifactInvalid
+		}
 		if int64(len(artifactBlob)) != rec.CompressedSize {
 			return ErrRuntimeArtifactInvalid
 		}
@@ -651,6 +792,9 @@ func updateRuntimeApplyStatusFromSummariesTx(ctx context.Context, tx *sql.Tx, dr
 			status.LastAttemptAtUnix = updatedAtUnix
 		}
 		if err := upsertRuntimeApplyStatusTx(ctx, tx, driver, status); err != nil {
+			return err
+		}
+		if err := deleteTerminalRuntimeAssignmentForStatusTx(ctx, tx, driver, status); err != nil {
 			return err
 		}
 	}
@@ -720,6 +864,9 @@ func normalizeRuntimeArtifactInsert(in RuntimeArtifactInsert) (RuntimeArtifactIn
 	if err != nil {
 		return RuntimeArtifactInsert{}, "", nil, "", err
 	}
+	if err := validateRuntimeArtifactRunnablePayload(in.RuntimeFamily, files); err != nil {
+		return RuntimeArtifactInsert{}, "", nil, "", fmt.Errorf("%w: %v", ErrRuntimeArtifactInvalid, err)
+	}
 	return in, manifestJSON, files, storageState, nil
 }
 
@@ -735,7 +882,7 @@ func normalizeAssignableRuntimeIdentity(runtimeFamily, runtimeID string) (string
 		}
 	case RuntimeFamilyPSGI:
 		switch id {
-		case "perl538":
+		case "perl536", "perl538", "perl540":
 		default:
 			return "", "", fmt.Errorf("%w: unsupported runtime_id", ErrRuntimeArtifactInvalid)
 		}
@@ -780,7 +927,8 @@ func normalizeRuntimeArtifactFiles(files []RuntimeArtifactFileMetadata) ([]Runti
 		if !runtimeArtifactFileKindPattern.MatchString(file.FileKind) || !hex64Pattern.MatchString(file.SHA256) {
 			return nil, fmt.Errorf("%w: invalid artifact file metadata", ErrRuntimeArtifactInvalid)
 		}
-		if file.SizeBytes <= 0 || file.SizeBytes > MaxRuntimeArtifactUncompressedBytes {
+		if file.SizeBytes < 0 || file.SizeBytes > MaxRuntimeArtifactUncompressedBytes ||
+			(file.SizeBytes == 0 && !strings.HasPrefix(file.ArchivePath, "rootfs/")) {
 			return nil, fmt.Errorf("%w: invalid artifact file size", ErrRuntimeArtifactInvalid)
 		}
 		if file.Mode < 0 || file.Mode > 0o777 {
@@ -794,6 +942,84 @@ func normalizeRuntimeArtifactFiles(files []RuntimeArtifactFileMetadata) ([]Runti
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ArchivePath < out[j].ArchivePath })
 	return out, nil
+}
+
+func runtimeArtifactHasRunnablePayloadTx(ctx context.Context, q queryerWithRows, driver, revision, runtimeFamily string) (bool, error) {
+	rows, err := q.QueryContext(ctx, `
+SELECT archive_path, file_kind, sha256, size_bytes, mode
+  FROM center_runtime_artifact_files
+ WHERE artifact_revision = `+placeholder(driver, 1), revision)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	files := []RuntimeArtifactFileMetadata{}
+	for rows.Next() {
+		var file RuntimeArtifactFileMetadata
+		if err := rows.Scan(&file.ArchivePath, &file.FileKind, &file.SHA256, &file.SizeBytes, &file.Mode); err != nil {
+			return false, err
+		}
+		files = append(files, file)
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return validateRuntimeArtifactRunnablePayload(runtimeFamily, files) == nil, nil
+}
+
+func validateRuntimeArtifactRunnablePayload(runtimeFamily string, files []RuntimeArtifactFileMetadata) error {
+	byPath := make(map[string]RuntimeArtifactFileMetadata, len(files))
+	for _, file := range files {
+		byPath[file.ArchivePath] = file
+	}
+	if !runtimeArtifactPayloadHasDynamicLoader(byPath) {
+		return fmt.Errorf("rootfs dynamic loader is missing")
+	}
+	switch strings.TrimSpace(runtimeFamily) {
+	case RuntimeFamilyPHPFPM:
+		if !runtimeArtifactPayloadHasExecutable(byPath, "rootfs/usr/local/sbin/php-fpm", "rootfs/usr/sbin/php-fpm") {
+			return fmt.Errorf("rootfs php-fpm executable is missing")
+		}
+		if !runtimeArtifactPayloadHasExecutable(byPath, "rootfs/usr/local/bin/php", "rootfs/usr/bin/php") {
+			return fmt.Errorf("rootfs php executable is missing")
+		}
+	case RuntimeFamilyPSGI:
+		if !runtimeArtifactPayloadHasExecutable(byPath, "rootfs/usr/local/bin/perl", "rootfs/usr/bin/perl") {
+			return fmt.Errorf("rootfs perl executable is missing")
+		}
+		if !runtimeArtifactPayloadHasExecutable(byPath, "rootfs/usr/local/bin/starman", "rootfs/usr/bin/starman") {
+			return fmt.Errorf("rootfs starman executable is missing")
+		}
+	default:
+		return fmt.Errorf("unsupported runtime family")
+	}
+	return nil
+}
+
+func runtimeArtifactPayloadHasExecutable(files map[string]RuntimeArtifactFileMetadata, candidates ...string) bool {
+	for _, candidate := range candidates {
+		file, ok := files[candidate]
+		if ok && file.SizeBytes > 0 && file.Mode&0o111 != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeArtifactPayloadHasDynamicLoader(files map[string]RuntimeArtifactFileMetadata) bool {
+	for archivePath, file := range files {
+		if !strings.HasPrefix(archivePath, "rootfs/") || file.SizeBytes <= 0 || file.Mode&0o111 == 0 {
+			continue
+		}
+		base := path.Base(archivePath)
+		if strings.HasPrefix(base, "ld-linux-") && strings.Contains(base, ".so.") {
+			return true
+		}
+		if strings.HasPrefix(base, "ld-musl-") && strings.HasSuffix(base, ".so.1") {
+			return true
+		}
+	}
+	return false
 }
 
 func cleanRuntimeArtifactArchivePath(raw string) (string, error) {
@@ -835,14 +1061,14 @@ func runtimeArtifactRecordFromInsert(in RuntimeArtifactInsert, storageState stri
 }
 
 func runtimeArtifactDuplicateMatches(existing RuntimeArtifactRecord, next RuntimeArtifactRecord) bool {
+	// Artifact revisions intentionally ignore manifest generated_at. Rebuilding the
+	// same runtime may therefore produce a different archive hash for the same file
+	// set, and should be idempotent instead of blocking rebuild flows.
 	return existing.ArtifactRevision == next.ArtifactRevision &&
-		existing.ArtifactHash == next.ArtifactHash &&
 		existing.RuntimeFamily == next.RuntimeFamily &&
 		existing.RuntimeID == next.RuntimeID &&
 		existing.DetectedVersion == next.DetectedVersion &&
 		existing.Target == next.Target &&
-		existing.CompressedSize == next.CompressedSize &&
-		existing.UncompressedSize == next.UncompressedSize &&
 		existing.FileCount == next.FileCount &&
 		existing.StorageState == next.StorageState &&
 		existing.BuilderVersion == next.BuilderVersion &&
@@ -1028,16 +1254,34 @@ func listCompatibleRuntimeArtifactsTx(ctx context.Context, db *sql.DB, driver st
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []RuntimeArtifactRecord{}
+	records := []RuntimeArtifactRecord{}
 	for rows.Next() {
 		var rec RuntimeArtifactRecord
 		if err := scanRuntimeArtifactRecord(rows, &rec); err != nil {
+			_ = rows.Close()
 			return nil, err
+		}
+		records = append(records, rec)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	out := []RuntimeArtifactRecord{}
+	for _, rec := range records {
+		payloadReady, err := runtimeArtifactHasRunnablePayloadTx(ctx, db, driver, rec.ArtifactRevision, rec.RuntimeFamily)
+		if err != nil {
+			return nil, err
+		}
+		if !payloadReady {
+			continue
 		}
 		out = append(out, rec)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func runtimeArtifactCompatibleWithDevice(artifact RuntimeArtifactRecord, device DeviceRecord) bool {
@@ -1059,16 +1303,17 @@ func upsertRuntimeAssignmentTx(ctx context.Context, tx *sql.Tx, driver string, i
 	case "mysql":
 		_, err := tx.ExecContext(ctx, `
 INSERT INTO center_device_runtime_assignments
-    (device_id, runtime_family, runtime_id, desired_artifact_revision, desired_state, reason, assigned_by, assigned_at_unix, updated_at_unix)
+    (device_id, runtime_family, runtime_id, desired_artifact_revision, desired_state, reason, assigned_by, assigned_at_unix, updated_at_unix, dispatched_at_unix)
 VALUES
-    (`+placeholders(driver, 9, 1)+`)
+    (`+placeholders(driver, 10, 1)+`)
 ON DUPLICATE KEY UPDATE
     desired_artifact_revision = VALUES(desired_artifact_revision),
     desired_state = VALUES(desired_state),
     reason = VALUES(reason),
     assigned_by = VALUES(assigned_by),
     assigned_at_unix = VALUES(assigned_at_unix),
-    updated_at_unix = VALUES(updated_at_unix)`,
+    updated_at_unix = VALUES(updated_at_unix),
+    dispatched_at_unix = 0`,
 			in.DeviceID,
 			in.RuntimeFamily,
 			in.RuntimeID,
@@ -1078,21 +1323,23 @@ ON DUPLICATE KEY UPDATE
 			in.AssignedBy,
 			in.AssignedAtUnix,
 			in.AssignedAtUnix,
+			int64(0),
 		)
 		return err
 	default:
 		_, err := tx.ExecContext(ctx, `
 INSERT INTO center_device_runtime_assignments
-    (device_id, runtime_family, runtime_id, desired_artifact_revision, desired_state, reason, assigned_by, assigned_at_unix, updated_at_unix)
+    (device_id, runtime_family, runtime_id, desired_artifact_revision, desired_state, reason, assigned_by, assigned_at_unix, updated_at_unix, dispatched_at_unix)
 VALUES
-    (`+placeholders(driver, 9, 1)+`)
+    (`+placeholders(driver, 10, 1)+`)
 ON CONFLICT(device_id, runtime_family, runtime_id) DO UPDATE SET
     desired_artifact_revision = excluded.desired_artifact_revision,
     desired_state = excluded.desired_state,
     reason = excluded.reason,
     assigned_by = excluded.assigned_by,
     assigned_at_unix = excluded.assigned_at_unix,
-    updated_at_unix = excluded.updated_at_unix`,
+    updated_at_unix = excluded.updated_at_unix,
+    dispatched_at_unix = 0`,
 			in.DeviceID,
 			in.RuntimeFamily,
 			in.RuntimeID,
@@ -1102,6 +1349,7 @@ ON CONFLICT(device_id, runtime_family, runtime_id) DO UPDATE SET
 			in.AssignedBy,
 			in.AssignedAtUnix,
 			in.AssignedAtUnix,
+			int64(0),
 		)
 		return err
 	}
@@ -1112,16 +1360,17 @@ func upsertRuntimeRemovalAssignmentTx(ctx context.Context, tx *sql.Tx, driver st
 	case "mysql":
 		_, err := tx.ExecContext(ctx, `
 INSERT INTO center_device_runtime_assignments
-    (device_id, runtime_family, runtime_id, desired_artifact_revision, desired_state, reason, assigned_by, assigned_at_unix, updated_at_unix)
+    (device_id, runtime_family, runtime_id, desired_artifact_revision, desired_state, reason, assigned_by, assigned_at_unix, updated_at_unix, dispatched_at_unix)
 VALUES
-    (`+placeholders(driver, 9, 1)+`)
+    (`+placeholders(driver, 10, 1)+`)
 ON DUPLICATE KEY UPDATE
     desired_artifact_revision = VALUES(desired_artifact_revision),
     desired_state = VALUES(desired_state),
     reason = VALUES(reason),
     assigned_by = VALUES(assigned_by),
     assigned_at_unix = VALUES(assigned_at_unix),
-    updated_at_unix = VALUES(updated_at_unix)`,
+    updated_at_unix = VALUES(updated_at_unix),
+    dispatched_at_unix = 0`,
 			in.DeviceID,
 			in.RuntimeFamily,
 			in.RuntimeID,
@@ -1131,21 +1380,23 @@ ON DUPLICATE KEY UPDATE
 			in.AssignedBy,
 			in.AssignedAtUnix,
 			in.AssignedAtUnix,
+			int64(0),
 		)
 		return err
 	default:
 		_, err := tx.ExecContext(ctx, `
 INSERT INTO center_device_runtime_assignments
-    (device_id, runtime_family, runtime_id, desired_artifact_revision, desired_state, reason, assigned_by, assigned_at_unix, updated_at_unix)
+    (device_id, runtime_family, runtime_id, desired_artifact_revision, desired_state, reason, assigned_by, assigned_at_unix, updated_at_unix, dispatched_at_unix)
 VALUES
-    (`+placeholders(driver, 9, 1)+`)
+    (`+placeholders(driver, 10, 1)+`)
 ON CONFLICT(device_id, runtime_family, runtime_id) DO UPDATE SET
     desired_artifact_revision = excluded.desired_artifact_revision,
     desired_state = excluded.desired_state,
     reason = excluded.reason,
     assigned_by = excluded.assigned_by,
     assigned_at_unix = excluded.assigned_at_unix,
-    updated_at_unix = excluded.updated_at_unix`,
+    updated_at_unix = excluded.updated_at_unix,
+    dispatched_at_unix = 0`,
 			in.DeviceID,
 			in.RuntimeFamily,
 			in.RuntimeID,
@@ -1155,6 +1406,7 @@ ON CONFLICT(device_id, runtime_family, runtime_id) DO UPDATE SET
 			in.AssignedBy,
 			in.AssignedAtUnix,
 			in.AssignedAtUnix,
+			int64(0),
 		)
 		return err
 	}
@@ -1179,10 +1431,31 @@ func loadRuntimeAssignmentTx(ctx context.Context, q queryer, driver, deviceID, r
 	return rec, nil
 }
 
-func listRuntimeAssignmentsForDeviceTx(ctx context.Context, db *sql.DB, driver string, deviceID string) ([]RuntimeAssignmentRecord, error) {
-	rows, err := db.QueryContext(ctx, runtimeAssignmentSelectSQL()+`
+func listRuntimeAssignmentsForDeviceTx(ctx context.Context, q queryerWithRows, driver string, deviceID string) ([]RuntimeAssignmentRecord, error) {
+	rows, err := q.QueryContext(ctx, runtimeAssignmentSelectSQL()+`
  WHERE a.device_id = `+placeholder(driver, 1)+`
  ORDER BY a.runtime_family ASC, a.runtime_id ASC`, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RuntimeAssignmentRecord{}
+	for rows.Next() {
+		var rec RuntimeAssignmentRecord
+		if err := scanRuntimeAssignmentRecord(rows, &rec); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func listVisibleRuntimeAssignmentsForDeviceTx(ctx context.Context, q queryerWithRows, driver string, deviceID string) ([]RuntimeAssignmentRecord, error) {
+	cutoff := time.Now().UTC().Unix() - RuntimeAssignmentDispatchLeaseSec
+	rows, err := q.QueryContext(ctx, runtimeAssignmentSelectSQL()+`
+ WHERE a.device_id = `+placeholder(driver, 1)+`
+   AND (a.dispatched_at_unix = 0 OR a.dispatched_at_unix <= `+placeholder(driver, 2)+`)
+ ORDER BY a.runtime_family ASC, a.runtime_id ASC`, deviceID, cutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -1201,7 +1474,7 @@ func listRuntimeAssignmentsForDeviceTx(ctx context.Context, db *sql.DB, driver s
 func runtimeAssignmentSelectSQL() string {
 	return `
 SELECT a.assignment_id, a.device_id, a.runtime_family, a.runtime_id, a.desired_artifact_revision,
-       a.desired_state, a.reason, a.assigned_by, a.assigned_at_unix, a.updated_at_unix,
+       a.desired_state, a.reason, a.assigned_by, a.assigned_at_unix, a.updated_at_unix, a.dispatched_at_unix,
        COALESCE(r.artifact_hash, ''), COALESCE(r.compressed_size_bytes, 0), COALESCE(r.uncompressed_size_bytes, 0), COALESCE(r.file_count, 0),
        COALESCE(r.detected_version, ''), COALESCE(r.storage_state, ''),
        COALESCE(r.target_os, ''), COALESCE(r.target_arch, ''), COALESCE(r.target_kernel_version, ''), COALESCE(r.target_distro_id, ''), COALESCE(r.target_distro_id_like, ''), COALESCE(r.target_distro_version, '')
@@ -1221,6 +1494,7 @@ func scanRuntimeAssignmentRecord(scanner rowScanner, rec *RuntimeAssignmentRecor
 		&rec.AssignedBy,
 		&rec.AssignedAtUnix,
 		&rec.UpdatedAtUnix,
+		&rec.DispatchedAtUnix,
 		&rec.ArtifactHash,
 		&rec.CompressedSize,
 		&rec.UncompressedSize,
@@ -1315,8 +1589,8 @@ ON CONFLICT(device_id, runtime_family, runtime_id) DO UPDATE SET
 	}
 }
 
-func listRuntimeApplyStatusForDeviceTx(ctx context.Context, db *sql.DB, driver string, deviceID string) ([]RuntimeApplyStatusRecord, error) {
-	rows, err := db.QueryContext(ctx, runtimeApplyStatusSelectSQL()+`
+func listRuntimeApplyStatusForDeviceTx(ctx context.Context, q queryerWithRows, driver string, deviceID string) ([]RuntimeApplyStatusRecord, error) {
+	rows, err := q.QueryContext(ctx, runtimeApplyStatusSelectSQL()+`
  WHERE device_id = `+placeholder(driver, 1)+`
  ORDER BY runtime_family ASC, runtime_id ASC`, deviceID)
 	if err != nil {
@@ -1334,8 +1608,8 @@ func listRuntimeApplyStatusForDeviceTx(ctx context.Context, db *sql.DB, driver s
 	return out, rows.Err()
 }
 
-func loadRuntimeApplyStatusMapTx(ctx context.Context, db *sql.DB, driver string, deviceID string) (map[string]RuntimeApplyStatusRecord, error) {
-	items, err := listRuntimeApplyStatusForDeviceTx(ctx, db, driver, deviceID)
+func loadRuntimeApplyStatusMapTx(ctx context.Context, q queryerWithRows, driver string, deviceID string) (map[string]RuntimeApplyStatusRecord, error) {
+	items, err := listRuntimeApplyStatusForDeviceTx(ctx, q, driver, deviceID)
 	if err != nil {
 		return nil, err
 	}

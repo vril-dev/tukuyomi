@@ -816,13 +816,21 @@ func normalizeRuntimeArtifactDownloadRequest(req RuntimeArtifactDownloadRequest,
 	if !hex64Pattern.MatchString(req.PublicKeyFingerprintSHA256) {
 		return RuntimeArtifactDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid public key fingerprint", ErrInvalidEnrollment)
 	}
-	if req.RuntimeFamily != RuntimeFamilyPHPFPM {
-		return RuntimeArtifactDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid runtime_family", ErrInvalidEnrollment)
-	}
-	switch req.RuntimeID {
-	case "php83", "php84", "php85":
+	switch req.RuntimeFamily {
+	case RuntimeFamilyPHPFPM:
+		switch req.RuntimeID {
+		case "php83", "php84", "php85":
+		default:
+			return RuntimeArtifactDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid runtime_id", ErrInvalidEnrollment)
+		}
+	case RuntimeFamilyPSGI:
+		switch req.RuntimeID {
+		case "perl536", "perl538", "perl540":
+		default:
+			return RuntimeArtifactDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid runtime_id", ErrInvalidEnrollment)
+		}
 	default:
-		return RuntimeArtifactDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid runtime_id", ErrInvalidEnrollment)
+		return RuntimeArtifactDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid runtime_family", ErrInvalidEnrollment)
 	}
 	if !hex64Pattern.MatchString(req.ArtifactRevision) {
 		return RuntimeArtifactDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid artifact_revision", ErrInvalidEnrollment)

@@ -24,6 +24,7 @@ import (
 
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/edgeartifactbundle"
+	"tukuyomi/internal/runtimeartifactbundle"
 )
 
 func TestPostEdgeDeviceEnrollmentCreatesIdentityAndSendsSignedRequest(t *testing.T) {
@@ -291,7 +292,8 @@ func TestApplyEdgeRuntimeRemovalDeletesUnusedManagedPHPBundle(t *testing.T) {
 	defer restoreAssignments()
 
 	tmp := t.TempDir()
-	inventoryPath := filepath.Join(tmp, "data", "php-fpm", "inventory.json")
+	t.Chdir(tmp)
+	inventoryPath := filepath.Join("data", "php-fpm", "inventory.json")
 	if err := os.MkdirAll(filepath.Dir(inventoryPath), 0o755); err != nil {
 		t.Fatalf("mkdir inventory: %v", err)
 	}
@@ -341,7 +343,8 @@ func TestApplyEdgeRuntimeRemovalBlocksReferencedPHPRuntime(t *testing.T) {
 	defer restoreAssignments()
 
 	tmp := t.TempDir()
-	inventoryPath := filepath.Join(tmp, "data", "php-fpm", "inventory.json")
+	t.Chdir(tmp)
+	inventoryPath := filepath.Join("data", "php-fpm", "inventory.json")
 	vhostPath := filepath.Join(tmp, "data", "php-fpm", "vhosts.json")
 	if err := os.MkdirAll(filepath.Dir(inventoryPath), 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
@@ -374,6 +377,242 @@ func TestApplyEdgeRuntimeRemovalBlocksReferencedPHPRuntime(t *testing.T) {
 	status := edgeRuntimeApplyStatusSnapshot()[edgeRuntimeAssignmentKey("php-fpm", "php83")]
 	if status.ApplyState != "blocked" || !strings.Contains(status.ApplyError, "app-php") {
 		t.Fatalf("apply status=%+v, want blocked with generated target", status)
+	}
+}
+
+func TestApplyEdgeRuntimeInstallDownloadsAndInstallsPHPArtifact(t *testing.T) {
+	restoreRuntime := resetPHPFoundationRuntimesForTest(t)
+	defer restoreRuntime()
+	restoreAssignments := resetEdgeRuntimeAssignmentStateForTest(t)
+	defer restoreAssignments()
+
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	inventoryPath := filepath.Join("data", "php-fpm", "inventory.json")
+	if err := os.MkdirAll(filepath.Dir(inventoryPath), 0o755); err != nil {
+		t.Fatalf("mkdir inventory: %v", err)
+	}
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+
+	artifact := buildGatewayRuntimeArtifactForTest(t, "php83")
+	identity := newEdgeDeviceIdentityForTest(t)
+	publicKey := publicKeyFromEdgeIdentityForTest(t, identity)
+	downloadCalls := 0
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/runtime-artifact-download" {
+			t.Fatalf("unexpected path=%q", r.URL.Path)
+		}
+		downloadCalls++
+		var req edgeRuntimeArtifactDownloadWireRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode download request: %v", err)
+		}
+		verifySignedEdgeRuntimeArtifactDownloadForTest(t, req, publicKey, identity.PublicKeyFingerprintSHA256)
+		if req.ArtifactRevision != artifact.Revision || req.ArtifactHash != artifact.ArtifactHash {
+			t.Fatalf("download request artifact=%s/%s want %s/%s", req.ArtifactRevision, req.ArtifactHash, artifact.Revision, artifact.ArtifactHash)
+		}
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(artifact.Compressed)
+	}))
+	defer center.Close()
+	identity.CenterURL = center.URL
+
+	applyEdgePHPRuntimeInstall(context.Background(), identity, assignmentForRuntimeArtifactForTest(artifact), "php83")
+
+	if downloadCalls != 1 {
+		t.Fatalf("downloadCalls=%d want 1", downloadCalls)
+	}
+	bundleDir := filepath.Join(phpRuntimeRootDirFromInventoryPath(inventoryPath), "binaries", "php83")
+	for _, name := range []string{"php-fpm", "php", "modules.json", "runtime.json", "rootfs/usr/local/sbin/php-fpm", "rootfs/usr/bin/php", "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"} {
+		if _, err := os.Stat(filepath.Join(bundleDir, filepath.FromSlash(name))); err != nil {
+			t.Fatalf("installed file %s missing: %v", name, err)
+		}
+	}
+	rawManifest, err := os.ReadFile(filepath.Join(bundleDir, "runtime.json"))
+	if err != nil {
+		t.Fatalf("read installed runtime manifest: %v", err)
+	}
+	var manifest phpRuntimeArtifactManifest
+	if err := json.Unmarshal(rawManifest, &manifest); err != nil {
+		t.Fatalf("decode installed runtime manifest: %v", err)
+	}
+	if manifest.BinaryPath != "data/php-fpm/binaries/php83/php-fpm" || manifest.CLIBinaryPath != "data/php-fpm/binaries/php83/php" {
+		t.Fatalf("installed manifest paths=%q/%q, want relative data paths", manifest.BinaryPath, manifest.CLIBinaryPath)
+	}
+	status := edgeRuntimeApplyStatusSnapshot()[edgeRuntimeAssignmentKey("php-fpm", "php83")]
+	if status.ApplyState != "installed" || status.ArtifactRevision != artifact.Revision || status.ArtifactHash != artifact.ArtifactHash {
+		t.Fatalf("apply status=%+v, want installed artifact", status)
+	}
+	summary := currentEdgeRuntimeInventorySummary()
+	if len(summary) != 1 || summary[0].RuntimeID != "php83" || summary[0].Source != "center" ||
+		summary[0].ArtifactRevision != artifact.Revision || summary[0].ArtifactHash != artifact.ArtifactHash ||
+		summary[0].ApplyState != "installed" {
+		t.Fatalf("summary=%+v, want installed center runtime", summary)
+	}
+}
+
+func TestApplyEdgeRuntimeInstallDownloadsAndInstallsPSGIArtifact(t *testing.T) {
+	restoreRuntime := resetPHPFoundationRuntimesForTest(t)
+	defer restoreRuntime()
+	restoreAssignments := resetEdgeRuntimeAssignmentStateForTest(t)
+	defer restoreAssignments()
+
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	inventoryPath := filepath.Join("data", "psgi", "inventory.json")
+	if err := os.MkdirAll(filepath.Dir(inventoryPath), 0o755); err != nil {
+		t.Fatalf("mkdir inventory: %v", err)
+	}
+	if err := os.WriteFile(inventoryPath, []byte(defaultPSGIRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	if err := InitPSGIRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPSGIRuntimeInventoryRuntime: %v", err)
+	}
+
+	artifact := buildGatewayPSGIRuntimeArtifactForTest(t, "perl538")
+	identity := newEdgeDeviceIdentityForTest(t)
+	publicKey := publicKeyFromEdgeIdentityForTest(t, identity)
+	downloadCalls := 0
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/runtime-artifact-download" {
+			t.Fatalf("unexpected path=%q", r.URL.Path)
+		}
+		downloadCalls++
+		var req edgeRuntimeArtifactDownloadWireRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode download request: %v", err)
+		}
+		verifySignedEdgeRuntimeArtifactDownloadForTest(t, req, publicKey, identity.PublicKeyFingerprintSHA256)
+		if req.ArtifactRevision != artifact.Revision || req.ArtifactHash != artifact.ArtifactHash {
+			t.Fatalf("download request artifact=%s/%s want %s/%s", req.ArtifactRevision, req.ArtifactHash, artifact.Revision, artifact.ArtifactHash)
+		}
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(artifact.Compressed)
+	}))
+	defer center.Close()
+	identity.CenterURL = center.URL
+
+	applyEdgePSGIRuntimeInstall(context.Background(), identity, assignmentForRuntimeArtifactForTest(artifact), "perl538")
+
+	if downloadCalls != 1 {
+		t.Fatalf("downloadCalls=%d want 1", downloadCalls)
+	}
+	bundleDir := filepath.Join(psgiRuntimeRootDirFromInventoryPath(inventoryPath), "binaries", "perl538")
+	for _, name := range []string{"perl", "starman", "modules.json", "runtime.json", "rootfs/usr/bin/perl", "rootfs/usr/bin/starman", "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"} {
+		if _, err := os.Stat(filepath.Join(bundleDir, filepath.FromSlash(name))); err != nil {
+			t.Fatalf("installed file %s missing: %v", name, err)
+		}
+	}
+	rawManifest, err := os.ReadFile(filepath.Join(bundleDir, "runtime.json"))
+	if err != nil {
+		t.Fatalf("read installed runtime manifest: %v", err)
+	}
+	var manifest psgiRuntimeArtifactManifest
+	if err := json.Unmarshal(rawManifest, &manifest); err != nil {
+		t.Fatalf("decode installed runtime manifest: %v", err)
+	}
+	if manifest.PerlPath != "data/psgi/binaries/perl538/perl" || manifest.StarmanPath != "data/psgi/binaries/perl538/starman" {
+		t.Fatalf("installed manifest paths=%q/%q, want relative data paths", manifest.PerlPath, manifest.StarmanPath)
+	}
+	status := edgeRuntimeApplyStatusSnapshot()[edgeRuntimeAssignmentKey("psgi", "perl538")]
+	if status.ApplyState != "installed" || status.ArtifactRevision != artifact.Revision || status.ArtifactHash != artifact.ArtifactHash {
+		t.Fatalf("apply status=%+v, want installed artifact", status)
+	}
+	var found bool
+	for _, item := range currentEdgeRuntimeInventorySummary() {
+		if item.RuntimeFamily != "psgi" || item.RuntimeID != "perl538" {
+			continue
+		}
+		found = true
+		if item.Source != "center" || item.ArtifactRevision != artifact.Revision ||
+			item.ArtifactHash != artifact.ArtifactHash || item.ApplyState != "installed" {
+			t.Fatalf("summary item=%+v, want installed center PSGI runtime", item)
+		}
+	}
+	if !found {
+		t.Fatalf("summary missing installed PSGI runtime: %+v", currentEdgeRuntimeInventorySummary())
+	}
+}
+
+func TestApplyEdgeRuntimeInstallRejectsHashMismatch(t *testing.T) {
+	restoreRuntime := resetPHPFoundationRuntimesForTest(t)
+	defer restoreRuntime()
+	restoreAssignments := resetEdgeRuntimeAssignmentStateForTest(t)
+	defer restoreAssignments()
+
+	tmp := t.TempDir()
+	inventoryPath := filepath.Join(tmp, "data", "php-fpm", "inventory.json")
+	if err := os.MkdirAll(filepath.Dir(inventoryPath), 0o755); err != nil {
+		t.Fatalf("mkdir inventory: %v", err)
+	}
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+
+	artifact := buildGatewayRuntimeArtifactForTest(t, "php83")
+	identity := newEdgeDeviceIdentityForTest(t)
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(artifact.Compressed)
+	}))
+	defer center.Close()
+	identity.CenterURL = center.URL
+	assignment := assignmentForRuntimeArtifactForTest(artifact)
+	assignment.ArtifactHash = strings.Repeat("a", 64)
+
+	applyEdgePHPRuntimeInstall(context.Background(), identity, assignment, "php83")
+
+	status := edgeRuntimeApplyStatusSnapshot()[edgeRuntimeAssignmentKey("php-fpm", "php83")]
+	if status.ApplyState != "failed" || !strings.Contains(status.ApplyError, "hash mismatch") {
+		t.Fatalf("apply status=%+v, want failed hash mismatch", status)
+	}
+	bundleDir := filepath.Join(phpRuntimeRootDirFromInventoryPath(inventoryPath), "binaries", "php83")
+	if _, err := os.Stat(bundleDir); !os.IsNotExist(err) {
+		t.Fatalf("bundle dir stat err=%v, want not exist", err)
+	}
+}
+
+func TestInstallEdgePHPRuntimeArtifactRejectsTargetMismatch(t *testing.T) {
+	restoreRuntime := resetPHPFoundationRuntimesForTest(t)
+	defer restoreRuntime()
+	restoreAssignments := resetEdgeRuntimeAssignmentStateForTest(t)
+	defer restoreAssignments()
+
+	tmp := t.TempDir()
+	inventoryPath := filepath.Join(tmp, "data", "php-fpm", "inventory.json")
+	if err := os.MkdirAll(filepath.Dir(inventoryPath), 0o755); err != nil {
+		t.Fatalf("mkdir inventory: %v", err)
+	}
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+
+	artifact := buildGatewayRuntimeArtifactForTest(t, "php83")
+	artifact.Manifest.Target.DistroVersion = artifact.Manifest.Target.DistroVersion + "-mismatch"
+	if edgeRuntimeArtifactTargetMatchesGateway(artifact.Manifest.Target) {
+		t.Fatal("test target should not match gateway platform")
+	}
+	if err := installEdgePHPRuntimeArtifact(artifact.Compressed, runtimeartifactbundle.Parsed{
+		Manifest:         artifact.Manifest,
+		Files:            nil,
+		Revision:         artifact.Revision,
+		ArtifactHash:     artifact.ArtifactHash,
+		CompressedSize:   artifact.CompressedSize,
+		UncompressedSize: artifact.UncompressedSize,
+		FileCount:        artifact.FileCount,
+	}, assignmentForRuntimeArtifactForTest(artifact)); err == nil {
+		t.Fatal("install should reject mismatched target before extraction")
 	}
 }
 
@@ -1137,6 +1376,26 @@ func verifySignedEdgeRuleArtifactBundleForTest(t *testing.T, req edgeRuleArtifac
 	return parsed
 }
 
+func verifySignedEdgeRuntimeArtifactDownloadForTest(t *testing.T, req edgeRuntimeArtifactDownloadWireRequest, pub ed25519.PublicKey, fingerprint string) {
+	t.Helper()
+	if len(pub) != ed25519.PublicKeySize {
+		t.Fatalf("public key was not captured")
+	}
+	if req.BodyHash != edgeRuntimeArtifactDownloadBodyHash(req) {
+		t.Fatalf("runtime artifact download body_hash mismatch")
+	}
+	if req.PublicKeyFingerprintSHA256 != fingerprint {
+		t.Fatalf("fingerprint=%q want %q", req.PublicKeyFingerprintSHA256, fingerprint)
+	}
+	signature, err := base64.StdEncoding.DecodeString(req.SignatureB64)
+	if err != nil {
+		t.Fatalf("signature b64: %v", err)
+	}
+	if !ed25519.Verify(pub, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)), signature) {
+		t.Fatalf("runtime artifact download signature verification failed")
+	}
+}
+
 func setEdgeRuntimeForTest(enabled bool, deviceAuthEnabled bool) func() {
 	oldEdgeEnabled := config.EdgeEnabled
 	oldDeviceAuthEnabled := config.EdgeDeviceAuthEnabled
@@ -1172,6 +1431,133 @@ func resetEdgeRuntimeAssignmentStateForTest(t *testing.T) func() {
 		edgeRuntimeApplyStatusMu.Lock()
 		edgeRuntimeApplyStatuses = prevStatuses
 		edgeRuntimeApplyStatusMu.Unlock()
+	}
+}
+
+func newEdgeDeviceIdentityForTest(t *testing.T) edgeDeviceIdentityRecord {
+	t.Helper()
+	identity, err := newEdgeDeviceIdentity("edge-runtime-install", "default")
+	if err != nil {
+		t.Fatalf("newEdgeDeviceIdentity: %v", err)
+	}
+	return identity
+}
+
+func publicKeyFromEdgeIdentityForTest(t *testing.T, identity edgeDeviceIdentityRecord) ed25519.PublicKey {
+	t.Helper()
+	_, publicDER, err := parseEdgeDevicePrivateKey(identity.PrivateKeyPEM)
+	if err != nil {
+		t.Fatalf("parseEdgeDevicePrivateKey: %v", err)
+	}
+	publicAny, err := x509.ParsePKIXPublicKey(publicDER)
+	if err != nil {
+		t.Fatalf("parse public key: %v", err)
+	}
+	publicKey, ok := publicAny.(ed25519.PublicKey)
+	if !ok {
+		t.Fatalf("public key is not Ed25519")
+	}
+	return publicKey
+}
+
+func buildGatewayRuntimeArtifactForTest(t *testing.T, runtimeID string) runtimeartifactbundle.Build {
+	t.Helper()
+	platform := currentEdgeGatewayPlatformMetadata()
+	if platform.OS != "linux" || platform.Arch == "" || platform.DistroID == "" || platform.DistroVersion == "" {
+		t.Skipf("runtime artifact install test requires linux platform metadata, got %+v", platform)
+	}
+	build, err := runtimeartifactbundle.BuildBundle(runtimeartifactbundle.BuildInput{
+		RuntimeFamily:   runtimeartifactbundle.RuntimeFamilyPHPFPM,
+		RuntimeID:       runtimeID,
+		DisplayName:     defaultDisplayNameForRuntimeID(runtimeID),
+		DetectedVersion: "8.3.30",
+		Target: runtimeartifactbundle.TargetKey{
+			OS:            platform.OS,
+			Arch:          platform.Arch,
+			KernelVersion: platform.KernelVersion,
+			DistroID:      platform.DistroID,
+			DistroIDLike:  platform.DistroIDLike,
+			DistroVersion: platform.DistroVersion,
+		},
+		BuilderVersion: "test-builder",
+		BuilderProfile: "test-profile",
+		GeneratedAt:    time.Unix(1000, 0).UTC(),
+		Files: []runtimeartifactbundle.File{
+			{
+				ArchivePath: "runtime.json",
+				FileKind:    "metadata",
+				Mode:        0o644,
+				Body:        []byte(`{"runtime_id":"` + runtimeID + `","display_name":"` + defaultDisplayNameForRuntimeID(runtimeID) + `","detected_version":"8.3.30","binary_path":"data/php-fpm/binaries/` + runtimeID + `/php-fpm","cli_binary_path":"data/php-fpm/binaries/` + runtimeID + `/php","source":"center"}`),
+			},
+			{ArchivePath: "modules.json", FileKind: "metadata", Mode: 0o644, Body: []byte(`["core","date"]`)},
+			{ArchivePath: "php-fpm", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "php", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "rootfs/usr/local/sbin/php-fpm", FileKind: "rootfs", Mode: 0o755, Body: []byte("php-fpm-binary")},
+			{ArchivePath: "rootfs/usr/bin/php", FileKind: "rootfs", Mode: 0o755, Body: []byte("php-binary")},
+			{ArchivePath: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2", FileKind: "rootfs", Mode: 0o755, Body: []byte("loader")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("build runtime artifact: %v", err)
+	}
+	return build
+}
+
+func buildGatewayPSGIRuntimeArtifactForTest(t *testing.T, runtimeID string) runtimeartifactbundle.Build {
+	t.Helper()
+	platform := currentEdgeGatewayPlatformMetadata()
+	if platform.OS != "linux" || platform.Arch == "" || platform.DistroID == "" || platform.DistroVersion == "" {
+		t.Skipf("runtime artifact install test requires linux platform metadata, got %+v", platform)
+	}
+	build, err := runtimeartifactbundle.BuildBundle(runtimeartifactbundle.BuildInput{
+		RuntimeFamily:   runtimeartifactbundle.RuntimeFamilyPSGI,
+		RuntimeID:       runtimeID,
+		DisplayName:     defaultDisplayNameForPSGIRuntimeID(runtimeID),
+		DetectedVersion: "v5.38.5",
+		Target: runtimeartifactbundle.TargetKey{
+			OS:            platform.OS,
+			Arch:          platform.Arch,
+			KernelVersion: platform.KernelVersion,
+			DistroID:      platform.DistroID,
+			DistroIDLike:  platform.DistroIDLike,
+			DistroVersion: platform.DistroVersion,
+		},
+		BuilderVersion: "test-builder",
+		BuilderProfile: "test-profile",
+		GeneratedAt:    time.Unix(1000, 0).UTC(),
+		Files: []runtimeartifactbundle.File{
+			{
+				ArchivePath: "runtime.json",
+				FileKind:    "metadata",
+				Mode:        0o644,
+				Body:        []byte(`{"runtime_id":"` + runtimeID + `","display_name":"` + defaultDisplayNameForPSGIRuntimeID(runtimeID) + `","detected_version":"v5.38.5","perl_path":"data/psgi/binaries/` + runtimeID + `/perl","starman_path":"data/psgi/binaries/` + runtimeID + `/starman","source":"center"}`),
+			},
+			{ArchivePath: "modules.json", FileKind: "metadata", Mode: 0o644, Body: []byte(`["plack","starman"]`)},
+			{ArchivePath: "perl", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "starman", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "rootfs/usr/bin/perl", FileKind: "rootfs", Mode: 0o755, Body: []byte("perl-binary")},
+			{ArchivePath: "rootfs/usr/bin/starman", FileKind: "rootfs", Mode: 0o755, Body: []byte("starman-binary")},
+			{ArchivePath: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2", FileKind: "rootfs", Mode: 0o755, Body: []byte("loader")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("build PSGI runtime artifact: %v", err)
+	}
+	return build
+}
+
+func assignmentForRuntimeArtifactForTest(artifact runtimeartifactbundle.Build) edgeRuntimeDeviceAssignment {
+	return edgeRuntimeDeviceAssignment{
+		RuntimeFamily:    artifact.Manifest.RuntimeFamily,
+		RuntimeID:        artifact.Manifest.RuntimeID,
+		ArtifactRevision: artifact.Revision,
+		ArtifactHash:     artifact.ArtifactHash,
+		CompressedSize:   artifact.CompressedSize,
+		UncompressedSize: artifact.UncompressedSize,
+		FileCount:        artifact.FileCount,
+		DetectedVersion:  artifact.Manifest.DetectedVersion,
+		DesiredState:     "installed",
+		AssignedAtUnix:   time.Now().UTC().Unix(),
 	}
 }
 

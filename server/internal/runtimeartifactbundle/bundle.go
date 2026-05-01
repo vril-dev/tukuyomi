@@ -22,10 +22,11 @@ const (
 	SchemaVersion = 1
 
 	RuntimeFamilyPHPFPM = "php-fpm"
+	RuntimeFamilyPSGI   = "psgi"
 
 	MaxCompressedBytes   = 512 * 1024 * 1024
 	MaxUncompressedBytes = 2 * 1024 * 1024 * 1024
-	MaxManifestBytes     = 2 * 1024 * 1024
+	MaxManifestBytes     = 8 * 1024 * 1024
 	MaxMetadataFileBytes = 1 * 1024 * 1024
 	MaxFiles             = 100000
 )
@@ -117,6 +118,10 @@ type runtimeJSON struct {
 	RuntimeID       string `json:"runtime_id"`
 	DisplayName     string `json:"display_name,omitempty"`
 	DetectedVersion string `json:"detected_version"`
+	BinaryPath      string `json:"binary_path,omitempty"`
+	CLIBinaryPath   string `json:"cli_binary_path,omitempty"`
+	PerlPath        string `json:"perl_path,omitempty"`
+	StarmanPath     string `json:"starman_path,omitempty"`
 	Source          string `json:"source,omitempty"`
 }
 
@@ -416,7 +421,7 @@ func normalizeFiles(files []File) ([]File, error) {
 		if !fileKindPattern.MatchString(file.FileKind) {
 			return nil, fmt.Errorf("invalid runtime artifact file kind")
 		}
-		if len(file.Body) == 0 {
+		if len(file.Body) == 0 && !strings.HasPrefix(archivePath, "rootfs/") {
 			return nil, fmt.Errorf("runtime artifact file %q is empty", file.ArchivePath)
 		}
 		if file.Mode == 0 {
@@ -457,11 +462,9 @@ func validateManifest(manifest Manifest) error {
 	if len(manifest.Files) == 0 || len(manifest.Files) > MaxFiles {
 		return fmt.Errorf("invalid runtime artifact file count")
 	}
-	required := map[string]bool{
-		"runtime.json": false,
-		"modules.json": false,
-		"php-fpm":      false,
-		"php":          false,
+	required, err := requiredRuntimeArtifactFiles(manifest.RuntimeFamily)
+	if err != nil {
+		return err
 	}
 	seen := map[string]struct{}{}
 	for _, file := range manifest.Files {
@@ -472,6 +475,11 @@ func validateManifest(manifest Manifest) error {
 			return fmt.Errorf("duplicate runtime artifact archive path %q", file.ArchivePath)
 		}
 		seen[file.ArchivePath] = struct{}{}
+		if runtimeTopLevelExecutable(file.ArchivePath) {
+			if _, ok := required[file.ArchivePath]; !ok {
+				return fmt.Errorf("runtime artifact contains unexpected executable %q for %s", file.ArchivePath, manifest.RuntimeFamily)
+			}
+		}
 		if _, ok := required[file.ArchivePath]; ok {
 			required[file.ArchivePath] = true
 		}
@@ -481,7 +489,65 @@ func validateManifest(manifest Manifest) error {
 			return fmt.Errorf("runtime artifact required file %q is missing", name)
 		}
 	}
+	if err := validateRuntimePayloadFiles(manifest.RuntimeFamily, manifest.Files); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateRuntimePayloadFiles(runtimeFamily string, files []FileManifest) error {
+	byPath := make(map[string]FileManifest, len(files))
+	for _, file := range files {
+		byPath[file.ArchivePath] = file
+	}
+	if !runtimePayloadHasDynamicLoader(byPath) {
+		return fmt.Errorf("runtime artifact rootfs dynamic loader is missing")
+	}
+	switch strings.TrimSpace(runtimeFamily) {
+	case RuntimeFamilyPHPFPM:
+		if !runtimePayloadHasExecutable(byPath, "rootfs/usr/local/sbin/php-fpm", "rootfs/usr/sbin/php-fpm") {
+			return fmt.Errorf("runtime artifact rootfs php-fpm executable is missing")
+		}
+		if !runtimePayloadHasExecutable(byPath, "rootfs/usr/local/bin/php", "rootfs/usr/bin/php") {
+			return fmt.Errorf("runtime artifact rootfs php executable is missing")
+		}
+	case RuntimeFamilyPSGI:
+		if !runtimePayloadHasExecutable(byPath, "rootfs/usr/local/bin/perl", "rootfs/usr/bin/perl") {
+			return fmt.Errorf("runtime artifact rootfs perl executable is missing")
+		}
+		if !runtimePayloadHasExecutable(byPath, "rootfs/usr/local/bin/starman", "rootfs/usr/bin/starman") {
+			return fmt.Errorf("runtime artifact rootfs starman executable is missing")
+		}
+	default:
+		return fmt.Errorf("unsupported runtime artifact family")
+	}
+	return nil
+}
+
+func runtimePayloadHasExecutable(files map[string]FileManifest, candidates ...string) bool {
+	for _, candidate := range candidates {
+		file, ok := files[candidate]
+		if ok && file.SizeBytes > 0 && file.Mode&0o111 != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimePayloadHasDynamicLoader(files map[string]FileManifest) bool {
+	for archivePath, file := range files {
+		if !strings.HasPrefix(archivePath, "rootfs/") || file.SizeBytes <= 0 || file.Mode&0o111 == 0 {
+			continue
+		}
+		base := path.Base(archivePath)
+		if strings.HasPrefix(base, "ld-linux-") && strings.Contains(base, ".so.") {
+			return true
+		}
+		if strings.HasPrefix(base, "ld-musl-") && strings.HasSuffix(base, ".so.1") {
+			return true
+		}
+	}
+	return false
 }
 
 func validateManifestFile(file FileManifest) error {
@@ -501,8 +567,8 @@ func validateManifestFile(file FileManifest) error {
 	if file.SHA256 != strings.ToLower(file.SHA256) {
 		return fmt.Errorf("invalid runtime artifact file hash")
 	}
-	if file.SizeBytes <= 0 || file.SizeBytes > MaxUncompressedBytes {
-		return fmt.Errorf("invalid runtime artifact file size")
+	if file.SizeBytes < 0 || file.SizeBytes > MaxUncompressedBytes || (file.SizeBytes == 0 && !strings.HasPrefix(archivePath, "rootfs/")) {
+		return fmt.Errorf("invalid runtime artifact file size for %q: %d", archivePath, file.SizeBytes)
 	}
 	if file.Mode < 0 || file.Mode > 0o777 {
 		return fmt.Errorf("invalid runtime artifact file mode")
@@ -516,7 +582,7 @@ func validateFileKindForPath(archivePath, fileKind string) error {
 		if fileKind != "metadata" {
 			return fmt.Errorf("invalid runtime artifact metadata file kind")
 		}
-	case "php-fpm", "php":
+	case "php-fpm", "php", "perl", "starman":
 		if fileKind != "binary" {
 			return fmt.Errorf("invalid runtime artifact binary file kind")
 		}
@@ -530,14 +596,53 @@ func validateFileKindForPath(archivePath, fileKind string) error {
 }
 
 func validateRuntimeIdentity(runtimeFamily, runtimeID string) error {
-	if strings.TrimSpace(runtimeFamily) != RuntimeFamilyPHPFPM {
+	switch strings.TrimSpace(runtimeFamily) {
+	case RuntimeFamilyPHPFPM:
+		switch strings.TrimSpace(runtimeID) {
+		case "php83", "php84", "php85":
+			return nil
+		default:
+			return fmt.Errorf("unsupported runtime artifact id")
+		}
+	case RuntimeFamilyPSGI:
+		switch strings.TrimSpace(runtimeID) {
+		case "perl536", "perl538", "perl540":
+			return nil
+		default:
+			return fmt.Errorf("unsupported runtime artifact id")
+		}
+	default:
 		return fmt.Errorf("unsupported runtime artifact family")
 	}
-	switch strings.TrimSpace(runtimeID) {
-	case "php83", "php84", "php85":
-		return nil
+}
+
+func requiredRuntimeArtifactFiles(runtimeFamily string) (map[string]bool, error) {
+	switch strings.TrimSpace(runtimeFamily) {
+	case RuntimeFamilyPHPFPM:
+		return map[string]bool{
+			"runtime.json": false,
+			"modules.json": false,
+			"php-fpm":      false,
+			"php":          false,
+		}, nil
+	case RuntimeFamilyPSGI:
+		return map[string]bool{
+			"runtime.json": false,
+			"modules.json": false,
+			"perl":         false,
+			"starman":      false,
+		}, nil
 	default:
-		return fmt.Errorf("unsupported runtime artifact id")
+		return nil, fmt.Errorf("unsupported runtime artifact family")
+	}
+}
+
+func runtimeTopLevelExecutable(archivePath string) bool {
+	switch archivePath {
+	case "php-fpm", "php", "perl", "starman":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -573,6 +678,10 @@ func validateRuntimeJSON(raw []byte, manifest Manifest) error {
 		return fmt.Errorf("runtime.json detected_version mismatch")
 	}
 	if !metadataPattern.MatchString(meta.DisplayName) || len(meta.DisplayName) > 128 ||
+		!metadataPattern.MatchString(meta.BinaryPath) || len(meta.BinaryPath) > 128 ||
+		!metadataPattern.MatchString(meta.CLIBinaryPath) || len(meta.CLIBinaryPath) > 128 ||
+		!metadataPattern.MatchString(meta.PerlPath) || len(meta.PerlPath) > 128 ||
+		!metadataPattern.MatchString(meta.StarmanPath) || len(meta.StarmanPath) > 128 ||
 		!metadataPattern.MatchString(meta.Source) || len(meta.Source) > 32 {
 		return fmt.Errorf("invalid runtime.json metadata")
 	}
@@ -619,7 +728,7 @@ func normalizeTarget(target TargetKey) TargetKey {
 
 func allowedRuntimeArchivePath(name string) bool {
 	switch name {
-	case "runtime.json", "modules.json", "php-fpm", "php":
+	case "runtime.json", "modules.json", "php-fpm", "php", "perl", "starman":
 		return true
 	default:
 		return strings.HasPrefix(name, "rootfs/")

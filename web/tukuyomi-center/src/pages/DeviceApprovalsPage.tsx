@@ -105,72 +105,6 @@ type DeviceConfigSnapshotListResponse = {
   next_offset: number;
 };
 
-type RuntimeTargetKey = {
-  os?: string;
-  arch?: string;
-  kernel_version?: string;
-  distro_id?: string;
-  distro_id_like?: string;
-  distro_version?: string;
-};
-
-type RuntimeArtifactRecord = {
-  artifact_revision: string;
-  artifact_hash: string;
-  runtime_family: string;
-  runtime_id: string;
-  detected_version?: string;
-  target?: RuntimeTargetKey;
-  compressed_size: number;
-  uncompressed_size: number;
-  file_count: number;
-  storage_state: string;
-  builder_version?: string;
-  builder_profile?: string;
-  created_by?: string;
-  created_at_unix: number;
-};
-
-type RuntimeAssignmentRecord = {
-  assignment_id: number;
-  device_id: string;
-  runtime_family: string;
-  runtime_id: string;
-  desired_artifact_revision: string;
-  desired_state: string;
-  reason?: string;
-  assigned_by?: string;
-  assigned_at_unix: number;
-  updated_at_unix: number;
-  artifact_hash: string;
-  compressed_size: number;
-  uncompressed_size: number;
-  file_count: number;
-  detected_version?: string;
-  storage_state: string;
-  target?: RuntimeTargetKey;
-};
-
-type RuntimeApplyStatusRecord = {
-  device_id: string;
-  runtime_family: string;
-  runtime_id: string;
-  desired_artifact_revision?: string;
-  local_artifact_revision?: string;
-  local_artifact_hash?: string;
-  apply_state?: string;
-  apply_error?: string;
-  last_attempt_at_unix: number;
-  updated_at_unix: number;
-};
-
-type RuntimeDeploymentResponse = {
-  device?: DeviceRecord;
-  artifacts?: RuntimeArtifactRecord[];
-  assignments?: RuntimeAssignmentRecord[];
-  apply_status?: RuntimeApplyStatusRecord[];
-};
-
 type EnrollmentTokenRecord = {
   token_id: number;
   token_prefix: string;
@@ -295,14 +229,6 @@ function platformTitle(device: DeviceRecord) {
     .join(" | ");
 }
 
-function runtimeTargetLabel(target?: RuntimeTargetKey) {
-  if (!target) {
-    return "-";
-  }
-  const distro = [target.distro_id, target.distro_version].filter(Boolean).join(" ");
-  return [distro || target.os, target.arch].filter(Boolean).join(" / ") || "-";
-}
-
 function configSnapshotDownloadPath(device: DeviceRecord) {
   return `${getAPIBasePath()}/devices/${encodeURIComponent(device.device_id)}/config-snapshot`;
 }
@@ -343,12 +269,6 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
   const [configSnapshotLoading, setConfigSnapshotLoading] = useState(false);
   const [configSnapshotMessage, setConfigSnapshotMessage] = useState("");
   const [configSnapshotViewer, setConfigSnapshotViewer] = useState<{ revision: string; payload: string } | null>(null);
-  const [runtimeDeployment, setRuntimeDeployment] = useState<RuntimeDeploymentResponse | null>(null);
-  const [runtimeDeploymentLoading, setRuntimeDeploymentLoading] = useState(false);
-  const [runtimeDeploymentMessage, setRuntimeDeploymentMessage] = useState("");
-  const [assigningRuntimeKey, setAssigningRuntimeKey] = useState("");
-  const [removingRuntimeKey, setRemovingRuntimeKey] = useState("");
-  const [clearingRuntimeKey, setClearingRuntimeKey] = useState("");
   const [tokenForm, setTokenForm] = useState({
     label: "",
     maxUses: String(DEFAULT_ENROLLMENT_TOKEN_MAX_USES),
@@ -418,29 +338,6 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
   }, [devices, selectedDeviceID]);
   const managedDeviceID = managedDevice?.device_id || "";
 
-  const loadRuntimeDeployment = useCallback(
-    async (deviceID: string) => {
-      setRuntimeDeploymentLoading(true);
-      setRuntimeDeploymentMessage("");
-      try {
-        const data = await apiGetJson<RuntimeDeploymentResponse>(`/devices/${encodeURIComponent(deviceID)}/runtime-deployment`);
-        setRuntimeDeployment({
-          device: data.device,
-          artifacts: Array.isArray(data.artifacts) ? data.artifacts : [],
-          assignments: Array.isArray(data.assignments) ? data.assignments : [],
-          apply_status: Array.isArray(data.apply_status) ? data.apply_status : [],
-        });
-      } catch (err) {
-        const fallback = tx("Failed to load runtime deployment");
-        setRuntimeDeployment(null);
-        setRuntimeDeploymentMessage(err instanceof Error ? err.message || fallback : fallback);
-      } finally {
-        setRuntimeDeploymentLoading(false);
-      }
-    },
-    [tx],
-  );
-
   useEffect(() => {
     if (!managedDeviceID) {
       setConfigSnapshots([]);
@@ -448,19 +345,10 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
       setConfigSnapshotNextOffset(0);
       setConfigSnapshotMessage("");
       setConfigSnapshotViewer(null);
-      setRuntimeDeployment(null);
-      setRuntimeDeploymentMessage("");
       return;
     }
     void loadConfigSnapshots(managedDeviceID, configSnapshotOffset);
   }, [managedDeviceID, configSnapshotOffset, loadConfigSnapshots]);
-
-  useEffect(() => {
-    if (!managedDeviceID) {
-      return;
-    }
-    void loadRuntimeDeployment(managedDeviceID);
-  }, [managedDeviceID, loadRuntimeDeployment]);
 
   async function viewConfigSnapshot(deviceID: string, revision: string) {
     setConfigSnapshotMessage("");
@@ -481,10 +369,6 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
     setConfigSnapshots([]);
     setConfigSnapshotMessage("");
     setConfigSnapshotViewer(null);
-    setRuntimeDeployment(null);
-    setRuntimeDeploymentMessage("");
-    setAssigningRuntimeKey("");
-    setClearingRuntimeKey("");
   }
 
   function openDeviceActions(device: DeviceRecord) {
@@ -589,73 +473,6 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
     }
   }
 
-  async function assignRuntimeArtifact(artifact: RuntimeArtifactRecord) {
-    if (!managedDeviceID) {
-      return;
-    }
-    const key = `${artifact.runtime_family}:${artifact.runtime_id}:${artifact.artifact_revision}`;
-    setAssigningRuntimeKey(key);
-    setRuntimeDeploymentMessage("");
-    try {
-      await apiPostJson(`/devices/${encodeURIComponent(managedDeviceID)}/runtime-assignments`, {
-        runtime_family: artifact.runtime_family,
-        runtime_id: artifact.runtime_id,
-        artifact_revision: artifact.artifact_revision,
-        reason: "assigned from center ui",
-      });
-      await loadRuntimeDeployment(managedDeviceID);
-    } catch (err) {
-      const fallback = tx("Failed to assign runtime artifact");
-      setRuntimeDeploymentMessage(err instanceof Error ? err.message || fallback : fallback);
-    } finally {
-      setAssigningRuntimeKey("");
-    }
-  }
-
-  async function clearRuntimeAssignment(assignment: RuntimeAssignmentRecord) {
-    if (!managedDeviceID) {
-      return;
-    }
-    const key = `${assignment.runtime_family}:${assignment.runtime_id}`;
-    setClearingRuntimeKey(key);
-    setRuntimeDeploymentMessage("");
-    try {
-      await apiPostJson(`/devices/${encodeURIComponent(managedDeviceID)}/runtime-assignments/clear`, {
-        runtime_family: assignment.runtime_family,
-        runtime_id: assignment.runtime_id,
-      });
-      await loadRuntimeDeployment(managedDeviceID);
-    } catch (err) {
-      const fallback = tx("Failed to clear runtime assignment");
-      setRuntimeDeploymentMessage(err instanceof Error ? err.message || fallback : fallback);
-    } finally {
-      setClearingRuntimeKey("");
-    }
-  }
-
-  async function requestRuntimeRemoval(runtime: DeviceRuntimeSummary) {
-    if (!managedDeviceID) {
-      return;
-    }
-    const key = `${runtime.runtime_family}:${runtime.runtime_id}`;
-    setRemovingRuntimeKey(key);
-    setRuntimeDeploymentMessage("");
-    try {
-      await apiPostJson(`/devices/${encodeURIComponent(managedDeviceID)}/runtime-assignments/remove`, {
-        runtime_family: runtime.runtime_family,
-        runtime_id: runtime.runtime_id,
-        reason: "removal requested from center ui",
-      });
-      await load();
-      await loadRuntimeDeployment(managedDeviceID);
-    } catch (err) {
-      const fallback = tx("Failed to request runtime removal");
-      setRuntimeDeploymentMessage(err instanceof Error ? err.message || fallback : fallback);
-    } finally {
-      setRemovingRuntimeKey("");
-    }
-  }
-
   const linkedTokenRefs = useMemo(() => {
     const ids = new Set<number>();
     const prefixes = new Set<string>();
@@ -697,18 +514,6 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
   });
   const hiddenTokenCount = tokens.length - visibleByDefaultTokens.length;
   const visibleTokens = showHiddenTokens ? tokens : visibleByDefaultTokens;
-  const runtimeAssignments = runtimeDeployment?.assignments || [];
-  const runtimeArtifacts = runtimeDeployment?.artifacts || [];
-  const runtimeApplyStatus = runtimeDeployment?.apply_status || [];
-  const runtimeStatusByKey = new Map<string, RuntimeApplyStatusRecord>(
-    runtimeApplyStatus.map((item) => [`${item.runtime_family}:${item.runtime_id}`, item] as const),
-  );
-  const assignedRevisionByKey = new Map<string, string>(
-    runtimeAssignments.map((item) => [`${item.runtime_family}:${item.runtime_id}`, item.desired_artifact_revision] as const),
-  );
-  const runtimeAssignmentByKey = new Map<string, RuntimeAssignmentRecord>(
-    runtimeAssignments.map((item) => [`${item.runtime_family}:${item.runtime_id}`, item] as const),
-  );
 
   if (selectedDeviceID) {
     return (
@@ -884,219 +689,6 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                     <pre>{configSnapshotViewer.payload}</pre>
                   </div>
                 ) : null}
-              </div>
-              <div className="device-detail-section">
-                <div className="device-detail-section-header">
-                  <div>
-                    <h3>{tx("Runtime inventory")}</h3>
-                    <p className="section-note">
-                      {managedDevice.runtime_deployment_supported
-                        ? tx("Latest runtime summary reported by this Gateway.")
-                        : tx("This Gateway has not reported runtime deployment capability.")}
-                    </p>
-                  </div>
-                </div>
-                <div className="table-wrap runtime-summary-table">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>{tx("Family")}</th>
-                        <th>{tx("Runtime ID")}</th>
-                        <th>{tx("Detected version")}</th>
-                        <th>{tx("Source")}</th>
-                        <th>{tx("Available")}</th>
-                        <th>{tx("Modules")}</th>
-                        <th>{tx("Apps")}</th>
-                        <th>{tx("Process")}</th>
-                        <th>{tx("Apply state")}</th>
-                        <th>{tx("Actions")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(managedDevice.runtime_inventory || []).map((runtime) => {
-                        const runtimeKey = `${runtime.runtime_family}:${runtime.runtime_id}`;
-                        const assignment = runtimeAssignmentByKey.get(runtimeKey);
-                        const appCount = Number.isFinite(runtime.app_count) ? runtime.app_count : 0;
-                        const removalRequested = assignment?.desired_state === "removed";
-                        const removalSupported = runtime.runtime_family === "php-fpm" || runtime.runtime_family === "psgi";
-                        const canRequestRemoval =
-                          removalSupported &&
-                          runtime.available &&
-                          runtime.usage_reported &&
-                          appCount === 0 &&
-                          !runtime.process_running &&
-                          !removalRequested;
-                        const removalTitle = !runtime.usage_reported
-                          ? tx("Usage state is not reported yet.")
-                          : !removalSupported
-                            ? tx("Removal is not supported for this runtime family.")
-                            : appCount > 0
-                              ? tx("Runtime is used by apps.")
-                              : runtime.process_running
-                                ? tx("Runtime process is running.")
-                                : removalRequested
-                                  ? tx("Removal already requested.")
-                                  : undefined;
-                        return (
-                          <tr key={runtimeKey}>
-                            <td>{runtime.runtime_family || "-"}</td>
-                            <td title={runtime.display_name || runtime.runtime_id}>{runtime.runtime_id || "-"}</td>
-                            <td title={runtime.detected_version || undefined}>{runtime.detected_version || "-"}</td>
-                            <td>{runtime.source || "-"}</td>
-                            <td title={runtime.availability_message || undefined}>
-                              <span className={`token-status ${runtime.available ? "token-status-approved" : "token-status-blocked"}`}>
-                                {runtime.available ? tx("available") : tx("unavailable")}
-                              </span>
-                              {runtime.availability_message ? <span className="table-subvalue">{runtime.availability_message}</span> : null}
-                            </td>
-                            <td>{Number.isFinite(runtime.module_count) ? runtime.module_count : "-"}</td>
-                            <td title={(runtime.generated_targets || []).join(", ") || undefined}>
-                              {runtime.usage_reported ? appCount : "-"}
-                              {runtime.generated_targets && runtime.generated_targets.length > 0 ? (
-                                <span className="table-subvalue">{runtime.generated_targets.join(", ")}</span>
-                              ) : null}
-                            </td>
-                            <td>
-                              {runtime.usage_reported ? (
-                                <span className={`token-status ${runtime.process_running ? "token-status-active" : "token-status-approved"}`}>
-                                  {runtime.process_running ? tx("running") : tx("stopped")}
-                                </span>
-                              ) : (
-                                "-"
-                              )}
-                            </td>
-                            <td title={runtime.apply_error || undefined}>
-                              {runtime.apply_state || "-"}
-                              {runtime.apply_error ? <span className="table-subvalue">{runtime.apply_error}</span> : null}
-                            </td>
-                            <td className="actions-cell">
-                              <button
-                                type="button"
-                                className="danger"
-                                title={removalTitle}
-                                onClick={() => void requestRuntimeRemoval(runtime)}
-                                disabled={!canRequestRemoval || removingRuntimeKey === runtimeKey}
-                              >
-                                {removingRuntimeKey === runtimeKey ? tx("Removing...") : removalRequested ? tx("Removal requested") : tx("Remove")}
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                  {(managedDevice.runtime_inventory || []).length === 0 ? <div className="empty">{tx("No runtime inventory reported.")}</div> : null}
-                </div>
-              </div>
-              <div className="device-detail-section">
-                <div className="device-detail-section-header">
-                  <div>
-                    <h3>{tx("Runtime assignments")}</h3>
-                    <p className="section-note">{tx("Desired runtime artifacts assigned from Center.")}</p>
-                  </div>
-                  {runtimeDeploymentLoading ? <span className="section-note">{tx("Loading runtime deployment...")}</span> : null}
-                </div>
-                <div className="table-wrap runtime-assignment-table">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>{tx("Actions")}</th>
-                        <th>{tx("Family")}</th>
-                        <th>{tx("Runtime ID")}</th>
-                        <th>{tx("Desired artifact")}</th>
-                        <th>{tx("Local artifact")}</th>
-                        <th>{tx("Apply state")}</th>
-                        <th>{tx("Assigned")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {runtimeAssignments.map((assignment) => {
-                        const status = runtimeStatusByKey.get(`${assignment.runtime_family}:${assignment.runtime_id}`);
-                        const clearKey = `${assignment.runtime_family}:${assignment.runtime_id}`;
-                        return (
-                          <tr key={clearKey}>
-                            <td className="actions-cell">
-                              <button
-                                type="button"
-                                className="secondary"
-                                onClick={() => void clearRuntimeAssignment(assignment)}
-                                disabled={clearingRuntimeKey === clearKey}
-                              >
-                                {clearingRuntimeKey === clearKey ? tx("Clearing...") : tx("Clear")}
-                              </button>
-                            </td>
-                            <td>{assignment.runtime_family || "-"}</td>
-                            <td>{assignment.runtime_id || "-"}</td>
-                            <td title={assignment.desired_artifact_revision}>R: {shortRevision(assignment.desired_artifact_revision)}</td>
-                            <td title={status?.local_artifact_revision || undefined}>
-                              {status?.local_artifact_revision ? `R: ${shortRevision(status.local_artifact_revision)}` : "-"}
-                            </td>
-                            <td title={status?.apply_error || undefined}>
-                              {status?.apply_state || "-"}
-                              {status?.apply_error ? <span className="table-subvalue">{status.apply_error}</span> : null}
-                            </td>
-                            <td title={assignment.assigned_by || undefined}>{formatUnixTime(assignment.assigned_at_unix, locale)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                  {runtimeAssignments.length === 0 && !runtimeDeploymentLoading ? <div className="empty">{tx("No runtime assignments.")}</div> : null}
-                </div>
-              </div>
-              <div className="device-detail-section">
-                <div className="device-detail-section-header">
-                  <div>
-                    <h3>{tx("Compatible artifacts")}</h3>
-                    <p className="section-note">{tx("Artifacts matching this Gateway platform.")}</p>
-                  </div>
-                </div>
-                <div className="table-wrap runtime-artifact-table">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>{tx("Actions")}</th>
-                        <th>{tx("Family")}</th>
-                        <th>{tx("Runtime ID")}</th>
-                        <th>{tx("Revision")}</th>
-                        <th>{tx("Version")}</th>
-                        <th>{tx("Target")}</th>
-                        <th>{tx("Size")}</th>
-                        <th>{tx("State")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {runtimeArtifacts.map((artifact) => {
-                        const assignKey = `${artifact.runtime_family}:${artifact.runtime_id}:${artifact.artifact_revision}`;
-                        const runtimeKey = `${artifact.runtime_family}:${artifact.runtime_id}`;
-                        const alreadyAssigned = assignedRevisionByKey.get(runtimeKey) === artifact.artifact_revision;
-                        const canAssign = artifact.storage_state === "stored" && !alreadyAssigned;
-                        return (
-                          <tr key={assignKey}>
-                            <td className="actions-cell">
-                              <button
-                                type="button"
-                                onClick={() => void assignRuntimeArtifact(artifact)}
-                                disabled={!canAssign || assigningRuntimeKey === assignKey}
-                              >
-                                {alreadyAssigned ? tx("Assigned") : assigningRuntimeKey === assignKey ? tx("Assigning...") : tx("Assign")}
-                              </button>
-                            </td>
-                            <td>{artifact.runtime_family || "-"}</td>
-                            <td>{artifact.runtime_id || "-"}</td>
-                            <td title={artifact.artifact_revision}>R: {shortRevision(artifact.artifact_revision)}</td>
-                            <td title={artifact.detected_version || undefined}>{artifact.detected_version || "-"}</td>
-                            <td title={artifact.builder_profile || undefined}>{runtimeTargetLabel(artifact.target)}</td>
-                            <td>{formatBytes(artifact.compressed_size)}</td>
-                            <td>{artifact.storage_state || "-"}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                  {runtimeArtifacts.length === 0 && !runtimeDeploymentLoading ? <div className="empty">{tx("No compatible artifacts.")}</div> : null}
-                </div>
-                {runtimeDeploymentMessage ? <p className="form-message error">{runtimeDeploymentMessage}</p> : null}
               </div>
             </>
           ) : null}

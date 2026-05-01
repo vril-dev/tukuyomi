@@ -25,8 +25,103 @@ func TestBuildParsePHPFPMRuntimeArtifact(t *testing.T) {
 	if parsed.Manifest.Target.DistroID != "ubuntu" || parsed.Manifest.Target.DistroVersion != "24.04" {
 		t.Fatalf("unexpected target: %+v", parsed.Manifest.Target)
 	}
-	if parsed.FileCount != 5 {
-		t.Fatalf("file_count=%d want 5", parsed.FileCount)
+	if parsed.FileCount != 7 {
+		t.Fatalf("file_count=%d want 7", parsed.FileCount)
+	}
+}
+
+func TestBuildParsePSGIRuntimeArtifact(t *testing.T) {
+	cases := []struct {
+		runtimeID       string
+		displayName     string
+		detectedVersion string
+	}{
+		{runtimeID: "perl536", displayName: "Perl 5.36", detectedVersion: "v5.36.0"},
+		{runtimeID: "perl538", displayName: "Perl 5.38", detectedVersion: "v5.38.5"},
+		{runtimeID: "perl540", displayName: "Perl 5.40", detectedVersion: "v5.40.0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.runtimeID, func(t *testing.T) {
+			build, err := BuildBundle(BuildInput{
+				RuntimeFamily:   RuntimeFamilyPSGI,
+				RuntimeID:       tc.runtimeID,
+				DisplayName:     tc.displayName,
+				DetectedVersion: tc.detectedVersion,
+				Target: TargetKey{
+					OS:            "linux",
+					Arch:          "amd64",
+					KernelVersion: "6.8.0-test",
+					DistroID:      "ubuntu",
+					DistroIDLike:  "debian",
+					DistroVersion: "24.04",
+				},
+				BuilderVersion: "test-builder",
+				BuilderProfile: "ubuntu-24.04-amd64",
+				GeneratedAt:    time.Unix(1000, 0).UTC(),
+				Files: []File{
+					{
+						ArchivePath: "runtime.json",
+						FileKind:    "metadata",
+						Mode:        0o644,
+						Body:        []byte(`{"runtime_id":"` + tc.runtimeID + `","display_name":"` + tc.displayName + `","detected_version":"` + tc.detectedVersion + `","perl_path":"data/psgi/binaries/` + tc.runtimeID + `/perl","starman_path":"data/psgi/binaries/` + tc.runtimeID + `/starman","source":"bundled"}`),
+					},
+					{ArchivePath: "modules.json", FileKind: "metadata", Mode: 0o644, Body: []byte(`["plack","starman"]`)},
+					{ArchivePath: "perl", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+					{ArchivePath: "starman", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+					{ArchivePath: "rootfs/usr/bin/perl", FileKind: "rootfs", Mode: 0o755, Body: []byte("perl-binary")},
+					{ArchivePath: "rootfs/usr/bin/starman", FileKind: "rootfs", Mode: 0o755, Body: []byte("starman-binary")},
+					{ArchivePath: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2", FileKind: "rootfs", Mode: 0o755, Body: []byte("loader")},
+				},
+			})
+			if err != nil {
+				t.Fatalf("BuildBundle: %v", err)
+			}
+			parsed, err := Parse(build.Compressed)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if parsed.Manifest.RuntimeFamily != RuntimeFamilyPSGI || parsed.Manifest.RuntimeID != tc.runtimeID {
+				t.Fatalf("unexpected runtime identity: %+v", parsed.Manifest)
+			}
+			if parsed.FileCount != 7 {
+				t.Fatalf("file_count=%d want 7", parsed.FileCount)
+			}
+		})
+	}
+}
+
+func TestBuildRejectsIncompleteRuntimeRootFS(t *testing.T) {
+	_, err := BuildBundle(BuildInput{
+		RuntimeFamily:   RuntimeFamilyPHPFPM,
+		RuntimeID:       "php83",
+		DisplayName:     "PHP 8.3",
+		DetectedVersion: "8.3.30",
+		Target: TargetKey{
+			OS:            "linux",
+			Arch:          "amd64",
+			KernelVersion: "6.8.0-test",
+			DistroID:      "ubuntu",
+			DistroIDLike:  "debian",
+			DistroVersion: "24.04",
+		},
+		BuilderVersion: "test-builder",
+		BuilderProfile: "ubuntu-24.04-amd64",
+		GeneratedAt:    time.Unix(1000, 0).UTC(),
+		Files: []File{
+			{
+				ArchivePath: "runtime.json",
+				FileKind:    "metadata",
+				Mode:        0o644,
+				Body:        []byte(`{"runtime_id":"php83","display_name":"PHP 8.3","detected_version":"8.3.30","source":"bundled"}`),
+			},
+			{ArchivePath: "modules.json", FileKind: "metadata", Mode: 0o644, Body: []byte(`["core","date"]`)},
+			{ArchivePath: "php-fpm", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "php", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "rootfs/.dockerenv", FileKind: "rootfs", Mode: 0o755, Body: nil},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "dynamic loader") {
+		t.Fatalf("BuildBundle incomplete rootfs err=%v", err)
 	}
 }
 
@@ -115,7 +210,9 @@ func buildTestArtifact(t *testing.T) Build {
 			{ArchivePath: "modules.json", FileKind: "metadata", Mode: 0o644, Body: []byte(`["core","date"]`)},
 			{ArchivePath: "php-fpm", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
 			{ArchivePath: "php", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "rootfs/usr/local/sbin/php-fpm", FileKind: "rootfs", Mode: 0o755, Body: []byte("php-fpm-binary")},
 			{ArchivePath: "rootfs/usr/bin/php", FileKind: "rootfs", Mode: 0o755, Body: []byte("php-binary")},
+			{ArchivePath: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2", FileKind: "rootfs", Mode: 0o755, Body: []byte("loader")},
 		},
 	})
 	if err != nil {

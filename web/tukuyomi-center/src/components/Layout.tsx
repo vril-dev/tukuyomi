@@ -37,20 +37,47 @@ function isActive(pathname: string, to: string) {
   return pathname === to || pathname.startsWith(`${to}/`);
 }
 
-function selectedDeviceIDFromPath(pathname: string) {
-  const match = pathname.match(/^\/device-approvals\/devices\/([^/]+)$/);
+type SelectedDeviceRoute = {
+  deviceID: string;
+  page: "status" | "runtime";
+};
+
+function selectedDeviceRouteFromPath(pathname: string): SelectedDeviceRoute | null {
+  const match = pathname.match(/^\/device-approvals\/devices\/([^/]+)(?:\/([^/]+))?$/);
   if (!match) {
-    return "";
+    return null;
   }
+  let deviceID = match[1];
   try {
-    return decodeURIComponent(match[1]);
+    deviceID = decodeURIComponent(match[1]);
   } catch {
-    return match[1];
   }
+  return {
+    deviceID,
+    page: match[2] === "runtime" ? "runtime" : "status",
+  };
 }
 
-function deviceDetailPath(deviceID: string) {
+function deviceStatusPath(deviceID: string) {
   return `/device-approvals/devices/${encodeURIComponent(deviceID)}`;
+}
+
+function deviceRuntimePath(deviceID: string) {
+  return `/device-approvals/devices/${encodeURIComponent(deviceID)}/runtime`;
+}
+
+function deviceMenuItems(deviceID: string): NavItem[] {
+  return [
+    { to: deviceStatusPath(deviceID), label: "Device Status", hint: "Selected Gateway status and config snapshots." },
+    { to: deviceRuntimePath(deviceID), label: "Runtime", hint: "" },
+  ];
+}
+
+function isDeviceMenuItemActive(pathname: string, item: NavItem, deviceID: string) {
+  if (item.to === deviceStatusPath(deviceID)) {
+    return pathname === item.to;
+  }
+  return isActive(pathname, item.to);
 }
 
 function formatSessionTime(value: string | undefined, locale: string) {
@@ -69,11 +96,16 @@ export default function Layout() {
   const { pathname } = useLocation();
   const { logout, session, loading } = useAuth();
   const navItems = [...navGroups.flatMap((group) => group.items), ...utilityNavItems];
-  const current = navItems.find((item) => isActive(pathname, item.to));
-  const selectedDeviceID = selectedDeviceIDFromPath(pathname);
-  const currentGroup =
-    navGroups.find((group) => group.items.some((item) => isActive(pathname, item.to))) ||
-    (current ? { id: "user", label: current.label, hint: current.hint, items: [current] } : navGroups[0]);
+  const selectedDeviceRoute = selectedDeviceRouteFromPath(pathname);
+  const selectedDeviceMenuItems = selectedDeviceRoute ? deviceMenuItems(selectedDeviceRoute.deviceID) : [];
+  const currentDeviceItem = selectedDeviceRoute
+    ? selectedDeviceMenuItems.find((item) => isDeviceMenuItemActive(pathname, item, selectedDeviceRoute.deviceID))
+    : undefined;
+  const current = currentDeviceItem || navItems.find((item) => isActive(pathname, item.to));
+  const currentGroup = selectedDeviceRoute
+    ? { id: "device", label: "Device", hint: "Selected Gateway device menu.", items: selectedDeviceMenuItems }
+    : navGroups.find((group) => group.items.some((item) => isActive(pathname, item.to))) ||
+      (current ? { id: "user", label: current.label, hint: current.hint, items: [current] } : navGroups[0]);
 
   return (
     <div className="app-shell">
@@ -96,15 +128,26 @@ export default function Layout() {
                     <Link to={item.to} className={isActive(pathname, item.to) ? "app-nav-link active" : "app-nav-link"}>
                       <span className="app-nav-label">{tx(item.label)}</span>
                     </Link>
-                    {item.to === "/device-approvals" && selectedDeviceID ? (
-                      <Link
-                        to={deviceDetailPath(selectedDeviceID)}
-                        className="app-nav-link app-nav-sublink active"
-                        title={selectedDeviceID}
-                      >
-                        <span className="app-nav-sublabel">{tx("Selected device")}</span>
-                        <span className="app-nav-label">{selectedDeviceID}</span>
-                      </Link>
+                    {item.to === "/device-approvals" && selectedDeviceRoute ? (
+                      <div className="app-device-menu">
+                        <div className="app-device-menu-heading" title={selectedDeviceRoute.deviceID}>
+                          <span className="app-nav-sublabel">{tx("Selected device")}</span>
+                          <span className="app-nav-label">{selectedDeviceRoute.deviceID}</span>
+                        </div>
+                        {selectedDeviceMenuItems.map((deviceItem) => (
+                          <Link
+                            key={deviceItem.to}
+                            to={deviceItem.to}
+                            className={
+                              isDeviceMenuItemActive(pathname, deviceItem, selectedDeviceRoute.deviceID)
+                                ? "app-nav-link app-nav-sublink active"
+                                : "app-nav-link app-nav-sublink"
+                            }
+                          >
+                            <span className="app-nav-label">{tx(deviceItem.label)}</span>
+                          </Link>
+                        ))}
+                      </div>
                     ) : null}
                   </div>
                 ))}

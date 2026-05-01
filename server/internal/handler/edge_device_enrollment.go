@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -19,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	goruntime "runtime"
@@ -34,12 +37,14 @@ import (
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/edgeartifactbundle"
 	"tukuyomi/internal/edgeconfigsnapshot"
+	"tukuyomi/internal/runtimeartifactbundle"
 )
 
 const (
 	edgeDeviceIdentityID        = int64(1)
 	edgeEnrollmentTokenMaxBytes = 256
 	edgeEnrollmentHTTPTimeout   = 10 * time.Second
+	edgeRuntimeArtifactTimeout  = 10 * time.Minute
 )
 
 const (
@@ -220,6 +225,20 @@ type edgeRuleArtifactBundleWireRequest struct {
 	BodyHash                   string `json:"body_hash"`
 	SignatureB64               string `json:"signature_b64"`
 	BundleB64                  string `json:"bundle_b64"`
+}
+
+type edgeRuntimeArtifactDownloadWireRequest struct {
+	DeviceID                   string `json:"device_id"`
+	KeyID                      string `json:"key_id"`
+	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string `json:"timestamp"`
+	Nonce                      string `json:"nonce"`
+	RuntimeFamily              string `json:"runtime_family"`
+	RuntimeID                  string `json:"runtime_id"`
+	ArtifactRevision           string `json:"artifact_revision"`
+	ArtifactHash               string `json:"artifact_hash"`
+	BodyHash                   string `json:"body_hash"`
+	SignatureB64               string `json:"signature_b64"`
 }
 
 type edgeDeviceCenterStatusResponse struct {
@@ -515,7 +534,7 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 		return edgeDeviceAuthStatusResponse{}, edgeEnrollmentError{status: http.StatusBadGateway, message: err.Error()}
 	}
 	if centerHTTPStatus < 200 || centerHTTPStatus >= 300 {
-		message := centerEnrollmentErrorMessage(centerHTTPStatus, centerBody)
+		message := centerHTTPErrorMessage("center status refresh failed", centerHTTPStatus, centerBody)
 		identity.CenterStatusError = clampEdgeText(message, 4096)
 		if centerHTTPStatus == http.StatusNotFound {
 			identity.EnrollmentStatus = edgeEnrollmentStatusUnconfigured
@@ -547,7 +566,7 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 	identity.CenterProductID = clampEdgeText(payload.ProductID, 191)
 	identity.CenterStatusError = ""
 	if identity.EnrollmentStatus == edgeEnrollmentStatusApproved {
-		applyEdgeRuntimeAssignments(payload.RuntimeAssignments)
+		applyEdgeRuntimeAssignments(ctx, identity, payload.RuntimeAssignments)
 		pruneCompletedEdgeRuntimeApplyStatuses(payload.RuntimeAssignments)
 		if pushEdgeRuleArtifactBundleIfChanged(ctx, &identity) {
 			pushEdgeConfigSnapshotIfChanged(ctx, &identity)
@@ -693,6 +712,22 @@ func centerRuleArtifactBundleURL(centerBaseURL string) (string, error) {
 		return "", fmt.Errorf("center URL scheme must be http or https")
 	}
 	u.Path = "/v1/rule-artifact-bundle"
+	u.RawPath = ""
+	return u.String(), nil
+}
+
+func centerRuntimeArtifactDownloadURL(centerBaseURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("center URL is not configured")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("center URL is invalid")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("center URL scheme must be http or https")
+	}
+	u.Path = "/v1/runtime-artifact-download"
 	u.RawPath = ""
 	return u.String(), nil
 }
@@ -1148,7 +1183,7 @@ func currentEdgeRuntimeInventorySummary() []edgeDeviceRuntimeSummary {
 			continue
 		}
 		targets := phpTargetsByRuntime[runtimeID]
-		out = append(out, edgeDeviceRuntimeSummary{
+		summary := edgeDeviceRuntimeSummary{
 			RuntimeFamily:       "php-fpm",
 			RuntimeID:           runtimeID,
 			DisplayName:         clampEdgeMetadataText(runtime.DisplayName, 128),
@@ -1161,8 +1196,13 @@ func currentEdgeRuntimeInventorySummary() []edgeDeviceRuntimeSummary {
 			AppCount:            len(targets),
 			GeneratedTargets:    targets,
 			ProcessRunning:      phpRunningByRuntime[runtimeID],
+			ArtifactRevision:    normalizeEdgeHex64(runtime.ArtifactRevision),
 			ArtifactHash:        normalizeEdgeHex64(runtime.SHA256),
-		})
+		}
+		if summary.ArtifactRevision != "" && summary.ArtifactHash != "" {
+			summary.ApplyState = "installed"
+		}
+		out = append(out, summary)
 	}
 	_, _, psgiInventory, _ := PSGIRuntimeInventorySnapshot()
 	psgiTargetsByRuntime := edgePSGIRuntimeGeneratedTargets()
@@ -1173,7 +1213,7 @@ func currentEdgeRuntimeInventorySummary() []edgeDeviceRuntimeSummary {
 			continue
 		}
 		targets := psgiTargetsByRuntime[runtimeID]
-		out = append(out, edgeDeviceRuntimeSummary{
+		summary := edgeDeviceRuntimeSummary{
 			RuntimeFamily:       "psgi",
 			RuntimeID:           runtimeID,
 			DisplayName:         clampEdgeMetadataText(runtime.DisplayName, 128),
@@ -1186,8 +1226,13 @@ func currentEdgeRuntimeInventorySummary() []edgeDeviceRuntimeSummary {
 			AppCount:            len(targets),
 			GeneratedTargets:    targets,
 			ProcessRunning:      psgiRunningByRuntime[runtimeID],
+			ArtifactRevision:    normalizeEdgeHex64(runtime.ArtifactRevision),
 			ArtifactHash:        normalizeEdgeHex64(runtime.SHA256),
-		})
+		}
+		if summary.ArtifactRevision != "" && summary.ArtifactHash != "" {
+			summary.ApplyState = "installed"
+		}
+		out = append(out, summary)
 	}
 	applyStatuses := edgeRuntimeApplyStatusSnapshot()
 	seen := make(map[string]struct{}, len(out))
@@ -1280,6 +1325,22 @@ func edgePSGIRuntimeRunningState() map[string]bool {
 		}
 		out[runtimeID] = out[runtimeID] || proc.Running
 	}
+	return out
+}
+
+func runningEdgePSGIProcessIDs(runtimeID string) []string {
+	runtimeID = clampEdgeMetadataText(runtimeID, 64)
+	out := []string{}
+	for _, proc := range PSGIRuntimeProcessSnapshot() {
+		if !proc.Running || clampEdgeMetadataText(proc.RuntimeID, 64) != runtimeID {
+			continue
+		}
+		processID := normalizeConfigToken(proc.ProcessID)
+		if processID != "" {
+			out = append(out, processID)
+		}
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -1395,7 +1456,7 @@ func normalizeEdgeRuntimeAssignmentIdentity(runtimeFamily, runtimeID string) (st
 		}
 	case "psgi":
 		switch id {
-		case "perl538":
+		case "perl536", "perl538", "perl540":
 		default:
 			return "", "", fmt.Errorf("unsupported runtime id")
 		}
@@ -1405,7 +1466,7 @@ func normalizeEdgeRuntimeAssignmentIdentity(runtimeFamily, runtimeID string) (st
 	return family, id, nil
 }
 
-func applyEdgeRuntimeAssignments(assignments []edgeRuntimeDeviceAssignment) {
+func applyEdgeRuntimeAssignments(ctx context.Context, identity edgeDeviceIdentityRecord, assignments []edgeRuntimeDeviceAssignment) {
 	if len(assignments) == 0 {
 		return
 	}
@@ -1418,12 +1479,573 @@ func applyEdgeRuntimeAssignments(assignments []edgeRuntimeDeviceAssignment) {
 	})
 	for _, assignment := range items {
 		switch strings.TrimSpace(assignment.DesiredState) {
+		case "installed":
+			applyEdgeRuntimeInstall(ctx, identity, assignment)
 		case "removed":
 			applyEdgeRuntimeRemoval(assignment)
 		default:
 			continue
 		}
 	}
+}
+
+func applyEdgeRuntimeInstall(ctx context.Context, identity edgeDeviceIdentityRecord, assignment edgeRuntimeDeviceAssignment) {
+	family, runtimeID, err := normalizeEdgeRuntimeAssignmentIdentity(assignment.RuntimeFamily, assignment.RuntimeID)
+	if err != nil {
+		return
+	}
+	switch family {
+	case "php-fpm":
+		applyEdgePHPRuntimeInstall(ctx, identity, assignment, runtimeID)
+	case "psgi":
+		applyEdgePSGIRuntimeInstall(ctx, identity, assignment, runtimeID)
+	default:
+		setEdgeRuntimeApplyStatus(edgeRuntimeApplyStatus{
+			RuntimeFamily:    family,
+			RuntimeID:        runtimeID,
+			ArtifactRevision: assignment.ArtifactRevision,
+			ArtifactHash:     assignment.ArtifactHash,
+			ApplyState:       "failed",
+			ApplyError:       "runtime install is not supported for this runtime family",
+		})
+	}
+}
+
+func applyEdgePHPRuntimeInstall(ctx context.Context, identity edgeDeviceIdentityRecord, assignment edgeRuntimeDeviceAssignment, runtimeID string) {
+	family := "php-fpm"
+	if !beginEdgeRuntimeAssignmentOp(family, runtimeID) {
+		return
+	}
+	defer endEdgeRuntimeAssignmentOp(family, runtimeID)
+
+	status := edgeRuntimeApplyStatus{
+		RuntimeFamily:    family,
+		RuntimeID:        runtimeID,
+		ArtifactRevision: assignment.ArtifactRevision,
+		ArtifactHash:     assignment.ArtifactHash,
+		ApplyState:       "installing",
+	}
+	setEdgeRuntimeApplyStatus(status)
+
+	wasRunning := edgePHPRuntimeRunningState()[runtimeID]
+	if wasRunning {
+		status.ApplyState = "stopping"
+		setEdgeRuntimeApplyStatus(status)
+		if err := StopPHPRuntimeProcess(runtimeID); err != nil {
+			status.ApplyState = "failed"
+			status.ApplyError = err.Error()
+			setEdgeRuntimeApplyStatus(status)
+			return
+		}
+	}
+	artifact, err := downloadEdgeRuntimeArtifact(ctx, identity, assignment)
+	if err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+	if err := installEdgePHPRuntimeArtifact(artifact.Compressed, artifact.Parsed, assignment); err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+	if err := RefreshPHPRuntimeMaterialization(); err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+	if err := ReconcilePHPRuntimeSupervisor(); err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+	if wasRunning {
+		if err := StartPHPRuntimeProcess(runtimeID); err != nil {
+			status.ApplyState = "failed"
+			status.ApplyError = err.Error()
+			setEdgeRuntimeApplyStatus(status)
+			return
+		}
+	}
+	status.ArtifactRevision = artifact.Parsed.Revision
+	status.ArtifactHash = artifact.Parsed.ArtifactHash
+	status.ApplyState = "installed"
+	status.ApplyError = ""
+	setEdgeRuntimeApplyStatus(status)
+}
+
+type edgeDownloadedRuntimeArtifact struct {
+	Compressed []byte
+	Parsed     runtimeartifactbundle.Parsed
+}
+
+func downloadEdgeRuntimeArtifact(ctx context.Context, identity edgeDeviceIdentityRecord, assignment edgeRuntimeDeviceAssignment) (edgeDownloadedRuntimeArtifact, error) {
+	assignment.ArtifactRevision = normalizeEdgeHex64(assignment.ArtifactRevision)
+	assignment.ArtifactHash = normalizeEdgeHex64(assignment.ArtifactHash)
+	if assignment.ArtifactRevision == "" || assignment.ArtifactHash == "" {
+		return edgeDownloadedRuntimeArtifact{}, fmt.Errorf("runtime artifact assignment is missing revision or hash")
+	}
+	if assignment.CompressedSize <= 0 || assignment.CompressedSize > runtimeartifactbundle.MaxCompressedBytes ||
+		assignment.UncompressedSize <= 0 || assignment.UncompressedSize > runtimeartifactbundle.MaxUncompressedBytes ||
+		assignment.FileCount <= 0 || assignment.FileCount > runtimeartifactbundle.MaxFiles {
+		return edgeDownloadedRuntimeArtifact{}, fmt.Errorf("runtime artifact assignment has invalid size metadata")
+	}
+	downloadURL, err := centerRuntimeArtifactDownloadURL(identity.CenterURL)
+	if err != nil {
+		return edgeDownloadedRuntimeArtifact{}, err
+	}
+	wireReq, err := signedEdgeRuntimeArtifactDownloadRequest(identity, assignment)
+	if err != nil {
+		return edgeDownloadedRuntimeArtifact{}, err
+	}
+	httpStatus, body, err := sendEdgeRuntimeArtifactDownload(ctx, downloadURL, wireReq, assignment.CompressedSize)
+	if err != nil {
+		return edgeDownloadedRuntimeArtifact{}, err
+	}
+	if httpStatus < 200 || httpStatus >= 300 {
+		return edgeDownloadedRuntimeArtifact{}, fmt.Errorf("%s", centerHTTPErrorMessage("center runtime artifact download failed", httpStatus, body))
+	}
+	if int64(len(body)) != assignment.CompressedSize {
+		return edgeDownloadedRuntimeArtifact{}, fmt.Errorf("runtime artifact compressed size mismatch")
+	}
+	sum := sha256.Sum256(body)
+	if hex.EncodeToString(sum[:]) != assignment.ArtifactHash {
+		return edgeDownloadedRuntimeArtifact{}, fmt.Errorf("runtime artifact hash mismatch")
+	}
+	parsed, err := runtimeartifactbundle.Parse(body)
+	if err != nil {
+		return edgeDownloadedRuntimeArtifact{}, err
+	}
+	if parsed.Revision != assignment.ArtifactRevision || parsed.ArtifactHash != assignment.ArtifactHash ||
+		parsed.CompressedSize != assignment.CompressedSize || parsed.UncompressedSize != assignment.UncompressedSize ||
+		parsed.FileCount != assignment.FileCount {
+		return edgeDownloadedRuntimeArtifact{}, fmt.Errorf("runtime artifact metadata mismatch")
+	}
+	if parsed.Manifest.RuntimeFamily != assignment.RuntimeFamily || parsed.Manifest.RuntimeID != assignment.RuntimeID {
+		return edgeDownloadedRuntimeArtifact{}, fmt.Errorf("runtime artifact identity mismatch")
+	}
+	if !edgeRuntimeArtifactTargetMatchesGateway(parsed.Manifest.Target) {
+		return edgeDownloadedRuntimeArtifact{}, fmt.Errorf("runtime artifact target does not match this Gateway platform")
+	}
+	return edgeDownloadedRuntimeArtifact{
+		Compressed: append([]byte(nil), body...),
+		Parsed:     parsed,
+	}, nil
+}
+
+func edgeRuntimeArtifactTargetMatchesGateway(target runtimeartifactbundle.TargetKey) bool {
+	platform := currentEdgeGatewayPlatformMetadata()
+	if target.OS == "" || target.Arch == "" || target.DistroID == "" || target.DistroVersion == "" {
+		return false
+	}
+	if platform.OS == "" || platform.Arch == "" || platform.DistroID == "" || platform.DistroVersion == "" {
+		return false
+	}
+	if target.OS != platform.OS || target.Arch != platform.Arch || target.DistroID != platform.DistroID || target.DistroVersion != platform.DistroVersion {
+		return false
+	}
+	return target.DistroIDLike == "" || target.DistroIDLike == platform.DistroIDLike
+}
+
+func installEdgePHPRuntimeArtifact(compressed []byte, parsed runtimeartifactbundle.Parsed, assignment edgeRuntimeDeviceAssignment) error {
+	if parsed.Manifest.RuntimeFamily != "php-fpm" {
+		return fmt.Errorf("runtime artifact family is not php-fpm")
+	}
+	if !edgeRuntimeArtifactTargetMatchesGateway(parsed.Manifest.Target) {
+		return fmt.Errorf("runtime artifact target does not match this Gateway platform")
+	}
+	_, runtimeID, err := normalizeEdgeRuntimeAssignmentIdentity(parsed.Manifest.RuntimeFamily, parsed.Manifest.RuntimeID)
+	if err != nil {
+		return err
+	}
+	if runtimeID != assignment.RuntimeID {
+		return fmt.Errorf("runtime artifact id mismatch")
+	}
+	baseDir := filepath.Join(phpRuntimeRootDirFromInventoryPath(currentPHPRuntimeInventoryPath()), "binaries")
+	baseAbs, err := filepath.Abs(filepath.Clean(baseDir))
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(baseAbs, 0o755); err != nil {
+		return err
+	}
+	manifestTargetDir := filepath.Join(baseDir, runtimeID)
+	stageDir, err := os.MkdirTemp(baseAbs, "."+runtimeID+".install-*")
+	if err != nil {
+		return err
+	}
+	stageMoved := false
+	defer func() {
+		if !stageMoved {
+			_ = os.RemoveAll(stageDir)
+		}
+	}()
+	if err := extractEdgeRuntimeArtifactToStage(compressed, parsed, stageDir); err != nil {
+		return err
+	}
+	if err := writeInstalledPHPRuntimeManifest(stageDir, manifestTargetDir, parsed); err != nil {
+		return err
+	}
+	if err := validateStagedPHPRuntimeArtifact(stageDir); err != nil {
+		return err
+	}
+	if err := replaceEdgeManagedRuntimeDir(baseAbs, "php-fpm", runtimeID, stageDir); err != nil {
+		return err
+	}
+	stageMoved = true
+	return nil
+}
+
+func applyEdgePSGIRuntimeInstall(ctx context.Context, identity edgeDeviceIdentityRecord, assignment edgeRuntimeDeviceAssignment, runtimeID string) {
+	family := "psgi"
+	if !beginEdgeRuntimeAssignmentOp(family, runtimeID) {
+		return
+	}
+	defer endEdgeRuntimeAssignmentOp(family, runtimeID)
+
+	status := edgeRuntimeApplyStatus{
+		RuntimeFamily:    family,
+		RuntimeID:        runtimeID,
+		ArtifactRevision: assignment.ArtifactRevision,
+		ArtifactHash:     assignment.ArtifactHash,
+		ApplyState:       "installing",
+	}
+	setEdgeRuntimeApplyStatus(status)
+
+	runningProcesses := runningEdgePSGIProcessIDs(runtimeID)
+	if len(runningProcesses) > 0 {
+		status.ApplyState = "stopping"
+		setEdgeRuntimeApplyStatus(status)
+		for _, processID := range runningProcesses {
+			if err := StopPSGIProcess(processID); err != nil {
+				status.ApplyState = "failed"
+				status.ApplyError = err.Error()
+				setEdgeRuntimeApplyStatus(status)
+				return
+			}
+		}
+	}
+	artifact, err := downloadEdgeRuntimeArtifact(ctx, identity, assignment)
+	if err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+	if err := installEdgePSGIRuntimeArtifact(artifact.Compressed, artifact.Parsed, assignment); err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+	if err := RefreshPSGIRuntimeMaterialization(); err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+	if err := ReconcilePSGIRuntimeSupervisor(); err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+	for _, processID := range runningProcesses {
+		if err := StartPSGIProcess(processID); err != nil {
+			status.ApplyState = "failed"
+			status.ApplyError = err.Error()
+			setEdgeRuntimeApplyStatus(status)
+			return
+		}
+	}
+	status.ArtifactRevision = artifact.Parsed.Revision
+	status.ArtifactHash = artifact.Parsed.ArtifactHash
+	status.ApplyState = "installed"
+	status.ApplyError = ""
+	setEdgeRuntimeApplyStatus(status)
+}
+
+func installEdgePSGIRuntimeArtifact(compressed []byte, parsed runtimeartifactbundle.Parsed, assignment edgeRuntimeDeviceAssignment) error {
+	if parsed.Manifest.RuntimeFamily != "psgi" {
+		return fmt.Errorf("runtime artifact family is not psgi")
+	}
+	if !edgeRuntimeArtifactTargetMatchesGateway(parsed.Manifest.Target) {
+		return fmt.Errorf("runtime artifact target does not match this Gateway platform")
+	}
+	_, runtimeID, err := normalizeEdgeRuntimeAssignmentIdentity(parsed.Manifest.RuntimeFamily, parsed.Manifest.RuntimeID)
+	if err != nil {
+		return err
+	}
+	if runtimeID != assignment.RuntimeID {
+		return fmt.Errorf("runtime artifact id mismatch")
+	}
+	baseDir := filepath.Join(psgiRuntimeRootDirFromInventoryPath(currentPSGIRuntimeInventoryPath()), "binaries")
+	baseAbs, err := filepath.Abs(filepath.Clean(baseDir))
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(baseAbs, 0o755); err != nil {
+		return err
+	}
+	manifestTargetDir := filepath.Join(baseDir, runtimeID)
+	stageDir, err := os.MkdirTemp(baseAbs, "."+runtimeID+".install-*")
+	if err != nil {
+		return err
+	}
+	stageMoved := false
+	defer func() {
+		if !stageMoved {
+			_ = os.RemoveAll(stageDir)
+		}
+	}()
+	if err := extractEdgeRuntimeArtifactToStage(compressed, parsed, stageDir); err != nil {
+		return err
+	}
+	if err := writeInstalledPSGIRuntimeManifest(stageDir, manifestTargetDir, parsed); err != nil {
+		return err
+	}
+	if err := validateStagedPSGIRuntimeArtifact(stageDir); err != nil {
+		return err
+	}
+	if err := replaceEdgeManagedRuntimeDir(baseAbs, "psgi", runtimeID, stageDir); err != nil {
+		return err
+	}
+	stageMoved = true
+	return nil
+}
+
+func extractEdgeRuntimeArtifactToStage(compressed []byte, parsed runtimeartifactbundle.Parsed, stageDir string) error {
+	stageAbs, err := filepath.Abs(filepath.Clean(stageDir))
+	if err != nil {
+		return err
+	}
+	allowed := make(map[string]runtimeartifactbundle.FileManifest, len(parsed.Manifest.Files))
+	for _, file := range parsed.Manifest.Files {
+		allowed[file.ArchivePath] = file
+	}
+	gr, err := gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		return fmt.Errorf("open runtime artifact gzip: %w", err)
+	}
+	defer gr.Close()
+	tr := tar.NewReader(gr)
+	written := map[string]struct{}{}
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read runtime artifact tar: %w", err)
+		}
+		if hdr == nil || hdr.Typeflag == tar.TypeDir {
+			continue
+		}
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
+			return fmt.Errorf("runtime artifact contains non-regular entry %q", hdr.Name)
+		}
+		name, err := cleanEdgeRuntimeArchivePath(hdr.Name)
+		if err != nil {
+			return err
+		}
+		if name == "manifest.json" || name == "runtime.json" {
+			continue
+		}
+		manifestFile, ok := allowed[name]
+		if !ok {
+			return fmt.Errorf("runtime artifact contains unexpected archive path %q", name)
+		}
+		if _, exists := written[name]; exists {
+			return fmt.Errorf("runtime artifact contains duplicate archive path %q", name)
+		}
+		written[name] = struct{}{}
+		target := filepath.Join(stageAbs, filepath.FromSlash(name))
+		if !edgePathWithin(stageAbs, target) {
+			return fmt.Errorf("runtime artifact path escapes install directory")
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		if err := writeEdgeRuntimeArtifactFile(target, tr, manifestFile.SizeBytes, manifestFile.Mode); err != nil {
+			return err
+		}
+	}
+	for _, file := range parsed.Manifest.Files {
+		if file.ArchivePath == "runtime.json" {
+			continue
+		}
+		if _, ok := written[file.ArchivePath]; !ok {
+			return fmt.Errorf("runtime artifact file %q was not installed", file.ArchivePath)
+		}
+	}
+	return nil
+}
+
+func validateStagedPHPRuntimeArtifact(stageDir string) error {
+	binaryPath := filepath.Join(stageDir, "php-fpm")
+	if ok, message := validatePHPRuntimeBinaryPath(binaryPath); !ok {
+		return fmt.Errorf("installed runtime is not available: %s", message)
+	}
+	if _, err := readPHPRuntimeModuleManifest(binaryPath); err != nil {
+		return fmt.Errorf("installed runtime is not available: %s", err.Error())
+	}
+	return nil
+}
+
+func validateStagedPSGIRuntimeArtifact(stageDir string) error {
+	perlPath := filepath.Join(stageDir, "perl")
+	starmanPath := filepath.Join(stageDir, "starman")
+	if ok, message := validatePHPRuntimeBinaryPath(perlPath); !ok {
+		return fmt.Errorf("installed runtime is not available: perl: %s", message)
+	}
+	if ok, message := validatePHPRuntimeBinaryPath(starmanPath); !ok {
+		return fmt.Errorf("installed runtime is not available: starman: %s", message)
+	}
+	if _, err := readPSGIRuntimeModuleManifest(perlPath); err != nil {
+		return fmt.Errorf("installed runtime is not available: %s", err.Error())
+	}
+	return nil
+}
+
+func writeInstalledPHPRuntimeManifest(stageDir string, targetDir string, parsed runtimeartifactbundle.Parsed) error {
+	binaryPath := filepath.ToSlash(filepath.Join(targetDir, "php-fpm"))
+	cliBinaryPath := filepath.ToSlash(filepath.Join(targetDir, "php"))
+	manifest := phpRuntimeArtifactManifest{
+		RuntimeID:        parsed.Manifest.RuntimeID,
+		DisplayName:      parsed.Manifest.DisplayName,
+		DetectedVersion:  parsed.Manifest.DetectedVersion,
+		BinaryPath:       binaryPath,
+		CLIBinaryPath:    cliBinaryPath,
+		Source:           "center",
+		ArtifactRevision: parsed.Revision,
+		SHA256:           parsed.ArtifactHash,
+	}
+	raw, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(stageDir, "runtime.json"), append(raw, '\n'), 0o644)
+}
+
+func writeInstalledPSGIRuntimeManifest(stageDir string, targetDir string, parsed runtimeartifactbundle.Parsed) error {
+	perlPath := filepath.ToSlash(filepath.Join(targetDir, "perl"))
+	starmanPath := filepath.ToSlash(filepath.Join(targetDir, "starman"))
+	manifest := psgiRuntimeArtifactManifest{
+		RuntimeID:        parsed.Manifest.RuntimeID,
+		DisplayName:      parsed.Manifest.DisplayName,
+		DetectedVersion:  parsed.Manifest.DetectedVersion,
+		PerlPath:         perlPath,
+		StarmanPath:      starmanPath,
+		Source:           "center",
+		ArtifactRevision: parsed.Revision,
+		SHA256:           parsed.ArtifactHash,
+	}
+	raw, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(stageDir, "runtime.json"), append(raw, '\n'), 0o644)
+}
+
+func writeEdgeRuntimeArtifactFile(target string, reader io.Reader, size int64, mode int64) error {
+	if size < 0 || size > runtimeartifactbundle.MaxUncompressedBytes {
+		return fmt.Errorf("runtime artifact file has invalid size")
+	}
+	if mode <= 0 {
+		mode = 0o644
+	}
+	file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, os.FileMode(mode)&0o777)
+	if err != nil {
+		return err
+	}
+	written, copyErr := io.Copy(file, io.LimitReader(reader, size+1))
+	closeErr := file.Close()
+	if copyErr != nil {
+		_ = os.Remove(target)
+		return copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(target)
+		return closeErr
+	}
+	if written != size {
+		_ = os.Remove(target)
+		return fmt.Errorf("runtime artifact file size mismatch")
+	}
+	return nil
+}
+
+func replaceEdgeManagedRuntimeDir(baseAbs string, runtimeFamily string, runtimeID string, stageDir string) error {
+	_, id, err := normalizeEdgeRuntimeAssignmentIdentity(runtimeFamily, runtimeID)
+	if err != nil {
+		return err
+	}
+	targetAbs, err := filepath.Abs(filepath.Join(baseAbs, id))
+	if err != nil {
+		return err
+	}
+	if !edgePathWithin(baseAbs, targetAbs) {
+		return fmt.Errorf("runtime path escapes managed directory")
+	}
+	stageAbs, err := filepath.Abs(filepath.Clean(stageDir))
+	if err != nil {
+		return err
+	}
+	if !edgePathWithin(baseAbs, stageAbs) {
+		return fmt.Errorf("runtime stage path escapes managed directory")
+	}
+	backupAbs := filepath.Join(baseAbs, "."+id+".backup-"+strconv.FormatInt(time.Now().UTC().UnixNano(), 36))
+	backupMoved := false
+	if _, err := os.Stat(targetAbs); err == nil {
+		if err := os.Rename(targetAbs, backupAbs); err != nil {
+			return err
+		}
+		backupMoved = true
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(stageAbs, targetAbs); err != nil {
+		if backupMoved {
+			_ = os.Rename(backupAbs, targetAbs)
+		}
+		return err
+	}
+	if backupMoved {
+		_ = os.RemoveAll(backupAbs)
+	}
+	return nil
+}
+
+func cleanEdgeRuntimeArchivePath(raw string) (string, error) {
+	raw = strings.TrimSpace(strings.ReplaceAll(raw, "\\", "/"))
+	if raw == "" || strings.HasPrefix(raw, "/") {
+		return "", fmt.Errorf("runtime artifact contains unsafe archive path")
+	}
+	cleaned := path.Clean(raw)
+	if cleaned == "." || strings.HasPrefix(cleaned, "../") || cleaned == ".." {
+		return "", fmt.Errorf("runtime artifact contains unsafe archive path")
+	}
+	return cleaned, nil
+}
+
+func edgePathWithin(root string, candidate string) bool {
+	rootAbs, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return false
+	}
+	candidateAbs, err := filepath.Abs(filepath.Clean(candidate))
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(rootAbs, candidateAbs)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != "" && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))
 }
 
 func applyEdgeRuntimeRemoval(assignment edgeRuntimeDeviceAssignment) {
@@ -1739,6 +2361,40 @@ func signedEdgeRuleArtifactBundleRequest(identity edgeDeviceIdentityRecord, bund
 	return req, nil
 }
 
+func signedEdgeRuntimeArtifactDownloadRequest(identity edgeDeviceIdentityRecord, assignment edgeRuntimeDeviceAssignment) (edgeRuntimeArtifactDownloadWireRequest, error) {
+	privateKey, _, err := parseEdgeDevicePrivateKey(identity.PrivateKeyPEM)
+	if err != nil {
+		return edgeRuntimeArtifactDownloadWireRequest{}, err
+	}
+	family, runtimeID, err := normalizeEdgeRuntimeAssignmentIdentity(assignment.RuntimeFamily, assignment.RuntimeID)
+	if err != nil {
+		return edgeRuntimeArtifactDownloadWireRequest{}, err
+	}
+	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	nonce, err := randomEdgeIdentifier("nonce")
+	if err != nil {
+		return edgeRuntimeArtifactDownloadWireRequest{}, err
+	}
+	req := edgeRuntimeArtifactDownloadWireRequest{
+		DeviceID:                   identity.DeviceID,
+		KeyID:                      identity.KeyID,
+		PublicKeyFingerprintSHA256: identity.PublicKeyFingerprintSHA256,
+		Timestamp:                  timestamp,
+		Nonce:                      nonce,
+		RuntimeFamily:              family,
+		RuntimeID:                  runtimeID,
+		ArtifactRevision:           normalizeEdgeHex64(assignment.ArtifactRevision),
+		ArtifactHash:               normalizeEdgeHex64(assignment.ArtifactHash),
+	}
+	if req.ArtifactRevision == "" || req.ArtifactHash == "" {
+		return edgeRuntimeArtifactDownloadWireRequest{}, fmt.Errorf("runtime artifact assignment is missing revision or hash")
+	}
+	req.BodyHash = edgeRuntimeArtifactDownloadBodyHash(req)
+	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)))
+	req.SignatureB64 = base64.StdEncoding.EncodeToString(signature)
+	return req, nil
+}
+
 func parseEdgeDevicePrivateKey(raw string) (ed25519.PrivateKey, []byte, error) {
 	block, rest := pem.Decode([]byte(raw))
 	if block == nil || block.Type != "PRIVATE KEY" || len(strings.TrimSpace(string(rest))) != 0 {
@@ -1860,6 +2516,36 @@ func sendEdgeRuleArtifactBundle(ctx context.Context, bundleURL string, wireReq e
 	return res.StatusCode, resBody, nil
 }
 
+func sendEdgeRuntimeArtifactDownload(ctx context.Context, downloadURL string, wireReq edgeRuntimeArtifactDownloadWireRequest, maxBytes int64) (int, []byte, error) {
+	body, err := json.Marshal(wireReq)
+	if err != nil {
+		return 0, nil, err
+	}
+	if maxBytes <= 0 || maxBytes > runtimeartifactbundle.MaxCompressedBytes {
+		maxBytes = runtimeartifactbundle.MaxCompressedBytes
+	}
+	ctx, cancel := context.WithTimeout(ctx, edgeRuntimeArtifactTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, downloadURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer res.Body.Close()
+	resBody, readErr := io.ReadAll(io.LimitReader(res.Body, maxBytes+1))
+	if readErr != nil {
+		return res.StatusCode, nil, readErr
+	}
+	if int64(len(resBody)) > maxBytes {
+		return res.StatusCode, nil, fmt.Errorf("runtime artifact download exceeds %d bytes", maxBytes)
+	}
+	return res.StatusCode, resBody, nil
+}
+
 func pushEdgeRuleArtifactBundleIfChanged(ctx context.Context, identity *edgeDeviceIdentityRecord) bool {
 	if identity == nil {
 		return true
@@ -1898,7 +2584,7 @@ func pushEdgeRuleArtifactBundleIfChanged(ctx context.Context, identity *edgeDevi
 		return false
 	}
 	if centerHTTPStatus < 200 || centerHTTPStatus >= 300 {
-		identity.RuleArtifactError = clampEdgeText(centerEnrollmentErrorMessage(centerHTTPStatus, centerBody), 2048)
+		identity.RuleArtifactError = clampEdgeText(centerHTTPErrorMessage("center rule artifact upload failed", centerHTTPStatus, centerBody), 2048)
 		return false
 	}
 	var payload edgeRuleArtifactBundleResponse
@@ -1971,7 +2657,7 @@ func pushEdgeConfigSnapshotIfChanged(ctx context.Context, identity *edgeDeviceId
 		return
 	}
 	if centerHTTPStatus < 200 || centerHTTPStatus >= 300 {
-		identity.ConfigSnapshotError = clampEdgeText(centerEnrollmentErrorMessage(centerHTTPStatus, centerBody), 2048)
+		identity.ConfigSnapshotError = clampEdgeText(centerHTTPErrorMessage("center config snapshot upload failed", centerHTTPStatus, centerBody), 2048)
 		return
 	}
 	var payload edgeDeviceConfigSnapshotResponse
@@ -1992,23 +2678,31 @@ func pushEdgeConfigSnapshotIfChanged(ctx context.Context, identity *edgeDeviceId
 }
 
 func centerEnrollmentErrorMessage(status int, body []byte) string {
+	return centerHTTPErrorMessage("center enrollment failed", status, body)
+}
+
+func centerHTTPErrorMessage(operation string, status int, body []byte) string {
+	operation = strings.TrimSpace(operation)
+	if operation == "" {
+		operation = "center request failed"
+	}
 	var payload struct {
 		Error   string `json:"error"`
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(body, &payload); err == nil {
 		if strings.TrimSpace(payload.Error) != "" {
-			return fmt.Sprintf("center enrollment failed: HTTP %d: %s", status, strings.TrimSpace(payload.Error))
+			return fmt.Sprintf("%s: HTTP %d: %s", operation, status, strings.TrimSpace(payload.Error))
 		}
 		if strings.TrimSpace(payload.Message) != "" {
-			return fmt.Sprintf("center enrollment failed: HTTP %d: %s", status, strings.TrimSpace(payload.Message))
+			return fmt.Sprintf("%s: HTTP %d: %s", operation, status, strings.TrimSpace(payload.Message))
 		}
 	}
 	text := strings.TrimSpace(string(body))
 	if text != "" {
-		return fmt.Sprintf("center enrollment failed: HTTP %d: %s", status, clampEdgeText(text, 512))
+		return fmt.Sprintf("%s: HTTP %d: %s", operation, status, clampEdgeText(text, 512))
 	}
-	return fmt.Sprintf("center enrollment failed: HTTP %d", status)
+	return fmt.Sprintf("%s: HTTP %d", operation, status)
 }
 
 func edgeDeviceStatusFromIdentity(identity edgeDeviceIdentityRecord) edgeDeviceAuthStatusResponse {
@@ -2143,6 +2837,21 @@ func edgeRuleArtifactBundleBodyHash(req edgeRuleArtifactBundleWireRequest) strin
 			fmt.Sprintf("%d", req.CompressedSize) + "\n" +
 			fmt.Sprintf("%d", req.UncompressedSize) + "\n" +
 			fmt.Sprintf("%d", req.FileCount),
+	))
+	return hex.EncodeToString(sum[:])
+}
+
+func edgeRuntimeArtifactDownloadBodyHash(req edgeRuntimeArtifactDownloadWireRequest) string {
+	sum := sha256.Sum256([]byte(
+		req.DeviceID + "\n" +
+			req.KeyID + "\n" +
+			req.PublicKeyFingerprintSHA256 + "\n" +
+			req.Timestamp + "\n" +
+			req.Nonce + "\n" +
+			req.RuntimeFamily + "\n" +
+			req.RuntimeID + "\n" +
+			req.ArtifactRevision + "\n" +
+			req.ArtifactHash,
 	))
 	return hex.EncodeToString(sum[:])
 }

@@ -5,6 +5,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 # DBD::mysql 5.x expects Oracle MySQL client symbols that Debian bookworm's MariaDB client does not expose.
 RUN set -eux; \
+    savedAptMark="$(apt-mark showmanual)"; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       build-essential \
@@ -61,5 +62,28 @@ RUN set -eux; \
       Mozilla::CA; \
     perl -MExtUtils::Installed -e 'print join("\n", sort ExtUtils::Installed->new->modules), "\n"' >/tmp/perl-modules.txt; \
     perl -e 'print $^V' >/tmp/perl-version.txt; \
+    apt-mark auto '.*' >/dev/null; \
+    if [ -n "${savedAptMark}" ]; then apt-mark manual ${savedAptMark} >/dev/null; fi; \
+    apt-mark manual \
+      ca-certificates \
+      imagemagick \
+      libdb5.3 \
+      libexpat1 \
+      libffi8 \
+      libfreetype6 \
+      libgd3 \
+      libgif7 \
+      libjpeg62-turbo \
+      libmariadb3 \
+      libpng16-16 \
+      libssl3 \
+      libtiff6 \
+      libwebp7 \
+      libxml2 \
+      libxslt1.1 \
+      netpbm \
+      zlib1g \
+      >/dev/null; \
+    apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/* /root/.cpanm

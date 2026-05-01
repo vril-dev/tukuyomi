@@ -45,6 +45,7 @@ services:
       - ./data/php-fpm:/app/data/php-fpm
       - ./data/vhosts:/app/data/vhosts
       - ./scripts:/app/scripts:ro
+      - ./build:/app/build:ro
     ports:
       - "${CORAZA_PORT:-9090}:${WAF_LISTEN_PORT:-9090}"
     extra_hosts:

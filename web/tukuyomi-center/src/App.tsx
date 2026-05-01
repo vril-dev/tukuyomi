@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { useState } from "react";
 
 import Layout from "@/components/Layout";
@@ -7,6 +7,7 @@ import { useI18n } from "@/lib/i18n";
 import { getUIBasePath } from "@/lib/runtime";
 import DeviceApprovalsPage from "@/pages/DeviceApprovalsPage";
 import Login from "@/pages/Login";
+import RuntimePage from "@/pages/RuntimePage";
 import StatusPage from "@/pages/StatusPage";
 import UserPage from "@/pages/UserPage";
 
@@ -56,6 +57,14 @@ function loginReturnPath(state: unknown) {
   return from;
 }
 
+function LegacyRuntimeRedirect() {
+  const { deviceID = "" } = useParams();
+  if (!deviceID) {
+    return <Navigate to="/device-approvals" replace />;
+  }
+  return <Navigate to={`/device-approvals/devices/${encodeURIComponent(deviceID)}/runtime`} replace />;
+}
+
 function CenterRoutes() {
   const [loginNoticeKey, setLoginNoticeKey] = useState("");
 
@@ -70,6 +79,9 @@ function CenterRoutes() {
         <Route path="status" element={<StatusPage />} />
         <Route path="device-approvals" element={<DeviceApprovalsPage focusApprovals />} />
         <Route path="device-approvals/devices/:deviceID" element={<DeviceApprovalsPage />} />
+        <Route path="device-approvals/devices/:deviceID/runtime" element={<RuntimePage />} />
+        <Route path="runtimes" element={<Navigate to="/device-approvals" replace />} />
+        <Route path="runtimes/devices/:deviceID" element={<LegacyRuntimeRedirect />} />
         <Route
           path="user"
           element={<UserPage onPasswordChanged={() => setLoginNoticeKey("Password changed. Sign in again.")} />}

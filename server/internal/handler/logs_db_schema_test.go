@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const latestSchemaMigrationVersionForTest = 28
+const latestSchemaMigrationVersionForTest = 29
 
 func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
@@ -181,6 +181,7 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		{table: "center_runtime_artifact_files", column: "sha256"},
 		{table: "center_device_runtime_assignments", column: "desired_artifact_revision"},
 		{table: "center_device_runtime_assignments", column: "desired_state"},
+		{table: "center_device_runtime_assignments", column: "dispatched_at_unix"},
 		{table: "center_device_runtime_apply_status", column: "local_artifact_revision"},
 		{table: "center_device_runtime_apply_status", column: "apply_state"},
 		{table: "edge_device_identities", column: "center_product_id"},

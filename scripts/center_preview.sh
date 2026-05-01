@@ -175,6 +175,19 @@ services:
       - TUKUYOMI_CENTER_API_BASE_PATH=${CENTER_PREVIEW_API_BASE_PATH_VALUE}
       - TUKUYOMI_CENTER_UI_BASE_PATH=${CENTER_PREVIEW_UI_BASE_PATH_VALUE}
 EOF
+  if [[ -S /var/run/docker.sock ]]; then
+    docker_sock_gid="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || true)"
+    cat >>"$PREVIEW_OVERRIDE" <<EOF
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+EOF
+    if [[ -n "${docker_sock_gid}" ]]; then
+      cat >>"$PREVIEW_OVERRIDE" <<EOF
+    group_add:
+      - "${docker_sock_gid}"
+EOF
+    fi
+  fi
 }
 
 run_center_preview_compose() {

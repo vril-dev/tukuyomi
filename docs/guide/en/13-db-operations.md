@@ -66,7 +66,7 @@ make db-import
   `storage` bootstrap block).
 - If configured runtime files such as `conf/proxy.json` exist, they
   take precedence.
-- Falls back to the bundled production seed under `seeds/conf/` when
+- Falls back to the bundled production seed at `seeds/conf/config-bundle.json` when
   no configured file exists.
 - Falls back to the compatibility default when even that is missing.
 - Imports runtime files like `sites`, `vhosts`, `scheduled_tasks`,
@@ -75,8 +75,7 @@ make db-import
 - After import, **the DB rows are authoritative**.
 
 To run the import command from outside the bundle root, point
-`WAF_DB_IMPORT_SEED_CONF_DIR` at the directory that contains the
-`seeds/conf` files.
+`WAF_DB_IMPORT_SEED_BUNDLE_FILE` at the config bundle path.
 
 ## 13.2 Driver selection
 
@@ -220,7 +219,7 @@ they are **initial seed / import / export artifacts**.
 
 - If a normalized domain does not exist, DB rows are imported from the
   current seed / export file. If no configured file is present,
-  `seeds/conf/` is used.
+  `seeds/conf/config-bundle.json` is used.
 - If `app_config` exists, it is applied after the initial DB open —
   except for **DB connection items, which keep the bootstrap
   `config.json` value**.

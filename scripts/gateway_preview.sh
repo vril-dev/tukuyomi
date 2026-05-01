@@ -242,6 +242,7 @@ run_preview_command() {
   (
     cd "$ROOT_DIR/data"
     WAF_CONFIG_FILE="$PREVIEW_BOOTSTRAP_CONFIG" \
+    WAF_DB_IMPORT_SEED_BUNDLE_FILE="$ROOT_DIR/seeds/conf/config-bundle.json" \
     WAF_DB_IMPORT_SEED_CONF_DIR="$ROOT_DIR/seeds/conf" \
     WAF_STORAGE_DB_DRIVER="sqlite" \
     WAF_STORAGE_DB_DSN="" \

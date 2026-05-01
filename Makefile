@@ -453,13 +453,14 @@ db-import: db-migrate
 	@set -euo pipefail; \
 	workdir="$(DB_MIGRATE_WORKDIR)"; \
 	config_file="$${WAF_CONFIG_FILE:-$(DB_MIGRATE_CONFIG)}"; \
+	seed_bundle_file="$${WAF_DB_IMPORT_SEED_BUNDLE_FILE-$(ROOT_DIR)/seeds/conf/config-bundle.json}"; \
 	seed_conf_dir="$${WAF_DB_IMPORT_SEED_CONF_DIR-$(ROOT_DIR)/seeds/conf}"; \
 	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" && -f "$(ROOT_DIR)/$$config_file" ]]; then \
 		config_file="$(ROOT_DIR)/$$config_file"; \
 	fi; \
-	echo "[db-import] workdir=$$workdir config=$$config_file seed_conf=$$seed_conf_dir"; \
+	echo "[db-import] workdir=$$workdir config=$$config_file seed_bundle=$$seed_bundle_file seed_conf=$$seed_conf_dir"; \
 	cd "$$workdir"; \
-	WAF_DB_IMPORT_SEED_CONF_DIR="$$seed_conf_dir" WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import
+	WAF_DB_IMPORT_SEED_BUNDLE_FILE="$$seed_bundle_file" WAF_DB_IMPORT_SEED_CONF_DIR="$$seed_conf_dir" WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import
 
 db-import-waf-rule-assets: db-migrate
 	@set -euo pipefail; \
@@ -714,10 +715,13 @@ gotestwaf:
 	if [ -f data/conf/proxy.json ]; then cp data/conf/proxy.json "$$backup"; had_proxy_seed=1; fi; \
 	trap 'if [ "$$had_proxy_seed" = "1" ]; then cp "$$backup" data/conf/proxy.json >/dev/null 2>&1 || true; else rm -f data/conf/proxy.json; fi; rm -f "$$backup"' EXIT; \
 	proxy_source="data/conf/proxy.json"; \
-	if [ ! -f "$$proxy_source" ]; then proxy_source="seeds/conf/proxy.json"; fi; \
 	mkdir -p data/conf; \
 	tmp_proxy="$$(mktemp)"; \
-	jq '.upstreams = [{"name":"gotestwaf-unreachable","url":"http://127.0.0.1:9081","weight":1,"enabled":true}]' "$$proxy_source" > "$$tmp_proxy"; \
+	if [ -f "$$proxy_source" ]; then \
+		jq '.upstreams = [{"name":"gotestwaf-unreachable","url":"http://127.0.0.1:9081","weight":1,"enabled":true}]' "$$proxy_source" > "$$tmp_proxy"; \
+	else \
+		jq '.domains.proxy | .upstreams = [{"name":"gotestwaf-unreachable","url":"http://127.0.0.1:9081","weight":1,"enabled":true}]' seeds/conf/config-bundle.json > "$$tmp_proxy"; \
+	fi; \
 	mv "$$tmp_proxy" data/conf/proxy.json; \
 	HOST_CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" ./scripts/run_gotestwaf.sh
 

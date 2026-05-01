@@ -267,9 +267,9 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
   です。
 - `conf/sites.json` は DB `sites` の任意 seed / import / export material です。
 - public release bundle は、`conf/config.json` と空 DB 向け runtime seed の
-  `seeds/conf/` を同梱します。
+  `seeds/conf/config-bundle.json` を同梱します。
 - `conf/proxy.json` や policy JSON など configured file が無いときは、
-  `make db-import` は `seeds/conf/` を読み、それも無ければ built-in 互換
+  `make db-import` は `seeds/conf/config-bundle.json` を読み、それも無ければ built-in 互換
   default に fallback します。
 - 既定の base WAF rule seed は、`make crs-install` が
   `seeds/waf/rules/tukuyomi.conf` から一時 stage して DB へ import します。

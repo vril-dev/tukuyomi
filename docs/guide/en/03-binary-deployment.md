@@ -281,9 +281,9 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
 - `conf/sites.json` is optional seed / import / export material for DB
   `sites`.
 - The public release bundle ships `conf/config.json` and runtime seed
-  for an empty DB under `seeds/conf/`.
+  for an empty DB at `seeds/conf/config-bundle.json`.
 - When `conf/proxy.json` or a policy JSON is missing, `make db-import`
-  reads `seeds/conf/`, and if even that is absent, falls back to a
+  reads `seeds/conf/config-bundle.json`, and if even that is absent, falls back to a
   built-in compatibility default.
 - The default base WAF rule seed is staged from
   `seeds/waf/rules/tukuyomi.conf` and imported to the DB by

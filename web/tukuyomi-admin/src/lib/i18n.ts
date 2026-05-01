@@ -935,7 +935,11 @@ const JA_STRINGS: Record<string, string> = {
   disabled: "無効",
   route: "route",
   "cert not after": "証明書有効期限",
-  "Latest status payload": "Latest status payload",
+  "Config bundle": "Config bundle",
+  "Download a redacted single-file config seed from the current DB-backed runtime config.":
+    "現在の DB-backed runtime config から、redacted single-file config seed をダウンロードします。",
+  "Download config": "設定をダウンロード",
+  "Config download failed: {message}": "設定のダウンロードに失敗しました: {message}",
   "{label} (dry-run, non-enforcing)": "{label}（ドライラン・非強制）",
   "{label} (observed only)": "{label}（観測のみ）",
   "Blocked by waf_block (rule {ruleID})":

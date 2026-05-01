@@ -68,9 +68,10 @@ or in JSON when you have just applied the preset.
 > **Note: fallback when JSON is missing**
 >
 > Even if you have not prepared `conf/proxy.json` or `conf/sites.json`,
-> `make db-import` will not fail. It first reads `seeds/conf/`, and falls
-> back to a compatibility default if even that is missing. You can ignore
-> this when you are only trying out the preview.
+> `make db-import` will not fail. It first reads
+> `seeds/conf/config-bundle.json`, and falls back to a compatibility default if
+> even that is missing. You can ignore this when you are only trying out the
+> preview.
 
 ## 2.4 Bring up the preview
 

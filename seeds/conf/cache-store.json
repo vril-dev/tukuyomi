@@ -1,6 +1,0 @@
-{
-  "enabled": false,
-  "store_dir": "cache/response",
-  "max_bytes": 2147483648,
-  "memory_enabled": false
-}

@@ -551,7 +551,7 @@ install_files() {
   [[ -x "${ROOT_DIR}/bin/tukuyomi" ]] || die "missing built binary: ${ROOT_DIR}/bin/tukuyomi"
   [[ -f "${ROOT_DIR}/data/conf/config.json" ]] || die "missing bootstrap config: data/conf/config.json"
   if install_role_is_gateway; then
-    [[ -d "${ROOT_DIR}/seeds/conf" ]] || die "missing runtime seeds: seeds/conf"
+    [[ -f "${ROOT_DIR}/seeds/conf/config-bundle.json" ]] || die "missing runtime seed bundle: seeds/conf/config-bundle.json"
   fi
 
   run_priv install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${RUNTIME_DIR}/bin/tukuyomi"

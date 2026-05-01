@@ -195,8 +195,8 @@ is established firmly in this release.
   GCS exist as configuration values, but the adapters are not
   implemented in this build, so selecting them produces a validation
   error.
-- Production seed data lives under **`seeds/conf`**. Edit the seed
-  files when adjusting initial-import data, not Go code.
+- Production seed data lives in **`seeds/conf/config-bundle.json`**. Edit the
+  bundle domains when adjusting initial-import data, not Go code.
 - **`make install TARGET=linux-systemd`** is added for Linux host
   install. **`make deploy-render`** generates deployment artifacts
   for container platforms.
@@ -217,7 +217,7 @@ is established firmly in this release.
   `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` create the **initial
   administrator account**. The step is skipped when an admin user
   already exists.
-- Adjust initial import data by editing `seeds/conf`. After import,
+- Adjust initial import data by editing `seeds/conf/config-bundle.json`. After import,
   the data normalized in the DB is the runtime authority.
 - `make ui-preview-up` generates a Git-untracked preview-only
   configuration `conf/config.ui-preview.json` and sets a random

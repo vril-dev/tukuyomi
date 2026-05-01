@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { apiGetJson } from "@/lib/api";
+import { apiGetBinary, apiGetJson } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 type StatusResponse = Record<string, unknown>;
@@ -38,6 +38,8 @@ export default function Status() {
     const [stats, setStats] = useState<LogsStatsResponse | null>(null);
     const [statsError, setStatsError] = useState<string | null>(null);
     const [statsLoading, setStatsLoading] = useState(false);
+    const [configDownloading, setConfigDownloading] = useState(false);
+    const [configDownloadError, setConfigDownloadError] = useState<string | null>(null);
     const [rangeHours, setRangeHours] = useState<number>(24);
 
     useEffect(() => {
@@ -113,6 +115,27 @@ export default function Status() {
 
     if (!data) {
         return <div className="w-full p-4 text-gray-500">{tx("Loading status...")}</div>;
+    }
+
+    async function downloadConfigBundle() {
+        setConfigDownloading(true);
+        setConfigDownloadError(null);
+        try {
+            const { blob, filename } = await apiGetBinary("/status/config-bundle");
+            const a = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            a.href = url;
+            a.download = filename || "tukuyomi-config-bundle.json";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            setConfigDownloadError(message);
+        } finally {
+            setConfigDownloading(false);
+        }
     }
 
     return (
@@ -225,15 +248,25 @@ export default function Status() {
             </div>
 
             <section className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                    <h2 className="text-sm font-semibold">{tx("Rendered JSON")}</h2>
-                    <span className="text-xs text-neutral-500">{tx("Latest status payload")}</span>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <h2 className="text-sm font-semibold">{tx("Config bundle")}</h2>
+                        <p className="mt-1 text-xs text-neutral-500">{tx("Download a redacted single-file config seed from the current DB-backed runtime config.")}</p>
+                    </div>
+                    <button
+                        type="button"
+                        className="rounded border border-neutral-300 bg-white px-3 py-2 text-xs font-semibold hover:bg-neutral-50 disabled:cursor-not-allowed disabled:text-neutral-400"
+                        onClick={downloadConfigBundle}
+                        disabled={configDownloading}
+                    >
+                        {configDownloading ? tx("Downloading...") : tx("Download config")}
+                    </button>
                 </div>
-                <div className="app-code-shell">
-                    <pre className="app-code-block">
-                        {JSON.stringify(data, null, 2)}
-                    </pre>
-                </div>
+                {configDownloadError ? (
+                    <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                        {tx("Config download failed: {message}", { message: configDownloadError })}
+                    </div>
+                ) : null}
             </section>
         </div>
     );

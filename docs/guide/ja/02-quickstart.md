@@ -66,8 +66,8 @@ proxy ルートや site の設定は、preset 適用時点では DB にも JSON 
 > **補足：JSON が無いときの fallback**
 >
 > `conf/proxy.json` や `conf/sites.json` を用意していない状態でも、`make db-import`
-> は壊れません。まず `seeds/conf/` を読み、それも無ければ互換 default に fallback
-> します。preview を試すだけなら、ここを意識しなくて構いません。
+> は壊れません。まず `seeds/conf/config-bundle.json` を読み、それも無ければ互換
+> default に fallback します。preview を試すだけなら、ここを意識しなくて構いません。
 
 ## 2.4　Preview を起動する
 

@@ -206,12 +206,12 @@ Notes:
 - `config.json` is the DB connection bootstrap; release samples keep only the `storage` block
 - `conf/proxy.json` is optional seed/import/export material for DB `proxy_rules`
 - `conf/sites.json` is optional seed/import/export material for DB `sites`
-- the public release bundle ships `conf/config.json` and bundled empty-DB runtime seeds under `seeds/conf/`
-- when configured files such as `conf/proxy.json` or policy JSON are absent, `make db-import` reads `seeds/conf/` before falling back to built-in compatibility defaults
+- the public release bundle ships `conf/config.json` and the bundled empty-DB runtime seed at `seeds/conf/config-bundle.json`
+- when configured files such as `conf/proxy.json` or policy JSON are absent, `make db-import` reads `seeds/conf/config-bundle.json` before falling back to built-in compatibility defaults
 - `make crs-install` stages the default base WAF rule seed from `seeds/waf/rules/tukuyomi.conf` and imports it into DB
 - CRS files are temporary import material for DB `waf_rule_assets`; `make crs-install` stages them under `data/tmp` and cleans up
-- `sites.json`, `scheduled-tasks.json`, `upstream-runtime.json`, policy JSON,
-  cache-rules JSON, WAF bypass JSON, and PHP-FPM JSON manifests are DB
+- the config bundle domains for sites, scheduled tasks, upstream runtime,
+  policies, cache rules, WAF bypass, and PHP-FPM/PSGI manifests are DB
   seed/export artifacts after DB bootstrap
 - render or mount `config.json` from your secret manager or config-management layer in production for `storage.db_driver`, `storage.db_path`, and `storage.db_dsn`
 - run `make db-migrate`, then `make crs-install` to install/import WAF rule assets, then `make db-import` for the remaining seed material before first start. `db-import` does not re-import WAF rule assets

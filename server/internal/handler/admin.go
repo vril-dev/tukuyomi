@@ -560,6 +560,21 @@ func StatusHandler(c *gin.Context) {
 	})
 }
 
+func DownloadRuntimeConfigBundle(c *gin.Context) {
+	raw, err := BuildRuntimeConfigBundleExport()
+	if err != nil {
+		if errors.Is(err, errConfigDBStoreRequired) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.Header("Content-Disposition", `attachment; filename="tukuyomi-config-bundle.json"`)
+	c.Header("Cache-Control", "no-store")
+	c.Data(http.StatusOK, "application/json; charset=utf-8", raw)
+}
+
 func RulesHandler(c *gin.Context) {
 	store, err := requireConfigDBStore()
 	if err != nil {

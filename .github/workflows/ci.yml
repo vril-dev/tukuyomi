@@ -137,6 +137,7 @@ jobs:
           tmp_proxy="$(mktemp)"
           mkdir -p data/conf
           jq '
+            .domains.proxy |
             .upstreams = [
               {
                 "name": "ci-unreachable",
@@ -145,7 +146,7 @@ jobs:
                 "enabled": true
               }
             ]
-          ' seeds/conf/proxy.json > "${tmp_proxy}"
+          ' seeds/conf/config-bundle.json > "${tmp_proxy}"
           mv "${tmp_proxy}" data/conf/proxy.json
 
       - name: Import startup config and WAF assets into DB

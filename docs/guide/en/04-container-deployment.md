@@ -228,7 +228,7 @@ Typical production pattern:
 - Render `conf/config.json` from a secret manager / config management
   system for `storage.db_driver` / `storage.db_path` /
   `storage.db_dsn`.
-- Mount or bake `seeds/conf/` as the bundled seed for an empty DB. When
+- Mount or bake `seeds/conf/config-bundle.json` as the bundled seed for an empty DB. When
   configured files like `conf/proxy.json` or policy JSON are present, they
   take precedence.
 - Before the first start, run `make db-migrate` then `make crs-install` to

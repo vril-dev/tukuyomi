@@ -175,11 +175,11 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
 - `config.json` は DB 接続のブートストラップ用です。リリースサンプルは `storage` ブロックのみを保持しています
 - `conf/proxy.json` は DB `proxy_rules` の任意のシード／インポート／エクスポート素材です
 - `conf/sites.json` は DB `sites` の任意のシード／インポート／エクスポート素材です
-- 公開リリースバンドルには `conf/config.json` と、空 DB 向けランタイムシードである `seeds/conf/` が同梱されます
-- `conf/proxy.json` やポリシー JSON など設定済みファイルが存在しない場合、`make db-import` は `seeds/conf/` を読み込み、その後ビルトインの互換デフォルトへフォールバックします
+- 公開リリースバンドルには `conf/config.json` と、空 DB 向けランタイムシードである `seeds/conf/config-bundle.json` が同梱されます
+- `conf/proxy.json` やポリシー JSON など設定済みファイルが存在しない場合、`make db-import` は `seeds/conf/config-bundle.json` を読み込み、その後ビルトインの互換デフォルトへフォールバックします
 - 既定のベース WAF ルールシードは、`make crs-install` が `seeds/waf/rules/tukuyomi.conf` から一時ステージングして DB へインポートします
 - CRS ファイルは DB `waf_rule_assets` 向けの一時インポート素材であり、`make crs-install` が `data/tmp` でステージングとクリーンアップを行います
-- `sites.json`、`scheduled-tasks.json`、`upstream-runtime.json`、ポリシー JSON、cache-rules JSON、WAF バイパス JSON、PHP-FPM JSON マニフェストは、DB ブートストラップ後は DB のシード／エクスポート用アーティファクトです
+- config bundle 内の sites、scheduled tasks、upstream runtime、policy、cache rules、WAF bypass、PHP-FPM/PSGI マニフェストは、DB ブートストラップ後は DB のシード／エクスポート用アーティファクトです
 - 本番では `storage.db_driver`、`storage.db_path`、`storage.db_dsn` 用の `config.json` を、シークレットマネージャー／構成管理から生成・マウントしてください
 - 初回起動前に `make db-migrate`、`make crs-install` の順で WAF ルールアセットをインストール／インポートし、その後に残りのシード素材用として `make db-import` を実行します。`db-import` は WAF ルールアセットを再インポートしません
 - 埋め込みの `Settings` 画面は DB `app_config` を編集します。リスナー／ランタイム／ストレージポリシー／オブザーバビリティ系の変更後はサービスを再起動してください

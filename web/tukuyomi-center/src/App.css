@@ -954,6 +954,10 @@ button.danger {
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
 }
 
+.device-action-modal {
+  width: min(980px, 100%);
+}
+
 .modal-header {
   display: flex;
   align-items: flex-start;
@@ -968,6 +972,27 @@ button.danger {
   align-items: center;
   gap: 10px;
   margin-top: 14px;
+}
+
+.modal-section {
+  margin-top: 16px;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 14px;
+}
+
+.modal-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.modal-section-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.2;
 }
 
 .summary-grid {
@@ -1065,7 +1090,12 @@ button.danger {
 }
 
 .registered-device-table th:nth-child(1) {
-  width: 14%;
+  width: 10%;
+}
+
+.registered-device-table th:first-child,
+.registered-device-table td.actions-cell:first-child {
+  text-align: left;
 }
 
 .registered-device-table th:nth-child(2) {
@@ -1088,6 +1118,68 @@ button.danger {
 .registered-device-table th:nth-child(13),
 .registered-device-table th:nth-child(14) {
   width: 12%;
+}
+
+.config-snapshot-table table {
+  min-width: 820px;
+}
+
+.config-snapshot-table th:nth-child(1) {
+  width: 25%;
+}
+
+.config-snapshot-table th:nth-child(2),
+.config-snapshot-table th:nth-child(3),
+.config-snapshot-table th:nth-child(5) {
+  width: 22%;
+}
+
+.config-snapshot-table th:nth-child(4) {
+  width: 9%;
+}
+
+.config-snapshot-table th:first-child,
+.config-snapshot-table td.actions-cell:first-child {
+  text-align: left;
+}
+
+.config-snapshot-table td.actions-cell {
+  overflow: visible;
+}
+
+.config-snapshot-table .inline-actions {
+  justify-content: flex-start;
+}
+
+.snapshot-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.snapshot-viewer {
+  margin-top: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 12px;
+  background: #fbfdff;
+}
+
+.snapshot-viewer pre {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 10px;
+  background: #0f172a;
+  color: #f8fafc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
 }
 
 .table-subvalue {

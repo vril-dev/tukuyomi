@@ -116,11 +116,11 @@ ship in this release.
 
 ## B1.5 Build / development
 
-- Gateway / Center UI build requires **`node >=22.12.0` and `npm
-  >=10`**.
-- **`.nvmrc` now points at Node 22.**
-- CI already uses Node 22. The sample deployment Dockerfile builds the
-  UI with Node 22 too.
+- Gateway / Center UI build requires **Node.js 24 LTS** and
+  **`npm >=11`**.
+- **`.nvmrc` now points at Node 24.**
+- CI already uses Node 24. The sample deployment Dockerfile builds the
+  UI with Node 24 too.
 - Gateway UI routes are **lazy-loaded** so large admin pages do not
   bloat the initial JavaScript bundle.
 - After the dependency lock update,
@@ -153,7 +153,7 @@ ship in this release.
 - The bundled config example explicitly states `edge.enabled` and
   defaults to **false**.
 - **UI builds on Node 18 are not supported.** Follow `.nvmrc` and the
-  package `engines` and use Node 22.
+  package `engines` and use Node 24 LTS.
 
 ## B1.8 Known limitations
 

@@ -111,11 +111,11 @@ workflow** を追加しました。あわせて install role と frontend build 
 
 ## B1.5　Build / Development
 
-- Gateway / Center UI build は **`node >=22.12.0` と `npm >=10`** を要求
+- Gateway / Center UI build は **Node.js 24 LTS** と **`npm >=11`** を要求
   します。
-- **`.nvmrc` は Node 22** を指すようにしました。
-- CI はすでに Node 22 を使用しており、sample deployment Dockerfile も
-  Node 22 で UI を build します。
+- **`.nvmrc` は Node 24** を指すようにしました。
+- CI はすでに Node 24 を使用しており、sample deployment Dockerfile も
+  Node 24 で UI を build します。
 - Gateway UI routes を **lazy load** し、大きな admin page が初期 JavaScript
   bundle を膨らませないようにしました。
 - dependency lock 更新後、Gateway / Center UI の
@@ -148,7 +148,7 @@ workflow** を追加しました。あわせて install role と frontend build 
 - bundled config example には `edge.enabled` を明示し、default は **false**
   です。
 - **Node 18 での UI build はサポート外** です。`.nvmrc` と package
-  `engines` に従い Node 22 を使ってください。
+  `engines` に従い Node 24 LTS を使ってください。
 
 ## B1.8　既知の制限
 

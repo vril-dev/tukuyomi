@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MIN_NODE_MAJOR=22
-MIN_NODE_MINOR=12
-MIN_NPM_MAJOR=10
-NODE_IMAGE="${TUKUYOMI_NODE_IMAGE:-node:22-alpine}"
+MIN_NODE_MAJOR=24
+MIN_NODE_MINOR=0
+MIN_NPM_MAJOR=11
+NODE_IMAGE="${TUKUYOMI_NODE_IMAGE:-node:24-alpine}"
 DOCKER_BIN="${DOCKER:-docker}"
 export npm_config_update_notifier="${npm_config_update_notifier:-false}"
 export npm_config_fund="${npm_config_fund:-false}"
@@ -37,10 +37,6 @@ local_runtime_ok() {
   [[ "$node_minor" =~ ^[0-9]+$ ]] || return 1
   [[ "$npm_major" =~ ^[0-9]+$ ]] || return 1
 
-  if (( node_major > MIN_NODE_MAJOR )); then
-    (( npm_major >= MIN_NPM_MAJOR ))
-    return
-  fi
   if (( node_major == MIN_NODE_MAJOR && node_minor >= MIN_NODE_MINOR && npm_major >= MIN_NPM_MAJOR )); then
     return 0
   fi
@@ -53,8 +49,8 @@ fi
 
 if ! command -v "$DOCKER_BIN" >/dev/null 2>&1; then
   cat >&2 <<EOF
-Node.js 22.12+ and npm 10+ are required for Tukuyomi UI builds.
-Install Node 22, or install Docker so this wrapper can run ${NODE_IMAGE}.
+Node.js 24 LTS and npm 11+ are required for Tukuyomi UI builds.
+Install Node 24 LTS, or install Docker so this wrapper can run ${NODE_IMAGE}.
 EOF
   exit 127
 fi
@@ -66,7 +62,7 @@ WORKDIR="$(pwd)"
 case "${WORKDIR}/" in
   "${REPO_ROOT}/"*) REL_WORKDIR="${WORKDIR#${REPO_ROOT}/}" ;;
   *)
-    echo "npm-node22: working directory must be inside ${REPO_ROOT}" >&2
+    echo "npm-node24: working directory must be inside ${REPO_ROOT}" >&2
     exit 1
     ;;
 esac

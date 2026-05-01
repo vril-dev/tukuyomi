@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/adminauth"
+	"tukuyomi/internal/edgeartifactbundle"
 )
 
 type enrollmentDecisionRequest struct {
@@ -29,6 +30,7 @@ func registerDeviceEnrollmentRoutes(r *gin.Engine) {
 	r.POST("/v1/enroll", postDeviceEnrollment)
 	r.POST("/v1/device-status", postDeviceStatus)
 	r.POST("/v1/device-config-snapshot", postDeviceConfigSnapshot)
+	r.POST("/v1/rule-artifact-bundle", postRuleArtifactBundle)
 }
 
 func registerCenterDeviceAdminRoutes(api *gin.RouterGroup) {
@@ -36,6 +38,8 @@ func registerCenterDeviceAdminRoutes(api *gin.RouterGroup) {
 	api.POST("/devices/:device_id/revoke", postCenterDeviceRevoke)
 	api.POST("/devices/:device_id/archive", postCenterDeviceArchive)
 	api.GET("/devices/:device_id/config-snapshot", getCenterDeviceConfigSnapshot)
+	api.GET("/devices/:device_id/config-snapshots", getCenterDeviceConfigSnapshots)
+	api.GET("/devices/:device_id/config-snapshots/:revision", getCenterDeviceConfigSnapshotRevision)
 	api.GET("/devices/enrollments", getCenterDeviceEnrollments)
 	api.POST("/devices/enrollments/:enrollment_id/approve", postCenterDeviceEnrollmentApprove)
 	api.POST("/devices/enrollments/:enrollment_id/reject", postCenterDeviceEnrollmentReject)
@@ -218,6 +222,91 @@ func postDeviceConfigSnapshot(c *gin.Context) {
 	})
 }
 
+func postRuleArtifactBundle(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxRuleArtifactBundleBodyBytes)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req RuleArtifactBundleRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid rule artifact bundle payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid rule artifact bundle payload"})
+		return
+	}
+	normalizedReq, _, _, err := normalizeRuleArtifactBundleRequest(req, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	req = normalizedReq
+	record, err := LookupDeviceStatus(c.Request.Context(), req.DeviceID, req.KeyID, req.PublicKeyFingerprintSHA256)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrDeviceStatusNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "device status not found"})
+		case errors.Is(err, ErrDeviceStatusKeyMismatch):
+			c.JSON(http.StatusForbidden, gin.H{"error": "device key mismatch"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load device status"})
+		}
+		return
+	}
+	if !record.FromApprovedDevice || record.Status != DeviceStatusApproved {
+		c.JSON(http.StatusForbidden, gin.H{"error": "device is not approved"})
+		return
+	}
+	verified, err := VerifyRuleArtifactBundleRequest(req, record.PublicKeyPEM, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	parsed, err := edgeartifactbundle.Parse(verified.BundleBytes)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validateParsedRuleArtifactUpload(verified, parsed); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	receivedAt := time.Now().UTC().Unix()
+	stored, err := StoreRuleArtifactBundle(c.Request.Context(), RuleArtifactBundleInsert{
+		DeviceID:         verified.DeviceID,
+		BundleRevision:   parsed.Revision,
+		BundleHash:       parsed.BundleHash,
+		CompressedSize:   parsed.CompressedSize,
+		UncompressedSize: parsed.UncompressedSize,
+		FileCount:        parsed.FileCount,
+		Files:            parsed.Files,
+		ReceivedAtUnix:   receivedAt,
+	})
+	if err != nil {
+		if errors.Is(err, ErrDeviceStatusNotFound) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "device is not approved"})
+			return
+		}
+		if errors.Is(err, ErrInvalidEnrollment) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "invalid rule artifact bundle payload"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store rule artifact bundle"})
+		return
+	}
+	status := "stored"
+	if !stored.Stored {
+		status = "duplicate"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"status":           status,
+		"bundle_revision":  stored.BundleRevision,
+		"bundle_hash":      stored.BundleHash,
+		"file_count":       stored.FileCount,
+		"received_at_unix": stored.CreatedAtUnix,
+	})
+}
+
 func getCenterDevices(c *gin.Context) {
 	devices, err := ListDevices(c.Request.Context(), parseBoolQuery(c.Query("include_archived")))
 	if err != nil {
@@ -260,6 +349,50 @@ func getCenterDeviceConfigSnapshot(c *gin.Context) {
 	}
 	name := safeConfigSnapshotFilename(snapshot.DeviceID, snapshot.Revision)
 	c.Header("Content-Disposition", `attachment; filename="`+name+`"`)
+	c.Data(http.StatusOK, "application/json; charset=utf-8", snapshot.PayloadJSON)
+}
+
+func getCenterDeviceConfigSnapshots(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	limit := parseBoundedInt(c.Query("limit"), 6, 1, 6)
+	offset := parseBoundedInt(c.Query("offset"), 0, 0, 1000000)
+	result, err := ListDeviceConfigSnapshots(c.Request.Context(), deviceID, limit, offset)
+	if err != nil {
+		if errors.Is(err, ErrDeviceStatusNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "device not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list config snapshots"})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func getCenterDeviceConfigSnapshotRevision(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	revision, ok := parseConfigRevisionParam(c)
+	if !ok {
+		return
+	}
+	snapshot, err := LoadDeviceConfigSnapshot(c.Request.Context(), deviceID, revision)
+	if err != nil {
+		if errors.Is(err, ErrDeviceStatusNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "config snapshot not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load config snapshot"})
+		return
+	}
+	if parseBoolQuery(c.Query("download")) {
+		name := safeConfigSnapshotFilename(snapshot.DeviceID, snapshot.Revision)
+		c.Header("Content-Disposition", `attachment; filename="`+name+`"`)
+	}
 	c.Data(http.StatusOK, "application/json; charset=utf-8", snapshot.PayloadJSON)
 }
 
@@ -417,6 +550,15 @@ func parseDeviceIDParam(c *gin.Context) (string, bool) {
 		return "", false
 	}
 	return deviceID, true
+}
+
+func parseConfigRevisionParam(c *gin.Context) (string, bool) {
+	revision := strings.ToLower(strings.TrimSpace(c.Param("revision")))
+	if !hex64Pattern.MatchString(revision) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid revision"})
+		return "", false
+	}
+	return revision, true
 }
 
 func safeConfigSnapshotFilename(deviceID string, revision string) string {

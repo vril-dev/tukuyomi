@@ -9,16 +9,20 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/edgeartifactbundle"
 )
 
 func TestPostEdgeDeviceEnrollmentCreatesIdentityAndSendsSignedRequest(t *testing.T) {
@@ -279,6 +283,328 @@ func TestEdgeDeviceStatusAutoRefreshUpdatesCachedApproval(t *testing.T) {
 	}
 }
 
+func TestEdgeDeviceStatusAutoRefreshUploadsRuleArtifactOncePerRevision(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)
+	defer restoreEdgeRuntime()
+
+	dbPath := filepath.Join(t.TempDir(), "edge-device-rule-artifact.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer InitLogsStatsStore(false, "", 0)
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("store is nil")
+	}
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{
+		{Path: "rules/tukuyomi.conf", Kind: wafRuleAssetKindBase, Raw: []byte("SecRuleEngine On\n"), ETag: "rule-etag-1"},
+		{Path: "rules/crs/REQUEST-901-INITIALIZATION.conf", Kind: wafRuleAssetKindCRSAsset, Raw: []byte("SecRule ARGS \"@rx test\" \"id:901000,phase:1,pass\"\n"), ETag: "rule-etag-2", Disabled: true},
+	}, configVersionSourceImport, "test", "test rule artifact upload", 0); err != nil {
+		t.Fatalf("writeWAFRuleAssetsVersion: %v", err)
+	}
+
+	statusCalls := 0
+	snapshotCalls := 0
+	artifactCalls := 0
+	var capturedPublicKey ed25519.PublicKey
+	var capturedFingerprint string
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/enroll":
+			var req edgeDeviceEnrollmentWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode enrollment: %v", err)
+			}
+			capturedPublicKey = verifySignedEdgeEnrollmentForTest(t, req)
+			capturedFingerprint = req.PublicKeyFingerprintSHA256
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"status":"pending"}`))
+		case "/v1/device-status":
+			statusCalls++
+			var req edgeDeviceStatusWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode status: %v", err)
+			}
+			verifySignedEdgeStatusForTest(t, req, capturedPublicKey, capturedFingerprint)
+			_, _ = w.Write([]byte(`{"status":"approved","device_id":"edge-device-rule","key_id":"default","product_id":"product-a","checked_at_unix":1700000000}`))
+		case "/v1/rule-artifact-bundle":
+			artifactCalls++
+			var req edgeRuleArtifactBundleWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode rule artifact: %v", err)
+			}
+			parsed := verifySignedEdgeRuleArtifactBundleForTest(t, req, capturedPublicKey, capturedFingerprint)
+			if parsed.FileCount != 2 || parsed.Files[0].Path != "rules/crs/REQUEST-901-INITIALIZATION.conf" || parsed.Files[0].Disabled ||
+				parsed.Files[1].Path != "rules/tukuyomi.conf" || string(parsed.Files[1].Body) != "SecRuleEngine On\n" {
+				t.Fatalf("unexpected parsed rule artifact: %+v", parsed)
+			}
+			_, _ = w.Write([]byte(`{"status":"stored","bundle_revision":` + quoteJSON(req.BundleRevision) + `,"received_at_unix":1700000001}`))
+		case "/v1/device-config-snapshot":
+			snapshotCalls++
+			var req edgeDeviceConfigSnapshotWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode config snapshot: %v", err)
+			}
+			verifySignedEdgeConfigSnapshotForTest(t, req, capturedPublicKey, capturedFingerprint)
+			if !strings.Contains(string(req.Snapshot), `"bundle_revision"`) {
+				t.Fatalf("config snapshot does not reference rule artifact bundle: %s", string(req.Snapshot))
+			}
+			_, _ = w.Write([]byte(`{"status":"stored","config_revision":` + quoteJSON(req.ConfigRevision) + `,"received_at_unix":1700000002}`))
+		default:
+			t.Fatalf("path=%q", r.URL.Path)
+		}
+	}))
+	defer center.Close()
+
+	router := gin.New()
+	router.POST("/edge/device-auth/enroll", PostEdgeDeviceEnrollment)
+
+	body := `{"center_url":` + quoteJSON(center.URL) + `,"enrollment_token":"tky_enroll_test","device_id":"edge-device-rule","key_id":"default"}`
+	rec := performEdgeDeviceRequest(router, http.MethodPost, "/edge/device-auth/enroll", body)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("enroll code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	status, attempted, err := autoRefreshEdgeDeviceCenterStatus(context.Background())
+	if err != nil {
+		t.Fatalf("first autoRefreshEdgeDeviceCenterStatus: %v", err)
+	}
+	if !attempted {
+		t.Fatal("first auto refresh should attempt")
+	}
+	if artifactCalls != 1 || snapshotCalls != 1 || status.RuleArtifactRevision == "" || status.ConfigSnapshotRevision == "" {
+		t.Fatalf("first refresh did not upload artifact and snapshot: artifact=%d snapshot=%d status=%+v", artifactCalls, snapshotCalls, status)
+	}
+
+	status, attempted, err = autoRefreshEdgeDeviceCenterStatus(context.Background())
+	if err != nil {
+		t.Fatalf("second autoRefreshEdgeDeviceCenterStatus: %v", err)
+	}
+	if !attempted {
+		t.Fatal("second auto refresh should attempt")
+	}
+	if statusCalls != 2 {
+		t.Fatalf("statusCalls=%d want 2", statusCalls)
+	}
+	if artifactCalls != 1 || snapshotCalls != 1 {
+		t.Fatalf("unchanged revision should not reupload: artifact=%d snapshot=%d status=%+v", artifactCalls, snapshotCalls, status)
+	}
+}
+
+func TestEdgeDeviceStatusRefreshSerializesConcurrentArtifactUploads(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)
+	defer restoreEdgeRuntime()
+
+	dbPath := filepath.Join(t.TempDir(), "edge-device-rule-artifact-concurrent.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer InitLogsStatsStore(false, "", 0)
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("store is nil")
+	}
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{
+		{Path: "rules/tukuyomi.conf", Kind: wafRuleAssetKindBase, Raw: []byte("SecRuleEngine On\n"), ETag: "rule-etag-1"},
+	}, configVersionSourceImport, "test", "test concurrent rule artifact upload", 0); err != nil {
+		t.Fatalf("writeWAFRuleAssetsVersion: %v", err)
+	}
+
+	var statusCalls int32
+	var snapshotCalls int32
+	var artifactCalls int32
+	artifactStarted := make(chan struct{})
+	releaseArtifact := make(chan struct{})
+	var capturedPublicKey ed25519.PublicKey
+	var capturedFingerprint string
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/enroll":
+			var req edgeDeviceEnrollmentWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode enrollment: %v", err)
+			}
+			capturedPublicKey = verifySignedEdgeEnrollmentForTest(t, req)
+			capturedFingerprint = req.PublicKeyFingerprintSHA256
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"status":"pending"}`))
+		case "/v1/device-status":
+			atomic.AddInt32(&statusCalls, 1)
+			var req edgeDeviceStatusWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode status: %v", err)
+			}
+			verifySignedEdgeStatusForTest(t, req, capturedPublicKey, capturedFingerprint)
+			_, _ = w.Write([]byte(`{"status":"approved","device_id":"edge-device-rule","key_id":"default","product_id":"product-a","checked_at_unix":1700000000}`))
+		case "/v1/rule-artifact-bundle":
+			if atomic.AddInt32(&artifactCalls, 1) == 1 {
+				close(artifactStarted)
+				<-releaseArtifact
+			}
+			var req edgeRuleArtifactBundleWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode rule artifact: %v", err)
+			}
+			parsed := verifySignedEdgeRuleArtifactBundleForTest(t, req, capturedPublicKey, capturedFingerprint)
+			if parsed.FileCount != 1 {
+				t.Fatalf("file_count=%d want 1", parsed.FileCount)
+			}
+			_, _ = w.Write([]byte(`{"status":"stored","bundle_revision":` + quoteJSON(req.BundleRevision) + `,"received_at_unix":1700000001}`))
+		case "/v1/device-config-snapshot":
+			atomic.AddInt32(&snapshotCalls, 1)
+			var req edgeDeviceConfigSnapshotWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode config snapshot: %v", err)
+			}
+			verifySignedEdgeConfigSnapshotForTest(t, req, capturedPublicKey, capturedFingerprint)
+			_, _ = w.Write([]byte(`{"status":"stored","config_revision":` + quoteJSON(req.ConfigRevision) + `,"received_at_unix":1700000002}`))
+		default:
+			t.Fatalf("path=%q", r.URL.Path)
+		}
+	}))
+	defer center.Close()
+
+	router := gin.New()
+	router.POST("/edge/device-auth/enroll", PostEdgeDeviceEnrollment)
+
+	body := `{"center_url":` + quoteJSON(center.URL) + `,"enrollment_token":"tky_enroll_test","device_id":"edge-device-rule","key_id":"default"}`
+	rec := performEdgeDeviceRequest(router, http.MethodPost, "/edge/device-auth/enroll", body)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("enroll code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	refreshDone := make(chan error, 2)
+	runRefresh := func() {
+		status, attempted, err := autoRefreshEdgeDeviceCenterStatus(context.Background())
+		if err != nil {
+			refreshDone <- err
+			return
+		}
+		if !attempted {
+			refreshDone <- errors.New("refresh was not attempted")
+			return
+		}
+		if status.EnrollmentStatus != edgeEnrollmentStatusApproved {
+			refreshDone <- fmt.Errorf("status=%s want approved", status.EnrollmentStatus)
+			return
+		}
+		refreshDone <- nil
+	}
+	go runRefresh()
+	select {
+	case <-artifactStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first refresh did not start artifact upload")
+	}
+	go runRefresh()
+	time.Sleep(50 * time.Millisecond)
+	if got := atomic.LoadInt32(&statusCalls); got != 1 {
+		t.Fatalf("concurrent refresh should wait for the active refresh, statusCalls=%d", got)
+	}
+	if got := atomic.LoadInt32(&artifactCalls); got != 1 {
+		t.Fatalf("concurrent refresh duplicated artifact upload, artifactCalls=%d", got)
+	}
+	close(releaseArtifact)
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-refreshDone:
+			if err != nil {
+				t.Fatalf("refresh %d: %v", i+1, err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("refresh %d did not finish", i+1)
+		}
+	}
+	if got := atomic.LoadInt32(&artifactCalls); got != 1 {
+		t.Fatalf("artifactCalls=%d want 1", got)
+	}
+	if got := atomic.LoadInt32(&snapshotCalls); got != 1 {
+		t.Fatalf("snapshotCalls=%d want 1", got)
+	}
+}
+
+func TestEdgeDeviceStatusRefreshSkipsConfigSnapshotWhenRuleArtifactFails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)
+	defer restoreEdgeRuntime()
+
+	dbPath := filepath.Join(t.TempDir(), "edge-device-rule-artifact-failure.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer InitLogsStatsStore(false, "", 0)
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("store is nil")
+	}
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{
+		{Path: "rules/tukuyomi.conf", Kind: wafRuleAssetKindBase, Raw: []byte("SecRuleEngine On\n"), ETag: "rule-etag-1"},
+	}, configVersionSourceImport, "test", "test failed rule artifact upload", 0); err != nil {
+		t.Fatalf("writeWAFRuleAssetsVersion: %v", err)
+	}
+
+	var snapshotCalls int32
+	var capturedPublicKey ed25519.PublicKey
+	var capturedFingerprint string
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/enroll":
+			var req edgeDeviceEnrollmentWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode enrollment: %v", err)
+			}
+			capturedPublicKey = verifySignedEdgeEnrollmentForTest(t, req)
+			capturedFingerprint = req.PublicKeyFingerprintSHA256
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"status":"pending"}`))
+		case "/v1/device-status":
+			var req edgeDeviceStatusWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode status: %v", err)
+			}
+			verifySignedEdgeStatusForTest(t, req, capturedPublicKey, capturedFingerprint)
+			_, _ = w.Write([]byte(`{"status":"approved","device_id":"edge-device-rule","key_id":"default","product_id":"product-a","checked_at_unix":1700000000}`))
+		case "/v1/rule-artifact-bundle":
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"rule artifact store unavailable"}`))
+		case "/v1/device-config-snapshot":
+			atomic.AddInt32(&snapshotCalls, 1)
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			t.Fatalf("path=%q", r.URL.Path)
+		}
+	}))
+	defer center.Close()
+
+	router := gin.New()
+	router.POST("/edge/device-auth/enroll", PostEdgeDeviceEnrollment)
+
+	body := `{"center_url":` + quoteJSON(center.URL) + `,"enrollment_token":"tky_enroll_test","device_id":"edge-device-rule","key_id":"default"}`
+	rec := performEdgeDeviceRequest(router, http.MethodPost, "/edge/device-auth/enroll", body)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("enroll code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	status, attempted, err := autoRefreshEdgeDeviceCenterStatus(context.Background())
+	if err != nil {
+		t.Fatalf("autoRefreshEdgeDeviceCenterStatus: %v", err)
+	}
+	if !attempted {
+		t.Fatal("refresh should attempt")
+	}
+	if status.RuleArtifactError == "" {
+		t.Fatalf("rule artifact failure was not recorded: %+v", status)
+	}
+	if status.ConfigSnapshotRevision != "" || atomic.LoadInt32(&snapshotCalls) != 0 {
+		t.Fatalf("config snapshot should wait for accepted rule artifact: snapshotCalls=%d status=%+v", snapshotCalls, status)
+	}
+}
+
 func TestEdgeDeviceStatusRefreshLoopWakesAfterEnrollment(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)
@@ -534,6 +860,54 @@ func verifySignedEdgeConfigSnapshotForTest(t *testing.T, req edgeDeviceConfigSna
 	if !ed25519.Verify(pub, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)), signature) {
 		t.Fatalf("config snapshot signature verification failed")
 	}
+}
+
+func verifySignedEdgeRuleArtifactBundleForTest(t *testing.T, req edgeRuleArtifactBundleWireRequest, pub ed25519.PublicKey, fingerprint string) edgeartifactbundle.Parsed {
+	t.Helper()
+	if len(pub) != ed25519.PublicKeySize {
+		t.Fatalf("public key was not captured")
+	}
+	if req.BodyHash != edgeRuleArtifactBundleBodyHash(req) {
+		t.Fatalf("rule artifact body_hash mismatch")
+	}
+	if req.PublicKeyFingerprintSHA256 != fingerprint {
+		t.Fatalf("fingerprint=%q want %q", req.PublicKeyFingerprintSHA256, fingerprint)
+	}
+	bundle, err := base64.StdEncoding.DecodeString(req.BundleB64)
+	if err != nil {
+		t.Fatalf("rule artifact bundle b64: %v", err)
+	}
+	sum := sha256.Sum256(bundle)
+	if hex.EncodeToString(sum[:]) != req.BundleHash {
+		t.Fatalf("rule artifact bundle_hash mismatch")
+	}
+	parsed, err := edgeartifactbundle.Parse(bundle)
+	if err != nil {
+		t.Fatalf("parse rule artifact bundle: %v", err)
+	}
+	if parsed.Revision != req.BundleRevision {
+		t.Fatalf("rule artifact revision=%q want %q", parsed.Revision, req.BundleRevision)
+	}
+	if parsed.BundleHash != req.BundleHash {
+		t.Fatalf("parsed bundle_hash=%q want %q", parsed.BundleHash, req.BundleHash)
+	}
+	if parsed.CompressedSize != req.CompressedSize {
+		t.Fatalf("compressed_size=%d want %d", parsed.CompressedSize, req.CompressedSize)
+	}
+	if parsed.UncompressedSize != req.UncompressedSize {
+		t.Fatalf("uncompressed_size=%d want %d", parsed.UncompressedSize, req.UncompressedSize)
+	}
+	if parsed.FileCount != req.FileCount {
+		t.Fatalf("file_count=%d want %d", parsed.FileCount, req.FileCount)
+	}
+	signature, err := base64.StdEncoding.DecodeString(req.SignatureB64)
+	if err != nil {
+		t.Fatalf("signature b64: %v", err)
+	}
+	if !ed25519.Verify(pub, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)), signature) {
+		t.Fatalf("rule artifact signature verification failed")
+	}
+	return parsed
 }
 
 func setEdgeRuntimeForTest(enabled bool, deviceAuthEnabled bool) func() {

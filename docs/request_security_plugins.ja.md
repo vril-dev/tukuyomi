@@ -2,45 +2,43 @@
 
 # Request-Time Security Plugins
 
-`tukuyomi` は `server/internal/handler` 内の compile-time plugin として request-time security extension をサポートします。
+`tukuyomi` は `server/internal/handler` 配下のコンパイル時プラグインとして、リクエスト時のセキュリティ拡張をサポートします。
 
-これは意図的に static で、Go runtime の `.so` plugin は使いません。
+これは意図的に静的な仕組みであり、Go ランタイムの `.so` プラグインは使用しません。
 
-## 境界: metadata resolver と request-security plugin
+## 境界: メタデータリゾルバとリクエストセキュリティプラグイン
 
-`request_security_plugins` は、いまや最初の request 拡張層ではありません。
+`request_security_plugins` は、最初のリクエスト拡張層ではなくなりました。
 
-request-security plugin が動く前に、`[proxy]` は
-`request_metadata_resolvers` を実行します。
+リクエストセキュリティプラグインが動作する前に、`request_metadata_resolvers` を実行します。
 
-この enrichment-only phase は、次のような typed request metadata を正規化する責務を持ちます。
+このエンリッチメント専用フェーズは、次のような型付きリクエストメタデータの正規化を担います。
 
-- client IP
-- country
-- country source（`header` または `mmdb`）
+- クライアント IP
+- 接続元国
+- 接続元国の取得ソース（`header` または `mmdb`）
 
-現在の順序はこうです。
+現在の処理順序は次のとおりです。
 
-1. proxy request entry
-2. request metadata resolvers
-3. country block
-4. rate limit
-5. request-security plugins
-6. WAF / CRS
+1. プロキシのリクエスト受け付け
+2. リクエストメタデータリゾルバ
+3. 国別ブロック
+4. レート制限
+5. リクエストセキュリティプラグイン
+6. WAF ／ CRS
 
 ルール:
 
-- metadata resolver は context enrichment のみ
-- metadata resolver は block/challenge しない
-- request-security plugin は引き続き decision layer
-- CRS plugin は別の rule-bundle surface
+- メタデータリゾルバはコンテキストのエンリッチメントのみを行う
+- メタデータリゾルバはブロック／チャレンジを行わない
+- リクエストセキュリティプラグインは引き続き判定層
+- CRS プラグインは別系統のルールバンドル
 
-つまり MaxMind 互換 `.mmdb` による country 解決は、
-`request_security_plugins` ではなく metadata resolver 層に属します。
+したがって、MaxMind 互換 `.mmdb` による接続元国の解決は、`request_security_plugins` ではなくメタデータリゾルバ層に属します。
 
-## Plugin Interface
+## プラグインインターフェース
 
-plugin は次の interface を使います。
+プラグインは次のインターフェースを実装します。
 
 ```go
 type requestSecurityPlugin interface {
@@ -55,16 +53,16 @@ type requestSecurityPlugin interface {
   - `requestSecurityPluginPhasePreWAF`
   - `requestSecurityPluginPhasePostWAF`
 - `Handle(...)` の戻り値:
-  - `true`: 次の plugin へ進む
-  - `false`: request は処理済みまたは blocked とみなし、chain を止める
+  - `true`: 次のプラグインへ処理を進める
+  - `false`: リクエストは処理済みまたはブロック済みとみなし、チェーンを停止する
 
-`requestSecurityPluginContext` は request ID、client IP、country、current time、semantic evaluation state などの normalized request metadata を提供します。
+`requestSecurityPluginContext` は、リクエスト ID、クライアント IP、接続元国、現在時刻、セマンティック評価状態など、正規化済みのリクエストメタデータを提供します。
 
-## Canonical `SecurityEvent` 契約
+## 正規 `SecurityEvent` 契約
 
-built-in と internal extension は `requestSecurityPluginContext` を通して canonical な in-process security event を publish できます。
+組み込みプラグインおよび内部拡張は、`requestSecurityPluginContext` を経由して、プロセス内で正規化されたセキュリティイベントを発行できます。
 
-event model は次の stable field を持ちます。
+イベントモデルが持つ安定フィールドは次のとおりです。
 
 - `event_id`
 - `ts`
@@ -84,9 +82,9 @@ event model は次の stable field を持ちます。
 - `status`
 - `attributes`
 
-これは cross-plugin 挙動のための internal contract です。JSON log や security-audit trail を置き換えるものではなく、それらを補完します。
+これはプラグイン横断の挙動を担保するための内部契約です。JSON ログやセキュリティ監査ログを置き換えるものではなく、それらを補完する位置付けです。
 
-### Context helper
+### コンテキストヘルパー
 
 `requestSecurityPluginContext` は次を提供します。
 
@@ -98,41 +96,41 @@ event model は次の stable field を持ちます。
 
 基本フロー:
 
-1. 実際の decision point で canonical event を組み立てる
-2. decision が確定した直後に publish する
-3. 同一 request 内の downstream subscriber が同期的に反応する
-4. operator 向け JSON log / audit record は別 surface として維持する
+1. 実際の判定ポイントで正規イベントを組み立てる
+2. 判定が確定した直後にイベントを発行する
+3. 同一リクエスト内の下流のサブスクライバが同期的に反応する
+4. オペレーター向けの JSON ログや監査レコードは別系統で維持する
 
-### Ordering と可視性
+### 順序と可視性
 
-- ordering は deterministic で、実際の request path に従います
-- subscriber が見えるのは、すでに発生した event だけです
-- bus は per-request / in-process のみです
-- feedback による derived event も runtime 順に追加されるため、subscriber は元 event と同期 feedback event の両方を観測することがあります
+- 順序は決定的で、実際のリクエストパスに従います
+- サブスクライバが観測できるのは、すでに発生したイベントのみです
+- イベントバスはリクエスト単位かつプロセス内のみで動作します
+- フィードバックによって派生したイベントも実行順に追加されるため、サブスクライバは元のイベントと同期的なフィードバックイベントの両方を観測することがあります
 
-### Dry-run semantics
+### ドライラン挙動
 
-- `dry_run=true` は would-enforce の結果を表します
-- `enforced=true` は runtime が実際に action を適用したことを表します
-- feedback consumer は shared state を更新する前に両方を確認してください
+- `dry_run=true` は「適用していたら起きていた結果」を表します
+- `enforced=true` はランタイムが実際にアクションを適用したことを表します
+- フィードバックの受信側は、共有状態を更新する前に両方を確認してください
 
-built-in の例:
+組み込みの例:
 
-- `bot_challenge_dry_run` は `dry_run=true` を publish し、live challenge-failure penalty state は作りません
-- `rate_limited` は実際に throttle された request のときだけ `enforced=true` を publish します
+- `bot_challenge_dry_run` は `dry_run=true` を発行し、実際のチャレンジ失敗ペナルティ状態は作りません
+- `rate_limited` は、実際にスロットルされたリクエストの場合のみ `enforced=true` を発行します
 
-### Bounded shared feedback
+### 上限付きの共有フィードバック
 
-feedback loop では bounded な in-memory state だけを使ってください。
+フィードバックループでは、上限付きのインメモリ状態のみを使用してください。
 
-- unbounded な per-request / per-identity map を作らない
-- TTL / window ベースの accumulator を優先する
-- 可能なら feedback は idempotent に保つ
-- `attributes` は既知 consumer 向けの structured metadata とし、巨大な log object の置き場にしない
+- 上限のないリクエスト単位／アイデンティティ単位のマップを作らない
+- TTL ／ウィンドウ方式のアキュムレータを優先する
+- 可能ならフィードバックは冪等に保つ
+- `attributes` は既知のコンシューマ向けの構造化メタデータとし、巨大なログオブジェクトの置き場にしない
 
-## Registration
+## 登録
 
-plugin の登録:
+プラグインの登録:
 
 ```go
 func init() {
@@ -140,29 +138,29 @@ func init() {
 }
 ```
 
-factory signature:
+ファクトリのシグネチャ:
 
 ```go
 type requestSecurityPluginFactory func() requestSecurityPlugin
 ```
 
-現在の built-in registration は `request_security_plugins.go` にあります。
+現在の組み込み登録は `request_security_plugins.go` にあります。
 
 - `ip_reputation`
 - `bot_defense`
 - `semantic`
 
-## File Placement
+## ファイル配置
 
-新しい plugin file は次の配下に追加します。
+新しいプラグインファイルは次の配下に追加します。
 
 - `server/internal/handler/`
 
-推奨 naming:
+推奨される命名:
 
 - `my_feature_request_security_plugin.go`
 
-## Minimal Example
+## 最小例
 
 ```go
 package handler
@@ -200,21 +198,21 @@ func (p *sampleRequestSecurityPlugin) Handle(c *gin.Context, ctx *requestSecurit
 }
 ```
 
-## Build And Test
+## ビルドとテスト
 
-これは compile-time extension なので、source file があれば通常 build に自動で含まれます。
+これはコンパイル時の拡張機構であるため、ソースファイルが存在すれば通常のビルドに自動的に含まれます。
 
-便利な確認コマンド:
+確認用のコマンド例:
 
 ```bash
 cd server
 go test ./internal/handler ./...
 ```
 
-## Design Rules
+## 設計ルール
 
-- plugin の挙動は deterministic かつ fail-safe に保つ。
-- direct file I/O ではなく runtime store と helper を優先する。
-- request を block / challenge したり downstream security logic に渡す時は canonical `SecurityEvent` を publish する。
-- built-in behavior を置き換える場合も admin/config の互換性を壊さない。
-- これは stable な third-party plugin ABI ではなく、internal extension point として扱う。
+- プラグインの挙動は決定的かつフェイルセーフに保つこと。
+- 直接のファイル I/O ではなく、ランタイムのストアとヘルパーを優先すること。
+- リクエストをブロック／チャレンジする場合や、下流のセキュリティロジックに引き渡す場合は、正規 `SecurityEvent` を発行すること。
+- 組み込みの挙動を置き換える場合も、管理 API ／設定の互換性を壊さないこと。
+- これは安定したサードパーティ向けプラグイン ABI ではなく、内部の拡張ポイントとして扱うこと。

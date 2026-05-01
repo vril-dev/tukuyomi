@@ -74,14 +74,25 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
-          cache-dependency-path: web/tukuyomi-admin/package-lock.json
-      - name: Install dependencies
+          cache-dependency-path: |
+            web/tukuyomi-admin/package-lock.json
+            web/tukuyomi-center/package-lock.json
+      - name: Install Gateway UI dependencies
         run: npm ci
-      - name: Run UI tests
+      - name: Run Gateway UI tests
         run: npm test
-      - name: Run UI build
+      - name: Run Gateway UI build
+        run: npm run build
+      - name: Install Center UI dependencies
+        working-directory: web/tukuyomi-center
+        run: npm ci
+      - name: Run Center UI tests
+        working-directory: web/tukuyomi-center
+        run: npm test
+      - name: Run Center UI build
+        working-directory: web/tukuyomi-center
         run: npm run build
 
   compose-validate:

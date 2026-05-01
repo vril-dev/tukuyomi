@@ -37,6 +37,7 @@ type DeviceRecord struct {
 	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
 	Status                     string `json:"status"`
 	ProductID                  string `json:"product_id"`
+	EnrollmentTokenID          int64  `json:"enrollment_token_id"`
 	EnrollmentTokenPrefix      string `json:"enrollment_token_prefix"`
 	EnrollmentTokenLabel       string `json:"enrollment_token_label"`
 	EnrollmentTokenStatus      string `json:"enrollment_token_status"`
@@ -64,6 +65,10 @@ type EnrollmentRecord struct {
 	KeyID                      string `json:"key_id"`
 	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
 	Status                     string `json:"status"`
+	EnrollmentTokenID          int64  `json:"enrollment_token_id"`
+	EnrollmentTokenPrefix      string `json:"enrollment_token_prefix"`
+	EnrollmentTokenLabel       string `json:"enrollment_token_label"`
+	EnrollmentTokenStatus      string `json:"enrollment_token_status"`
 	RequestedAtUnix            int64  `json:"requested_at_unix"`
 	DecidedAtUnix              int64  `json:"decided_at_unix"`
 	DecidedBy                  string `json:"decided_by"`
@@ -125,6 +130,13 @@ type DeviceConfigSnapshotRecord struct {
 	SizeBytes     int64  `json:"size_bytes"`
 	CreatedAtUnix int64  `json:"created_at_unix"`
 	CreatedAt     string `json:"created_at"`
+}
+
+type DeviceConfigSnapshotListResult struct {
+	Snapshots  []DeviceConfigSnapshotRecord `json:"snapshots"`
+	Limit      int                          `json:"limit"`
+	Offset     int                          `json:"offset"`
+	NextOffset int                          `json:"next_offset"`
 }
 
 func CreatePendingEnrollment(ctx context.Context, in enrollmentInsert) (EnrollmentRecord, error) {
@@ -323,15 +335,17 @@ func ListEnrollments(ctx context.Context, status string, limit int) ([]Enrollmen
 	out := []EnrollmentRecord{}
 	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
 		query := `
-SELECT enrollment_id, device_id, key_id, public_key_fingerprint_sha256, status,
-       requested_at_unix, decided_at_unix, decided_by, decision_reason, remote_addr, user_agent
-  FROM center_device_enrollments`
+SELECT e.enrollment_id, e.device_id, e.key_id, e.public_key_fingerprint_sha256, e.status,
+       COALESCE(t.token_id, 0), COALESCE(t.token_prefix, ''), COALESCE(t.label, ''), COALESCE(t.status, ''),
+       e.requested_at_unix, e.decided_at_unix, e.decided_by, e.decision_reason, e.remote_addr, e.user_agent
+  FROM center_device_enrollments e
+  LEFT JOIN center_enrollment_tokens t ON t.token_hash = e.license_key_hash`
 		args := []any{}
 		if status != "" && status != "all" {
-			query += " WHERE status = " + placeholder(driver, 1)
+			query += " WHERE e.status = " + placeholder(driver, 1)
 			args = append(args, status)
 		}
-		query += " ORDER BY requested_at_unix DESC, enrollment_id DESC"
+		query += " ORDER BY e.requested_at_unix DESC, e.enrollment_id DESC"
 		if driver == "pgsql" {
 			query += fmt.Sprintf(" LIMIT %d", limit)
 		} else {
@@ -351,6 +365,10 @@ SELECT enrollment_id, device_id, key_id, public_key_fingerprint_sha256, status,
 				&rec.KeyID,
 				&rec.PublicKeyFingerprintSHA256,
 				&rec.Status,
+				&rec.EnrollmentTokenID,
+				&rec.EnrollmentTokenPrefix,
+				&rec.EnrollmentTokenLabel,
+				&rec.EnrollmentTokenStatus,
 				&rec.RequestedAtUnix,
 				&rec.DecidedAtUnix,
 				&rec.DecidedBy,
@@ -562,6 +580,113 @@ SELECT s.device_id, s.revision, s.payload_hash, s.payload_json, s.size_bytes, s.
 	return out, err
 }
 
+func ListDeviceConfigSnapshots(ctx context.Context, deviceID string, limit int, offset int) (DeviceConfigSnapshotListResult, error) {
+	deviceID = strings.TrimSpace(deviceID)
+	if !deviceIDPattern.MatchString(deviceID) {
+		return DeviceConfigSnapshotListResult{}, ErrDeviceStatusNotFound
+	}
+	if limit <= 0 {
+		limit = 6
+	}
+	if limit > 6 {
+		limit = 6
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	out := DeviceConfigSnapshotListResult{
+		Snapshots: []DeviceConfigSnapshotRecord{},
+		Limit:     limit,
+		Offset:    offset,
+	}
+	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		var exists int
+		if err := db.QueryRowContext(ctx, `SELECT 1 FROM center_devices WHERE device_id = `+placeholder(driver, 1), deviceID).Scan(&exists); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrDeviceStatusNotFound
+			}
+			return err
+		}
+
+		query := `
+SELECT device_id, revision, payload_hash, size_bytes, created_at_unix, created_at
+  FROM center_device_config_snapshots
+ WHERE device_id = ` + placeholder(driver, 1) + `
+ ORDER BY created_at_unix DESC, snapshot_id DESC`
+		args := []any{deviceID}
+		fetchLimit := limit + 1
+		switch driver {
+		case "pgsql":
+			query += fmt.Sprintf(" LIMIT %d OFFSET %d", fetchLimit, offset)
+		default:
+			query += " LIMIT " + placeholder(driver, 2) + " OFFSET " + placeholder(driver, 3)
+			args = append(args, fetchLimit, offset)
+		}
+		rows, err := db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var rec DeviceConfigSnapshotRecord
+			if err := rows.Scan(
+				&rec.DeviceID,
+				&rec.Revision,
+				&rec.PayloadHash,
+				&rec.SizeBytes,
+				&rec.CreatedAtUnix,
+				&rec.CreatedAt,
+			); err != nil {
+				return err
+			}
+			if len(out.Snapshots) < limit {
+				out.Snapshots = append(out.Snapshots, rec)
+			} else {
+				out.NextOffset = offset + limit
+			}
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+func LoadDeviceConfigSnapshot(ctx context.Context, deviceID string, revision string) (DeviceConfigSnapshotRecord, error) {
+	deviceID = strings.TrimSpace(deviceID)
+	revision = strings.ToLower(strings.TrimSpace(revision))
+	if !deviceIDPattern.MatchString(deviceID) || !hex64Pattern.MatchString(revision) {
+		return DeviceConfigSnapshotRecord{}, ErrDeviceStatusNotFound
+	}
+	var out DeviceConfigSnapshotRecord
+	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		row := db.QueryRowContext(ctx, `
+SELECT device_id, revision, payload_hash, payload_json, size_bytes, created_at_unix, created_at
+  FROM center_device_config_snapshots
+ WHERE device_id = `+placeholder(driver, 1)+`
+   AND revision = `+placeholder(driver, 2),
+			deviceID,
+			revision,
+		)
+		var payload string
+		if err := row.Scan(
+			&out.DeviceID,
+			&out.Revision,
+			&out.PayloadHash,
+			&payload,
+			&out.SizeBytes,
+			&out.CreatedAtUnix,
+			&out.CreatedAt,
+		); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrDeviceStatusNotFound
+			}
+			return err
+		}
+		out.PayloadJSON = []byte(payload)
+		return nil
+	})
+	return out, err
+}
+
 func ApproveEnrollment(ctx context.Context, enrollmentID int64, actor string) (EnrollmentRecord, error) {
 	return decideEnrollment(ctx, enrollmentID, actor, EnrollmentStatusApproved, "")
 }
@@ -677,7 +802,7 @@ type rowScanner interface {
 func centerDeviceRecordSelect() string {
 	return `
 SELECT d.device_id, d.key_id, d.public_key_fingerprint_sha256, d.status, d.product_id,
-       COALESCE(t.token_prefix, ''), COALESCE(t.label, ''), COALESCE(t.status, ''),
+       COALESCE(t.token_id, 0), COALESCE(t.token_prefix, ''), COALESCE(t.label, ''), COALESCE(t.status, ''),
        d.approved_enrollment_id, d.approved_at_unix, d.approved_by,
        d.created_at_unix, d.updated_at_unix, d.revoked_at_unix, d.revoked_by,
        d.archived_at_unix, d.archived_by, d.last_seen_at_unix,
@@ -695,6 +820,7 @@ func scanDeviceRecord(scanner rowScanner, rec *DeviceRecord) error {
 		&rec.PublicKeyFingerprintSHA256,
 		&rec.Status,
 		&rec.ProductID,
+		&rec.EnrollmentTokenID,
 		&rec.EnrollmentTokenPrefix,
 		&rec.EnrollmentTokenLabel,
 		&rec.EnrollmentTokenStatus,
@@ -734,16 +860,22 @@ func loadDeviceByIDTx(ctx context.Context, q queryer, driver string, deviceID st
 func loadEnrollmentByIDTx(ctx context.Context, q queryer, driver string, id int64) (EnrollmentRecord, error) {
 	var rec EnrollmentRecord
 	row := q.QueryRowContext(ctx, `
-SELECT enrollment_id, device_id, key_id, public_key_fingerprint_sha256, status,
-       requested_at_unix, decided_at_unix, decided_by, decision_reason, remote_addr, user_agent
-  FROM center_device_enrollments
- WHERE enrollment_id = `+placeholder(driver, 1), id)
+SELECT e.enrollment_id, e.device_id, e.key_id, e.public_key_fingerprint_sha256, e.status,
+       COALESCE(t.token_id, 0), COALESCE(t.token_prefix, ''), COALESCE(t.label, ''), COALESCE(t.status, ''),
+       e.requested_at_unix, e.decided_at_unix, e.decided_by, e.decision_reason, e.remote_addr, e.user_agent
+  FROM center_device_enrollments e
+  LEFT JOIN center_enrollment_tokens t ON t.token_hash = e.license_key_hash
+ WHERE e.enrollment_id = `+placeholder(driver, 1), id)
 	if err := row.Scan(
 		&rec.EnrollmentID,
 		&rec.DeviceID,
 		&rec.KeyID,
 		&rec.PublicKeyFingerprintSHA256,
 		&rec.Status,
+		&rec.EnrollmentTokenID,
+		&rec.EnrollmentTokenPrefix,
+		&rec.EnrollmentTokenLabel,
+		&rec.EnrollmentTokenStatus,
 		&rec.RequestedAtUnix,
 		&rec.DecidedAtUnix,
 		&rec.DecidedBy,
@@ -794,10 +926,12 @@ func loadEnrollmentByNonce(ctx context.Context, db *sql.DB, driver, deviceID, ke
 
 func loadEnrollmentByNonceTx(ctx context.Context, q queryer, driver, deviceID, keyID, nonceHash string, out *EnrollmentRecord) error {
 	row := q.QueryRowContext(ctx, `
-SELECT enrollment_id, device_id, key_id, public_key_fingerprint_sha256, status,
-       requested_at_unix, decided_at_unix, decided_by, decision_reason, remote_addr, user_agent
-  FROM center_device_enrollments
- WHERE device_id = `+placeholder(driver, 1)+` AND key_id = `+placeholder(driver, 2)+` AND nonce_hash = `+placeholder(driver, 3),
+SELECT e.enrollment_id, e.device_id, e.key_id, e.public_key_fingerprint_sha256, e.status,
+       COALESCE(t.token_id, 0), COALESCE(t.token_prefix, ''), COALESCE(t.label, ''), COALESCE(t.status, ''),
+       e.requested_at_unix, e.decided_at_unix, e.decided_by, e.decision_reason, e.remote_addr, e.user_agent
+  FROM center_device_enrollments e
+  LEFT JOIN center_enrollment_tokens t ON t.token_hash = e.license_key_hash
+ WHERE e.device_id = `+placeholder(driver, 1)+` AND e.key_id = `+placeholder(driver, 2)+` AND e.nonce_hash = `+placeholder(driver, 3),
 		deviceID,
 		keyID,
 		nonceHash,
@@ -809,6 +943,10 @@ SELECT enrollment_id, device_id, key_id, public_key_fingerprint_sha256, status,
 		&rec.KeyID,
 		&rec.PublicKeyFingerprintSHA256,
 		&rec.Status,
+		&rec.EnrollmentTokenID,
+		&rec.EnrollmentTokenPrefix,
+		&rec.EnrollmentTokenLabel,
+		&rec.EnrollmentTokenStatus,
 		&rec.RequestedAtUnix,
 		&rec.DecidedAtUnix,
 		&rec.DecidedBy,

@@ -1,203 +1,160 @@
 [English](db-ops.md) | [日本語](db-ops.ja.md)
 
-# DB Operations (SQLite / MySQL / PostgreSQL)
+# DB 運用（SQLite ／ MySQL ／ PostgreSQL）
 
-runtime storage は DB-only です。tukuyomi は起動時に DB store を開き、
-schema bootstrap を実行し、DB が利用不能または不正なら起動を失敗させます。
-file storage への runtime fallback はありません。
+ランタイムストレージは DB のみです。tukuyomi は起動時に DB ストアを開き、スキーマブートストラップを実行し、DB が利用不能または不正な状態であれば起動を失敗させます。
+ファイルストレージへのランタイムでのフォールバックはありません。
 
-配備済み runtime を起動する前に schema migration を明示実行します。
+配備済みのランタイムを起動する前に、スキーママイグレーションを明示的に実行します。
 
 ```bash
 make db-migrate
 ```
 
-この target は local binary を build し、通常起動と同じ `config.json` を読み、
-設定 driver 用の embedded SQL migration を golang-migrate で適用します。
-現在の schema version と dirty flag は `schema_migrations` に記録され、
-listener や runtime sync loop は起動しません。
+このターゲットはローカルバイナリをビルドし、通常起動と同じ `config.json` を読み込み、設定済みドライバ用の組み込み SQL マイグレーションを golang-migrate で適用します。
+現在のスキーマバージョンと dirty フラグは `schema_migrations` に記録され、リスナーやランタイムの同期ループは起動しません。
 
-migration 後に CRS を install / refresh し、WAF rule asset を DB へ import します。
+マイグレーション後に CRS をインストール／更新し、WAF ルールアセットを DB へインポートします。
 
 ```bash
 make crs-install
 ```
 
-`make crs-install` は `db-migrate` 後に動き、設定 workdir 配下へ CRS seed file を
-配置し、base WAF と CRS の `.conf` / `.data` asset を DB `waf_rule_assets` へ
-import します。CRS を再ダウンロードせず既存 seed file から DB rule asset だけ
-更新する場合は次を使います。
+`make crs-install` は `db-migrate` 後に動作し、設定された作業ディレクトリ配下に CRS シードファイルを配置したうえで、ベース WAF と CRS の `.conf` ／ `.data` アセットを DB `waf_rule_assets` へインポートします。CRS を再ダウンロードせず、既存のシードファイルから DB のルールアセットのみを更新する場合は次を使用します。
 
 ```bash
 make db-import-waf-rule-assets
 ```
 
-既存の bootstrap/export file から DB を準備する場合は、migration 後に import します。
+既存のブートストラップ／エクスポートファイルから DB を準備する場合は、マイグレーション後にインポートします。
 
 ```bash
 make db-import
 ```
 
-`make db-import` は先に `db-migrate` を実行し、その後 seed/export material を
-versioned normalized DB table へ import します。`config.json` は built-in default
-適用後の `app_config` seed として読みますが、bundled config は意図的に
-`storage` bootstrap block だけを保持します。`conf/proxy.json` など configured
-runtime file がある場合はそれが優先され、無い場合は `seeds/conf/` の同梱本番
-seed を読んでから互換 default に fallback します。`sites`、`vhosts`、
-`scheduled_tasks`、`upstream_runtime`、PHP-FPM runtime inventory などの runtime
-file は各 feature table へ import されます。import 後はそれらの DB row が正です。
+`make db-import` は先に `db-migrate` を実行し、その後にシード／エクスポート素材をバージョン管理された正規化済み DB テーブルへインポートします。`config.json` は組み込みデフォルト適用後の `app_config` シードとして読み込まれますが、同梱設定は意図的に `storage` のブートストラップブロックのみを保持します。`conf/proxy.json` などの設定済みランタイムファイルがあればそちらが優先され、無い場合は `seeds/conf/` の同梱本番シードを読み込んだうえで、互換デフォルトへフォールバックします。`sites`、`vhosts`、`scheduled_tasks`、`upstream_runtime`、PHP-FPM ランタイムインベントリなどのランタイムファイルは、それぞれの機能テーブルへインポートされます。インポート後は、それらの DB レコードを正として扱います。
 
-bundle root 以外から import command を実行する場合は、
-`WAF_DB_IMPORT_SEED_CONF_DIR` に `seeds/conf` file がある directory を指定します。
+バンドルルート以外からインポートコマンドを実行する場合は、`WAF_DB_IMPORT_SEED_CONF_DIR` に `seeds/conf` ファイルが存在するディレクトリを指定してください。
 
-## Driver Selection
+## ドライバの選択
 
-DB 接続 bootstrap は `data/conf/config.json` の `storage` で設定します。
+DB 接続のブートストラップは、`data/conf/config.json` の `storage` で設定します。
 
-- `db_driver`: `sqlite`, `mysql`, `pgsql`
-- `db_path`: SQLite database path
-- `db_dsn`: MySQL / PostgreSQL DSN
-- `db_retention_days`: WAF event retention
-- `db_sync_interval_sec`: periodic DB-to-runtime reconcile loop
+- `db_driver`: `sqlite`、`mysql`、`pgsql`
+- `db_path`: SQLite データベースのパス
+- `db_dsn`: MySQL ／ PostgreSQL の DSN
+- `db_retention_days`: WAF イベントの保持期間
+- `db_sync_interval_sec`: DB からランタイムへの定期的な再同期ループ間隔
 
-`storage.backend` は deprecated です。設定しないでください。
-`storage.backend=file` は config validation で拒否されます。
+`storage.backend` は非推奨です。設定しないでください。
+`storage.backend=file` は設定検証で拒否されます。
 
-`db_driver`、`db_path`、`db_dsn` は DB を開く前に必ず bootstrap
-`config.json` から読みます。`app_config` の DB stored value が
-接続済み process を別 DB へ移動させる循環を作らないためです。
+`db_driver`、`db_path`、`db_dsn` は、DB を開く前に必ずブートストラップ用の `config.json` から読み込みます。`app_config` の DB 上の値が、接続済みプロセスを別の DB へ移動させるような循環を作らないためです。
 
-default の SQLite path:
+SQLite のパス既定値:
 
 - `db/tukuyomi.db`
 
-DSN 要件:
+DSN の要件:
 
 - `mysql`: `db_dsn` が必須
 - `pgsql`: `db_dsn` が必須。例:
   `postgres://user:pass@postgres:5432/tukuyomi?sslmode=disable`
 
-## What Is Stored
+## 何が保存されるか
 
 ### 1. `waf_events`
 
-以下のエンドポイントで使用する WAF / access / request-security event record です。
+次のエンドポイントで使用する WAF ／アクセス／リクエストセキュリティのイベントレコードです。
 
 - `/tukuyomi-api/logs/stats`
 - `/tukuyomi-api/logs/read?src=waf`
 - `/tukuyomi-api/logs/download?src=waf`
-- FP tuner の latest-event lookup
+- 誤検知チューナーの最新イベントルックアップ
 
-現在の runtime はこれらの event を DB へ直接書き込みます。`waf-events.ndjson`
-は、古い file log を operator が明示的に取り込む場合だけの legacy import source です。
+現在のランタイムは、これらのイベントを DB へ直接書き込みます。`waf-events.ndjson` は、古いファイルログをオペレーターが明示的に取り込む場合のみ使用するレガシーなインポート元です。
 
-### 2. Versioned runtime config tables
+### 2. バージョン管理されたランタイム設定テーブル
 
-operator-owned runtime config は immutable version で管理します。
+オペレーターが所有するランタイム設定は、イミュータブルなバージョン管理で保持されます。
 
 - `config_domains`
 - `config_versions`
 - `config_rollbacks`
 
-feature-owned row は `version_id` を持ちます。現在 normalized 済みの domain:
+機能側のレコードは `version_id` を持ちます。現在の正規化済みドメインは次のとおりです。
 
-- `app_config_values`, `app_config_lists`, `app_config_list_values`
+- `app_config_values`、`app_config_lists`、`app_config_list_values`
 - `proxy_*`
-- `sites`, `site_hosts`, `site_tls`
-- `vhosts`, `vhost_*`
-- `scheduled_tasks`, `scheduled_task_env`, `scheduled_task_args`
+- `sites`、`site_hosts`、`site_tls`
+- `vhosts`、`vhost_*`
+- `scheduled_tasks`、`scheduled_task_env`、`scheduled_task_args`
 - `upstream_runtime_overrides`
-- `cache_rule_scopes`, `cache_rules`, `cache_rule_methods`,
-  `cache_rule_vary_headers`
-- `bypass_scopes`, `bypass_entries`
-- `country_block_scopes`, `country_block_countries`
-- `rate_limit_scopes`, `rate_limit_scope_values`, `rate_limit_rules`,
-  `rate_limit_rule_methods`
-- `bot_defense_scopes`, `bot_defense_scope_values`,
-  `bot_defense_path_policies`, `bot_defense_path_policy_prefixes`
-- `semantic_scopes`, `semantic_scope_values`
-- `notification_settings`, `notification_triggers`,
-  `notification_security_sources`, `notification_sinks`,
-  `notification_sink_headers`, `notification_sink_recipients`
-- `ip_reputation_scopes`, `ip_reputation_scope_values`
+- `cache_rule_scopes`、`cache_rules`、`cache_rule_methods`、`cache_rule_vary_headers`
+- `bypass_scopes`、`bypass_entries`
+- `country_block_scopes`、`country_block_countries`
+- `rate_limit_scopes`、`rate_limit_scope_values`、`rate_limit_rules`、`rate_limit_rule_methods`
+- `bot_defense_scopes`、`bot_defense_scope_values`、`bot_defense_path_policies`、`bot_defense_path_policy_prefixes`
+- `semantic_scopes`、`semantic_scope_values`
+- `notification_settings`、`notification_triggers`、`notification_security_sources`、`notification_sinks`、`notification_sink_headers`、`notification_sink_recipients`
+- `ip_reputation_scopes`、`ip_reputation_scope_values`
 - `response_cache_config`
 - `crs_disabled_rules`
-- `override_rules`, `override_rule_versions`
-- `php_runtime_inventory`, `php_runtime_modules`,
-  `php_runtime_default_disabled_modules`
+- `override_rules`、`override_rule_versions`
+- `php_runtime_inventory`、`php_runtime_modules`、`php_runtime_default_disabled_modules`
 
 ### 3. `config_blobs`
 
-`config_blobs` は normalized 済み runtime / policy config domain の
-authority ではありません。legacy import 互換と、config authority では
-ない content artifact のためだけに残っています。
+`config_blobs` は、正規化済みのランタイム／ポリシー設定ドメインの正となる保存先ではありません。レガシーインポートとの互換、および設定として正にしないコンテンツアーティファクトのためにのみ残しています。
 
-残っている blob 例:
+残っている blob の例:
 
-- `waf_rule_assets`, `waf_rule_asset_contents`（base WAF と CRS の rule/data asset）
+- `waf_rule_assets`、`waf_rule_asset_contents`（ベース WAF と CRS のルール／データアセット）
 
-import 後の本番起動で必要な file は次だけです。
+インポート後の本番起動で必要なファイルは次のみです。
 
-- `config.json`: DB 接続 bootstrap（`storage.db_driver`、`storage.db_path`、
-  `storage.db_dsn`）と storage retention/sync bootstrap 値
+- `config.json`: DB 接続のブートストラップ（`storage.db_driver`、`storage.db_path`、`storage.db_dsn`）と、ストレージの保持期間／同期間隔のブートストラップ値
 
-これは config authority の話です。runtime byte artifact は別扱いです。
-site-managed ACME を local backend で使う場合は `persistent_storage.local.base_dir`
-（既定 `data/persistent`）を保持してください。internal response cache を有効化
-した場合の `cache_store.store_dir`、security / FP tuner / proxy rules audit、
-scheduled task log、PHP-FPM runtime log/socket は DB 設定ではなく runtime artifact です。
+これは「設定として何を正とするか」に関する話です。ランタイムのバイトアーティファクトは別扱いです。
+サイト管理 ACME をローカルバックエンドで使う場合は、`persistent_storage.local.base_dir`（既定 `data/persistent`）を維持してください。内部レスポンスキャッシュを有効化した場合の `cache_store.store_dir`、セキュリティ ／誤検知チューナー ／プロキシルールの監査、スケジュールタスクのログ、PHP-FPM ランタイムのログ／ソケットは、DB の設定ではなくランタイムのアーティファクトです。
 
-その他の seed/export file は operator workflow 用に残しても構いませんが、
-対応する normalized DB row が存在した後の runtime authority ではありません。
-`make db-migrate`、`make crs-install`、`make db-import` 後の本番 runtime では
-`data/conf/config.json` 以外の `data/conf/*.json`、
-および `inventory.json`、`vhosts.json`、`runtime.json`、
-`modules.json` などの PHP-FPM JSON manifest を削除できます。GeoIP managed
-asset も import 後は DB-backed です。
+その他のシード／エクスポートファイルはオペレーターのワークフロー用に残しても構いませんが、対応する正規化済みの DB レコードが存在するようになった後は、ランタイムの参照元ではありません。
+`make db-migrate`、`make crs-install`、`make db-import` 後の本番ランタイムでは、`data/conf/config.json` 以外の `data/conf/*.json`、および `inventory.json`、`vhosts.json`、`runtime.json`、`modules.json` などの PHP-FPM JSON マニフェストは削除できます。GeoIP のマネージドアセットも、インポート後は DB を正として保持します。
 
 ### 4. `schema_migrations`
 
-golang-migrate の schema version table です。`make db-migrate` と起動時の
-defensive schema check 用に、現在の migration `version` と `dirty` state を
-保持します。
+golang-migrate のスキーマバージョン管理テーブルです。`make db-migrate` および起動時の防御的なスキーマチェック用に、現在のマイグレーション `version` と `dirty` 状態を保持します。
 
-その他の設定済み JSON/text file は runtime storage backend ではありません。
-initial seed / import / export artifact です。
+その他の設定済み JSON ／テキストファイルは、ランタイムストレージのバックエンドではありません。あくまで初期シード／インポート／エクスポート用のアーティファクトです。
 
-- normalized domain が存在しない場合、現在の seed/export file から DB row を
-  import します。configured file が無い場合は `seeds/conf/` を使います
-- `app_config` が存在する場合、初期 DB open 後にそれを適用します。ただし DB
-  接続項目は bootstrap `config.json` の値を保持します
-- proxy、sites、vhosts、scheduled tasks、upstream runtime、policy domain、
-  WAF asset、response cache、PHP-FPM inventory は JSON file へ戻さず DB content
-  を直接 runtime state に読み込みます
-- sync、parse、reload に失敗した場合、fallback せず起動を失敗させます
+- 正規化済みドメインが存在しない場合は、現在のシード／エクスポートファイルから DB レコードをインポートします。設定済みファイルが存在しない場合は `seeds/conf/` を使用します
+- `app_config` が存在する場合は、初回 DB オープン後にそれを適用します。ただし DB 接続関連の項目は、ブートストラップ `config.json` の値を保持します
+- プロキシ、サイト、vhosts、スケジュールタスク、アップストリームランタイム、ポリシードメイン、WAF アセット、レスポンスキャッシュ、PHP-FPM インベントリは、JSON ファイルへ書き戻さず、DB のコンテンツを直接ランタイム状態へ読み込みます
+- 同期、パース、リロードに失敗した場合は、フォールバックせず起動を失敗させます
 
-`db_sync_interval_sec >= 1` の場合、各 node は periodic な DB-to-runtime
-reconciliation も実行し、content に変更があった時だけ reload を発火します。
-DB-native runtime では DB-to-file restoration ではなく、DB-to-memory/runtime
-reload です。
+`db_sync_interval_sec >= 1` の場合、各ノードは DB からランタイムへの定期的な再同期も実行し、コンテンツに変更があった時のみリロードを発火します。
+DB ネイティブのランタイムでは、DB からファイルへの復元ではなく、DB からメモリ／ランタイムへのリロードを行います。
 
-## Retention / Pruning
+## 保持期間 ／削除
 
-`db_retention_days` が効くのは `waf_events` だけです。
+`db_retention_days` が効くのは `waf_events` のみです。
 
-- `30`（default）: 直近 30 日を保持
-- `0`: pruning を無効化
+- `30`（既定）: 直近 30 日を保持
+- `0`: 削除を無効化
 
-`config_blobs` は retention では prune しません。
+`config_blobs` は保持期間による削除の対象外です。
 
-## Backup
+## バックアップ
 
 ### SQLite
 
-大きな変更の前には DB file を snapshot します。
+大きな変更を行う前には、DB ファイルをスナップショットしておきます。
 
 ```bash
 cp data/db/tukuyomi.db data/db/tukuyomi.db.bak.$(date +%Y%m%d%H%M%S)
 ```
 
-WAL file がある場合は一緒に backup します。
+WAL ファイルが存在する場合は、合わせてバックアップしてください。
 
 ```bash
 cp data/db/tukuyomi.db-wal data/db/tukuyomi.db-wal.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
@@ -206,36 +163,36 @@ cp data/db/tukuyomi.db-shm data/db/tukuyomi.db-shm.bak.$(date +%Y%m%d%H%M%S) 2>/
 
 ### MySQL
 
-通常の DB backup flow（例: `mysqldump`）で backup します。
+通常の DB バックアップ手順（例: `mysqldump`）でバックアップします。
 
 ### PostgreSQL
 
-通常の DB backup flow（例: `pg_dump`）で backup します。
+通常の DB バックアップ手順（例: `pg_dump`）でバックアップします。
 
-## Vacuum / Size Maintenance (SQLite)
+## バキューム ／サイズメンテナンス（SQLite）
 
-heavy test の後は次を実行します。
+負荷の高いテストの後には、次を実行します。
 
 ```bash
 sqlite3 data/db/tukuyomi.db "PRAGMA wal_checkpoint(TRUNCATE); VACUUM;"
 ```
 
-## Recovery
+## リカバリ
 
 ### SQLite
 
-DB が missing / corrupted の場合:
+DB が紛失または破損した場合:
 
-1. stack を止める（`docker compose down`）。
-2. DB backup から復元する。壊れた DB file を退避して再 seed するのは、設定 file が known-good な seed/export の場合だけにする。
-3. stack を起動する（`docker compose up -d coraza`）。schema bootstrap と initial seed が走ります。
-4. service を起動する。新しい WAF/access event は `waf_events` へ直接書き込まれる。古い `waf-events.ndjson` を明示的に取り込む場合だけ、legacy log file を設定して `/tukuyomi-api/logs/stats` を呼ぶ。
+1. スタックを停止します（`docker compose down`）
+2. DB バックアップから復元します。壊れた DB ファイルを退避し再シードする方法は、設定ファイルが既知の正常なシード／エクスポートである場合に限ります
+3. スタックを起動します（`docker compose up -d coraza`）。スキーマブートストラップと初期シードが実行されます
+4. サービスを起動します。新しい WAF ／アクセスイベントは `waf_events` へ直接書き込まれます。古い `waf-events.ndjson` を明示的に取り込む場合のみ、レガシーログファイルを設定したうえで `/tukuyomi-api/logs/stats` を呼び出します
 
 ### MySQL / PostgreSQL
 
-DB が reset された場合:
+DB がリセットされた場合:
 
-1. 設定した DSN で DB に接続できることを確認する。
-2. DB backup から復元するか、initial seed 用の known-good config file を用意する。
-3. schema bootstrap と sync が走るように coraza を起動または再起動する。
-4. 新しい WAF/access event は `waf_events` へ直接書き込まれる。legacy log file を明示的に取り込む場合だけ logs endpoint を呼ぶ。
+1. 設定した DSN で DB へ接続できることを確認します
+2. DB バックアップから復元するか、初期シード用の既知の正常な設定ファイルを用意します
+3. スキーマブートストラップと同期が実行されるよう、coraza を起動または再起動します
+4. 新しい WAF ／アクセスイベントは `waf_events` へ直接書き込まれます。レガシーログファイルを明示的に取り込む場合のみ、logs エンドポイントを呼び出します

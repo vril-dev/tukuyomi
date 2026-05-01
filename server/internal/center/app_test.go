@@ -1,10 +1,12 @@
 package center
 
 import (
+	"context"
 	"crypto/ed25519"
 	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +23,7 @@ import (
 
 	"tukuyomi/internal/adminauth"
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/edgeartifactbundle"
 	"tukuyomi/internal/handler"
 )
 
@@ -186,6 +189,23 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	}, cookies)
 	if expiredTokenResp.Code != http.StatusBadRequest {
 		t.Fatalf("expired token code=%d body=%s", expiredTokenResp.Code, expiredTokenResp.Body.String())
+	}
+
+	defaultTokenResp := performRequestWithCookies(engine, http.MethodPost, "/center-api/enrollment-tokens", `{"label":"default max uses"}`, map[string]string{
+		"Content-Type":           "application/json",
+		adminauth.CSRFHeaderName: csrfCookie.Value,
+	}, cookies)
+	if defaultTokenResp.Code != http.StatusCreated {
+		t.Fatalf("create default token code=%d body=%s", defaultTokenResp.Code, defaultTokenResp.Body.String())
+	}
+	var defaultToken struct {
+		Record EnrollmentTokenRecord `json:"record"`
+	}
+	if err := json.Unmarshal(defaultTokenResp.Body.Bytes(), &defaultToken); err != nil {
+		t.Fatalf("decode default token response: %v body=%s", err, defaultTokenResp.Body.String())
+	}
+	if defaultToken.Record.MaxUses != EnrollmentTokenDefaultMaxUses {
+		t.Fatalf("default token max uses=%d want=%d", defaultToken.Record.MaxUses, EnrollmentTokenDefaultMaxUses)
 	}
 
 	tokenResp := performRequestWithCookies(engine, http.MethodPost, "/center-api/enrollment-tokens", `{"label":"factory batch","max_uses":5}`, map[string]string{
@@ -363,6 +383,9 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	if !strings.Contains(list.Body.String(), "edge-device-1") {
 		t.Fatalf("pending list missing device: %s", list.Body.String())
 	}
+	if !strings.Contains(list.Body.String(), `"enrollment_token_id":`+strconv.FormatInt(createdToken.Record.TokenID, 10)) {
+		t.Fatalf("pending list missing linked enrollment token id: %s", list.Body.String())
+	}
 
 	approve := performRequestWithCookies(
 		engine,
@@ -423,6 +446,9 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	if !strings.Contains(devices.Body.String(), `"status":"approved"`) {
 		t.Fatalf("approved device missing: %s", devices.Body.String())
 	}
+	if !strings.Contains(devices.Body.String(), `"enrollment_token_id":`+strconv.FormatInt(createdToken.Record.TokenID, 10)) {
+		t.Fatalf("approved device missing linked enrollment token id: %s", devices.Body.String())
+	}
 	if !strings.Contains(devices.Body.String(), `"runtime_role":"gateway"`) ||
 		!strings.Contains(devices.Body.String(), `"build_version":"v1.2.0-test"`) ||
 		!strings.Contains(devices.Body.String(), `"go_version":"go1.26.2-test"`) {
@@ -438,6 +464,105 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	}
 	if !strings.Contains(download.Body.String(), `"schema_version":1`) || !strings.Contains(download.Header().Get("Content-Disposition"), "edge-device-1-config-aaaaaaaaaaaa.json") {
 		t.Fatalf("config snapshot download unexpected: disposition=%q body=%s", download.Header().Get("Content-Disposition"), download.Body.String())
+	}
+
+	configRevision2 := strings.Repeat("b", 64)
+	configSnapshotReq2 := signedDeviceConfigSnapshotForTest(t, enrollmentFixture, "nonce-config-approved-2", time.Now().UTC(), configRevision2, []byte(`{"schema_version":2,"domains":{"proxy":{"etag":"test-2","raw":{"routes":[{"name":"r2"}]}}}}`))
+	configSnapshotBody2, err := json.Marshal(configSnapshotReq2)
+	if err != nil {
+		t.Fatalf("marshal second config snapshot: %v", err)
+	}
+	configSnapshot2 := performRequest(engine, http.MethodPost, "/v1/device-config-snapshot", string(configSnapshotBody2), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if configSnapshot2.Code != http.StatusOK {
+		t.Fatalf("second config snapshot code=%d body=%s", configSnapshot2.Code, configSnapshot2.Body.String())
+	}
+	history := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/edge-device-1/config-snapshots?limit=1&offset=0", "", nil, cookies)
+	if history.Code != http.StatusOK {
+		t.Fatalf("config snapshot history code=%d body=%s", history.Code, history.Body.String())
+	}
+	var historyResp DeviceConfigSnapshotListResult
+	if err := json.Unmarshal(history.Body.Bytes(), &historyResp); err != nil {
+		t.Fatalf("decode config snapshot history: %v body=%s", err, history.Body.String())
+	}
+	if historyResp.Limit != 1 || historyResp.Offset != 0 || historyResp.NextOffset != 1 || len(historyResp.Snapshots) != 1 {
+		t.Fatalf("unexpected config snapshot history paging: %+v", historyResp)
+	}
+	if historyResp.Snapshots[0].Revision != configRevision2 || len(historyResp.Snapshots[0].PayloadJSON) != 0 {
+		t.Fatalf("config snapshot history should expose latest metadata only: %+v", historyResp.Snapshots[0])
+	}
+	if strings.Contains(history.Body.String(), "schema_version") || strings.Contains(history.Body.String(), "routes") {
+		t.Fatalf("config snapshot history leaked payload: %s", history.Body.String())
+	}
+	clampedHistory := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/edge-device-1/config-snapshots?limit=1000", "", nil, cookies)
+	if clampedHistory.Code != http.StatusOK {
+		t.Fatalf("clamped config snapshot history code=%d body=%s", clampedHistory.Code, clampedHistory.Body.String())
+	}
+	if !strings.Contains(clampedHistory.Body.String(), `"limit":6`) {
+		t.Fatalf("config snapshot history did not clamp limit: %s", clampedHistory.Body.String())
+	}
+	revisionDownload := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/edge-device-1/config-snapshots/"+configRevision+"?download=1", "", nil, cookies)
+	if revisionDownload.Code != http.StatusOK {
+		t.Fatalf("config snapshot revision download code=%d body=%s", revisionDownload.Code, revisionDownload.Body.String())
+	}
+	if !strings.Contains(revisionDownload.Body.String(), `"schema_version":1`) || !strings.Contains(revisionDownload.Header().Get("Content-Disposition"), "edge-device-1-config-aaaaaaaaaaaa.json") {
+		t.Fatalf("config snapshot revision download unexpected: disposition=%q body=%s", revisionDownload.Header().Get("Content-Disposition"), revisionDownload.Body.String())
+	}
+	invalidRevision := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/edge-device-1/config-snapshots/not-a-revision", "", nil, cookies)
+	if invalidRevision.Code != http.StatusBadRequest {
+		t.Fatalf("invalid revision code=%d body=%s", invalidRevision.Code, invalidRevision.Body.String())
+	}
+
+	ruleBundle, err := edgeartifactbundle.BuildBundle([]edgeartifactbundle.RuleFile{
+		{Path: "rules/tukuyomi.conf", Kind: "base", ETag: "rule-1", Body: []byte("SecRuleEngine On\n")},
+		{Path: "rules/crs/REQUEST-901.conf", Kind: "crs_asset", ETag: "rule-2", Disabled: true, Body: []byte("SecRule ARGS \"@rx test\" \"id:901\"\n")},
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("build rule artifact bundle: %v", err)
+	}
+	ruleReq := signedRuleArtifactBundleForTest(t, enrollmentFixture, "nonce-rule-artifact", time.Now().UTC(), ruleBundle)
+	ruleBody, err := json.Marshal(ruleReq)
+	if err != nil {
+		t.Fatalf("marshal rule artifact bundle: %v", err)
+	}
+	ruleUpload := performRequest(engine, http.MethodPost, "/v1/rule-artifact-bundle", string(ruleBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if ruleUpload.Code != http.StatusOK {
+		t.Fatalf("rule artifact upload code=%d body=%s", ruleUpload.Code, ruleUpload.Body.String())
+	}
+	if !strings.Contains(ruleUpload.Body.String(), `"status":"stored"`) || !strings.Contains(ruleUpload.Body.String(), `"bundle_revision":"`+ruleBundle.Revision+`"`) {
+		t.Fatalf("rule artifact upload response unexpected: %s", ruleUpload.Body.String())
+	}
+	ruleUploadDuplicate := performRequest(engine, http.MethodPost, "/v1/rule-artifact-bundle", string(ruleBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if ruleUploadDuplicate.Code != http.StatusOK {
+		t.Fatalf("duplicate rule artifact upload code=%d body=%s", ruleUploadDuplicate.Code, ruleUploadDuplicate.Body.String())
+	}
+	if !strings.Contains(ruleUploadDuplicate.Body.String(), `"status":"duplicate"`) {
+		t.Fatalf("duplicate rule artifact response unexpected: %s", ruleUploadDuplicate.Body.String())
+	}
+	var ruleFileCount int
+	if err := withCenterDB(context.Background(), func(db *sql.DB, driver string) error {
+		return db.QueryRow(`SELECT COUNT(*) FROM center_rule_artifact_files WHERE device_id = `+placeholder(driver, 1)+` AND bundle_revision = `+placeholder(driver, 2), "edge-device-1", ruleBundle.Revision).Scan(&ruleFileCount)
+	}); err != nil {
+		t.Fatalf("count rule artifact files: %v", err)
+	}
+	if ruleFileCount != 2 {
+		t.Fatalf("rule artifact file count=%d want 2", ruleFileCount)
+	}
+	malformedRuleReq := signedRuleArtifactBytesForTest(t, enrollmentFixture, "nonce-rule-artifact-bad", time.Now().UTC(), strings.Repeat("c", 64), []byte("not-gzip"))
+	malformedRuleBody, err := json.Marshal(malformedRuleReq)
+	if err != nil {
+		t.Fatalf("marshal malformed rule artifact bundle: %v", err)
+	}
+	malformedRuleUpload := performRequest(engine, http.MethodPost, "/v1/rule-artifact-bundle", string(malformedRuleBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if malformedRuleUpload.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("malformed rule artifact upload code=%d body=%s", malformedRuleUpload.Code, malformedRuleUpload.Body.String())
 	}
 
 	revokeApprovedToken := performRequestWithCookies(engine, http.MethodPost, "/center-api/enrollment-tokens/"+strconv.FormatInt(createdToken.Record.TokenID, 10)+"/revoke", "", map[string]string{
@@ -914,6 +1039,36 @@ func signedDeviceConfigSnapshotForTest(t *testing.T, fixture signedEnrollmentFix
 		Snapshot:                   append(json.RawMessage(nil), payload...),
 	}
 	req.BodyHash = deviceConfigSnapshotBodyHash(req)
+	req.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(fixture.PrivateKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash))))
+	return req
+}
+
+func signedRuleArtifactBundleForTest(t *testing.T, fixture signedEnrollmentFixture, nonce string, ts time.Time, bundle edgeartifactbundle.Build) RuleArtifactBundleRequest {
+	t.Helper()
+	return signedRuleArtifactBytesForTest(t, fixture, nonce, ts, bundle.Revision, bundle.Compressed)
+}
+
+func signedRuleArtifactBytesForTest(t *testing.T, fixture signedEnrollmentFixture, nonce string, ts time.Time, revision string, bundle []byte) RuleArtifactBundleRequest {
+	t.Helper()
+	sum := sha256.Sum256(bundle)
+	req := RuleArtifactBundleRequest{
+		DeviceID:                   fixture.Request.DeviceID,
+		KeyID:                      fixture.Request.KeyID,
+		PublicKeyFingerprintSHA256: fixture.Fingerprint,
+		Timestamp:                  ts.UTC().Format(time.RFC3339Nano),
+		Nonce:                      nonce,
+		BundleRevision:             revision,
+		BundleHash:                 hex.EncodeToString(sum[:]),
+		CompressedSize:             int64(len(bundle)),
+		UncompressedSize:           1,
+		FileCount:                  1,
+		BundleB64:                  base64.StdEncoding.EncodeToString(bundle),
+	}
+	if parsed, err := edgeartifactbundle.Parse(bundle); err == nil {
+		req.UncompressedSize = parsed.UncompressedSize
+		req.FileCount = parsed.FileCount
+	}
+	req.BodyHash = ruleArtifactBundleBodyHash(req)
 	req.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(fixture.PrivateKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash))))
 	return req
 }

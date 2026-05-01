@@ -28,6 +28,7 @@ import (
 
 	"tukuyomi/internal/buildinfo"
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/edgeartifactbundle"
 	"tukuyomi/internal/edgeconfigsnapshot"
 )
 
@@ -62,6 +63,10 @@ var (
 
 	edgeDeviceStatusRefreshTriggerMu sync.RWMutex
 	edgeDeviceStatusRefreshTrigger   chan struct{}
+	edgeDeviceCenterRefreshMu        sync.Mutex
+
+	edgeRuleArtifactUploadMu       sync.Mutex
+	edgeRuleArtifactUploadRevision string
 )
 
 type edgeDeviceIdentityRecord struct {
@@ -77,6 +82,9 @@ type edgeDeviceIdentityRecord struct {
 	ConfigSnapshotRevision     string
 	ConfigSnapshotPushedAtUnix int64
 	ConfigSnapshotError        string
+	RuleArtifactRevision       string
+	RuleArtifactPushedAtUnix   int64
+	RuleArtifactError          string
 	LastEnrollmentAtUnix       int64
 	LastEnrollmentError        string
 	CreatedAtUnix              int64
@@ -102,6 +110,9 @@ type edgeDeviceAuthStatusResponse struct {
 	ConfigSnapshotRevision     string `json:"config_snapshot_revision"`
 	ConfigSnapshotPushedAtUnix int64  `json:"config_snapshot_pushed_at_unix"`
 	ConfigSnapshotError        string `json:"config_snapshot_error"`
+	RuleArtifactRevision       string `json:"rule_artifact_revision"`
+	RuleArtifactPushedAtUnix   int64  `json:"rule_artifact_pushed_at_unix"`
+	RuleArtifactError          string `json:"rule_artifact_error"`
 	LastEnrollmentAtUnix       int64  `json:"last_enrollment_at_unix"`
 	LastEnrollmentError        string `json:"last_enrollment_error"`
 }
@@ -150,6 +161,22 @@ type edgeDeviceConfigSnapshotWireRequest struct {
 	Snapshot                   json.RawMessage `json:"snapshot"`
 }
 
+type edgeRuleArtifactBundleWireRequest struct {
+	DeviceID                   string `json:"device_id"`
+	KeyID                      string `json:"key_id"`
+	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string `json:"timestamp"`
+	Nonce                      string `json:"nonce"`
+	BundleRevision             string `json:"bundle_revision"`
+	BundleHash                 string `json:"bundle_hash"`
+	CompressedSize             int64  `json:"compressed_size"`
+	UncompressedSize           int64  `json:"uncompressed_size"`
+	FileCount                  int    `json:"file_count"`
+	BodyHash                   string `json:"body_hash"`
+	SignatureB64               string `json:"signature_b64"`
+	BundleB64                  string `json:"bundle_b64"`
+}
+
 type edgeDeviceCenterStatusResponse struct {
 	Status        string `json:"status"`
 	DeviceID      string `json:"device_id"`
@@ -161,6 +188,12 @@ type edgeDeviceCenterStatusResponse struct {
 type edgeDeviceConfigSnapshotResponse struct {
 	Status         string `json:"status"`
 	ConfigRevision string `json:"config_revision"`
+	ReceivedAtUnix int64  `json:"received_at_unix"`
+}
+
+type edgeRuleArtifactBundleResponse struct {
+	Status         string `json:"status"`
+	BundleRevision string `json:"bundle_revision"`
 	ReceivedAtUnix int64  `json:"received_at_unix"`
 }
 
@@ -300,6 +333,9 @@ func currentEdgeDeviceAuthStatus() (edgeDeviceAuthStatusResponse, error) {
 	status.ConfigSnapshotRevision = rec.ConfigSnapshotRevision
 	status.ConfigSnapshotPushedAtUnix = rec.ConfigSnapshotPushedAtUnix
 	status.ConfigSnapshotError = rec.ConfigSnapshotError
+	status.RuleArtifactRevision = rec.RuleArtifactRevision
+	status.RuleArtifactPushedAtUnix = rec.RuleArtifactPushedAtUnix
+	status.RuleArtifactError = rec.RuleArtifactError
 	status.LastEnrollmentAtUnix = rec.LastEnrollmentAtUnix
 	status.LastEnrollmentError = rec.LastEnrollmentError
 	applyEdgeProxyGateStatus(&status)
@@ -371,6 +407,9 @@ func enrollEdgeDevice(ctx context.Context, req edgeDeviceEnrollmentRequest) (edg
 }
 
 func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusResponse, error) {
+	edgeDeviceCenterRefreshMu.Lock()
+	defer edgeDeviceCenterRefreshMu.Unlock()
+
 	if !config.EdgeEnabled || !config.EdgeDeviceAuthEnabled {
 		return edgeDeviceAuthStatusResponse{}, edgeEnrollmentError{status: http.StatusConflict, message: "edge device authentication is not enabled in the running process"}
 	}
@@ -440,7 +479,9 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 	identity.CenterProductID = clampEdgeText(payload.ProductID, 191)
 	identity.CenterStatusError = ""
 	if identity.EnrollmentStatus == edgeEnrollmentStatusApproved {
-		pushEdgeConfigSnapshotIfChanged(ctx, &identity)
+		if pushEdgeRuleArtifactBundleIfChanged(ctx, &identity) {
+			pushEdgeConfigSnapshotIfChanged(ctx, &identity)
+		}
 	}
 	if err := upsertEdgeDeviceIdentity(store, identity); err != nil {
 		return edgeDeviceAuthStatusResponse{}, err
@@ -570,6 +611,22 @@ func centerDeviceConfigSnapshotURL(centerBaseURL string) (string, error) {
 	return u.String(), nil
 }
 
+func centerRuleArtifactBundleURL(centerBaseURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("center URL is not configured")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("center URL is invalid")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("center URL scheme must be http or https")
+	}
+	u.Path = "/v1/rule-artifact-bundle"
+	u.RawPath = ""
+	return u.String(), nil
+}
+
 type edgeConfigSnapshotRuleAsset struct {
 	Path      string `json:"path"`
 	Kind      string `json:"kind"`
@@ -578,13 +635,39 @@ type edgeConfigSnapshotRuleAsset struct {
 	SizeBytes int    `json:"size_bytes"`
 }
 
+func buildEdgeRuleArtifactBundle() (edgeartifactbundle.Build, bool, error) {
+	store := getLogsStatsStore()
+	if store == nil {
+		return edgeartifactbundle.Build{}, false, fmt.Errorf("config DB store is not initialized")
+	}
+	assets, _, found, err := store.loadActiveWAFRuleAssets()
+	if err != nil || !found || len(assets) == 0 {
+		return edgeartifactbundle.Build{}, found, err
+	}
+	files := make([]edgeartifactbundle.RuleFile, 0, len(assets))
+	for _, asset := range assets {
+		files = append(files, edgeartifactbundle.RuleFile{
+			Path:     asset.Path,
+			Kind:     asset.Kind,
+			ETag:     asset.ETag,
+			Disabled: asset.Disabled,
+			Body:     asset.Raw,
+		})
+	}
+	bundle, err := edgeartifactbundle.BuildBundle(files, time.Now().UTC())
+	if err != nil {
+		return edgeartifactbundle.Build{}, true, err
+	}
+	return bundle, true, nil
+}
+
 func buildEdgeConfigSnapshot(identity edgeDeviceIdentityRecord) (edgeconfigsnapshot.Build, error) {
 	builder := edgeconfigsnapshot.New(identity.DeviceID, identity.KeyID, buildinfo.Version, goruntime.Version())
-	addGatewayConfigSnapshotDomains(builder)
+	addGatewayConfigSnapshotDomains(builder, identity.RuleArtifactRevision)
 	return builder.Build()
 }
 
-func addGatewayConfigSnapshotDomains(builder *edgeconfigsnapshot.Builder) {
+func addGatewayConfigSnapshotDomains(builder *edgeconfigsnapshot.Builder, ruleArtifactRevision string) {
 	if builder == nil {
 		return
 	}
@@ -689,7 +772,10 @@ func addGatewayConfigSnapshotDomains(builder *edgeconfigsnapshot.Builder) {
 				SizeBytes: len(asset.Raw),
 			})
 		}
-		builder.AddValueDomain(wafRuleAssetsConfigDomain, rec.ETag, out)
+		builder.AddValueDomain(wafRuleAssetsConfigDomain, rec.ETag, map[string]any{
+			"bundle_revision": strings.TrimSpace(ruleArtifactRevision),
+			"assets":          out,
+		})
 	}
 }
 
@@ -708,6 +794,7 @@ func loadEdgeDeviceIdentityUnlocked(store *wafEventStore) (edgeDeviceIdentityRec
 SELECT device_id, key_id, private_key_pem, public_key_fingerprint_sha256, enrollment_status,
        center_url, center_product_id, center_status_checked_at_unix, center_status_error,
        config_snapshot_revision, config_snapshot_pushed_at_unix, config_snapshot_error,
+       rule_artifact_revision, rule_artifact_pushed_at_unix, rule_artifact_error,
        last_enrollment_at_unix, last_enrollment_error, created_at_unix, updated_at_unix
   FROM edge_device_identities
  WHERE identity_id = ?`, edgeDeviceIdentityID).Scan(
@@ -723,6 +810,9 @@ SELECT device_id, key_id, private_key_pem, public_key_fingerprint_sha256, enroll
 		&rec.ConfigSnapshotRevision,
 		&rec.ConfigSnapshotPushedAtUnix,
 		&rec.ConfigSnapshotError,
+		&rec.RuleArtifactRevision,
+		&rec.RuleArtifactPushedAtUnix,
+		&rec.RuleArtifactError,
 		&rec.LastEnrollmentAtUnix,
 		&rec.LastEnrollmentError,
 		&rec.CreatedAtUnix,
@@ -773,6 +863,9 @@ UPDATE edge_device_identities
        config_snapshot_revision = ?,
        config_snapshot_pushed_at_unix = ?,
        config_snapshot_error = ?,
+       rule_artifact_revision = ?,
+       rule_artifact_pushed_at_unix = ?,
+       rule_artifact_error = ?,
        last_enrollment_at_unix = ?,
        last_enrollment_error = ?,
        updated_at_unix = ?
@@ -789,6 +882,9 @@ UPDATE edge_device_identities
 		rec.ConfigSnapshotRevision,
 		rec.ConfigSnapshotPushedAtUnix,
 		rec.ConfigSnapshotError,
+		rec.RuleArtifactRevision,
+		rec.RuleArtifactPushedAtUnix,
+		rec.RuleArtifactError,
 		rec.LastEnrollmentAtUnix,
 		rec.LastEnrollmentError,
 		rec.UpdatedAtUnix,
@@ -806,9 +902,10 @@ INSERT INTO edge_device_identities
     (identity_id, device_id, key_id, private_key_pem, public_key_fingerprint_sha256,
      enrollment_status, center_url, center_product_id, center_status_checked_at_unix, center_status_error,
      config_snapshot_revision, config_snapshot_pushed_at_unix, config_snapshot_error,
+     rule_artifact_revision, rule_artifact_pushed_at_unix, rule_artifact_error,
      last_enrollment_at_unix, last_enrollment_error,
      created_at_unix, updated_at_unix)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		edgeDeviceIdentityID,
 		rec.DeviceID,
 		rec.KeyID,
@@ -822,6 +919,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ConfigSnapshotRevision,
 		rec.ConfigSnapshotPushedAtUnix,
 		rec.ConfigSnapshotError,
+		rec.RuleArtifactRevision,
+		rec.RuleArtifactPushedAtUnix,
+		rec.RuleArtifactError,
 		rec.LastEnrollmentAtUnix,
 		rec.LastEnrollmentError,
 		rec.CreatedAtUnix,
@@ -984,6 +1084,35 @@ func signedEdgeDeviceConfigSnapshotRequest(identity edgeDeviceIdentityRecord, sn
 	return req, nil
 }
 
+func signedEdgeRuleArtifactBundleRequest(identity edgeDeviceIdentityRecord, bundle edgeartifactbundle.Build) (edgeRuleArtifactBundleWireRequest, error) {
+	privateKey, _, err := parseEdgeDevicePrivateKey(identity.PrivateKeyPEM)
+	if err != nil {
+		return edgeRuleArtifactBundleWireRequest{}, err
+	}
+	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	nonce, err := randomEdgeIdentifier("nonce")
+	if err != nil {
+		return edgeRuleArtifactBundleWireRequest{}, err
+	}
+	req := edgeRuleArtifactBundleWireRequest{
+		DeviceID:                   identity.DeviceID,
+		KeyID:                      identity.KeyID,
+		PublicKeyFingerprintSHA256: identity.PublicKeyFingerprintSHA256,
+		Timestamp:                  timestamp,
+		Nonce:                      nonce,
+		BundleRevision:             bundle.Revision,
+		BundleHash:                 bundle.BundleHash,
+		CompressedSize:             bundle.CompressedSize,
+		UncompressedSize:           bundle.UncompressedSize,
+		FileCount:                  bundle.FileCount,
+		BundleB64:                  base64.StdEncoding.EncodeToString(bundle.Compressed),
+	}
+	req.BodyHash = edgeRuleArtifactBundleBodyHash(req)
+	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)))
+	req.SignatureB64 = base64.StdEncoding.EncodeToString(signature)
+	return req, nil
+}
+
 func parseEdgeDevicePrivateKey(raw string) (ed25519.PrivateKey, []byte, error) {
 	block, rest := pem.Decode([]byte(raw))
 	if block == nil || block.Type != "PRIVATE KEY" || len(strings.TrimSpace(string(rest))) != 0 {
@@ -1081,6 +1210,112 @@ func sendEdgeDeviceConfigSnapshot(ctx context.Context, snapshotURL string, wireR
 	return res.StatusCode, resBody, nil
 }
 
+func sendEdgeRuleArtifactBundle(ctx context.Context, bundleURL string, wireReq edgeRuleArtifactBundleWireRequest) (int, []byte, error) {
+	body, err := json.Marshal(wireReq)
+	if err != nil {
+		return 0, nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, edgeEnrollmentHTTPTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, bundleURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer res.Body.Close()
+	resBody, readErr := io.ReadAll(io.LimitReader(res.Body, 8*1024))
+	if readErr != nil {
+		return res.StatusCode, nil, readErr
+	}
+	return res.StatusCode, resBody, nil
+}
+
+func pushEdgeRuleArtifactBundleIfChanged(ctx context.Context, identity *edgeDeviceIdentityRecord) bool {
+	if identity == nil {
+		return true
+	}
+	bundle, found, err := buildEdgeRuleArtifactBundle()
+	if err != nil {
+		identity.RuleArtifactError = clampEdgeText(err.Error(), 2048)
+		return false
+	}
+	if !found {
+		identity.RuleArtifactError = ""
+		return true
+	}
+	if bundle.Revision == strings.TrimSpace(identity.RuleArtifactRevision) {
+		identity.RuleArtifactError = ""
+		return true
+	}
+	if !beginEdgeRuleArtifactUpload(bundle.Revision) {
+		return false
+	}
+	defer finishEdgeRuleArtifactUpload(bundle.Revision)
+
+	bundleURL, err := centerRuleArtifactBundleURL(identity.CenterURL)
+	if err != nil {
+		identity.RuleArtifactError = clampEdgeText(err.Error(), 2048)
+		return false
+	}
+	wireReq, err := signedEdgeRuleArtifactBundleRequest(*identity, bundle)
+	if err != nil {
+		identity.RuleArtifactError = clampEdgeText(err.Error(), 2048)
+		return false
+	}
+	centerHTTPStatus, centerBody, err := sendEdgeRuleArtifactBundle(ctx, bundleURL, wireReq)
+	if err != nil {
+		identity.RuleArtifactError = clampEdgeText(err.Error(), 2048)
+		return false
+	}
+	if centerHTTPStatus < 200 || centerHTTPStatus >= 300 {
+		identity.RuleArtifactError = clampEdgeText(centerEnrollmentErrorMessage(centerHTTPStatus, centerBody), 2048)
+		return false
+	}
+	var payload edgeRuleArtifactBundleResponse
+	if err := json.Unmarshal(centerBody, &payload); err != nil {
+		identity.RuleArtifactError = "center rule artifact response is invalid JSON"
+		return false
+	}
+	if payload.BundleRevision != bundle.Revision {
+		identity.RuleArtifactError = "center rule artifact response revision mismatch"
+		return false
+	}
+	identity.RuleArtifactRevision = bundle.Revision
+	identity.RuleArtifactPushedAtUnix = time.Now().UTC().Unix()
+	if payload.ReceivedAtUnix > 0 {
+		identity.RuleArtifactPushedAtUnix = payload.ReceivedAtUnix
+	}
+	identity.RuleArtifactError = ""
+	return true
+}
+
+func beginEdgeRuleArtifactUpload(revision string) bool {
+	revision = strings.TrimSpace(revision)
+	if revision == "" {
+		return false
+	}
+	edgeRuleArtifactUploadMu.Lock()
+	defer edgeRuleArtifactUploadMu.Unlock()
+	if edgeRuleArtifactUploadRevision != "" {
+		return false
+	}
+	edgeRuleArtifactUploadRevision = revision
+	return true
+}
+
+func finishEdgeRuleArtifactUpload(revision string) {
+	revision = strings.TrimSpace(revision)
+	edgeRuleArtifactUploadMu.Lock()
+	defer edgeRuleArtifactUploadMu.Unlock()
+	if edgeRuleArtifactUploadRevision == revision {
+		edgeRuleArtifactUploadRevision = ""
+	}
+}
+
 func pushEdgeConfigSnapshotIfChanged(ctx context.Context, identity *edgeDeviceIdentityRecord) {
 	if identity == nil {
 		return
@@ -1168,6 +1403,9 @@ func edgeDeviceStatusFromIdentity(identity edgeDeviceIdentityRecord) edgeDeviceA
 		ConfigSnapshotRevision:     identity.ConfigSnapshotRevision,
 		ConfigSnapshotPushedAtUnix: identity.ConfigSnapshotPushedAtUnix,
 		ConfigSnapshotError:        identity.ConfigSnapshotError,
+		RuleArtifactRevision:       identity.RuleArtifactRevision,
+		RuleArtifactPushedAtUnix:   identity.RuleArtifactPushedAtUnix,
+		RuleArtifactError:          identity.RuleArtifactError,
 		LastEnrollmentAtUnix:       identity.LastEnrollmentAtUnix,
 		LastEnrollmentError:        identity.LastEnrollmentError,
 	}
@@ -1210,6 +1448,22 @@ func edgeDeviceConfigSnapshotBodyHash(req edgeDeviceConfigSnapshotWireRequest) s
 			req.Nonce + "\n" +
 			req.ConfigRevision + "\n" +
 			req.PayloadHash,
+	))
+	return hex.EncodeToString(sum[:])
+}
+
+func edgeRuleArtifactBundleBodyHash(req edgeRuleArtifactBundleWireRequest) string {
+	sum := sha256.Sum256([]byte(
+		req.DeviceID + "\n" +
+			req.KeyID + "\n" +
+			req.PublicKeyFingerprintSHA256 + "\n" +
+			req.Timestamp + "\n" +
+			req.Nonce + "\n" +
+			req.BundleRevision + "\n" +
+			req.BundleHash + "\n" +
+			fmt.Sprintf("%d", req.CompressedSize) + "\n" +
+			fmt.Sprintf("%d", req.UncompressedSize) + "\n" +
+			fmt.Sprintf("%d", req.FileCount),
 	))
 	return hex.EncodeToString(sum[:])
 }

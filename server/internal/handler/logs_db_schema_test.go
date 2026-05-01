@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const latestSchemaMigrationVersionForTest = 22
+const latestSchemaMigrationVersionForTest = 23
 
 func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
@@ -81,6 +81,8 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		"center_device_enrollments",
 		"center_enrollment_tokens",
 		"center_device_config_snapshots",
+		"center_rule_artifact_bundles",
+		"center_rule_artifact_files",
 		"edge_device_identities",
 	} {
 		var name string
@@ -150,6 +152,9 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		{table: "edge_device_identities", column: "config_snapshot_revision"},
 		{table: "edge_device_identities", column: "config_snapshot_pushed_at_unix"},
 		{table: "edge_device_identities", column: "config_snapshot_error"},
+		{table: "edge_device_identities", column: "rule_artifact_revision"},
+		{table: "edge_device_identities", column: "rule_artifact_pushed_at_unix"},
+		{table: "edge_device_identities", column: "rule_artifact_error"},
 	} {
 		var count int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('`+tc.table+`') WHERE name = ?`, tc.column).Scan(&count); err != nil {

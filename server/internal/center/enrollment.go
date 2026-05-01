@@ -16,12 +16,15 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"tukuyomi/internal/edgeartifactbundle"
 )
 
 const (
 	MaxEnrollmentBodyBytes              = 64 * 1024
 	MaxDeviceConfigSnapshotBodyBytes    = 3 * 1024 * 1024
 	MaxDeviceConfigSnapshotPayloadBytes = 2 * 1024 * 1024
+	MaxRuleArtifactBundleBodyBytes      = 12 * 1024 * 1024
 	enrollmentFreshness                 = 10 * time.Minute
 )
 
@@ -72,6 +75,22 @@ type DeviceConfigSnapshotRequest struct {
 	Snapshot                   json.RawMessage `json:"snapshot"`
 }
 
+type RuleArtifactBundleRequest struct {
+	DeviceID                   string `json:"device_id"`
+	KeyID                      string `json:"key_id"`
+	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string `json:"timestamp"`
+	Nonce                      string `json:"nonce"`
+	BundleRevision             string `json:"bundle_revision"`
+	BundleHash                 string `json:"bundle_hash"`
+	CompressedSize             int64  `json:"compressed_size"`
+	UncompressedSize           int64  `json:"uncompressed_size"`
+	FileCount                  int    `json:"file_count"`
+	BodyHash                   string `json:"body_hash"`
+	SignatureB64               string `json:"signature_b64"`
+	BundleB64                  string `json:"bundle_b64"`
+}
+
 type verifiedEnrollment struct {
 	DeviceID                   string
 	KeyID                      string
@@ -103,6 +122,21 @@ type verifiedDeviceConfigSnapshotRequest struct {
 	ConfigRevision             string
 	PayloadHash                string
 	PayloadJSON                []byte
+	BodyHash                   string
+	SignatureB64               string
+}
+
+type verifiedRuleArtifactBundleRequest struct {
+	DeviceID                   string
+	KeyID                      string
+	PublicKeyFingerprintSHA256 string
+	Timestamp                  time.Time
+	BundleRevision             string
+	BundleHash                 string
+	CompressedSize             int64
+	UncompressedSize           int64
+	FileCount                  int
+	BundleBytes                []byte
 	BodyHash                   string
 	SignatureB64               string
 }
@@ -265,6 +299,51 @@ func VerifyDeviceConfigSnapshotRequest(req DeviceConfigSnapshotRequest, publicKe
 	}, nil
 }
 
+func VerifyRuleArtifactBundleRequest(req RuleArtifactBundleRequest, publicKeyPEM string, now time.Time) (verifiedRuleArtifactBundleRequest, error) {
+	normalized, ts, bundleBytes, err := normalizeRuleArtifactBundleRequest(req, now)
+	if err != nil {
+		return verifiedRuleArtifactBundleRequest{}, err
+	}
+	req = normalized
+
+	publicKeyDER, publicKey, err := parseStoredEnrollmentPublicKey(publicKeyPEM)
+	if err != nil {
+		return verifiedRuleArtifactBundleRequest{}, err
+	}
+	fingerprint := sha256.Sum256(publicKeyDER)
+	if !secureEqualHex(hex.EncodeToString(fingerprint[:]), req.PublicKeyFingerprintSHA256) {
+		return verifiedRuleArtifactBundleRequest{}, fmt.Errorf("%w: public key fingerprint mismatch", ErrInvalidEnrollment)
+	}
+	bundleHash := sha256.Sum256(bundleBytes)
+	if !secureEqualHex(hex.EncodeToString(bundleHash[:]), req.BundleHash) {
+		return verifiedRuleArtifactBundleRequest{}, fmt.Errorf("%w: bundle_hash mismatch", ErrInvalidEnrollment)
+	}
+	if !secureEqualHex(ruleArtifactBundleBodyHash(req), req.BodyHash) {
+		return verifiedRuleArtifactBundleRequest{}, fmt.Errorf("%w: body_hash mismatch", ErrInvalidEnrollment)
+	}
+	signature, err := base64.StdEncoding.DecodeString(req.SignatureB64)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return verifiedRuleArtifactBundleRequest{}, fmt.Errorf("%w: invalid signature", ErrInvalidEnrollment)
+	}
+	if !ed25519.Verify(publicKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)), signature) {
+		return verifiedRuleArtifactBundleRequest{}, fmt.Errorf("%w: signature verification failed", ErrInvalidEnrollment)
+	}
+	return verifiedRuleArtifactBundleRequest{
+		DeviceID:                   req.DeviceID,
+		KeyID:                      req.KeyID,
+		PublicKeyFingerprintSHA256: req.PublicKeyFingerprintSHA256,
+		Timestamp:                  ts.UTC(),
+		BundleRevision:             req.BundleRevision,
+		BundleHash:                 req.BundleHash,
+		CompressedSize:             req.CompressedSize,
+		UncompressedSize:           req.UncompressedSize,
+		FileCount:                  req.FileCount,
+		BundleBytes:                append([]byte(nil), bundleBytes...),
+		BodyHash:                   req.BodyHash,
+		SignatureB64:               req.SignatureB64,
+	}, nil
+}
+
 func normalizeDeviceStatusRequest(req DeviceStatusRequest, now time.Time) (DeviceStatusRequest, time.Time, error) {
 	req.DeviceID = strings.TrimSpace(req.DeviceID)
 	req.KeyID = strings.TrimSpace(req.KeyID)
@@ -384,6 +463,75 @@ func normalizeDeviceConfigSnapshotRequest(req DeviceConfigSnapshotRequest, now t
 	return req, ts.UTC(), payloadJSON, nil
 }
 
+func normalizeRuleArtifactBundleRequest(req RuleArtifactBundleRequest, now time.Time) (RuleArtifactBundleRequest, time.Time, []byte, error) {
+	req.DeviceID = strings.TrimSpace(req.DeviceID)
+	req.KeyID = strings.TrimSpace(req.KeyID)
+	req.PublicKeyFingerprintSHA256 = strings.ToLower(strings.TrimSpace(req.PublicKeyFingerprintSHA256))
+	req.Timestamp = strings.TrimSpace(req.Timestamp)
+	req.Nonce = strings.TrimSpace(req.Nonce)
+	req.BundleRevision = strings.ToLower(strings.TrimSpace(req.BundleRevision))
+	req.BundleHash = strings.ToLower(strings.TrimSpace(req.BundleHash))
+	req.BodyHash = strings.ToLower(strings.TrimSpace(req.BodyHash))
+	req.SignatureB64 = strings.TrimSpace(req.SignatureB64)
+	req.BundleB64 = strings.TrimSpace(req.BundleB64)
+
+	if !deviceIDPattern.MatchString(req.DeviceID) {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: invalid device_id", ErrInvalidEnrollment)
+	}
+	if !keyIDPattern.MatchString(req.KeyID) {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: invalid key_id", ErrInvalidEnrollment)
+	}
+	if !noncePattern.MatchString(req.Nonce) {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: invalid nonce", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.PublicKeyFingerprintSHA256) {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: invalid public key fingerprint", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.BundleRevision) {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: invalid bundle_revision", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.BundleHash) {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: invalid bundle_hash", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.BodyHash) {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: invalid body_hash", ErrInvalidEnrollment)
+	}
+	if req.CompressedSize <= 0 || req.CompressedSize > edgeartifactbundle.MaxCompressedBytes {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: invalid compressed_size", ErrInvalidEnrollment)
+	}
+	if req.UncompressedSize <= 0 || req.UncompressedSize > edgeartifactbundle.MaxUncompressedBytes {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: invalid uncompressed_size", ErrInvalidEnrollment)
+	}
+	if req.FileCount <= 0 || req.FileCount > edgeartifactbundle.MaxFiles {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: invalid file_count", ErrInvalidEnrollment)
+	}
+	if req.SignatureB64 == "" || len(req.SignatureB64) > 4096 {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: invalid signature", ErrInvalidEnrollment)
+	}
+	if req.BundleB64 == "" || len(req.BundleB64) > MaxRuleArtifactBundleBodyBytes {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: invalid bundle payload", ErrInvalidEnrollment)
+	}
+	bundleBytes, err := base64.StdEncoding.DecodeString(req.BundleB64)
+	if err != nil {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: bundle payload is not base64", ErrInvalidEnrollment)
+	}
+	if int64(len(bundleBytes)) != req.CompressedSize {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: compressed_size mismatch", ErrInvalidEnrollment)
+	}
+
+	ts, err := time.Parse(time.RFC3339Nano, req.Timestamp)
+	if err != nil {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: invalid timestamp", ErrInvalidEnrollment)
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if ts.After(now.Add(enrollmentFreshness)) || ts.Before(now.Add(-enrollmentFreshness)) {
+		return RuleArtifactBundleRequest{}, time.Time{}, nil, fmt.Errorf("%w: stale timestamp", ErrInvalidEnrollment)
+	}
+	return req, ts.UTC(), bundleBytes, nil
+}
+
 func parseEnrollmentPublicKey(publicKeyPEMB64 string) ([]byte, []byte, ed25519.PublicKey, error) {
 	pemBytes, err := base64.StdEncoding.DecodeString(publicKeyPEMB64)
 	if err != nil {
@@ -451,6 +599,22 @@ func deviceConfigSnapshotBodyHash(req DeviceConfigSnapshotRequest) string {
 			req.Nonce + "\n" +
 			req.ConfigRevision + "\n" +
 			req.PayloadHash,
+	))
+	return hex.EncodeToString(sum[:])
+}
+
+func ruleArtifactBundleBodyHash(req RuleArtifactBundleRequest) string {
+	sum := sha256.Sum256([]byte(
+		req.DeviceID + "\n" +
+			req.KeyID + "\n" +
+			req.PublicKeyFingerprintSHA256 + "\n" +
+			req.Timestamp + "\n" +
+			req.Nonce + "\n" +
+			req.BundleRevision + "\n" +
+			req.BundleHash + "\n" +
+			fmt.Sprintf("%d", req.CompressedSize) + "\n" +
+			fmt.Sprintf("%d", req.UncompressedSize) + "\n" +
+			fmt.Sprintf("%d", req.FileCount),
 	))
 	return hex.EncodeToString(sum[:])
 }

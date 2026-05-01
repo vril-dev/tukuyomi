@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -280,6 +281,232 @@ func TestEdgeDeviceStatusAutoRefreshUpdatesCachedApproval(t *testing.T) {
 	}
 	if gate := currentEdgeProxyGateState(); gate.Locked {
 		t.Fatalf("approved identity should unlock proxy, gate=%+v", gate)
+	}
+}
+
+func TestApplyEdgeRuntimeRemovalDeletesUnusedManagedPHPBundle(t *testing.T) {
+	restoreRuntime := resetPHPFoundationRuntimesForTest(t)
+	defer restoreRuntime()
+	restoreAssignments := resetEdgeRuntimeAssignmentStateForTest(t)
+	defer restoreAssignments()
+
+	tmp := t.TempDir()
+	inventoryPath := filepath.Join(tmp, "data", "php-fpm", "inventory.json")
+	if err := os.MkdirAll(filepath.Dir(inventoryPath), 0o755); err != nil {
+		t.Fatalf("mkdir inventory: %v", err)
+	}
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	writeTestPHPRuntimeArtifact(t, inventoryPath, "php83", testPHPRuntimeArtifactOptions{})
+	rootDir := phpRuntimeRootDirFromInventoryPath(inventoryPath)
+	bundleDir := filepath.Join(rootDir, "binaries", "php83")
+	runtimeDir := filepath.Join(rootDir, "runtime", "php83")
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		t.Fatalf("mkdir runtime dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeDir, "php-fpm.conf"), []byte("[global]\n"), 0o600); err != nil {
+		t.Fatalf("write runtime config: %v", err)
+	}
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+
+	applyEdgeRuntimeRemoval(edgeRuntimeDeviceAssignment{
+		RuntimeFamily: "php-fpm",
+		RuntimeID:     "php83",
+		DesiredState:  "removed",
+	})
+
+	if _, err := os.Stat(bundleDir); !os.IsNotExist(err) {
+		t.Fatalf("bundle dir stat err=%v, want not exist", err)
+	}
+	if _, err := os.Stat(runtimeDir); !os.IsNotExist(err) {
+		t.Fatalf("runtime dir stat err=%v, want not exist", err)
+	}
+	status := edgeRuntimeApplyStatusSnapshot()[edgeRuntimeAssignmentKey("php-fpm", "php83")]
+	if status.ApplyState != "removed" || status.ApplyError != "" {
+		t.Fatalf("apply status=%+v, want removed without error", status)
+	}
+	summary := currentEdgeRuntimeInventorySummary()
+	if len(summary) != 1 || summary[0].RuntimeFamily != "php-fpm" || summary[0].RuntimeID != "php83" || summary[0].ApplyState != "removed" {
+		t.Fatalf("summary=%+v, want virtual removed runtime", summary)
+	}
+}
+
+func TestApplyEdgeRuntimeRemovalBlocksReferencedPHPRuntime(t *testing.T) {
+	restoreRuntime := resetPHPFoundationRuntimesForTest(t)
+	defer restoreRuntime()
+	restoreAssignments := resetEdgeRuntimeAssignmentStateForTest(t)
+	defer restoreAssignments()
+
+	tmp := t.TempDir()
+	inventoryPath := filepath.Join(tmp, "data", "php-fpm", "inventory.json")
+	vhostPath := filepath.Join(tmp, "data", "php-fpm", "vhosts.json")
+	if err := os.MkdirAll(filepath.Dir(inventoryPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	vhosts := `{"vhosts":[{"name":"app","mode":"php-fpm","hostname":"127.0.0.1","listen_port":19083,"document_root":"data/vhosts/app/public","runtime_id":"php83","generated_target":"app-php"}]}`
+	if err := os.WriteFile(vhostPath, []byte(vhosts), 0o600); err != nil {
+		t.Fatalf("write vhosts: %v", err)
+	}
+	writeTestPHPRuntimeArtifact(t, inventoryPath, "php83", testPHPRuntimeArtifactOptions{})
+	bundleDir := filepath.Join(phpRuntimeRootDirFromInventoryPath(inventoryPath), "binaries", "php83")
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+	if err := InitVhostRuntime(vhostPath, 2); err != nil {
+		t.Fatalf("InitVhostRuntime: %v", err)
+	}
+
+	applyEdgeRuntimeRemoval(edgeRuntimeDeviceAssignment{
+		RuntimeFamily: "php-fpm",
+		RuntimeID:     "php83",
+		DesiredState:  "removed",
+	})
+
+	if _, err := os.Stat(bundleDir); err != nil {
+		t.Fatalf("bundle dir should remain: %v", err)
+	}
+	status := edgeRuntimeApplyStatusSnapshot()[edgeRuntimeAssignmentKey("php-fpm", "php83")]
+	if status.ApplyState != "blocked" || !strings.Contains(status.ApplyError, "app-php") {
+		t.Fatalf("apply status=%+v, want blocked with generated target", status)
+	}
+}
+
+func TestApplyEdgeRuntimeRemovalDeletesUnusedManagedPSGIBundle(t *testing.T) {
+	restoreRuntime := resetPHPFoundationRuntimesForTest(t)
+	defer restoreRuntime()
+	restoreAssignments := resetEdgeRuntimeAssignmentStateForTest(t)
+	defer restoreAssignments()
+
+	tmp := t.TempDir()
+	inventoryPath := filepath.Join(tmp, "data", "psgi", "inventory.json")
+	if err := os.MkdirAll(filepath.Dir(inventoryPath), 0o755); err != nil {
+		t.Fatalf("mkdir inventory: %v", err)
+	}
+	if err := os.WriteFile(inventoryPath, []byte(defaultPSGIRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	writeTestPSGIRuntimeArtifact(t, inventoryPath, "perl538")
+	rootDir := psgiRuntimeRootDirFromInventoryPath(inventoryPath)
+	bundleDir := filepath.Join(rootDir, "binaries", "perl538")
+	runtimeDir := filepath.Join(rootDir, "runtime", "perl538")
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		t.Fatalf("mkdir runtime dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeDir, "process.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write runtime manifest: %v", err)
+	}
+	if err := InitPSGIRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPSGIRuntimeInventoryRuntime: %v", err)
+	}
+
+	applyEdgeRuntimeRemoval(edgeRuntimeDeviceAssignment{
+		RuntimeFamily: "psgi",
+		RuntimeID:     "perl538",
+		DesiredState:  "removed",
+	})
+
+	if _, err := os.Stat(bundleDir); !os.IsNotExist(err) {
+		t.Fatalf("bundle dir stat err=%v, want not exist", err)
+	}
+	if _, err := os.Stat(runtimeDir); !os.IsNotExist(err) {
+		t.Fatalf("runtime dir stat err=%v, want not exist", err)
+	}
+	status := edgeRuntimeApplyStatusSnapshot()[edgeRuntimeAssignmentKey("psgi", "perl538")]
+	if status.ApplyState != "removed" || status.ApplyError != "" {
+		t.Fatalf("apply status=%+v, want removed without error", status)
+	}
+	var found bool
+	for _, item := range currentEdgeRuntimeInventorySummary() {
+		if item.RuntimeFamily == "psgi" && item.RuntimeID == "perl538" {
+			found = true
+			if item.ApplyState != "removed" {
+				t.Fatalf("summary item=%+v, want removed", item)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("summary missing virtual PSGI removal: %+v", currentEdgeRuntimeInventorySummary())
+	}
+	pruneCompletedEdgeRuntimeApplyStatuses(nil)
+	for _, item := range currentEdgeRuntimeInventorySummary() {
+		if item.RuntimeFamily == "psgi" && item.RuntimeID == "perl538" {
+			t.Fatalf("removed virtual runtime should be pruned after Center stops sending assignment: %+v", item)
+		}
+	}
+}
+
+func TestPruneCompletedEdgeRuntimeApplyStatusesKeepsDesiredRemoval(t *testing.T) {
+	restoreAssignments := resetEdgeRuntimeAssignmentStateForTest(t)
+	defer restoreAssignments()
+
+	setEdgeRuntimeApplyStatus(edgeRuntimeApplyStatus{
+		RuntimeFamily: "psgi",
+		RuntimeID:     "perl538",
+		ApplyState:    "removed",
+	})
+	pruneCompletedEdgeRuntimeApplyStatuses([]edgeRuntimeDeviceAssignment{
+		{
+			RuntimeFamily: "psgi",
+			RuntimeID:     "perl538",
+			DesiredState:  "removed",
+		},
+	})
+	if _, ok := edgeRuntimeApplyStatusSnapshot()[edgeRuntimeAssignmentKey("psgi", "perl538")]; !ok {
+		t.Fatal("removed status should remain while Center still sends the removal assignment")
+	}
+
+	pruneCompletedEdgeRuntimeApplyStatuses(nil)
+	if _, ok := edgeRuntimeApplyStatusSnapshot()[edgeRuntimeAssignmentKey("psgi", "perl538")]; ok {
+		t.Fatal("removed status should be pruned after Center stops sending the removal assignment")
+	}
+}
+
+func TestApplyEdgeRuntimeRemovalBlocksReferencedPSGIRuntime(t *testing.T) {
+	restoreRuntime := resetPHPFoundationRuntimesForTest(t)
+	defer restoreRuntime()
+	restoreAssignments := resetEdgeRuntimeAssignmentStateForTest(t)
+	defer restoreAssignments()
+
+	tmp := t.TempDir()
+	inventoryPath := filepath.Join(tmp, "data", "psgi", "inventory.json")
+	vhostPath := filepath.Join(tmp, "data", "psgi", "vhosts.json")
+	if err := os.MkdirAll(filepath.Dir(inventoryPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(inventoryPath, []byte(defaultPSGIRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	vhosts := `{"vhosts":[{"name":"mt-site","mode":"psgi","hostname":"127.0.0.1","listen_port":19538,"document_root":"data/mt/mt-static","runtime_id":"perl538","app_root":"data/mt/MT","psgi_file":"mt.psgi","generated_target":"mt-psgi"}]}`
+	if err := os.WriteFile(vhostPath, []byte(vhosts), 0o600); err != nil {
+		t.Fatalf("write vhosts: %v", err)
+	}
+	writeTestPSGIRuntimeArtifact(t, inventoryPath, "perl538")
+	bundleDir := filepath.Join(psgiRuntimeRootDirFromInventoryPath(inventoryPath), "binaries", "perl538")
+	if err := InitPSGIRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPSGIRuntimeInventoryRuntime: %v", err)
+	}
+	if err := InitVhostRuntime(vhostPath, 2); err != nil {
+		t.Fatalf("InitVhostRuntime: %v", err)
+	}
+
+	applyEdgeRuntimeRemoval(edgeRuntimeDeviceAssignment{
+		RuntimeFamily: "psgi",
+		RuntimeID:     "perl538",
+		DesiredState:  "removed",
+	})
+
+	if _, err := os.Stat(bundleDir); err != nil {
+		t.Fatalf("bundle dir should remain: %v", err)
+	}
+	status := edgeRuntimeApplyStatusSnapshot()[edgeRuntimeAssignmentKey("psgi", "perl538")]
+	if status.ApplyState != "blocked" || !strings.Contains(status.ApplyError, "mt-psgi") {
+		t.Fatalf("apply status=%+v, want blocked with generated target", status)
 	}
 }
 
@@ -921,6 +1148,66 @@ func setEdgeRuntimeForTest(enabled bool, deviceAuthEnabled bool) func() {
 		config.EdgeEnabled = oldEdgeEnabled
 		config.EdgeDeviceAuthEnabled = oldDeviceAuthEnabled
 		config.EdgeRequireDeviceApproval = oldRequireDeviceApproval
+	}
+}
+
+func resetEdgeRuntimeAssignmentStateForTest(t *testing.T) func() {
+	t.Helper()
+
+	edgeRuntimeAssignmentMu.Lock()
+	prevActive := edgeRuntimeAssignmentActive
+	edgeRuntimeAssignmentActive = map[string]struct{}{}
+	edgeRuntimeAssignmentMu.Unlock()
+
+	edgeRuntimeApplyStatusMu.Lock()
+	prevStatuses := edgeRuntimeApplyStatuses
+	edgeRuntimeApplyStatuses = map[string]edgeRuntimeApplyStatus{}
+	edgeRuntimeApplyStatusMu.Unlock()
+
+	return func() {
+		edgeRuntimeAssignmentMu.Lock()
+		edgeRuntimeAssignmentActive = prevActive
+		edgeRuntimeAssignmentMu.Unlock()
+
+		edgeRuntimeApplyStatusMu.Lock()
+		edgeRuntimeApplyStatuses = prevStatuses
+		edgeRuntimeApplyStatusMu.Unlock()
+	}
+}
+
+func writeTestPSGIRuntimeArtifact(t *testing.T, inventoryPath string, runtimeID string) {
+	t.Helper()
+
+	runtimeDir := filepath.Join(psgiRuntimeRootDirFromInventoryPath(inventoryPath), "binaries", runtimeID)
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		t.Fatalf("mkdir psgi runtime dir: %v", err)
+	}
+	for _, name := range []string{"perl", "starman"} {
+		if err := os.WriteFile(filepath.Join(runtimeDir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	modulesRaw, err := json.Marshal([]string{"plack", "starman"})
+	if err != nil {
+		t.Fatalf("marshal psgi modules: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeDir, "modules.json"), append(modulesRaw, '\n'), 0o600); err != nil {
+		t.Fatalf("write modules.json: %v", err)
+	}
+	manifest := psgiRuntimeArtifactManifest{
+		RuntimeID:       runtimeID,
+		DisplayName:     defaultDisplayNameForPSGIRuntimeID(runtimeID),
+		DetectedVersion: "v5.38.5",
+		PerlPath:        filepath.ToSlash(filepath.Join(runtimeDir, "perl")),
+		StarmanPath:     filepath.ToSlash(filepath.Join(runtimeDir, "starman")),
+		Source:          "bundled",
+	}
+	manifestRaw, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal psgi manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeDir, "runtime.json"), append(manifestRaw, '\n'), 0o600); err != nil {
+		t.Fatalf("write runtime.json: %v", err)
 	}
 }
 

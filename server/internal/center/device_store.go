@@ -3,6 +3,7 @@ package center
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -32,31 +33,39 @@ var (
 )
 
 type DeviceRecord struct {
-	DeviceID                   string `json:"device_id"`
-	KeyID                      string `json:"key_id"`
-	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
-	Status                     string `json:"status"`
-	ProductID                  string `json:"product_id"`
-	EnrollmentTokenID          int64  `json:"enrollment_token_id"`
-	EnrollmentTokenPrefix      string `json:"enrollment_token_prefix"`
-	EnrollmentTokenLabel       string `json:"enrollment_token_label"`
-	EnrollmentTokenStatus      string `json:"enrollment_token_status"`
-	ApprovedEnrollmentID       int64  `json:"approved_enrollment_id"`
-	ApprovedAtUnix             int64  `json:"approved_at_unix"`
-	ApprovedBy                 string `json:"approved_by"`
-	CreatedAtUnix              int64  `json:"created_at_unix"`
-	UpdatedAtUnix              int64  `json:"updated_at_unix"`
-	RevokedAtUnix              int64  `json:"revoked_at_unix"`
-	RevokedBy                  string `json:"revoked_by"`
-	ArchivedAtUnix             int64  `json:"archived_at_unix"`
-	ArchivedBy                 string `json:"archived_by"`
-	LastSeenAtUnix             int64  `json:"last_seen_at_unix"`
-	RuntimeRole                string `json:"runtime_role"`
-	BuildVersion               string `json:"build_version"`
-	GoVersion                  string `json:"go_version"`
-	ConfigSnapshotRevision     string `json:"config_snapshot_revision"`
-	ConfigSnapshotAtUnix       int64  `json:"config_snapshot_at_unix"`
-	ConfigSnapshotBytes        int64  `json:"config_snapshot_bytes"`
+	DeviceID                   string                 `json:"device_id"`
+	KeyID                      string                 `json:"key_id"`
+	PublicKeyFingerprintSHA256 string                 `json:"public_key_fingerprint_sha256"`
+	Status                     string                 `json:"status"`
+	ProductID                  string                 `json:"product_id"`
+	EnrollmentTokenID          int64                  `json:"enrollment_token_id"`
+	EnrollmentTokenPrefix      string                 `json:"enrollment_token_prefix"`
+	EnrollmentTokenLabel       string                 `json:"enrollment_token_label"`
+	EnrollmentTokenStatus      string                 `json:"enrollment_token_status"`
+	ApprovedEnrollmentID       int64                  `json:"approved_enrollment_id"`
+	ApprovedAtUnix             int64                  `json:"approved_at_unix"`
+	ApprovedBy                 string                 `json:"approved_by"`
+	CreatedAtUnix              int64                  `json:"created_at_unix"`
+	UpdatedAtUnix              int64                  `json:"updated_at_unix"`
+	RevokedAtUnix              int64                  `json:"revoked_at_unix"`
+	RevokedBy                  string                 `json:"revoked_by"`
+	ArchivedAtUnix             int64                  `json:"archived_at_unix"`
+	ArchivedBy                 string                 `json:"archived_by"`
+	LastSeenAtUnix             int64                  `json:"last_seen_at_unix"`
+	RuntimeRole                string                 `json:"runtime_role"`
+	BuildVersion               string                 `json:"build_version"`
+	GoVersion                  string                 `json:"go_version"`
+	OS                         string                 `json:"os"`
+	Arch                       string                 `json:"arch"`
+	KernelVersion              string                 `json:"kernel_version"`
+	DistroID                   string                 `json:"distro_id"`
+	DistroIDLike               string                 `json:"distro_id_like"`
+	DistroVersion              string                 `json:"distro_version"`
+	RuntimeDeploymentSupported bool                   `json:"runtime_deployment_supported"`
+	RuntimeInventory           []DeviceRuntimeSummary `json:"runtime_inventory,omitempty"`
+	ConfigSnapshotRevision     string                 `json:"config_snapshot_revision"`
+	ConfigSnapshotAtUnix       int64                  `json:"config_snapshot_at_unix"`
+	ConfigSnapshotBytes        int64                  `json:"config_snapshot_bytes"`
 }
 
 type EnrollmentRecord struct {
@@ -109,9 +118,17 @@ type DeviceStatusRecord struct {
 }
 
 type DeviceRuntimeInventory struct {
-	RuntimeRole  string
-	BuildVersion string
-	GoVersion    string
+	RuntimeRole                string
+	BuildVersion               string
+	GoVersion                  string
+	OS                         string
+	Arch                       string
+	KernelVersion              string
+	DistroID                   string
+	DistroIDLike               string
+	DistroVersion              string
+	RuntimeDeploymentSupported bool
+	RuntimeInventory           []DeviceRuntimeSummary
 }
 
 type DeviceConfigSnapshotInsert struct {
@@ -212,15 +229,22 @@ func ListDevices(ctx context.Context, includeArchived bool) ([]DeviceRecord, err
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
 		for rows.Next() {
 			var rec DeviceRecord
 			if err := scanDeviceRecord(rows, &rec); err != nil {
+				_ = rows.Close()
 				return err
 			}
 			out = append(out, rec)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		return attachRuntimeSummaries(ctx, db, driver, out)
 	})
 	return out, err
 }
@@ -456,23 +480,185 @@ func TouchApprovedDeviceHeartbeat(ctx context.Context, deviceID string, seenAtUn
 		return nil
 	}
 	return withCenterDB(ctx, func(db *sql.DB, driver string) error {
-		_, err := db.ExecContext(ctx, `
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		_, err = tx.ExecContext(ctx, `
 UPDATE center_devices
    SET last_seen_at_unix = `+placeholder(driver, 1)+`,
        runtime_role = `+placeholder(driver, 2)+`,
        build_version = `+placeholder(driver, 3)+`,
        go_version = `+placeholder(driver, 4)+`,
-       updated_at_unix = `+placeholder(driver, 5)+`
- WHERE device_id = `+placeholder(driver, 6),
+       os = `+placeholder(driver, 5)+`,
+       arch = `+placeholder(driver, 6)+`,
+       kernel_version = `+placeholder(driver, 7)+`,
+       distro_id = `+placeholder(driver, 8)+`,
+       distro_id_like = `+placeholder(driver, 9)+`,
+       distro_version = `+placeholder(driver, 10)+`,
+       runtime_deployment_supported = `+placeholder(driver, 11)+`,
+       updated_at_unix = `+placeholder(driver, 12)+`
+ WHERE device_id = `+placeholder(driver, 13),
 			seenAtUnix,
 			inventory.RuntimeRole,
 			inventory.BuildVersion,
 			inventory.GoVersion,
+			inventory.OS,
+			inventory.Arch,
+			inventory.KernelVersion,
+			inventory.DistroID,
+			inventory.DistroIDLike,
+			inventory.DistroVersion,
+			boolInt(inventory.RuntimeDeploymentSupported),
 			seenAtUnix,
 			deviceID,
 		)
-		return err
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM center_device_runtime_summaries WHERE device_id = `+placeholder(driver, 1), deviceID); err != nil {
+			return err
+		}
+		for _, runtime := range inventory.RuntimeInventory {
+			if isVirtualRuntimeRemovalSummary(runtime) {
+				continue
+			}
+			if err := insertDeviceRuntimeSummaryTx(ctx, tx, driver, deviceID, runtime, seenAtUnix); err != nil {
+				return err
+			}
+		}
+		if err := updateRuntimeApplyStatusFromSummariesTx(ctx, tx, driver, deviceID, inventory.RuntimeInventory, seenAtUnix); err != nil {
+			return err
+		}
+		return tx.Commit()
 	})
+}
+
+func isVirtualRuntimeRemovalSummary(runtime DeviceRuntimeSummary) bool {
+	return strings.TrimSpace(runtime.ApplyState) == "removed" &&
+		!runtime.Available &&
+		strings.TrimSpace(runtime.Source) == "center"
+}
+
+func insertDeviceRuntimeSummaryTx(ctx context.Context, tx *sql.Tx, driver string, deviceID string, runtime DeviceRuntimeSummary, updatedAtUnix int64) error {
+	targetsJSON, err := marshalRuntimeGeneratedTargets(runtime.GeneratedTargets)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+INSERT INTO center_device_runtime_summaries
+    (device_id, runtime_family, runtime_id, display_name, detected_version, source,
+     available, availability_message, module_count, artifact_revision, artifact_hash,
+     usage_reported, app_count, generated_targets_json, process_running, apply_state, apply_error, updated_at_unix)
+VALUES
+    (`+placeholders(driver, 18, 1)+`)`,
+		deviceID,
+		runtime.RuntimeFamily,
+		runtime.RuntimeID,
+		runtime.DisplayName,
+		runtime.DetectedVersion,
+		runtime.Source,
+		boolInt(runtime.Available),
+		runtime.AvailabilityMessage,
+		runtime.ModuleCount,
+		runtime.ArtifactRevision,
+		runtime.ArtifactHash,
+		boolInt(runtime.UsageReported),
+		runtime.AppCount,
+		targetsJSON,
+		boolInt(runtime.ProcessRunning),
+		runtime.ApplyState,
+		runtime.ApplyError,
+		updatedAtUnix,
+	)
+	return err
+}
+
+func attachRuntimeSummaries(ctx context.Context, db *sql.DB, driver string, devices []DeviceRecord) error {
+	if len(devices) == 0 {
+		return nil
+	}
+	indexByDeviceID := make(map[string]int, len(devices))
+	args := make([]any, 0, len(devices))
+	for i := range devices {
+		indexByDeviceID[devices[i].DeviceID] = i
+		args = append(args, devices[i].DeviceID)
+	}
+	rows, err := db.QueryContext(ctx, `
+SELECT device_id, runtime_family, runtime_id, display_name, detected_version, source,
+       available, availability_message, module_count, artifact_revision, artifact_hash,
+       usage_reported, app_count, COALESCE(generated_targets_json, '[]'), process_running, apply_state, apply_error, updated_at_unix
+  FROM center_device_runtime_summaries
+ WHERE device_id IN (`+placeholders(driver, len(args), 1)+`)
+ ORDER BY device_id ASC, runtime_family ASC, runtime_id ASC`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var deviceID string
+		var available int
+		var usageReported int
+		var processRunning int
+		var generatedTargetsJSON string
+		var rec DeviceRuntimeSummary
+		if err := rows.Scan(
+			&deviceID,
+			&rec.RuntimeFamily,
+			&rec.RuntimeID,
+			&rec.DisplayName,
+			&rec.DetectedVersion,
+			&rec.Source,
+			&available,
+			&rec.AvailabilityMessage,
+			&rec.ModuleCount,
+			&rec.ArtifactRevision,
+			&rec.ArtifactHash,
+			&usageReported,
+			&rec.AppCount,
+			&generatedTargetsJSON,
+			&processRunning,
+			&rec.ApplyState,
+			&rec.ApplyError,
+			&rec.UpdatedAtUnix,
+		); err != nil {
+			return err
+		}
+		rec.Available = available != 0
+		rec.UsageReported = usageReported != 0
+		rec.ProcessRunning = processRunning != 0
+		rec.GeneratedTargets = unmarshalRuntimeGeneratedTargets(generatedTargetsJSON)
+		if idx, ok := indexByDeviceID[deviceID]; ok {
+			devices[idx].RuntimeInventory = append(devices[idx].RuntimeInventory, rec)
+		}
+	}
+	return rows.Err()
+}
+
+func marshalRuntimeGeneratedTargets(targets []string) (string, error) {
+	targets = normalizeDeviceRuntimeGeneratedTargets(targets)
+	if len(targets) == 0 {
+		return "[]", nil
+	}
+	raw, err := json.Marshal(targets)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func unmarshalRuntimeGeneratedTargets(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var targets []string
+	if err := json.Unmarshal([]byte(raw), &targets); err != nil {
+		return nil
+	}
+	return normalizeDeviceRuntimeGeneratedTargets(targets)
 }
 
 func StoreDeviceConfigSnapshot(ctx context.Context, in DeviceConfigSnapshotInsert) (DeviceConfigSnapshotRecord, error) {
@@ -807,6 +993,8 @@ SELECT d.device_id, d.key_id, d.public_key_fingerprint_sha256, d.status, d.produ
        d.created_at_unix, d.updated_at_unix, d.revoked_at_unix, d.revoked_by,
        d.archived_at_unix, d.archived_by, d.last_seen_at_unix,
        d.runtime_role, d.build_version, d.go_version,
+       d.os, d.arch, d.kernel_version, d.distro_id, d.distro_id_like, d.distro_version,
+       d.runtime_deployment_supported,
        d.config_snapshot_revision, d.config_snapshot_at_unix, d.config_snapshot_bytes
   FROM center_devices d
   LEFT JOIN center_device_enrollments e ON e.enrollment_id = d.approved_enrollment_id
@@ -814,7 +1002,8 @@ SELECT d.device_id, d.key_id, d.public_key_fingerprint_sha256, d.status, d.produ
 }
 
 func scanDeviceRecord(scanner rowScanner, rec *DeviceRecord) error {
-	return scanner.Scan(
+	var runtimeDeploymentSupported int
+	if err := scanner.Scan(
 		&rec.DeviceID,
 		&rec.KeyID,
 		&rec.PublicKeyFingerprintSHA256,
@@ -837,10 +1026,21 @@ func scanDeviceRecord(scanner rowScanner, rec *DeviceRecord) error {
 		&rec.RuntimeRole,
 		&rec.BuildVersion,
 		&rec.GoVersion,
+		&rec.OS,
+		&rec.Arch,
+		&rec.KernelVersion,
+		&rec.DistroID,
+		&rec.DistroIDLike,
+		&rec.DistroVersion,
+		&runtimeDeploymentSupported,
 		&rec.ConfigSnapshotRevision,
 		&rec.ConfigSnapshotAtUnix,
 		&rec.ConfigSnapshotBytes,
-	)
+	); err != nil {
+		return err
+	}
+	rec.RuntimeDeploymentSupported = runtimeDeploymentSupported != 0
+	return nil
 }
 
 func loadDeviceByIDTx(ctx context.Context, q queryer, driver string, deviceID string, out *DeviceRecord) error {
@@ -1156,6 +1356,13 @@ func placeholders(driver string, count int, start int) string {
 		parts = append(parts, placeholder(driver, start+i))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func boolInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func isUniqueConstraintError(err error) bool {

@@ -18,8 +18,12 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	goruntime "runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -67,6 +71,11 @@ var (
 
 	edgeRuleArtifactUploadMu       sync.Mutex
 	edgeRuleArtifactUploadRevision string
+
+	edgeRuntimeAssignmentMu     sync.Mutex
+	edgeRuntimeAssignmentActive = map[string]struct{}{}
+	edgeRuntimeApplyStatusMu    sync.RWMutex
+	edgeRuntimeApplyStatuses    = map[string]edgeRuntimeApplyStatus{}
 )
 
 type edgeDeviceIdentityRecord struct {
@@ -136,16 +145,52 @@ type edgeDeviceEnrollmentWireRequest struct {
 }
 
 type edgeDeviceStatusWireRequest struct {
-	DeviceID                   string `json:"device_id"`
-	KeyID                      string `json:"key_id"`
-	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
-	Timestamp                  string `json:"timestamp"`
-	Nonce                      string `json:"nonce"`
-	RuntimeRole                string `json:"runtime_role,omitempty"`
-	BuildVersion               string `json:"build_version,omitempty"`
-	GoVersion                  string `json:"go_version,omitempty"`
-	BodyHash                   string `json:"body_hash"`
-	SignatureB64               string `json:"signature_b64"`
+	DeviceID                   string                     `json:"device_id"`
+	KeyID                      string                     `json:"key_id"`
+	PublicKeyFingerprintSHA256 string                     `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string                     `json:"timestamp"`
+	Nonce                      string                     `json:"nonce"`
+	RuntimeRole                string                     `json:"runtime_role,omitempty"`
+	BuildVersion               string                     `json:"build_version,omitempty"`
+	GoVersion                  string                     `json:"go_version,omitempty"`
+	OS                         string                     `json:"os,omitempty"`
+	Arch                       string                     `json:"arch,omitempty"`
+	KernelVersion              string                     `json:"kernel_version,omitempty"`
+	DistroID                   string                     `json:"distro_id,omitempty"`
+	DistroIDLike               string                     `json:"distro_id_like,omitempty"`
+	DistroVersion              string                     `json:"distro_version,omitempty"`
+	RuntimeDeploymentSupported bool                       `json:"runtime_deployment_supported,omitempty"`
+	RuntimeInventory           []edgeDeviceRuntimeSummary `json:"runtime_inventory,omitempty"`
+	BodyHash                   string                     `json:"body_hash"`
+	SignatureB64               string                     `json:"signature_b64"`
+}
+
+type edgeDeviceRuntimeSummary struct {
+	RuntimeFamily       string   `json:"runtime_family"`
+	RuntimeID           string   `json:"runtime_id"`
+	DisplayName         string   `json:"display_name,omitempty"`
+	DetectedVersion     string   `json:"detected_version,omitempty"`
+	Source              string   `json:"source,omitempty"`
+	Available           bool     `json:"available"`
+	AvailabilityMessage string   `json:"availability_message,omitempty"`
+	ModuleCount         int      `json:"module_count"`
+	UsageReported       bool     `json:"usage_reported"`
+	AppCount            int      `json:"app_count"`
+	GeneratedTargets    []string `json:"generated_targets,omitempty"`
+	ProcessRunning      bool     `json:"process_running"`
+	ArtifactRevision    string   `json:"artifact_revision,omitempty"`
+	ArtifactHash        string   `json:"artifact_hash,omitempty"`
+	ApplyState          string   `json:"apply_state,omitempty"`
+	ApplyError          string   `json:"apply_error,omitempty"`
+}
+
+type edgeGatewayPlatformMetadata struct {
+	OS            string
+	Arch          string
+	KernelVersion string
+	DistroID      string
+	DistroIDLike  string
+	DistroVersion string
 }
 
 type edgeDeviceConfigSnapshotWireRequest struct {
@@ -178,11 +223,34 @@ type edgeRuleArtifactBundleWireRequest struct {
 }
 
 type edgeDeviceCenterStatusResponse struct {
-	Status        string `json:"status"`
-	DeviceID      string `json:"device_id"`
-	KeyID         string `json:"key_id"`
-	ProductID     string `json:"product_id"`
-	CheckedAtUnix int64  `json:"checked_at_unix"`
+	Status             string                        `json:"status"`
+	DeviceID           string                        `json:"device_id"`
+	KeyID              string                        `json:"key_id"`
+	ProductID          string                        `json:"product_id"`
+	CheckedAtUnix      int64                         `json:"checked_at_unix"`
+	RuntimeAssignments []edgeRuntimeDeviceAssignment `json:"runtime_assignments,omitempty"`
+}
+
+type edgeRuntimeDeviceAssignment struct {
+	RuntimeFamily    string `json:"runtime_family"`
+	RuntimeID        string `json:"runtime_id"`
+	ArtifactRevision string `json:"artifact_revision,omitempty"`
+	ArtifactHash     string `json:"artifact_hash,omitempty"`
+	CompressedSize   int64  `json:"compressed_size,omitempty"`
+	UncompressedSize int64  `json:"uncompressed_size,omitempty"`
+	FileCount        int    `json:"file_count,omitempty"`
+	DetectedVersion  string `json:"detected_version,omitempty"`
+	DesiredState     string `json:"desired_state"`
+	AssignedAtUnix   int64  `json:"assigned_at_unix"`
+}
+
+type edgeRuntimeApplyStatus struct {
+	RuntimeFamily    string
+	RuntimeID        string
+	ArtifactRevision string
+	ArtifactHash     string
+	ApplyState       string
+	ApplyError       string
 }
 
 type edgeDeviceConfigSnapshotResponse struct {
@@ -479,6 +547,8 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 	identity.CenterProductID = clampEdgeText(payload.ProductID, 191)
 	identity.CenterStatusError = ""
 	if identity.EnrollmentStatus == edgeEnrollmentStatusApproved {
+		applyEdgeRuntimeAssignments(payload.RuntimeAssignments)
+		pruneCompletedEdgeRuntimeApplyStatuses(payload.RuntimeAssignments)
 		if pushEdgeRuleArtifactBundleIfChanged(ctx, &identity) {
 			pushEdgeConfigSnapshotIfChanged(ctx, &identity)
 		}
@@ -1052,10 +1122,566 @@ func signedEdgeDeviceStatusRequest(identity edgeDeviceIdentityRecord) (edgeDevic
 		BuildVersion:               clampEdgeText(buildinfo.Version, 128),
 		GoVersion:                  clampEdgeText(goruntime.Version(), 64),
 	}
+	platform := currentEdgeGatewayPlatformMetadata()
+	req.OS = platform.OS
+	req.Arch = platform.Arch
+	req.KernelVersion = platform.KernelVersion
+	req.DistroID = platform.DistroID
+	req.DistroIDLike = platform.DistroIDLike
+	req.DistroVersion = platform.DistroVersion
+	req.RuntimeDeploymentSupported = true
+	req.RuntimeInventory = currentEdgeRuntimeInventorySummary()
 	req.BodyHash = edgeDeviceStatusBodyHash(req)
 	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)))
 	req.SignatureB64 = base64.StdEncoding.EncodeToString(signature)
 	return req, nil
+}
+
+func currentEdgeRuntimeInventorySummary() []edgeDeviceRuntimeSummary {
+	out := make([]edgeDeviceRuntimeSummary, 0, 8)
+	_, _, phpInventory, _ := PHPRuntimeInventorySnapshot()
+	phpTargetsByRuntime := edgePHPRuntimeGeneratedTargets()
+	phpRunningByRuntime := edgePHPRuntimeRunningState()
+	for _, runtime := range phpInventory.Runtimes {
+		runtimeID := clampEdgeMetadataText(runtime.RuntimeID, 64)
+		if runtimeID == "" {
+			continue
+		}
+		targets := phpTargetsByRuntime[runtimeID]
+		out = append(out, edgeDeviceRuntimeSummary{
+			RuntimeFamily:       "php-fpm",
+			RuntimeID:           runtimeID,
+			DisplayName:         clampEdgeMetadataText(runtime.DisplayName, 128),
+			DetectedVersion:     clampEdgeMetadataText(runtime.DetectedVersion, 128),
+			Source:              clampEdgeMetadataText(runtime.Source, 32),
+			Available:           runtime.Available,
+			AvailabilityMessage: clampEdgeMetadataText(runtime.AvailabilityMessage, 256),
+			ModuleCount:         len(runtime.Modules),
+			UsageReported:       true,
+			AppCount:            len(targets),
+			GeneratedTargets:    targets,
+			ProcessRunning:      phpRunningByRuntime[runtimeID],
+			ArtifactHash:        normalizeEdgeHex64(runtime.SHA256),
+		})
+	}
+	_, _, psgiInventory, _ := PSGIRuntimeInventorySnapshot()
+	psgiTargetsByRuntime := edgePSGIRuntimeGeneratedTargets()
+	psgiRunningByRuntime := edgePSGIRuntimeRunningState()
+	for _, runtime := range psgiInventory.Runtimes {
+		runtimeID := clampEdgeMetadataText(runtime.RuntimeID, 64)
+		if runtimeID == "" {
+			continue
+		}
+		targets := psgiTargetsByRuntime[runtimeID]
+		out = append(out, edgeDeviceRuntimeSummary{
+			RuntimeFamily:       "psgi",
+			RuntimeID:           runtimeID,
+			DisplayName:         clampEdgeMetadataText(runtime.DisplayName, 128),
+			DetectedVersion:     clampEdgeMetadataText(runtime.DetectedVersion, 128),
+			Source:              clampEdgeMetadataText(runtime.Source, 32),
+			Available:           runtime.Available,
+			AvailabilityMessage: clampEdgeMetadataText(runtime.AvailabilityMessage, 256),
+			ModuleCount:         len(runtime.Modules),
+			UsageReported:       true,
+			AppCount:            len(targets),
+			GeneratedTargets:    targets,
+			ProcessRunning:      psgiRunningByRuntime[runtimeID],
+			ArtifactHash:        normalizeEdgeHex64(runtime.SHA256),
+		})
+	}
+	applyStatuses := edgeRuntimeApplyStatusSnapshot()
+	seen := make(map[string]struct{}, len(out))
+	for i := range out {
+		key := edgeRuntimeAssignmentKey(out[i].RuntimeFamily, out[i].RuntimeID)
+		seen[key] = struct{}{}
+		if status, ok := applyStatuses[key]; ok {
+			out[i].ApplyState = clampEdgeMetadataText(status.ApplyState, 32)
+			out[i].ApplyError = clampEdgeMetadataText(status.ApplyError, 256)
+			out[i].ArtifactRevision = normalizeEdgeHex64(status.ArtifactRevision)
+			if status.ArtifactHash != "" {
+				out[i].ArtifactHash = normalizeEdgeHex64(status.ArtifactHash)
+			}
+		}
+	}
+	for key, status := range applyStatuses {
+		if _, ok := seen[key]; ok || strings.TrimSpace(status.ApplyState) == "" {
+			continue
+		}
+		out = append(out, edgeDeviceRuntimeSummary{
+			RuntimeFamily:    status.RuntimeFamily,
+			RuntimeID:        status.RuntimeID,
+			Source:           "center",
+			Available:        false,
+			UsageReported:    true,
+			ArtifactRevision: normalizeEdgeHex64(status.ArtifactRevision),
+			ArtifactHash:     normalizeEdgeHex64(status.ArtifactHash),
+			ApplyState:       clampEdgeMetadataText(status.ApplyState, 32),
+			ApplyError:       clampEdgeMetadataText(status.ApplyError, 256),
+		})
+	}
+	sortEdgeRuntimeSummaries(out)
+	if len(out) > 64 {
+		out = out[:64]
+	}
+	return out
+}
+
+func edgePHPRuntimeGeneratedTargets() map[string][]string {
+	out := map[string][]string{}
+	for _, mat := range PHPRuntimeMaterializationSnapshot() {
+		runtimeID := clampEdgeMetadataText(mat.RuntimeID, 64)
+		if runtimeID == "" {
+			continue
+		}
+		targets := append([]string(nil), mat.GeneratedTarget...)
+		for i := range targets {
+			targets[i] = clampEdgeMetadataText(targets[i], 128)
+		}
+		targets = uniqueSortedNonEmptyStrings(targets, 64)
+		out[runtimeID] = targets
+	}
+	return out
+}
+
+func edgePHPRuntimeRunningState() map[string]bool {
+	out := map[string]bool{}
+	for _, proc := range PHPRuntimeProcessSnapshot() {
+		runtimeID := clampEdgeMetadataText(proc.RuntimeID, 64)
+		if runtimeID == "" {
+			continue
+		}
+		out[runtimeID] = proc.Running
+	}
+	return out
+}
+
+func edgePSGIRuntimeGeneratedTargets() map[string][]string {
+	out := map[string][]string{}
+	for _, mat := range PSGIRuntimeMaterializationSnapshot() {
+		runtimeID := clampEdgeMetadataText(mat.RuntimeID, 64)
+		if runtimeID == "" {
+			continue
+		}
+		target := clampEdgeMetadataText(mat.GeneratedTarget, 128)
+		out[runtimeID] = append(out[runtimeID], target)
+	}
+	for runtimeID, targets := range out {
+		out[runtimeID] = uniqueSortedNonEmptyStrings(targets, 64)
+	}
+	return out
+}
+
+func edgePSGIRuntimeRunningState() map[string]bool {
+	out := map[string]bool{}
+	for _, proc := range PSGIRuntimeProcessSnapshot() {
+		runtimeID := clampEdgeMetadataText(proc.RuntimeID, 64)
+		if runtimeID == "" {
+			continue
+		}
+		out[runtimeID] = out[runtimeID] || proc.Running
+	}
+	return out
+}
+
+func sortEdgeRuntimeSummaries(items []edgeDeviceRuntimeSummary) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].RuntimeFamily != items[j].RuntimeFamily {
+			return items[i].RuntimeFamily < items[j].RuntimeFamily
+		}
+		return items[i].RuntimeID < items[j].RuntimeID
+	})
+}
+
+func uniqueSortedNonEmptyStrings(items []string, limit int) []string {
+	if len(items) == 0 || limit <= 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	sort.Strings(out)
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+func edgeRuntimeAssignmentKey(runtimeFamily, runtimeID string) string {
+	return strings.TrimSpace(runtimeFamily) + "\x00" + strings.TrimSpace(runtimeID)
+}
+
+func edgeRuntimeApplyStatusSnapshot() map[string]edgeRuntimeApplyStatus {
+	edgeRuntimeApplyStatusMu.RLock()
+	defer edgeRuntimeApplyStatusMu.RUnlock()
+	out := make(map[string]edgeRuntimeApplyStatus, len(edgeRuntimeApplyStatuses))
+	for key, status := range edgeRuntimeApplyStatuses {
+		out[key] = status
+	}
+	return out
+}
+
+func setEdgeRuntimeApplyStatus(status edgeRuntimeApplyStatus) {
+	status.RuntimeFamily, status.RuntimeID, _ = normalizeEdgeRuntimeAssignmentIdentity(status.RuntimeFamily, status.RuntimeID)
+	if status.RuntimeFamily == "" || status.RuntimeID == "" {
+		return
+	}
+	status.ArtifactRevision = normalizeEdgeHex64(status.ArtifactRevision)
+	status.ArtifactHash = normalizeEdgeHex64(status.ArtifactHash)
+	status.ApplyState = clampEdgeMetadataText(status.ApplyState, 32)
+	status.ApplyError = clampEdgeMetadataText(status.ApplyError, 256)
+	edgeRuntimeApplyStatusMu.Lock()
+	edgeRuntimeApplyStatuses[edgeRuntimeAssignmentKey(status.RuntimeFamily, status.RuntimeID)] = status
+	edgeRuntimeApplyStatusMu.Unlock()
+}
+
+func pruneCompletedEdgeRuntimeApplyStatuses(assignments []edgeRuntimeDeviceAssignment) {
+	desired := make(map[string]struct{}, len(assignments))
+	for _, assignment := range assignments {
+		family, runtimeID, err := normalizeEdgeRuntimeAssignmentIdentity(assignment.RuntimeFamily, assignment.RuntimeID)
+		if err != nil {
+			continue
+		}
+		desired[edgeRuntimeAssignmentKey(family, runtimeID)] = struct{}{}
+	}
+	edgeRuntimeApplyStatusMu.Lock()
+	for key, status := range edgeRuntimeApplyStatuses {
+		if status.ApplyState != "removed" {
+			continue
+		}
+		if _, ok := desired[key]; !ok {
+			delete(edgeRuntimeApplyStatuses, key)
+		}
+	}
+	edgeRuntimeApplyStatusMu.Unlock()
+}
+
+func beginEdgeRuntimeAssignmentOp(runtimeFamily, runtimeID string) bool {
+	key := edgeRuntimeAssignmentKey(runtimeFamily, runtimeID)
+	edgeRuntimeAssignmentMu.Lock()
+	defer edgeRuntimeAssignmentMu.Unlock()
+	if _, ok := edgeRuntimeAssignmentActive[key]; ok {
+		return false
+	}
+	edgeRuntimeAssignmentActive[key] = struct{}{}
+	return true
+}
+
+func endEdgeRuntimeAssignmentOp(runtimeFamily, runtimeID string) {
+	key := edgeRuntimeAssignmentKey(runtimeFamily, runtimeID)
+	edgeRuntimeAssignmentMu.Lock()
+	delete(edgeRuntimeAssignmentActive, key)
+	edgeRuntimeAssignmentMu.Unlock()
+}
+
+func normalizeEdgeRuntimeAssignmentIdentity(runtimeFamily, runtimeID string) (string, string, error) {
+	family := strings.TrimSpace(runtimeFamily)
+	id := strings.TrimSpace(runtimeID)
+	switch family {
+	case "php-fpm":
+		switch id {
+		case "php83", "php84", "php85":
+		default:
+			return "", "", fmt.Errorf("unsupported runtime id")
+		}
+	case "psgi":
+		switch id {
+		case "perl538":
+		default:
+			return "", "", fmt.Errorf("unsupported runtime id")
+		}
+	default:
+		return "", "", fmt.Errorf("unsupported runtime family")
+	}
+	return family, id, nil
+}
+
+func applyEdgeRuntimeAssignments(assignments []edgeRuntimeDeviceAssignment) {
+	if len(assignments) == 0 {
+		return
+	}
+	items := append([]edgeRuntimeDeviceAssignment(nil), assignments...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].RuntimeFamily != items[j].RuntimeFamily {
+			return items[i].RuntimeFamily < items[j].RuntimeFamily
+		}
+		return items[i].RuntimeID < items[j].RuntimeID
+	})
+	for _, assignment := range items {
+		switch strings.TrimSpace(assignment.DesiredState) {
+		case "removed":
+			applyEdgeRuntimeRemoval(assignment)
+		default:
+			continue
+		}
+	}
+}
+
+func applyEdgeRuntimeRemoval(assignment edgeRuntimeDeviceAssignment) {
+	family, runtimeID, err := normalizeEdgeRuntimeAssignmentIdentity(assignment.RuntimeFamily, assignment.RuntimeID)
+	if err != nil {
+		return
+	}
+	switch family {
+	case "php-fpm":
+		applyEdgePHPRuntimeRemoval(assignment, runtimeID)
+	case "psgi":
+		applyEdgePSGIRuntimeRemoval(assignment, runtimeID)
+	}
+}
+
+func applyEdgePHPRuntimeRemoval(assignment edgeRuntimeDeviceAssignment, runtimeID string) {
+	family := "php-fpm"
+	if !beginEdgeRuntimeAssignmentOp(family, runtimeID) {
+		return
+	}
+	defer endEdgeRuntimeAssignmentOp(family, runtimeID)
+
+	status := edgeRuntimeApplyStatus{
+		RuntimeFamily:    family,
+		RuntimeID:        runtimeID,
+		ArtifactRevision: assignment.ArtifactRevision,
+		ArtifactHash:     assignment.ArtifactHash,
+		ApplyState:       "removing",
+	}
+	setEdgeRuntimeApplyStatus(status)
+
+	refs := currentEdgePHPRuntimeReferences(runtimeID)
+	if len(refs) > 0 {
+		status.ApplyState = "blocked"
+		status.ApplyError = "runtime is referenced by Runtime Apps: " + strings.Join(refs, ", ")
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+	if edgePHPRuntimeRunningState()[runtimeID] {
+		status.ApplyState = "blocked"
+		status.ApplyError = "runtime process is still running"
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+
+	rootDir := phpRuntimeRootDirFromInventoryPath(currentPHPRuntimeInventoryPath())
+	for _, base := range []string{
+		filepath.Join(rootDir, "runtime"),
+		filepath.Join(rootDir, "binaries"),
+	} {
+		if err := removeEdgeManagedRuntimeDir(base, family, runtimeID); err != nil {
+			status.ApplyState = "failed"
+			status.ApplyError = err.Error()
+			setEdgeRuntimeApplyStatus(status)
+			return
+		}
+	}
+	if err := RefreshPHPRuntimeMaterialization(); err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+	if err := ReconcilePHPRuntimeSupervisor(); err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+	status.ApplyState = "removed"
+	status.ApplyError = ""
+	setEdgeRuntimeApplyStatus(status)
+}
+
+func applyEdgePSGIRuntimeRemoval(assignment edgeRuntimeDeviceAssignment, runtimeID string) {
+	family := "psgi"
+	if !beginEdgeRuntimeAssignmentOp(family, runtimeID) {
+		return
+	}
+	defer endEdgeRuntimeAssignmentOp(family, runtimeID)
+
+	status := edgeRuntimeApplyStatus{
+		RuntimeFamily:    family,
+		RuntimeID:        runtimeID,
+		ArtifactRevision: assignment.ArtifactRevision,
+		ArtifactHash:     assignment.ArtifactHash,
+		ApplyState:       "removing",
+	}
+	setEdgeRuntimeApplyStatus(status)
+
+	refs := currentEdgePSGIRuntimeReferences(runtimeID)
+	if len(refs) > 0 {
+		status.ApplyState = "blocked"
+		status.ApplyError = "runtime is referenced by Runtime Apps: " + strings.Join(refs, ", ")
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+	if edgePSGIRuntimeRunningState()[runtimeID] {
+		status.ApplyState = "blocked"
+		status.ApplyError = "runtime process is still running"
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+
+	rootDir := psgiRuntimeRootDirFromInventoryPath(currentPSGIRuntimeInventoryPath())
+	for _, base := range []string{
+		filepath.Join(rootDir, "runtime"),
+		filepath.Join(rootDir, "binaries"),
+	} {
+		if err := removeEdgeManagedRuntimeDir(base, family, runtimeID); err != nil {
+			status.ApplyState = "failed"
+			status.ApplyError = err.Error()
+			setEdgeRuntimeApplyStatus(status)
+			return
+		}
+	}
+	if err := RefreshPSGIRuntimeMaterialization(); err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+	if err := ReconcilePSGIRuntimeSupervisor(); err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
+	status.ApplyState = "removed"
+	status.ApplyError = ""
+	setEdgeRuntimeApplyStatus(status)
+}
+
+func currentEdgePHPRuntimeReferences(runtimeID string) []string {
+	runtimeID = strings.TrimSpace(runtimeID)
+	if runtimeID == "" {
+		return nil
+	}
+	refs := []string{}
+	for _, vhost := range currentVhostConfig().Vhosts {
+		if normalizeVhostMode(vhost.Mode) != "php-fpm" || strings.TrimSpace(vhost.RuntimeID) != runtimeID {
+			continue
+		}
+		name := strings.TrimSpace(vhost.GeneratedTarget)
+		if name == "" {
+			name = strings.TrimSpace(vhost.Name)
+		}
+		if name == "" {
+			name = runtimeID
+		}
+		refs = append(refs, name)
+	}
+	return uniqueSortedNonEmptyStrings(refs, 32)
+}
+
+func currentEdgePSGIRuntimeReferences(runtimeID string) []string {
+	runtimeID = strings.TrimSpace(runtimeID)
+	if runtimeID == "" {
+		return nil
+	}
+	refs := []string{}
+	for _, vhost := range currentVhostConfig().Vhosts {
+		if normalizeVhostMode(vhost.Mode) != "psgi" || strings.TrimSpace(vhost.RuntimeID) != runtimeID {
+			continue
+		}
+		name := strings.TrimSpace(vhost.GeneratedTarget)
+		if name == "" {
+			name = strings.TrimSpace(vhost.Name)
+		}
+		if name == "" {
+			name = runtimeID
+		}
+		refs = append(refs, name)
+	}
+	return uniqueSortedNonEmptyStrings(refs, 32)
+}
+
+func removeEdgeManagedRuntimeDir(baseDir, runtimeFamily, runtimeID string) error {
+	_, id, err := normalizeEdgeRuntimeAssignmentIdentity(runtimeFamily, runtimeID)
+	if err != nil {
+		return err
+	}
+	baseAbs, err := filepath.Abs(filepath.Clean(baseDir))
+	if err != nil {
+		return err
+	}
+	targetAbs, err := filepath.Abs(filepath.Join(baseAbs, id))
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(baseAbs, targetAbs)
+	if err != nil {
+		return err
+	}
+	if rel == "." || rel == "" || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." || filepath.IsAbs(rel) {
+		return fmt.Errorf("runtime path escapes managed directory")
+	}
+	return os.RemoveAll(targetAbs)
+}
+
+func currentEdgeGatewayPlatformMetadata() edgeGatewayPlatformMetadata {
+	platform := edgeGatewayPlatformMetadata{
+		OS:   clampEdgeMetadataText(goruntime.GOOS, 32),
+		Arch: clampEdgeMetadataText(goruntime.GOARCH, 32),
+	}
+	if platform.OS != "linux" {
+		return platform
+	}
+	platform.KernelVersion = readEdgePlatformTextFile("/proc/sys/kernel/osrelease", 128)
+	osRelease := readEdgeOSRelease()
+	platform.DistroID = clampEdgeMetadataText(osRelease["ID"], 64)
+	platform.DistroIDLike = clampEdgeMetadataText(osRelease["ID_LIKE"], 128)
+	platform.DistroVersion = clampEdgeMetadataText(osRelease["VERSION_ID"], 64)
+	return platform
+}
+
+func readEdgePlatformTextFile(path string, limit int) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return clampEdgeMetadataText(string(raw), limit)
+}
+
+func readEdgeOSRelease() map[string]string {
+	for _, path := range []string{"/etc/os-release", "/usr/lib/os-release"} {
+		raw, err := os.ReadFile(path)
+		if err == nil {
+			return parseEdgeOSRelease(raw)
+		}
+	}
+	return map[string]string{}
+}
+
+func parseEdgeOSRelease(raw []byte) map[string]string {
+	out := map[string]string{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		switch key {
+		case "ID", "ID_LIKE", "VERSION_ID":
+		default:
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if unquoted, err := strconv.Unquote(value); err == nil {
+			value = unquoted
+		}
+		out[key] = value
+	}
+	return out
 }
 
 func signedEdgeDeviceConfigSnapshotRequest(identity edgeDeviceIdentityRecord, snapshot edgeconfigsnapshot.Build) (edgeDeviceConfigSnapshotWireRequest, error) {
@@ -1434,9 +2060,62 @@ func edgeDeviceStatusBodyHash(req edgeDeviceStatusWireRequest) string {
 			req.Nonce + "\n" +
 			req.RuntimeRole + "\n" +
 			req.BuildVersion + "\n" +
-			req.GoVersion,
+			req.GoVersion + "\n" +
+			req.OS + "\n" +
+			req.Arch + "\n" +
+			req.KernelVersion + "\n" +
+			req.DistroID + "\n" +
+			req.DistroIDLike + "\n" +
+			req.DistroVersion + "\n" +
+			strconv.FormatBool(req.RuntimeDeploymentSupported) + "\n" +
+			edgeRuntimeInventoryCanonical(req.RuntimeInventory),
 	))
 	return hex.EncodeToString(sum[:])
+}
+
+func edgeRuntimeInventoryCanonical(items []edgeDeviceRuntimeSummary) string {
+	if len(items) == 0 {
+		return "0"
+	}
+	sorted := append([]edgeDeviceRuntimeSummary(nil), items...)
+	sortEdgeRuntimeSummaries(sorted)
+	var b strings.Builder
+	b.WriteString(strconv.Itoa(len(sorted)))
+	for _, item := range sorted {
+		b.WriteByte('\n')
+		b.WriteString(item.RuntimeFamily)
+		b.WriteByte('\t')
+		b.WriteString(item.RuntimeID)
+		b.WriteByte('\t')
+		b.WriteString(item.DisplayName)
+		b.WriteByte('\t')
+		b.WriteString(item.DetectedVersion)
+		b.WriteByte('\t')
+		b.WriteString(item.Source)
+		b.WriteByte('\t')
+		b.WriteString(strconv.FormatBool(item.Available))
+		b.WriteByte('\t')
+		b.WriteString(item.AvailabilityMessage)
+		b.WriteByte('\t')
+		b.WriteString(strconv.Itoa(item.ModuleCount))
+		b.WriteByte('\t')
+		b.WriteString(strconv.FormatBool(item.UsageReported))
+		b.WriteByte('\t')
+		b.WriteString(strconv.Itoa(item.AppCount))
+		b.WriteByte('\t')
+		b.WriteString(strings.Join(uniqueSortedNonEmptyStrings(item.GeneratedTargets, 64), ","))
+		b.WriteByte('\t')
+		b.WriteString(strconv.FormatBool(item.ProcessRunning))
+		b.WriteByte('\t')
+		b.WriteString(item.ArtifactRevision)
+		b.WriteByte('\t')
+		b.WriteString(item.ArtifactHash)
+		b.WriteByte('\t')
+		b.WriteString(item.ApplyState)
+		b.WriteByte('\t')
+		b.WriteString(item.ApplyError)
+	}
+	return b.String()
 }
 
 func edgeDeviceConfigSnapshotBodyHash(req edgeDeviceConfigSnapshotWireRequest) string {
@@ -1536,4 +2215,33 @@ func clampEdgeText(raw string, limit int) string {
 		return raw
 	}
 	return raw[:limit]
+}
+
+func clampEdgeMetadataText(raw string, limit int) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || limit <= 0 {
+		return ""
+	}
+	if len(raw) > limit {
+		raw = raw[:limit]
+	}
+	for _, r := range raw {
+		if r < 0x20 || r > 0x7e {
+			return ""
+		}
+	}
+	return raw
+}
+
+func normalizeEdgeHex64(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if len(raw) != 64 {
+		return ""
+	}
+	for _, r := range raw {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return ""
+		}
+	}
+	return raw
 }

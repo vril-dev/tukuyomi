@@ -1288,6 +1288,11 @@ func resetPHPFoundationRuntimesForTest(t *testing.T) func() {
 	phpRuntimeInventoryRt = nil
 	phpRuntimeInventoryMu.Unlock()
 
+	psgiRuntimeInventoryMu.Lock()
+	prevPSGIInventory := psgiRuntimeInventoryRt
+	psgiRuntimeInventoryRt = nil
+	psgiRuntimeInventoryMu.Unlock()
+
 	vhostRuntimeMu.Lock()
 	prevVhost := vhostRt
 	vhostRt = nil
@@ -1308,10 +1313,20 @@ func resetPHPFoundationRuntimesForTest(t *testing.T) func() {
 	phpRuntimeSupervisorRt = nil
 	phpRuntimeSupervisorMu.Unlock()
 
+	psgiRuntimeSupervisorMu.Lock()
+	prevPSGISupervisor := psgiRuntimeSupervisorRt
+	psgiRuntimeSupervisorRt = nil
+	psgiRuntimeSupervisorMu.Unlock()
+
 	phpRuntimeMaterializationMu.Lock()
 	prevMaterialized := phpRuntimeMaterialized
 	phpRuntimeMaterialized = nil
 	phpRuntimeMaterializationMu.Unlock()
+
+	psgiRuntimeMaterializationMu.Lock()
+	prevPSGIMaterialized := psgiRuntimeMaterialized
+	psgiRuntimeMaterialized = nil
+	psgiRuntimeMaterializationMu.Unlock()
 
 	scheduledTaskRuntimeMu.Lock()
 	prevScheduledTasks := scheduledTaskRt
@@ -1322,6 +1337,10 @@ func resetPHPFoundationRuntimesForTest(t *testing.T) func() {
 		phpRuntimeInventoryMu.Lock()
 		phpRuntimeInventoryRt = prevInventory
 		phpRuntimeInventoryMu.Unlock()
+
+		psgiRuntimeInventoryMu.Lock()
+		psgiRuntimeInventoryRt = prevPSGIInventory
+		psgiRuntimeInventoryMu.Unlock()
 
 		vhostRuntimeMu.Lock()
 		vhostRt = prevVhost
@@ -1343,9 +1362,21 @@ func resetPHPFoundationRuntimesForTest(t *testing.T) func() {
 			_ = currentSupervisor.shutdown()
 		}
 
+		psgiRuntimeSupervisorMu.Lock()
+		currentPSGISupervisor := psgiRuntimeSupervisorRt
+		psgiRuntimeSupervisorRt = prevPSGISupervisor
+		psgiRuntimeSupervisorMu.Unlock()
+		if currentPSGISupervisor != nil {
+			_ = currentPSGISupervisor.shutdown()
+		}
+
 		phpRuntimeMaterializationMu.Lock()
 		phpRuntimeMaterialized = prevMaterialized
 		phpRuntimeMaterializationMu.Unlock()
+
+		psgiRuntimeMaterializationMu.Lock()
+		psgiRuntimeMaterialized = prevPSGIMaterialized
+		psgiRuntimeMaterializationMu.Unlock()
 
 		scheduledTaskRuntimeMu.Lock()
 		scheduledTaskRt = prevScheduledTasks

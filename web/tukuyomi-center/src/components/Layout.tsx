@@ -37,6 +37,22 @@ function isActive(pathname: string, to: string) {
   return pathname === to || pathname.startsWith(`${to}/`);
 }
 
+function selectedDeviceIDFromPath(pathname: string) {
+  const match = pathname.match(/^\/device-approvals\/devices\/([^/]+)$/);
+  if (!match) {
+    return "";
+  }
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+function deviceDetailPath(deviceID: string) {
+  return `/device-approvals/devices/${encodeURIComponent(deviceID)}`;
+}
+
 function formatSessionTime(value: string | undefined, locale: string) {
   if (!value) {
     return "";
@@ -54,6 +70,7 @@ export default function Layout() {
   const { logout, session, loading } = useAuth();
   const navItems = [...navGroups.flatMap((group) => group.items), ...utilityNavItems];
   const current = navItems.find((item) => isActive(pathname, item.to));
+  const selectedDeviceID = selectedDeviceIDFromPath(pathname);
   const currentGroup =
     navGroups.find((group) => group.items.some((item) => isActive(pathname, item.to))) ||
     (current ? { id: "user", label: current.label, hint: current.hint, items: [current] } : navGroups[0]);
@@ -75,13 +92,21 @@ export default function Layout() {
               </div>
               <div className="app-nav-group-links">
                 {group.items.map((item) => (
-                  <Link
-                    key={item.to}
-                    to={item.to}
-                    className={isActive(pathname, item.to) ? "app-nav-link active" : "app-nav-link"}
-                  >
-                    <span className="app-nav-label">{tx(item.label)}</span>
-                  </Link>
+                  <div key={item.to} className="app-nav-item-block">
+                    <Link to={item.to} className={isActive(pathname, item.to) ? "app-nav-link active" : "app-nav-link"}>
+                      <span className="app-nav-label">{tx(item.label)}</span>
+                    </Link>
+                    {item.to === "/device-approvals" && selectedDeviceID ? (
+                      <Link
+                        to={deviceDetailPath(selectedDeviceID)}
+                        className="app-nav-link app-nav-sublink active"
+                        title={selectedDeviceID}
+                      >
+                        <span className="app-nav-sublabel">{tx("Selected device")}</span>
+                        <span className="app-nav-label">{selectedDeviceID}</span>
+                      </Link>
+                    ) : null}
+                  </div>
                 ))}
               </div>
             </section>

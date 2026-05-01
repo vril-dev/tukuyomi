@@ -1,46 +1,47 @@
-# tukuyomi Listener Topology
+# tukuyomi リスナー構成
 
-この文書は、`tukuyomi` の listener topology に関する現時点の判断をまとめたものです。
+この文書では、`tukuyomi` のリスナー構成について、現時点の採用方針をまとめます。
 
-## 現在の判断
+## 採用方針
 
-- supported runtime は single TCP listener のまま維持する
-- 任意の HTTP redirect listener は single-socket のままにする
-- built-in HTTP/3 listener は single UDP socket のままにする
-- 現時点では `SO_REUSEPORT` / multi-listener fan-out は採用しない
-- public HTTP/1.1 data-plane listener は Tukuyomi native HTTP/1.1 server で処理し、admin listener は分離した control-plane server path のままにする
+- サポート対象の実行構成は、TCP リスナー 1 本の構成を維持する
+- 任意で有効化する HTTP リダイレクト用リスナーも、単一ソケット構成とする
+- 内蔵 HTTP/3 リスナーは、UDP ソケット 1 本の構成とする
+- 現時点では `SO_REUSEPORT` / 複数リスナーへの accept 分散は採用しない
+- 公開側 HTTP/1.1 のデータプレーンリスナーは、`tukuyomi` 内蔵の HTTP/1.1 サーバーで処理する
+- 管理側リスナーは、公開側とは分離したコントロールプレーンサーバー経路のままにする
 
-現時点の答えは no です。`tukuyomi` に lower-level な listener fan-out knob は追加しません。
+結論として、現時点の `tukuyomi` には、低レイヤーのリスナー分散を操作する設定項目は追加しません。
 
-## 評価止まりにした理由
+## 評価段階に留める理由
 
-`SO_REUSEPORT` / multi-listener の試作を実際に review まで進めましたが、安全かつ一貫した改善が確認できませんでした。
+`SO_REUSEPORT` / 複数リスナー構成の試作を検証しましたが、安全で一貫した改善は確認できませんでした。
 
-review で確認したこと:
+検証で確認した内容は次のとおりです。
 
-- Docker の port publish を使った smoke で `connection reset by peer` が出ることがあった
-- local benchmark でも workload による偏りが強く、安定した改善ではなく大きな regression が出るケースがあった
-- `tukuyomi` は WAF inspection、routing、retry/health、compression、cache でも時間を使うので、TCP accept fan-out が最初の bottleneck とは限らない
+- Docker のポート公開を使ったスモークテストで、`connection reset by peer` が発生することがあった
+- ローカルベンチマークでは負荷条件による偏りが大きく、安定した性能改善ではなく、大きな性能低下が出るケースがあった
+- `tukuyomi` は WAF 検査、ルーティング、リトライ / ヘルス判定、圧縮、キャッシュ処理にも時間を使うため、TCP accept の分散が最初に解くべきボトルネックとは限らない
 
-そのため、現時点の `tukuyomi` は single-listener topology を supported runtime とします。
+そのため、現時点の `tukuyomi` では、単一リスナー構成をサポート対象の実行構成とします。
 
 ## 当面の方針
 
-- 既定の single-listener topology を維持する
-- throughput 調整は、まず `make bench` と transport metrics で詰める
-- listener fan-out を再検討する前に、upstream transport tuning、cache、compression、backpressure を優先する
+- 既定の単一リスナー構成を維持する
+- スループットを調整する場合は、まず `make bench` とトランスポートメトリクスで状況を確認する
+- リスナー分散を再検討する前に、上流向けトランスポート設定、キャッシュ、圧縮、バックプレッシャーを優先して見直す
 
 ## 再検討条件
 
-今後 listener fan-out を再導入するなら、少なくとも次が必要です。
+今後リスナー分散を再導入する場合は、少なくとも次の条件を満たす必要があります。
 
-- 対象 host class で再現可能な benchmark 改善
-- Docker / published-port でも素直に通る smoke
-- bottleneck が upstream/WAF ではなく listener accept 分散にあるという根拠
+- 対象となるホスト構成で、再現可能なベンチマーク改善があること
+- Docker のポート公開を使ったスモークテストが安定して通ること
+- 主なボトルネックが上流通信や WAF 処理ではなく、リスナーの accept 分散にあると説明できること
 
 ## 関連文書
 
-- benchmark baseline: [benchmark-baseline.ja.md](benchmark-baseline.ja.md)
-- reuse-port evaluation: [reuseport-evaluation.ja.md](reuseport-evaluation.ja.md)
-- reuse-port host matrix and policy: [reuseport-policy.ja.md](reuseport-policy.ja.md)
-- HTTP/3 public-entry smoke: [http3-public-entry-smoke.ja.md](http3-public-entry-smoke.ja.md)
+- ベンチマーク基準値: [benchmark-baseline.ja.md](benchmark-baseline.ja.md)
+- reuse-port 評価: [reuseport-evaluation.ja.md](reuseport-evaluation.ja.md)
+- reuse-port のホスト別方針: [reuseport-policy.ja.md](reuseport-policy.ja.md)
+- HTTP/3 公開エントリポイント スモークテスト: [http3-public-entry-smoke.ja.md](http3-public-entry-smoke.ja.md)

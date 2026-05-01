@@ -1,6 +1,7 @@
 package center
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -26,11 +27,34 @@ type enrollmentTokenCreateRequest struct {
 	ExpiresAtUnix int64  `json:"expires_at_unix"`
 }
 
+type runtimeAssignmentRequest struct {
+	RuntimeFamily    string `json:"runtime_family"`
+	RuntimeID        string `json:"runtime_id"`
+	ArtifactRevision string `json:"artifact_revision"`
+	Reason           string `json:"reason"`
+}
+
+type runtimeAssignmentClearRequest struct {
+	RuntimeFamily string `json:"runtime_family"`
+	RuntimeID     string `json:"runtime_id"`
+}
+
+type runtimeAssignmentRemovalRequest struct {
+	RuntimeFamily string `json:"runtime_family"`
+	RuntimeID     string `json:"runtime_id"`
+	Reason        string `json:"reason"`
+}
+
+type runtimeArtifactImportRequest struct {
+	ArtifactB64 string `json:"artifact_b64"`
+}
+
 func registerDeviceEnrollmentRoutes(r *gin.Engine) {
 	r.POST("/v1/enroll", postDeviceEnrollment)
 	r.POST("/v1/device-status", postDeviceStatus)
 	r.POST("/v1/device-config-snapshot", postDeviceConfigSnapshot)
 	r.POST("/v1/rule-artifact-bundle", postRuleArtifactBundle)
+	r.POST("/v1/runtime-artifact-download", postRuntimeArtifactDownload)
 }
 
 func registerCenterDeviceAdminRoutes(api *gin.RouterGroup) {
@@ -40,6 +64,11 @@ func registerCenterDeviceAdminRoutes(api *gin.RouterGroup) {
 	api.GET("/devices/:device_id/config-snapshot", getCenterDeviceConfigSnapshot)
 	api.GET("/devices/:device_id/config-snapshots", getCenterDeviceConfigSnapshots)
 	api.GET("/devices/:device_id/config-snapshots/:revision", getCenterDeviceConfigSnapshotRevision)
+	api.GET("/devices/:device_id/runtime-deployment", getCenterDeviceRuntimeDeployment)
+	api.POST("/devices/:device_id/runtime-assignments", postCenterDeviceRuntimeAssignment)
+	api.POST("/devices/:device_id/runtime-assignments/remove", postCenterDeviceRuntimeAssignmentRemoval)
+	api.POST("/devices/:device_id/runtime-assignments/clear", postCenterDeviceRuntimeAssignmentClear)
+	api.POST("/runtime-artifacts/import", postCenterRuntimeArtifactImport)
 	api.GET("/devices/enrollments", getCenterDeviceEnrollments)
 	api.POST("/devices/enrollments/:enrollment_id/approve", postCenterDeviceEnrollmentApprove)
 	api.POST("/devices/enrollments/:enrollment_id/reject", postCenterDeviceEnrollmentReject)
@@ -100,7 +129,7 @@ func postDeviceEnrollment(c *gin.Context) {
 }
 
 func postDeviceStatus(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8*1024)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxDeviceStatusBodyBytes)
 	decoder := json.NewDecoder(c.Request.Body)
 	decoder.DisallowUnknownFields()
 	var req DeviceStatusRequest
@@ -136,23 +165,44 @@ func postDeviceStatus(c *gin.Context) {
 		return
 	}
 	checkedAt := time.Now().UTC().Unix()
+	runtimeAssignments := []RuntimeDeviceAssignment{}
 	if record.FromApprovedDevice {
 		if err := TouchApprovedDeviceHeartbeat(c.Request.Context(), verified.DeviceID, checkedAt, DeviceRuntimeInventory{
-			RuntimeRole:  verified.RuntimeRole,
-			BuildVersion: verified.BuildVersion,
-			GoVersion:    verified.GoVersion,
+			RuntimeRole:                verified.RuntimeRole,
+			BuildVersion:               verified.BuildVersion,
+			GoVersion:                  verified.GoVersion,
+			OS:                         verified.OS,
+			Arch:                       verified.Arch,
+			KernelVersion:              verified.KernelVersion,
+			DistroID:                   verified.DistroID,
+			DistroIDLike:               verified.DistroIDLike,
+			DistroVersion:              verified.DistroVersion,
+			RuntimeDeploymentSupported: verified.RuntimeDeploymentSupported,
+			RuntimeInventory:           verified.RuntimeInventory,
 		}); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update device last seen"})
 			return
 		}
+		if record.Status == DeviceStatusApproved && verified.RuntimeDeploymentSupported {
+			assignments, err := PendingRuntimeAssignmentsForDevice(c.Request.Context(), verified.DeviceID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load runtime assignments"})
+				return
+			}
+			runtimeAssignments = assignments
+		}
 	}
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"status":          record.Status,
 		"device_id":       verified.DeviceID,
 		"key_id":          verified.KeyID,
 		"product_id":      record.ProductID,
 		"checked_at_unix": checkedAt,
-	})
+	}
+	if len(runtimeAssignments) > 0 {
+		resp["runtime_assignments"] = runtimeAssignments
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func postDeviceConfigSnapshot(c *gin.Context) {
@@ -307,6 +357,77 @@ func postRuleArtifactBundle(c *gin.Context) {
 	})
 }
 
+func postRuntimeArtifactDownload(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxRuntimeArtifactDownloadBodyBytes)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req RuntimeArtifactDownloadRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime artifact download payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime artifact download payload"})
+		return
+	}
+	normalizedReq, _, err := normalizeRuntimeArtifactDownloadRequest(req, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	req = normalizedReq
+	record, err := LookupDeviceStatus(c.Request.Context(), req.DeviceID, req.KeyID, req.PublicKeyFingerprintSHA256)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrDeviceStatusNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "device status not found"})
+		case errors.Is(err, ErrDeviceStatusKeyMismatch):
+			c.JSON(http.StatusForbidden, gin.H{"error": "device key mismatch"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load device status"})
+		}
+		return
+	}
+	if !record.FromApprovedDevice || record.Status != DeviceStatusApproved {
+		c.JSON(http.StatusForbidden, gin.H{"error": "device is not approved"})
+		return
+	}
+	verified, err := VerifyRuntimeArtifactDownloadRequest(req, record.PublicKeyPEM, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	artifact, body, err := RuntimeArtifactDownloadForDevice(
+		c.Request.Context(),
+		verified.DeviceID,
+		verified.RuntimeFamily,
+		verified.RuntimeID,
+		verified.ArtifactRevision,
+		verified.ArtifactHash,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrDeviceStatusNotFound), errors.Is(err, ErrRuntimeArtifactNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "runtime artifact not found"})
+		case errors.Is(err, ErrRuntimeArtifactIncompatible):
+			c.JSON(http.StatusForbidden, gin.H{"error": "runtime artifact is not assigned to this device"})
+		case errors.Is(err, ErrRuntimeArtifactInvalid):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "runtime artifact storage is invalid"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load runtime artifact"})
+		}
+		return
+	}
+	filename := artifact.RuntimeID + "-" + artifact.ArtifactRevision[:12] + ".tar.gz"
+	c.Header("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	c.Header("Content-Length", strconv.FormatInt(int64(len(body)), 10))
+	c.Header("X-Tukuyomi-Runtime-Family", artifact.RuntimeFamily)
+	c.Header("X-Tukuyomi-Runtime-ID", artifact.RuntimeID)
+	c.Header("X-Tukuyomi-Runtime-Artifact-Revision", artifact.ArtifactRevision)
+	c.Header("X-Tukuyomi-Runtime-Artifact-Hash", artifact.ArtifactHash)
+	c.Data(http.StatusOK, "application/gzip", body)
+}
+
 func getCenterDevices(c *gin.Context) {
 	devices, err := ListDevices(c.Request.Context(), parseBoolQuery(c.Query("include_archived")))
 	if err != nil {
@@ -414,6 +535,165 @@ func postCenterDeviceArchive(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"device": record})
+}
+
+func getCenterDeviceRuntimeDeployment(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	view, err := RuntimeDeploymentForDevice(c.Request.Context(), deviceID)
+	if err != nil {
+		if errors.Is(err, ErrDeviceStatusNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "device not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load runtime deployment"})
+		return
+	}
+	c.JSON(http.StatusOK, view)
+}
+
+func postCenterDeviceRuntimeAssignment(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8*1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req runtimeAssignmentRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime assignment payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime assignment payload"})
+		return
+	}
+	record, err := AssignRuntimeArtifactToDevice(c.Request.Context(), RuntimeAssignmentUpdate{
+		DeviceID:         deviceID,
+		RuntimeFamily:    req.RuntimeFamily,
+		RuntimeID:        req.RuntimeID,
+		ArtifactRevision: req.ArtifactRevision,
+		Reason:           req.Reason,
+		AssignedBy:       centerAdminActor(c),
+	})
+	if err != nil {
+		respondRuntimeAssignmentError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"assignment": record})
+}
+
+func postCenterDeviceRuntimeAssignmentClear(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8*1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req runtimeAssignmentClearRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime assignment payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime assignment payload"})
+		return
+	}
+	cleared, err := ClearRuntimeAssignment(c.Request.Context(), deviceID, req.RuntimeFamily, req.RuntimeID)
+	if err != nil {
+		respondRuntimeAssignmentError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"cleared": cleared})
+}
+
+func postCenterDeviceRuntimeAssignmentRemoval(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8*1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req runtimeAssignmentRemovalRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime assignment payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime assignment payload"})
+		return
+	}
+	record, err := RequestRuntimeRemovalForDevice(c.Request.Context(), RuntimeAssignmentUpdate{
+		DeviceID:      deviceID,
+		RuntimeFamily: req.RuntimeFamily,
+		RuntimeID:     req.RuntimeID,
+		Reason:        req.Reason,
+		AssignedBy:    centerAdminActor(c),
+	})
+	if err != nil {
+		respondRuntimeAssignmentError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"assignment": record})
+}
+
+func postCenterRuntimeArtifactImport(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxRuntimeArtifactImportBodyBytes)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req runtimeArtifactImportRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime artifact import payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime artifact import payload"})
+		return
+	}
+	compressed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(req.ArtifactB64))
+	if err != nil || len(compressed) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime artifact import payload"})
+		return
+	}
+	record, err := StoreRuntimeArtifactBundle(c.Request.Context(), compressed, centerAdminActor(c))
+	if err != nil {
+		if errors.Is(err, ErrRuntimeArtifactInvalid) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to import runtime artifact"})
+		return
+	}
+	status := "stored"
+	code := http.StatusCreated
+	if !record.Stored {
+		status = "duplicate"
+		code = http.StatusOK
+	}
+	c.JSON(code, gin.H{
+		"status":   status,
+		"artifact": record,
+	})
+}
+
+func respondRuntimeAssignmentError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrDeviceStatusNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "device not found"})
+	case errors.Is(err, ErrRuntimeArtifactNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "runtime artifact not found"})
+	case errors.Is(err, ErrRuntimeArtifactInvalid):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runtime assignment payload"})
+	case errors.Is(err, ErrRuntimeArtifactIncompatible):
+		c.JSON(http.StatusConflict, gin.H{"error": "runtime artifact is incompatible with device"})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update runtime assignment"})
+	}
 }
 
 func getCenterDeviceEnrollments(c *gin.Context) {

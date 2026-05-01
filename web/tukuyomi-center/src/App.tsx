@@ -69,6 +69,7 @@ function CenterRoutes() {
         <Route index element={<Navigate to="/status" replace />} />
         <Route path="status" element={<StatusPage />} />
         <Route path="device-approvals" element={<DeviceApprovalsPage focusApprovals />} />
+        <Route path="device-approvals/devices/:deviceID" element={<DeviceApprovalsPage />} />
         <Route
           path="user"
           element={<UserPage onPasswordChanged={() => setLoginNoticeKey("Password changed. Sign in again.")} />}

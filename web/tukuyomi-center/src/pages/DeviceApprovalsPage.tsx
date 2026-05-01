@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { apiGetJson, apiPostJson } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -22,6 +23,26 @@ type EnrollmentListResponse = {
   enrollments?: EnrollmentRecord[];
 };
 
+type DeviceRuntimeSummary = {
+  runtime_family: string;
+  runtime_id: string;
+  display_name?: string;
+  detected_version?: string;
+  source?: string;
+  available: boolean;
+  availability_message?: string;
+  module_count: number;
+  usage_reported: boolean;
+  app_count: number;
+  generated_targets?: string[];
+  process_running: boolean;
+  artifact_revision?: string;
+  artifact_hash?: string;
+  apply_state?: string;
+  apply_error?: string;
+  updated_at_unix: number;
+};
+
 type DeviceRecord = {
   device_id: string;
   key_id: string;
@@ -31,6 +52,14 @@ type DeviceRecord = {
   runtime_role?: string;
   build_version?: string;
   go_version?: string;
+  os?: string;
+  arch?: string;
+  kernel_version?: string;
+  distro_id?: string;
+  distro_id_like?: string;
+  distro_version?: string;
+  runtime_deployment_supported?: boolean;
+  runtime_inventory?: DeviceRuntimeSummary[];
   enrollment_token_id?: number;
   enrollment_token_prefix?: string;
   enrollment_token_label?: string;
@@ -74,6 +103,72 @@ type DeviceConfigSnapshotListResponse = {
   limit: number;
   offset: number;
   next_offset: number;
+};
+
+type RuntimeTargetKey = {
+  os?: string;
+  arch?: string;
+  kernel_version?: string;
+  distro_id?: string;
+  distro_id_like?: string;
+  distro_version?: string;
+};
+
+type RuntimeArtifactRecord = {
+  artifact_revision: string;
+  artifact_hash: string;
+  runtime_family: string;
+  runtime_id: string;
+  detected_version?: string;
+  target?: RuntimeTargetKey;
+  compressed_size: number;
+  uncompressed_size: number;
+  file_count: number;
+  storage_state: string;
+  builder_version?: string;
+  builder_profile?: string;
+  created_by?: string;
+  created_at_unix: number;
+};
+
+type RuntimeAssignmentRecord = {
+  assignment_id: number;
+  device_id: string;
+  runtime_family: string;
+  runtime_id: string;
+  desired_artifact_revision: string;
+  desired_state: string;
+  reason?: string;
+  assigned_by?: string;
+  assigned_at_unix: number;
+  updated_at_unix: number;
+  artifact_hash: string;
+  compressed_size: number;
+  uncompressed_size: number;
+  file_count: number;
+  detected_version?: string;
+  storage_state: string;
+  target?: RuntimeTargetKey;
+};
+
+type RuntimeApplyStatusRecord = {
+  device_id: string;
+  runtime_family: string;
+  runtime_id: string;
+  desired_artifact_revision?: string;
+  local_artifact_revision?: string;
+  local_artifact_hash?: string;
+  apply_state?: string;
+  apply_error?: string;
+  last_attempt_at_unix: number;
+  updated_at_unix: number;
+};
+
+type RuntimeDeploymentResponse = {
+  device?: DeviceRecord;
+  artifacts?: RuntimeArtifactRecord[];
+  assignments?: RuntimeAssignmentRecord[];
+  apply_status?: RuntimeApplyStatusRecord[];
 };
 
 type EnrollmentTokenRecord = {
@@ -183,6 +278,31 @@ function formatBytes(value: number) {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function platformLabel(device: DeviceRecord) {
+  const distro = [device.distro_id, device.distro_version].filter(Boolean).join(" ");
+  const os = distro || device.os || "";
+  return [os, device.arch].filter(Boolean).join(" / ") || "-";
+}
+
+function platformTitle(device: DeviceRecord) {
+  return [
+    [device.os, device.arch].filter(Boolean).join("/"),
+    [device.distro_id, device.distro_version].filter(Boolean).join(" "),
+    device.distro_id_like ? `like: ${device.distro_id_like}` : "",
+    device.kernel_version ? `kernel: ${device.kernel_version}` : "",
+  ]
+    .filter(Boolean)
+    .join(" | ");
+}
+
+function runtimeTargetLabel(target?: RuntimeTargetKey) {
+  if (!target) {
+    return "-";
+  }
+  const distro = [target.distro_id, target.distro_version].filter(Boolean).join(" ");
+  return [distro || target.os, target.arch].filter(Boolean).join(" / ") || "-";
+}
+
 function configSnapshotDownloadPath(device: DeviceRecord) {
   return `${getAPIBasePath()}/devices/${encodeURIComponent(device.device_id)}/config-snapshot`;
 }
@@ -192,8 +312,15 @@ function configSnapshotRevisionPath(deviceID: string, revision: string, download
   return `${getAPIBasePath()}/devices/${encodeURIComponent(deviceID)}/config-snapshots/${encodeURIComponent(revision)}${suffix}`;
 }
 
+function deviceDetailPath(deviceID: string) {
+  return `/device-approvals/devices/${encodeURIComponent(deviceID)}`;
+}
+
 export default function DeviceApprovalsPage({ focusApprovals = false }: { focusApprovals?: boolean }) {
   const { locale, tx } = useI18n();
+  const navigate = useNavigate();
+  const { deviceID: routeDeviceID = "" } = useParams();
+  const selectedDeviceID = routeDeviceID || "";
   const approvalRef = useRef<HTMLElement | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -210,13 +337,18 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
   const [tokenMessageTone, setTokenMessageTone] = useState<"success" | "error">("success");
   const [showHiddenTokens, setShowHiddenTokens] = useState(false);
   const [showArchivedDevices, setShowArchivedDevices] = useState(false);
-  const [managedDevice, setManagedDevice] = useState<DeviceRecord | null>(null);
   const [configSnapshots, setConfigSnapshots] = useState<DeviceConfigSnapshotRecord[]>([]);
   const [configSnapshotOffset, setConfigSnapshotOffset] = useState(0);
   const [configSnapshotNextOffset, setConfigSnapshotNextOffset] = useState(0);
   const [configSnapshotLoading, setConfigSnapshotLoading] = useState(false);
   const [configSnapshotMessage, setConfigSnapshotMessage] = useState("");
   const [configSnapshotViewer, setConfigSnapshotViewer] = useState<{ revision: string; payload: string } | null>(null);
+  const [runtimeDeployment, setRuntimeDeployment] = useState<RuntimeDeploymentResponse | null>(null);
+  const [runtimeDeploymentLoading, setRuntimeDeploymentLoading] = useState(false);
+  const [runtimeDeploymentMessage, setRuntimeDeploymentMessage] = useState("");
+  const [assigningRuntimeKey, setAssigningRuntimeKey] = useState("");
+  const [removingRuntimeKey, setRemovingRuntimeKey] = useState("");
+  const [clearingRuntimeKey, setClearingRuntimeKey] = useState("");
   const [tokenForm, setTokenForm] = useState({
     label: "",
     maxUses: String(DEFAULT_ENROLLMENT_TOKEN_MAX_USES),
@@ -227,10 +359,11 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
     setLoading(true);
     setMessage("");
     try {
+      const deviceListPath = showArchivedDevices || selectedDeviceID ? "/devices?include_archived=1" : "/devices";
       const [enrollmentData, tokenData, deviceData] = await Promise.all([
         apiGetJson<EnrollmentListResponse>("/devices/enrollments?status=pending&limit=50"),
         apiGetJson<EnrollmentTokenListResponse>("/enrollment-tokens?limit=500"),
-        apiGetJson<DeviceListResponse>(showArchivedDevices ? "/devices?include_archived=1" : "/devices"),
+        apiGetJson<DeviceListResponse>(deviceListPath),
       ]);
       setEnrollments(Array.isArray(enrollmentData.enrollments) ? enrollmentData.enrollments : []);
       setTokens(Array.isArray(tokenData.tokens) ? tokenData.tokens : []);
@@ -241,7 +374,7 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
     } finally {
       setLoading(false);
     }
-  }, [showArchivedDevices, tx]);
+  }, [selectedDeviceID, showArchivedDevices, tx]);
 
   useEffect(() => {
     void load();
@@ -277,7 +410,36 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
     [tx],
   );
 
+  const managedDevice = useMemo(() => {
+    if (!selectedDeviceID) {
+      return null;
+    }
+    return devices.find((device) => device.device_id === selectedDeviceID) || null;
+  }, [devices, selectedDeviceID]);
   const managedDeviceID = managedDevice?.device_id || "";
+
+  const loadRuntimeDeployment = useCallback(
+    async (deviceID: string) => {
+      setRuntimeDeploymentLoading(true);
+      setRuntimeDeploymentMessage("");
+      try {
+        const data = await apiGetJson<RuntimeDeploymentResponse>(`/devices/${encodeURIComponent(deviceID)}/runtime-deployment`);
+        setRuntimeDeployment({
+          device: data.device,
+          artifacts: Array.isArray(data.artifacts) ? data.artifacts : [],
+          assignments: Array.isArray(data.assignments) ? data.assignments : [],
+          apply_status: Array.isArray(data.apply_status) ? data.apply_status : [],
+        });
+      } catch (err) {
+        const fallback = tx("Failed to load runtime deployment");
+        setRuntimeDeployment(null);
+        setRuntimeDeploymentMessage(err instanceof Error ? err.message || fallback : fallback);
+      } finally {
+        setRuntimeDeploymentLoading(false);
+      }
+    },
+    [tx],
+  );
 
   useEffect(() => {
     if (!managedDeviceID) {
@@ -286,10 +448,19 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
       setConfigSnapshotNextOffset(0);
       setConfigSnapshotMessage("");
       setConfigSnapshotViewer(null);
+      setRuntimeDeployment(null);
+      setRuntimeDeploymentMessage("");
       return;
     }
     void loadConfigSnapshots(managedDeviceID, configSnapshotOffset);
   }, [managedDeviceID, configSnapshotOffset, loadConfigSnapshots]);
+
+  useEffect(() => {
+    if (!managedDeviceID) {
+      return;
+    }
+    void loadRuntimeDeployment(managedDeviceID);
+  }, [managedDeviceID, loadRuntimeDeployment]);
 
   async function viewConfigSnapshot(deviceID: string, revision: string) {
     setConfigSnapshotMessage("");
@@ -304,22 +475,26 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
     }
   }
 
-  function openDeviceActions(device: DeviceRecord) {
+  function resetDeviceActionState() {
     setConfigSnapshotOffset(0);
     setConfigSnapshotNextOffset(0);
     setConfigSnapshots([]);
     setConfigSnapshotMessage("");
     setConfigSnapshotViewer(null);
-    setManagedDevice(device);
+    setRuntimeDeployment(null);
+    setRuntimeDeploymentMessage("");
+    setAssigningRuntimeKey("");
+    setClearingRuntimeKey("");
+  }
+
+  function openDeviceActions(device: DeviceRecord) {
+    resetDeviceActionState();
+    navigate(deviceDetailPath(device.device_id));
   }
 
   function closeDeviceActions() {
-    setManagedDevice(null);
-    setConfigSnapshotOffset(0);
-    setConfigSnapshotNextOffset(0);
-    setConfigSnapshots([]);
-    setConfigSnapshotMessage("");
-    setConfigSnapshotViewer(null);
+    resetDeviceActionState();
+    navigate("/device-approvals");
   }
 
   async function decide(enrollmentID: number, action: "approve" | "reject") {
@@ -414,6 +589,73 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
     }
   }
 
+  async function assignRuntimeArtifact(artifact: RuntimeArtifactRecord) {
+    if (!managedDeviceID) {
+      return;
+    }
+    const key = `${artifact.runtime_family}:${artifact.runtime_id}:${artifact.artifact_revision}`;
+    setAssigningRuntimeKey(key);
+    setRuntimeDeploymentMessage("");
+    try {
+      await apiPostJson(`/devices/${encodeURIComponent(managedDeviceID)}/runtime-assignments`, {
+        runtime_family: artifact.runtime_family,
+        runtime_id: artifact.runtime_id,
+        artifact_revision: artifact.artifact_revision,
+        reason: "assigned from center ui",
+      });
+      await loadRuntimeDeployment(managedDeviceID);
+    } catch (err) {
+      const fallback = tx("Failed to assign runtime artifact");
+      setRuntimeDeploymentMessage(err instanceof Error ? err.message || fallback : fallback);
+    } finally {
+      setAssigningRuntimeKey("");
+    }
+  }
+
+  async function clearRuntimeAssignment(assignment: RuntimeAssignmentRecord) {
+    if (!managedDeviceID) {
+      return;
+    }
+    const key = `${assignment.runtime_family}:${assignment.runtime_id}`;
+    setClearingRuntimeKey(key);
+    setRuntimeDeploymentMessage("");
+    try {
+      await apiPostJson(`/devices/${encodeURIComponent(managedDeviceID)}/runtime-assignments/clear`, {
+        runtime_family: assignment.runtime_family,
+        runtime_id: assignment.runtime_id,
+      });
+      await loadRuntimeDeployment(managedDeviceID);
+    } catch (err) {
+      const fallback = tx("Failed to clear runtime assignment");
+      setRuntimeDeploymentMessage(err instanceof Error ? err.message || fallback : fallback);
+    } finally {
+      setClearingRuntimeKey("");
+    }
+  }
+
+  async function requestRuntimeRemoval(runtime: DeviceRuntimeSummary) {
+    if (!managedDeviceID) {
+      return;
+    }
+    const key = `${runtime.runtime_family}:${runtime.runtime_id}`;
+    setRemovingRuntimeKey(key);
+    setRuntimeDeploymentMessage("");
+    try {
+      await apiPostJson(`/devices/${encodeURIComponent(managedDeviceID)}/runtime-assignments/remove`, {
+        runtime_family: runtime.runtime_family,
+        runtime_id: runtime.runtime_id,
+        reason: "removal requested from center ui",
+      });
+      await load();
+      await loadRuntimeDeployment(managedDeviceID);
+    } catch (err) {
+      const fallback = tx("Failed to request runtime removal");
+      setRuntimeDeploymentMessage(err instanceof Error ? err.message || fallback : fallback);
+    } finally {
+      setRemovingRuntimeKey("");
+    }
+  }
+
   const linkedTokenRefs = useMemo(() => {
     const ids = new Set<number>();
     const prefixes = new Set<string>();
@@ -455,6 +697,413 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
   });
   const hiddenTokenCount = tokens.length - visibleByDefaultTokens.length;
   const visibleTokens = showHiddenTokens ? tokens : visibleByDefaultTokens;
+  const runtimeAssignments = runtimeDeployment?.assignments || [];
+  const runtimeArtifacts = runtimeDeployment?.artifacts || [];
+  const runtimeApplyStatus = runtimeDeployment?.apply_status || [];
+  const runtimeStatusByKey = new Map<string, RuntimeApplyStatusRecord>(
+    runtimeApplyStatus.map((item) => [`${item.runtime_family}:${item.runtime_id}`, item] as const),
+  );
+  const assignedRevisionByKey = new Map<string, string>(
+    runtimeAssignments.map((item) => [`${item.runtime_family}:${item.runtime_id}`, item.desired_artifact_revision] as const),
+  );
+  const runtimeAssignmentByKey = new Map<string, RuntimeAssignmentRecord>(
+    runtimeAssignments.map((item) => [`${item.runtime_family}:${item.runtime_id}`, item] as const),
+  );
+
+  if (selectedDeviceID) {
+    return (
+      <div className="content-panel">
+        <section className="content-section device-detail-page">
+          <div className="section-header">
+            <div>
+              <h2 className="section-title">{tx("Device actions")}</h2>
+              <p className="section-note device-detail-id">{selectedDeviceID}</p>
+              {loading ? <p className="section-note">{tx("Loading device details...")}</p> : null}
+            </div>
+            <button type="button" className="secondary" onClick={closeDeviceActions}>
+              {tx("Back to registered devices")}
+            </button>
+          </div>
+          {message ? <p className="form-message error">{message}</p> : null}
+          {!loading && !managedDevice ? <div className="empty">{tx("Device not found.")}</div> : null}
+          {managedDevice ? (
+            <>
+              <div className="summary-grid">
+                <div>
+                  <span>{tx("Status")}</span>
+                  <strong>{tx(managedDevice.status || "-")}</strong>
+                </div>
+                <div>
+                  <span>{tx("Config received")}</span>
+                  <strong>{formatUnixTime(managedDevice.config_snapshot_at_unix, locale)}</strong>
+                </div>
+                <div>
+                  <span>{tx("Last seen")}</span>
+                  <strong>{formatUnixTime(managedDevice.last_seen_at_unix, locale)}</strong>
+                </div>
+              </div>
+              <div className="device-actions">
+                {managedDevice.config_snapshot_revision ? (
+                  <a className="button-link" href={configSnapshotDownloadPath(managedDevice)}>
+                    {tx("Config download")}
+                  </a>
+                ) : (
+                  <span className="section-note">{tx("No config snapshot received.")}</span>
+                )}
+                {managedDevice.status === "approved" ? (
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={() => void revokeDevice(managedDevice.device_id)}
+                    disabled={revokingDeviceID === managedDevice.device_id}
+                  >
+                    {revokingDeviceID === managedDevice.device_id ? tx("Revoking...") : tx("Revoke approval")}
+                  </button>
+                ) : null}
+                {managedDevice.status === "revoked" ? (
+                  <button
+                    type="button"
+                    onClick={() => void archiveDevice(managedDevice.device_id)}
+                    disabled={archivingDeviceID === managedDevice.device_id}
+                  >
+                    {archivingDeviceID === managedDevice.device_id ? tx("Archiving...") : tx("Archive")}
+                  </button>
+                ) : null}
+              </div>
+              <div className="device-detail-section">
+                <div className="device-detail-section-header">
+                  <div>
+                    <h3>{tx("Platform details")}</h3>
+                  </div>
+                </div>
+                <div className="summary-grid platform-detail-grid">
+                  <div>
+                    <span>{tx("OS")}</span>
+                    <strong title={managedDevice.os || undefined}>{managedDevice.os || "-"}</strong>
+                  </div>
+                  <div>
+                    <span>{tx("Architecture")}</span>
+                    <strong title={managedDevice.arch || undefined}>{managedDevice.arch || "-"}</strong>
+                  </div>
+                  <div>
+                    <span>{tx("Distro ID")}</span>
+                    <strong title={managedDevice.distro_id || undefined}>{managedDevice.distro_id || "-"}</strong>
+                  </div>
+                  <div>
+                    <span>{tx("Distro version")}</span>
+                    <strong title={managedDevice.distro_version || undefined}>{managedDevice.distro_version || "-"}</strong>
+                  </div>
+                  <div>
+                    <span>{tx("Distro ID like")}</span>
+                    <strong title={managedDevice.distro_id_like || undefined}>{managedDevice.distro_id_like || "-"}</strong>
+                  </div>
+                  <div>
+                    <span>{tx("Kernel version")}</span>
+                    <strong title={managedDevice.kernel_version || undefined}>{managedDevice.kernel_version || "-"}</strong>
+                  </div>
+                </div>
+              </div>
+              <div className="device-detail-section">
+                <div className="device-detail-section-header">
+                  <div>
+                    <h3>{tx("Config snapshots")}</h3>
+                    <p className="section-note">{tx("Latest 6 snapshots are shown per page. History rows do not include JSON payloads until opened.")}</p>
+                  </div>
+                  {configSnapshotLoading ? <span className="section-note">{tx("Loading config snapshots...")}</span> : null}
+                </div>
+                <div className="table-wrap config-snapshot-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>{tx("Actions")}</th>
+                        <th>{tx("Revision")}</th>
+                        <th>{tx("Received")}</th>
+                        <th>{tx("Size")}</th>
+                        <th>{tx("Payload hash")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {configSnapshots.map((snapshot) => (
+                        <tr key={snapshot.revision}>
+                          <td className="actions-cell">
+                            <div className="inline-actions">
+                              <button type="button" onClick={() => void viewConfigSnapshot(snapshot.device_id, snapshot.revision)}>
+                                {tx("View JSON")}
+                              </button>
+                              <a className="button-link" href={configSnapshotRevisionPath(snapshot.device_id, snapshot.revision, true)}>
+                                {tx("Download JSON")}
+                              </a>
+                            </div>
+                          </td>
+                          <td title={snapshot.revision}>R: {shortRevision(snapshot.revision)}</td>
+                          <td>{formatUnixTime(snapshot.created_at_unix, locale)}</td>
+                          <td>{formatBytes(snapshot.size_bytes)}</td>
+                          <td title={snapshot.payload_hash}>H: {shortRevision(snapshot.payload_hash)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {configSnapshots.length === 0 && !configSnapshotLoading ? <div className="empty">{tx("No config snapshots.")}</div> : null}
+                </div>
+                <div className="snapshot-pager">
+                  <span className="section-note">
+                    {tx("Showing {start}-{end}", {
+                      start: configSnapshots.length ? configSnapshotOffset + 1 : 0,
+                      end: configSnapshotOffset + configSnapshots.length,
+                    })}
+                  </span>
+                  <div className="inline-actions">
+                    <button
+                      type="button"
+                      onClick={() => setConfigSnapshotOffset(Math.max(0, configSnapshotOffset - CONFIG_SNAPSHOT_PAGE_SIZE))}
+                      disabled={configSnapshotLoading || configSnapshotOffset <= 0}
+                    >
+                      {tx("Previous")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfigSnapshotOffset(configSnapshotNextOffset)}
+                      disabled={configSnapshotLoading || configSnapshotNextOffset <= 0}
+                    >
+                      {tx("Next")}
+                    </button>
+                  </div>
+                </div>
+                {configSnapshotMessage ? <p className="form-message error">{configSnapshotMessage}</p> : null}
+                {configSnapshotViewer ? (
+                  <div className="snapshot-viewer">
+                    <div className="device-detail-section-header">
+                      <div>
+                        <h3>{tx("Config JSON")}</h3>
+                        <p className="section-note">R: {shortRevision(configSnapshotViewer.revision)}</p>
+                      </div>
+                      <button type="button" className="secondary" onClick={() => setConfigSnapshotViewer(null)}>
+                        {tx("Close")}
+                      </button>
+                    </div>
+                    <pre>{configSnapshotViewer.payload}</pre>
+                  </div>
+                ) : null}
+              </div>
+              <div className="device-detail-section">
+                <div className="device-detail-section-header">
+                  <div>
+                    <h3>{tx("Runtime inventory")}</h3>
+                    <p className="section-note">
+                      {managedDevice.runtime_deployment_supported
+                        ? tx("Latest runtime summary reported by this Gateway.")
+                        : tx("This Gateway has not reported runtime deployment capability.")}
+                    </p>
+                  </div>
+                </div>
+                <div className="table-wrap runtime-summary-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>{tx("Family")}</th>
+                        <th>{tx("Runtime ID")}</th>
+                        <th>{tx("Detected version")}</th>
+                        <th>{tx("Source")}</th>
+                        <th>{tx("Available")}</th>
+                        <th>{tx("Modules")}</th>
+                        <th>{tx("Apps")}</th>
+                        <th>{tx("Process")}</th>
+                        <th>{tx("Apply state")}</th>
+                        <th>{tx("Actions")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(managedDevice.runtime_inventory || []).map((runtime) => {
+                        const runtimeKey = `${runtime.runtime_family}:${runtime.runtime_id}`;
+                        const assignment = runtimeAssignmentByKey.get(runtimeKey);
+                        const appCount = Number.isFinite(runtime.app_count) ? runtime.app_count : 0;
+                        const removalRequested = assignment?.desired_state === "removed";
+                        const removalSupported = runtime.runtime_family === "php-fpm" || runtime.runtime_family === "psgi";
+                        const canRequestRemoval =
+                          removalSupported &&
+                          runtime.available &&
+                          runtime.usage_reported &&
+                          appCount === 0 &&
+                          !runtime.process_running &&
+                          !removalRequested;
+                        const removalTitle = !runtime.usage_reported
+                          ? tx("Usage state is not reported yet.")
+                          : !removalSupported
+                            ? tx("Removal is not supported for this runtime family.")
+                            : appCount > 0
+                              ? tx("Runtime is used by apps.")
+                              : runtime.process_running
+                                ? tx("Runtime process is running.")
+                                : removalRequested
+                                  ? tx("Removal already requested.")
+                                  : undefined;
+                        return (
+                          <tr key={runtimeKey}>
+                            <td>{runtime.runtime_family || "-"}</td>
+                            <td title={runtime.display_name || runtime.runtime_id}>{runtime.runtime_id || "-"}</td>
+                            <td title={runtime.detected_version || undefined}>{runtime.detected_version || "-"}</td>
+                            <td>{runtime.source || "-"}</td>
+                            <td title={runtime.availability_message || undefined}>
+                              <span className={`token-status ${runtime.available ? "token-status-approved" : "token-status-blocked"}`}>
+                                {runtime.available ? tx("available") : tx("unavailable")}
+                              </span>
+                              {runtime.availability_message ? <span className="table-subvalue">{runtime.availability_message}</span> : null}
+                            </td>
+                            <td>{Number.isFinite(runtime.module_count) ? runtime.module_count : "-"}</td>
+                            <td title={(runtime.generated_targets || []).join(", ") || undefined}>
+                              {runtime.usage_reported ? appCount : "-"}
+                              {runtime.generated_targets && runtime.generated_targets.length > 0 ? (
+                                <span className="table-subvalue">{runtime.generated_targets.join(", ")}</span>
+                              ) : null}
+                            </td>
+                            <td>
+                              {runtime.usage_reported ? (
+                                <span className={`token-status ${runtime.process_running ? "token-status-active" : "token-status-approved"}`}>
+                                  {runtime.process_running ? tx("running") : tx("stopped")}
+                                </span>
+                              ) : (
+                                "-"
+                              )}
+                            </td>
+                            <td title={runtime.apply_error || undefined}>
+                              {runtime.apply_state || "-"}
+                              {runtime.apply_error ? <span className="table-subvalue">{runtime.apply_error}</span> : null}
+                            </td>
+                            <td className="actions-cell">
+                              <button
+                                type="button"
+                                className="danger"
+                                title={removalTitle}
+                                onClick={() => void requestRuntimeRemoval(runtime)}
+                                disabled={!canRequestRemoval || removingRuntimeKey === runtimeKey}
+                              >
+                                {removingRuntimeKey === runtimeKey ? tx("Removing...") : removalRequested ? tx("Removal requested") : tx("Remove")}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {(managedDevice.runtime_inventory || []).length === 0 ? <div className="empty">{tx("No runtime inventory reported.")}</div> : null}
+                </div>
+              </div>
+              <div className="device-detail-section">
+                <div className="device-detail-section-header">
+                  <div>
+                    <h3>{tx("Runtime assignments")}</h3>
+                    <p className="section-note">{tx("Desired runtime artifacts assigned from Center.")}</p>
+                  </div>
+                  {runtimeDeploymentLoading ? <span className="section-note">{tx("Loading runtime deployment...")}</span> : null}
+                </div>
+                <div className="table-wrap runtime-assignment-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>{tx("Actions")}</th>
+                        <th>{tx("Family")}</th>
+                        <th>{tx("Runtime ID")}</th>
+                        <th>{tx("Desired artifact")}</th>
+                        <th>{tx("Local artifact")}</th>
+                        <th>{tx("Apply state")}</th>
+                        <th>{tx("Assigned")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {runtimeAssignments.map((assignment) => {
+                        const status = runtimeStatusByKey.get(`${assignment.runtime_family}:${assignment.runtime_id}`);
+                        const clearKey = `${assignment.runtime_family}:${assignment.runtime_id}`;
+                        return (
+                          <tr key={clearKey}>
+                            <td className="actions-cell">
+                              <button
+                                type="button"
+                                className="secondary"
+                                onClick={() => void clearRuntimeAssignment(assignment)}
+                                disabled={clearingRuntimeKey === clearKey}
+                              >
+                                {clearingRuntimeKey === clearKey ? tx("Clearing...") : tx("Clear")}
+                              </button>
+                            </td>
+                            <td>{assignment.runtime_family || "-"}</td>
+                            <td>{assignment.runtime_id || "-"}</td>
+                            <td title={assignment.desired_artifact_revision}>R: {shortRevision(assignment.desired_artifact_revision)}</td>
+                            <td title={status?.local_artifact_revision || undefined}>
+                              {status?.local_artifact_revision ? `R: ${shortRevision(status.local_artifact_revision)}` : "-"}
+                            </td>
+                            <td title={status?.apply_error || undefined}>
+                              {status?.apply_state || "-"}
+                              {status?.apply_error ? <span className="table-subvalue">{status.apply_error}</span> : null}
+                            </td>
+                            <td title={assignment.assigned_by || undefined}>{formatUnixTime(assignment.assigned_at_unix, locale)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {runtimeAssignments.length === 0 && !runtimeDeploymentLoading ? <div className="empty">{tx("No runtime assignments.")}</div> : null}
+                </div>
+              </div>
+              <div className="device-detail-section">
+                <div className="device-detail-section-header">
+                  <div>
+                    <h3>{tx("Compatible artifacts")}</h3>
+                    <p className="section-note">{tx("Artifacts matching this Gateway platform.")}</p>
+                  </div>
+                </div>
+                <div className="table-wrap runtime-artifact-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>{tx("Actions")}</th>
+                        <th>{tx("Family")}</th>
+                        <th>{tx("Runtime ID")}</th>
+                        <th>{tx("Revision")}</th>
+                        <th>{tx("Version")}</th>
+                        <th>{tx("Target")}</th>
+                        <th>{tx("Size")}</th>
+                        <th>{tx("State")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {runtimeArtifacts.map((artifact) => {
+                        const assignKey = `${artifact.runtime_family}:${artifact.runtime_id}:${artifact.artifact_revision}`;
+                        const runtimeKey = `${artifact.runtime_family}:${artifact.runtime_id}`;
+                        const alreadyAssigned = assignedRevisionByKey.get(runtimeKey) === artifact.artifact_revision;
+                        const canAssign = artifact.storage_state === "stored" && !alreadyAssigned;
+                        return (
+                          <tr key={assignKey}>
+                            <td className="actions-cell">
+                              <button
+                                type="button"
+                                onClick={() => void assignRuntimeArtifact(artifact)}
+                                disabled={!canAssign || assigningRuntimeKey === assignKey}
+                              >
+                                {alreadyAssigned ? tx("Assigned") : assigningRuntimeKey === assignKey ? tx("Assigning...") : tx("Assign")}
+                              </button>
+                            </td>
+                            <td>{artifact.runtime_family || "-"}</td>
+                            <td>{artifact.runtime_id || "-"}</td>
+                            <td title={artifact.artifact_revision}>R: {shortRevision(artifact.artifact_revision)}</td>
+                            <td title={artifact.detected_version || undefined}>{artifact.detected_version || "-"}</td>
+                            <td title={artifact.builder_profile || undefined}>{runtimeTargetLabel(artifact.target)}</td>
+                            <td>{formatBytes(artifact.compressed_size)}</td>
+                            <td>{artifact.storage_state || "-"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {runtimeArtifacts.length === 0 && !runtimeDeploymentLoading ? <div className="empty">{tx("No compatible artifacts.")}</div> : null}
+                </div>
+                {runtimeDeploymentMessage ? <p className="form-message error">{runtimeDeploymentMessage}</p> : null}
+              </div>
+            </>
+          ) : null}
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="content-panel">
@@ -660,6 +1309,7 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                 <th>{tx("Product ID")}</th>
                 <th>{tx("Runtime")}</th>
                 <th>{tx("Version")}</th>
+                <th>{tx("Platform")}</th>
                 <th>{tx("Config")}</th>
                 <th>{tx("Enrollment token")}</th>
                 <th>{tx("Token status")}</th>
@@ -686,6 +1336,7 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                     {device.build_version || "-"}
                     {device.go_version ? <span className="table-subvalue">{device.go_version}</span> : null}
                   </td>
+                  <td title={platformTitle(device) || undefined}>{platformLabel(device)}</td>
                   <td title={device.config_snapshot_revision || undefined}>
                     {device.config_snapshot_revision ? (
                       <>
@@ -723,146 +1374,6 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
           {devices.length === 0 ? <div className="empty">{tx("No registered devices.")}</div> : null}
         </div>
       </section>
-
-      {managedDevice ? (
-        <div className="modal-backdrop" role="presentation" onMouseDown={closeDeviceActions}>
-          <div className="modal-panel device-action-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <h2 className="section-title">{tx("Device actions")}</h2>
-                <p className="section-note">{managedDevice.device_id}</p>
-              </div>
-              <button type="button" className="secondary" onClick={closeDeviceActions}>
-                {tx("Close")}
-              </button>
-            </div>
-            <div className="summary-grid">
-              <div>
-                <span>{tx("Status")}</span>
-                <strong>{tx(managedDevice.status || "-")}</strong>
-              </div>
-              <div>
-                <span>{tx("Config received")}</span>
-                <strong>{formatUnixTime(managedDevice.config_snapshot_at_unix, locale)}</strong>
-              </div>
-              <div>
-                <span>{tx("Last seen")}</span>
-                <strong>{formatUnixTime(managedDevice.last_seen_at_unix, locale)}</strong>
-              </div>
-            </div>
-            <div className="modal-actions">
-              {managedDevice.config_snapshot_revision ? (
-                <a className="button-link" href={configSnapshotDownloadPath(managedDevice)}>
-                  {tx("Config download")}
-                </a>
-              ) : (
-                <span className="section-note">{tx("No config snapshot received.")}</span>
-              )}
-              {managedDevice.status === "approved" ? (
-                <button
-                  type="button"
-                  className="danger"
-                  onClick={() => void revokeDevice(managedDevice.device_id)}
-                  disabled={revokingDeviceID === managedDevice.device_id}
-                >
-                  {revokingDeviceID === managedDevice.device_id ? tx("Revoking...") : tx("Revoke approval")}
-                </button>
-              ) : null}
-              {managedDevice.status === "revoked" ? (
-                <button
-                  type="button"
-                  onClick={() => void archiveDevice(managedDevice.device_id)}
-                  disabled={archivingDeviceID === managedDevice.device_id}
-                >
-                  {archivingDeviceID === managedDevice.device_id ? tx("Archiving...") : tx("Archive")}
-                </button>
-              ) : null}
-            </div>
-            <div className="modal-section">
-              <div className="modal-section-header">
-                <div>
-                  <h3>{tx("Config snapshots")}</h3>
-                  <p className="section-note">{tx("Latest 6 snapshots are shown per page. History rows do not include JSON payloads until opened.")}</p>
-                </div>
-                {configSnapshotLoading ? <span className="section-note">{tx("Loading config snapshots...")}</span> : null}
-              </div>
-              <div className="table-wrap config-snapshot-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>{tx("Actions")}</th>
-                      <th>{tx("Revision")}</th>
-                      <th>{tx("Received")}</th>
-                      <th>{tx("Size")}</th>
-                      <th>{tx("Payload hash")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {configSnapshots.map((snapshot) => (
-                      <tr key={snapshot.revision}>
-                        <td className="actions-cell">
-                          <div className="inline-actions">
-                            <button type="button" onClick={() => void viewConfigSnapshot(snapshot.device_id, snapshot.revision)}>
-                              {tx("View JSON")}
-                            </button>
-                            <a className="button-link" href={configSnapshotRevisionPath(snapshot.device_id, snapshot.revision, true)}>
-                              {tx("Download JSON")}
-                            </a>
-                          </div>
-                        </td>
-                        <td title={snapshot.revision}>R: {shortRevision(snapshot.revision)}</td>
-                        <td>{formatUnixTime(snapshot.created_at_unix, locale)}</td>
-                        <td>{formatBytes(snapshot.size_bytes)}</td>
-                        <td title={snapshot.payload_hash}>H: {shortRevision(snapshot.payload_hash)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {configSnapshots.length === 0 && !configSnapshotLoading ? <div className="empty">{tx("No config snapshots.")}</div> : null}
-              </div>
-              <div className="snapshot-pager">
-                <span className="section-note">
-                  {tx("Showing {start}-{end}", {
-                    start: configSnapshots.length ? configSnapshotOffset + 1 : 0,
-                    end: configSnapshotOffset + configSnapshots.length,
-                  })}
-                </span>
-                <div className="inline-actions">
-                  <button
-                    type="button"
-                    onClick={() => setConfigSnapshotOffset(Math.max(0, configSnapshotOffset - CONFIG_SNAPSHOT_PAGE_SIZE))}
-                    disabled={configSnapshotLoading || configSnapshotOffset <= 0}
-                  >
-                    {tx("Previous")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfigSnapshotOffset(configSnapshotNextOffset)}
-                    disabled={configSnapshotLoading || configSnapshotNextOffset <= 0}
-                  >
-                    {tx("Next")}
-                  </button>
-                </div>
-              </div>
-              {configSnapshotMessage ? <p className="form-message error">{configSnapshotMessage}</p> : null}
-              {configSnapshotViewer ? (
-                <div className="snapshot-viewer">
-                  <div className="modal-section-header">
-                    <div>
-                      <h3>{tx("Config JSON")}</h3>
-                      <p className="section-note">R: {shortRevision(configSnapshotViewer.revision)}</p>
-                    </div>
-                    <button type="button" className="secondary" onClick={() => setConfigSnapshotViewer(null)}>
-                      {tx("Close")}
-                    </button>
-                  </div>
-                  <pre>{configSnapshotViewer.payload}</pre>
-                </div>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

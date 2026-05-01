@@ -1,6 +1,7 @@
 package center
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	cryptorand "crypto/rand"
@@ -25,6 +26,7 @@ import (
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/edgeartifactbundle"
 	"tukuyomi/internal/handler"
+	"tukuyomi/internal/runtimeartifactbundle"
 )
 
 func TestRuntimeConfigFromEnvDefaults(t *testing.T) {
@@ -399,6 +401,22 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 		t.Fatalf("approve code=%d body=%s", approve.Code, approve.Body.String())
 	}
 
+	legacyPlatformStatusReq := signedDeviceStatusForTest(t, enrollmentFixture, "nonce-status-platform-compat", time.Now().UTC())
+	legacyPlatformStatusReq.RuntimeDeploymentSupported = false
+	legacyPlatformStatusReq.RuntimeInventory = nil
+	legacyPlatformStatusReq.BodyHash = platformDeviceStatusBodyHash(legacyPlatformStatusReq)
+	legacyPlatformStatusReq.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(enrollmentFixture.PrivateKey, []byte(signedEnvelopeMessage(legacyPlatformStatusReq.DeviceID, legacyPlatformStatusReq.KeyID, legacyPlatformStatusReq.Timestamp, legacyPlatformStatusReq.Nonce, legacyPlatformStatusReq.BodyHash))))
+	legacyPlatformStatusBody, err := json.Marshal(legacyPlatformStatusReq)
+	if err != nil {
+		t.Fatalf("marshal legacy platform status: %v", err)
+	}
+	legacyPlatformStatus := performRequest(engine, http.MethodPost, "/v1/device-status", string(legacyPlatformStatusBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if legacyPlatformStatus.Code != http.StatusOK {
+		t.Fatalf("legacy platform status code=%d body=%s", legacyPlatformStatus.Code, legacyPlatformStatus.Body.String())
+	}
+
 	approvedStatusReq := signedDeviceStatusForTest(t, enrollmentFixture, "nonce-status-approved", time.Now().UTC())
 	approvedStatusBody, err := json.Marshal(approvedStatusReq)
 	if err != nil {
@@ -412,6 +430,241 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	}
 	if !strings.Contains(approvedStatus.Body.String(), `"status":"approved"`) {
 		t.Fatalf("approved status body=%s", approvedStatus.Body.String())
+	}
+
+	runtimeArtifact, err := runtimeartifactbundle.BuildBundle(runtimeartifactbundle.BuildInput{
+		RuntimeFamily:   runtimeartifactbundle.RuntimeFamilyPHPFPM,
+		RuntimeID:       "php83",
+		DisplayName:     "PHP 8.3",
+		DetectedVersion: "8.3.30",
+		Target: runtimeartifactbundle.TargetKey{
+			OS:            "linux",
+			Arch:          "amd64",
+			KernelVersion: "6.8.0-test",
+			DistroID:      "ubuntu",
+			DistroIDLike:  "debian",
+			DistroVersion: "24.04",
+		},
+		BuilderVersion: "test-builder",
+		BuilderProfile: "ubuntu-24.04-amd64",
+		GeneratedAt:    time.Unix(1000, 0).UTC(),
+		Files: []runtimeartifactbundle.File{
+			{
+				ArchivePath: "runtime.json",
+				FileKind:    "metadata",
+				Mode:        0o644,
+				Body:        []byte(`{"runtime_id":"php83","display_name":"PHP 8.3","detected_version":"8.3.30","source":"bundled"}`),
+			},
+			{ArchivePath: "modules.json", FileKind: "metadata", Mode: 0o644, Body: []byte(`["core","date"]`)},
+			{ArchivePath: "php-fpm", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "php", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "rootfs/usr/bin/php", FileKind: "rootfs", Mode: 0o755, Body: []byte("php-binary")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("build runtime artifact: %v", err)
+	}
+	artifactRevision := runtimeArtifact.Revision
+	importRuntime := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/runtime-artifacts/import",
+		`{"artifact_b64":"`+base64.StdEncoding.EncodeToString(runtimeArtifact.Compressed)+`"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if importRuntime.Code != http.StatusCreated {
+		t.Fatalf("import runtime artifact code=%d body=%s", importRuntime.Code, importRuntime.Body.String())
+	}
+	if !strings.Contains(importRuntime.Body.String(), `"artifact_revision":"`+artifactRevision+`"`) ||
+		!strings.Contains(importRuntime.Body.String(), `"storage_state":"stored"`) {
+		t.Fatalf("runtime artifact import response unexpected: %s", importRuntime.Body.String())
+	}
+	runtimeDeployment := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/edge-device-1/runtime-deployment", "", nil, cookies)
+	if runtimeDeployment.Code != http.StatusOK {
+		t.Fatalf("runtime deployment code=%d body=%s", runtimeDeployment.Code, runtimeDeployment.Body.String())
+	}
+	if !strings.Contains(runtimeDeployment.Body.String(), `"artifact_revision":"`+artifactRevision+`"`) ||
+		!strings.Contains(runtimeDeployment.Body.String(), `"storage_state":"stored"`) {
+		t.Fatalf("runtime deployment missing compatible artifact: %s", runtimeDeployment.Body.String())
+	}
+	assignRuntime := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/devices/edge-device-1/runtime-assignments",
+		`{"runtime_family":"php-fpm","runtime_id":"php83","artifact_revision":"`+artifactRevision+`","reason":"test assignment"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if assignRuntime.Code != http.StatusOK {
+		t.Fatalf("assign runtime code=%d body=%s", assignRuntime.Code, assignRuntime.Body.String())
+	}
+	if !strings.Contains(assignRuntime.Body.String(), `"desired_artifact_revision":"`+artifactRevision+`"`) {
+		t.Fatalf("assign runtime response missing revision: %s", assignRuntime.Body.String())
+	}
+	assignedStatusReq := signedDeviceStatusForTest(t, enrollmentFixture, "nonce-status-assigned", time.Now().UTC())
+	assignedStatusBody, err := json.Marshal(assignedStatusReq)
+	if err != nil {
+		t.Fatalf("marshal assigned status: %v", err)
+	}
+	assignedStatus := performRequest(engine, http.MethodPost, "/v1/device-status", string(assignedStatusBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if assignedStatus.Code != http.StatusOK {
+		t.Fatalf("assigned status code=%d body=%s", assignedStatus.Code, assignedStatus.Body.String())
+	}
+	if !strings.Contains(assignedStatus.Body.String(), `"runtime_assignments"`) ||
+		!strings.Contains(assignedStatus.Body.String(), `"artifact_revision":"`+artifactRevision+`"`) {
+		t.Fatalf("assigned status missing runtime assignment: %s", assignedStatus.Body.String())
+	}
+	downloadRuntimeReq := signedRuntimeArtifactDownloadForTest(t, enrollmentFixture, "nonce-runtime-download", time.Now().UTC(), runtimeArtifact)
+	downloadRuntimeBody, err := json.Marshal(downloadRuntimeReq)
+	if err != nil {
+		t.Fatalf("marshal runtime download: %v", err)
+	}
+	downloadRuntime := performRequest(
+		engine,
+		http.MethodPost,
+		"/v1/runtime-artifact-download",
+		string(downloadRuntimeBody),
+		map[string]string{"Content-Type": "application/json"},
+	)
+	if downloadRuntime.Code != http.StatusOK {
+		t.Fatalf("download runtime code=%d body=%s", downloadRuntime.Code, downloadRuntime.Body.String())
+	}
+	if !bytes.Equal(downloadRuntime.Body.Bytes(), runtimeArtifact.Compressed) {
+		t.Fatalf("download runtime body mismatch")
+	}
+	if downloadRuntime.Header().Get("X-Tukuyomi-Runtime-Artifact-Revision") != artifactRevision ||
+		downloadRuntime.Header().Get("X-Tukuyomi-Runtime-Artifact-Hash") != runtimeArtifact.ArtifactHash ||
+		!strings.Contains(downloadRuntime.Header().Get("Content-Disposition"), "php83-"+artifactRevision[:12]+".tar.gz") {
+		t.Fatalf("download runtime headers unexpected: %v", downloadRuntime.Header())
+	}
+	removeRuntime := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/devices/edge-device-1/runtime-assignments/remove",
+		`{"runtime_family":"php-fpm","runtime_id":"php83","reason":"test removal"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if removeRuntime.Code != http.StatusOK {
+		t.Fatalf("remove runtime code=%d body=%s", removeRuntime.Code, removeRuntime.Body.String())
+	}
+	if !strings.Contains(removeRuntime.Body.String(), `"desired_state":"removed"`) {
+		t.Fatalf("remove runtime response missing removed state: %s", removeRuntime.Body.String())
+	}
+	removalStatusReq := signedDeviceStatusForTest(t, enrollmentFixture, "nonce-status-removal", time.Now().UTC())
+	removalStatusBody, err := json.Marshal(removalStatusReq)
+	if err != nil {
+		t.Fatalf("marshal removal status: %v", err)
+	}
+	removalStatus := performRequest(engine, http.MethodPost, "/v1/device-status", string(removalStatusBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if removalStatus.Code != http.StatusOK {
+		t.Fatalf("removal status code=%d body=%s", removalStatus.Code, removalStatus.Body.String())
+	}
+	if !strings.Contains(removalStatus.Body.String(), `"desired_state":"removed"`) {
+		t.Fatalf("removal status missing runtime removal assignment: %s", removalStatus.Body.String())
+	}
+	removePSGI := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/devices/edge-device-1/runtime-assignments/remove",
+		`{"runtime_family":"psgi","runtime_id":"perl538","reason":"test psgi removal"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if removePSGI.Code != http.StatusOK {
+		t.Fatalf("remove psgi code=%d body=%s", removePSGI.Code, removePSGI.Body.String())
+	}
+	if !strings.Contains(removePSGI.Body.String(), `"runtime_family":"psgi"`) || !strings.Contains(removePSGI.Body.String(), `"desired_state":"removed"`) {
+		t.Fatalf("remove psgi response unexpected: %s", removePSGI.Body.String())
+	}
+	virtualRemovedReq := signedDeviceStatusForTest(t, enrollmentFixture, "nonce-status-virtual-removed", time.Now().UTC())
+	virtualRemovedReq.RuntimeInventory = []DeviceRuntimeSummary{
+		{
+			RuntimeFamily:   "php-fpm",
+			RuntimeID:       "php83",
+			DisplayName:     "PHP 8.3",
+			DetectedVersion: "8.3.30",
+			Source:          "bundled",
+			Available:       true,
+			ModuleCount:     42,
+			UsageReported:   true,
+		},
+		{
+			RuntimeFamily: "psgi",
+			RuntimeID:     "perl538",
+			Source:        "center",
+			Available:     false,
+			UsageReported: true,
+			ApplyState:    "removed",
+		},
+	}
+	virtualRemovedReq.BodyHash = deviceStatusBodyHash(virtualRemovedReq)
+	virtualRemovedReq.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(enrollmentFixture.PrivateKey, []byte(signedEnvelopeMessage(virtualRemovedReq.DeviceID, virtualRemovedReq.KeyID, virtualRemovedReq.Timestamp, virtualRemovedReq.Nonce, virtualRemovedReq.BodyHash))))
+	virtualRemovedBody, err := json.Marshal(virtualRemovedReq)
+	if err != nil {
+		t.Fatalf("marshal virtual removed status: %v", err)
+	}
+	virtualRemovedStatus := performRequest(engine, http.MethodPost, "/v1/device-status", string(virtualRemovedBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if virtualRemovedStatus.Code != http.StatusOK {
+		t.Fatalf("virtual removed status code=%d body=%s", virtualRemovedStatus.Code, virtualRemovedStatus.Body.String())
+	}
+	virtualRemovedDeployment := performRequestWithCookies(engine, http.MethodGet, "/center-api/devices/edge-device-1/runtime-deployment", "", nil, cookies)
+	if virtualRemovedDeployment.Code != http.StatusOK {
+		t.Fatalf("virtual removed deployment code=%d body=%s", virtualRemovedDeployment.Code, virtualRemovedDeployment.Body.String())
+	}
+	var virtualRemovedView RuntimeDeploymentView
+	if err := json.Unmarshal(virtualRemovedDeployment.Body.Bytes(), &virtualRemovedView); err != nil {
+		t.Fatalf("decode virtual removed deployment: %v body=%s", err, virtualRemovedDeployment.Body.String())
+	}
+	for _, runtime := range virtualRemovedView.Device.RuntimeInventory {
+		if runtime.RuntimeFamily == "psgi" && runtime.RuntimeID == "perl538" {
+			t.Fatalf("virtual removed runtime must not remain in runtime inventory: %+v", runtime)
+		}
+	}
+	var removedStatusFound bool
+	for _, status := range virtualRemovedView.ApplyStatus {
+		if status.RuntimeFamily == "psgi" && status.RuntimeID == "perl538" && status.ApplyState == "removed" {
+			removedStatusFound = true
+		}
+	}
+	if !removedStatusFound {
+		t.Fatalf("virtual removed status did not update apply status: %+v", virtualRemovedView.ApplyStatus)
+	}
+	clearRuntime := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/devices/edge-device-1/runtime-assignments/clear",
+		`{"runtime_family":"php-fpm","runtime_id":"php83"}`,
+		map[string]string{adminauth.CSRFHeaderName: csrfCookie.Value},
+		cookies,
+	)
+	if clearRuntime.Code != http.StatusOK {
+		t.Fatalf("clear runtime code=%d body=%s", clearRuntime.Code, clearRuntime.Body.String())
+	}
+	if !strings.Contains(clearRuntime.Body.String(), `"cleared":true`) {
+		t.Fatalf("clear runtime response unexpected: %s", clearRuntime.Body.String())
+	}
+	downloadClearedReq := signedRuntimeArtifactDownloadForTest(t, enrollmentFixture, "nonce-runtime-download-cleared", time.Now().UTC(), runtimeArtifact)
+	downloadClearedBody, err := json.Marshal(downloadClearedReq)
+	if err != nil {
+		t.Fatalf("marshal cleared runtime download: %v", err)
+	}
+	downloadCleared := performRequest(
+		engine,
+		http.MethodPost,
+		"/v1/runtime-artifact-download",
+		string(downloadClearedBody),
+		map[string]string{"Content-Type": "application/json"},
+	)
+	if downloadCleared.Code != http.StatusNotFound {
+		t.Fatalf("download cleared runtime code=%d body=%s", downloadCleared.Code, downloadCleared.Body.String())
 	}
 
 	configRevision := strings.Repeat("a", 64)
@@ -453,6 +706,18 @@ func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 		!strings.Contains(devices.Body.String(), `"build_version":"v1.2.0-test"`) ||
 		!strings.Contains(devices.Body.String(), `"go_version":"go1.26.2-test"`) {
 		t.Fatalf("approved device missing runtime inventory: %s", devices.Body.String())
+	}
+	if !strings.Contains(devices.Body.String(), `"os":"linux"`) ||
+		!strings.Contains(devices.Body.String(), `"arch":"amd64"`) ||
+		!strings.Contains(devices.Body.String(), `"distro_id":"ubuntu"`) ||
+		!strings.Contains(devices.Body.String(), `"distro_version":"24.04"`) {
+		t.Fatalf("approved device missing platform inventory: %s", devices.Body.String())
+	}
+	if !strings.Contains(devices.Body.String(), `"runtime_deployment_supported":true`) ||
+		!strings.Contains(devices.Body.String(), `"runtime_family":"php-fpm"`) ||
+		!strings.Contains(devices.Body.String(), `"runtime_id":"php83"`) ||
+		!strings.Contains(devices.Body.String(), `"module_count":42`) {
+		t.Fatalf("approved device missing runtime summary: %s", devices.Body.String())
 	}
 	if !strings.Contains(devices.Body.String(), `"config_snapshot_revision":"`+configRevision+`"`) ||
 		!strings.Contains(devices.Body.String(), `"config_snapshot_bytes":`) {
@@ -1019,6 +1284,35 @@ func signedDeviceStatusForTest(t *testing.T, fixture signedEnrollmentFixture, no
 		RuntimeRole:                "gateway",
 		BuildVersion:               "v1.2.0-test",
 		GoVersion:                  "go1.26.2-test",
+		OS:                         "linux",
+		Arch:                       "amd64",
+		KernelVersion:              "6.8.0-test",
+		DistroID:                   "ubuntu",
+		DistroIDLike:               "debian",
+		DistroVersion:              "24.04",
+		RuntimeDeploymentSupported: true,
+		RuntimeInventory: []DeviceRuntimeSummary{
+			{
+				RuntimeFamily:   "php-fpm",
+				RuntimeID:       "php83",
+				DisplayName:     "PHP 8.3",
+				DetectedVersion: "8.3.30",
+				Source:          "bundled",
+				Available:       true,
+				ModuleCount:     42,
+				UsageReported:   true,
+			},
+			{
+				RuntimeFamily:   "psgi",
+				RuntimeID:       "perl538",
+				DisplayName:     "Perl 5.38",
+				DetectedVersion: "v5.38.5",
+				Source:          "bundled",
+				Available:       true,
+				ModuleCount:     157,
+				UsageReported:   true,
+			},
+		},
 	}
 	req.BodyHash = deviceStatusBodyHash(req)
 	req.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(fixture.PrivateKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash))))
@@ -1069,6 +1363,24 @@ func signedRuleArtifactBytesForTest(t *testing.T, fixture signedEnrollmentFixtur
 		req.FileCount = parsed.FileCount
 	}
 	req.BodyHash = ruleArtifactBundleBodyHash(req)
+	req.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(fixture.PrivateKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash))))
+	return req
+}
+
+func signedRuntimeArtifactDownloadForTest(t *testing.T, fixture signedEnrollmentFixture, nonce string, ts time.Time, bundle runtimeartifactbundle.Build) RuntimeArtifactDownloadRequest {
+	t.Helper()
+	req := RuntimeArtifactDownloadRequest{
+		DeviceID:                   fixture.Request.DeviceID,
+		KeyID:                      fixture.Request.KeyID,
+		PublicKeyFingerprintSHA256: fixture.Fingerprint,
+		Timestamp:                  ts.UTC().Format(time.RFC3339Nano),
+		Nonce:                      nonce,
+		RuntimeFamily:              bundle.Manifest.RuntimeFamily,
+		RuntimeID:                  bundle.Manifest.RuntimeID,
+		ArtifactRevision:           bundle.Revision,
+		ArtifactHash:               bundle.ArtifactHash,
+	}
+	req.BodyHash = runtimeArtifactDownloadBodyHash(req)
 	req.SignatureB64 = base64.StdEncoding.EncodeToString(ed25519.Sign(fixture.PrivateKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash))))
 	return req
 }

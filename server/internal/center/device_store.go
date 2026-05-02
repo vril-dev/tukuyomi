@@ -2,7 +2,10 @@ package center
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -131,6 +134,14 @@ type DeviceRuntimeInventory struct {
 	RuntimeInventory           []DeviceRuntimeSummary
 }
 
+type BootstrapApprovedDeviceInput struct {
+	DeviceID                   string
+	KeyID                      string
+	PublicKeyPEM               string
+	PublicKeyFingerprintSHA256 string
+	Actor                      string
+}
+
 type DeviceConfigSnapshotInsert struct {
 	DeviceID       string
 	Revision       string
@@ -210,6 +221,106 @@ VALUES
 			return err
 		}
 		out = rec
+		return tx.Commit()
+	})
+	return out, err
+}
+
+func BootstrapApprovedDevice(ctx context.Context, in BootstrapApprovedDeviceInput) (DeviceRecord, error) {
+	deviceID := strings.TrimSpace(in.DeviceID)
+	keyID := strings.TrimSpace(in.KeyID)
+	fingerprint := strings.ToLower(strings.TrimSpace(in.PublicKeyFingerprintSHA256))
+	publicKeyPEM := strings.TrimSpace(in.PublicKeyPEM)
+	if !deviceIDPattern.MatchString(deviceID) {
+		return DeviceRecord{}, fmt.Errorf("invalid device_id")
+	}
+	if !keyIDPattern.MatchString(keyID) {
+		return DeviceRecord{}, fmt.Errorf("invalid key_id")
+	}
+	if !hex64Pattern.MatchString(fingerprint) {
+		return DeviceRecord{}, fmt.Errorf("invalid public key fingerprint")
+	}
+	publicDER, _, err := parseStoredEnrollmentPublicKey(publicKeyPEM)
+	if err != nil {
+		return DeviceRecord{}, err
+	}
+	sum := sha256.Sum256(publicDER)
+	if actual := hex.EncodeToString(sum[:]); actual != fingerprint {
+		return DeviceRecord{}, fmt.Errorf("public key fingerprint mismatch")
+	}
+	actor := strings.TrimSpace(in.Actor)
+	if actor == "" {
+		actor = "system:center-protected-bootstrap"
+	}
+
+	var out DeviceRecord
+	now := time.Now().UTC().Unix()
+	err = withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		existing, found, err := loadBootstrapDeviceTrustTx(ctx, tx, driver, deviceID)
+		if err != nil {
+			return err
+		}
+		if found {
+			if existing.KeyID != keyID || existing.PublicKeyFingerprintSHA256 != fingerprint || strings.TrimSpace(existing.PublicKeyPEM) != publicKeyPEM {
+				return fmt.Errorf("device %q already exists with different trust material", deviceID)
+			}
+			if existing.Status != DeviceStatusApproved {
+				return fmt.Errorf("device %q already exists with status %q", deviceID, existing.Status)
+			}
+			return loadDeviceByIDTx(ctx, tx, driver, deviceID, &out)
+		}
+
+		nonceHash := centerProtectedBootstrapHash("nonce", deviceID, keyID, fingerprint)
+		bodyHash := centerProtectedBootstrapHash("body", deviceID, keyID, fingerprint)
+		signature := base64.StdEncoding.EncodeToString([]byte(centerProtectedBootstrapHash("signature", deviceID, keyID, fingerprint)))
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO center_device_enrollments
+    (device_id, key_id, public_key_pem, public_key_fingerprint_sha256, license_key_hash,
+     nonce_hash, body_hash, signature_b64, status, requested_at_unix, decided_at_unix,
+     decided_by, decision_reason, remote_addr, user_agent)
+VALUES
+    (`+placeholders(driver, 15, 1)+`)`,
+			deviceID,
+			keyID,
+			publicKeyPEM+"\n",
+			fingerprint,
+			"",
+			nonceHash,
+			bodyHash,
+			signature,
+			EnrollmentStatusApproved,
+			now,
+			now,
+			actor,
+			"center-protected bootstrap",
+			"local",
+			"tukuyomi-bootstrap",
+		); err != nil && !isUniqueConstraintError(err) {
+			return err
+		}
+
+		enrollment, err := loadEnrollmentPrivateByNonceTx(ctx, tx, driver, deviceID, keyID, nonceHash)
+		if err != nil {
+			return err
+		}
+		if enrollment.Status != EnrollmentStatusApproved {
+			return fmt.Errorf("bootstrap enrollment for device %q already exists with status %q", deviceID, enrollment.Status)
+		}
+		if enrollment.PublicKeyFingerprintSHA256 != fingerprint || strings.TrimSpace(enrollment.PublicKeyPEM) != publicKeyPEM {
+			return fmt.Errorf("bootstrap enrollment for device %q has different trust material", deviceID)
+		}
+		if err := upsertApprovedDeviceTx(ctx, tx, driver, enrollment, actor, now); err != nil {
+			return err
+		}
+		if err := loadDeviceByIDTx(ctx, tx, driver, deviceID, &out); err != nil {
+			return err
+		}
 		return tx.Commit()
 	})
 	return out, err
@@ -968,6 +1079,13 @@ type privateEnrollmentRecord struct {
 	PublicKeyPEM string
 }
 
+type bootstrapDeviceTrustRecord struct {
+	KeyID                      string
+	PublicKeyPEM               string
+	PublicKeyFingerprintSHA256 string
+	Status                     string
+}
+
 func loadEnrollmentByID(ctx context.Context, db *sql.DB, driver string, id int64, out *EnrollmentRecord) error {
 	rec, err := loadEnrollmentByIDTx(ctx, db, driver, id)
 	if err != nil {
@@ -1120,6 +1238,61 @@ SELECT enrollment_id, device_id, key_id, public_key_pem, public_key_fingerprint_
 	return rec, nil
 }
 
+func loadEnrollmentPrivateByNonceTx(ctx context.Context, q queryer, driver, deviceID, keyID, nonceHash string) (privateEnrollmentRecord, error) {
+	var rec privateEnrollmentRecord
+	row := q.QueryRowContext(ctx, `
+SELECT enrollment_id, device_id, key_id, public_key_pem, public_key_fingerprint_sha256, status,
+       requested_at_unix, decided_at_unix, decided_by, decision_reason, remote_addr, user_agent
+  FROM center_device_enrollments
+ WHERE device_id = `+placeholder(driver, 1)+` AND key_id = `+placeholder(driver, 2)+` AND nonce_hash = `+placeholder(driver, 3),
+		deviceID,
+		keyID,
+		nonceHash,
+	)
+	if err := row.Scan(
+		&rec.EnrollmentID,
+		&rec.DeviceID,
+		&rec.KeyID,
+		&rec.PublicKeyPEM,
+		&rec.PublicKeyFingerprintSHA256,
+		&rec.Status,
+		&rec.RequestedAtUnix,
+		&rec.DecidedAtUnix,
+		&rec.DecidedBy,
+		&rec.DecisionReason,
+		&rec.RemoteAddr,
+		&rec.UserAgent,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return privateEnrollmentRecord{}, ErrEnrollmentNotFound
+		}
+		return privateEnrollmentRecord{}, err
+	}
+	return rec, nil
+}
+
+func loadBootstrapDeviceTrustTx(ctx context.Context, q queryer, driver string, deviceID string) (bootstrapDeviceTrustRecord, bool, error) {
+	var rec bootstrapDeviceTrustRecord
+	err := q.QueryRowContext(ctx, `
+SELECT key_id, public_key_pem, public_key_fingerprint_sha256, status
+  FROM center_devices
+ WHERE device_id = `+placeholder(driver, 1),
+		deviceID,
+	).Scan(
+		&rec.KeyID,
+		&rec.PublicKeyPEM,
+		&rec.PublicKeyFingerprintSHA256,
+		&rec.Status,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return bootstrapDeviceTrustRecord{}, false, nil
+	}
+	if err != nil {
+		return bootstrapDeviceTrustRecord{}, false, err
+	}
+	return rec, true, nil
+}
+
 func loadEnrollmentByNonce(ctx context.Context, db *sql.DB, driver, deviceID, keyID, nonceHash string, out *EnrollmentRecord) error {
 	return loadEnrollmentByNonceTx(ctx, db, driver, deviceID, keyID, nonceHash, out)
 }
@@ -1259,6 +1432,15 @@ ON CONFLICT(device_id) DO UPDATE SET
 		)
 		return err
 	}
+}
+
+func centerProtectedBootstrapHash(parts ...string) string {
+	h := sha256.New()
+	for _, part := range parts {
+		h.Write([]byte(part))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func upsertDeviceConfigSnapshotTx(ctx context.Context, tx *sql.Tx, driver string, rec DeviceConfigSnapshotRecord) error {

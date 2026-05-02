@@ -14,6 +14,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1400,6 +1401,7 @@ func stripAdminAuthCookiesFromProxyRequest(r *http.Request) {
 	if r == nil || len(r.Header.Values("Cookie")) == 0 {
 		return
 	}
+	allowCenterCookies := allowCenterAdminCookiesForProxyRequest(r)
 	kept := make([]string, 0)
 	changed := false
 	for _, raw := range r.Header.Values("Cookie") {
@@ -1413,7 +1415,14 @@ func stripAdminAuthCookiesFromProxyRequest(r *http.Request) {
 				name = part
 			}
 			switch strings.TrimSpace(name) {
-			case adminauth.SessionCookieName, adminauth.CSRFCookieName, adminauth.CenterSessionCookieName, adminauth.CenterCSRFCookieName:
+			case adminauth.SessionCookieName, adminauth.CSRFCookieName:
+				changed = true
+				continue
+			case adminauth.CenterSessionCookieName, adminauth.CenterCSRFCookieName:
+				if allowCenterCookies {
+					kept = append(kept, part)
+					continue
+				}
 				changed = true
 				continue
 			default:
@@ -1428,6 +1437,72 @@ func stripAdminAuthCookiesFromProxyRequest(r *http.Request) {
 	if len(kept) > 0 {
 		r.Header.Set("Cookie", strings.Join(kept, "; "))
 	}
+}
+
+func allowCenterAdminCookiesForProxyRequest(r *http.Request) bool {
+	if r == nil || r.URL == nil {
+		return false
+	}
+	classification, classOK := proxyRouteClassificationFromContext(r.Context())
+	if !classOK || classification.Source != proxyRouteResolutionRoute {
+		return false
+	}
+	routeName := strings.TrimSpace(classification.RouteName)
+	switch routeName {
+	case "center-api":
+		if !proxyPathHasCleanPrefix(r.URL.Path, "/center-api") {
+			return false
+		}
+	case "center-ui":
+		if !proxyPathHasCleanPrefix(r.URL.Path, "/center-ui") {
+			return false
+		}
+	default:
+		return false
+	}
+	selection, selectionOK := proxyRouteTransportSelectionFromContext(r.Context())
+	if !selectionOK || strings.TrimSpace(selection.SelectedUpstream) != "center" {
+		return false
+	}
+	selectedTarget, ok := normalizeCenterAdminCookieTargetURL(selection.SelectedUpstreamURL)
+	if !ok {
+		return false
+	}
+	status, err := currentEdgeDeviceAuthStatus()
+	if err != nil ||
+		!status.EdgeEnabled ||
+		!status.DeviceAuthEnabled ||
+		!status.IdentityConfigured ||
+		status.EnrollmentStatus != edgeEnrollmentStatusApproved {
+		return false
+	}
+	centerTarget, ok := normalizeCenterAdminCookieTargetURL(status.CenterURL)
+	return ok && selectedTarget == centerTarget
+}
+
+func normalizeCenterAdminCookieTargetURL(raw string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed == nil {
+		return "", false
+	}
+	if parsed.User != nil || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", false
+	}
+	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	if scheme != "http" && scheme != "https" {
+		return "", false
+	}
+	cleanPath := strings.TrimSpace(parsed.EscapedPath())
+	if cleanPath != "" && cleanPath != "/" {
+		return "", false
+	}
+	return scheme + "://" + strings.ToLower(parsed.Host), true
+}
+
+func proxyPathHasCleanPrefix(pathValue string, prefix string) bool {
+	pathValue = strings.TrimSpace(pathValue)
+	prefix = strings.TrimRight(strings.TrimSpace(prefix), "/")
+	return pathValue == prefix || strings.HasPrefix(pathValue, prefix+"/")
 }
 
 func hasProxyResponseCacheConditionalRequestHeader(header http.Header) bool {

@@ -2,6 +2,8 @@ package handler
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -78,5 +80,65 @@ func TestImportPreviewConfigStorageSeedsIPReputationFailOpen(t *testing.T) {
 	}
 	if !cfg.Default.FailOpen {
 		t.Fatalf("preview ip reputation default fail_open=%v want=true\n%s", cfg.Default.FailOpen, string(raw))
+	}
+}
+
+func TestImportPreviewConfigStorageCanSeedProxyFromStartupBundle(t *testing.T) {
+	cfgPath := writeSettingsConfigFixture(t)
+	restore := saveConfigFilePathForTest(t, cfgPath)
+	defer restore()
+	seedDir := t.TempDir()
+	seedBundlePath := filepath.Join(seedDir, "config-bundle.json")
+	seedBundleRaw := []byte(`{
+  "schema_version": 1,
+  "source": "preview-protected-test",
+  "domains": {
+    "proxy": {
+      "upstreams": [
+        {"enabled": true, "name": "center", "url": "http://center-preview:9090", "weight": 1}
+      ],
+      "routes": [
+        {
+          "name": "center-ui",
+          "priority": 20,
+          "match": {"path": {"type": "prefix", "value": "/center-ui"}},
+          "action": {"upstream": "center"}
+        }
+      ],
+      "default_route": null,
+      "health_check_path": "/healthz"
+    }
+  }
+}` + "\n")
+	if err := os.WriteFile(seedBundlePath, seedBundleRaw, 0o600); err != nil {
+		t.Fatalf("write seed bundle: %v", err)
+	}
+	t.Setenv(startupSeedBundleFileEnv, seedBundlePath)
+	t.Setenv(previewProxySeedFromStartupEnv, "1")
+	initSettingsDBStoreForTest(t)
+
+	if err := ImportPreviewConfigStorage(PreviewBootstrapOptions{}); err != nil {
+		t.Fatalf("ImportPreviewConfigStorage: %v", err)
+	}
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected db store")
+	}
+	proxyCfg, _, found, err := store.loadActiveProxyConfig()
+	if err != nil {
+		t.Fatalf("loadActiveProxyConfig: %v", err)
+	}
+	if !found {
+		t.Fatal("expected proxy config")
+	}
+	if len(proxyCfg.Upstreams) != 1 || proxyCfg.Upstreams[0].Name != "center" || proxyCfg.Upstreams[0].URL != "http://center-preview:9090" {
+		t.Fatalf("unexpected proxy upstreams: %+v", proxyCfg.Upstreams)
+	}
+	if len(proxyCfg.Routes) != 1 || proxyCfg.Routes[0].Name != "center-ui" || proxyCfg.Routes[0].Action.Upstream != "center" {
+		t.Fatalf("unexpected proxy routes: %+v", proxyCfg.Routes)
+	}
+	if proxyCfg.HealthCheckPath != "/healthz" {
+		t.Fatalf("health_check_path=%q want /healthz", proxyCfg.HealthCheckPath)
 	}
 }

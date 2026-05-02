@@ -77,6 +77,11 @@ make db-import
 To run the import command from outside the bundle root, point
 `WAF_DB_IMPORT_SEED_BUNDLE_FILE` at the config bundle path.
 
+The Gateway Status `Download config` action produces this same
+seed/restore bundle format. That export is intentionally separate from
+the Center config snapshot sent during signed status polling; the Center
+snapshot is a fleet status payload, not an import seed.
+
 ## 13.2 Driver selection
 
 The DB connection bootstrap sits in the `storage` block of

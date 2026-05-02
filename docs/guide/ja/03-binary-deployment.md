@@ -65,6 +65,13 @@ make install TARGET=linux-systemd
 make install TARGET=linux-systemd INSTALL_ROLE=center
 ```
 
+Center を同じホスト上の Gateway security front 経由で公開したい場合は、
+protected Center role を使います。
+
+```bash
+make install TARGET=linux-systemd INSTALL_ROLE=center-protected
+```
+
 主な override は次のように渡します。
 
 ```bash
@@ -96,21 +103,30 @@ systemd ユニット配置）だけです。
 
 ### 3.3.2　role ごとの挙動
 
-`INSTALL_ROLE=gateway` と `INSTALL_ROLE=center` で、対象になる成果物が変わります。
+`INSTALL_ROLE` で、ホストに入る形が変わります。
 
-| 対象 | gateway | center |
-|---|---|---|
-| service unit | `tukuyomi.service` | `tukuyomi-center.service` |
-| env file | `tukuyomi.env` | `tukuyomi-center.env` |
-| config | `conf/config.json` | `conf/config.center.json` |
-| WAF/CRS import | 実行する | 実行しない |
-| 初回 gateway DB seed | 実行する | 実行しない |
-| scheduled-task timer | 実行する | 実行しない |
-| DB migration | 実行する | 実行する |
+| 対象 | gateway | center | center-protected |
+|---|---|---|---|
+| service unit | `tukuyomi.service` | `tukuyomi-center.service` | 両方 |
+| env file | `tukuyomi.env` | `tukuyomi-center.env` | 両方 |
+| config | `conf/config.json` | `conf/config.center.json` | 両方 |
+| WAF/CRS import | 実行する | 実行しない | Gateway front 用に実行する |
+| 初回 gateway DB seed | 実行する | 実行しない | Center route 入りで実行する |
+| scheduled-task timer | 実行する | 実行しない | 実行しない |
+| DB migration | 実行する | 実行する | 両方の DB に実行する |
 
 Center 側は WAF/CRS import や scheduled tasks を持たない点がポイントです。
 Center は Gateway を承認・管理する control plane なので、edge データプレーンの
 資産は持ちません。
+
+`center-protected` は、Center を同一ホストの Gateway front の背後に置くための
+パッケージ済み role です。Center は loopback listener のまま動かし、Gateway
+front の初期 seed には `/center-ui` と `/center-api` を
+`http://127.0.0.1:9092` へ転送する path-scoped route を入れます。導入時には
+Gateway の IoT / Edge device authentication も有効化し、同じホスト上で Center
+承認済みの device として bootstrap します。Gateway の private key は Gateway DB
+にのみ残り、Center には public key identity だけが入ります。既存 DB に異なる
+device trust がある場合は、黙って置き換えず bootstrap を失敗させます。
 
 ### 3.3.3　DB seed の挙動
 

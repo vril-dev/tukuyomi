@@ -36,6 +36,8 @@ make db-import
 
 バンドルルート以外からインポートコマンドを実行する場合は、`WAF_DB_IMPORT_SEED_BUNDLE_FILE` に config bundle のパスを指定してください。
 
+Gateway Status の `Download config` は、この seed／restore 用 bundle format を出力します。この export は、署名付きステータスポーリングで Center へ送る config snapshot とは意図的に分けています。Center snapshot は fleet status payload であり、import seed ではありません。
+
 ## ドライバの選択
 
 DB 接続のブートストラップは、`data/conf/config.json` の `storage` で設定します。

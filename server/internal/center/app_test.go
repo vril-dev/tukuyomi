@@ -156,6 +156,68 @@ func TestCenterLoginFlowUsesIsolatedAdminCookies(t *testing.T) {
 	}
 }
 
+func TestBootstrapApprovedDeviceCreatesApprovedDeviceAndRejectsTrustChange(t *testing.T) {
+	restore := configureCenterAuthTest(t)
+	defer restore()
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer handler.InitLogsStatsStore(false, "", 0)
+
+	fixture := signedEnrollmentFixtureForTest(t, "gateway-a", "default", "nonce-bootstrap-a", time.Now().UTC())
+	publicPEMBytes, err := base64.StdEncoding.DecodeString(fixture.Request.PublicKeyPEMB64)
+	if err != nil {
+		t.Fatalf("decode public key: %v", err)
+	}
+	rec, err := BootstrapApprovedDevice(context.Background(), BootstrapApprovedDeviceInput{
+		DeviceID:                   fixture.Request.DeviceID,
+		KeyID:                      fixture.Request.KeyID,
+		PublicKeyPEM:               string(publicPEMBytes),
+		PublicKeyFingerprintSHA256: fixture.Request.PublicKeyFingerprintSHA256,
+	})
+	if err != nil {
+		t.Fatalf("BootstrapApprovedDevice: %v", err)
+	}
+	if rec.DeviceID != "gateway-a" || rec.Status != DeviceStatusApproved || rec.PublicKeyFingerprintSHA256 != fixture.Request.PublicKeyFingerprintSHA256 {
+		t.Fatalf("unexpected device record: %+v", rec)
+	}
+	enrollments, err := ListEnrollments(context.Background(), EnrollmentStatusApproved, 10)
+	if err != nil {
+		t.Fatalf("ListEnrollments: %v", err)
+	}
+	if len(enrollments) != 1 || enrollments[0].DeviceID != "gateway-a" || enrollments[0].Status != EnrollmentStatusApproved {
+		t.Fatalf("unexpected approved enrollments: %+v", enrollments)
+	}
+
+	again, err := BootstrapApprovedDevice(context.Background(), BootstrapApprovedDeviceInput{
+		DeviceID:                   fixture.Request.DeviceID,
+		KeyID:                      fixture.Request.KeyID,
+		PublicKeyPEM:               string(publicPEMBytes),
+		PublicKeyFingerprintSHA256: fixture.Request.PublicKeyFingerprintSHA256,
+	})
+	if err != nil {
+		t.Fatalf("BootstrapApprovedDevice idempotent: %v", err)
+	}
+	if again.ApprovedEnrollmentID != rec.ApprovedEnrollmentID {
+		t.Fatalf("approved enrollment changed: %d != %d", again.ApprovedEnrollmentID, rec.ApprovedEnrollmentID)
+	}
+
+	other := signedEnrollmentFixtureForTest(t, "gateway-a", "default", "nonce-bootstrap-b", time.Now().UTC())
+	otherPEM, err := base64.StdEncoding.DecodeString(other.Request.PublicKeyPEMB64)
+	if err != nil {
+		t.Fatalf("decode other public key: %v", err)
+	}
+	_, err = BootstrapApprovedDevice(context.Background(), BootstrapApprovedDeviceInput{
+		DeviceID:                   other.Request.DeviceID,
+		KeyID:                      other.Request.KeyID,
+		PublicKeyPEM:               string(otherPEM),
+		PublicKeyFingerprintSHA256: other.Request.PublicKeyFingerprintSHA256,
+	})
+	if err == nil || !strings.Contains(err.Error(), "different trust material") {
+		t.Fatalf("expected trust conflict, got %v", err)
+	}
+}
+
 func TestCenterRuntimeBuildStoresArtifactAndAssignsDevice(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restore := configureCenterAuthTest(t)

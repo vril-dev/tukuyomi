@@ -138,6 +138,24 @@ type edgeDeviceEnrollmentRequest struct {
 	KeyID           string `json:"key_id"`
 }
 
+type CenterProtectedGatewayBootstrapOptions struct {
+	CenterURL                string
+	DeviceID                 string
+	KeyID                    string
+	StatusRefreshIntervalSec int
+	MarkApproved             bool
+}
+
+type CenterProtectedGatewayBootstrapResult struct {
+	DeviceID                   string `json:"device_id"`
+	KeyID                      string `json:"key_id"`
+	PublicKeyPEM               string `json:"public_key_pem"`
+	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
+	CenterURL                  string `json:"center_url"`
+	EnrollmentStatus           string `json:"enrollment_status"`
+	AppConfigUpdated           bool   `json:"app_config_updated"`
+}
+
 type edgeDeviceEnrollmentWireRequest struct {
 	DeviceID                   string `json:"device_id"`
 	KeyID                      string `json:"key_id"`
@@ -620,6 +638,115 @@ func prepareEdgeDeviceIdentity(store *wafEventStore, req edgeDeviceEnrollmentReq
 		return edgeDeviceIdentityRecord{}, err
 	}
 	return identity, nil
+}
+
+func BootstrapCenterProtectedGateway(ctx context.Context, opts CenterProtectedGatewayBootstrapOptions) (CenterProtectedGatewayBootstrapResult, error) {
+	_ = ctx
+	centerURL, _, err := normalizeCenterEnrollmentURL(opts.CenterURL)
+	if err != nil {
+		return CenterProtectedGatewayBootstrapResult{}, err
+	}
+	if opts.StatusRefreshIntervalSec < 0 || opts.StatusRefreshIntervalSec > config.MaxEdgeDeviceStatusRefreshSec {
+		return CenterProtectedGatewayBootstrapResult{}, fmt.Errorf("status refresh interval must be between 0 and %d", config.MaxEdgeDeviceStatusRefreshSec)
+	}
+	store := getLogsStatsStore()
+	if store == nil {
+		return CenterProtectedGatewayBootstrapResult{}, fmt.Errorf("db store is not initialized")
+	}
+
+	appUpdated, err := bootstrapCenterProtectedGatewayAppConfig(opts.StatusRefreshIntervalSec)
+	if err != nil {
+		return CenterProtectedGatewayBootstrapResult{}, err
+	}
+
+	identity, err := prepareEdgeDeviceIdentity(store, edgeDeviceEnrollmentRequest{
+		DeviceID: opts.DeviceID,
+		KeyID:    opts.KeyID,
+	})
+	if err != nil {
+		return CenterProtectedGatewayBootstrapResult{}, err
+	}
+	if opts.MarkApproved && !edgeCanMarkBootstrapApproved(identity.EnrollmentStatus) {
+		return CenterProtectedGatewayBootstrapResult{}, fmt.Errorf("local device identity status %q cannot be auto-approved", identity.EnrollmentStatus)
+	}
+
+	publicPEM, err := edgeDevicePublicKeyPEM(identity)
+	if err != nil {
+		return CenterProtectedGatewayBootstrapResult{}, err
+	}
+
+	now := time.Now().UTC().Unix()
+	identity.CenterURL = centerURL
+	identity.CenterStatusError = ""
+	identity.UpdatedAtUnix = now
+	if opts.MarkApproved {
+		identity.EnrollmentStatus = edgeEnrollmentStatusApproved
+		identity.LastEnrollmentError = ""
+	}
+	if err := upsertEdgeDeviceIdentity(store, identity); err != nil {
+		return CenterProtectedGatewayBootstrapResult{}, err
+	}
+
+	return CenterProtectedGatewayBootstrapResult{
+		DeviceID:                   identity.DeviceID,
+		KeyID:                      identity.KeyID,
+		PublicKeyPEM:               publicPEM,
+		PublicKeyFingerprintSHA256: identity.PublicKeyFingerprintSHA256,
+		CenterURL:                  centerURL,
+		EnrollmentStatus:           identity.EnrollmentStatus,
+		AppConfigUpdated:           appUpdated,
+	}, nil
+}
+
+func bootstrapCenterProtectedGatewayAppConfig(statusRefreshIntervalSec int) (bool, error) {
+	_, etag, cfg, err := loadAppConfigStorage(true)
+	if err != nil {
+		return false, err
+	}
+	changed := false
+	if !cfg.Edge.Enabled {
+		cfg.Edge.Enabled = true
+		changed = true
+	}
+	if !cfg.Edge.DeviceAuth.Enabled {
+		cfg.Edge.DeviceAuth.Enabled = true
+		changed = true
+	}
+	if statusRefreshIntervalSec > 0 && cfg.Edge.DeviceAuth.StatusRefreshIntervalSec != statusRefreshIntervalSec {
+		cfg.Edge.DeviceAuth.StatusRefreshIntervalSec = statusRefreshIntervalSec
+		changed = true
+	} else if cfg.Edge.DeviceAuth.StatusRefreshIntervalSec == 0 {
+		cfg.Edge.DeviceAuth.StatusRefreshIntervalSec = config.DefaultEdgeDeviceStatusRefreshSec
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
+	if _, err := persistSettingsAppConfig(cfg, etag); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func edgeCanMarkBootstrapApproved(status string) bool {
+	switch normalizeEdgeStatus(status) {
+	case "", edgeEnrollmentStatusApproved, edgeEnrollmentStatusFailed, edgeEnrollmentStatusLocal, edgeEnrollmentStatusPending, edgeEnrollmentStatusUnconfigured:
+		return true
+	default:
+		return false
+	}
+}
+
+func edgeDevicePublicKeyPEM(identity edgeDeviceIdentityRecord) (string, error) {
+	_, publicDER, err := parseEdgeDevicePrivateKey(identity.PrivateKeyPEM)
+	if err != nil {
+		return "", err
+	}
+	publicPEM := strings.TrimSpace(string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicDER})))
+	if publicPEM == "" {
+		return "", fmt.Errorf("device public key is empty")
+	}
+	return publicPEM + "\n", nil
 }
 
 type edgeEnrollmentError struct {

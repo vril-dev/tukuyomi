@@ -207,6 +207,91 @@ func TestPostEdgeDeviceEnrollmentCreatesIdentityAndSendsSignedRequest(t *testing
 	}
 }
 
+func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "gateway.db")
+	configPath := filepath.Join(tmp, "config.json")
+	raw := `{
+  "edge": {
+    "enabled": false,
+    "device_auth": {
+      "enabled": false,
+      "status_refresh_interval_sec": 0
+    }
+  },
+  "storage": {
+    "db_driver": "sqlite",
+    "db_path": "db/tukuyomi.db",
+    "db_dsn": ""
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	restoreConfig := saveConfigFilePathForTest(t, configPath)
+	defer restoreConfig()
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer InitLogsStatsStore(false, "", 0)
+
+	first, err := BootstrapCenterProtectedGateway(context.Background(), CenterProtectedGatewayBootstrapOptions{
+		CenterURL: "http://127.0.0.1:9092",
+		DeviceID:  "gateway-a",
+	})
+	if err != nil {
+		t.Fatalf("BootstrapCenterProtectedGateway prepare: %v", err)
+	}
+	if !first.AppConfigUpdated {
+		t.Fatal("expected bootstrap to update app_config")
+	}
+	if first.DeviceID != "gateway-a" || first.KeyID != "default" {
+		t.Fatalf("unexpected identity: %+v", first)
+	}
+	if !strings.Contains(first.PublicKeyPEM, "BEGIN PUBLIC KEY") {
+		t.Fatalf("public key PEM missing header: %q", first.PublicKeyPEM)
+	}
+	if first.EnrollmentStatus != edgeEnrollmentStatusLocal {
+		t.Fatalf("status=%q want local", first.EnrollmentStatus)
+	}
+
+	_, _, cfg, err := loadAppConfigStorage(false)
+	if err != nil {
+		t.Fatalf("load app config: %v", err)
+	}
+	if !cfg.Edge.Enabled || !cfg.Edge.DeviceAuth.Enabled {
+		t.Fatalf("edge config was not enabled: %+v", cfg.Edge)
+	}
+	if cfg.Edge.DeviceAuth.StatusRefreshIntervalSec != config.DefaultEdgeDeviceStatusRefreshSec {
+		t.Fatalf("poll interval=%d want %d", cfg.Edge.DeviceAuth.StatusRefreshIntervalSec, config.DefaultEdgeDeviceStatusRefreshSec)
+	}
+
+	second, err := BootstrapCenterProtectedGateway(context.Background(), CenterProtectedGatewayBootstrapOptions{
+		CenterURL:    "http://127.0.0.1:9092",
+		DeviceID:     "gateway-a",
+		MarkApproved: true,
+	})
+	if err != nil {
+		t.Fatalf("BootstrapCenterProtectedGateway approve: %v", err)
+	}
+	if second.AppConfigUpdated {
+		t.Fatal("second bootstrap should be idempotent for app_config")
+	}
+	if second.PublicKeyFingerprintSHA256 != first.PublicKeyFingerprintSHA256 {
+		t.Fatalf("fingerprint rotated: %q != %q", second.PublicKeyFingerprintSHA256, first.PublicKeyFingerprintSHA256)
+	}
+	if second.EnrollmentStatus != edgeEnrollmentStatusApproved {
+		t.Fatalf("status=%q want approved", second.EnrollmentStatus)
+	}
+	status, err := currentEdgeDeviceAuthStatus()
+	if err != nil {
+		t.Fatalf("currentEdgeDeviceAuthStatus: %v", err)
+	}
+	if status.EnrollmentStatus != edgeEnrollmentStatusApproved || status.CenterURL != "http://127.0.0.1:9092" {
+		t.Fatalf("unexpected current status: %+v", status)
+	}
+}
+
 func TestEdgeDeviceStatusAutoRefreshUpdatesCachedApproval(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)

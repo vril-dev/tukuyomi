@@ -70,6 +70,13 @@ Center on a control-plane host, set it explicitly:
 make install TARGET=linux-systemd INSTALL_ROLE=center
 ```
 
+If the Center should be reachable through a same-host Gateway security
+front, install the protected Center role:
+
+```bash
+make install TARGET=linux-systemd INSTALL_ROLE=center-protected
+```
+
 Common overrides:
 
 ```bash
@@ -103,22 +110,30 @@ user, writing to `/opt/tukuyomi`, installing systemd units).
 
 ### 3.3.2 Per-role behavior
 
-`INSTALL_ROLE=gateway` and `INSTALL_ROLE=center` differ in the
-artifacts they touch:
+`INSTALL_ROLE` decides which host shape is installed:
 
-| Target | gateway | center |
-|---|---|---|
-| service unit | `tukuyomi.service` | `tukuyomi-center.service` |
-| env file | `tukuyomi.env` | `tukuyomi-center.env` |
-| config | `conf/config.json` | `conf/config.center.json` |
-| WAF/CRS import | yes | no |
-| First-run gateway DB seed | yes | no |
-| Scheduled-task timer | yes | no |
-| DB migration | yes | yes |
+| Target | gateway | center | center-protected |
+|---|---|---|---|
+| service unit | `tukuyomi.service` | `tukuyomi-center.service` | both |
+| env file | `tukuyomi.env` | `tukuyomi-center.env` | both |
+| config | `conf/config.json` | `conf/config.center.json` | both |
+| WAF/CRS import | yes | no | yes, for the Gateway front |
+| First-run gateway DB seed | yes | no | yes, with Center routes |
+| Scheduled-task timer | yes | no | no |
+| DB migration | yes | yes | both DBs |
 
 The Center role does not carry WAF/CRS import or scheduled tasks
 because the Center is a control plane that approves and manages
 Gateways; it does not own edge data-plane assets.
+
+The `center-protected` role is the packaged same-host shape for exposing
+Center safely. Center keeps its loopback listener, and the Gateway front
+starts with path-scoped routes for `/center-ui` and `/center-api` to
+`http://127.0.0.1:9092`. During install, the role also enables Gateway
+IoT / Edge device authentication and bootstraps the matching Center approval
+locally. The Gateway private key stays in the Gateway DB; Center receives only
+the public key identity. If an existing DB contains conflicting device trust,
+the bootstrap fails instead of replacing it silently.
 
 ### 3.3.3 DB seeding
 

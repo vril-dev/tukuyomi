@@ -53,6 +53,11 @@ those DB rows are authoritative.
 If the import command runs outside the bundle root, set
 `WAF_DB_IMPORT_SEED_BUNDLE_FILE` to the config bundle path.
 
+The Gateway Status `Download config` action produces this same seed/restore
+bundle format. That export is intentionally separate from the Center config
+snapshot sent during signed status polling; the Center snapshot is a fleet
+status payload, not an import seed.
+
 ## Driver Selection
 
 The DB connection bootstrap is configured in `data/conf/config.json` under

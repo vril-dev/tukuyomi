@@ -9,23 +9,25 @@ import (
 type serverCommandKind string
 
 const (
-	serverCommandServe                 serverCommandKind = "serve"
-	serverCommandCenter                serverCommandKind = "center"
-	serverCommandSupervisor            serverCommandKind = "supervisor"
-	serverCommandWorker                serverCommandKind = "worker"
-	serverCommandReleaseMetadata       serverCommandKind = "release-metadata"
-	serverCommandValidateConfig        serverCommandKind = "validate-config"
-	serverCommandReleaseStatus         serverCommandKind = "release-status"
-	serverCommandReleaseStage          serverCommandKind = "release-stage"
-	serverCommandReleaseActivate       serverCommandKind = "release-activate"
-	serverCommandReleaseRollback       serverCommandKind = "release-rollback"
-	serverCommandDBMigrate             serverCommandKind = "db-migrate"
-	serverCommandDBImport              serverCommandKind = "db-import"
-	serverCommandDBImportPreview       serverCommandKind = "db-import-preview"
-	serverCommandDBImportWAFRuleAssets serverCommandKind = "db-import-waf-rule-assets"
-	serverCommandPreviewPrintTopology  serverCommandKind = "preview-print-topology"
-	serverCommandRunScheduledTasks     serverCommandKind = "run-scheduled-tasks"
-	serverCommandUpdateCountryDB       serverCommandKind = "update-country-db"
+	serverCommandServe                     serverCommandKind = "serve"
+	serverCommandCenter                    serverCommandKind = "center"
+	serverCommandSupervisor                serverCommandKind = "supervisor"
+	serverCommandWorker                    serverCommandKind = "worker"
+	serverCommandReleaseMetadata           serverCommandKind = "release-metadata"
+	serverCommandValidateConfig            serverCommandKind = "validate-config"
+	serverCommandReleaseStatus             serverCommandKind = "release-status"
+	serverCommandReleaseStage              serverCommandKind = "release-stage"
+	serverCommandReleaseActivate           serverCommandKind = "release-activate"
+	serverCommandReleaseRollback           serverCommandKind = "release-rollback"
+	serverCommandDBMigrate                 serverCommandKind = "db-migrate"
+	serverCommandDBImport                  serverCommandKind = "db-import"
+	serverCommandDBImportPreview           serverCommandKind = "db-import-preview"
+	serverCommandDBImportWAFRuleAssets     serverCommandKind = "db-import-waf-rule-assets"
+	serverCommandPreviewPrintTopology      serverCommandKind = "preview-print-topology"
+	serverCommandRunScheduledTasks         serverCommandKind = "run-scheduled-tasks"
+	serverCommandUpdateCountryDB           serverCommandKind = "update-country-db"
+	serverCommandBootstrapProtectedGateway serverCommandKind = "bootstrap-center-protected-gateway"
+	serverCommandBootstrapProtectedCenter  serverCommandKind = "bootstrap-center-protected-center"
 )
 
 const (
@@ -93,6 +95,10 @@ func parseServerCommandWithEnv(args []string, env []string) (serverCommand, erro
 		return serverCommand{kind: serverCommandRunScheduledTasks}, nil
 	case "update-country-db":
 		return serverCommand{kind: serverCommandUpdateCountryDB}, nil
+	case "bootstrap-center-protected-gateway":
+		return serverCommand{kind: serverCommandBootstrapProtectedGateway, args: args[2:]}, nil
+	case "bootstrap-center-protected-center":
+		return serverCommand{kind: serverCommandBootstrapProtectedCenter, args: args[2:]}, nil
 	default:
 		return serverCommand{}, fmt.Errorf("unknown command %q", arg)
 	}

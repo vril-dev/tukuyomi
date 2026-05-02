@@ -54,6 +54,12 @@ Install Center on a control-plane host:
 make install TARGET=linux-systemd INSTALL_ROLE=center
 ```
 
+Install Center behind a same-host Gateway front:
+
+```bash
+make install TARGET=linux-systemd INSTALL_ROLE=center-protected
+```
+
 Common overrides:
 
 ```bash
@@ -79,6 +85,11 @@ Behavior:
 - `INSTALL_ROLE=center` installs `tukuyomi-center.service`,
   `tukuyomi-center.env`, and `conf/config.center.json`; it runs DB migration
   only and skips WAF/CRS import, gateway seed, and scheduled tasks
+- `INSTALL_ROLE=center-protected` installs both `tukuyomi.service` and
+  `tukuyomi-center.service`; Center listens on loopback, while the Gateway seed
+  routes `/center-ui` and `/center-api` to `http://127.0.0.1:9092`. It also
+  enables Gateway IoT / Edge device authentication and locally bootstraps the
+  matching Center approval. It does not install the scheduled-task timer.
 - when `PREFIX` is under the invoking user's home directory,
   `INSTALL_CREATE_USER=auto` uses that user as the runtime user and skips
   `useradd`

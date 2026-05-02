@@ -27,8 +27,10 @@ CRS_VERSION="${CRS_VERSION:-v4.23.0}"
 
 INSTALL_CONFIG_REL=""
 INSTALL_ENV_BASENAME=""
-INSTALL_SERVICE_BASENAME=""
 INSTALL_DERIVED_PROCESS_MODEL=""
+INSTALL_CENTER_CONFIG_REL="conf/config.center.json"
+INSTALL_CENTER_ENV_BASENAME="tukuyomi-center.env"
+INSTALL_CENTER_SERVICE_BASENAME="tukuyomi-center.service"
 
 log() {
   echo "[install] $*"
@@ -54,27 +56,45 @@ install_role_is_gateway() {
   [[ "${INSTALL_ROLE}" == "gateway" ]]
 }
 
+install_role_is_center() {
+  [[ "${INSTALL_ROLE}" == "center" ]]
+}
+
+install_role_is_center_protected() {
+  [[ "${INSTALL_ROLE}" == "center-protected" ]]
+}
+
+install_role_includes_gateway() {
+  [[ "${INSTALL_ROLE}" == "gateway" || "${INSTALL_ROLE}" == "center-protected" ]]
+}
+
+install_role_includes_center() {
+  [[ "${INSTALL_ROLE}" == "center" || "${INSTALL_ROLE}" == "center-protected" ]]
+}
+
 configure_install_role() {
   case "${INSTALL_ROLE}" in
     gateway)
       INSTALL_CONFIG_REL="conf/config.json"
       INSTALL_ENV_BASENAME="tukuyomi.env"
-      INSTALL_SERVICE_BASENAME="tukuyomi.service"
       ;;
     center)
       INSTALL_CONFIG_REL="conf/config.center.json"
       INSTALL_ENV_BASENAME="tukuyomi-center.env"
-      INSTALL_SERVICE_BASENAME="tukuyomi-center.service"
+      ;;
+    center-protected)
+      INSTALL_CONFIG_REL="conf/config.json"
+      INSTALL_ENV_BASENAME="tukuyomi.env"
       ;;
     *)
-      die "INSTALL_ROLE must be gateway or center"
+      die "INSTALL_ROLE must be gateway, center, or center-protected"
       ;;
   esac
 
   if [[ -n "${INSTALL_PROCESS_MODEL}" ]]; then
-    die "INSTALL_PROCESS_MODEL is no longer supported; use INSTALL_ROLE=gateway or INSTALL_ROLE=center"
+    die "INSTALL_PROCESS_MODEL is no longer supported; use INSTALL_ROLE=gateway, INSTALL_ROLE=center, or INSTALL_ROLE=center-protected"
   fi
-  if install_role_is_gateway; then
+  if install_role_includes_gateway; then
     INSTALL_DERIVED_PROCESS_MODEL="supervised"
   else
     INSTALL_DERIVED_PROCESS_MODEL="single"
@@ -174,14 +194,15 @@ install_config_preserve() {
   local mode="$3"
   local overwrite="$4"
   local role="$5"
+  local process_model="$6"
   local tmp
   if [[ -e "${dst}" ]] && ! is_enabled "${overwrite}"; then
     log "preserve existing ${dst}"
-    migrate_config_process_model "${dst}" "${mode}" "${INSTALL_DERIVED_PROCESS_MODEL}"
+    migrate_config_process_model "${dst}" "${mode}" "${process_model}"
     return
   fi
   tmp="$(mktemp)"
-  if ! python3 - "$src" "$tmp" "$role" "$INSTALL_DERIVED_PROCESS_MODEL" <<'PY'
+  if ! python3 - "$src" "$tmp" "$role" "$process_model" <<'PY'
 import json
 import secrets
 import sys
@@ -387,13 +408,19 @@ set_runtime_permissions() {
   if ! use_service_account; then
     return
   fi
-  local conf_file config_file
-  config_file="${RUNTIME_DIR}/${INSTALL_CONFIG_REL}"
+  local conf_file
+  local -a config_files=()
+  if install_role_includes_gateway; then
+    config_files+=("${RUNTIME_DIR}/conf/config.json" "${RUNTIME_DIR}/conf/crs-disabled.conf")
+  fi
+  if install_role_includes_center; then
+    config_files+=("${RUNTIME_DIR}/${INSTALL_CENTER_CONFIG_REL}")
+  fi
   if use_login_user_home_install; then
     run_priv chown -R "${INSTALL_USER}:${INSTALL_GROUP}" "${RUNTIME_DIR}"
     run_priv chmod 755 "${RUNTIME_DIR}"
     run_priv chmod 750 "${RUNTIME_DIR}/conf"
-    for conf_file in "${config_file}" "${RUNTIME_DIR}/conf/crs-disabled.conf"; do
+    for conf_file in "${config_files[@]}"; do
       [[ -e "${conf_file}" ]] || continue
       if [[ -L "${conf_file}" ]]; then
         log "preserve symlink permissions for ${conf_file}"
@@ -410,7 +437,7 @@ set_runtime_permissions() {
   fi
   run_priv chown root:"${INSTALL_GROUP}" "${RUNTIME_DIR}/conf"
   run_priv chmod 750 "${RUNTIME_DIR}/conf"
-  for conf_file in "${config_file}" "${RUNTIME_DIR}/conf/crs-disabled.conf"; do
+  for conf_file in "${config_files[@]}"; do
     [[ -e "${conf_file}" ]] || continue
     if [[ -L "${conf_file}" ]]; then
       log "preserve symlink permissions for ${conf_file}"
@@ -430,7 +457,15 @@ assert_runtime_accessible() {
   if ! use_service_account || is_enabled "${INSTALL_DRY_RUN}"; then
     return
   fi
-  local -a cmd=(test -x "${RUNTIME_DIR}" -a -r "${RUNTIME_DIR}/${INSTALL_CONFIG_REL}" -a -w "${RUNTIME_DIR}/db")
+  local check_script
+  check_script='runtime_dir="$1"; test -x "$runtime_dir" && test -w "$runtime_dir/db"'
+  if install_role_includes_gateway; then
+    check_script="${check_script}"' && test -r "$runtime_dir/conf/config.json"'
+  fi
+  if install_role_includes_center; then
+    check_script="${check_script}"' && test -r "$runtime_dir/conf/config.center.json"'
+  fi
+  local -a cmd=(bash -c "${check_script}" bash "${RUNTIME_DIR}")
   if [[ "${EUID}" -eq 0 && -x /sbin/runuser ]]; then
     /sbin/runuser -u "${INSTALL_USER}" -- "${cmd[@]}" || die "runtime path is not accessible to ${INSTALL_USER}: ${RUNTIME_DIR}; choose INSTALL_USER=$(invoking_user) for a home-directory PREFIX or install under /opt/tukuyomi"
     return
@@ -443,8 +478,10 @@ assert_runtime_accessible() {
   sudo -H -u "${INSTALL_USER}" -- "${cmd[@]}" || die "runtime path is not accessible to ${INSTALL_USER}: ${RUNTIME_DIR}; choose INSTALL_USER=$(invoking_user) for a home-directory PREFIX or install under /opt/tukuyomi"
 }
 
-run_runtime() {
-  local -a env_args=("WAF_CONFIG_FILE=${INSTALL_CONFIG_REL}")
+run_runtime_with_config() {
+  local config_rel="$1"
+  shift
+  local -a env_args=("WAF_CONFIG_FILE=${config_rel}")
   while [[ "$#" -gt 0 && "$1" == *=* ]]; do
     env_args+=("$1")
     shift
@@ -473,9 +510,14 @@ run_runtime() {
   sudo -H -u "${INSTALL_USER}" -- bash -c 'cd "$1" && shift && "$@"' bash "${RUNTIME_DIR}" "${cmd[@]}"
 }
 
+run_runtime() {
+  run_runtime_with_config "${INSTALL_CONFIG_REL}" "$@"
+}
+
 read_storage_field() {
-  local field="$1"
-  python3 - "$RUNTIME_DIR/${INSTALL_CONFIG_REL}" "$field" <<'PY'
+  local config_rel="$1"
+  local field="$2"
+  python3 - "$RUNTIME_DIR/${config_rel}" "$field" <<'PY'
 import json
 import sys
 
@@ -488,10 +530,11 @@ PY
 }
 
 sqlite_db_exists_before_migrate() {
+  local config_rel="$1"
   local driver db_path db_file
-  driver="$(read_storage_field db_driver | tr '[:upper:]' '[:lower:]')"
+  driver="$(read_storage_field "${config_rel}" db_driver | tr '[:upper:]' '[:lower:]')"
   [[ "${driver}" == "sqlite" ]] || return 2
-  db_path="$(read_storage_field db_path)"
+  db_path="$(read_storage_field "${config_rel}" db_path)"
   [[ -n "${db_path}" ]] || return 1
   if [[ "${db_path}" == /* ]]; then
     db_file="${db_path}"
@@ -502,22 +545,36 @@ sqlite_db_exists_before_migrate() {
 }
 
 should_seed_db() {
+  local config_rel="$1"
   case "${INSTALL_DB_SEED}" in
     always) return 0 ;;
     never) return 1 ;;
   esac
 
   local driver
-  driver="$(read_storage_field db_driver | tr '[:upper:]' '[:lower:]')"
+  driver="$(read_storage_field "${config_rel}" db_driver | tr '[:upper:]' '[:lower:]')"
   if [[ "${driver}" != "sqlite" ]]; then
     log "INSTALL_DB_SEED=auto skips db-import for ${driver}; use INSTALL_DB_SEED=always for a known-empty external DB"
     return 1
   fi
-  if sqlite_db_exists_before_migrate; then
+  if sqlite_db_exists_before_migrate "${config_rel}"; then
     log "existing SQLite DB detected; skip db-import seed"
     return 1
   fi
   return 0
+}
+
+bootstrap_center_protected_enrollment() {
+  install_role_is_center_protected || return 0
+  local identity_rel="data/tmp/center-protected-device.json"
+  local approved_rel="data/tmp/center-protected-approved-device.json"
+  local center_url="http://127.0.0.1:9092"
+  log "bootstrap center-protected Gateway enrollment"
+  run_runtime bootstrap-center-protected-gateway --center-url "${center_url}" --out "${identity_rel}"
+  run_runtime_with_config "${INSTALL_CENTER_CONFIG_REL}" bootstrap-center-protected-center --in "${identity_rel}" --out "${approved_rel}"
+  run_runtime bootstrap-center-protected-gateway --center-url "${center_url}" --mark-approved --out "${identity_rel}"
+  run_priv rm -f "${RUNTIME_DIR}/${identity_rel}" || true
+  run_priv rm -f "${RUNTIME_DIR}/${approved_rel}" || true
 }
 
 build_if_needed() {
@@ -526,6 +583,68 @@ build_if_needed() {
     return
   fi
   run_cmd make -C "${ROOT_DIR}" build
+}
+
+write_center_protected_seed_bundle() {
+  local src="${ROOT_DIR}/seeds/conf/config-bundle.json"
+  local dst="${RUNTIME_DIR}/seeds/conf/config-bundle.json"
+  local tmp
+  tmp="$(mktemp)"
+  if ! python3 - "$src" "$tmp" <<'PY'
+import json
+import sys
+
+src, dst = sys.argv[1:3]
+with open(src, encoding="utf-8") as fh:
+    bundle = json.load(fh)
+if not isinstance(bundle, dict):
+    raise SystemExit("config bundle root must be an object")
+domains = bundle.setdefault("domains", {})
+if not isinstance(domains, dict):
+    raise SystemExit("config bundle domains must be an object")
+proxy = domains.get("proxy")
+if not isinstance(proxy, dict):
+    proxy = {}
+proxy["upstreams"] = [
+    {
+        "enabled": True,
+        "name": "center",
+        "url": "http://127.0.0.1:9092",
+        "weight": 1,
+    }
+]
+proxy["backend_pools"] = []
+proxy["routes"] = [
+    {
+        "name": "center-api",
+        "priority": 10,
+        "match": {"path": {"type": "prefix", "value": "/center-api"}},
+        "action": {"upstream": "center"},
+    },
+    {
+        "name": "center-ui",
+        "priority": 20,
+        "match": {"path": {"type": "prefix", "value": "/center-ui"}},
+        "action": {"upstream": "center"},
+    },
+]
+proxy["default_route"] = None
+proxy["health_check_path"] = "/healthz"
+domains["proxy"] = proxy
+bundle["source"] = "center-protected-seed"
+with open(dst, "w", encoding="utf-8") as fh:
+    json.dump(bundle, fh, indent=2, sort_keys=True)
+    fh.write("\n")
+PY
+  then
+    rm -f "${tmp}"
+    return 1
+  fi
+  run_priv install -m 644 "${tmp}" "${dst}" || {
+    rm -f "${tmp}"
+    return 1
+  }
+  rm -f "${tmp}"
 }
 
 install_files() {
@@ -550,23 +669,28 @@ install_files() {
 
   [[ -x "${ROOT_DIR}/bin/tukuyomi" ]] || die "missing built binary: ${ROOT_DIR}/bin/tukuyomi"
   [[ -f "${ROOT_DIR}/data/conf/config.json" ]] || die "missing bootstrap config: data/conf/config.json"
-  if install_role_is_gateway; then
+  if install_role_includes_gateway; then
     [[ -f "${ROOT_DIR}/seeds/conf/config-bundle.json" ]] || die "missing runtime seed bundle: seeds/conf/config-bundle.json"
   fi
 
   run_priv install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${RUNTIME_DIR}/bin/tukuyomi"
-  if install_role_is_gateway; then
+  if install_role_includes_gateway; then
     run_priv install -m 755 "${ROOT_DIR}/scripts/update_country_db.sh" "${RUNTIME_DIR}/scripts/update_country_db.sh"
     run_priv cp -R "${ROOT_DIR}/seeds/conf/." "${RUNTIME_DIR}/seeds/conf/"
   fi
-  install_config_preserve "${ROOT_DIR}/data/conf/config.json" "${RUNTIME_DIR}/${INSTALL_CONFIG_REL}" 644 "${INSTALL_OVERWRITE_CONFIG}" "${INSTALL_ROLE}"
-  if install_role_is_gateway; then
+  if install_role_is_center_protected; then
+    write_center_protected_seed_bundle
+  fi
+  if install_role_includes_gateway; then
+    install_config_preserve "${ROOT_DIR}/data/conf/config.json" "${RUNTIME_DIR}/conf/config.json" 644 "${INSTALL_OVERWRITE_CONFIG}" "gateway" "supervised"
     render_env_preserve "${ROOT_DIR}/docs/build/tukuyomi.env.example" "${env_dir}/${INSTALL_ENV_BASENAME}" "${INSTALL_OVERWRITE_ENV}"
-  else
-    render_env_preserve "${ROOT_DIR}/docs/build/tukuyomi-center.env.example" "${env_dir}/${INSTALL_ENV_BASENAME}" "${INSTALL_OVERWRITE_ENV}"
+  fi
+  if install_role_includes_center; then
+    install_config_preserve "${ROOT_DIR}/data/conf/config.json" "${RUNTIME_DIR}/${INSTALL_CENTER_CONFIG_REL}" 644 "${INSTALL_OVERWRITE_CONFIG}" "center" "single"
+    render_env_preserve "${ROOT_DIR}/docs/build/tukuyomi-center.env.example" "${env_dir}/${INSTALL_CENTER_ENV_BASENAME}" "${INSTALL_OVERWRITE_ENV}"
   fi
 
-  if install_role_is_gateway && [[ ! -e "${RUNTIME_DIR}/conf/crs-disabled.conf" ]]; then
+  if install_role_includes_gateway && [[ ! -e "${RUNTIME_DIR}/conf/crs-disabled.conf" ]]; then
     run_priv touch "${RUNTIME_DIR}/conf/crs-disabled.conf"
   fi
 
@@ -574,25 +698,30 @@ install_files() {
 
   if is_enabled "${INSTALL_ENABLE_SYSTEMD}"; then
     run_priv install -d -m 755 "${systemd_dir}"
-    if install_role_is_gateway; then
+    if install_role_includes_gateway; then
       render_systemd_unit "${ROOT_DIR}/docs/build/tukuyomi.service.example" "${systemd_dir}/tukuyomi.service" "${INSTALL_ENV_BASENAME}"
-      render_systemd_unit "${ROOT_DIR}/docs/build/tukuyomi-scheduled-tasks.service.example" "${systemd_dir}/tukuyomi-scheduled-tasks.service" "${INSTALL_ENV_BASENAME}"
-      run_priv install -m 644 "${ROOT_DIR}/docs/build/tukuyomi-scheduled-tasks.timer.example" "${systemd_dir}/tukuyomi-scheduled-tasks.timer"
-    else
-      render_systemd_unit "${ROOT_DIR}/docs/build/tukuyomi-center.service.example" "${systemd_dir}/tukuyomi-center.service" "${INSTALL_ENV_BASENAME}"
+      if install_role_is_gateway; then
+        render_systemd_unit "${ROOT_DIR}/docs/build/tukuyomi-scheduled-tasks.service.example" "${systemd_dir}/tukuyomi-scheduled-tasks.service" "${INSTALL_ENV_BASENAME}"
+        run_priv install -m 644 "${ROOT_DIR}/docs/build/tukuyomi-scheduled-tasks.timer.example" "${systemd_dir}/tukuyomi-scheduled-tasks.timer"
+      fi
+    fi
+    if install_role_includes_center; then
+      render_systemd_unit "${ROOT_DIR}/docs/build/tukuyomi-center.service.example" "${systemd_dir}/tukuyomi-center.service" "${INSTALL_CENTER_ENV_BASENAME}"
     fi
   fi
 }
 
 initialize_db() {
-  if ! install_role_is_gateway; then
-    run_runtime db-migrate
-    log "center role skips WAF/CRS asset import and gateway DB seed"
-    return
+  if install_role_includes_center; then
+    run_runtime_with_config "${INSTALL_CENTER_CONFIG_REL}" db-migrate
+    if install_role_is_center; then
+      log "center role skips WAF/CRS asset import and gateway DB seed"
+      return
+    fi
   fi
 
   local seed_db="0"
-  if should_seed_db; then
+  if should_seed_db "${INSTALL_CONFIG_REL}"; then
     seed_db="1"
   fi
 
@@ -613,6 +742,21 @@ initialize_db() {
   if [[ "${seed_db}" == "1" ]]; then
     run_runtime db-import
   fi
+  bootstrap_center_protected_enrollment
+}
+
+activate_service() {
+  local service="$1"
+  if is_enabled "${INSTALL_ENABLE_BOOT}"; then
+    run_priv systemctl enable "${service}"
+  fi
+  if is_enabled "${INSTALL_START}"; then
+    if systemctl is-active --quiet "${service}"; then
+      run_priv systemctl restart "${service}"
+    else
+      run_priv systemctl start "${service}"
+    fi
+  fi
 }
 
 activate_systemd() {
@@ -622,31 +766,22 @@ activate_systemd() {
   command -v systemctl >/dev/null 2>&1 || die "systemctl is required when INSTALL_ENABLE_SYSTEMD=1"
   run_priv systemctl daemon-reload
 
-  if is_enabled "${INSTALL_ENABLE_BOOT}"; then
-    run_priv systemctl enable "${INSTALL_SERVICE_BASENAME}"
+  if install_role_includes_center; then
+    activate_service "${INSTALL_CENTER_SERVICE_BASENAME}"
   fi
-  if is_enabled "${INSTALL_START}"; then
-    if systemctl is-active --quiet "${INSTALL_SERVICE_BASENAME}"; then
-      run_priv systemctl restart "${INSTALL_SERVICE_BASENAME}"
-    else
-      run_priv systemctl start "${INSTALL_SERVICE_BASENAME}"
-    fi
+  if install_role_includes_gateway; then
+    activate_service "tukuyomi.service"
   fi
 
-  if ! install_role_is_gateway; then
-    if is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
-      log "center role does not install scheduled-task timer"
-    fi
-    return
-  fi
-
-  if is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
+  if install_role_is_gateway && is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
     if is_enabled "${INSTALL_ENABLE_BOOT}"; then
       run_priv systemctl enable tukuyomi-scheduled-tasks.timer
     fi
     if is_enabled "${INSTALL_START}"; then
       run_priv systemctl start tukuyomi-scheduled-tasks.timer
     fi
+  elif is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
+    log "${INSTALL_ROLE} role does not install scheduled-task timer"
   fi
 }
 

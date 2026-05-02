@@ -380,6 +380,24 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
     void loadConfigSnapshots(managedDeviceID, configSnapshotOffset);
   }, [managedDeviceID, configSnapshotOffset, loadConfigSnapshots]);
 
+  useEffect(() => {
+    if (!configSnapshotViewer) {
+      return;
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setConfigSnapshotViewer(null);
+      }
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [configSnapshotViewer]);
+
   async function viewConfigSnapshot(deviceID: string, revision: string) {
     setConfigSnapshotMessage("");
     setConfigSnapshotViewer(null);
@@ -705,24 +723,42 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                   </div>
                 </div>
                 {configSnapshotMessage ? <p className="form-message error">{configSnapshotMessage}</p> : null}
-                {configSnapshotViewer ? (
-                  <div className="snapshot-viewer">
-                    <div className="device-detail-section-header">
-                      <div>
-                        <h3>{tx("Config JSON")}</h3>
-                        <p className="section-note">R: {shortRevision(configSnapshotViewer.revision)}</p>
-                      </div>
-                      <button type="button" className="secondary" onClick={() => setConfigSnapshotViewer(null)}>
-                        {tx("Close")}
-                      </button>
-                    </div>
-                    <pre>{configSnapshotViewer.payload}</pre>
-                  </div>
-                ) : null}
               </div>
             </>
           ) : null}
         </section>
+        {configSnapshotViewer ? (
+          <div
+            className="config-snapshot-modal-backdrop"
+            role="presentation"
+            onMouseDown={() => setConfigSnapshotViewer(null)}
+          >
+            <div
+              className="config-snapshot-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="config-snapshot-modal-title"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <div className="device-detail-section-header">
+                <div>
+                  <h3 id="config-snapshot-modal-title">{tx("Config JSON")}</h3>
+                  <p className="section-note">R: {shortRevision(configSnapshotViewer.revision)}</p>
+                </div>
+                <button type="button" className="secondary" onClick={() => setConfigSnapshotViewer(null)}>
+                  {tx("Close")}
+                </button>
+              </div>
+              <textarea
+                className="rules-json-editor config-snapshot-json"
+                value={configSnapshotViewer.payload}
+                readOnly
+                spellCheck={false}
+                aria-label={tx("Config JSON")}
+              />
+            </div>
+          </div>
+        ) : null}
       </div>
     );
   }

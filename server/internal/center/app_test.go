@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +29,7 @@ import (
 	"tukuyomi/internal/adminauth"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/edgeartifactbundle"
+	"tukuyomi/internal/edgeconfigsnapshot"
 	"tukuyomi/internal/handler"
 	"tukuyomi/internal/runtimeartifactbundle"
 )
@@ -106,7 +108,7 @@ func TestCenterLoginFlowUsesIsolatedAdminCookies(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
 
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 30); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -202,7 +204,7 @@ func TestCenterAuthIgnoresGlobalAuthDisable(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
 
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 30); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -251,7 +253,7 @@ func TestCenterAuthIgnoresGlobalAuthDisable(t *testing.T) {
 func TestBootstrapApprovedDeviceCreatesApprovedDeviceAndRejectsTrustChange(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 30); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -503,7 +505,7 @@ func TestCenterRuntimeBuildStoresArtifactAndAssignsDevice(t *testing.T) {
 	restoreBuilder := replaceRuntimeBuildRunnerForTest(fakeRuntimeBuildRunner{})
 	defer restoreBuilder()
 
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 30); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -668,7 +670,7 @@ func TestStoreRuntimeArtifactBundleIsIdempotentForSameRevision(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
 
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 30); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -702,12 +704,122 @@ func TestStoreRuntimeArtifactBundleIsIdempotentForSameRevision(t *testing.T) {
 	}
 }
 
+func TestCenterProxyRuleAssignmentQueue(t *testing.T) {
+	restore := configureCenterAuthTest(t)
+	defer restore()
+
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer handler.InitLogsStatsStore(false, "", 0)
+
+	fixture := signedEnrollmentFixtureForTest(t, "proxy-rule-device", "key-1", "nonce-proxy-rule", time.Now().UTC())
+	publicKeyPEM, err := base64.StdEncoding.DecodeString(fixture.Request.PublicKeyPEMB64)
+	if err != nil {
+		t.Fatalf("decode public key: %v", err)
+	}
+	if _, err := BootstrapApprovedDevice(context.Background(), BootstrapApprovedDeviceInput{
+		DeviceID:                   fixture.Request.DeviceID,
+		KeyID:                      fixture.Request.KeyID,
+		PublicKeyPEM:               string(publicKeyPEM),
+		PublicKeyFingerprintSHA256: fixture.Fingerprint,
+		Actor:                      "test",
+	}); err != nil {
+		t.Fatalf("BootstrapApprovedDevice: %v", err)
+	}
+
+	currentRaw, currentETag, _, err := handler.NormalizeProxyRulesRawStandalone(`{"upstreams":[{"name":"current","url":"http://127.0.0.1:8080"}]}`)
+	if err != nil {
+		t.Fatalf("normalize current proxy rules: %v", err)
+	}
+	builder := edgeconfigsnapshot.New(fixture.Request.DeviceID, fixture.Request.KeyID, "test-build", "go-test")
+	builder.AddRawDomain("proxy", currentETag, []byte(currentRaw))
+	snapshot, err := builder.Build()
+	if err != nil {
+		t.Fatalf("build config snapshot: %v", err)
+	}
+	if _, err := StoreDeviceConfigSnapshot(context.Background(), DeviceConfigSnapshotInsert{
+		DeviceID:       fixture.Request.DeviceID,
+		Revision:       snapshot.Revision,
+		PayloadHash:    snapshot.PayloadHash,
+		PayloadJSON:    snapshot.PayloadRaw,
+		ReceivedAtUnix: time.Now().UTC().Unix(),
+	}); err != nil {
+		t.Fatalf("StoreDeviceConfigSnapshot: %v", err)
+	}
+
+	bundle, err := BuildProxyRuleBundleForDevice(context.Background(), ProxyRuleBundleBuild{
+		DeviceID:             fixture.Request.DeviceID,
+		Raw:                  `{"upstreams":[{"name":"next","url":"http://127.0.0.1:8081"}]}`,
+		SourceConfigRevision: snapshot.Revision,
+		SourceProxyETag:      currentETag,
+		CreatedBy:            "tester",
+	})
+	if err != nil {
+		t.Fatalf("BuildProxyRuleBundleForDevice: %v", err)
+	}
+	if bundle.BundleRevision == "" || bundle.PayloadETag == "" || bundle.PayloadHash == "" {
+		t.Fatalf("bundle missing identity: %+v", bundle)
+	}
+	assignment, err := AssignProxyRuleBundleToDevice(context.Background(), ProxyRuleAssignmentUpdate{
+		DeviceID:       fixture.Request.DeviceID,
+		BundleRevision: bundle.BundleRevision,
+		Reason:         "test assignment",
+		AssignedBy:     "tester",
+	})
+	if err != nil {
+		t.Fatalf("AssignProxyRuleBundleToDevice: %v", err)
+	}
+	if assignment.BundleRevision != bundle.BundleRevision || assignment.BaseProxyETag != currentETag {
+		t.Fatalf("assignment mismatch: %+v bundle=%+v", assignment, bundle)
+	}
+	pending, err := PendingProxyRuleAssignmentForDevice(context.Background(), fixture.Request.DeviceID, time.Now().UTC().Unix())
+	if err != nil {
+		t.Fatalf("PendingProxyRuleAssignmentForDevice: %v", err)
+	}
+	if pending == nil || pending.BundleRevision != bundle.BundleRevision || pending.PayloadETag != bundle.PayloadETag {
+		t.Fatalf("pending assignment mismatch: %+v bundle=%+v", pending, bundle)
+	}
+	if cleared, err := ClearProxyRuleAssignment(context.Background(), fixture.Request.DeviceID); !errors.Is(err, ErrProxyRuleAssignmentDispatched) || cleared {
+		t.Fatalf("ClearProxyRuleAssignment dispatched cleared=%v err=%v", cleared, err)
+	}
+	downloaded, body, err := ProxyRuleBundleDownloadForDevice(context.Background(), fixture.Request.DeviceID, bundle.BundleRevision, bundle.PayloadHash)
+	if err != nil {
+		t.Fatalf("ProxyRuleBundleDownloadForDevice: %v", err)
+	}
+	if downloaded.PayloadETag != bundle.PayloadETag || string(body) != string(bundle.PayloadJSON) {
+		t.Fatalf("downloaded bundle mismatch: downloaded=%+v body=%s bundle=%+v", downloaded, string(body), bundle)
+	}
+	if err := UpsertProxyRuleApplyStatus(context.Background(), ProxyRuleApplyStatusRecord{
+		DeviceID:              fixture.Request.DeviceID,
+		DesiredBundleRevision: bundle.BundleRevision,
+		LocalProxyETag:        "proxy:38:" + proxyRuleETagContentHash(bundle.PayloadETag),
+		ApplyState:            "applied",
+		UpdatedAtUnix:         time.Now().UTC().Unix(),
+	}); err != nil {
+		t.Fatalf("UpsertProxyRuleApplyStatus: %v", err)
+	}
+	view, err := ProxyRulesDeploymentForDevice(context.Background(), fixture.Request.DeviceID)
+	if err != nil {
+		t.Fatalf("ProxyRulesDeploymentForDevice: %v", err)
+	}
+	if view.Assignment != nil {
+		t.Fatalf("terminal proxy rule assignment must be removed: %+v", view.Assignment)
+	}
+	if view.ApplyStatus == nil || view.ApplyStatus.ApplyState != "applied" {
+		t.Fatalf("apply status missing: %+v", view.ApplyStatus)
+	}
+	if len(view.Bundles) != 1 || view.Bundles[0].ApplyState != "applied" || view.Bundles[0].AppliedAtUnix <= 0 {
+		t.Fatalf("bundle apply history missing: %+v", view.Bundles)
+	}
+}
+
 func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restore := configureCenterAuthTest(t)
 	defer restore()
 
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 30); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -1548,7 +1660,7 @@ func TestCenterDeviceRevokeApprovalFlow(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
 
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 30); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -1733,7 +1845,7 @@ func TestCenterAccountManagementFlow(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
 
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 30); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)

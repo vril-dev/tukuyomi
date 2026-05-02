@@ -7,6 +7,7 @@ import { useI18n } from "@/lib/i18n";
 import { getUIBasePath } from "@/lib/runtime";
 import DeviceApprovalsPage from "@/pages/DeviceApprovalsPage";
 import Login from "@/pages/Login";
+import ProxyRulesPage from "@/pages/ProxyRulesPage";
 import RuntimePage from "@/pages/RuntimePage";
 import SettingsPage from "@/pages/SettingsPage";
 import StatusPage from "@/pages/StatusPage";
@@ -66,6 +67,14 @@ function LegacyRuntimeRedirect() {
   return <Navigate to={`/device-approvals/devices/${encodeURIComponent(deviceID)}/runtime`} replace />;
 }
 
+function LegacyRulesRedirect() {
+  const { deviceID = "" } = useParams();
+  if (!deviceID) {
+    return <Navigate to="/device-approvals" replace />;
+  }
+  return <Navigate to={`/device-approvals/devices/${encodeURIComponent(deviceID)}/proxy-rules`} replace />;
+}
+
 function CenterRoutes() {
   const [loginNoticeKey, setLoginNoticeKey] = useState("");
 
@@ -81,6 +90,8 @@ function CenterRoutes() {
         <Route path="device-approvals" element={<DeviceApprovalsPage focusApprovals />} />
         <Route path="device-approvals/devices/:deviceID" element={<DeviceApprovalsPage />} />
         <Route path="device-approvals/devices/:deviceID/runtime" element={<RuntimePage />} />
+        <Route path="device-approvals/devices/:deviceID/proxy-rules" element={<ProxyRulesPage />} />
+        <Route path="device-approvals/devices/:deviceID/rules" element={<LegacyRulesRedirect />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="runtimes" element={<Navigate to="/device-approvals" replace />} />
         <Route path="runtimes/devices/:deviceID" element={<LegacyRuntimeRedirect />} />

@@ -1353,6 +1353,24 @@ func TestPostEdgeDeviceEnrollmentRejectsInvalidBoundaryInput(t *testing.T) {
 	}
 }
 
+func TestEdgeProxyRuleAssignmentBaseMatchesSameContentGeneration(t *testing.T) {
+	if !edgeProxyRuleAssignmentBaseMatches(
+		"proxy:23:2a652ffdf1c197900c218af0ee3001e096c95f",
+		"proxy:21:2a652ffdf1c197900c218af0ee3001e096c95f",
+	) {
+		t.Fatal("same proxy content hash across generations should match")
+	}
+	if edgeProxyRuleAssignmentBaseMatches(
+		"proxy:23:2a652ffdf1c197900c218af0ee3001e096c95f",
+		"proxy:21:different",
+	) {
+		t.Fatal("different proxy content hash should not match")
+	}
+	if edgeProxyRuleAssignmentBaseMatches("", "proxy:21:2a652ffdf1c197900c218af0ee3001e096c95f") {
+		t.Fatal("empty current etag should not match")
+	}
+}
+
 func performEdgeDeviceRequest(router http.Handler, method string, path string, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if body != "" {

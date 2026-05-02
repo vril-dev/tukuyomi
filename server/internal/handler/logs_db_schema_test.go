@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const latestSchemaMigrationVersionForTest = 29
+const latestSchemaMigrationVersionForTest = 31
 
 func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
@@ -88,6 +88,10 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		"center_device_runtime_apply_status",
 		"center_rule_artifact_bundles",
 		"center_rule_artifact_files",
+		"center_proxy_rule_bundles",
+		"center_device_proxy_rule_assignments",
+		"center_device_proxy_rule_apply_status",
+		"center_device_proxy_rule_apply_history",
 		"edge_device_identities",
 	} {
 		var name string
@@ -184,6 +188,15 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		{table: "center_device_runtime_assignments", column: "dispatched_at_unix"},
 		{table: "center_device_runtime_apply_status", column: "local_artifact_revision"},
 		{table: "center_device_runtime_apply_status", column: "apply_state"},
+		{table: "center_proxy_rule_bundles", column: "bundle_revision"},
+		{table: "center_proxy_rule_bundles", column: "payload_etag"},
+		{table: "center_proxy_rule_bundles", column: "payload_hash"},
+		{table: "center_device_proxy_rule_assignments", column: "bundle_revision"},
+		{table: "center_device_proxy_rule_assignments", column: "dispatched_at_unix"},
+		{table: "center_device_proxy_rule_apply_status", column: "local_proxy_etag"},
+		{table: "center_device_proxy_rule_apply_status", column: "apply_state"},
+		{table: "center_device_proxy_rule_apply_history", column: "bundle_revision"},
+		{table: "center_device_proxy_rule_apply_history", column: "applied_at_unix"},
 		{table: "edge_device_identities", column: "center_product_id"},
 		{table: "edge_device_identities", column: "center_status_checked_at_unix"},
 		{table: "edge_device_identities", column: "center_status_error"},

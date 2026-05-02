@@ -132,6 +132,7 @@ type DeviceRuntimeInventory struct {
 	DistroVersion              string
 	RuntimeDeploymentSupported bool
 	RuntimeInventory           []DeviceRuntimeSummary
+	ProxyRuleApplyStatus       *DeviceProxyRuleApplyStatus
 }
 
 type BootstrapApprovedDeviceInput struct {
@@ -642,6 +643,25 @@ UPDATE center_devices
 		}
 		if err := updateRuntimeApplyStatusFromSummariesTx(ctx, tx, driver, deviceID, inventory.RuntimeInventory, seenAtUnix); err != nil {
 			return err
+		}
+		if inventory.ProxyRuleApplyStatus != nil {
+			status := ProxyRuleApplyStatusRecord{
+				DeviceID:              deviceID,
+				DesiredBundleRevision: inventory.ProxyRuleApplyStatus.DesiredBundleRevision,
+				LocalProxyETag:        inventory.ProxyRuleApplyStatus.LocalProxyETag,
+				ApplyState:            inventory.ProxyRuleApplyStatus.ApplyState,
+				ApplyError:            inventory.ProxyRuleApplyStatus.ApplyError,
+				UpdatedAtUnix:         seenAtUnix,
+			}
+			if status.ApplyState != "" {
+				status.LastAttemptAtUnix = seenAtUnix
+			}
+			if err := upsertProxyRuleApplyStatusTx(ctx, tx, driver, status); err != nil {
+				return err
+			}
+			if err := deleteTerminalProxyRuleAssignmentForStatusTx(ctx, tx, driver, status); err != nil {
+				return err
+			}
 		}
 		return tx.Commit()
 	})

@@ -23,13 +23,14 @@ import (
 )
 
 const (
-	MaxEnrollmentBodyBytes              = 64 * 1024
-	MaxDeviceStatusBodyBytes            = 64 * 1024
-	MaxDeviceConfigSnapshotBodyBytes    = 3 * 1024 * 1024
-	MaxDeviceConfigSnapshotPayloadBytes = 2 * 1024 * 1024
-	MaxRuleArtifactBundleBodyBytes      = 12 * 1024 * 1024
-	MaxRuntimeArtifactDownloadBodyBytes = 16 * 1024
-	enrollmentFreshness                 = 10 * time.Minute
+	MaxEnrollmentBodyBytes               = 64 * 1024
+	MaxDeviceStatusBodyBytes             = 64 * 1024
+	MaxDeviceConfigSnapshotBodyBytes     = 3 * 1024 * 1024
+	MaxDeviceConfigSnapshotPayloadBytes  = 2 * 1024 * 1024
+	MaxRuleArtifactBundleBodyBytes       = 12 * 1024 * 1024
+	MaxRuntimeArtifactDownloadBodyBytes  = 16 * 1024
+	MaxProxyRulesBundleDownloadBodyBytes = 16 * 1024
+	enrollmentFreshness                  = 10 * time.Minute
 )
 
 var (
@@ -55,24 +56,25 @@ type EnrollmentRequest struct {
 }
 
 type DeviceStatusRequest struct {
-	DeviceID                   string                 `json:"device_id"`
-	KeyID                      string                 `json:"key_id"`
-	PublicKeyFingerprintSHA256 string                 `json:"public_key_fingerprint_sha256"`
-	Timestamp                  string                 `json:"timestamp"`
-	Nonce                      string                 `json:"nonce"`
-	RuntimeRole                string                 `json:"runtime_role,omitempty"`
-	BuildVersion               string                 `json:"build_version,omitempty"`
-	GoVersion                  string                 `json:"go_version,omitempty"`
-	OS                         string                 `json:"os,omitempty"`
-	Arch                       string                 `json:"arch,omitempty"`
-	KernelVersion              string                 `json:"kernel_version,omitempty"`
-	DistroID                   string                 `json:"distro_id,omitempty"`
-	DistroIDLike               string                 `json:"distro_id_like,omitempty"`
-	DistroVersion              string                 `json:"distro_version,omitempty"`
-	RuntimeDeploymentSupported bool                   `json:"runtime_deployment_supported,omitempty"`
-	RuntimeInventory           []DeviceRuntimeSummary `json:"runtime_inventory,omitempty"`
-	BodyHash                   string                 `json:"body_hash"`
-	SignatureB64               string                 `json:"signature_b64"`
+	DeviceID                   string                      `json:"device_id"`
+	KeyID                      string                      `json:"key_id"`
+	PublicKeyFingerprintSHA256 string                      `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string                      `json:"timestamp"`
+	Nonce                      string                      `json:"nonce"`
+	RuntimeRole                string                      `json:"runtime_role,omitempty"`
+	BuildVersion               string                      `json:"build_version,omitempty"`
+	GoVersion                  string                      `json:"go_version,omitempty"`
+	OS                         string                      `json:"os,omitempty"`
+	Arch                       string                      `json:"arch,omitempty"`
+	KernelVersion              string                      `json:"kernel_version,omitempty"`
+	DistroID                   string                      `json:"distro_id,omitempty"`
+	DistroIDLike               string                      `json:"distro_id_like,omitempty"`
+	DistroVersion              string                      `json:"distro_version,omitempty"`
+	RuntimeDeploymentSupported bool                        `json:"runtime_deployment_supported,omitempty"`
+	RuntimeInventory           []DeviceRuntimeSummary      `json:"runtime_inventory,omitempty"`
+	ProxyRuleApplyStatus       *DeviceProxyRuleApplyStatus `json:"proxy_rule_apply_status,omitempty"`
+	BodyHash                   string                      `json:"body_hash"`
+	SignatureB64               string                      `json:"signature_b64"`
 }
 
 type DeviceRuntimeSummary struct {
@@ -93,6 +95,13 @@ type DeviceRuntimeSummary struct {
 	ApplyState          string   `json:"apply_state,omitempty"`
 	ApplyError          string   `json:"apply_error,omitempty"`
 	UpdatedAtUnix       int64    `json:"updated_at_unix,omitempty"`
+}
+
+type DeviceProxyRuleApplyStatus struct {
+	DesiredBundleRevision string `json:"desired_bundle_revision,omitempty"`
+	LocalProxyETag        string `json:"local_proxy_etag,omitempty"`
+	ApplyState            string `json:"apply_state,omitempty"`
+	ApplyError            string `json:"apply_error,omitempty"`
 }
 
 type DeviceConfigSnapshotRequest struct {
@@ -138,6 +147,18 @@ type RuntimeArtifactDownloadRequest struct {
 	SignatureB64               string `json:"signature_b64"`
 }
 
+type ProxyRulesBundleDownloadRequest struct {
+	DeviceID                   string `json:"device_id"`
+	KeyID                      string `json:"key_id"`
+	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string `json:"timestamp"`
+	Nonce                      string `json:"nonce"`
+	BundleRevision             string `json:"bundle_revision"`
+	PayloadHash                string `json:"payload_hash"`
+	BodyHash                   string `json:"body_hash"`
+	SignatureB64               string `json:"signature_b64"`
+}
+
 type verifiedEnrollment struct {
 	DeviceID                   string
 	KeyID                      string
@@ -165,6 +186,7 @@ type verifiedDeviceStatusRequest struct {
 	DistroVersion              string
 	RuntimeDeploymentSupported bool
 	RuntimeInventory           []DeviceRuntimeSummary
+	ProxyRuleApplyStatus       *DeviceProxyRuleApplyStatus
 	BodyHash                   string
 	SignatureB64               string
 }
@@ -205,6 +227,17 @@ type verifiedRuntimeArtifactDownloadRequest struct {
 	RuntimeID                  string
 	ArtifactRevision           string
 	ArtifactHash               string
+	BodyHash                   string
+	SignatureB64               string
+}
+
+type verifiedProxyRulesBundleDownloadRequest struct {
+	DeviceID                   string
+	KeyID                      string
+	PublicKeyFingerprintSHA256 string
+	Timestamp                  time.Time
+	BundleRevision             string
+	PayloadHash                string
 	BodyHash                   string
 	SignatureB64               string
 }
@@ -328,6 +361,7 @@ func VerifyDeviceStatusRequest(req DeviceStatusRequest, publicKeyPEM string, now
 		DistroVersion:              req.DistroVersion,
 		RuntimeDeploymentSupported: req.RuntimeDeploymentSupported,
 		RuntimeInventory:           append([]DeviceRuntimeSummary(nil), req.RuntimeInventory...),
+		ProxyRuleApplyStatus:       req.ProxyRuleApplyStatus,
 		BodyHash:                   req.BodyHash,
 		SignatureB64:               req.SignatureB64,
 	}, nil
@@ -459,6 +493,43 @@ func VerifyRuntimeArtifactDownloadRequest(req RuntimeArtifactDownloadRequest, pu
 	}, nil
 }
 
+func VerifyProxyRulesBundleDownloadRequest(req ProxyRulesBundleDownloadRequest, publicKeyPEM string, now time.Time) (verifiedProxyRulesBundleDownloadRequest, error) {
+	normalized, ts, err := normalizeProxyRulesBundleDownloadRequest(req, now)
+	if err != nil {
+		return verifiedProxyRulesBundleDownloadRequest{}, err
+	}
+	req = normalized
+
+	publicKeyDER, publicKey, err := parseStoredEnrollmentPublicKey(publicKeyPEM)
+	if err != nil {
+		return verifiedProxyRulesBundleDownloadRequest{}, err
+	}
+	fingerprint := sha256.Sum256(publicKeyDER)
+	if !secureEqualHex(hex.EncodeToString(fingerprint[:]), req.PublicKeyFingerprintSHA256) {
+		return verifiedProxyRulesBundleDownloadRequest{}, fmt.Errorf("%w: public key fingerprint mismatch", ErrInvalidEnrollment)
+	}
+	if !secureEqualHex(proxyRulesBundleDownloadBodyHash(req), req.BodyHash) {
+		return verifiedProxyRulesBundleDownloadRequest{}, fmt.Errorf("%w: body_hash mismatch", ErrInvalidEnrollment)
+	}
+	signature, err := base64.StdEncoding.DecodeString(req.SignatureB64)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return verifiedProxyRulesBundleDownloadRequest{}, fmt.Errorf("%w: invalid signature", ErrInvalidEnrollment)
+	}
+	if !ed25519.Verify(publicKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)), signature) {
+		return verifiedProxyRulesBundleDownloadRequest{}, fmt.Errorf("%w: signature verification failed", ErrInvalidEnrollment)
+	}
+	return verifiedProxyRulesBundleDownloadRequest{
+		DeviceID:                   req.DeviceID,
+		KeyID:                      req.KeyID,
+		PublicKeyFingerprintSHA256: req.PublicKeyFingerprintSHA256,
+		Timestamp:                  ts.UTC(),
+		BundleRevision:             req.BundleRevision,
+		PayloadHash:                req.PayloadHash,
+		BodyHash:                   req.BodyHash,
+		SignatureB64:               req.SignatureB64,
+	}, nil
+}
+
 func normalizeDeviceStatusRequest(req DeviceStatusRequest, now time.Time) (DeviceStatusRequest, time.Time, error) {
 	req.DeviceID = strings.TrimSpace(req.DeviceID)
 	req.KeyID = strings.TrimSpace(req.KeyID)
@@ -476,6 +547,10 @@ func normalizeDeviceStatusRequest(req DeviceStatusRequest, now time.Time) (Devic
 	req.DistroVersion = strings.TrimSpace(req.DistroVersion)
 	var err error
 	req.RuntimeInventory, err = normalizeDeviceRuntimeSummaries(req.RuntimeInventory)
+	if err != nil {
+		return DeviceStatusRequest{}, time.Time{}, err
+	}
+	req.ProxyRuleApplyStatus, err = normalizeDeviceProxyRuleApplyStatus(req.ProxyRuleApplyStatus)
 	if err != nil {
 		return DeviceStatusRequest{}, time.Time{}, err
 	}
@@ -539,6 +614,33 @@ func normalizeDeviceStatusRequest(req DeviceStatusRequest, now time.Time) (Devic
 		return DeviceStatusRequest{}, time.Time{}, fmt.Errorf("%w: stale timestamp", ErrInvalidEnrollment)
 	}
 	return req, ts.UTC(), nil
+}
+
+func normalizeDeviceProxyRuleApplyStatus(status *DeviceProxyRuleApplyStatus) (*DeviceProxyRuleApplyStatus, error) {
+	if status == nil {
+		return nil, nil
+	}
+	out := *status
+	out.DesiredBundleRevision = strings.ToLower(strings.TrimSpace(out.DesiredBundleRevision))
+	out.LocalProxyETag = strings.TrimSpace(out.LocalProxyETag)
+	out.ApplyState = strings.TrimSpace(out.ApplyState)
+	out.ApplyError = strings.TrimSpace(out.ApplyError)
+	if out.DesiredBundleRevision == "" && out.LocalProxyETag == "" && out.ApplyState == "" && out.ApplyError == "" {
+		return nil, nil
+	}
+	if out.DesiredBundleRevision != "" && !hex64Pattern.MatchString(out.DesiredBundleRevision) {
+		return nil, fmt.Errorf("%w: invalid proxy_rule_apply_status.desired_bundle_revision", ErrInvalidEnrollment)
+	}
+	if !metadataPattern.MatchString(out.LocalProxyETag) || len(out.LocalProxyETag) > 128 {
+		return nil, fmt.Errorf("%w: invalid proxy_rule_apply_status.local_proxy_etag", ErrInvalidEnrollment)
+	}
+	if !metadataPattern.MatchString(out.ApplyState) || len(out.ApplyState) > 32 {
+		return nil, fmt.Errorf("%w: invalid proxy_rule_apply_status.apply_state", ErrInvalidEnrollment)
+	}
+	if !metadataPattern.MatchString(out.ApplyError) || len(out.ApplyError) > 256 {
+		return nil, fmt.Errorf("%w: invalid proxy_rule_apply_status.apply_error", ErrInvalidEnrollment)
+	}
+	return &out, nil
 }
 
 func normalizeDeviceRuntimeSummaries(items []DeviceRuntimeSummary) ([]DeviceRuntimeSummary, error) {
@@ -858,6 +960,55 @@ func normalizeRuntimeArtifactDownloadRequest(req RuntimeArtifactDownloadRequest,
 	return req, ts.UTC(), nil
 }
 
+func normalizeProxyRulesBundleDownloadRequest(req ProxyRulesBundleDownloadRequest, now time.Time) (ProxyRulesBundleDownloadRequest, time.Time, error) {
+	req.DeviceID = strings.TrimSpace(req.DeviceID)
+	req.KeyID = strings.TrimSpace(req.KeyID)
+	req.PublicKeyFingerprintSHA256 = strings.ToLower(strings.TrimSpace(req.PublicKeyFingerprintSHA256))
+	req.Timestamp = strings.TrimSpace(req.Timestamp)
+	req.Nonce = strings.TrimSpace(req.Nonce)
+	req.BundleRevision = strings.ToLower(strings.TrimSpace(req.BundleRevision))
+	req.PayloadHash = strings.ToLower(strings.TrimSpace(req.PayloadHash))
+	req.BodyHash = strings.ToLower(strings.TrimSpace(req.BodyHash))
+	req.SignatureB64 = strings.TrimSpace(req.SignatureB64)
+
+	if !deviceIDPattern.MatchString(req.DeviceID) {
+		return ProxyRulesBundleDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid device_id", ErrInvalidEnrollment)
+	}
+	if !keyIDPattern.MatchString(req.KeyID) {
+		return ProxyRulesBundleDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid key_id", ErrInvalidEnrollment)
+	}
+	if !noncePattern.MatchString(req.Nonce) {
+		return ProxyRulesBundleDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid nonce", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.PublicKeyFingerprintSHA256) {
+		return ProxyRulesBundleDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid public key fingerprint", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.BundleRevision) {
+		return ProxyRulesBundleDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid bundle_revision", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.PayloadHash) {
+		return ProxyRulesBundleDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid payload_hash", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.BodyHash) {
+		return ProxyRulesBundleDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid body_hash", ErrInvalidEnrollment)
+	}
+	if req.SignatureB64 == "" || len(req.SignatureB64) > 4096 {
+		return ProxyRulesBundleDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid signature", ErrInvalidEnrollment)
+	}
+
+	ts, err := time.Parse(time.RFC3339Nano, req.Timestamp)
+	if err != nil {
+		return ProxyRulesBundleDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid timestamp", ErrInvalidEnrollment)
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if ts.After(now.Add(enrollmentFreshness)) || ts.Before(now.Add(-enrollmentFreshness)) {
+		return ProxyRulesBundleDownloadRequest{}, time.Time{}, fmt.Errorf("%w: stale timestamp", ErrInvalidEnrollment)
+	}
+	return req, ts.UTC(), nil
+}
+
 func parseEnrollmentPublicKey(publicKeyPEMB64 string) ([]byte, []byte, ed25519.PublicKey, error) {
 	pemBytes, err := base64.StdEncoding.DecodeString(publicKeyPEMB64)
 	if err != nil {
@@ -903,7 +1054,11 @@ func enrollmentBodyHash(req EnrollmentRequest) string {
 }
 
 func deviceStatusBodyHash(req DeviceStatusRequest) string {
-	sum := sha256.Sum256([]byte(deviceStatusBodyCanonical(req) + "\n" + strconv.FormatBool(req.RuntimeDeploymentSupported) + "\n" + deviceRuntimeInventoryCanonical(req.RuntimeInventory)))
+	body := deviceStatusBodyCanonical(req) + "\n" + strconv.FormatBool(req.RuntimeDeploymentSupported) + "\n" + deviceRuntimeInventoryCanonical(req.RuntimeInventory)
+	if req.ProxyRuleApplyStatus != nil {
+		body += "\n" + deviceProxyRuleApplyStatusCanonical(*req.ProxyRuleApplyStatus)
+	}
+	sum := sha256.Sum256([]byte(body))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -974,6 +1129,13 @@ func deviceRuntimeInventoryCanonical(items []DeviceRuntimeSummary) string {
 	return b.String()
 }
 
+func deviceProxyRuleApplyStatusCanonical(status DeviceProxyRuleApplyStatus) string {
+	return status.DesiredBundleRevision + "\n" +
+		status.LocalProxyETag + "\n" +
+		status.ApplyState + "\n" +
+		status.ApplyError
+}
+
 func deviceConfigSnapshotBodyHash(req DeviceConfigSnapshotRequest) string {
 	sum := sha256.Sum256([]byte(
 		req.DeviceID + "\n" +
@@ -1018,9 +1180,25 @@ func runtimeArtifactDownloadBodyHash(req RuntimeArtifactDownloadRequest) string 
 	return hex.EncodeToString(sum[:])
 }
 
+func proxyRulesBundleDownloadBodyHash(req ProxyRulesBundleDownloadRequest) string {
+	sum := sha256.Sum256([]byte(
+		req.DeviceID + "\n" +
+			req.KeyID + "\n" +
+			req.PublicKeyFingerprintSHA256 + "\n" +
+			req.Timestamp + "\n" +
+			req.Nonce + "\n" +
+			req.BundleRevision + "\n" +
+			req.PayloadHash,
+	))
+	return hex.EncodeToString(sum[:])
+}
+
 func deviceStatusBodyHashMatches(req DeviceStatusRequest) bool {
 	if secureEqualHex(deviceStatusBodyHash(req), req.BodyHash) {
 		return true
+	}
+	if req.ProxyRuleApplyStatus != nil {
+		return false
 	}
 	if req.RuntimeDeploymentSupported || len(req.RuntimeInventory) > 0 {
 		return secureEqualHex(deviceStatusBodyHashV1RuntimeInventory(req), req.BodyHash)

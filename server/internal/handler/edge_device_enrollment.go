@@ -46,6 +46,7 @@ const (
 	edgeEnrollmentTokenMaxBytes = 256
 	edgeEnrollmentHTTPTimeout   = 10 * time.Second
 	edgeRuntimeArtifactTimeout  = 10 * time.Minute
+	edgeProxyRuleBundleMaxBytes = edgeconfigsnapshot.MaxBytes
 )
 
 const (
@@ -83,10 +84,14 @@ var (
 	edgeRuleArtifactUploadMu       sync.Mutex
 	edgeRuleArtifactUploadRevision string
 
-	edgeRuntimeAssignmentMu     sync.Mutex
-	edgeRuntimeAssignmentActive = map[string]struct{}{}
-	edgeRuntimeApplyStatusMu    sync.RWMutex
-	edgeRuntimeApplyStatuses    = map[string]edgeRuntimeApplyStatus{}
+	edgeRuntimeAssignmentMu         sync.Mutex
+	edgeRuntimeAssignmentActive     = map[string]struct{}{}
+	edgeRuntimeApplyStatusMu        sync.RWMutex
+	edgeRuntimeApplyStatuses        = map[string]edgeRuntimeApplyStatus{}
+	edgeProxyRuleAssignmentMu       sync.Mutex
+	edgeProxyRuleAssignmentActive   bool
+	edgeProxyRuleApplyStatusMu      sync.RWMutex
+	edgeProxyRuleApplyStatusCurrent *edgeProxyRuleApplyStatus
 )
 
 type edgeDeviceIdentityRecord struct {
@@ -190,6 +195,7 @@ type edgeDeviceStatusWireRequest struct {
 	DistroVersion              string                     `json:"distro_version,omitempty"`
 	RuntimeDeploymentSupported bool                       `json:"runtime_deployment_supported,omitempty"`
 	RuntimeInventory           []edgeDeviceRuntimeSummary `json:"runtime_inventory,omitempty"`
+	ProxyRuleApplyStatus       *edgeProxyRuleApplyStatus  `json:"proxy_rule_apply_status,omitempty"`
 	BodyHash                   string                     `json:"body_hash"`
 	SignatureB64               string                     `json:"signature_b64"`
 }
@@ -265,13 +271,26 @@ type edgeRuntimeArtifactDownloadWireRequest struct {
 	SignatureB64               string `json:"signature_b64"`
 }
 
+type edgeProxyRulesBundleDownloadWireRequest struct {
+	DeviceID                   string `json:"device_id"`
+	KeyID                      string `json:"key_id"`
+	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string `json:"timestamp"`
+	Nonce                      string `json:"nonce"`
+	BundleRevision             string `json:"bundle_revision"`
+	PayloadHash                string `json:"payload_hash"`
+	BodyHash                   string `json:"body_hash"`
+	SignatureB64               string `json:"signature_b64"`
+}
+
 type edgeDeviceCenterStatusResponse struct {
-	Status             string                        `json:"status"`
-	DeviceID           string                        `json:"device_id"`
-	KeyID              string                        `json:"key_id"`
-	ProductID          string                        `json:"product_id"`
-	CheckedAtUnix      int64                         `json:"checked_at_unix"`
-	RuntimeAssignments []edgeRuntimeDeviceAssignment `json:"runtime_assignments,omitempty"`
+	Status              string                         `json:"status"`
+	DeviceID            string                         `json:"device_id"`
+	KeyID               string                         `json:"key_id"`
+	ProductID           string                         `json:"product_id"`
+	CheckedAtUnix       int64                          `json:"checked_at_unix"`
+	RuntimeAssignments  []edgeRuntimeDeviceAssignment  `json:"runtime_assignments,omitempty"`
+	ProxyRuleAssignment *edgeProxyRuleDeviceAssignment `json:"proxy_rule_assignment,omitempty"`
 }
 
 type edgeRuntimeDeviceAssignment struct {
@@ -294,6 +313,22 @@ type edgeRuntimeApplyStatus struct {
 	ArtifactHash     string
 	ApplyState       string
 	ApplyError       string
+}
+
+type edgeProxyRuleDeviceAssignment struct {
+	BundleRevision  string `json:"bundle_revision"`
+	PayloadHash     string `json:"payload_hash"`
+	PayloadETag     string `json:"payload_etag"`
+	SourceProxyETag string `json:"source_proxy_etag"`
+	SizeBytes       int64  `json:"size_bytes"`
+	AssignedAtUnix  int64  `json:"assigned_at_unix"`
+}
+
+type edgeProxyRuleApplyStatus struct {
+	DesiredBundleRevision string `json:"desired_bundle_revision,omitempty"`
+	LocalProxyETag        string `json:"local_proxy_etag,omitempty"`
+	ApplyState            string `json:"apply_state,omitempty"`
+	ApplyError            string `json:"apply_error,omitempty"`
 }
 
 type edgeDeviceConfigSnapshotResponse struct {
@@ -590,6 +625,8 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 	identity.CenterProductID = clampEdgeText(payload.ProductID, 191)
 	identity.CenterStatusError = ""
 	if identity.EnrollmentStatus == edgeEnrollmentStatusApproved {
+		applyEdgeProxyRuleAssignment(ctx, identity, payload.ProxyRuleAssignment)
+		pruneCompletedEdgeProxyRuleApplyStatus(payload.ProxyRuleAssignment)
 		applyEdgeRuntimeAssignments(ctx, identity, payload.RuntimeAssignments)
 		pruneCompletedEdgeRuntimeApplyStatuses(payload.RuntimeAssignments)
 		if pushEdgeRuleArtifactBundleIfChanged(ctx, &identity) {
@@ -1004,6 +1041,22 @@ func centerRuntimeArtifactDownloadURL(centerBaseURL string) (string, error) {
 		return "", fmt.Errorf("center URL scheme must be http or https")
 	}
 	u.Path = "/v1/runtime-artifact-download"
+	u.RawPath = ""
+	return u.String(), nil
+}
+
+func centerProxyRulesBundleDownloadURL(centerBaseURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("center URL is not configured")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("center URL is invalid")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("center URL scheme must be http or https")
+	}
+	u.Path = "/v1/proxy-rules-bundle-download"
 	u.RawPath = ""
 	return u.String(), nil
 }
@@ -1442,6 +1495,7 @@ func signedEdgeDeviceStatusRequest(identity edgeDeviceIdentityRecord) (edgeDevic
 	req.DistroVersion = platform.DistroVersion
 	req.RuntimeDeploymentSupported = true
 	req.RuntimeInventory = currentEdgeRuntimeInventorySummary()
+	req.ProxyRuleApplyStatus = edgeProxyRuleApplyStatusSnapshot()
 	req.BodyHash = edgeDeviceStatusBodyHash(req)
 	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)))
 	req.SignatureB64 = base64.StdEncoding.EncodeToString(signature)
@@ -1681,6 +1735,44 @@ func setEdgeRuntimeApplyStatus(status edgeRuntimeApplyStatus) {
 	edgeRuntimeApplyStatusMu.Unlock()
 }
 
+func edgeProxyRuleApplyStatusSnapshot() *edgeProxyRuleApplyStatus {
+	edgeProxyRuleApplyStatusMu.RLock()
+	defer edgeProxyRuleApplyStatusMu.RUnlock()
+	if edgeProxyRuleApplyStatusCurrent == nil {
+		return nil
+	}
+	out := *edgeProxyRuleApplyStatusCurrent
+	return &out
+}
+
+func setEdgeProxyRuleApplyStatus(status edgeProxyRuleApplyStatus) {
+	status.DesiredBundleRevision = normalizeEdgeHex64(status.DesiredBundleRevision)
+	status.LocalProxyETag = clampEdgeMetadataText(status.LocalProxyETag, 128)
+	status.ApplyState = clampEdgeMetadataText(status.ApplyState, 32)
+	status.ApplyError = clampEdgeMetadataText(status.ApplyError, 256)
+	if status.DesiredBundleRevision == "" && status.LocalProxyETag == "" && status.ApplyState == "" && status.ApplyError == "" {
+		return
+	}
+	edgeProxyRuleApplyStatusMu.Lock()
+	edgeProxyRuleApplyStatusCurrent = &status
+	edgeProxyRuleApplyStatusMu.Unlock()
+}
+
+func pruneCompletedEdgeProxyRuleApplyStatus(assignment *edgeProxyRuleDeviceAssignment) {
+	if assignment != nil {
+		return
+	}
+	edgeProxyRuleApplyStatusMu.Lock()
+	defer edgeProxyRuleApplyStatusMu.Unlock()
+	if edgeProxyRuleApplyStatusCurrent == nil {
+		return
+	}
+	switch edgeProxyRuleApplyStatusCurrent.ApplyState {
+	case "applied", "failed", "blocked":
+		edgeProxyRuleApplyStatusCurrent = nil
+	}
+}
+
 func pruneCompletedEdgeRuntimeApplyStatuses(assignments []edgeRuntimeDeviceAssignment) {
 	desired := make(map[string]struct{}, len(assignments))
 	for _, assignment := range assignments {
@@ -1702,6 +1794,22 @@ func pruneCompletedEdgeRuntimeApplyStatuses(assignments []edgeRuntimeDeviceAssig
 	edgeRuntimeApplyStatusMu.Unlock()
 }
 
+func beginEdgeProxyRuleAssignmentOp() bool {
+	edgeProxyRuleAssignmentMu.Lock()
+	defer edgeProxyRuleAssignmentMu.Unlock()
+	if edgeProxyRuleAssignmentActive {
+		return false
+	}
+	edgeProxyRuleAssignmentActive = true
+	return true
+}
+
+func endEdgeProxyRuleAssignmentOp() {
+	edgeProxyRuleAssignmentMu.Lock()
+	edgeProxyRuleAssignmentActive = false
+	edgeProxyRuleAssignmentMu.Unlock()
+}
+
 func beginEdgeRuntimeAssignmentOp(runtimeFamily, runtimeID string) bool {
 	key := edgeRuntimeAssignmentKey(runtimeFamily, runtimeID)
 	edgeRuntimeAssignmentMu.Lock()
@@ -1718,6 +1826,131 @@ func endEdgeRuntimeAssignmentOp(runtimeFamily, runtimeID string) {
 	edgeRuntimeAssignmentMu.Lock()
 	delete(edgeRuntimeAssignmentActive, key)
 	edgeRuntimeAssignmentMu.Unlock()
+}
+
+func applyEdgeProxyRuleAssignment(ctx context.Context, identity edgeDeviceIdentityRecord, assignment *edgeProxyRuleDeviceAssignment) {
+	if assignment == nil {
+		return
+	}
+	normalized, ok := normalizeEdgeProxyRuleAssignment(*assignment)
+	if !ok {
+		return
+	}
+	if !beginEdgeProxyRuleAssignmentOp() {
+		return
+	}
+	defer endEdgeProxyRuleAssignmentOp()
+
+	status := edgeProxyRuleApplyStatus{
+		DesiredBundleRevision: normalized.BundleRevision,
+		ApplyState:            "applying",
+	}
+	setEdgeProxyRuleApplyStatus(status)
+
+	_, currentETag, _, _, _ := ProxyRulesSnapshot()
+	if normalized.SourceProxyETag == "" {
+		status.ApplyState = "blocked"
+		status.LocalProxyETag = currentETag
+		status.ApplyError = "proxy rules assignment is missing base etag"
+		setEdgeProxyRuleApplyStatus(status)
+		return
+	}
+	if !edgeProxyRuleAssignmentBaseMatches(currentETag, normalized.SourceProxyETag) {
+		status.ApplyState = "blocked"
+		status.LocalProxyETag = currentETag
+		status.ApplyError = "local proxy rules changed after assignment"
+		setEdgeProxyRuleApplyStatus(status)
+		return
+	}
+
+	raw, err := downloadEdgeProxyRuleBundle(ctx, identity, normalized)
+	if err != nil {
+		status.ApplyState = "failed"
+		status.LocalProxyETag = currentETag
+		status.ApplyError = err.Error()
+		setEdgeProxyRuleApplyStatus(status)
+		return
+	}
+	nextETag, _, err := applyProxyRulesRaw(currentETag, string(raw), "center:"+identity.DeviceID)
+	if err != nil {
+		var conflict proxyRulesConflictError
+		if asProxyRulesConflict(err, &conflict) {
+			status.ApplyState = "blocked"
+			status.LocalProxyETag = conflict.CurrentETag
+			status.ApplyError = "local proxy rules changed during assignment"
+			setEdgeProxyRuleApplyStatus(status)
+			return
+		}
+		status.ApplyState = "failed"
+		status.LocalProxyETag = currentETag
+		status.ApplyError = err.Error()
+		setEdgeProxyRuleApplyStatus(status)
+		return
+	}
+	status.ApplyState = "applied"
+	status.LocalProxyETag = nextETag
+	status.ApplyError = ""
+	setEdgeProxyRuleApplyStatus(status)
+}
+
+func edgeProxyRuleAssignmentBaseMatches(currentETag, sourceETag string) bool {
+	currentETag = strings.TrimSpace(currentETag)
+	sourceETag = strings.TrimSpace(sourceETag)
+	if currentETag == "" || sourceETag == "" {
+		return false
+	}
+	return currentETag == sourceETag || configVersionETagSameContent(currentETag, sourceETag)
+}
+
+func normalizeEdgeProxyRuleAssignment(in edgeProxyRuleDeviceAssignment) (edgeProxyRuleDeviceAssignment, bool) {
+	out := edgeProxyRuleDeviceAssignment{
+		BundleRevision:  normalizeEdgeHex64(in.BundleRevision),
+		PayloadHash:     normalizeEdgeHex64(in.PayloadHash),
+		PayloadETag:     clampEdgeMetadataText(in.PayloadETag, 128),
+		SourceProxyETag: clampEdgeMetadataText(in.SourceProxyETag, 128),
+		SizeBytes:       in.SizeBytes,
+		AssignedAtUnix:  in.AssignedAtUnix,
+	}
+	if out.BundleRevision == "" || out.PayloadHash == "" || out.PayloadETag == "" {
+		return edgeProxyRuleDeviceAssignment{}, false
+	}
+	if out.SizeBytes < 0 || out.SizeBytes > edgeProxyRuleBundleMaxBytes {
+		return edgeProxyRuleDeviceAssignment{}, false
+	}
+	return out, true
+}
+
+func downloadEdgeProxyRuleBundle(ctx context.Context, identity edgeDeviceIdentityRecord, assignment edgeProxyRuleDeviceAssignment) ([]byte, error) {
+	downloadURL, err := centerProxyRulesBundleDownloadURL(identity.CenterURL)
+	if err != nil {
+		return nil, err
+	}
+	wireReq, err := signedEdgeProxyRulesBundleDownloadRequest(identity, assignment)
+	if err != nil {
+		return nil, err
+	}
+	maxBytes := assignment.SizeBytes
+	if maxBytes <= 0 {
+		maxBytes = edgeProxyRuleBundleMaxBytes
+	}
+	centerHTTPStatus, body, err := sendEdgeProxyRulesBundleDownload(ctx, downloadURL, wireReq, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	if centerHTTPStatus < 200 || centerHTTPStatus >= 300 {
+		return nil, fmt.Errorf("%s", centerHTTPErrorMessage("center proxy rules bundle download failed", centerHTTPStatus, body))
+	}
+	if len(body) == 0 || len(body) > edgeProxyRuleBundleMaxBytes {
+		return nil, fmt.Errorf("proxy rules bundle size is invalid")
+	}
+	sum := sha256.Sum256(body)
+	if hex.EncodeToString(sum[:]) != assignment.PayloadHash {
+		return nil, fmt.Errorf("proxy rules bundle hash mismatch")
+	}
+	if etag := bypassconf.ComputeETag(body); etag != assignment.PayloadETag {
+		return nil, fmt.Errorf("proxy rules bundle etag mismatch")
+	}
+	return body, nil
 }
 
 func normalizeEdgeRuntimeAssignmentIdentity(runtimeFamily, runtimeID string) (string, string, error) {
@@ -2671,6 +2904,34 @@ func signedEdgeRuntimeArtifactDownloadRequest(identity edgeDeviceIdentityRecord,
 	return req, nil
 }
 
+func signedEdgeProxyRulesBundleDownloadRequest(identity edgeDeviceIdentityRecord, assignment edgeProxyRuleDeviceAssignment) (edgeProxyRulesBundleDownloadWireRequest, error) {
+	privateKey, _, err := parseEdgeDevicePrivateKey(identity.PrivateKeyPEM)
+	if err != nil {
+		return edgeProxyRulesBundleDownloadWireRequest{}, err
+	}
+	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	nonce, err := randomEdgeIdentifier("nonce")
+	if err != nil {
+		return edgeProxyRulesBundleDownloadWireRequest{}, err
+	}
+	req := edgeProxyRulesBundleDownloadWireRequest{
+		DeviceID:                   identity.DeviceID,
+		KeyID:                      identity.KeyID,
+		PublicKeyFingerprintSHA256: identity.PublicKeyFingerprintSHA256,
+		Timestamp:                  timestamp,
+		Nonce:                      nonce,
+		BundleRevision:             normalizeEdgeHex64(assignment.BundleRevision),
+		PayloadHash:                normalizeEdgeHex64(assignment.PayloadHash),
+	}
+	if req.BundleRevision == "" || req.PayloadHash == "" {
+		return edgeProxyRulesBundleDownloadWireRequest{}, fmt.Errorf("proxy rules assignment is missing revision or hash")
+	}
+	req.BodyHash = edgeProxyRulesBundleDownloadBodyHash(req)
+	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)))
+	req.SignatureB64 = base64.StdEncoding.EncodeToString(signature)
+	return req, nil
+}
+
 func parseEdgeDevicePrivateKey(raw string) (ed25519.PrivateKey, []byte, error) {
 	block, rest := pem.Decode([]byte(raw))
 	if block == nil || block.Type != "PRIVATE KEY" || len(strings.TrimSpace(string(rest))) != 0 {
@@ -2818,6 +3079,36 @@ func sendEdgeRuntimeArtifactDownload(ctx context.Context, downloadURL string, wi
 	}
 	if int64(len(resBody)) > maxBytes {
 		return res.StatusCode, nil, fmt.Errorf("runtime artifact download exceeds %d bytes", maxBytes)
+	}
+	return res.StatusCode, resBody, nil
+}
+
+func sendEdgeProxyRulesBundleDownload(ctx context.Context, downloadURL string, wireReq edgeProxyRulesBundleDownloadWireRequest, maxBytes int64) (int, []byte, error) {
+	body, err := json.Marshal(wireReq)
+	if err != nil {
+		return 0, nil, err
+	}
+	if maxBytes <= 0 || maxBytes > edgeProxyRuleBundleMaxBytes {
+		maxBytes = edgeProxyRuleBundleMaxBytes
+	}
+	ctx, cancel := context.WithTimeout(ctx, edgeEnrollmentHTTPTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, downloadURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer res.Body.Close()
+	resBody, readErr := io.ReadAll(io.LimitReader(res.Body, maxBytes+1))
+	if readErr != nil {
+		return res.StatusCode, nil, readErr
+	}
+	if int64(len(resBody)) > maxBytes {
+		return res.StatusCode, nil, fmt.Errorf("proxy rules bundle download exceeds %d bytes", maxBytes)
 	}
 	return res.StatusCode, resBody, nil
 }
@@ -3022,24 +3313,26 @@ func edgeEnrollmentBodyHash(req edgeDeviceEnrollmentWireRequest) string {
 }
 
 func edgeDeviceStatusBodyHash(req edgeDeviceStatusWireRequest) string {
-	sum := sha256.Sum256([]byte(
-		req.DeviceID + "\n" +
-			req.KeyID + "\n" +
-			req.PublicKeyFingerprintSHA256 + "\n" +
-			req.Timestamp + "\n" +
-			req.Nonce + "\n" +
-			req.RuntimeRole + "\n" +
-			req.BuildVersion + "\n" +
-			req.GoVersion + "\n" +
-			req.OS + "\n" +
-			req.Arch + "\n" +
-			req.KernelVersion + "\n" +
-			req.DistroID + "\n" +
-			req.DistroIDLike + "\n" +
-			req.DistroVersion + "\n" +
-			strconv.FormatBool(req.RuntimeDeploymentSupported) + "\n" +
-			edgeRuntimeInventoryCanonical(req.RuntimeInventory),
-	))
+	body := req.DeviceID + "\n" +
+		req.KeyID + "\n" +
+		req.PublicKeyFingerprintSHA256 + "\n" +
+		req.Timestamp + "\n" +
+		req.Nonce + "\n" +
+		req.RuntimeRole + "\n" +
+		req.BuildVersion + "\n" +
+		req.GoVersion + "\n" +
+		req.OS + "\n" +
+		req.Arch + "\n" +
+		req.KernelVersion + "\n" +
+		req.DistroID + "\n" +
+		req.DistroIDLike + "\n" +
+		req.DistroVersion + "\n" +
+		strconv.FormatBool(req.RuntimeDeploymentSupported) + "\n" +
+		edgeRuntimeInventoryCanonical(req.RuntimeInventory)
+	if req.ProxyRuleApplyStatus != nil {
+		body += "\n" + edgeProxyRuleApplyStatusCanonical(*req.ProxyRuleApplyStatus)
+	}
+	sum := sha256.Sum256([]byte(body))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -3088,6 +3381,13 @@ func edgeRuntimeInventoryCanonical(items []edgeDeviceRuntimeSummary) string {
 	return b.String()
 }
 
+func edgeProxyRuleApplyStatusCanonical(status edgeProxyRuleApplyStatus) string {
+	return status.DesiredBundleRevision + "\n" +
+		status.LocalProxyETag + "\n" +
+		status.ApplyState + "\n" +
+		status.ApplyError
+}
+
 func edgeDeviceConfigSnapshotBodyHash(req edgeDeviceConfigSnapshotWireRequest) string {
 	sum := sha256.Sum256([]byte(
 		req.DeviceID + "\n" +
@@ -3128,6 +3428,19 @@ func edgeRuntimeArtifactDownloadBodyHash(req edgeRuntimeArtifactDownloadWireRequ
 			req.RuntimeID + "\n" +
 			req.ArtifactRevision + "\n" +
 			req.ArtifactHash,
+	))
+	return hex.EncodeToString(sum[:])
+}
+
+func edgeProxyRulesBundleDownloadBodyHash(req edgeProxyRulesBundleDownloadWireRequest) string {
+	sum := sha256.Sum256([]byte(
+		req.DeviceID + "\n" +
+			req.KeyID + "\n" +
+			req.PublicKeyFingerprintSHA256 + "\n" +
+			req.Timestamp + "\n" +
+			req.Nonce + "\n" +
+			req.BundleRevision + "\n" +
+			req.PayloadHash,
 	))
 	return hex.EncodeToString(sum[:])
 }

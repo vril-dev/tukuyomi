@@ -8,6 +8,7 @@ import { getUIBasePath } from "@/lib/runtime";
 import DeviceApprovalsPage from "@/pages/DeviceApprovalsPage";
 import Login from "@/pages/Login";
 import RuntimePage from "@/pages/RuntimePage";
+import SettingsPage from "@/pages/SettingsPage";
 import StatusPage from "@/pages/StatusPage";
 import UserPage from "@/pages/UserPage";
 
@@ -80,6 +81,7 @@ function CenterRoutes() {
         <Route path="device-approvals" element={<DeviceApprovalsPage focusApprovals />} />
         <Route path="device-approvals/devices/:deviceID" element={<DeviceApprovalsPage />} />
         <Route path="device-approvals/devices/:deviceID/runtime" element={<RuntimePage />} />
+        <Route path="settings" element={<SettingsPage />} />
         <Route path="runtimes" element={<Navigate to="/device-approvals" replace />} />
         <Route path="runtimes/devices/:deviceID" element={<LegacyRuntimeRedirect />} />
         <Route

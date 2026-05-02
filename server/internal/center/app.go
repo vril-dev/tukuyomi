@@ -2,6 +2,7 @@ package center
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -31,21 +33,41 @@ const (
 	ListenAddrEnv  = "TUKUYOMI_CENTER_LISTEN_ADDR"
 	APIBasePathEnv = "TUKUYOMI_CENTER_API_BASE_PATH"
 	UIBasePathEnv  = "TUKUYOMI_CENTER_UI_BASE_PATH"
+
+	TLSEnabledEnv    = "TUKUYOMI_CENTER_TLS_ENABLED"
+	TLSCertFileEnv   = "TUKUYOMI_CENTER_TLS_CERT_FILE"
+	TLSKeyFileEnv    = "TUKUYOMI_CENTER_TLS_KEY_FILE"
+	TLSMinVersionEnv = "TUKUYOMI_CENTER_TLS_MIN_VERSION"
 )
 
 var centerAdminAuthCookieNames = adminauth.CenterCookieNames()
 
 type RuntimeConfig struct {
-	ListenAddr  string
-	APIBasePath string
-	UIBasePath  string
+	ListenAddr    string
+	APIBasePath   string
+	UIBasePath    string
+	TLSEnabled    bool
+	TLSCertFile   string
+	TLSKeyFile    string
+	TLSMinVersion string
 }
 
 func RuntimeConfigFromEnv() (RuntimeConfig, error) {
+	tlsEnabled, err := parseCenterBoolEnv(TLSEnabledEnv, false)
+	if err != nil {
+		return RuntimeConfig{}, err
+	}
 	cfg := RuntimeConfig{
-		ListenAddr:  strings.TrimSpace(os.Getenv(ListenAddrEnv)),
-		APIBasePath: strings.TrimSpace(os.Getenv(APIBasePathEnv)),
-		UIBasePath:  strings.TrimSpace(os.Getenv(UIBasePathEnv)),
+		ListenAddr:    strings.TrimSpace(os.Getenv(ListenAddrEnv)),
+		APIBasePath:   strings.TrimSpace(os.Getenv(APIBasePathEnv)),
+		UIBasePath:    strings.TrimSpace(os.Getenv(UIBasePathEnv)),
+		TLSEnabled:    tlsEnabled,
+		TLSCertFile:   strings.TrimSpace(os.Getenv(TLSCertFileEnv)),
+		TLSKeyFile:    strings.TrimSpace(os.Getenv(TLSKeyFileEnv)),
+		TLSMinVersion: normalizeCenterTLSMinVersion(os.Getenv(TLSMinVersionEnv)),
+	}
+	if err := validateCenterTLSMinVersion(cfg.TLSMinVersion); err != nil {
+		return RuntimeConfig{}, fmt.Errorf("%s %w", TLSMinVersionEnv, err)
 	}
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = DefaultListenAddr
@@ -61,9 +83,29 @@ func RuntimeConfigFromEnv() (RuntimeConfig, error) {
 	if apiBase == uiBase {
 		return RuntimeConfig{}, fmt.Errorf("center api and ui base paths must differ")
 	}
+	if cfg.TLSEnabled {
+		if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
+			return RuntimeConfig{}, fmt.Errorf("%s and %s are required when %s=true", TLSCertFileEnv, TLSKeyFileEnv, TLSEnabledEnv)
+		}
+		if _, err := config.BuildServerTLSConfig(cfg.TLSCertFile, cfg.TLSKeyFile, cfg.TLSMinVersion); err != nil {
+			return RuntimeConfig{}, fmt.Errorf("center TLS: %w", err)
+		}
+	}
 	cfg.APIBasePath = apiBase
 	cfg.UIBasePath = uiBase
 	return cfg, nil
+}
+
+func parseCenterBoolEnv(name string, fallback bool) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean", name)
+	}
+	return parsed, nil
 }
 
 func InitializeRuntime() error {
@@ -114,8 +156,16 @@ func NewEngine(cfg RuntimeConfig) (*gin.Engine, error) {
 	})
 
 	registerDeviceEnrollmentRoutes(r)
-	handler.RegisterAdminAuthRoutesAtWithCookieNames(r, apiBase, centerAdminAuthCookieNames)
-	registerCenterAPI(r, apiBase)
+	handler.RegisterRequiredAdminAuthRoutesAtWithCookieNames(r, apiBase, centerAdminAuthCookieNames)
+	registerCenterAPI(r, RuntimeConfig{
+		ListenAddr:    strings.TrimSpace(cfg.ListenAddr),
+		APIBasePath:   apiBase,
+		UIBasePath:    uiBase,
+		TLSEnabled:    cfg.TLSEnabled,
+		TLSCertFile:   strings.TrimSpace(cfg.TLSCertFile),
+		TLSKeyFile:    strings.TrimSpace(cfg.TLSKeyFile),
+		TLSMinVersion: cfg.TLSMinVersion,
+	})
 	registerCenterUI(r, apiBase, uiBase)
 	return r, nil
 }
@@ -123,6 +173,19 @@ func NewEngine(cfg RuntimeConfig) (*gin.Engine, error) {
 func Run(ctx context.Context, cfg RuntimeConfig) error {
 	if err := InitializeRuntime(); err != nil {
 		return err
+	}
+	settings, _, found, err := loadCenterSettings(ctx)
+	if err != nil {
+		return fmt.Errorf("load center settings: %w", err)
+	}
+	if found {
+		if err := applyCenterMutableSettings(settings); err != nil {
+			return err
+		}
+		cfg, err = applyCenterRuntimeSettings(cfg, settings)
+		if err != nil {
+			return err
+		}
 	}
 	r, err := NewEngine(cfg)
 	if err != nil {
@@ -154,6 +217,17 @@ func Run(ctx context.Context, cfg RuntimeConfig) error {
 
 	errCh := make(chan error, 1)
 	go func() {
+		if cfg.TLSEnabled {
+			tlsConfig, err := config.BuildServerTLSConfig(cfg.TLSCertFile, cfg.TLSKeyFile, cfg.TLSMinVersion)
+			if err != nil {
+				errCh <- fmt.Errorf("center TLS: %w", err)
+				return
+			}
+			srv.TLSConfig = tlsConfig
+			log.Printf("[CENTER] starting center TLS server on %s ui=%s api=%s", addr, cfg.UIBasePath, cfg.APIBasePath)
+			errCh <- srv.Serve(tls.NewListener(listener, tlsConfig))
+			return
+		}
 		log.Printf("[CENTER] starting center server on %s ui=%s api=%s", addr, cfg.UIBasePath, cfg.APIBasePath)
 		errCh <- srv.Serve(listener)
 	}()
@@ -175,13 +249,14 @@ func Run(ctx context.Context, cfg RuntimeConfig) error {
 	}
 }
 
-func registerCenterAPI(r *gin.Engine, apiBase string) {
+func registerCenterAPI(r *gin.Engine, runtimeCfg RuntimeConfig) {
+	apiBase := runtimeCfg.APIBasePath
 	api := r.Group(
 		apiBase,
 		handler.AdminAccessMiddleware("api"),
 		handler.AdminRateLimitMiddleware(),
 		handler.AdminAuthCookieNamesMiddleware(centerAdminAuthCookieNames),
-		middleware.AdminAuthWithResolver(handler.DBAdminAuthResolverWithCookieNames(centerAdminAuthCookieNames)),
+		middleware.AdminAuthRequiredWithResolver(handler.DBAdminAuthResolverWithCookieNames(centerAdminAuthCookieNames)),
 	)
 	api.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -193,6 +268,7 @@ func registerCenterAPI(r *gin.Engine, apiBase string) {
 				apiBase + "/auth/logout",
 				apiBase + "/auth/account",
 				apiBase + "/auth/password",
+				apiBase + "/settings",
 				apiBase + "/devices",
 				apiBase + "/devices/enrollments",
 				apiBase + "/enrollment-tokens",
@@ -215,6 +291,8 @@ func registerCenterAPI(r *gin.Engine, apiBase string) {
 			"rejected_enrollments": counts.RejectedEnrollments,
 		})
 	})
+	api.GET("/settings", getCenterSettings(runtimeCfg))
+	api.PUT("/settings", putCenterSettings(runtimeCfg))
 	api.GET("/auth/account", handler.GetAdminAccount)
 	api.PUT("/auth/account", handler.PutAdminAccount)
 	api.PUT("/auth/password", handler.PutAdminPassword)

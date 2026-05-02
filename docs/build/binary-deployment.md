@@ -460,6 +460,10 @@ sudo systemctl enable --now tukuyomi-center
 sudo systemctl status tukuyomi-center
 ```
 
+After first boot, Center `Settings` can persist standalone listen address,
+API/UI base path, and manual TLS certificate/key settings. Listener and TLS
+changes apply after restarting `tukuyomi-center`.
+
 Socket activation install:
 
 ```bash

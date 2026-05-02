@@ -12,8 +12,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	goruntime "runtime"
 	"strconv"
@@ -34,6 +36,7 @@ func TestRuntimeConfigFromEnvDefaults(t *testing.T) {
 	t.Setenv(ListenAddrEnv, "")
 	t.Setenv(APIBasePathEnv, "")
 	t.Setenv(UIBasePathEnv, "")
+	t.Setenv(TLSEnabledEnv, "")
 
 	cfg, err := RuntimeConfigFromEnv()
 	if err != nil {
@@ -47,6 +50,44 @@ func TestRuntimeConfigFromEnvDefaults(t *testing.T) {
 	}
 	if cfg.UIBasePath != DefaultUIBasePath {
 		t.Fatalf("ui=%q want %q", cfg.UIBasePath, DefaultUIBasePath)
+	}
+	if cfg.TLSEnabled {
+		t.Fatal("tls should default off")
+	}
+}
+
+func TestRuntimeConfigFromEnvAcceptsManualTLS(t *testing.T) {
+	certFile, keyFile := writeCenterTLSFilesForTest(t)
+	t.Setenv(TLSEnabledEnv, "true")
+	t.Setenv(TLSCertFileEnv, certFile)
+	t.Setenv(TLSKeyFileEnv, keyFile)
+	t.Setenv(TLSMinVersionEnv, "tls1.3")
+
+	cfg, err := RuntimeConfigFromEnv()
+	if err != nil {
+		t.Fatalf("RuntimeConfigFromEnv: %v", err)
+	}
+	if !cfg.TLSEnabled || cfg.TLSCertFile != certFile || cfg.TLSKeyFile != keyFile || cfg.TLSMinVersion != "tls1.3" {
+		t.Fatalf("unexpected TLS config: %+v", cfg)
+	}
+}
+
+func TestRuntimeConfigFromEnvRejectsTLSWithoutPair(t *testing.T) {
+	t.Setenv(TLSEnabledEnv, "true")
+	t.Setenv(TLSCertFileEnv, "")
+	t.Setenv(TLSKeyFileEnv, "")
+
+	if _, err := RuntimeConfigFromEnv(); err == nil {
+		t.Fatal("expected missing TLS pair to be rejected")
+	}
+}
+
+func TestRuntimeConfigFromEnvRejectsInvalidTLSMinVersion(t *testing.T) {
+	t.Setenv(TLSEnabledEnv, "false")
+	t.Setenv(TLSMinVersionEnv, "ssl3")
+
+	if _, err := RuntimeConfigFromEnv(); err == nil {
+		t.Fatal("expected invalid TLS minimum version to be rejected")
 	}
 }
 
@@ -156,6 +197,57 @@ func TestCenterLoginFlowUsesIsolatedAdminCookies(t *testing.T) {
 	}
 }
 
+func TestCenterAuthIgnoresGlobalAuthDisable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restore := configureCenterAuthTest(t)
+	defer restore()
+
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer handler.InitLogsStatsStore(false, "", 0)
+
+	t.Setenv(handler.AdminBootstrapUsernameEnv, "center-admin")
+	t.Setenv(handler.AdminBootstrapPasswordEnv, "center-admin-password")
+	if created, err := handler.EnsureAdminBootstrapOwnerFromEnv(); err != nil {
+		t.Fatalf("EnsureAdminBootstrapOwnerFromEnv: %v", err)
+	} else if !created {
+		t.Fatal("bootstrap admin was not created")
+	}
+	if err := handler.InitAdminGuards(); err != nil {
+		t.Fatalf("InitAdminGuards: %v", err)
+	}
+	config.APIAuthDisable = true
+
+	engine, err := NewEngine(RuntimeConfig{
+		APIBasePath: "/center-api",
+		UIBasePath:  "/center-ui",
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	session := performRequest(engine, http.MethodGet, "/center-api/auth/session", "", nil)
+	if session.Code != http.StatusOK {
+		t.Fatalf("session code=%d body=%s", session.Code, session.Body.String())
+	}
+	if authenticatedBool(t, session.Body.Bytes()) || strings.Contains(session.Body.String(), `"mode":"disabled"`) {
+		t.Fatalf("center auth should remain required when global auth disable is true: %s", session.Body.String())
+	}
+
+	protected := performRequest(engine, http.MethodGet, "/center-api/settings", "", nil)
+	if protected.Code != http.StatusUnauthorized {
+		t.Fatalf("protected code=%d body=%s", protected.Code, protected.Body.String())
+	}
+
+	login := performRequest(engine, http.MethodPost, "/center-api/auth/login", `{"identifier":"center-admin","password":"center-admin-password"}`, map[string]string{
+		"Content-Type": "application/json",
+	})
+	if login.Code != http.StatusOK || !strings.Contains(login.Body.String(), `"mode":"session"`) {
+		t.Fatalf("login code=%d body=%s", login.Code, login.Body.String())
+	}
+}
+
 func TestBootstrapApprovedDeviceCreatesApprovedDeviceAndRejectsTrustChange(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
@@ -215,6 +307,192 @@ func TestBootstrapApprovedDeviceCreatesApprovedDeviceAndRejectsTrustChange(t *te
 	})
 	if err == nil || !strings.Contains(err.Error(), "different trust material") {
 		t.Fatalf("expected trust conflict, got %v", err)
+	}
+}
+
+func TestCenterSettingsEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restore := configureCenterAuthTest(t)
+	defer restore()
+	old := struct {
+		dbDriver        string
+		dbRetentionDays int
+		fileRetention   time.Duration
+		adminReadOnly   bool
+	}{
+		dbDriver:        config.DBDriver,
+		dbRetentionDays: config.DBRetentionDays,
+		fileRetention:   config.FileRetention,
+		adminReadOnly:   config.AdminReadOnly,
+	}
+	defer func() {
+		config.DBDriver = old.dbDriver
+		config.DBRetentionDays = old.dbRetentionDays
+		config.FileRetention = old.fileRetention
+		config.AdminReadOnly = old.adminReadOnly
+	}()
+	config.DBDriver = "sqlite"
+	config.DBRetentionDays = 45
+	config.FileRetention = 14 * 24 * time.Hour
+	config.AdminReadOnly = false
+
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 45); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer handler.InitLogsStatsStore(false, "", 0)
+
+	t.Setenv(handler.AdminBootstrapUsernameEnv, "center-admin")
+	t.Setenv(handler.AdminBootstrapPasswordEnv, "center-admin-password")
+	if created, err := handler.EnsureAdminBootstrapOwnerFromEnv(); err != nil {
+		t.Fatalf("EnsureAdminBootstrapOwnerFromEnv: %v", err)
+	} else if !created {
+		t.Fatal("bootstrap admin was not created")
+	}
+	if err := handler.InitAdminGuards(); err != nil {
+		t.Fatalf("InitAdminGuards: %v", err)
+	}
+
+	engine, err := NewEngine(RuntimeConfig{
+		ListenAddr:  "127.0.0.1:19092",
+		APIBasePath: "/center-api",
+		UIBasePath:  "/center-ui",
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	cookies, csrfCookie := loginCenterForTest(t, engine)
+	settings := performRequestWithCookies(engine, http.MethodGet, "/center-api/settings", "", nil, cookies)
+	if settings.Code != http.StatusOK {
+		t.Fatalf("settings code=%d body=%s", settings.Code, settings.Body.String())
+	}
+	var payload centerSettingsPayload
+	if err := json.Unmarshal(settings.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal settings: %v", err)
+	}
+	if payload.Runtime.Mode != "center" || payload.Runtime.ListenAddr != "127.0.0.1:19092" || payload.Runtime.APIBasePath != "/center-api" || payload.Runtime.UIBasePath != "/center-ui" {
+		t.Fatalf("runtime settings mismatch: %+v", payload.Runtime)
+	}
+	if payload.Storage.DBDriver != "sqlite" || payload.Storage.DBRetentionDays != 45 || payload.Storage.FileRetentionDays != 14 {
+		t.Fatalf("storage settings mismatch: %+v", payload.Storage)
+	}
+	if payload.Access.ReadOnly {
+		t.Fatalf("access settings mismatch: %+v", payload.Access)
+	}
+	if payload.Config.EnrollmentTokenDefaultMaxUses != EnrollmentTokenDefaultMaxUses ||
+		payload.Config.EnrollmentTokenDefaultTTLSeconds != 0 ||
+		payload.Config.AdminSessionTTLSeconds != 3600 {
+		t.Fatalf("config settings mismatch: %+v", payload.Config)
+	}
+	if payload.Config.ListenAddr != "127.0.0.1:19092" || payload.Config.APIBasePath != "/center-api" || payload.Config.UIBasePath != "/center-ui" ||
+		payload.Config.TLSMode != centerSettingsTLSModeOff || payload.Config.TLSMinVersion != "tls1.2" || payload.RestartRequired {
+		t.Fatalf("listener settings mismatch: restart=%v config=%+v", payload.RestartRequired, payload.Config)
+	}
+	update := performRequestWithCookies(
+		engine,
+		http.MethodPut,
+		"/center-api/settings",
+		`{"config":{"enrollment_token_default_max_uses":3,"enrollment_token_default_ttl_seconds":86400,"admin_session_ttl_seconds":7200}}`,
+		map[string]string{
+			"If-Match":               payload.ETag,
+			"Content-Type":           "application/json",
+			adminauth.CSRFHeaderName: csrfCookie.Value,
+		},
+		cookies,
+	)
+	if update.Code != http.StatusOK {
+		t.Fatalf("update settings code=%d body=%s", update.Code, update.Body.String())
+	}
+	var updated centerSettingsPayload
+	if err := json.Unmarshal(update.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("unmarshal updated settings: %v", err)
+	}
+	if updated.Config.EnrollmentTokenDefaultMaxUses != 3 ||
+		updated.Config.EnrollmentTokenDefaultTTLSeconds != 86400 ||
+		updated.Config.AdminSessionTTLSeconds != 7200 ||
+		config.AdminSessionTTL != 2*time.Hour {
+		t.Fatalf("updated config mismatch: %+v", updated.Config)
+	}
+	if updated.RestartRequired {
+		t.Fatalf("token-only settings update should not require restart: %+v", updated)
+	}
+	token, _, err := CreateEnrollmentToken(context.Background(), EnrollmentTokenCreate{CreatedBy: "test"})
+	if err != nil {
+		t.Fatalf("CreateEnrollmentToken: %v", err)
+	}
+	if token.MaxUses != 3 || token.ExpiresAtUnix <= time.Now().UTC().Unix() {
+		t.Fatalf("token did not use settings defaults: %+v", token)
+	}
+
+	listenerUpdate := performRequestWithCookies(
+		engine,
+		http.MethodPut,
+		"/center-api/settings",
+		`{"config":{"enrollment_token_default_max_uses":3,"enrollment_token_default_ttl_seconds":86400,"admin_session_ttl_seconds":7200,"listen_addr":"127.0.0.1:19192","api_base_path":"/center-api","ui_base_path":"/center-ui","tls_mode":"off","tls_min_version":"tls1.3"}}`,
+		map[string]string{
+			"If-Match":               updated.ETag,
+			"Content-Type":           "application/json",
+			adminauth.CSRFHeaderName: csrfCookie.Value,
+		},
+		cookies,
+	)
+	if listenerUpdate.Code != http.StatusOK {
+		t.Fatalf("listener settings code=%d body=%s", listenerUpdate.Code, listenerUpdate.Body.String())
+	}
+	var listenerUpdated centerSettingsPayload
+	if err := json.Unmarshal(listenerUpdate.Body.Bytes(), &listenerUpdated); err != nil {
+		t.Fatalf("unmarshal listener settings: %v", err)
+	}
+	if !listenerUpdated.RestartRequired || listenerUpdated.Config.ListenAddr != "127.0.0.1:19192" || listenerUpdated.Config.TLSMinVersion != "tls1.3" {
+		t.Fatalf("listener update should require restart: %+v", listenerUpdated)
+	}
+
+	badTLS := performRequestWithCookies(
+		engine,
+		http.MethodPut,
+		"/center-api/settings",
+		`{"config":{"tls_mode":"manual"}}`,
+		map[string]string{
+			"If-Match":               listenerUpdated.ETag,
+			"Content-Type":           "application/json",
+			adminauth.CSRFHeaderName: csrfCookie.Value,
+		},
+		cookies,
+	)
+	if badTLS.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad tls settings code=%d body=%s", badTLS.Code, badTLS.Body.String())
+	}
+
+	badTLSVersion := performRequestWithCookies(
+		engine,
+		http.MethodPut,
+		"/center-api/settings",
+		`{"config":{"tls_mode":"off","tls_min_version":"ssl3"}}`,
+		map[string]string{
+			"If-Match":               listenerUpdated.ETag,
+			"Content-Type":           "application/json",
+			adminauth.CSRFHeaderName: csrfCookie.Value,
+		},
+		cookies,
+	)
+	if badTLSVersion.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad tls min version code=%d body=%s", badTLSVersion.Code, badTLSVersion.Body.String())
+	}
+
+	badSessionTTL := performRequestWithCookies(
+		engine,
+		http.MethodPut,
+		"/center-api/settings",
+		`{"config":{"admin_session_ttl_seconds":299}}`,
+		map[string]string{
+			"If-Match":               listenerUpdated.ETag,
+			"Content-Type":           "application/json",
+			adminauth.CSRFHeaderName: csrfCookie.Value,
+		},
+		cookies,
+	)
+	if badSessionTTL.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad session ttl code=%d body=%s", badSessionTTL.Code, badSessionTTL.Body.String())
 	}
 }
 
@@ -2045,4 +2323,36 @@ func authenticatedBool(t *testing.T, raw []byte) bool {
 		t.Fatalf("decode session: %v body=%s", err, string(raw))
 	}
 	return payload.Authenticated
+}
+
+func writeCenterTLSFilesForTest(t *testing.T) (string, string) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(cryptorand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		DNSNames:     []string{"localhost"},
+	}
+	certDER, err := x509.CreateCertificate(cryptorand.Reader, tmpl, tmpl, publicKey, privateKey)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	privateDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		t.Fatalf("MarshalPKCS8PrivateKey: %v", err)
+	}
+	dir := t.TempDir()
+	certFile := filepath.Join(dir, "center.crt")
+	keyFile := filepath.Join(dir, "center.key")
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), 0o600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER}), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	return certFile, keyFile
 }

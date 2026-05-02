@@ -579,6 +579,11 @@ The Gateway sample unit keeps `User=tukuyomi` while granting
 launches `tukuyomi center` and does not require low-port-bind
 capability by default.
 
+Center standalone listener settings start in `tukuyomi-center.env` and can
+then be edited from Center `Settings`. The editable values are the Center
+listen address, API/UI base paths, and manual TLS certificate/key paths.
+Listener and TLS changes apply after restarting `tukuyomi-center`.
+
 For graceful binary replacement, use systemd **socket activation**.
 The socket units hold the public / admin / redirect / HTTP3 listeners,
 which separates the service-process shutdown / restart from the
@@ -671,9 +676,10 @@ connections do not survive process replacement.
   are not required.
 - `admin.listen_addr` only splits ports. Reachability remains
   controlled by `admin.external_mode` and `admin.trusted_cidrs`.
-- In the first slice of split listening, the `admin.listen_addr` side
+- In Gateway split-listener deployments, the `admin.listen_addr` side
   has no built-in TLS. Operate it on a trusted private network or
-  behind a front proxy that terminates TLS.
+  behind a front proxy that terminates TLS. Center standalone has its
+  own manual TLS listener controls in Center `Settings`.
 - This capability is **for low-port binds only**. Switching `php-fpm`
   to a UID/GID other than `tukuyomi` (for example, `www-data`) still
   needs root start-up.

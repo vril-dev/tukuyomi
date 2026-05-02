@@ -34,6 +34,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/buildinfo"
+	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/edgeartifactbundle"
 	"tukuyomi/internal/edgeconfigsnapshot"
@@ -45,6 +46,11 @@ const (
 	edgeEnrollmentTokenMaxBytes = 256
 	edgeEnrollmentHTTPTimeout   = 10 * time.Second
 	edgeRuntimeArtifactTimeout  = 10 * time.Minute
+)
+
+const (
+	centerProtectedBootstrapActor = "system:center-protected-bootstrap"
+	centerProtectedUpstreamName   = "center"
 )
 
 const (
@@ -658,6 +664,9 @@ func BootstrapCenterProtectedGateway(ctx context.Context, opts CenterProtectedGa
 	if err != nil {
 		return CenterProtectedGatewayBootstrapResult{}, err
 	}
+	if err := bootstrapCenterProtectedGatewayRouting(store, centerURL); err != nil {
+		return CenterProtectedGatewayBootstrapResult{}, err
+	}
 
 	identity, err := prepareEdgeDeviceIdentity(store, edgeDeviceEnrollmentRequest{
 		DeviceID: opts.DeviceID,
@@ -726,6 +735,146 @@ func bootstrapCenterProtectedGatewayAppConfig(statusRefreshIntervalSec int) (boo
 		return false, err
 	}
 	return true, nil
+}
+
+func bootstrapCenterProtectedGatewayRouting(store *wafEventStore, centerURL string) error {
+	if err := bootstrapCenterProtectedGatewayProxyRoutes(store, centerURL); err != nil {
+		return err
+	}
+	return bootstrapCenterProtectedGatewayWAFBypass(store)
+}
+
+func bootstrapCenterProtectedGatewayProxyRoutes(store *wafEventStore, centerURL string) error {
+	cfg, rec, found, err := store.loadActiveProxyConfig()
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	changed := false
+	nextUpstream := ProxyUpstream{
+		Enabled: true,
+		Name:    centerProtectedUpstreamName,
+		URL:     centerURL,
+		Weight:  1,
+	}
+	upstreamFound := false
+	for i := range cfg.Upstreams {
+		if cfg.Upstreams[i].Name != centerProtectedUpstreamName {
+			continue
+		}
+		upstreamFound = true
+		if mustJSON(cfg.Upstreams[i]) != mustJSON(nextUpstream) {
+			cfg.Upstreams[i] = nextUpstream
+			changed = true
+		}
+		break
+	}
+	if !upstreamFound {
+		cfg.Upstreams = append(cfg.Upstreams, nextUpstream)
+		changed = true
+	}
+
+	for _, nextRoute := range centerProtectedGatewayRoutes() {
+		routeFound := false
+		for i := range cfg.Routes {
+			if cfg.Routes[i].Name != nextRoute.Name {
+				continue
+			}
+			routeFound = true
+			if mustJSON(cfg.Routes[i]) != mustJSON(nextRoute) {
+				cfg.Routes[i] = nextRoute
+				changed = true
+			}
+			break
+		}
+		if !routeFound {
+			cfg.Routes = append(cfg.Routes, nextRoute)
+			changed = true
+		}
+	}
+	if strings.TrimSpace(cfg.HealthCheckPath) == "" {
+		cfg.HealthCheckPath = "/healthz"
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	_, err = store.writeProxyConfigVersion(rec.ETag, cfg, configVersionSourceApply, centerProtectedBootstrapActor, "center-protected proxy route bootstrap", 0)
+	return err
+}
+
+func centerProtectedGatewayRoutes() []ProxyRoute {
+	return []ProxyRoute{
+		{
+			Name:     "center-api",
+			Priority: 10,
+			Match: ProxyRouteMatch{Path: &ProxyRoutePathMatch{
+				Type:  "prefix",
+				Value: "/center-api",
+			}},
+			Action: ProxyRouteAction{Upstream: centerProtectedUpstreamName},
+		},
+		{
+			Name:     "center-ui",
+			Priority: 20,
+			Match: ProxyRouteMatch{Path: &ProxyRoutePathMatch{
+				Type:  "prefix",
+				Value: "/center-ui",
+			}},
+			Action: ProxyRouteAction{Upstream: centerProtectedUpstreamName},
+		},
+	}
+}
+
+func bootstrapCenterProtectedGatewayWAFBypass(store *wafEventStore) error {
+	spec := mustPolicyJSONSpec(bypassConfigBlobKey)
+	raw, rec, found, err := store.loadActivePolicyJSONConfig(spec)
+	if err != nil {
+		return err
+	}
+	file := bypassconf.File{Default: bypassconf.Scope{Entries: []bypassconf.Entry{}}}
+	if found {
+		file, err = bypassconf.Parse(string(raw))
+		if err != nil {
+			return err
+		}
+	}
+	changed := false
+	for _, path := range []string{"/center-api/", "/center-ui/"} {
+		if centerProtectedBypassEntryExists(file.Default.Entries, path) {
+			continue
+		}
+		file.Default.Entries = append(file.Default.Entries, bypassconf.Entry{Path: path})
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	normalized, err := bypassconf.MarshalJSON(file)
+	if err != nil {
+		return err
+	}
+	expectedETag := ""
+	if found {
+		expectedETag = rec.ETag
+	}
+	_, err = store.writePolicyJSONConfigVersion(expectedETag, spec, normalized, configVersionSourceApply, centerProtectedBootstrapActor, "center-protected WAF bypass bootstrap", 0)
+	return err
+}
+
+func centerProtectedBypassEntryExists(entries []bypassconf.Entry, expectedPath string) bool {
+	expectedPath = strings.TrimRight(expectedPath, "/")
+	for _, entry := range entries {
+		if entry.ExtraRule != "" {
+			continue
+		}
+		if strings.TrimRight(strings.TrimSpace(entry.Path), "/") == expectedPath {
+			return true
+		}
+	}
+	return false
 }
 
 func edgeCanMarkBootstrapApproved(status string) bool {

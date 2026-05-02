@@ -22,6 +22,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/edgeartifactbundle"
 	"tukuyomi/internal/runtimeartifactbundle"
@@ -234,6 +235,20 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer InitLogsStatsStore(false, "", 0)
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected db store")
+	}
+	if _, err := store.writeProxyConfigVersion("", ProxyRulesConfig{}, configVersionSourceImport, "", "test proxy seed", 0); err != nil {
+		t.Fatalf("write proxy seed: %v", err)
+	}
+	emptyBypass, err := bypassconf.MarshalJSON(bypassconf.File{Default: bypassconf.Scope{Entries: []bypassconf.Entry{}}})
+	if err != nil {
+		t.Fatalf("marshal bypass seed: %v", err)
+	}
+	if _, err := store.writePolicyJSONConfigVersion("", mustPolicyJSONSpec(bypassConfigBlobKey), emptyBypass, configVersionSourceImport, "", "test bypass seed", 0); err != nil {
+		t.Fatalf("write bypass seed: %v", err)
+	}
 
 	first, err := BootstrapCenterProtectedGateway(context.Background(), CenterProtectedGatewayBootstrapOptions{
 		CenterURL: "http://127.0.0.1:9092",
@@ -264,6 +279,26 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	}
 	if cfg.Edge.DeviceAuth.StatusRefreshIntervalSec != config.DefaultEdgeDeviceStatusRefreshSec {
 		t.Fatalf("poll interval=%d want %d", cfg.Edge.DeviceAuth.StatusRefreshIntervalSec, config.DefaultEdgeDeviceStatusRefreshSec)
+	}
+	proxyCfg, _, found, err := store.loadActiveProxyConfig()
+	if err != nil {
+		t.Fatalf("load proxy config: %v", err)
+	}
+	if !found {
+		t.Fatal("proxy config was not seeded")
+	}
+	if len(proxyCfg.Upstreams) != 1 || proxyCfg.Upstreams[0].Name != "center" || proxyCfg.Upstreams[0].URL != "http://127.0.0.1:9092" {
+		t.Fatalf("center upstream was not bootstrapped: %+v", proxyCfg.Upstreams)
+	}
+	if len(proxyCfg.Routes) != 2 || proxyCfg.Routes[0].Name != "center-api" || proxyCfg.Routes[1].Name != "center-ui" {
+		t.Fatalf("center routes were not bootstrapped: %+v", proxyCfg.Routes)
+	}
+	bypassRaw, _, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(bypassConfigBlobKey))
+	if err != nil {
+		t.Fatalf("load bypass config: %v", err)
+	}
+	if !found || !strings.Contains(string(bypassRaw), `"/center-api/"`) || !strings.Contains(string(bypassRaw), `"/center-ui/"`) {
+		t.Fatalf("center bypass was not bootstrapped found=%v raw=%s", found, string(bypassRaw))
 	}
 
 	second, err := BootstrapCenterProtectedGateway(context.Background(), CenterProtectedGatewayBootstrapOptions{

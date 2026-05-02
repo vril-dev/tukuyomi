@@ -411,6 +411,10 @@ sudo systemctl enable --now tukuyomi-center
 sudo systemctl status tukuyomi-center
 ```
 
+初回起動後は、Center `Settings` から単体 listen address、API/UI base path、
+manual TLS の証明書／鍵設定を永続化できます。listener と TLS の変更は
+`tukuyomi-center` の再起動後に反映されます。
+
 ソケットアクティベーションの登録例:
 
 ```bash

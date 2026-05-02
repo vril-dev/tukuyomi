@@ -631,6 +631,21 @@ proxy["routes"] = [
 proxy["default_route"] = None
 proxy["health_check_path"] = "/healthz"
 domains["proxy"] = proxy
+waf_bypass = domains.get("waf_bypass")
+if not isinstance(waf_bypass, dict):
+    waf_bypass = {}
+default_bypass = waf_bypass.get("default")
+if not isinstance(default_bypass, dict):
+    default_bypass = {}
+bypass_entries = default_bypass.get("entries")
+if not isinstance(bypass_entries, list):
+    bypass_entries = []
+for path in ("/center-api/", "/center-ui/"):
+    if not any(isinstance(entry, dict) and entry.get("path") == path for entry in bypass_entries):
+        bypass_entries.append({"path": path})
+default_bypass["entries"] = bypass_entries
+waf_bypass["default"] = default_bypass
+domains["waf_bypass"] = waf_bypass
 bundle["source"] = "center-protected-seed"
 with open(dst, "w", encoding="utf-8") as fh:
     json.dump(bundle, fh, indent=2, sort_keys=True)

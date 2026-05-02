@@ -107,6 +107,14 @@ func TestImportPreviewConfigStorageCanSeedProxyFromStartupBundle(t *testing.T) {
       ],
       "default_route": null,
       "health_check_path": "/healthz"
+    },
+    "waf_bypass": {
+      "default": {
+        "entries": [
+          {"path": "/center-api/"},
+          {"path": "/center-ui/"}
+        ]
+      }
     }
   }
 }` + "\n")
@@ -140,5 +148,15 @@ func TestImportPreviewConfigStorageCanSeedProxyFromStartupBundle(t *testing.T) {
 	}
 	if proxyCfg.HealthCheckPath != "/healthz" {
 		t.Fatalf("health_check_path=%q want /healthz", proxyCfg.HealthCheckPath)
+	}
+	bypassRaw, _, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(bypassConfigBlobKey))
+	if err != nil {
+		t.Fatalf("loadActivePolicyJSONConfig(%s): %v", bypassConfigBlobKey, err)
+	}
+	if !found {
+		t.Fatal("expected bypass config")
+	}
+	if !strings.Contains(string(bypassRaw), `"/center-api/"`) || !strings.Contains(string(bypassRaw), `"/center-ui/"`) {
+		t.Fatalf("unexpected bypass raw: %s", string(bypassRaw))
 	}
 }

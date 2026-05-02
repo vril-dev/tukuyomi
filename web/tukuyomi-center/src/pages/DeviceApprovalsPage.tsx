@@ -130,7 +130,15 @@ type EnrollmentTokenCreateResponse = {
   record?: EnrollmentTokenRecord;
 };
 
+type CenterSettingsResponse = {
+  config?: {
+    enrollment_token_default_max_uses?: number;
+    enrollment_token_default_ttl_seconds?: number;
+  };
+};
+
 const DEFAULT_ENROLLMENT_TOKEN_MAX_USES = 10;
+const SECONDS_PER_DAY = 24 * 60 * 60;
 const CONFIG_SNAPSHOT_PAGE_SIZE = 6;
 
 function formatUnixTime(value: number, locale: string) {
@@ -163,11 +171,30 @@ function datetimeLocalToUnix(value: string) {
 }
 
 function boundedMaxUses(value: string) {
+  if (!value.trim()) {
+    return 0;
+  }
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    return DEFAULT_ENROLLMENT_TOKEN_MAX_USES;
+    return 0;
   }
   return Math.min(parsed, 1000000);
+}
+
+function normalizeTokenDefaults(settings: CenterSettingsResponse) {
+  const maxUses = Number(settings.config?.enrollment_token_default_max_uses);
+  const ttlSeconds = Number(settings.config?.enrollment_token_default_ttl_seconds);
+  return {
+    maxUses: Number.isFinite(maxUses) && maxUses > 0 ? Math.min(maxUses, 1000000) : DEFAULT_ENROLLMENT_TOKEN_MAX_USES,
+    ttlSeconds: Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? ttlSeconds : 0,
+  };
+}
+
+function tokenDefaultTTLLabel(seconds: number, tx: (key: string, vars?: Record<string, string | number>) => string) {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return tx("no expiration");
+  }
+  return tx("{count} days", { count: Math.ceil(seconds / SECONDS_PER_DAY) });
 }
 
 function tokenEffectiveStatus(token: EnrollmentTokenRecord) {
@@ -263,6 +290,7 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
   const [tokenMessageTone, setTokenMessageTone] = useState<"success" | "error">("success");
   const [showHiddenTokens, setShowHiddenTokens] = useState(false);
   const [showArchivedDevices, setShowArchivedDevices] = useState(false);
+  const [tokenDefaults, setTokenDefaults] = useState({ maxUses: DEFAULT_ENROLLMENT_TOKEN_MAX_USES, ttlSeconds: 0 });
   const [configSnapshots, setConfigSnapshots] = useState<DeviceConfigSnapshotRecord[]>([]);
   const [configSnapshotOffset, setConfigSnapshotOffset] = useState(0);
   const [configSnapshotNextOffset, setConfigSnapshotNextOffset] = useState(0);
@@ -271,7 +299,7 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
   const [configSnapshotViewer, setConfigSnapshotViewer] = useState<{ revision: string; payload: string } | null>(null);
   const [tokenForm, setTokenForm] = useState({
     label: "",
-    maxUses: String(DEFAULT_ENROLLMENT_TOKEN_MAX_USES),
+    maxUses: "",
     expiresAt: "",
   });
 
@@ -280,14 +308,16 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
     setMessage("");
     try {
       const deviceListPath = showArchivedDevices || selectedDeviceID ? "/devices?include_archived=1" : "/devices";
-      const [enrollmentData, tokenData, deviceData] = await Promise.all([
+      const [enrollmentData, tokenData, deviceData, settingsData] = await Promise.all([
         apiGetJson<EnrollmentListResponse>("/devices/enrollments?status=pending&limit=50"),
         apiGetJson<EnrollmentTokenListResponse>("/enrollment-tokens?limit=500"),
         apiGetJson<DeviceListResponse>(deviceListPath),
+        apiGetJson<CenterSettingsResponse>("/settings"),
       ]);
       setEnrollments(Array.isArray(enrollmentData.enrollments) ? enrollmentData.enrollments : []);
       setTokens(Array.isArray(tokenData.tokens) ? tokenData.tokens : []);
       setDevices(Array.isArray(deviceData.devices) ? deviceData.devices : []);
+      setTokenDefaults(normalizeTokenDefaults(settingsData));
     } catch (err) {
       const fallback = tx("Failed to load device approvals");
       setMessage(err instanceof Error ? err.message || fallback : fallback);
@@ -733,8 +763,10 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                 max={1000000}
                 value={tokenForm.maxUses}
                 onChange={(event) => setTokenForm((current) => ({ ...current, maxUses: event.target.value }))}
+                placeholder={String(tokenDefaults.maxUses)}
                 disabled={tokenSaving}
               />
+              <span className="field-hint">{tx("Settings default: {value}", { value: tokenDefaults.maxUses })}</span>
             </label>
             <label>
               <span>{tx("Expires at")}</span>
@@ -744,7 +776,9 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                 onChange={(event) => setTokenForm((current) => ({ ...current, expiresAt: event.target.value }))}
                 disabled={tokenSaving}
               />
-              <span className="field-hint">{tx("Leave blank for no expiration.")}</span>
+              <span className="field-hint">
+                {tx("Settings default: {value}", { value: tokenDefaultTTLLabel(tokenDefaults.ttlSeconds, tx) })}
+              </span>
             </label>
           </div>
           <div className="form-footer">

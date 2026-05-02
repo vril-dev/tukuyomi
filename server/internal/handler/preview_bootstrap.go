@@ -192,6 +192,15 @@ func previewDefaultCacheRulesPolicyRaw() (string, error) {
 }
 
 func previewDefaultBypassPolicyRaw() (string, error) {
+	if strings.TrimSpace(os.Getenv(previewProxySeedFromStartupEnv)) == "1" {
+		raw, found, err := readStartupSeedConfFile(startupPolicySeedName(bypassConfigBlobKey))
+		if err != nil {
+			return "", fmt.Errorf("read preview bypass seed: %w", err)
+		}
+		if found && strings.TrimSpace(string(raw)) != "" {
+			return string(raw), nil
+		}
+	}
 	raw, err := bypassconf.MarshalJSON(bypassconf.File{Default: bypassconf.Scope{Entries: []bypassconf.Entry{}}})
 	if err != nil {
 		return "", err

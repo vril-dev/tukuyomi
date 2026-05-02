@@ -550,6 +550,11 @@ gateway sample ユニットは、`User=tukuyomi` のまま `AmbientCapabilities=
 です。Center ユニットは `tukuyomi center` を起動し、既定では low port bind
 capability を必要としません。
 
+Center 単体 listener の初期値は `tukuyomi-center.env` に置き、初回起動後は
+Center の `Settings` から編集できます。対象は Center listen address、API/UI
+base path、manual TLS の証明書／鍵 path です。listener と TLS の変更は
+`tukuyomi-center` の再起動後に反映されます。
+
 graceful binary replacement が必要な場合は、systemd の **socket activation**
 を推奨します。socket unit が public / admin / redirect / HTTP3 listener を
 保持するため、service process の shutdown / restart と、listener bind race を
@@ -637,9 +642,10 @@ process replacement をまたいでは維持されません。
   を使うのが通例なので、admin listener 用の追加 capability は不要です。
 - `admin.listen_addr` は port 分離だけを行います。到達可否は引き続き
   `admin.external_mode` と `admin.trusted_cidrs` で制御してください。
-- 最初の slice の split listener では、`admin.listen_addr` 側に built-in TLS
+- Gateway の split listener では、`admin.listen_addr` 側に built-in TLS
   はありません。trusted private network か、front proxy 側で TLS を terminate
-  する前提で運用してください。
+  する前提で運用してください。Center 単体には Center `Settings` 側に
+  manual TLS listener 設定があります。
 - `CAP_NET_BIND_SERVICE` は **low port bind 用だけ** の capability です。
   `php-fpm` を `www-data` など `tukuyomi` 以外の UID/GID へ切り替えるには、
   引き続き root 起動が必要です。

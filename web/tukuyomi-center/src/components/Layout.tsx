@@ -31,6 +31,7 @@ const navGroups: NavGroup[] = [
 
 const utilityNavItems: NavItem[] = [
   { to: "/user", label: "User", hint: "Manage your Center sign-in account and password." },
+  { to: "/settings", label: "Settings", hint: "Center runtime and policy settings." },
 ];
 
 function isActive(pathname: string, to: string) {

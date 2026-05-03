@@ -18,6 +18,9 @@ CENTER_PREVIEW_CONTAINER_PORT_VALUE="${CENTER_PREVIEW_CONTAINER_PORT:-9090}"
 CENTER_PREVIEW_CONFIG_VALUE="${CENTER_PREVIEW_CONFIG:-conf/config.center-preview.json}"
 CENTER_PREVIEW_DB_REL_VALUE="${CENTER_PREVIEW_DB_PATH:-db/tukuyomi-center-preview.db}"
 GATEWAY_PREVIEW_CENTER_UPSTREAM_URL_VALUE="${GATEWAY_PREVIEW_CENTER_UPSTREAM_URL:-http://${CENTER_PREVIEW_NETWORK_ALIAS_VALUE}:${CENTER_PREVIEW_CONTAINER_PORT_VALUE}}"
+CENTER_PROTECTED_GATEWAY_API_BASE_PATH_VALUE="${CENTER_PROTECTED_GATEWAY_API_BASE_PATH:-${CENTER_PREVIEW_GATEWAY_API_BASE_PATH:-/center-api}}"
+CENTER_PROTECTED_CENTER_API_BASE_PATH_VALUE="${CENTER_PROTECTED_CENTER_API_BASE_PATH:-${CENTER_PREVIEW_API_BASE_PATH:-/center-api}}"
+CENTER_PROTECTED_CENTER_UI_BASE_PATH_VALUE="${CENTER_PROTECTED_CENTER_UI_BASE_PATH:-${CENTER_PREVIEW_UI_BASE_PATH:-/center-ui}}"
 
 preview_config_host_path() {
   local config_ref="$1"
@@ -291,9 +294,10 @@ write_center_protected_seed_bundle() {
   local dst=""
   dst="$(protected_preview_seed_bundle_path)"
   mkdir -p "$(dirname "$dst")"
-  python3 - "$src" "$dst" "$GATEWAY_PREVIEW_CENTER_UPSTREAM_URL_VALUE" <<'PY'
+  python3 - "$src" "$dst" "$GATEWAY_PREVIEW_CENTER_UPSTREAM_URL_VALUE" "$CENTER_PROTECTED_GATEWAY_API_BASE_PATH_VALUE" "$CENTER_PROTECTED_CENTER_API_BASE_PATH_VALUE" "$CENTER_PROTECTED_CENTER_UI_BASE_PATH_VALUE" <<'PY'
 import json
 import pathlib
+import posixpath
 import sys
 
 src = pathlib.Path(sys.argv[1])
@@ -301,6 +305,23 @@ dst = pathlib.Path(sys.argv[2])
 upstream_url = str(sys.argv[3]).strip()
 if not upstream_url:
     raise SystemExit("center upstream URL is empty")
+
+def normalize_base_path(label, raw, fallback):
+    value = str(raw).strip() or fallback
+    if not value.startswith("/"):
+        value = "/" + value
+    if any(part in (".", "..") for part in value.split("/")):
+        raise SystemExit(f"{label} must not contain dot segments")
+    value = posixpath.normpath(value)
+    if value == "/" or "*" in value:
+        raise SystemExit(f"{label} must be a non-root absolute path")
+    return value
+
+gateway_api_base = normalize_base_path("gateway API base path", sys.argv[4], "/center-api")
+center_api_base = normalize_base_path("center API base path", sys.argv[5], "/center-api")
+center_ui_base = normalize_base_path("center UI base path", sys.argv[6], "/center-ui")
+if gateway_api_base == center_ui_base or center_api_base == center_ui_base:
+    raise SystemExit("center API paths and UI base path must differ")
 with src.open(encoding="utf-8") as fh:
     bundle = json.load(fh)
 if not isinstance(bundle, dict):
@@ -320,17 +341,20 @@ proxy["upstreams"] = [
     }
 ]
 proxy["backend_pools"] = []
+api_action = {"upstream": "center"}
+if gateway_api_base != center_api_base:
+    api_action["path_rewrite"] = {"prefix": center_api_base}
 proxy["routes"] = [
     {
         "name": "center-api",
         "priority": 10,
-        "match": {"path": {"type": "prefix", "value": "/center-api"}},
-        "action": {"upstream": "center"},
+        "match": {"path": {"type": "prefix", "value": gateway_api_base}},
+        "action": api_action,
     },
     {
         "name": "center-ui",
         "priority": 20,
-        "match": {"path": {"type": "prefix", "value": "/center-ui"}},
+        "match": {"path": {"type": "prefix", "value": center_ui_base}},
         "action": {"upstream": "center"},
     },
 ]
@@ -338,20 +362,27 @@ proxy["default_route"] = None
 proxy["health_check_path"] = "/healthz"
 domains["proxy"] = proxy
 waf_bypass = domains.get("waf_bypass")
-if not isinstance(waf_bypass, dict):
-    waf_bypass = {}
-default_bypass = waf_bypass.get("default")
-if not isinstance(default_bypass, dict):
-    default_bypass = {}
-bypass_entries = default_bypass.get("entries")
-if not isinstance(bypass_entries, list):
-    bypass_entries = []
-for path in ("/center-api/", "/center-ui/"):
-    if not any(isinstance(entry, dict) and entry.get("path") == path for entry in bypass_entries):
-        bypass_entries.append({"path": path})
-default_bypass["entries"] = bypass_entries
-waf_bypass["default"] = default_bypass
-domains["waf_bypass"] = waf_bypass
+protected_bypass_paths = {gateway_api_base, center_api_base, center_ui_base}
+
+def keep_bypass_entry(entry):
+    if not isinstance(entry, dict):
+        return True
+    if str(entry.get("extra_rule", "")).strip():
+        return True
+    return str(entry.get("path", "")).strip().rstrip("/") not in protected_bypass_paths
+
+if isinstance(waf_bypass, dict):
+    scopes = []
+    default_bypass = waf_bypass.get("default")
+    if isinstance(default_bypass, dict):
+        scopes.append(default_bypass)
+    hosts = waf_bypass.get("hosts")
+    if isinstance(hosts, dict):
+        scopes.extend(scope for scope in hosts.values() if isinstance(scope, dict))
+    for scope in scopes:
+        entries = scope.get("entries")
+        if isinstance(entries, list):
+            scope["entries"] = [entry for entry in entries if keep_bypass_entry(entry)]
 bundle["source"] = "center-protected-preview-seed"
 tmp = dst.with_name(dst.name + ".tmp")
 with tmp.open("w", encoding="utf-8") as fh:
@@ -421,9 +452,20 @@ bootstrap_center_protected_preview_enrollment() {
     return 1
   fi
   ensure_preview_runtime_dirs
-  run_preview_command bootstrap-center-protected-gateway --center-url "$GATEWAY_PREVIEW_CENTER_UPSTREAM_URL_VALUE" --out "$identity_rel"
+  run_preview_command bootstrap-center-protected-gateway \
+    --center-url "$GATEWAY_PREVIEW_CENTER_UPSTREAM_URL_VALUE" \
+    --gateway-api-base-path "$CENTER_PROTECTED_GATEWAY_API_BASE_PATH_VALUE" \
+    --center-api-base-path "$CENTER_PROTECTED_CENTER_API_BASE_PATH_VALUE" \
+    --center-ui-base-path "$CENTER_PROTECTED_CENTER_UI_BASE_PATH_VALUE" \
+    --out "$identity_rel"
   run_center_preview_bootstrap_command bootstrap-center-protected-center --in "$identity_rel" --out "$approved_rel"
-  run_preview_command bootstrap-center-protected-gateway --center-url "$GATEWAY_PREVIEW_CENTER_UPSTREAM_URL_VALUE" --mark-approved --out "$identity_rel"
+  run_preview_command bootstrap-center-protected-gateway \
+    --center-url "$GATEWAY_PREVIEW_CENTER_UPSTREAM_URL_VALUE" \
+    --gateway-api-base-path "$CENTER_PROTECTED_GATEWAY_API_BASE_PATH_VALUE" \
+    --center-api-base-path "$CENTER_PROTECTED_CENTER_API_BASE_PATH_VALUE" \
+    --center-ui-base-path "$CENTER_PROTECTED_CENTER_UI_BASE_PATH_VALUE" \
+    --mark-approved \
+    --out "$identity_rel"
   rm -f "$ROOT_DIR/data/$identity_rel"
   rm -f "$ROOT_DIR/data/$approved_rel"
 }
@@ -545,8 +587,8 @@ case "${1:-}" in
     echo "[gateway-preview] admin ui: ${GATEWAY_PREVIEW_ADMIN_UI_URL}"
     echo "[gateway-preview] admin api: ${GATEWAY_PREVIEW_ADMIN_API_URL}"
     if center_protected_preview_enabled; then
-      echo "[gateway-preview] center ui via gateway: ${GATEWAY_PREVIEW_PUBLIC_URL%/}/center-ui"
-      echo "[gateway-preview] center api via gateway: ${GATEWAY_PREVIEW_PUBLIC_URL%/}/center-api"
+      echo "[gateway-preview] center ui via gateway: ${GATEWAY_PREVIEW_PUBLIC_URL%/}${CENTER_PROTECTED_CENTER_UI_BASE_PATH_VALUE}"
+      echo "[gateway-preview] center api via gateway: ${GATEWAY_PREVIEW_PUBLIC_URL%/}${CENTER_PROTECTED_GATEWAY_API_BASE_PATH_VALUE}"
       echo "[gateway-preview] center upstream: ${GATEWAY_PREVIEW_CENTER_UPSTREAM_URL_VALUE}"
       if [[ "$GATEWAY_PREVIEW_PERSIST_VALUE" == "1" && "$preview_db_existed" == "1" ]]; then
         echo "[gateway-preview] existing persistent Gateway DB is preserved; protected Center routes are seeded only when the preview DB is created"

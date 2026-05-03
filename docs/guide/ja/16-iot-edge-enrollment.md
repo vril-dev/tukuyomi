@@ -148,6 +148,11 @@ seed します。Center は Gateway 経由の `http://localhost:9090/center-ui` 
 開きます。protected preview では Gateway の IoT / Edge mode も有効化し、preview
 Center DB に対する Center 承認も bootstrap します。
 
+Center process 側の API path を非公開名にする場合は、
+`CENTER_PREVIEW_GATEWAY_API_BASE_PATH` は Gateway で公開する path のままにし、
+`CENTER_PREVIEW_API_BASE_PATH` に Center 側 path を指定します。Gateway は公開 route
+を Center 側 path へ rewrite してから転送します。
+
 `GATEWAY_PREVIEW_PERSIST=1` の場合、この protected route は Gateway preview
 DB が作成されるタイミングでのみ seed されます。既存の永続 Gateway preview
 DB がすでにある場合は、その preview DB をリセットするか、`Proxy Rules` から

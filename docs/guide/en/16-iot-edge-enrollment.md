@@ -168,6 +168,11 @@ Open Center through Gateway at `http://localhost:9090/center-ui`. Protected
 preview also enables Gateway IoT / Edge mode and bootstraps the matching Center
 approval against the preview Center DB.
 
+When the Center process API path is private, keep
+`CENTER_PREVIEW_GATEWAY_API_BASE_PATH` on the public Gateway path and set
+`CENTER_PREVIEW_API_BASE_PATH` to the Center path. Gateway rewrites the public
+route before forwarding to Center.
+
 With `GATEWAY_PREVIEW_PERSIST=1`, these protected routes are seeded only when
 the Gateway preview DB is created. If an existing persistent Gateway preview DB
 is already present, reset that preview DB or add the routes from `Proxy Rules`.

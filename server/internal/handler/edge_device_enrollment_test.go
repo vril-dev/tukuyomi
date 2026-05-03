@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -242,17 +243,25 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	if _, err := store.writeProxyConfigVersion("", ProxyRulesConfig{}, configVersionSourceImport, "", "test proxy seed", 0); err != nil {
 		t.Fatalf("write proxy seed: %v", err)
 	}
-	emptyBypass, err := bypassconf.MarshalJSON(bypassconf.File{Default: bypassconf.Scope{Entries: []bypassconf.Entry{}}})
+	seedBypass, err := bypassconf.MarshalJSON(bypassconf.File{Default: bypassconf.Scope{Entries: []bypassconf.Entry{
+		{Path: "/center-api/"},
+		{Path: "/center-manage-api/"},
+		{Path: "/center-ui/"},
+		{Path: "/healthz"},
+	}}})
 	if err != nil {
 		t.Fatalf("marshal bypass seed: %v", err)
 	}
-	if _, err := store.writePolicyJSONConfigVersion("", mustPolicyJSONSpec(bypassConfigBlobKey), emptyBypass, configVersionSourceImport, "", "test bypass seed", 0); err != nil {
+	if _, err := store.writePolicyJSONConfigVersion("", mustPolicyJSONSpec(bypassConfigBlobKey), seedBypass, configVersionSourceImport, "", "test bypass seed", 0); err != nil {
 		t.Fatalf("write bypass seed: %v", err)
 	}
 
 	first, err := BootstrapCenterProtectedGateway(context.Background(), CenterProtectedGatewayBootstrapOptions{
-		CenterURL: "http://127.0.0.1:9092",
-		DeviceID:  "gateway-a",
+		CenterURL:          "http://127.0.0.1:9092",
+		GatewayAPIBasePath: "/center-api",
+		CenterAPIBasePath:  "/center-manage-api",
+		CenterUIBasePath:   "/center-ui",
+		DeviceID:           "gateway-a",
 	})
 	if err != nil {
 		t.Fatalf("BootstrapCenterProtectedGateway prepare: %v", err)
@@ -293,18 +302,39 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	if len(proxyCfg.Routes) != 2 || proxyCfg.Routes[0].Name != "center-api" || proxyCfg.Routes[1].Name != "center-ui" {
 		t.Fatalf("center routes were not bootstrapped: %+v", proxyCfg.Routes)
 	}
+	if proxyCfg.Routes[0].Match.Path == nil || proxyCfg.Routes[0].Match.Path.Value != "/center-api" {
+		t.Fatalf("center api route match mismatch: %+v", proxyCfg.Routes[0])
+	}
+	if proxyCfg.Routes[0].Action.PathRewrite == nil || proxyCfg.Routes[0].Action.PathRewrite.Prefix != "/center-manage-api" {
+		t.Fatalf("center api route rewrite mismatch: %+v", proxyCfg.Routes[0].Action)
+	}
 	bypassRaw, _, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(bypassConfigBlobKey))
 	if err != nil {
 		t.Fatalf("load bypass config: %v", err)
 	}
-	if !found || !strings.Contains(string(bypassRaw), `"/center-api/"`) || !strings.Contains(string(bypassRaw), `"/center-ui/"`) {
-		t.Fatalf("center bypass was not bootstrapped found=%v raw=%s", found, string(bypassRaw))
+	if !found {
+		t.Fatal("bypass config was not preserved")
+	}
+	parsedBypass, err := bypassconf.Parse(string(bypassRaw))
+	if err != nil {
+		t.Fatalf("parse bypass config: %v raw=%s", err, string(bypassRaw))
+	}
+	for _, entry := range parsedBypass.Default.Entries {
+		if strings.TrimRight(entry.Path, "/") == "/center-api" || strings.TrimRight(entry.Path, "/") == "/center-manage-api" || strings.TrimRight(entry.Path, "/") == "/center-ui" {
+			t.Fatalf("center route leaked into WAF bypass: %s", string(bypassRaw))
+		}
+	}
+	if !strings.Contains(string(bypassRaw), `"/healthz"`) {
+		t.Fatalf("unrelated bypass entry was not preserved: %s", string(bypassRaw))
 	}
 
 	second, err := BootstrapCenterProtectedGateway(context.Background(), CenterProtectedGatewayBootstrapOptions{
-		CenterURL:    "http://127.0.0.1:9092",
-		DeviceID:     "gateway-a",
-		MarkApproved: true,
+		CenterURL:          "http://127.0.0.1:9092",
+		GatewayAPIBasePath: "/center-api",
+		CenterAPIBasePath:  "/center-manage-api",
+		CenterUIBasePath:   "/center-ui",
+		DeviceID:           "gateway-a",
+		MarkApproved:       true,
 	})
 	if err != nil {
 		t.Fatalf("BootstrapCenterProtectedGateway approve: %v", err)
@@ -979,6 +1009,256 @@ func TestEdgeDeviceStatusAutoRefreshUploadsRuleArtifactOncePerRevision(t *testin
 	}
 }
 
+func TestApplyEdgeWAFRuleArtifactBundleWritesDBAndReloads(t *testing.T) {
+	restoreRules := saveRulesFileConfigForTest()
+	defer restoreRules()
+
+	tmp := t.TempDir()
+	t.Setenv("WAF_RULE_ASSET_FS_ROOT", tmp)
+	config.RulesFile = config.DefaultBaseRuleAssetPath
+	config.CRSEnable = false
+
+	dbPath := filepath.Join(tmp, "edge-waf-apply.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 32); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer InitLogsStatsStore(false, "", 0)
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("store is nil")
+	}
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{
+		{Path: config.DefaultBaseRuleAssetPath, Kind: wafRuleAssetKindBase, Raw: []byte("SecRuleEngine On\n"), ETag: "rule-etag-current"},
+	}, configVersionSourceImport, "test", "test WAF apply seed", 0); err != nil {
+		t.Fatalf("writeWAFRuleAssetsVersion seed: %v", err)
+	}
+
+	next, err := edgeartifactbundle.BuildBundle([]edgeartifactbundle.RuleFile{
+		{Path: config.DefaultBaseRuleAssetPath, Kind: wafRuleAssetKindBase, Body: []byte("SecRuleEngine DetectionOnly\n"), ETag: "rule-etag-next"},
+	}, time.Unix(2000, 0).UTC())
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	parsed, err := edgeartifactbundle.Parse(next.Compressed)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if err := applyEdgeWAFRuleArtifactBundle(parsed); err != nil {
+		t.Fatalf("applyEdgeWAFRuleArtifactBundle: %v", err)
+	}
+
+	assets, _, found, err := store.loadActiveWAFRuleAssets()
+	if err != nil || !found {
+		t.Fatalf("loadActiveWAFRuleAssets found=%v err=%v", found, err)
+	}
+	got, ok := wafRuleAssetMap(assets)[config.DefaultBaseRuleAssetPath]
+	if !ok {
+		t.Fatalf("missing applied rule asset: %+v", assets)
+	}
+	if string(got.Raw) != "SecRuleEngine DetectionOnly\n" || got.ETag != "rule-etag-next" {
+		t.Fatalf("applied asset mismatch: %+v", got)
+	}
+	currentRevision, err := currentEdgeWAFRuleBundleRevision()
+	if err != nil {
+		t.Fatalf("currentEdgeWAFRuleBundleRevision: %v", err)
+	}
+	if currentRevision != parsed.Revision {
+		t.Fatalf("current revision=%s want=%s", currentRevision, parsed.Revision)
+	}
+}
+
+func TestApplyEdgeWAFRuleAssignmentBlocksStaleBase(t *testing.T) {
+	restoreRules := saveRulesFileConfigForTest()
+	defer restoreRules()
+	restoreWAFState := resetEdgeWAFRuleAssignmentStateForTest(t)
+	defer restoreWAFState()
+
+	tmp := t.TempDir()
+	t.Setenv("WAF_RULE_ASSET_FS_ROOT", tmp)
+	config.RulesFile = config.DefaultBaseRuleAssetPath
+	config.CRSEnable = false
+
+	dbPath := filepath.Join(tmp, "edge-waf-stale.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 32); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer InitLogsStatsStore(false, "", 0)
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("store is nil")
+	}
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{
+		{Path: config.DefaultBaseRuleAssetPath, Kind: wafRuleAssetKindBase, Raw: []byte("SecRuleEngine On\n"), ETag: "rule-etag-current"},
+	}, configVersionSourceImport, "test", "test WAF stale seed", 0); err != nil {
+		t.Fatalf("writeWAFRuleAssetsVersion seed: %v", err)
+	}
+	currentRevision, err := currentEdgeWAFRuleBundleRevision()
+	if err != nil {
+		t.Fatalf("currentEdgeWAFRuleBundleRevision: %v", err)
+	}
+
+	applyEdgeWAFRuleAssignment(context.Background(), &edgeDeviceIdentityRecord{CenterURL: "http://127.0.0.1"}, &edgeWAFRuleDeviceAssignment{
+		BundleRevision:     strings.Repeat("a", 64),
+		BaseBundleRevision: strings.Repeat("b", 64),
+		CompressedSize:     1,
+		UncompressedSize:   1,
+		FileCount:          1,
+	})
+
+	status := edgeWAFRuleApplyStatusSnapshot()
+	if status == nil {
+		t.Fatal("expected WAF apply status")
+	}
+	if status.ApplyState != "blocked" || status.LocalBundleRevision != currentRevision || !strings.Contains(status.ApplyError, "changed after assignment") {
+		t.Fatalf("WAF apply status=%+v, want stale-base blocked with current revision %s", status, currentRevision)
+	}
+}
+
+func TestEdgeDeviceStatusAutoRefreshAppliesWAFRuleAssignment(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)
+	defer restoreEdgeRuntime()
+	restoreRules := saveRulesFileConfigForTest()
+	defer restoreRules()
+	restoreWAFState := resetEdgeWAFRuleAssignmentStateForTest(t)
+	defer restoreWAFState()
+
+	tmp := t.TempDir()
+	t.Setenv("WAF_RULE_ASSET_FS_ROOT", tmp)
+	config.RulesFile = config.DefaultBaseRuleAssetPath
+	config.CRSEnable = false
+
+	dbPath := filepath.Join(tmp, "edge-waf-polling.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 32); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer InitLogsStatsStore(false, "", 0)
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("store is nil")
+	}
+	if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{
+		{Path: config.DefaultBaseRuleAssetPath, Kind: wafRuleAssetKindBase, Raw: []byte("SecRuleEngine On\n"), ETag: "rule-etag-current"},
+	}, configVersionSourceImport, "test", "test WAF polling seed", 0); err != nil {
+		t.Fatalf("writeWAFRuleAssetsVersion seed: %v", err)
+	}
+	baseRevision, err := currentEdgeWAFRuleBundleRevision()
+	if err != nil {
+		t.Fatalf("currentEdgeWAFRuleBundleRevision: %v", err)
+	}
+	next, err := edgeartifactbundle.BuildBundle([]edgeartifactbundle.RuleFile{
+		{Path: config.DefaultBaseRuleAssetPath, Kind: wafRuleAssetKindBase, Body: []byte("SecRuleEngine DetectionOnly\n"), ETag: "rule-etag-next"},
+	}, time.Unix(0, 0).UTC())
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+
+	statusCalls := 0
+	downloadCalls := 0
+	snapshotCalls := 0
+	var capturedPublicKey ed25519.PublicKey
+	var capturedFingerprint string
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/enroll":
+			var req edgeDeviceEnrollmentWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode enrollment: %v", err)
+			}
+			capturedPublicKey = verifySignedEdgeEnrollmentForTest(t, req)
+			capturedFingerprint = req.PublicKeyFingerprintSHA256
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"status":"pending"}`))
+		case "/v1/device-status":
+			statusCalls++
+			var req edgeDeviceStatusWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode status: %v", err)
+			}
+			verifySignedEdgeStatusForTest(t, req, capturedPublicKey, capturedFingerprint)
+			if statusCalls == 2 {
+				if req.WAFRuleApplyStatus == nil || req.WAFRuleApplyStatus.ApplyState != "applied" || req.WAFRuleApplyStatus.LocalBundleRevision != next.Revision {
+					t.Fatalf("second status missing WAF applied report: %+v", req.WAFRuleApplyStatus)
+				}
+			}
+			if statusCalls == 1 {
+				_, _ = w.Write([]byte(`{"status":"approved","device_id":"edge-waf-device","key_id":"default","product_id":"product-a","checked_at_unix":1700000000,"waf_rule_assignment":{"bundle_revision":` +
+					quoteJSON(next.Revision) + `,"base_bundle_revision":` + quoteJSON(baseRevision) + `,"compressed_size":` + strconv.FormatInt(next.CompressedSize, 10) +
+					`,"uncompressed_size":` + strconv.FormatInt(next.UncompressedSize, 10) + `,"file_count":` + strconv.Itoa(next.FileCount) + `,"assigned_at_unix":1700000000}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"status":"approved","device_id":"edge-waf-device","key_id":"default","product_id":"product-a","checked_at_unix":1700000001}`))
+		case "/v1/waf-rule-artifact-download":
+			downloadCalls++
+			var req edgeWAFRuleArtifactDownloadWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode WAF artifact download: %v", err)
+			}
+			verifySignedEdgeWAFRuleArtifactDownloadForTest(t, req, capturedPublicKey, capturedFingerprint)
+			if req.BundleRevision != next.Revision {
+				t.Fatalf("download revision=%s want=%s", req.BundleRevision, next.Revision)
+			}
+			w.Header().Set("Content-Type", "application/gzip")
+			_, _ = w.Write(next.Compressed)
+		case "/v1/device-config-snapshot":
+			snapshotCalls++
+			var req edgeDeviceConfigSnapshotWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode config snapshot: %v", err)
+			}
+			verifySignedEdgeConfigSnapshotForTest(t, req, capturedPublicKey, capturedFingerprint)
+			if !strings.Contains(string(req.Snapshot), next.Revision) {
+				t.Fatalf("config snapshot does not reference applied WAF bundle: %s", string(req.Snapshot))
+			}
+			_, _ = w.Write([]byte(`{"status":"stored","config_revision":` + quoteJSON(req.ConfigRevision) + `,"received_at_unix":1700000002}`))
+		default:
+			t.Fatalf("path=%q", r.URL.Path)
+		}
+	}))
+	defer center.Close()
+
+	router := gin.New()
+	router.POST("/edge/device-auth/enroll", PostEdgeDeviceEnrollment)
+
+	body := `{"center_url":` + quoteJSON(center.URL) + `,"enrollment_token":"tky_enroll_test","device_id":"edge-waf-device","key_id":"default"}`
+	rec := performEdgeDeviceRequest(router, http.MethodPost, "/edge/device-auth/enroll", body)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("enroll code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	if _, attempted, err := autoRefreshEdgeDeviceCenterStatus(context.Background()); err != nil || !attempted {
+		t.Fatalf("first autoRefreshEdgeDeviceCenterStatus attempted=%v err=%v", attempted, err)
+	}
+	if downloadCalls != 1 || snapshotCalls != 1 {
+		t.Fatalf("first refresh download=%d snapshot=%d want 1 each", downloadCalls, snapshotCalls)
+	}
+	status := edgeWAFRuleApplyStatusSnapshot()
+	if status == nil || status.ApplyState != "applied" || status.LocalBundleRevision != next.Revision {
+		t.Fatalf("WAF apply status after first refresh=%+v", status)
+	}
+	assets, _, found, err := store.loadActiveWAFRuleAssets()
+	if err != nil || !found {
+		t.Fatalf("loadActiveWAFRuleAssets found=%v err=%v", found, err)
+	}
+	got, ok := wafRuleAssetMap(assets)[config.DefaultBaseRuleAssetPath]
+	if !ok || string(got.Raw) != "SecRuleEngine DetectionOnly\n" {
+		t.Fatalf("applied WAF asset mismatch ok=%v asset=%+v assets=%+v", ok, got, assets)
+	}
+
+	if _, attempted, err := autoRefreshEdgeDeviceCenterStatus(context.Background()); err != nil || !attempted {
+		t.Fatalf("second autoRefreshEdgeDeviceCenterStatus attempted=%v err=%v", attempted, err)
+	}
+	if statusCalls != 2 {
+		t.Fatalf("statusCalls=%d want 2", statusCalls)
+	}
+	if status := edgeWAFRuleApplyStatusSnapshot(); status != nil {
+		t.Fatalf("terminal WAF status should be pruned after report: %+v", status)
+	}
+}
+
 func TestEdgeDeviceStatusRefreshSerializesConcurrentArtifactUploads(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)
@@ -1534,6 +1814,26 @@ func verifySignedEdgeRuntimeArtifactDownloadForTest(t *testing.T, req edgeRuntim
 	}
 }
 
+func verifySignedEdgeWAFRuleArtifactDownloadForTest(t *testing.T, req edgeWAFRuleArtifactDownloadWireRequest, pub ed25519.PublicKey, fingerprint string) {
+	t.Helper()
+	if len(pub) != ed25519.PublicKeySize {
+		t.Fatalf("public key was not captured")
+	}
+	if req.BodyHash != edgeWAFRuleArtifactDownloadBodyHash(req) {
+		t.Fatalf("WAF rule artifact download body_hash mismatch")
+	}
+	if req.PublicKeyFingerprintSHA256 != fingerprint {
+		t.Fatalf("fingerprint=%q want %q", req.PublicKeyFingerprintSHA256, fingerprint)
+	}
+	signature, err := base64.StdEncoding.DecodeString(req.SignatureB64)
+	if err != nil {
+		t.Fatalf("signature b64: %v", err)
+	}
+	if !ed25519.Verify(pub, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)), signature) {
+		t.Fatalf("WAF rule artifact download signature verification failed")
+	}
+}
+
 func setEdgeRuntimeForTest(enabled bool, deviceAuthEnabled bool) func() {
 	oldEdgeEnabled := config.EdgeEnabled
 	oldDeviceAuthEnabled := config.EdgeDeviceAuthEnabled
@@ -1569,6 +1869,30 @@ func resetEdgeRuntimeAssignmentStateForTest(t *testing.T) func() {
 		edgeRuntimeApplyStatusMu.Lock()
 		edgeRuntimeApplyStatuses = prevStatuses
 		edgeRuntimeApplyStatusMu.Unlock()
+	}
+}
+
+func resetEdgeWAFRuleAssignmentStateForTest(t *testing.T) func() {
+	t.Helper()
+
+	edgeWAFRuleAssignmentMu.Lock()
+	prevActive := edgeWAFRuleAssignmentActive
+	edgeWAFRuleAssignmentActive = false
+	edgeWAFRuleAssignmentMu.Unlock()
+
+	edgeWAFRuleApplyStatusMu.Lock()
+	prevStatus := edgeWAFRuleApplyStatusCurrent
+	edgeWAFRuleApplyStatusCurrent = nil
+	edgeWAFRuleApplyStatusMu.Unlock()
+
+	return func() {
+		edgeWAFRuleAssignmentMu.Lock()
+		edgeWAFRuleAssignmentActive = prevActive
+		edgeWAFRuleAssignmentMu.Unlock()
+
+		edgeWAFRuleApplyStatusMu.Lock()
+		edgeWAFRuleApplyStatusCurrent = prevStatus
+		edgeWAFRuleApplyStatusMu.Unlock()
 	}
 }
 

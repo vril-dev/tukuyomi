@@ -39,6 +39,7 @@ import (
 	"tukuyomi/internal/edgeartifactbundle"
 	"tukuyomi/internal/edgeconfigsnapshot"
 	"tukuyomi/internal/runtimeartifactbundle"
+	"tukuyomi/internal/waf"
 )
 
 const (
@@ -47,11 +48,15 @@ const (
 	edgeEnrollmentHTTPTimeout   = 10 * time.Second
 	edgeRuntimeArtifactTimeout  = 10 * time.Minute
 	edgeProxyRuleBundleMaxBytes = edgeconfigsnapshot.MaxBytes
+	edgeWAFRuleArtifactMaxBytes = edgeartifactbundle.MaxCompressedBytes
 )
 
 const (
-	centerProtectedBootstrapActor = "system:center-protected-bootstrap"
-	centerProtectedUpstreamName   = "center"
+	centerProtectedBootstrapActor        = "system:center-protected-bootstrap"
+	centerProtectedUpstreamName          = "center"
+	centerProtectedDefaultGatewayAPIPath = "/center-api"
+	centerProtectedDefaultCenterAPIPath  = "/center-api"
+	centerProtectedDefaultCenterUIPath   = "/center-ui"
 )
 
 const (
@@ -92,6 +97,10 @@ var (
 	edgeProxyRuleAssignmentActive   bool
 	edgeProxyRuleApplyStatusMu      sync.RWMutex
 	edgeProxyRuleApplyStatusCurrent *edgeProxyRuleApplyStatus
+	edgeWAFRuleAssignmentMu         sync.Mutex
+	edgeWAFRuleAssignmentActive     bool
+	edgeWAFRuleApplyStatusMu        sync.RWMutex
+	edgeWAFRuleApplyStatusCurrent   *edgeWAFRuleApplyStatus
 )
 
 type edgeDeviceIdentityRecord struct {
@@ -151,10 +160,19 @@ type edgeDeviceEnrollmentRequest struct {
 
 type CenterProtectedGatewayBootstrapOptions struct {
 	CenterURL                string
+	GatewayAPIBasePath       string
+	CenterAPIBasePath        string
+	CenterUIBasePath         string
 	DeviceID                 string
 	KeyID                    string
 	StatusRefreshIntervalSec int
 	MarkApproved             bool
+}
+
+type centerProtectedGatewayRouteConfig struct {
+	GatewayAPIBasePath string
+	CenterAPIBasePath  string
+	CenterUIBasePath   string
 }
 
 type CenterProtectedGatewayBootstrapResult struct {
@@ -196,6 +214,7 @@ type edgeDeviceStatusWireRequest struct {
 	RuntimeDeploymentSupported bool                       `json:"runtime_deployment_supported,omitempty"`
 	RuntimeInventory           []edgeDeviceRuntimeSummary `json:"runtime_inventory,omitempty"`
 	ProxyRuleApplyStatus       *edgeProxyRuleApplyStatus  `json:"proxy_rule_apply_status,omitempty"`
+	WAFRuleApplyStatus         *edgeWAFRuleApplyStatus    `json:"waf_rule_apply_status,omitempty"`
 	BodyHash                   string                     `json:"body_hash"`
 	SignatureB64               string                     `json:"signature_b64"`
 }
@@ -283,6 +302,17 @@ type edgeProxyRulesBundleDownloadWireRequest struct {
 	SignatureB64               string `json:"signature_b64"`
 }
 
+type edgeWAFRuleArtifactDownloadWireRequest struct {
+	DeviceID                   string `json:"device_id"`
+	KeyID                      string `json:"key_id"`
+	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string `json:"timestamp"`
+	Nonce                      string `json:"nonce"`
+	BundleRevision             string `json:"bundle_revision"`
+	BodyHash                   string `json:"body_hash"`
+	SignatureB64               string `json:"signature_b64"`
+}
+
 type edgeDeviceCenterStatusResponse struct {
 	Status              string                         `json:"status"`
 	DeviceID            string                         `json:"device_id"`
@@ -291,6 +321,7 @@ type edgeDeviceCenterStatusResponse struct {
 	CheckedAtUnix       int64                          `json:"checked_at_unix"`
 	RuntimeAssignments  []edgeRuntimeDeviceAssignment  `json:"runtime_assignments,omitempty"`
 	ProxyRuleAssignment *edgeProxyRuleDeviceAssignment `json:"proxy_rule_assignment,omitempty"`
+	WAFRuleAssignment   *edgeWAFRuleDeviceAssignment   `json:"waf_rule_assignment,omitempty"`
 }
 
 type edgeRuntimeDeviceAssignment struct {
@@ -327,6 +358,22 @@ type edgeProxyRuleDeviceAssignment struct {
 type edgeProxyRuleApplyStatus struct {
 	DesiredBundleRevision string `json:"desired_bundle_revision,omitempty"`
 	LocalProxyETag        string `json:"local_proxy_etag,omitempty"`
+	ApplyState            string `json:"apply_state,omitempty"`
+	ApplyError            string `json:"apply_error,omitempty"`
+}
+
+type edgeWAFRuleDeviceAssignment struct {
+	BundleRevision     string `json:"bundle_revision"`
+	BaseBundleRevision string `json:"base_bundle_revision"`
+	CompressedSize     int64  `json:"compressed_size"`
+	UncompressedSize   int64  `json:"uncompressed_size"`
+	FileCount          int    `json:"file_count"`
+	AssignedAtUnix     int64  `json:"assigned_at_unix"`
+}
+
+type edgeWAFRuleApplyStatus struct {
+	DesiredBundleRevision string `json:"desired_bundle_revision,omitempty"`
+	LocalBundleRevision   string `json:"local_bundle_revision,omitempty"`
 	ApplyState            string `json:"apply_state,omitempty"`
 	ApplyError            string `json:"apply_error,omitempty"`
 }
@@ -627,6 +674,8 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 	if identity.EnrollmentStatus == edgeEnrollmentStatusApproved {
 		applyEdgeProxyRuleAssignment(ctx, identity, payload.ProxyRuleAssignment)
 		pruneCompletedEdgeProxyRuleApplyStatus(payload.ProxyRuleAssignment)
+		applyEdgeWAFRuleAssignment(ctx, &identity, payload.WAFRuleAssignment)
+		pruneCompletedEdgeWAFRuleApplyStatus(payload.WAFRuleAssignment)
 		applyEdgeRuntimeAssignments(ctx, identity, payload.RuntimeAssignments)
 		pruneCompletedEdgeRuntimeApplyStatuses(payload.RuntimeAssignments)
 		if pushEdgeRuleArtifactBundleIfChanged(ctx, &identity) {
@@ -689,6 +738,10 @@ func BootstrapCenterProtectedGateway(ctx context.Context, opts CenterProtectedGa
 	if err != nil {
 		return CenterProtectedGatewayBootstrapResult{}, err
 	}
+	routeCfg, err := normalizeCenterProtectedGatewayRouteConfig(opts)
+	if err != nil {
+		return CenterProtectedGatewayBootstrapResult{}, err
+	}
 	if opts.StatusRefreshIntervalSec < 0 || opts.StatusRefreshIntervalSec > config.MaxEdgeDeviceStatusRefreshSec {
 		return CenterProtectedGatewayBootstrapResult{}, fmt.Errorf("status refresh interval must be between 0 and %d", config.MaxEdgeDeviceStatusRefreshSec)
 	}
@@ -701,7 +754,7 @@ func BootstrapCenterProtectedGateway(ctx context.Context, opts CenterProtectedGa
 	if err != nil {
 		return CenterProtectedGatewayBootstrapResult{}, err
 	}
-	if err := bootstrapCenterProtectedGatewayRouting(store, centerURL); err != nil {
+	if err := bootstrapCenterProtectedGatewayRouting(store, centerURL, routeCfg); err != nil {
 		return CenterProtectedGatewayBootstrapResult{}, err
 	}
 
@@ -774,14 +827,14 @@ func bootstrapCenterProtectedGatewayAppConfig(statusRefreshIntervalSec int) (boo
 	return true, nil
 }
 
-func bootstrapCenterProtectedGatewayRouting(store *wafEventStore, centerURL string) error {
-	if err := bootstrapCenterProtectedGatewayProxyRoutes(store, centerURL); err != nil {
+func bootstrapCenterProtectedGatewayRouting(store *wafEventStore, centerURL string, routeCfg centerProtectedGatewayRouteConfig) error {
+	if err := bootstrapCenterProtectedGatewayProxyRoutes(store, centerURL, routeCfg); err != nil {
 		return err
 	}
-	return bootstrapCenterProtectedGatewayWAFBypass(store)
+	return bootstrapCenterProtectedGatewayWAFBypass(store, centerProtectedBypassPaths(routeCfg))
 }
 
-func bootstrapCenterProtectedGatewayProxyRoutes(store *wafEventStore, centerURL string) error {
+func bootstrapCenterProtectedGatewayProxyRoutes(store *wafEventStore, centerURL string, routeCfg centerProtectedGatewayRouteConfig) error {
 	cfg, rec, found, err := store.loadActiveProxyConfig()
 	if err != nil {
 		return err
@@ -813,7 +866,7 @@ func bootstrapCenterProtectedGatewayProxyRoutes(store *wafEventStore, centerURL 
 		changed = true
 	}
 
-	for _, nextRoute := range centerProtectedGatewayRoutes() {
+	for _, nextRoute := range centerProtectedGatewayRoutes(routeCfg) {
 		routeFound := false
 		for i := range cfg.Routes {
 			if cfg.Routes[i].Name != nextRoute.Name {
@@ -842,50 +895,117 @@ func bootstrapCenterProtectedGatewayProxyRoutes(store *wafEventStore, centerURL 
 	return err
 }
 
-func centerProtectedGatewayRoutes() []ProxyRoute {
+func centerProtectedGatewayRoutes(routeCfg centerProtectedGatewayRouteConfig) []ProxyRoute {
+	apiAction := ProxyRouteAction{Upstream: centerProtectedUpstreamName}
+	if routeCfg.GatewayAPIBasePath != routeCfg.CenterAPIBasePath {
+		apiAction.PathRewrite = &ProxyRoutePathRewrite{Prefix: routeCfg.CenterAPIBasePath}
+	}
 	return []ProxyRoute{
 		{
 			Name:     "center-api",
 			Priority: 10,
 			Match: ProxyRouteMatch{Path: &ProxyRoutePathMatch{
 				Type:  "prefix",
-				Value: "/center-api",
+				Value: routeCfg.GatewayAPIBasePath,
 			}},
-			Action: ProxyRouteAction{Upstream: centerProtectedUpstreamName},
+			Action: apiAction,
 		},
 		{
 			Name:     "center-ui",
 			Priority: 20,
 			Match: ProxyRouteMatch{Path: &ProxyRoutePathMatch{
 				Type:  "prefix",
-				Value: "/center-ui",
+				Value: routeCfg.CenterUIBasePath,
 			}},
 			Action: ProxyRouteAction{Upstream: centerProtectedUpstreamName},
 		},
 	}
 }
 
-func bootstrapCenterProtectedGatewayWAFBypass(store *wafEventStore) error {
+func normalizeCenterProtectedGatewayRouteConfig(opts CenterProtectedGatewayBootstrapOptions) (centerProtectedGatewayRouteConfig, error) {
+	gatewayAPIBase, err := normalizeCenterProtectedGatewayBasePath(opts.GatewayAPIBasePath, centerProtectedDefaultGatewayAPIPath)
+	if err != nil {
+		return centerProtectedGatewayRouteConfig{}, fmt.Errorf("gateway api base path: %w", err)
+	}
+	centerAPIBase, err := normalizeCenterProtectedGatewayBasePath(opts.CenterAPIBasePath, centerProtectedDefaultCenterAPIPath)
+	if err != nil {
+		return centerProtectedGatewayRouteConfig{}, fmt.Errorf("center api base path: %w", err)
+	}
+	centerUIBase, err := normalizeCenterProtectedGatewayBasePath(opts.CenterUIBasePath, centerProtectedDefaultCenterUIPath)
+	if err != nil {
+		return centerProtectedGatewayRouteConfig{}, fmt.Errorf("center ui base path: %w", err)
+	}
+	if gatewayAPIBase == centerUIBase {
+		return centerProtectedGatewayRouteConfig{}, fmt.Errorf("gateway api base path and center ui base path must differ")
+	}
+	if centerAPIBase == centerUIBase {
+		return centerProtectedGatewayRouteConfig{}, fmt.Errorf("center api base path and center ui base path must differ")
+	}
+	return centerProtectedGatewayRouteConfig{
+		GatewayAPIBasePath: gatewayAPIBase,
+		CenterAPIBasePath:  centerAPIBase,
+		CenterUIBasePath:   centerUIBase,
+	}, nil
+}
+
+func normalizeCenterProtectedGatewayBasePath(raw, fallback string) (string, error) {
+	base := strings.TrimSpace(raw)
+	if base == "" {
+		base = fallback
+	}
+	if base == "" {
+		return "", fmt.Errorf("base path is empty")
+	}
+	if !strings.HasPrefix(base, "/") {
+		base = "/" + base
+	}
+	for _, segment := range strings.Split(base, "/") {
+		switch segment {
+		case ".", "..":
+			return "", fmt.Errorf("base path must not contain dot segments")
+		}
+	}
+	clean := path.Clean(base)
+	if clean == "." || clean == "/" {
+		return "", fmt.Errorf("base path must not be root")
+	}
+	if strings.Contains(clean, "*") {
+		return "", fmt.Errorf("base path must not contain wildcard")
+	}
+	return clean, nil
+}
+
+func centerProtectedBypassPaths(routeCfg centerProtectedGatewayRouteConfig) []string {
+	seen := map[string]struct{}{}
+	paths := make([]string, 0, 3)
+	for _, raw := range []string{routeCfg.GatewayAPIBasePath, routeCfg.CenterAPIBasePath, routeCfg.CenterUIBasePath} {
+		path := strings.TrimRight(strings.TrimSpace(raw), "/")
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+func bootstrapCenterProtectedGatewayWAFBypass(store *wafEventStore, protectedPaths []string) error {
 	spec := mustPolicyJSONSpec(bypassConfigBlobKey)
 	raw, rec, found, err := store.loadActivePolicyJSONConfig(spec)
 	if err != nil {
 		return err
 	}
-	file := bypassconf.File{Default: bypassconf.Scope{Entries: []bypassconf.Entry{}}}
-	if found {
-		file, err = bypassconf.Parse(string(raw))
-		if err != nil {
-			return err
-		}
+	if !found {
+		return nil
 	}
-	changed := false
-	for _, path := range []string{"/center-api/", "/center-ui/"} {
-		if centerProtectedBypassEntryExists(file.Default.Entries, path) {
-			continue
-		}
-		file.Default.Entries = append(file.Default.Entries, bypassconf.Entry{Path: path})
-		changed = true
+	file, err := bypassconf.Parse(string(raw))
+	if err != nil {
+		return err
 	}
+	file, changed := removeCenterProtectedBypassEntries(file, protectedPaths)
 	if !changed {
 		return nil
 	}
@@ -901,17 +1021,54 @@ func bootstrapCenterProtectedGatewayWAFBypass(store *wafEventStore) error {
 	return err
 }
 
-func centerProtectedBypassEntryExists(entries []bypassconf.Entry, expectedPath string) bool {
-	expectedPath = strings.TrimRight(expectedPath, "/")
-	for _, entry := range entries {
-		if entry.ExtraRule != "" {
-			continue
-		}
-		if strings.TrimRight(strings.TrimSpace(entry.Path), "/") == expectedPath {
-			return true
+func removeCenterProtectedBypassEntries(file bypassconf.File, protectedPaths []string) (bypassconf.File, bool) {
+	changed := false
+	protectedPathSet := centerProtectedBypassPathSet(protectedPaths)
+	file.Default.Entries, changed = filterCenterProtectedBypassEntries(file.Default.Entries, protectedPathSet)
+	for host, scope := range file.Hosts {
+		var scopeChanged bool
+		scope.Entries, scopeChanged = filterCenterProtectedBypassEntries(scope.Entries, protectedPathSet)
+		if scopeChanged {
+			file.Hosts[host] = scope
+			changed = true
 		}
 	}
-	return false
+	return file, changed
+}
+
+func centerProtectedBypassPathSet(protectedPaths []string) map[string]struct{} {
+	if len(protectedPaths) == 0 {
+		protectedPaths = []string{centerProtectedDefaultGatewayAPIPath, centerProtectedDefaultCenterUIPath}
+	}
+	set := make(map[string]struct{}, len(protectedPaths))
+	for _, raw := range protectedPaths {
+		path := strings.TrimRight(strings.TrimSpace(raw), "/")
+		if path != "" {
+			set[path] = struct{}{}
+		}
+	}
+	return set
+}
+
+func filterCenterProtectedBypassEntries(entries []bypassconf.Entry, protectedPathSet map[string]struct{}) ([]bypassconf.Entry, bool) {
+	out := entries[:0]
+	changed := false
+	for _, entry := range entries {
+		if isCenterProtectedBypassEntry(entry, protectedPathSet) {
+			changed = true
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out, changed
+}
+
+func isCenterProtectedBypassEntry(entry bypassconf.Entry, protectedPathSet map[string]struct{}) bool {
+	if strings.TrimSpace(entry.ExtraRule) != "" {
+		return false
+	}
+	_, ok := protectedPathSet[strings.TrimRight(strings.TrimSpace(entry.Path), "/")]
+	return ok
 }
 
 func edgeCanMarkBootstrapApproved(status string) bool {
@@ -1057,6 +1214,22 @@ func centerProxyRulesBundleDownloadURL(centerBaseURL string) (string, error) {
 		return "", fmt.Errorf("center URL scheme must be http or https")
 	}
 	u.Path = "/v1/proxy-rules-bundle-download"
+	u.RawPath = ""
+	return u.String(), nil
+}
+
+func centerWAFRuleArtifactDownloadURL(centerBaseURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("center URL is not configured")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("center URL is invalid")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("center URL scheme must be http or https")
+	}
+	u.Path = "/v1/waf-rule-artifact-download"
 	u.RawPath = ""
 	return u.String(), nil
 }
@@ -1496,6 +1669,7 @@ func signedEdgeDeviceStatusRequest(identity edgeDeviceIdentityRecord) (edgeDevic
 	req.RuntimeDeploymentSupported = true
 	req.RuntimeInventory = currentEdgeRuntimeInventorySummary()
 	req.ProxyRuleApplyStatus = edgeProxyRuleApplyStatusSnapshot()
+	req.WAFRuleApplyStatus = edgeWAFRuleApplyStatusSnapshot()
 	req.BodyHash = edgeDeviceStatusBodyHash(req)
 	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)))
 	req.SignatureB64 = base64.StdEncoding.EncodeToString(signature)
@@ -1758,6 +1932,29 @@ func setEdgeProxyRuleApplyStatus(status edgeProxyRuleApplyStatus) {
 	edgeProxyRuleApplyStatusMu.Unlock()
 }
 
+func edgeWAFRuleApplyStatusSnapshot() *edgeWAFRuleApplyStatus {
+	edgeWAFRuleApplyStatusMu.RLock()
+	defer edgeWAFRuleApplyStatusMu.RUnlock()
+	if edgeWAFRuleApplyStatusCurrent == nil {
+		return nil
+	}
+	out := *edgeWAFRuleApplyStatusCurrent
+	return &out
+}
+
+func setEdgeWAFRuleApplyStatus(status edgeWAFRuleApplyStatus) {
+	status.DesiredBundleRevision = normalizeEdgeHex64(status.DesiredBundleRevision)
+	status.LocalBundleRevision = normalizeEdgeHex64(status.LocalBundleRevision)
+	status.ApplyState = clampEdgeMetadataText(status.ApplyState, 32)
+	status.ApplyError = clampEdgeMetadataText(status.ApplyError, 256)
+	if status.DesiredBundleRevision == "" && status.LocalBundleRevision == "" && status.ApplyState == "" && status.ApplyError == "" {
+		return
+	}
+	edgeWAFRuleApplyStatusMu.Lock()
+	edgeWAFRuleApplyStatusCurrent = &status
+	edgeWAFRuleApplyStatusMu.Unlock()
+}
+
 func pruneCompletedEdgeProxyRuleApplyStatus(assignment *edgeProxyRuleDeviceAssignment) {
 	if assignment != nil {
 		return
@@ -1770,6 +1967,21 @@ func pruneCompletedEdgeProxyRuleApplyStatus(assignment *edgeProxyRuleDeviceAssig
 	switch edgeProxyRuleApplyStatusCurrent.ApplyState {
 	case "applied", "failed", "blocked":
 		edgeProxyRuleApplyStatusCurrent = nil
+	}
+}
+
+func pruneCompletedEdgeWAFRuleApplyStatus(assignment *edgeWAFRuleDeviceAssignment) {
+	if assignment != nil {
+		return
+	}
+	edgeWAFRuleApplyStatusMu.Lock()
+	defer edgeWAFRuleApplyStatusMu.Unlock()
+	if edgeWAFRuleApplyStatusCurrent == nil {
+		return
+	}
+	switch edgeWAFRuleApplyStatusCurrent.ApplyState {
+	case "applied", "failed", "blocked":
+		edgeWAFRuleApplyStatusCurrent = nil
 	}
 }
 
@@ -1808,6 +2020,22 @@ func endEdgeProxyRuleAssignmentOp() {
 	edgeProxyRuleAssignmentMu.Lock()
 	edgeProxyRuleAssignmentActive = false
 	edgeProxyRuleAssignmentMu.Unlock()
+}
+
+func beginEdgeWAFRuleAssignmentOp() bool {
+	edgeWAFRuleAssignmentMu.Lock()
+	defer edgeWAFRuleAssignmentMu.Unlock()
+	if edgeWAFRuleAssignmentActive {
+		return false
+	}
+	edgeWAFRuleAssignmentActive = true
+	return true
+}
+
+func endEdgeWAFRuleAssignmentOp() {
+	edgeWAFRuleAssignmentMu.Lock()
+	edgeWAFRuleAssignmentActive = false
+	edgeWAFRuleAssignmentMu.Unlock()
 }
 
 func beginEdgeRuntimeAssignmentOp(runtimeFamily, runtimeID string) bool {
@@ -1951,6 +2179,199 @@ func downloadEdgeProxyRuleBundle(ctx context.Context, identity edgeDeviceIdentit
 		return nil, fmt.Errorf("proxy rules bundle etag mismatch")
 	}
 	return body, nil
+}
+
+func applyEdgeWAFRuleAssignment(ctx context.Context, identity *edgeDeviceIdentityRecord, assignment *edgeWAFRuleDeviceAssignment) {
+	if identity == nil || assignment == nil {
+		return
+	}
+	normalized, ok := normalizeEdgeWAFRuleAssignment(*assignment)
+	if !ok {
+		return
+	}
+	if !beginEdgeWAFRuleAssignmentOp() {
+		return
+	}
+	defer endEdgeWAFRuleAssignmentOp()
+
+	status := edgeWAFRuleApplyStatus{
+		DesiredBundleRevision: normalized.BundleRevision,
+		ApplyState:            "applying",
+	}
+	setEdgeWAFRuleApplyStatus(status)
+
+	currentRevision, err := currentEdgeWAFRuleBundleRevision()
+	if err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeWAFRuleApplyStatus(status)
+		return
+	}
+	status.LocalBundleRevision = currentRevision
+	if normalized.BaseBundleRevision != "" && currentRevision != normalized.BaseBundleRevision {
+		status.ApplyState = "blocked"
+		status.ApplyError = "local WAF rules changed after assignment"
+		setEdgeWAFRuleApplyStatus(status)
+		return
+	}
+
+	artifact, err := downloadEdgeWAFRuleArtifact(ctx, *identity, normalized)
+	if err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeWAFRuleApplyStatus(status)
+		return
+	}
+	if err := applyEdgeWAFRuleArtifactBundle(artifact); err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeWAFRuleApplyStatus(status)
+		return
+	}
+	now := time.Now().UTC().Unix()
+	identity.RuleArtifactRevision = artifact.Revision
+	identity.RuleArtifactPushedAtUnix = now
+	identity.RuleArtifactError = ""
+	status.LocalBundleRevision = artifact.Revision
+	status.ApplyState = "applied"
+	status.ApplyError = ""
+	setEdgeWAFRuleApplyStatus(status)
+}
+
+func currentEdgeWAFRuleBundleRevision() (string, error) {
+	bundle, found, err := buildEdgeRuleArtifactBundle()
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("current WAF rule assets are not initialized")
+	}
+	return bundle.Revision, nil
+}
+
+func normalizeEdgeWAFRuleAssignment(in edgeWAFRuleDeviceAssignment) (edgeWAFRuleDeviceAssignment, bool) {
+	out := edgeWAFRuleDeviceAssignment{
+		BundleRevision:     normalizeEdgeHex64(in.BundleRevision),
+		BaseBundleRevision: normalizeEdgeHex64(in.BaseBundleRevision),
+		CompressedSize:     in.CompressedSize,
+		UncompressedSize:   in.UncompressedSize,
+		FileCount:          in.FileCount,
+		AssignedAtUnix:     in.AssignedAtUnix,
+	}
+	if out.BundleRevision == "" {
+		return edgeWAFRuleDeviceAssignment{}, false
+	}
+	if out.CompressedSize <= 0 || out.CompressedSize > edgeartifactbundle.MaxCompressedBytes ||
+		out.UncompressedSize <= 0 || out.UncompressedSize > edgeartifactbundle.MaxUncompressedBytes ||
+		out.FileCount <= 0 || out.FileCount > edgeartifactbundle.MaxFiles {
+		return edgeWAFRuleDeviceAssignment{}, false
+	}
+	return out, true
+}
+
+func downloadEdgeWAFRuleArtifact(ctx context.Context, identity edgeDeviceIdentityRecord, assignment edgeWAFRuleDeviceAssignment) (edgeartifactbundle.Parsed, error) {
+	downloadURL, err := centerWAFRuleArtifactDownloadURL(identity.CenterURL)
+	if err != nil {
+		return edgeartifactbundle.Parsed{}, err
+	}
+	wireReq, err := signedEdgeWAFRuleArtifactDownloadRequest(identity, assignment)
+	if err != nil {
+		return edgeartifactbundle.Parsed{}, err
+	}
+	httpStatus, body, err := sendEdgeWAFRuleArtifactDownload(ctx, downloadURL, wireReq, assignment.CompressedSize)
+	if err != nil {
+		return edgeartifactbundle.Parsed{}, err
+	}
+	if httpStatus < 200 || httpStatus >= 300 {
+		return edgeartifactbundle.Parsed{}, fmt.Errorf("%s", centerHTTPErrorMessage("center WAF rule artifact download failed", httpStatus, body))
+	}
+	if int64(len(body)) != assignment.CompressedSize {
+		return edgeartifactbundle.Parsed{}, fmt.Errorf("WAF rule artifact compressed size mismatch")
+	}
+	parsed, err := edgeartifactbundle.Parse(body)
+	if err != nil {
+		return edgeartifactbundle.Parsed{}, err
+	}
+	if parsed.Revision != assignment.BundleRevision ||
+		parsed.CompressedSize != assignment.CompressedSize ||
+		parsed.UncompressedSize != assignment.UncompressedSize ||
+		parsed.FileCount != assignment.FileCount {
+		return edgeartifactbundle.Parsed{}, fmt.Errorf("WAF rule artifact metadata mismatch")
+	}
+	return parsed, nil
+}
+
+func applyEdgeWAFRuleArtifactBundle(parsed edgeartifactbundle.Parsed) error {
+	if parsed.Revision == "" || len(parsed.Files) == 0 {
+		return fmt.Errorf("WAF rule artifact is empty")
+	}
+	store := getLogsStatsStore()
+	if store == nil {
+		return fmt.Errorf("config DB store is not initialized")
+	}
+	currentAssets, currentRec, found, err := store.loadActiveWAFRuleAssets()
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("current WAF rule assets are not initialized")
+	}
+	next := make([]wafRuleAssetVersion, 0, len(parsed.Files))
+	for _, file := range parsed.Files {
+		next = append(next, wafRuleAssetVersion{
+			Path:     file.Path,
+			Kind:     file.Kind,
+			Raw:      append([]byte(nil), file.Body...),
+			ETag:     file.ETag,
+			Disabled: file.Disabled,
+		})
+	}
+	normalizedNext := normalizeWAFRuleAssets(next)
+	if len(normalizedNext) != len(next) {
+		return fmt.Errorf("WAF rule artifact contains unsupported asset paths")
+	}
+	nextRec, _, err := store.writeWAFRuleAssetsVersion(
+		currentRec.ETag,
+		normalizedNext,
+		configVersionSourceApply,
+		"center",
+		"center WAF rule artifact assignment",
+		0,
+	)
+	if err != nil {
+		if errors.Is(err, errConfigVersionConflict) {
+			return fmt.Errorf("local WAF rules changed during assignment")
+		}
+		return err
+	}
+	if err := reloadWAFRuleAssetsAfterCenterApply(normalizedNext); err != nil {
+		_, _, rollbackErr := store.writeWAFRuleAssetsVersion(
+			nextRec.ETag,
+			currentAssets,
+			configVersionSourceRollback,
+			"center",
+			"rollback failed center WAF rule artifact assignment",
+			currentRec.VersionID,
+		)
+		_ = waf.ReloadBaseWAF()
+		if rollbackErr != nil {
+			return fmt.Errorf("reload WAF after assignment: %w; rollback failed: %v", err, rollbackErr)
+		}
+		return fmt.Errorf("reload WAF after assignment: %w", err)
+	}
+	return nil
+}
+
+func reloadWAFRuleAssetsAfterCenterApply(assets []wafRuleAssetVersion) error {
+	if err := waf.ReloadBaseWAF(); err != nil {
+		return err
+	}
+	for _, asset := range normalizeWAFRuleAssets(assets) {
+		if asset.Kind == wafRuleAssetKindBypassExtra {
+			waf.InvalidateOverrideWAF(asset.Path)
+		}
+	}
+	return nil
 }
 
 func normalizeEdgeRuntimeAssignmentIdentity(runtimeFamily, runtimeID string) (string, string, error) {
@@ -2932,6 +3353,33 @@ func signedEdgeProxyRulesBundleDownloadRequest(identity edgeDeviceIdentityRecord
 	return req, nil
 }
 
+func signedEdgeWAFRuleArtifactDownloadRequest(identity edgeDeviceIdentityRecord, assignment edgeWAFRuleDeviceAssignment) (edgeWAFRuleArtifactDownloadWireRequest, error) {
+	privateKey, _, err := parseEdgeDevicePrivateKey(identity.PrivateKeyPEM)
+	if err != nil {
+		return edgeWAFRuleArtifactDownloadWireRequest{}, err
+	}
+	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	nonce, err := randomEdgeIdentifier("nonce")
+	if err != nil {
+		return edgeWAFRuleArtifactDownloadWireRequest{}, err
+	}
+	req := edgeWAFRuleArtifactDownloadWireRequest{
+		DeviceID:                   identity.DeviceID,
+		KeyID:                      identity.KeyID,
+		PublicKeyFingerprintSHA256: identity.PublicKeyFingerprintSHA256,
+		Timestamp:                  timestamp,
+		Nonce:                      nonce,
+		BundleRevision:             normalizeEdgeHex64(assignment.BundleRevision),
+	}
+	if req.BundleRevision == "" {
+		return edgeWAFRuleArtifactDownloadWireRequest{}, fmt.Errorf("WAF rule assignment is missing revision")
+	}
+	req.BodyHash = edgeWAFRuleArtifactDownloadBodyHash(req)
+	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)))
+	req.SignatureB64 = base64.StdEncoding.EncodeToString(signature)
+	return req, nil
+}
+
 func parseEdgeDevicePrivateKey(raw string) (ed25519.PrivateKey, []byte, error) {
 	block, rest := pem.Decode([]byte(raw))
 	if block == nil || block.Type != "PRIVATE KEY" || len(strings.TrimSpace(string(rest))) != 0 {
@@ -3109,6 +3557,36 @@ func sendEdgeProxyRulesBundleDownload(ctx context.Context, downloadURL string, w
 	}
 	if int64(len(resBody)) > maxBytes {
 		return res.StatusCode, nil, fmt.Errorf("proxy rules bundle download exceeds %d bytes", maxBytes)
+	}
+	return res.StatusCode, resBody, nil
+}
+
+func sendEdgeWAFRuleArtifactDownload(ctx context.Context, downloadURL string, wireReq edgeWAFRuleArtifactDownloadWireRequest, maxBytes int64) (int, []byte, error) {
+	body, err := json.Marshal(wireReq)
+	if err != nil {
+		return 0, nil, err
+	}
+	if maxBytes <= 0 || maxBytes > edgeWAFRuleArtifactMaxBytes {
+		maxBytes = edgeWAFRuleArtifactMaxBytes
+	}
+	ctx, cancel := context.WithTimeout(ctx, edgeEnrollmentHTTPTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, downloadURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer res.Body.Close()
+	resBody, readErr := io.ReadAll(io.LimitReader(res.Body, maxBytes+1))
+	if readErr != nil {
+		return res.StatusCode, nil, readErr
+	}
+	if int64(len(resBody)) > maxBytes {
+		return res.StatusCode, nil, fmt.Errorf("WAF rule artifact download exceeds %d bytes", maxBytes)
 	}
 	return res.StatusCode, resBody, nil
 }
@@ -3332,6 +3810,9 @@ func edgeDeviceStatusBodyHash(req edgeDeviceStatusWireRequest) string {
 	if req.ProxyRuleApplyStatus != nil {
 		body += "\n" + edgeProxyRuleApplyStatusCanonical(*req.ProxyRuleApplyStatus)
 	}
+	if req.WAFRuleApplyStatus != nil {
+		body += "\n" + edgeWAFRuleApplyStatusCanonical(*req.WAFRuleApplyStatus)
+	}
 	sum := sha256.Sum256([]byte(body))
 	return hex.EncodeToString(sum[:])
 }
@@ -3384,6 +3865,13 @@ func edgeRuntimeInventoryCanonical(items []edgeDeviceRuntimeSummary) string {
 func edgeProxyRuleApplyStatusCanonical(status edgeProxyRuleApplyStatus) string {
 	return status.DesiredBundleRevision + "\n" +
 		status.LocalProxyETag + "\n" +
+		status.ApplyState + "\n" +
+		status.ApplyError
+}
+
+func edgeWAFRuleApplyStatusCanonical(status edgeWAFRuleApplyStatus) string {
+	return status.DesiredBundleRevision + "\n" +
+		status.LocalBundleRevision + "\n" +
 		status.ApplyState + "\n" +
 		status.ApplyError
 }
@@ -3441,6 +3929,18 @@ func edgeProxyRulesBundleDownloadBodyHash(req edgeProxyRulesBundleDownloadWireRe
 			req.Nonce + "\n" +
 			req.BundleRevision + "\n" +
 			req.PayloadHash,
+	))
+	return hex.EncodeToString(sum[:])
+}
+
+func edgeWAFRuleArtifactDownloadBodyHash(req edgeWAFRuleArtifactDownloadWireRequest) string {
+	sum := sha256.Sum256([]byte(
+		req.DeviceID + "\n" +
+			req.KeyID + "\n" +
+			req.PublicKeyFingerprintSHA256 + "\n" +
+			req.Timestamp + "\n" +
+			req.Nonce + "\n" +
+			req.BundleRevision,
 	))
 	return hex.EncodeToString(sum[:])
 }

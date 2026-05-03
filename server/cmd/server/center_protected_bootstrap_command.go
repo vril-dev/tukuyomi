@@ -16,6 +16,9 @@ func runBootstrapCenterProtectedGatewayCommand(args []string) {
 	fs := flag.NewFlagSet("bootstrap-center-protected-gateway", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	centerURL := fs.String("center-url", "", "protected Center base URL")
+	gatewayAPIBasePath := fs.String("gateway-api-base-path", "", "Gateway-facing Center API base path")
+	centerAPIBasePath := fs.String("center-api-base-path", "", "upstream Center API base path")
+	centerUIBasePath := fs.String("center-ui-base-path", "", "Center UI base path")
 	outPath := fs.String("out", "", "identity JSON output path; stdout when empty")
 	deviceID := fs.String("device-id", "", "optional Gateway device ID")
 	keyID := fs.String("key-id", "", "optional Gateway key ID")
@@ -35,6 +38,9 @@ func runBootstrapCenterProtectedGatewayCommand(args []string) {
 	initRuntimeDBStoreOrFatal("[CENTER_PROTECTED][GATEWAY][DB]")
 	result, err := handler.BootstrapCenterProtectedGateway(context.Background(), handler.CenterProtectedGatewayBootstrapOptions{
 		CenterURL:                *centerURL,
+		GatewayAPIBasePath:       *gatewayAPIBasePath,
+		CenterAPIBasePath:        *centerAPIBasePath,
+		CenterUIBasePath:         *centerUIBasePath,
 		DeviceID:                 *deviceID,
 		KeyID:                    *keyID,
 		StatusRefreshIntervalSec: *pollInterval,

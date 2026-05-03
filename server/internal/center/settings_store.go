@@ -20,7 +20,7 @@ import (
 const (
 	centerSettingsBlobKey = "center_settings"
 
-	maxCenterSettingsJSONBytes  = 4096
+	maxCenterSettingsJSONBytes  = 8192
 	maxEnrollmentTokenTTLDays   = 3650
 	minCenterAdminSessionTTL    = 300
 	maxCenterAdminSessionTTL    = 604800
@@ -34,16 +34,20 @@ var (
 )
 
 type CenterSettingsConfig struct {
-	EnrollmentTokenDefaultMaxUses    int64  `json:"enrollment_token_default_max_uses"`
-	EnrollmentTokenDefaultTTLSeconds int64  `json:"enrollment_token_default_ttl_seconds"`
-	AdminSessionTTLSeconds           int64  `json:"admin_session_ttl_seconds,omitempty"`
-	ListenAddr                       string `json:"listen_addr,omitempty"`
-	APIBasePath                      string `json:"api_base_path,omitempty"`
-	UIBasePath                       string `json:"ui_base_path,omitempty"`
-	TLSMode                          string `json:"tls_mode,omitempty"`
-	TLSCertFile                      string `json:"tls_cert_file,omitempty"`
-	TLSKeyFile                       string `json:"tls_key_file,omitempty"`
-	TLSMinVersion                    string `json:"tls_min_version,omitempty"`
+	EnrollmentTokenDefaultMaxUses    int64    `json:"enrollment_token_default_max_uses"`
+	EnrollmentTokenDefaultTTLSeconds int64    `json:"enrollment_token_default_ttl_seconds"`
+	AdminSessionTTLSeconds           int64    `json:"admin_session_ttl_seconds,omitempty"`
+	ListenAddr                       string   `json:"listen_addr,omitempty"`
+	APIBasePath                      string   `json:"api_base_path,omitempty"`
+	GatewayAPIBasePath               string   `json:"gateway_api_base_path,omitempty"`
+	UIBasePath                       string   `json:"ui_base_path,omitempty"`
+	TLSMode                          string   `json:"tls_mode,omitempty"`
+	TLSCertFile                      string   `json:"tls_cert_file,omitempty"`
+	TLSKeyFile                       string   `json:"tls_key_file,omitempty"`
+	TLSMinVersion                    string   `json:"tls_min_version,omitempty"`
+	ClientAllowCIDRs                 []string `json:"client_allow_cidrs,omitempty"`
+	ManageAPIAllowCIDRs              []string `json:"manage_api_allow_cidrs,omitempty"`
+	CenterAPIAllowCIDRs              []string `json:"center_api_allow_cidrs,omitempty"`
 }
 
 func defaultCenterSettingsConfig() CenterSettingsConfig {
@@ -191,11 +195,22 @@ func decodeCenterSettings(raw []byte) (CenterSettingsConfig, error) {
 func normalizeCenterSettingsConfig(cfg CenterSettingsConfig) (CenterSettingsConfig, error) {
 	cfg.ListenAddr = strings.TrimSpace(cfg.ListenAddr)
 	cfg.APIBasePath = strings.TrimSpace(cfg.APIBasePath)
+	cfg.GatewayAPIBasePath = strings.TrimSpace(cfg.GatewayAPIBasePath)
 	cfg.UIBasePath = strings.TrimSpace(cfg.UIBasePath)
 	cfg.TLSMode = strings.ToLower(strings.TrimSpace(cfg.TLSMode))
 	cfg.TLSCertFile = strings.TrimSpace(cfg.TLSCertFile)
 	cfg.TLSKeyFile = strings.TrimSpace(cfg.TLSKeyFile)
 	cfg.TLSMinVersion = normalizeCenterTLSMinVersion(cfg.TLSMinVersion)
+	var err error
+	if cfg.ClientAllowCIDRs, err = normalizeCenterSourceCIDRStrings("client_allow_cidrs", cfg.ClientAllowCIDRs); err != nil {
+		return CenterSettingsConfig{}, fmt.Errorf("%w: %v", ErrCenterSettingsInvalid, err)
+	}
+	if cfg.ManageAPIAllowCIDRs, err = normalizeCenterSourceCIDRStrings("manage_api_allow_cidrs", cfg.ManageAPIAllowCIDRs); err != nil {
+		return CenterSettingsConfig{}, fmt.Errorf("%w: %v", ErrCenterSettingsInvalid, err)
+	}
+	if cfg.CenterAPIAllowCIDRs, err = normalizeCenterSourceCIDRStrings("center_api_allow_cidrs", cfg.CenterAPIAllowCIDRs); err != nil {
+		return CenterSettingsConfig{}, fmt.Errorf("%w: %v", ErrCenterSettingsInvalid, err)
+	}
 	if err := validateCenterTLSMinVersion(cfg.TLSMinVersion); err != nil {
 		return CenterSettingsConfig{}, fmt.Errorf("%w: tls_min_version %v", ErrCenterSettingsInvalid, err)
 	}
@@ -228,6 +243,13 @@ func normalizeCenterSettingsConfig(cfg CenterSettingsConfig) (CenterSettingsConf
 		}
 		cfg.APIBasePath = apiBase
 	}
+	if cfg.GatewayAPIBasePath != "" {
+		gatewayAPIBase, err := normalizeBasePath(cfg.GatewayAPIBasePath, DefaultGatewayAPIBasePath)
+		if err != nil {
+			return CenterSettingsConfig{}, fmt.Errorf("%w: gateway_api_base_path %v", ErrCenterSettingsInvalid, err)
+		}
+		cfg.GatewayAPIBasePath = gatewayAPIBase
+	}
 	if cfg.UIBasePath != "" {
 		uiBase, err := normalizeBasePath(cfg.UIBasePath, DefaultUIBasePath)
 		if err != nil {
@@ -237,6 +259,9 @@ func normalizeCenterSettingsConfig(cfg CenterSettingsConfig) (CenterSettingsConf
 	}
 	if cfg.APIBasePath != "" && cfg.UIBasePath != "" && cfg.APIBasePath == cfg.UIBasePath {
 		return CenterSettingsConfig{}, fmt.Errorf("%w: api_base_path and ui_base_path must differ", ErrCenterSettingsInvalid)
+	}
+	if cfg.GatewayAPIBasePath != "" && cfg.UIBasePath != "" && cfg.GatewayAPIBasePath == cfg.UIBasePath {
+		return CenterSettingsConfig{}, fmt.Errorf("%w: gateway_api_base_path and ui_base_path must differ", ErrCenterSettingsInvalid)
 	}
 	if cfg.TLSMode != "" && cfg.TLSMode != centerSettingsTLSModeOff && cfg.TLSMode != centerSettingsTLSModeManual {
 		return CenterSettingsConfig{}, fmt.Errorf("%w: tls_mode must be off or manual", ErrCenterSettingsInvalid)

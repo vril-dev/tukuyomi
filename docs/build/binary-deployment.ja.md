@@ -72,6 +72,8 @@ make install TARGET=linux-systemd \
 - Gateway インストールは `runtime.process_model=supervised` を書き込みます。スーパーバイザーが TCP リスナーを所有し、レディネス確認後に初期ワーカーをアクティブ化します。既存 Gateway 設定に対しては、インストール時に `runtime.process_model` のみをピンポイントで更新します。レガシーなシングルプロセス Gateway からの初回移行は、リスナーの所有者が変わるため通常のサービス再起動が必要です。HTTP/3 は UDP ハンドオフ実装が完了するまで拒否されます
 - `INSTALL_ROLE=center` は `tukuyomi-center.service`、`tukuyomi-center.env`、`conf/config.center.json` を対象とし、DB マイグレーションのみを実行します。WAF／CRS インポート、Gateway シード、スケジュールタスクは実行しません
 - `INSTALL_ROLE=center-protected` は `tukuyomi.service` と `tukuyomi-center.service` の両方を導入します。Center は loopback で待ち受け、Gateway seed は `/center-ui` と `/center-api` を `http://127.0.0.1:9092` へ転送します。Gateway の IoT / Edge device authentication を有効化し、対応する Center 承認もローカルで bootstrap します。scheduled-task timer は導入しません
+- `INSTALL_CENTER_API_BASE_PATH` は Center process が受ける API path、`INSTALL_CENTER_GATEWAY_API_BASE_PATH` は Gateway で公開する API route path です。両者が異なる場合、生成される Gateway route は公開 path を Center 側 path へ rewrite してから upstream へ転送します
+- Center を直接露出する場合の送信元 IP allowlist は 3 種類あります。`TUKUYOMI_CENTER_CLIENT_ALLOW_CIDRS` は Center UI client、`TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS` は管理 API、`TUKUYOMI_CENTER_API_ALLOW_CIDRS` は Gateway/device API に適用します。client と Gateway/device は空欄なら任意の送信元を許可し、管理 API は既定で loopback と private/local CIDR を許可します
 - `PREFIX` が実行ユーザーのホーム配下にある場合、`INSTALL_CREATE_USER=auto` は実行ユーザーをそのままランタイムユーザーとし、`useradd` は実行しません
 - ホーム配下にインストールしたランタイムツリーは、その login ユーザーとプライマリグループの所有になります
 - `/opt/tukuyomi` などのシステムパスの場合、既定では `tukuyomi` システムユーザー／グループを作成または再利用します

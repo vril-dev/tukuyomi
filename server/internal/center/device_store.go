@@ -133,6 +133,7 @@ type DeviceRuntimeInventory struct {
 	RuntimeDeploymentSupported bool
 	RuntimeInventory           []DeviceRuntimeSummary
 	ProxyRuleApplyStatus       *DeviceProxyRuleApplyStatus
+	WAFRuleApplyStatus         *DeviceWAFRuleApplyStatus
 }
 
 type BootstrapApprovedDeviceInput struct {
@@ -660,6 +661,25 @@ UPDATE center_devices
 				return err
 			}
 			if err := deleteTerminalProxyRuleAssignmentForStatusTx(ctx, tx, driver, status); err != nil {
+				return err
+			}
+		}
+		if inventory.WAFRuleApplyStatus != nil {
+			status := WAFRuleApplyStatusRecord{
+				DeviceID:              deviceID,
+				DesiredBundleRevision: inventory.WAFRuleApplyStatus.DesiredBundleRevision,
+				LocalBundleRevision:   inventory.WAFRuleApplyStatus.LocalBundleRevision,
+				ApplyState:            inventory.WAFRuleApplyStatus.ApplyState,
+				ApplyError:            inventory.WAFRuleApplyStatus.ApplyError,
+				UpdatedAtUnix:         seenAtUnix,
+			}
+			if status.ApplyState != "" {
+				status.LastAttemptAtUnix = seenAtUnix
+			}
+			if err := upsertWAFRuleApplyStatusTx(ctx, tx, driver, status); err != nil {
+				return err
+			}
+			if err := deleteTerminalWAFRuleAssignmentForStatusTx(ctx, tx, driver, status); err != nil {
 				return err
 			}
 		}

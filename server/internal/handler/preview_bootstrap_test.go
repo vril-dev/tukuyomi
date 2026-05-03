@@ -110,10 +110,7 @@ func TestImportPreviewConfigStorageCanSeedProxyFromStartupBundle(t *testing.T) {
     },
     "waf_bypass": {
       "default": {
-        "entries": [
-          {"path": "/center-api/"},
-          {"path": "/center-ui/"}
-        ]
+        "entries": []
       }
     }
   }
@@ -156,7 +153,7 @@ func TestImportPreviewConfigStorageCanSeedProxyFromStartupBundle(t *testing.T) {
 	if !found {
 		t.Fatal("expected bypass config")
 	}
-	if !strings.Contains(string(bypassRaw), `"/center-api/"`) || !strings.Contains(string(bypassRaw), `"/center-ui/"`) {
-		t.Fatalf("unexpected bypass raw: %s", string(bypassRaw))
+	if strings.Contains(string(bypassRaw), `"/center-api`) || strings.Contains(string(bypassRaw), `"/center-ui`) {
+		t.Fatalf("center route must not be seeded as WAF bypass: %s", string(bypassRaw))
 	}
 }

@@ -1,6 +1,7 @@
 package center
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/ed25519"
@@ -19,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -37,8 +39,12 @@ import (
 func TestRuntimeConfigFromEnvDefaults(t *testing.T) {
 	t.Setenv(ListenAddrEnv, "")
 	t.Setenv(APIBasePathEnv, "")
+	t.Setenv(GatewayAPIBasePathEnv, "")
 	t.Setenv(UIBasePathEnv, "")
 	t.Setenv(TLSEnabledEnv, "")
+	t.Setenv(ClientAllowCIDRsEnv, "")
+	t.Setenv(ManageAPIAllowCIDRsEnv, "")
+	t.Setenv(CenterAPIAllowCIDRsEnv, "")
 
 	cfg, err := RuntimeConfigFromEnv()
 	if err != nil {
@@ -50,8 +56,17 @@ func TestRuntimeConfigFromEnvDefaults(t *testing.T) {
 	if cfg.APIBasePath != DefaultAPIBasePath {
 		t.Fatalf("api=%q want %q", cfg.APIBasePath, DefaultAPIBasePath)
 	}
+	if cfg.GatewayAPIBasePath != DefaultGatewayAPIBasePath {
+		t.Fatalf("gateway api=%q want %q", cfg.GatewayAPIBasePath, DefaultGatewayAPIBasePath)
+	}
 	if cfg.UIBasePath != DefaultUIBasePath {
 		t.Fatalf("ui=%q want %q", cfg.UIBasePath, DefaultUIBasePath)
+	}
+	if len(cfg.ClientAllowCIDRs) != 0 || len(cfg.CenterAPIAllowCIDRs) != 0 {
+		t.Fatalf("client/api allow CIDRs should default any: %+v", cfg)
+	}
+	if strings.Join(cfg.ManageAPIAllowCIDRs, ",") != strings.Join(defaultCenterManageAPIAllowCIDRs, ",") {
+		t.Fatalf("manage allow CIDRs=%v want %v", cfg.ManageAPIAllowCIDRs, defaultCenterManageAPIAllowCIDRs)
 	}
 	if cfg.TLSEnabled {
 		t.Fatal("tls should default off")
@@ -96,10 +111,104 @@ func TestRuntimeConfigFromEnvRejectsInvalidTLSMinVersion(t *testing.T) {
 func TestRuntimeConfigFromEnvRejectsUnsafeBasePath(t *testing.T) {
 	t.Setenv(ListenAddrEnv, "")
 	t.Setenv(APIBasePathEnv, "/center-api/../bad")
+	t.Setenv(GatewayAPIBasePathEnv, "")
 	t.Setenv(UIBasePathEnv, "")
 
 	if _, err := RuntimeConfigFromEnv(); err == nil {
 		t.Fatal("expected unsafe api base path to be rejected")
+	}
+}
+
+func TestRuntimeConfigFromEnvRejectsInvalidSourceCIDR(t *testing.T) {
+	t.Setenv(ClientAllowCIDRsEnv, "not-a-cidr")
+
+	if _, err := RuntimeConfigFromEnv(); err == nil {
+		t.Fatal("expected invalid source CIDR to be rejected")
+	}
+}
+
+func TestRuntimeConfigFromEnvAcceptsSplitGatewayAPIBasePath(t *testing.T) {
+	t.Setenv(APIBasePathEnv, "/center-manage-api")
+	t.Setenv(GatewayAPIBasePathEnv, "/center-api")
+	t.Setenv(UIBasePathEnv, "/center-ui")
+	t.Setenv(ClientAllowCIDRsEnv, "198.51.100.10, 2001:db8::/32")
+	t.Setenv(ManageAPIAllowCIDRsEnv, "127.0.0.1")
+	t.Setenv(CenterAPIAllowCIDRsEnv, "203.0.113.0/24")
+
+	cfg, err := RuntimeConfigFromEnv()
+	if err != nil {
+		t.Fatalf("RuntimeConfigFromEnv: %v", err)
+	}
+	if cfg.APIBasePath != "/center-manage-api" || cfg.GatewayAPIBasePath != "/center-api" || cfg.UIBasePath != "/center-ui" {
+		t.Fatalf("unexpected split API paths: %+v", cfg)
+	}
+	if strings.Join(cfg.ClientAllowCIDRs, ",") != "198.51.100.10/32,2001:db8::/32" ||
+		strings.Join(cfg.ManageAPIAllowCIDRs, ",") != "127.0.0.1/32" ||
+		strings.Join(cfg.CenterAPIAllowCIDRs, ",") != "203.0.113.0/24" {
+		t.Fatalf("unexpected allow CIDRs: %+v", cfg)
+	}
+}
+
+func TestCenterSourceIPAllowlists(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine, err := NewEngine(RuntimeConfig{
+		APIBasePath:         "/center-manage-api",
+		GatewayAPIBasePath:  "/center-api",
+		UIBasePath:          "/center-ui",
+		ClientAllowCIDRs:    []string{"198.51.100.0/24"},
+		ManageAPIAllowCIDRs: []string{"127.0.0.1/32"},
+		CenterAPIAllowCIDRs: []string{"203.0.113.0/24"},
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	uiAllowed := performRequestFrom(engine, http.MethodGet, "/center-ui", "", nil, "198.51.100.10:12345")
+	if uiAllowed.Code == http.StatusForbidden {
+		t.Fatalf("ui allowed source was forbidden: %s", uiAllowed.Body.String())
+	}
+	uiDenied := performRequestFrom(engine, http.MethodGet, "/center-ui", "", nil, "203.0.113.10:12345")
+	if uiDenied.Code != http.StatusForbidden {
+		t.Fatalf("ui denied code=%d body=%s", uiDenied.Code, uiDenied.Body.String())
+	}
+
+	manageAllowed := performRequestFrom(engine, http.MethodGet, "/center-manage-api/auth/session", "", nil, "127.0.0.1:12345")
+	if manageAllowed.Code == http.StatusForbidden {
+		t.Fatalf("manage api local source was forbidden: %s", manageAllowed.Body.String())
+	}
+	manageDenied := performRequestFrom(engine, http.MethodGet, "/center-manage-api/auth/session", "", nil, "198.51.100.10:12345")
+	if manageDenied.Code != http.StatusForbidden {
+		t.Fatalf("manage api denied code=%d body=%s", manageDenied.Code, manageDenied.Body.String())
+	}
+
+	centerAPIAllowed := performRequestFrom(engine, http.MethodPost, "/v1/enroll", "{}", map[string]string{"Content-Type": "application/json"}, "203.0.113.10:12345")
+	if centerAPIAllowed.Code == http.StatusForbidden {
+		t.Fatalf("center api allowed source was forbidden: %s", centerAPIAllowed.Body.String())
+	}
+	centerAPIDenied := performRequestFrom(engine, http.MethodPost, "/v1/enroll", "{}", map[string]string{"Content-Type": "application/json"}, "198.51.100.10:12345")
+	if centerAPIDenied.Code != http.StatusForbidden {
+		t.Fatalf("center api denied code=%d body=%s", centerAPIDenied.Code, centerAPIDenied.Body.String())
+	}
+}
+
+func TestCenterManageAPIDefaultsToLocalSources(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine, err := NewEngine(RuntimeConfig{
+		APIBasePath:        "/center-api",
+		GatewayAPIBasePath: "/center-api",
+		UIBasePath:         "/center-ui",
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	local := performRequestFrom(engine, http.MethodGet, "/center-api/auth/session", "", nil, "127.0.0.1:12345")
+	if local.Code == http.StatusForbidden {
+		t.Fatalf("local manage api source was forbidden: %s", local.Body.String())
+	}
+	external := performRequestFrom(engine, http.MethodGet, "/center-api/auth/session", "", nil, "203.0.113.10:12345")
+	if external.Code != http.StatusForbidden {
+		t.Fatalf("external manage api code=%d body=%s", external.Code, external.Body.String())
 	}
 }
 
@@ -108,7 +217,7 @@ func TestCenterLoginFlowUsesIsolatedAdminCookies(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
 
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 32); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -167,6 +276,7 @@ func TestCenterLoginFlowUsesIsolatedAdminCookies(t *testing.T) {
 	}
 
 	wrongCookieReq := httptest.NewRequest(http.MethodGet, "/center-api/auth/session", nil)
+	wrongCookieReq.RemoteAddr = "127.0.0.1:12345"
 	wrongCookieReq.AddCookie(&http.Cookie{Name: adminauth.SessionCookieName, Value: centerSessionCookie.Value})
 	wrongCookieSession := httptest.NewRecorder()
 	engine.ServeHTTP(wrongCookieSession, wrongCookieReq)
@@ -178,6 +288,7 @@ func TestCenterLoginFlowUsesIsolatedAdminCookies(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/center-api/auth/session", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
 	for _, cookie := range cookies {
 		req.AddCookie(cookie)
 	}
@@ -204,7 +315,7 @@ func TestCenterAuthIgnoresGlobalAuthDisable(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
 
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 32); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -253,7 +364,7 @@ func TestCenterAuthIgnoresGlobalAuthDisable(t *testing.T) {
 func TestBootstrapApprovedDeviceCreatesApprovedDeviceAndRejectsTrustChange(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 32); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -372,7 +483,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	if err := json.Unmarshal(settings.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("unmarshal settings: %v", err)
 	}
-	if payload.Runtime.Mode != "center" || payload.Runtime.ListenAddr != "127.0.0.1:19092" || payload.Runtime.APIBasePath != "/center-api" || payload.Runtime.UIBasePath != "/center-ui" {
+	if payload.Runtime.Mode != "center" || payload.Runtime.ListenAddr != "127.0.0.1:19092" || payload.Runtime.APIBasePath != "/center-api" || payload.Runtime.GatewayAPIBasePath != "/center-api" || payload.Runtime.UIBasePath != "/center-ui" {
 		t.Fatalf("runtime settings mismatch: %+v", payload.Runtime)
 	}
 	if payload.Storage.DBDriver != "sqlite" || payload.Storage.DBRetentionDays != 45 || payload.Storage.FileRetentionDays != 14 {
@@ -386,9 +497,14 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 		payload.Config.AdminSessionTTLSeconds != 3600 {
 		t.Fatalf("config settings mismatch: %+v", payload.Config)
 	}
-	if payload.Config.ListenAddr != "127.0.0.1:19092" || payload.Config.APIBasePath != "/center-api" || payload.Config.UIBasePath != "/center-ui" ||
+	if payload.Config.ListenAddr != "127.0.0.1:19092" || payload.Config.APIBasePath != "/center-api" || payload.Config.GatewayAPIBasePath != "/center-api" || payload.Config.UIBasePath != "/center-ui" ||
 		payload.Config.TLSMode != centerSettingsTLSModeOff || payload.Config.TLSMinVersion != "tls1.2" || payload.RestartRequired {
 		t.Fatalf("listener settings mismatch: restart=%v config=%+v", payload.RestartRequired, payload.Config)
+	}
+	if len(payload.Config.ClientAllowCIDRs) != 0 ||
+		strings.Join(payload.Config.ManageAPIAllowCIDRs, ",") != strings.Join(defaultCenterManageAPIAllowCIDRs, ",") ||
+		len(payload.Config.CenterAPIAllowCIDRs) != 0 {
+		t.Fatalf("source allowlist settings mismatch: %+v", payload.Config)
 	}
 	update := performRequestWithCookies(
 		engine,
@@ -430,7 +546,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 		engine,
 		http.MethodPut,
 		"/center-api/settings",
-		`{"config":{"enrollment_token_default_max_uses":3,"enrollment_token_default_ttl_seconds":86400,"admin_session_ttl_seconds":7200,"listen_addr":"127.0.0.1:19192","api_base_path":"/center-api","ui_base_path":"/center-ui","tls_mode":"off","tls_min_version":"tls1.3"}}`,
+		`{"config":{"enrollment_token_default_max_uses":3,"enrollment_token_default_ttl_seconds":86400,"admin_session_ttl_seconds":7200,"listen_addr":"127.0.0.1:19192","api_base_path":"/center-manage-api","gateway_api_base_path":"/center-api","ui_base_path":"/center-ui","tls_mode":"off","tls_min_version":"tls1.3","client_allow_cidrs":["198.51.100.0/24"],"manage_api_allow_cidrs":["127.0.0.1"],"center_api_allow_cidrs":["203.0.113.0/24"]}}`,
 		map[string]string{
 			"If-Match":               updated.ETag,
 			"Content-Type":           "application/json",
@@ -445,7 +561,10 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	if err := json.Unmarshal(listenerUpdate.Body.Bytes(), &listenerUpdated); err != nil {
 		t.Fatalf("unmarshal listener settings: %v", err)
 	}
-	if !listenerUpdated.RestartRequired || listenerUpdated.Config.ListenAddr != "127.0.0.1:19192" || listenerUpdated.Config.TLSMinVersion != "tls1.3" {
+	if !listenerUpdated.RestartRequired || listenerUpdated.Config.ListenAddr != "127.0.0.1:19192" || listenerUpdated.Config.APIBasePath != "/center-manage-api" || listenerUpdated.Config.GatewayAPIBasePath != "/center-api" || listenerUpdated.Config.TLSMinVersion != "tls1.3" ||
+		strings.Join(listenerUpdated.Config.ClientAllowCIDRs, ",") != "198.51.100.0/24" ||
+		strings.Join(listenerUpdated.Config.ManageAPIAllowCIDRs, ",") != "127.0.0.1/32" ||
+		strings.Join(listenerUpdated.Config.CenterAPIAllowCIDRs, ",") != "203.0.113.0/24" {
 		t.Fatalf("listener update should require restart: %+v", listenerUpdated)
 	}
 
@@ -481,6 +600,22 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 		t.Fatalf("bad tls min version code=%d body=%s", badTLSVersion.Code, badTLSVersion.Body.String())
 	}
 
+	badCIDR := performRequestWithCookies(
+		engine,
+		http.MethodPut,
+		"/center-api/settings",
+		`{"config":{"manage_api_allow_cidrs":["not-a-cidr"]}}`,
+		map[string]string{
+			"If-Match":               listenerUpdated.ETag,
+			"Content-Type":           "application/json",
+			adminauth.CSRFHeaderName: csrfCookie.Value,
+		},
+		cookies,
+	)
+	if badCIDR.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad source cidr code=%d body=%s", badCIDR.Code, badCIDR.Body.String())
+	}
+
 	badSessionTTL := performRequestWithCookies(
 		engine,
 		http.MethodPut,
@@ -505,7 +640,7 @@ func TestCenterRuntimeBuildStoresArtifactAndAssignsDevice(t *testing.T) {
 	restoreBuilder := replaceRuntimeBuildRunnerForTest(fakeRuntimeBuildRunner{})
 	defer restoreBuilder()
 
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 32); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -670,7 +805,7 @@ func TestStoreRuntimeArtifactBundleIsIdempotentForSameRevision(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
 
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 32); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -708,7 +843,7 @@ func TestCenterProxyRuleAssignmentQueue(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
 
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 32); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -814,12 +949,432 @@ func TestCenterProxyRuleAssignmentQueue(t *testing.T) {
 	}
 }
 
+func TestCenterWAFRuleAssignmentQueue(t *testing.T) {
+	restore := configureCenterAuthTest(t)
+	defer restore()
+
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 32); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer handler.InitLogsStatsStore(false, "", 0)
+
+	fixture := signedEnrollmentFixtureForTest(t, "waf-rule-device", "key-1", "nonce-waf-rule", time.Now().UTC())
+	publicKeyPEM, err := base64.StdEncoding.DecodeString(fixture.Request.PublicKeyPEMB64)
+	if err != nil {
+		t.Fatalf("decode public key: %v", err)
+	}
+	if _, err := BootstrapApprovedDevice(context.Background(), BootstrapApprovedDeviceInput{
+		DeviceID:                   fixture.Request.DeviceID,
+		KeyID:                      fixture.Request.KeyID,
+		PublicKeyPEM:               string(publicKeyPEM),
+		PublicKeyFingerprintSHA256: fixture.Fingerprint,
+		Actor:                      "test",
+	}); err != nil {
+		t.Fatalf("BootstrapApprovedDevice: %v", err)
+	}
+
+	currentBuild, err := edgeartifactbundle.BuildBundle([]edgeartifactbundle.RuleFile{
+		{Path: "rules/tukuyomi.conf", Kind: "base", ETag: "rule-etag-current", Body: []byte("SecRuleEngine On\n")},
+	}, time.Unix(1000, 0).UTC())
+	if err != nil {
+		t.Fatalf("build current WAF bundle: %v", err)
+	}
+	builder := edgeconfigsnapshot.New(fixture.Request.DeviceID, fixture.Request.KeyID, "test-build", "go-test")
+	builder.AddValueDomain("waf_rule_assets", "waf-rule-assets:1:current", map[string]any{
+		"bundle_revision": currentBuild.Revision,
+		"assets": []map[string]any{
+			{
+				"path":       "rules/tukuyomi.conf",
+				"kind":       "base",
+				"etag":       "rule-etag-current",
+				"disabled":   false,
+				"size_bytes": len("SecRuleEngine On\n"),
+			},
+		},
+	})
+	snapshot, err := builder.Build()
+	if err != nil {
+		t.Fatalf("build config snapshot: %v", err)
+	}
+	if _, err := StoreDeviceConfigSnapshot(context.Background(), DeviceConfigSnapshotInsert{
+		DeviceID:       fixture.Request.DeviceID,
+		Revision:       snapshot.Revision,
+		PayloadHash:    snapshot.PayloadHash,
+		PayloadJSON:    snapshot.PayloadRaw,
+		ReceivedAtUnix: time.Now().UTC().Unix(),
+	}); err != nil {
+		t.Fatalf("StoreDeviceConfigSnapshot: %v", err)
+	}
+
+	nextBuild, err := edgeartifactbundle.BuildBundle([]edgeartifactbundle.RuleFile{
+		{Path: "rules/tukuyomi.conf", Kind: "base", ETag: "rule-etag-next", Body: []byte("SecRuleEngine DetectionOnly\n")},
+		{Path: "rules/crs/REQUEST-901-INITIALIZATION.conf", Kind: "crs_asset", ETag: "rule-etag-crs", Body: []byte("SecRule ARGS \"@rx test\" \"id:901000,phase:1,pass\"\n")},
+	}, time.Unix(2000, 0).UTC())
+	if err != nil {
+		t.Fatalf("build next WAF bundle: %v", err)
+	}
+	parsedNext, err := edgeartifactbundle.Parse(nextBuild.Compressed)
+	if err != nil {
+		t.Fatalf("parse next WAF bundle: %v", err)
+	}
+	if _, err := StoreRuleArtifactBundle(context.Background(), RuleArtifactBundleInsert{
+		DeviceID:         fixture.Request.DeviceID,
+		BundleRevision:   parsedNext.Revision,
+		BundleHash:       parsedNext.BundleHash,
+		CompressedSize:   parsedNext.CompressedSize,
+		UncompressedSize: parsedNext.UncompressedSize,
+		FileCount:        parsedNext.FileCount,
+		Files:            parsedNext.Files,
+		ReceivedAtUnix:   time.Now().UTC().Unix(),
+		Source:           RuleArtifactBundleSourceCenter,
+	}); err != nil {
+		t.Fatalf("StoreRuleArtifactBundle: %v", err)
+	}
+	adminDownloaded, adminBody, err := DownloadWAFRuleBundleForDevice(context.Background(), fixture.Request.DeviceID, parsedNext.Revision)
+	if err != nil {
+		t.Fatalf("DownloadWAFRuleBundleForDevice: %v", err)
+	}
+	adminZip, err := zip.NewReader(bytes.NewReader(adminBody), int64(len(adminBody)))
+	if err != nil {
+		t.Fatalf("open admin-downloaded WAF bundle zip: %v", err)
+	}
+	adminZipNames := map[string]struct{}{}
+	for _, file := range adminZip.File {
+		adminZipNames[file.Name] = struct{}{}
+	}
+	if adminDownloaded.BundleRevision != parsedNext.Revision {
+		t.Fatalf("admin downloaded bundle mismatch: downloaded=%+v next=%+v", adminDownloaded, parsedNext)
+	}
+	if _, ok := adminZipNames["rules/tukuyomi.conf"]; !ok {
+		t.Fatalf("admin zip missing logical WAF rule path: %v", adminZipNames)
+	}
+	if _, ok := adminZipNames["rules/crs/REQUEST-901-INITIALIZATION.conf"]; !ok {
+		t.Fatalf("admin zip missing logical CRS path: %v", adminZipNames)
+	}
+	if _, ok := adminZipNames["_tukuyomi/manifest.json"]; !ok {
+		t.Fatalf("admin zip missing operator manifest: %v", adminZipNames)
+	}
+
+	assignment, err := AssignWAFRuleBundleToDevice(context.Background(), WAFRuleAssignmentUpdate{
+		DeviceID:       fixture.Request.DeviceID,
+		BundleRevision: parsedNext.Revision,
+		Reason:         "test assignment",
+		AssignedBy:     "tester",
+	})
+	if err != nil {
+		t.Fatalf("AssignWAFRuleBundleToDevice: %v", err)
+	}
+	if assignment.BundleRevision != parsedNext.Revision || assignment.BaseBundleRevision != currentBuild.Revision {
+		t.Fatalf("assignment mismatch: %+v current=%s next=%s", assignment, currentBuild.Revision, parsedNext.Revision)
+	}
+	pending, err := PendingWAFRuleAssignmentForDevice(context.Background(), fixture.Request.DeviceID, time.Now().UTC().Unix())
+	if err != nil {
+		t.Fatalf("PendingWAFRuleAssignmentForDevice: %v", err)
+	}
+	if pending == nil || pending.BundleRevision != parsedNext.Revision || pending.FileCount != parsedNext.FileCount {
+		t.Fatalf("pending assignment mismatch: %+v next=%+v", pending, parsedNext)
+	}
+	if cleared, err := ClearWAFRuleAssignment(context.Background(), fixture.Request.DeviceID); !errors.Is(err, ErrWAFRuleAssignmentDispatched) || cleared {
+		t.Fatalf("ClearWAFRuleAssignment dispatched cleared=%v err=%v", cleared, err)
+	}
+	downloaded, body, err := WAFRuleArtifactDownloadForDevice(context.Background(), fixture.Request.DeviceID, parsedNext.Revision)
+	if err != nil {
+		t.Fatalf("WAFRuleArtifactDownloadForDevice: %v", err)
+	}
+	reparsed, err := edgeartifactbundle.Parse(body)
+	if err != nil {
+		t.Fatalf("parse downloaded WAF bundle: %v", err)
+	}
+	if downloaded.BundleRevision != parsedNext.Revision || reparsed.Revision != parsedNext.Revision {
+		t.Fatalf("downloaded bundle mismatch: downloaded=%+v reparsed=%+v next=%+v", downloaded, reparsed, parsedNext)
+	}
+	if int64(len(body)) != pending.CompressedSize || reparsed.CompressedSize != pending.CompressedSize || reparsed.UncompressedSize != pending.UncompressedSize {
+		t.Fatalf("pending metadata does not match rebuilt download: pending=%+v reparsed=%+v len=%d", pending, reparsed, len(body))
+	}
+	if err := UpsertWAFRuleApplyStatus(context.Background(), WAFRuleApplyStatusRecord{
+		DeviceID:              fixture.Request.DeviceID,
+		DesiredBundleRevision: parsedNext.Revision,
+		LocalBundleRevision:   parsedNext.Revision,
+		ApplyState:            "applied",
+		UpdatedAtUnix:         time.Now().UTC().Unix(),
+	}); err != nil {
+		t.Fatalf("UpsertWAFRuleApplyStatus: %v", err)
+	}
+	gatewayReported, err := edgeartifactbundle.BuildBundle([]edgeartifactbundle.RuleFile{
+		{Path: "rules/tukuyomi.conf", Kind: "base", ETag: "gateway-etag-next", Body: []byte("SecRuleEngine DetectionOnly\n")},
+		{Path: "rules/crs/REQUEST-901-INITIALIZATION.conf", Kind: "crs_asset", ETag: "gateway-etag-crs", Body: []byte("SecRule ARGS \"@rx test\" \"id:901000,phase:1,pass\"\n")},
+	}, time.Unix(3000, 0).UTC())
+	if err != nil {
+		t.Fatalf("build gateway-reported WAF bundle: %v", err)
+	}
+	parsedGatewayReported, err := edgeartifactbundle.Parse(gatewayReported.Compressed)
+	if err != nil {
+		t.Fatalf("parse gateway-reported WAF bundle: %v", err)
+	}
+	if parsedGatewayReported.Revision == parsedNext.Revision {
+		t.Fatalf("gateway-reported bundle should differ when Gateway local etags differ")
+	}
+	if _, err := StoreRuleArtifactBundle(context.Background(), RuleArtifactBundleInsert{
+		DeviceID:         fixture.Request.DeviceID,
+		BundleRevision:   parsedGatewayReported.Revision,
+		BundleHash:       parsedGatewayReported.BundleHash,
+		CompressedSize:   parsedGatewayReported.CompressedSize,
+		UncompressedSize: parsedGatewayReported.UncompressedSize,
+		FileCount:        parsedGatewayReported.FileCount,
+		Files:            parsedGatewayReported.Files,
+		ReceivedAtUnix:   time.Now().UTC().Unix(),
+		Source:           RuleArtifactBundleSourceGateway,
+	}); err != nil {
+		t.Fatalf("StoreRuleArtifactBundle gateway-reported: %v", err)
+	}
+	view, err := WAFRulesDeploymentForDevice(context.Background(), fixture.Request.DeviceID)
+	if err != nil {
+		t.Fatalf("WAFRulesDeploymentForDevice: %v", err)
+	}
+	if view.Assignment != nil {
+		t.Fatalf("terminal WAF rule assignment must be removed: %+v", view.Assignment)
+	}
+	if view.ApplyStatus == nil || view.ApplyStatus.ApplyState != "applied" {
+		t.Fatalf("apply status missing: %+v", view.ApplyStatus)
+	}
+	if len(view.Bundles) != 1 || view.Bundles[0].ApplyState != "applied" || view.Bundles[0].AppliedAtUnix <= 0 {
+		t.Fatalf("bundle apply history missing: %+v", view.Bundles)
+	}
+	if view.Bundles[0].BundleRevision == parsedGatewayReported.Revision {
+		t.Fatalf("gateway-reported WAF bundle leaked into saved bundles: %+v", view.Bundles)
+	}
+}
+
+func TestCenterWAFRuleBundleImportZipPreservesLogicalPaths(t *testing.T) {
+	restore := configureCenterAuthTest(t)
+	defer restore()
+
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 32); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer handler.InitLogsStatsStore(false, "", 0)
+
+	fixture := signedEnrollmentFixtureForTest(t, "waf-rule-upload-device", "key-1", "nonce-waf-upload", time.Now().UTC())
+	publicKeyPEM, err := base64.StdEncoding.DecodeString(fixture.Request.PublicKeyPEMB64)
+	if err != nil {
+		t.Fatalf("decode public key: %v", err)
+	}
+	if _, err := BootstrapApprovedDevice(context.Background(), BootstrapApprovedDeviceInput{
+		DeviceID:                   fixture.Request.DeviceID,
+		KeyID:                      fixture.Request.KeyID,
+		PublicKeyPEM:               string(publicKeyPEM),
+		PublicKeyFingerprintSHA256: fixture.Fingerprint,
+		Actor:                      "test",
+	}); err != nil {
+		t.Fatalf("BootstrapApprovedDevice: %v", err)
+	}
+
+	currentBuild, err := edgeartifactbundle.BuildBundle([]edgeartifactbundle.RuleFile{
+		{Path: "rules/tukuyomi.conf", Kind: "base", ETag: "rule-etag-current", Body: []byte("SecRuleEngine On\n")},
+	}, time.Unix(1000, 0).UTC())
+	if err != nil {
+		t.Fatalf("build current WAF bundle: %v", err)
+	}
+	builder := edgeconfigsnapshot.New(fixture.Request.DeviceID, fixture.Request.KeyID, "test-build", "go-test")
+	builder.AddValueDomain("waf_rule_assets", "waf-rule-assets:1:current", map[string]any{
+		"bundle_revision": currentBuild.Revision,
+		"assets": []map[string]any{
+			{"path": "rules/tukuyomi.conf", "kind": "base", "etag": "rule-etag-current", "disabled": false, "size_bytes": len("SecRuleEngine On\n")},
+		},
+	})
+	snapshot, err := builder.Build()
+	if err != nil {
+		t.Fatalf("build config snapshot: %v", err)
+	}
+	if _, err := StoreDeviceConfigSnapshot(context.Background(), DeviceConfigSnapshotInsert{
+		DeviceID:       fixture.Request.DeviceID,
+		Revision:       snapshot.Revision,
+		PayloadHash:    snapshot.PayloadHash,
+		PayloadJSON:    snapshot.PayloadRaw,
+		ReceivedAtUnix: time.Now().UTC().Unix(),
+	}); err != nil {
+		t.Fatalf("StoreDeviceConfigSnapshot: %v", err)
+	}
+
+	upload := operatorWAFZipForTest(t, map[string][]byte{
+		"waf-rules/waf-rules/rules/tukuyomi.conf":                             []byte("SecRuleEngine DetectionOnly\n"),
+		"waf-rules/waf-rules/rules/crs/rules/REQUEST-901-INITIALIZATION.conf": []byte("SecRule ARGS \"@rx test\" \"id:901000,phase:1,pass\"\n"),
+		"waf-rules/waf-rules/rules/crs/rules/REQUEST-901.conf.example":        []byte("# example rule\n"),
+		"waf-rules/waf-rules/rules/crs/data/unicode.mapping":                  []byte("ff01:21\n"),
+		"waf-rules/waf-rules/data/coraza-support.data":                        []byte("support\n"),
+	})
+	imported, err := ImportWAFRuleBundleForDevice(context.Background(), WAFRuleBundleImport{
+		DeviceID: fixture.Request.DeviceID,
+		Archive:  upload,
+		Assign:   true,
+		Reason:   "test upload",
+		Actor:    "tester",
+	})
+	if err != nil {
+		t.Fatalf("ImportWAFRuleBundleForDevice: %v", err)
+	}
+	if !imported.Stored || imported.Assignment == nil || imported.Assignment.BaseBundleRevision != currentBuild.Revision {
+		t.Fatalf("import result unexpected: %+v current=%s", imported, currentBuild.Revision)
+	}
+	if imported.Bundle.Source != RuleArtifactBundleSourceCenter {
+		t.Fatalf("imported source=%q want %q", imported.Bundle.Source, RuleArtifactBundleSourceCenter)
+	}
+	if len(imported.StrippedRootPrefixes) != 2 ||
+		imported.StrippedRootPrefixes[0] != "waf-rules" ||
+		imported.StrippedRootPrefixes[1] != "waf-rules" {
+		t.Fatalf("stripped roots=%v want two waf-rules wrappers", imported.StrippedRootPrefixes)
+	}
+
+	detail, err := LoadWAFRuleBundleForDevice(context.Background(), fixture.Request.DeviceID, imported.Bundle.BundleRevision)
+	if err != nil {
+		t.Fatalf("LoadWAFRuleBundleForDevice: %v", err)
+	}
+	filesByPath := map[string]WAFRuleBundleFileRecord{}
+	for _, file := range detail.Files {
+		filesByPath[file.Path] = file
+	}
+	for _, path := range []string{
+		"rules/tukuyomi.conf",
+		"rules/crs/rules/REQUEST-901-INITIALIZATION.conf",
+		"rules/crs/rules/REQUEST-901.conf.example",
+		"rules/crs/data/unicode.mapping",
+		"data/coraza-support.data",
+	} {
+		if _, ok := filesByPath[path]; !ok {
+			t.Fatalf("imported bundle missing %s: %+v", path, detail.Files)
+		}
+	}
+	if filesByPath["rules/crs/data/unicode.mapping"].Kind != "crs_asset" ||
+		filesByPath["rules/crs/rules/REQUEST-901.conf.example"].Kind != "crs_asset" ||
+		filesByPath["data/coraza-support.data"].Kind != "crs_asset" {
+		t.Fatalf("CRS support/example files not kept as CRS assets: %+v", detail.Files)
+	}
+
+	adminDownloaded, adminBody, err := DownloadWAFRuleBundleForDevice(context.Background(), fixture.Request.DeviceID, imported.Bundle.BundleRevision)
+	if err != nil {
+		t.Fatalf("DownloadWAFRuleBundleForDevice: %v", err)
+	}
+	adminZip, err := zip.NewReader(bytes.NewReader(adminBody), int64(len(adminBody)))
+	if err != nil {
+		t.Fatalf("open admin-downloaded WAF zip: %v", err)
+	}
+	adminZipNames := map[string]struct{}{}
+	for _, file := range adminZip.File {
+		adminZipNames[file.Name] = struct{}{}
+	}
+	if adminDownloaded.BundleRevision != imported.Bundle.BundleRevision {
+		t.Fatalf("admin downloaded revision=%s want %s", adminDownloaded.BundleRevision, imported.Bundle.BundleRevision)
+	}
+	if _, ok := adminZipNames["rules/crs/data/unicode.mapping"]; !ok {
+		t.Fatalf("admin zip missing logical data path: %v", adminZipNames)
+	}
+	if _, ok := adminZipNames["_tukuyomi/manifest.json"]; !ok {
+		t.Fatalf("admin zip missing manifest: %v", adminZipNames)
+	}
+
+	pending, err := PendingWAFRuleAssignmentForDevice(context.Background(), fixture.Request.DeviceID, time.Now().UTC().Unix())
+	if err != nil {
+		t.Fatalf("PendingWAFRuleAssignmentForDevice: %v", err)
+	}
+	if pending == nil || pending.BundleRevision != imported.Bundle.BundleRevision || pending.FileCount != 5 {
+		t.Fatalf("pending assignment mismatch: %+v imported=%+v", pending, imported)
+	}
+	downloaded, body, err := WAFRuleArtifactDownloadForDevice(context.Background(), fixture.Request.DeviceID, imported.Bundle.BundleRevision)
+	if err != nil {
+		t.Fatalf("WAFRuleArtifactDownloadForDevice: %v", err)
+	}
+	reparsed, err := edgeartifactbundle.Parse(body)
+	if err != nil {
+		t.Fatalf("parse downloaded Gateway WAF artifact: %v", err)
+	}
+	if downloaded.BundleRevision != imported.Bundle.BundleRevision || reparsed.Revision != imported.Bundle.BundleRevision {
+		t.Fatalf("Gateway artifact mismatch: downloaded=%+v reparsed=%+v imported=%+v", downloaded, reparsed, imported)
+	}
+}
+
+func TestStoreRuleArtifactBundlePromotesGatewayDuplicateToCenter(t *testing.T) {
+	restore := configureCenterAuthTest(t)
+	defer restore()
+
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 32); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer handler.InitLogsStatsStore(false, "", 0)
+
+	fixture := signedEnrollmentFixtureForTest(t, "waf-rule-promote-device", "key-1", "nonce-waf-promote", time.Now().UTC())
+	publicKeyPEM, err := base64.StdEncoding.DecodeString(fixture.Request.PublicKeyPEMB64)
+	if err != nil {
+		t.Fatalf("decode public key: %v", err)
+	}
+	if _, err := BootstrapApprovedDevice(context.Background(), BootstrapApprovedDeviceInput{
+		DeviceID:                   fixture.Request.DeviceID,
+		KeyID:                      fixture.Request.KeyID,
+		PublicKeyPEM:               string(publicKeyPEM),
+		PublicKeyFingerprintSHA256: fixture.Fingerprint,
+		Actor:                      "test",
+	}); err != nil {
+		t.Fatalf("BootstrapApprovedDevice: %v", err)
+	}
+
+	built, err := edgeartifactbundle.BuildBundle([]edgeartifactbundle.RuleFile{
+		{Path: "rules/tukuyomi.conf", Kind: "base", ETag: "same", Body: []byte("SecRuleEngine DetectionOnly\n")},
+	}, time.Unix(4000, 0).UTC())
+	if err != nil {
+		t.Fatalf("build WAF bundle: %v", err)
+	}
+	parsed, err := edgeartifactbundle.Parse(built.Compressed)
+	if err != nil {
+		t.Fatalf("parse WAF bundle: %v", err)
+	}
+	gatewayStored, err := StoreRuleArtifactBundle(context.Background(), RuleArtifactBundleInsert{
+		DeviceID:         fixture.Request.DeviceID,
+		BundleRevision:   parsed.Revision,
+		BundleHash:       parsed.BundleHash,
+		CompressedSize:   parsed.CompressedSize,
+		UncompressedSize: parsed.UncompressedSize,
+		FileCount:        parsed.FileCount,
+		Files:            parsed.Files,
+		ReceivedAtUnix:   time.Now().UTC().Unix(),
+		Source:           RuleArtifactBundleSourceGateway,
+	})
+	if err != nil {
+		t.Fatalf("StoreRuleArtifactBundle gateway source: %v", err)
+	}
+	if !gatewayStored.Stored || gatewayStored.Source != RuleArtifactBundleSourceGateway {
+		t.Fatalf("gateway store mismatch: %+v", gatewayStored)
+	}
+	centerStored, err := StoreRuleArtifactBundle(context.Background(), RuleArtifactBundleInsert{
+		DeviceID:         fixture.Request.DeviceID,
+		BundleRevision:   parsed.Revision,
+		BundleHash:       parsed.BundleHash,
+		CompressedSize:   parsed.CompressedSize,
+		UncompressedSize: parsed.UncompressedSize,
+		FileCount:        parsed.FileCount,
+		Files:            parsed.Files,
+		ReceivedAtUnix:   time.Now().UTC().Unix(),
+		Source:           RuleArtifactBundleSourceCenter,
+	})
+	if err != nil {
+		t.Fatalf("StoreRuleArtifactBundle center duplicate: %v", err)
+	}
+	if centerStored.Stored || centerStored.Source != RuleArtifactBundleSourceCenter {
+		t.Fatalf("center duplicate should promote source without inserting: %+v", centerStored)
+	}
+	view, err := WAFRulesDeploymentForDevice(context.Background(), fixture.Request.DeviceID)
+	if err != nil {
+		t.Fatalf("WAFRulesDeploymentForDevice: %v", err)
+	}
+	if len(view.Bundles) != 1 || view.Bundles[0].BundleRevision != parsed.Revision || view.Bundles[0].Source != RuleArtifactBundleSourceCenter {
+		t.Fatalf("promoted bundle missing from saved bundles: %+v", view.Bundles)
+	}
+}
+
 func TestCenterDeviceEnrollmentApprovalFlow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restore := configureCenterAuthTest(t)
 	defer restore()
 
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 32); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -1660,7 +2215,7 @@ func TestCenterDeviceRevokeApprovalFlow(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
 
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 32); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -1845,7 +2400,7 @@ func TestCenterAccountManagementFlow(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
 
-	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 31); err != nil {
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 32); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer handler.InitLogsStatsStore(false, "", 0)
@@ -1955,7 +2510,12 @@ func configureCenterAuthTest(t *testing.T) func() {
 }
 
 func performRequest(engine http.Handler, method, target, body string, headers map[string]string) *httptest.ResponseRecorder {
+	return performRequestFrom(engine, method, target, body, headers, "127.0.0.1:12345")
+}
+
+func performRequestFrom(engine http.Handler, method, target, body string, headers map[string]string, remoteAddr string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.RemoteAddr = remoteAddr
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
@@ -1966,6 +2526,7 @@ func performRequest(engine http.Handler, method, target, body string, headers ma
 
 func performRequestWithCookies(engine http.Handler, method, target, body string, headers map[string]string, cookies []*http.Cookie) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:12345"
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
@@ -2435,6 +2996,30 @@ func authenticatedBool(t *testing.T, raw []byte) bool {
 		t.Fatalf("decode session: %v body=%s", err, string(raw))
 	}
 	return payload.Authenticated
+}
+
+func operatorWAFZipForTest(t *testing.T, files map[string][]byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatalf("create zip entry %s: %v", name, err)
+		}
+		if _, err := w.Write(files[name]); err != nil {
+			t.Fatalf("write zip entry %s: %v", name, err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close zip: %v", err)
+	}
+	return buf.Bytes()
 }
 
 func writeCenterTLSFilesForTest(t *testing.T) (string, string) {

@@ -26,30 +26,40 @@ import (
 )
 
 const (
-	DefaultListenAddr  = "127.0.0.1:9092"
-	DefaultAPIBasePath = "/center-api"
-	DefaultUIBasePath  = "/center-ui"
+	DefaultListenAddr         = "127.0.0.1:9092"
+	DefaultAPIBasePath        = "/center-api"
+	DefaultGatewayAPIBasePath = "/center-api"
+	DefaultUIBasePath         = "/center-ui"
 
-	ListenAddrEnv  = "TUKUYOMI_CENTER_LISTEN_ADDR"
-	APIBasePathEnv = "TUKUYOMI_CENTER_API_BASE_PATH"
-	UIBasePathEnv  = "TUKUYOMI_CENTER_UI_BASE_PATH"
+	ListenAddrEnv         = "TUKUYOMI_CENTER_LISTEN_ADDR"
+	APIBasePathEnv        = "TUKUYOMI_CENTER_API_BASE_PATH"
+	GatewayAPIBasePathEnv = "TUKUYOMI_CENTER_GATEWAY_API_BASE_PATH"
+	UIBasePathEnv         = "TUKUYOMI_CENTER_UI_BASE_PATH"
 
 	TLSEnabledEnv    = "TUKUYOMI_CENTER_TLS_ENABLED"
 	TLSCertFileEnv   = "TUKUYOMI_CENTER_TLS_CERT_FILE"
 	TLSKeyFileEnv    = "TUKUYOMI_CENTER_TLS_KEY_FILE"
 	TLSMinVersionEnv = "TUKUYOMI_CENTER_TLS_MIN_VERSION"
+
+	ClientAllowCIDRsEnv    = "TUKUYOMI_CENTER_CLIENT_ALLOW_CIDRS"
+	ManageAPIAllowCIDRsEnv = "TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS"
+	CenterAPIAllowCIDRsEnv = "TUKUYOMI_CENTER_API_ALLOW_CIDRS"
 )
 
 var centerAdminAuthCookieNames = adminauth.CenterCookieNames()
 
 type RuntimeConfig struct {
-	ListenAddr    string
-	APIBasePath   string
-	UIBasePath    string
-	TLSEnabled    bool
-	TLSCertFile   string
-	TLSKeyFile    string
-	TLSMinVersion string
+	ListenAddr          string
+	APIBasePath         string
+	GatewayAPIBasePath  string
+	UIBasePath          string
+	TLSEnabled          bool
+	TLSCertFile         string
+	TLSKeyFile          string
+	TLSMinVersion       string
+	ClientAllowCIDRs    []string
+	ManageAPIAllowCIDRs []string
+	CenterAPIAllowCIDRs []string
 }
 
 func RuntimeConfigFromEnv() (RuntimeConfig, error) {
@@ -58,13 +68,14 @@ func RuntimeConfigFromEnv() (RuntimeConfig, error) {
 		return RuntimeConfig{}, err
 	}
 	cfg := RuntimeConfig{
-		ListenAddr:    strings.TrimSpace(os.Getenv(ListenAddrEnv)),
-		APIBasePath:   strings.TrimSpace(os.Getenv(APIBasePathEnv)),
-		UIBasePath:    strings.TrimSpace(os.Getenv(UIBasePathEnv)),
-		TLSEnabled:    tlsEnabled,
-		TLSCertFile:   strings.TrimSpace(os.Getenv(TLSCertFileEnv)),
-		TLSKeyFile:    strings.TrimSpace(os.Getenv(TLSKeyFileEnv)),
-		TLSMinVersion: normalizeCenterTLSMinVersion(os.Getenv(TLSMinVersionEnv)),
+		ListenAddr:         strings.TrimSpace(os.Getenv(ListenAddrEnv)),
+		APIBasePath:        strings.TrimSpace(os.Getenv(APIBasePathEnv)),
+		GatewayAPIBasePath: strings.TrimSpace(os.Getenv(GatewayAPIBasePathEnv)),
+		UIBasePath:         strings.TrimSpace(os.Getenv(UIBasePathEnv)),
+		TLSEnabled:         tlsEnabled,
+		TLSCertFile:        strings.TrimSpace(os.Getenv(TLSCertFileEnv)),
+		TLSKeyFile:         strings.TrimSpace(os.Getenv(TLSKeyFileEnv)),
+		TLSMinVersion:      normalizeCenterTLSMinVersion(os.Getenv(TLSMinVersionEnv)),
 	}
 	if err := validateCenterTLSMinVersion(cfg.TLSMinVersion); err != nil {
 		return RuntimeConfig{}, fmt.Errorf("%s %w", TLSMinVersionEnv, err)
@@ -83,6 +94,13 @@ func RuntimeConfigFromEnv() (RuntimeConfig, error) {
 	if apiBase == uiBase {
 		return RuntimeConfig{}, fmt.Errorf("center api and ui base paths must differ")
 	}
+	gatewayAPIBase, err := normalizeBasePath(cfg.GatewayAPIBasePath, DefaultGatewayAPIBasePath)
+	if err != nil {
+		return RuntimeConfig{}, fmt.Errorf("%s: %w", GatewayAPIBasePathEnv, err)
+	}
+	if gatewayAPIBase == uiBase {
+		return RuntimeConfig{}, fmt.Errorf("center gateway api and ui base paths must differ")
+	}
 	if cfg.TLSEnabled {
 		if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
 			return RuntimeConfig{}, fmt.Errorf("%s and %s are required when %s=true", TLSCertFileEnv, TLSKeyFileEnv, TLSEnabledEnv)
@@ -91,8 +109,24 @@ func RuntimeConfigFromEnv() (RuntimeConfig, error) {
 			return RuntimeConfig{}, fmt.Errorf("center TLS: %w", err)
 		}
 	}
+	clientAllowCIDRs, err := parseCenterSourceCIDREnv(ClientAllowCIDRsEnv, nil)
+	if err != nil {
+		return RuntimeConfig{}, err
+	}
+	manageAPIAllowCIDRs, err := parseCenterSourceCIDREnv(ManageAPIAllowCIDRsEnv, defaultCenterManageAPIAllowCIDRs)
+	if err != nil {
+		return RuntimeConfig{}, err
+	}
+	centerAPIAllowCIDRs, err := parseCenterSourceCIDREnv(CenterAPIAllowCIDRsEnv, nil)
+	if err != nil {
+		return RuntimeConfig{}, err
+	}
 	cfg.APIBasePath = apiBase
+	cfg.GatewayAPIBasePath = gatewayAPIBase
 	cfg.UIBasePath = uiBase
+	cfg.ClientAllowCIDRs = clientAllowCIDRs
+	cfg.ManageAPIAllowCIDRs = manageAPIAllowCIDRs
+	cfg.CenterAPIAllowCIDRs = centerAPIAllowCIDRs
 	return cfg, nil
 }
 
@@ -141,6 +175,21 @@ func NewEngine(cfg RuntimeConfig) (*gin.Engine, error) {
 	if apiBase == uiBase {
 		return nil, fmt.Errorf("center api and ui base paths must differ")
 	}
+	gatewayAPIBase, err := normalizeBasePath(cfg.GatewayAPIBasePath, DefaultGatewayAPIBasePath)
+	if err != nil {
+		return nil, err
+	}
+	if gatewayAPIBase == uiBase {
+		return nil, fmt.Errorf("center gateway api and ui base paths must differ")
+	}
+	allowlists, err := compileCenterSourceAllowlists(RuntimeConfig{
+		ClientAllowCIDRs:    cfg.ClientAllowCIDRs,
+		ManageAPIAllowCIDRs: cfg.ManageAPIAllowCIDRs,
+		CenterAPIAllowCIDRs: cfg.CenterAPIAllowCIDRs,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	r := gin.New()
 	if config.RequestLogEnabled {
@@ -148,6 +197,7 @@ func NewEngine(cfg RuntimeConfig) (*gin.Engine, error) {
 	}
 	r.Use(gin.Recovery())
 	r.Use(observability.GinTracingMiddleware())
+	r.Use(centerSourceAllowlistMiddleware(apiBase, uiBase, allowlists))
 	if err := r.SetTrustedProxies(nil); err != nil {
 		return nil, err
 	}
@@ -158,15 +208,19 @@ func NewEngine(cfg RuntimeConfig) (*gin.Engine, error) {
 	registerDeviceEnrollmentRoutes(r)
 	handler.RegisterRequiredAdminAuthRoutesAtWithCookieNames(r, apiBase, centerAdminAuthCookieNames)
 	registerCenterAPI(r, RuntimeConfig{
-		ListenAddr:    strings.TrimSpace(cfg.ListenAddr),
-		APIBasePath:   apiBase,
-		UIBasePath:    uiBase,
-		TLSEnabled:    cfg.TLSEnabled,
-		TLSCertFile:   strings.TrimSpace(cfg.TLSCertFile),
-		TLSKeyFile:    strings.TrimSpace(cfg.TLSKeyFile),
-		TLSMinVersion: cfg.TLSMinVersion,
+		ListenAddr:          strings.TrimSpace(cfg.ListenAddr),
+		APIBasePath:         apiBase,
+		GatewayAPIBasePath:  gatewayAPIBase,
+		UIBasePath:          uiBase,
+		TLSEnabled:          cfg.TLSEnabled,
+		TLSCertFile:         strings.TrimSpace(cfg.TLSCertFile),
+		TLSKeyFile:          strings.TrimSpace(cfg.TLSKeyFile),
+		TLSMinVersion:       cfg.TLSMinVersion,
+		ClientAllowCIDRs:    append([]string(nil), cfg.ClientAllowCIDRs...),
+		ManageAPIAllowCIDRs: append([]string(nil), cfg.ManageAPIAllowCIDRs...),
+		CenterAPIAllowCIDRs: append([]string(nil), cfg.CenterAPIAllowCIDRs...),
 	})
-	registerCenterUI(r, apiBase, uiBase)
+	registerCenterUI(r, apiBase, gatewayAPIBase, uiBase)
 	return r, nil
 }
 
@@ -224,11 +278,11 @@ func Run(ctx context.Context, cfg RuntimeConfig) error {
 				return
 			}
 			srv.TLSConfig = tlsConfig
-			log.Printf("[CENTER] starting center TLS server on %s ui=%s api=%s", addr, cfg.UIBasePath, cfg.APIBasePath)
+			log.Printf("[CENTER] starting center TLS server on %s ui=%s api=%s gateway_api=%s", addr, cfg.UIBasePath, cfg.APIBasePath, cfg.GatewayAPIBasePath)
 			errCh <- srv.Serve(tls.NewListener(listener, tlsConfig))
 			return
 		}
-		log.Printf("[CENTER] starting center server on %s ui=%s api=%s", addr, cfg.UIBasePath, cfg.APIBasePath)
+		log.Printf("[CENTER] starting center server on %s ui=%s api=%s gateway_api=%s", addr, cfg.UIBasePath, cfg.APIBasePath, cfg.GatewayAPIBasePath)
 		errCh <- srv.Serve(listener)
 	}()
 

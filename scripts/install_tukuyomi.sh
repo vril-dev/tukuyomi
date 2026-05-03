@@ -24,6 +24,14 @@ INSTALL_REFRESH_WAF_ASSETS="${INSTALL_REFRESH_WAF_ASSETS:-1}"
 INSTALL_DB_SEED="${INSTALL_DB_SEED:-auto}"
 INSTALL_DRY_RUN="${INSTALL_DRY_RUN:-0}"
 CRS_VERSION="${CRS_VERSION:-v4.23.0}"
+INSTALL_CENTER_LISTEN_ADDR_VALUE="${INSTALL_CENTER_LISTEN_ADDR:-127.0.0.1:9092}"
+INSTALL_CENTER_API_BASE_PATH_VALUE="${INSTALL_CENTER_API_BASE_PATH:-/center-api}"
+INSTALL_CENTER_GATEWAY_API_BASE_PATH_VALUE="${INSTALL_CENTER_GATEWAY_API_BASE_PATH:-/center-api}"
+INSTALL_CENTER_UI_BASE_PATH_VALUE="${INSTALL_CENTER_UI_BASE_PATH:-/center-ui}"
+INSTALL_CENTER_UPSTREAM_URL_VALUE="${INSTALL_CENTER_UPSTREAM_URL:-http://127.0.0.1:9092}"
+INSTALL_CENTER_CLIENT_ALLOW_CIDRS_VALUE="${INSTALL_CENTER_CLIENT_ALLOW_CIDRS:-}"
+INSTALL_CENTER_MANAGE_API_ALLOW_CIDRS_VALUE="${INSTALL_CENTER_MANAGE_API_ALLOW_CIDRS:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}"
+INSTALL_CENTER_API_ALLOW_CIDRS_VALUE="${INSTALL_CENTER_API_ALLOW_CIDRS:-}"
 
 INSTALL_CONFIG_REL=""
 INSTALL_ENV_BASENAME=""
@@ -258,6 +266,58 @@ with open(src, encoding="utf-8") as fh:
 data = data.replace("/opt/tukuyomi", prefix)
 with open(dst, "w", encoding="utf-8") as fh:
     fh.write(data)
+PY
+  then
+    rm -f "${tmp}"
+    return 1
+  fi
+  run_priv install -m 640 "${tmp}" "${dst}" || {
+    rm -f "${tmp}"
+    return 1
+  }
+  rm -f "${tmp}"
+}
+
+render_center_env_preserve() {
+  local src="$1"
+  local dst="$2"
+  local overwrite="$3"
+  local tmp
+  if [[ -e "${dst}" ]] && ! is_enabled "${overwrite}"; then
+    log "preserve existing ${dst}"
+    return
+  fi
+  tmp="$(mktemp)"
+  if ! python3 - "$src" "$tmp" "$PREFIX" "$INSTALL_CENTER_LISTEN_ADDR_VALUE" "$INSTALL_CENTER_API_BASE_PATH_VALUE" "$INSTALL_CENTER_GATEWAY_API_BASE_PATH_VALUE" "$INSTALL_CENTER_UI_BASE_PATH_VALUE" "$INSTALL_CENTER_CLIENT_ALLOW_CIDRS_VALUE" "$INSTALL_CENTER_MANAGE_API_ALLOW_CIDRS_VALUE" "$INSTALL_CENTER_API_ALLOW_CIDRS_VALUE" <<'PY'
+import sys
+
+src, dst, prefix, listen_addr, api_base_path, gateway_api_base_path, ui_base_path, client_allow_cidrs, manage_api_allow_cidrs, center_api_allow_cidrs = sys.argv[1:11]
+with open(src, encoding="utf-8") as fh:
+    lines = fh.read().replace("/opt/tukuyomi", prefix).splitlines()
+replacements = {
+    "TUKUYOMI_CENTER_LISTEN_ADDR": listen_addr,
+    "TUKUYOMI_CENTER_API_BASE_PATH": api_base_path,
+    "TUKUYOMI_CENTER_GATEWAY_API_BASE_PATH": gateway_api_base_path,
+    "TUKUYOMI_CENTER_UI_BASE_PATH": ui_base_path,
+    "TUKUYOMI_CENTER_CLIENT_ALLOW_CIDRS": client_allow_cidrs,
+    "TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS": manage_api_allow_cidrs,
+    "TUKUYOMI_CENTER_API_ALLOW_CIDRS": center_api_allow_cidrs,
+}
+seen = set()
+out = []
+for line in lines:
+    key = line.split("=", 1)[0] if "=" in line else ""
+    if key in replacements:
+        out.append(f"{key}={replacements[key]}")
+        seen.add(key)
+    else:
+        out.append(line)
+for key, value in replacements.items():
+    if key not in seen:
+        out.append(f"{key}={value}")
+with open(dst, "w", encoding="utf-8") as fh:
+    fh.write("\n".join(out))
+    fh.write("\n")
 PY
   then
     rm -f "${tmp}"
@@ -568,11 +628,22 @@ bootstrap_center_protected_enrollment() {
   install_role_is_center_protected || return 0
   local identity_rel="data/tmp/center-protected-device.json"
   local approved_rel="data/tmp/center-protected-approved-device.json"
-  local center_url="http://127.0.0.1:9092"
+  local center_url="${INSTALL_CENTER_UPSTREAM_URL_VALUE}"
   log "bootstrap center-protected Gateway enrollment"
-  run_runtime bootstrap-center-protected-gateway --center-url "${center_url}" --out "${identity_rel}"
+  run_runtime bootstrap-center-protected-gateway \
+    --center-url "${center_url}" \
+    --gateway-api-base-path "${INSTALL_CENTER_GATEWAY_API_BASE_PATH_VALUE}" \
+    --center-api-base-path "${INSTALL_CENTER_API_BASE_PATH_VALUE}" \
+    --center-ui-base-path "${INSTALL_CENTER_UI_BASE_PATH_VALUE}" \
+    --out "${identity_rel}"
   run_runtime_with_config "${INSTALL_CENTER_CONFIG_REL}" bootstrap-center-protected-center --in "${identity_rel}" --out "${approved_rel}"
-  run_runtime bootstrap-center-protected-gateway --center-url "${center_url}" --mark-approved --out "${identity_rel}"
+  run_runtime bootstrap-center-protected-gateway \
+    --center-url "${center_url}" \
+    --gateway-api-base-path "${INSTALL_CENTER_GATEWAY_API_BASE_PATH_VALUE}" \
+    --center-api-base-path "${INSTALL_CENTER_API_BASE_PATH_VALUE}" \
+    --center-ui-base-path "${INSTALL_CENTER_UI_BASE_PATH_VALUE}" \
+    --mark-approved \
+    --out "${identity_rel}"
   run_priv rm -f "${RUNTIME_DIR}/${identity_rel}" || true
   run_priv rm -f "${RUNTIME_DIR}/${approved_rel}" || true
 }
@@ -590,11 +661,32 @@ write_center_protected_seed_bundle() {
   local dst="${RUNTIME_DIR}/seeds/conf/config-bundle.json"
   local tmp
   tmp="$(mktemp)"
-  if ! python3 - "$src" "$tmp" <<'PY'
+  if ! python3 - "$src" "$tmp" "$INSTALL_CENTER_UPSTREAM_URL_VALUE" "$INSTALL_CENTER_GATEWAY_API_BASE_PATH_VALUE" "$INSTALL_CENTER_API_BASE_PATH_VALUE" "$INSTALL_CENTER_UI_BASE_PATH_VALUE" <<'PY'
 import json
+import posixpath
 import sys
 
 src, dst = sys.argv[1:3]
+upstream_url = str(sys.argv[3]).strip()
+if not upstream_url:
+    raise SystemExit("center upstream URL is empty")
+
+def normalize_base_path(label, raw, fallback):
+    value = str(raw).strip() or fallback
+    if not value.startswith("/"):
+        value = "/" + value
+    if any(part in (".", "..") for part in value.split("/")):
+        raise SystemExit(f"{label} must not contain dot segments")
+    value = posixpath.normpath(value)
+    if value == "/" or "*" in value:
+        raise SystemExit(f"{label} must be a non-root absolute path")
+    return value
+
+gateway_api_base = normalize_base_path("gateway API base path", sys.argv[4], "/center-api")
+center_api_base = normalize_base_path("center API base path", sys.argv[5], "/center-api")
+center_ui_base = normalize_base_path("center UI base path", sys.argv[6], "/center-ui")
+if gateway_api_base == center_ui_base or center_api_base == center_ui_base:
+    raise SystemExit("center API paths and UI base path must differ")
 with open(src, encoding="utf-8") as fh:
     bundle = json.load(fh)
 if not isinstance(bundle, dict):
@@ -609,22 +701,25 @@ proxy["upstreams"] = [
     {
         "enabled": True,
         "name": "center",
-        "url": "http://127.0.0.1:9092",
+        "url": upstream_url,
         "weight": 1,
     }
 ]
 proxy["backend_pools"] = []
+api_action = {"upstream": "center"}
+if gateway_api_base != center_api_base:
+    api_action["path_rewrite"] = {"prefix": center_api_base}
 proxy["routes"] = [
     {
         "name": "center-api",
         "priority": 10,
-        "match": {"path": {"type": "prefix", "value": "/center-api"}},
-        "action": {"upstream": "center"},
+        "match": {"path": {"type": "prefix", "value": gateway_api_base}},
+        "action": api_action,
     },
     {
         "name": "center-ui",
         "priority": 20,
-        "match": {"path": {"type": "prefix", "value": "/center-ui"}},
+        "match": {"path": {"type": "prefix", "value": center_ui_base}},
         "action": {"upstream": "center"},
     },
 ]
@@ -632,20 +727,27 @@ proxy["default_route"] = None
 proxy["health_check_path"] = "/healthz"
 domains["proxy"] = proxy
 waf_bypass = domains.get("waf_bypass")
-if not isinstance(waf_bypass, dict):
-    waf_bypass = {}
-default_bypass = waf_bypass.get("default")
-if not isinstance(default_bypass, dict):
-    default_bypass = {}
-bypass_entries = default_bypass.get("entries")
-if not isinstance(bypass_entries, list):
-    bypass_entries = []
-for path in ("/center-api/", "/center-ui/"):
-    if not any(isinstance(entry, dict) and entry.get("path") == path for entry in bypass_entries):
-        bypass_entries.append({"path": path})
-default_bypass["entries"] = bypass_entries
-waf_bypass["default"] = default_bypass
-domains["waf_bypass"] = waf_bypass
+protected_bypass_paths = {gateway_api_base, center_api_base, center_ui_base}
+
+def keep_bypass_entry(entry):
+    if not isinstance(entry, dict):
+        return True
+    if str(entry.get("extra_rule", "")).strip():
+        return True
+    return str(entry.get("path", "")).strip().rstrip("/") not in protected_bypass_paths
+
+if isinstance(waf_bypass, dict):
+    scopes = []
+    default_bypass = waf_bypass.get("default")
+    if isinstance(default_bypass, dict):
+        scopes.append(default_bypass)
+    hosts = waf_bypass.get("hosts")
+    if isinstance(hosts, dict):
+        scopes.extend(scope for scope in hosts.values() if isinstance(scope, dict))
+    for scope in scopes:
+        entries = scope.get("entries")
+        if isinstance(entries, list):
+            scope["entries"] = [entry for entry in entries if keep_bypass_entry(entry)]
 bundle["source"] = "center-protected-seed"
 with open(dst, "w", encoding="utf-8") as fh:
     json.dump(bundle, fh, indent=2, sort_keys=True)
@@ -702,7 +804,7 @@ install_files() {
   fi
   if install_role_includes_center; then
     install_config_preserve "${ROOT_DIR}/data/conf/config.json" "${RUNTIME_DIR}/${INSTALL_CENTER_CONFIG_REL}" 644 "${INSTALL_OVERWRITE_CONFIG}" "center" "single"
-    render_env_preserve "${ROOT_DIR}/docs/build/tukuyomi-center.env.example" "${env_dir}/${INSTALL_CENTER_ENV_BASENAME}" "${INSTALL_OVERWRITE_ENV}"
+    render_center_env_preserve "${ROOT_DIR}/docs/build/tukuyomi-center.env.example" "${env_dir}/${INSTALL_CENTER_ENV_BASENAME}" "${INSTALL_OVERWRITE_ENV}"
   fi
 
   if install_role_includes_gateway && [[ ! -e "${RUNTIME_DIR}/conf/crs-disabled.conf" ]]; then

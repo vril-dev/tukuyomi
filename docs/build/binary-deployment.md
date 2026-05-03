@@ -90,6 +90,16 @@ Behavior:
   routes `/center-ui` and `/center-api` to `http://127.0.0.1:9092`. It also
   enables Gateway IoT / Edge device authentication and locally bootstraps the
   matching Center approval. It does not install the scheduled-task timer.
+- `INSTALL_CENTER_API_BASE_PATH` controls the Center process API path, and
+  `INSTALL_CENTER_GATEWAY_API_BASE_PATH` controls the public Gateway route path.
+  When they differ, the generated Gateway route rewrites the public path to the
+  Center path before forwarding upstream.
+- Center has three source IP allowlists for direct exposure:
+  `TUKUYOMI_CENTER_CLIENT_ALLOW_CIDRS` for Center UI clients,
+  `TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS` for the management API, and
+  `TUKUYOMI_CENTER_API_ALLOW_CIDRS` for the Gateway/device API. Empty client
+  and Gateway/device lists allow any source. The management API defaults to
+  loopback plus private/local CIDRs.
 - when `PREFIX` is under the invoking user's home directory,
   `INSTALL_CREATE_USER=auto` uses that user as the runtime user and skips
   `useradd`

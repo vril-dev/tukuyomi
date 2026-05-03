@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const latestSchemaMigrationVersionForTest = 31
+const latestSchemaMigrationVersionForTest = 33
 
 func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
@@ -92,6 +92,9 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		"center_device_proxy_rule_assignments",
 		"center_device_proxy_rule_apply_status",
 		"center_device_proxy_rule_apply_history",
+		"center_device_waf_rule_assignments",
+		"center_device_waf_rule_apply_status",
+		"center_device_waf_rule_apply_history",
 		"edge_device_identities",
 	} {
 		var name string
@@ -115,6 +118,13 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 	}
 	if wafRuleAssetEnabledColumns != 1 {
 		t.Fatalf("waf_rule_assets enabled column count=%d want 1", wafRuleAssetEnabledColumns)
+	}
+	var ruleArtifactSourceColumns int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('center_rule_artifact_bundles') WHERE name = 'source'`).Scan(&ruleArtifactSourceColumns); err != nil {
+		t.Fatalf("query center_rule_artifact_bundles source column: %v", err)
+	}
+	if ruleArtifactSourceColumns != 1 {
+		t.Fatalf("center_rule_artifact_bundles source column count=%d want 1", ruleArtifactSourceColumns)
 	}
 	for _, column := range []string{"acme_environment", "acme_email"} {
 		var count int
@@ -197,6 +207,13 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		{table: "center_device_proxy_rule_apply_status", column: "apply_state"},
 		{table: "center_device_proxy_rule_apply_history", column: "bundle_revision"},
 		{table: "center_device_proxy_rule_apply_history", column: "applied_at_unix"},
+		{table: "center_device_waf_rule_assignments", column: "bundle_revision"},
+		{table: "center_device_waf_rule_assignments", column: "base_bundle_revision"},
+		{table: "center_device_waf_rule_assignments", column: "dispatched_at_unix"},
+		{table: "center_device_waf_rule_apply_status", column: "local_bundle_revision"},
+		{table: "center_device_waf_rule_apply_status", column: "apply_state"},
+		{table: "center_device_waf_rule_apply_history", column: "bundle_revision"},
+		{table: "center_device_waf_rule_apply_history", column: "applied_at_unix"},
 		{table: "edge_device_identities", column: "center_product_id"},
 		{table: "edge_device_identities", column: "center_status_checked_at_unix"},
 		{table: "edge_device_identities", column: "center_status_error"},

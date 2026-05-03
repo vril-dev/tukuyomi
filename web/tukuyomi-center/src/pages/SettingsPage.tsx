@@ -9,11 +9,15 @@ type SettingsConfig = {
   admin_session_ttl_seconds?: number;
   listen_addr?: string;
   api_base_path?: string;
+  gateway_api_base_path?: string;
   ui_base_path?: string;
   tls_mode?: string;
   tls_cert_file?: string;
   tls_key_file?: string;
   tls_min_version?: string;
+  client_allow_cidrs?: string[];
+  manage_api_allow_cidrs?: string[];
+  center_api_allow_cidrs?: string[];
 };
 
 type CenterSettings = {
@@ -40,7 +44,9 @@ const MIN_SESSION_TTL_MINUTES = 5;
 const MAX_SESSION_TTL_MINUTES = 7 * 24 * 60;
 const DEFAULT_CENTER_LISTEN_ADDR = "127.0.0.1:9092";
 const DEFAULT_CENTER_API_BASE_PATH = "/center-api";
+const DEFAULT_CENTER_GATEWAY_API_BASE_PATH = "/center-api";
 const DEFAULT_CENTER_UI_BASE_PATH = "/center-ui";
+const DEFAULT_MANAGE_API_ALLOW_CIDRS = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"];
 
 function boolLabel(value: boolean | undefined, tx: Tx) {
   if (typeof value !== "boolean") {
@@ -54,6 +60,11 @@ function daysLabel(value: number | undefined, tx: Tx) {
     return "-";
   }
   return tx("{count} days", { count: value });
+}
+
+function allowCIDRText(value: string[] | undefined, fallback: string[] = []) {
+  const list = Array.isArray(value) ? value : fallback;
+  return list.join("\n");
 }
 
 function normalizeForm(config: SettingsConfig | undefined) {
@@ -72,11 +83,15 @@ function normalizeForm(config: SettingsConfig | undefined) {
     sessionTTLMinutes: String(Math.max(MIN_SESSION_TTL_MINUTES, Math.min(Math.floor(sessionTTLSeconds / 60), MAX_SESSION_TTL_MINUTES))),
     listenAddr: config?.listen_addr || DEFAULT_CENTER_LISTEN_ADDR,
     apiBasePath: config?.api_base_path || DEFAULT_CENTER_API_BASE_PATH,
+    gatewayApiBasePath: config?.gateway_api_base_path || DEFAULT_CENTER_GATEWAY_API_BASE_PATH,
     uiBasePath: config?.ui_base_path || DEFAULT_CENTER_UI_BASE_PATH,
     tlsMode: config?.tls_mode === "manual" ? "manual" : "off",
     tlsCertFile: config?.tls_cert_file || "",
     tlsKeyFile: config?.tls_key_file || "",
     tlsMinVersion: config?.tls_min_version === "tls1.3" ? "tls1.3" : "tls1.2",
+    clientAllowCIDRs: allowCIDRText(config?.client_allow_cidrs),
+    manageApiAllowCIDRs: allowCIDRText(config?.manage_api_allow_cidrs, DEFAULT_MANAGE_API_ALLOW_CIDRS),
+    centerApiAllowCIDRs: allowCIDRText(config?.center_api_allow_cidrs),
   };
 }
 
@@ -86,6 +101,13 @@ function parsePositiveInt(value: string, fallback: number) {
     return fallback;
   }
   return parsed;
+}
+
+function parseCIDRList(value: string) {
+  return value
+    .split(/[\s,]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 export default function SettingsPage() {
@@ -124,11 +146,15 @@ export default function SettingsPage() {
     form.sessionTTLMinutes !== currentForm.sessionTTLMinutes ||
     form.listenAddr !== currentForm.listenAddr ||
     form.apiBasePath !== currentForm.apiBasePath ||
+    form.gatewayApiBasePath !== currentForm.gatewayApiBasePath ||
     form.uiBasePath !== currentForm.uiBasePath ||
     form.tlsMode !== currentForm.tlsMode ||
     form.tlsCertFile !== currentForm.tlsCertFile ||
     form.tlsKeyFile !== currentForm.tlsKeyFile ||
-    form.tlsMinVersion !== currentForm.tlsMinVersion;
+    form.tlsMinVersion !== currentForm.tlsMinVersion ||
+    form.clientAllowCIDRs !== currentForm.clientAllowCIDRs ||
+    form.manageApiAllowCIDRs !== currentForm.manageApiAllowCIDRs ||
+    form.centerApiAllowCIDRs !== currentForm.centerApiAllowCIDRs;
   const readOnly = settings.access?.read_only === true;
 
   async function save(event: FormEvent<HTMLFormElement>) {
@@ -155,17 +181,27 @@ export default function SettingsPage() {
     }
     const listenAddr = form.listenAddr.trim();
     const apiBasePath = form.apiBasePath.trim();
+    const gatewayApiBasePath = form.gatewayApiBasePath.trim();
     const uiBasePath = form.uiBasePath.trim();
     const tlsCertFile = form.tlsCertFile.trim();
     const tlsKeyFile = form.tlsKeyFile.trim();
+    const clientAllowCIDRs = parseCIDRList(form.clientAllowCIDRs);
+    const manageApiAllowCIDRs = parseCIDRList(form.manageApiAllowCIDRs);
+    const centerApiAllowCIDRs = parseCIDRList(form.centerApiAllowCIDRs);
     if (!listenAddr || !listenAddr.includes(":")) {
       setMessageTone("error");
       setMessage(tx("Listen address must include a host and port."));
       return;
     }
-    if (!apiBasePath.startsWith("/") || !uiBasePath.startsWith("/") || apiBasePath === uiBasePath) {
+    if (
+      !apiBasePath.startsWith("/") ||
+      !gatewayApiBasePath.startsWith("/") ||
+      !uiBasePath.startsWith("/") ||
+      apiBasePath === uiBasePath ||
+      gatewayApiBasePath === uiBasePath
+    ) {
       setMessageTone("error");
-      setMessage(tx("API and UI base paths must be different absolute paths."));
+      setMessage(tx("API paths and UI base path must be different absolute paths."));
       return;
     }
     if (form.tlsMode === "manual" && (!tlsCertFile || !tlsKeyFile)) {
@@ -190,11 +226,15 @@ export default function SettingsPage() {
             admin_session_ttl_seconds: sessionTTLMinutes * 60,
             listen_addr: listenAddr,
             api_base_path: apiBasePath,
+            gateway_api_base_path: gatewayApiBasePath,
             ui_base_path: uiBasePath,
             tls_mode: form.tlsMode,
             tls_cert_file: tlsCertFile,
             tls_key_file: tlsKeyFile,
             tls_min_version: form.tlsMinVersion,
+            client_allow_cidrs: clientAllowCIDRs,
+            manage_api_allow_cidrs: manageApiAllowCIDRs,
+            center_api_allow_cidrs: centerApiAllowCIDRs,
           },
         },
         { headers: { "If-Match": etag } },
@@ -202,7 +242,7 @@ export default function SettingsPage() {
       setSettings(next);
       setForm(normalizeForm(next.config));
       setMessageTone("success");
-      setMessage(next.restart_required ? tx("Center settings saved. Restart Center to apply listener changes.") : tx("Center settings saved."));
+      setMessage(next.restart_required ? tx("Center settings saved. Restart Center to apply runtime changes.") : tx("Center settings saved."));
     } catch (err) {
       const fallback = tx("Failed to save Center settings");
       setMessageTone("error");
@@ -251,6 +291,15 @@ export default function SettingsPage() {
                 disabled={loading || saving || readOnly}
               />
               <span className="field-hint">{tx("Applied after Center restart.")}</span>
+            </label>
+            <label>
+              <span>{tx("Gateway API base path")}</span>
+              <input
+                value={form.gatewayApiBasePath}
+                onChange={(event) => setForm((current) => ({ ...current, gatewayApiBasePath: event.target.value }))}
+                disabled={loading || saving || readOnly}
+              />
+              <span className="field-hint">{tx("Public API path used when Center UI is accessed through Gateway.")}</span>
             </label>
             <label>
               <span>{tx("UI base path")}</span>
@@ -302,6 +351,39 @@ export default function SettingsPage() {
             </label>
           </div>
           {settings.restart_required ? <p className="form-message warning">{tx("Center restart required for saved listener settings.")}</p> : null}
+          <h3 className="section-subtitle">{tx("Source IP allowlists")}</h3>
+          <div className="form-grid">
+            <label>
+              <span>{tx("Client to Center")}</span>
+              <textarea
+                rows={4}
+                value={form.clientAllowCIDRs}
+                onChange={(event) => setForm((current) => ({ ...current, clientAllowCIDRs: event.target.value }))}
+                disabled={loading || saving || readOnly}
+              />
+              <span className="field-hint">{tx("Empty allows any source. Applies to Center UI access.")}</span>
+            </label>
+            <label>
+              <span>{tx("Center manage API")}</span>
+              <textarea
+                rows={4}
+                value={form.manageApiAllowCIDRs}
+                onChange={(event) => setForm((current) => ({ ...current, manageApiAllowCIDRs: event.target.value }))}
+                disabled={loading || saving || readOnly}
+              />
+              <span className="field-hint">{tx("Default allows loopback and private/local CIDRs.")}</span>
+            </label>
+            <label>
+              <span>{tx("Center API")}</span>
+              <textarea
+                rows={4}
+                value={form.centerApiAllowCIDRs}
+                onChange={(event) => setForm((current) => ({ ...current, centerApiAllowCIDRs: event.target.value }))}
+                disabled={loading || saving || readOnly}
+              />
+              <span className="field-hint">{tx("Empty allows any source. Applies to Gateway device API calls.")}</span>
+            </label>
+          </div>
           <h3 className="section-subtitle">{tx("Admin session")}</h3>
           <div className="form-grid">
             <label>

@@ -106,6 +106,10 @@ Docker preview network. Open Center through Gateway at
 IoT / Edge mode and bootstraps the matching Center approval against the preview
 Center DB.
 
+For split API paths, set `CENTER_PREVIEW_API_BASE_PATH` to the Center process
+path and `CENTER_PREVIEW_GATEWAY_API_BASE_PATH` to the Gateway-facing path. The
+Gateway preview route rewrites the public path to the Center path upstream.
+
 With `GATEWAY_PREVIEW_PERSIST=1`, those protected routes are seeded only when
 the Gateway preview DB is created. If an existing persistent Gateway preview DB
 is already present, reset that preview DB or add the routes from `Proxy Rules`.

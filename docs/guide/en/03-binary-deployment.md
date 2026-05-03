@@ -135,6 +135,18 @@ locally. The Gateway private key stays in the Gateway DB; Center receives only
 the public key identity. If an existing DB contains conflicting device trust,
 the bootstrap fails instead of replacing it silently.
 
+If the Center process should keep a private API path, set
+`INSTALL_CENTER_API_BASE_PATH` to that internal path and keep
+`INSTALL_CENTER_GATEWAY_API_BASE_PATH` on the public Gateway path. The Gateway
+route then matches the public path and rewrites upstream requests to the Center
+path.
+
+When Center is exposed without a tukuyomi Gateway in front, configure the
+source IP allowlists deliberately. Center UI client access and the
+Gateway/device API allow any source by default; the management API defaults to
+loopback plus private/local CIDRs. These controls use the socket source address,
+not `X-Forwarded-For`.
+
 ### 3.3.3 DB seeding
 
 - `INSTALL_DB_SEED=auto` (the default) only runs `db-import` on the

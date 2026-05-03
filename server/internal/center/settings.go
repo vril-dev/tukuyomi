@@ -16,15 +16,19 @@ import (
 )
 
 type centerSettingsRuntime struct {
-	Mode          string `json:"mode"`
-	Version       string `json:"version"`
-	ListenAddr    string `json:"listen_addr"`
-	APIBasePath   string `json:"api_base_path"`
-	UIBasePath    string `json:"ui_base_path"`
-	TLSEnabled    bool   `json:"tls_enabled"`
-	TLSCertFile   string `json:"tls_cert_file,omitempty"`
-	TLSKeyFile    string `json:"tls_key_file,omitempty"`
-	TLSMinVersion string `json:"tls_min_version"`
+	Mode                string   `json:"mode"`
+	Version             string   `json:"version"`
+	ListenAddr          string   `json:"listen_addr"`
+	APIBasePath         string   `json:"api_base_path"`
+	GatewayAPIBasePath  string   `json:"gateway_api_base_path"`
+	UIBasePath          string   `json:"ui_base_path"`
+	TLSEnabled          bool     `json:"tls_enabled"`
+	TLSCertFile         string   `json:"tls_cert_file,omitempty"`
+	TLSKeyFile          string   `json:"tls_key_file,omitempty"`
+	TLSMinVersion       string   `json:"tls_min_version"`
+	ClientAllowCIDRs    []string `json:"client_allow_cidrs,omitempty"`
+	ManageAPIAllowCIDRs []string `json:"manage_api_allow_cidrs,omitempty"`
+	CenterAPIAllowCIDRs []string `json:"center_api_allow_cidrs,omitempty"`
 }
 
 type centerSettingsStorage struct {
@@ -117,15 +121,19 @@ func buildCenterSettingsResponse(runtimeCfg RuntimeConfig, cfg CenterSettingsCon
 		ETag:            etag,
 		RestartRequired: centerSettingsRestartRequired(runtimeCfg, displayCfg),
 		Runtime: centerSettingsRuntime{
-			Mode:          "center",
-			Version:       buildinfo.Version,
-			ListenAddr:    runtimeCfg.normalizedListenAddr(),
-			APIBasePath:   runtimeCfg.APIBasePath,
-			UIBasePath:    runtimeCfg.UIBasePath,
-			TLSEnabled:    runtimeCfg.TLSEnabled,
-			TLSCertFile:   runtimeCfg.TLSCertFile,
-			TLSKeyFile:    runtimeCfg.TLSKeyFile,
-			TLSMinVersion: effectiveCenterTLSMinVersion(runtimeCfg.TLSMinVersion),
+			Mode:                "center",
+			Version:             buildinfo.Version,
+			ListenAddr:          runtimeCfg.normalizedListenAddr(),
+			APIBasePath:         runtimeCfg.APIBasePath,
+			GatewayAPIBasePath:  runtimeCfg.effectiveGatewayAPIBasePath(),
+			UIBasePath:          runtimeCfg.UIBasePath,
+			TLSEnabled:          runtimeCfg.TLSEnabled,
+			TLSCertFile:         runtimeCfg.TLSCertFile,
+			TLSKeyFile:          runtimeCfg.TLSKeyFile,
+			TLSMinVersion:       effectiveCenterTLSMinVersion(runtimeCfg.TLSMinVersion),
+			ClientAllowCIDRs:    append([]string(nil), runtimeCfg.ClientAllowCIDRs...),
+			ManageAPIAllowCIDRs: append([]string(nil), runtimeCfg.effectiveManageAPIAllowCIDRs()...),
+			CenterAPIAllowCIDRs: append([]string(nil), runtimeCfg.CenterAPIAllowCIDRs...),
 		},
 		Storage: centerSettingsStorage{
 			DBDriver:          config.DBDriver,
@@ -152,6 +160,10 @@ func displayCenterSettingsConfig(runtimeCfg RuntimeConfig, cfg CenterSettingsCon
 	if cfg.APIBasePath == "" {
 		cfg.APIBasePath = runtimeCfg.APIBasePath
 	}
+	cfg.GatewayAPIBasePath = strings.TrimSpace(cfg.GatewayAPIBasePath)
+	if cfg.GatewayAPIBasePath == "" {
+		cfg.GatewayAPIBasePath = runtimeCfg.effectiveGatewayAPIBasePath()
+	}
 	cfg.UIBasePath = strings.TrimSpace(cfg.UIBasePath)
 	if cfg.UIBasePath == "" {
 		cfg.UIBasePath = runtimeCfg.UIBasePath
@@ -174,6 +186,15 @@ func displayCenterSettingsConfig(runtimeCfg RuntimeConfig, cfg CenterSettingsCon
 		cfg.TLSMinVersion = runtimeCfg.TLSMinVersion
 	}
 	cfg.TLSMinVersion = effectiveCenterTLSMinVersion(cfg.TLSMinVersion)
+	if cfg.ClientAllowCIDRs == nil {
+		cfg.ClientAllowCIDRs = append([]string(nil), runtimeCfg.ClientAllowCIDRs...)
+	}
+	if cfg.ManageAPIAllowCIDRs == nil {
+		cfg.ManageAPIAllowCIDRs = append([]string(nil), runtimeCfg.effectiveManageAPIAllowCIDRs()...)
+	}
+	if cfg.CenterAPIAllowCIDRs == nil {
+		cfg.CenterAPIAllowCIDRs = append([]string(nil), runtimeCfg.CenterAPIAllowCIDRs...)
+	}
 	return cfg
 }
 
@@ -195,7 +216,11 @@ func centerSettingsRestartRequired(runtimeCfg RuntimeConfig, cfg CenterSettingsC
 	}
 	return runtimeCfg.normalizedListenAddr() != desired.normalizedListenAddr() ||
 		runtimeCfg.APIBasePath != desired.APIBasePath ||
+		runtimeCfg.effectiveGatewayAPIBasePath() != desired.effectiveGatewayAPIBasePath() ||
 		runtimeCfg.UIBasePath != desired.UIBasePath ||
+		strings.Join(runtimeCfg.ClientAllowCIDRs, "\n") != strings.Join(desired.ClientAllowCIDRs, "\n") ||
+		strings.Join(runtimeCfg.effectiveManageAPIAllowCIDRs(), "\n") != strings.Join(desired.effectiveManageAPIAllowCIDRs(), "\n") ||
+		strings.Join(runtimeCfg.CenterAPIAllowCIDRs, "\n") != strings.Join(desired.CenterAPIAllowCIDRs, "\n") ||
 		runtimeCfg.TLSEnabled != desired.TLSEnabled ||
 		strings.TrimSpace(runtimeCfg.TLSCertFile) != strings.TrimSpace(desired.TLSCertFile) ||
 		strings.TrimSpace(runtimeCfg.TLSKeyFile) != strings.TrimSpace(desired.TLSKeyFile) ||
@@ -213,8 +238,20 @@ func applyCenterRuntimeSettings(runtimeCfg RuntimeConfig, cfg CenterSettingsConf
 	if cfg.APIBasePath != "" {
 		runtimeCfg.APIBasePath = cfg.APIBasePath
 	}
+	if cfg.GatewayAPIBasePath != "" {
+		runtimeCfg.GatewayAPIBasePath = cfg.GatewayAPIBasePath
+	}
 	if cfg.UIBasePath != "" {
 		runtimeCfg.UIBasePath = cfg.UIBasePath
+	}
+	if cfg.ClientAllowCIDRs != nil {
+		runtimeCfg.ClientAllowCIDRs = append([]string(nil), cfg.ClientAllowCIDRs...)
+	}
+	if cfg.ManageAPIAllowCIDRs != nil {
+		runtimeCfg.ManageAPIAllowCIDRs = append([]string(nil), cfg.ManageAPIAllowCIDRs...)
+	}
+	if cfg.CenterAPIAllowCIDRs != nil {
+		runtimeCfg.CenterAPIAllowCIDRs = append([]string(nil), cfg.CenterAPIAllowCIDRs...)
 	}
 	switch cfg.TLSMode {
 	case centerSettingsTLSModeOff:
@@ -239,11 +276,20 @@ func applyCenterRuntimeSettings(runtimeCfg RuntimeConfig, cfg CenterSettingsConf
 	if runtimeCfg.APIBasePath == "" {
 		runtimeCfg.APIBasePath = DefaultAPIBasePath
 	}
+	if runtimeCfg.GatewayAPIBasePath == "" {
+		runtimeCfg.GatewayAPIBasePath = DefaultGatewayAPIBasePath
+	}
 	if runtimeCfg.UIBasePath == "" {
 		runtimeCfg.UIBasePath = DefaultUIBasePath
 	}
 	if runtimeCfg.APIBasePath == runtimeCfg.UIBasePath {
 		return RuntimeConfig{}, fmt.Errorf("%w: api_base_path and ui_base_path must differ", ErrCenterSettingsInvalid)
+	}
+	if runtimeCfg.GatewayAPIBasePath == runtimeCfg.UIBasePath {
+		return RuntimeConfig{}, fmt.Errorf("%w: gateway_api_base_path and ui_base_path must differ", ErrCenterSettingsInvalid)
+	}
+	if len(runtimeCfg.ManageAPIAllowCIDRs) == 0 {
+		runtimeCfg.ManageAPIAllowCIDRs = defaultCenterManageAPIAllowCIDRStrings()
 	}
 	return runtimeCfg, nil
 }
@@ -262,4 +308,19 @@ func (cfg RuntimeConfig) normalizedListenAddr() string {
 		return DefaultListenAddr
 	}
 	return addr
+}
+
+func (cfg RuntimeConfig) effectiveGatewayAPIBasePath() string {
+	base := strings.TrimSpace(cfg.GatewayAPIBasePath)
+	if base == "" {
+		return DefaultGatewayAPIBasePath
+	}
+	return base
+}
+
+func (cfg RuntimeConfig) effectiveManageAPIAllowCIDRs() []string {
+	if len(cfg.ManageAPIAllowCIDRs) == 0 {
+		return defaultCenterManageAPIAllowCIDRStrings()
+	}
+	return cfg.ManageAPIAllowCIDRs
 }

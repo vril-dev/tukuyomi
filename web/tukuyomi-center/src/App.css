@@ -1056,6 +1056,34 @@ button.danger {
   line-height: 1.45;
 }
 
+.waf-upload-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.waf-upload-row input[type="file"] {
+  width: min(430px, 100%);
+  min-height: 34px;
+}
+
+.checkbox-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.checkbox-line input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
 .rules-request-table table,
 .rules-bundle-table table {
   min-width: 1180px;
@@ -1079,6 +1107,10 @@ button.danger {
 
 .rules-request-col-time {
   width: 170px;
+}
+
+.rules-request-col-size {
+  width: 90px;
 }
 
 .rules-request-table td.actions-cell {
@@ -1125,6 +1157,10 @@ button.danger {
 }
 
 .rules-bundle-table td.actions-cell button {
+  padding-inline: 8px;
+}
+
+.rules-bundle-table td.actions-cell .button-link {
   padding-inline: 8px;
 }
 
@@ -1216,6 +1252,34 @@ button.danger {
 .rules-bundle-json {
   height: min(58vh, 560px);
   min-height: 260px;
+}
+
+.rules-file-table {
+  max-height: min(58vh, 520px);
+}
+
+.rules-file-table table {
+  min-width: 980px;
+}
+
+.waf-request-table table {
+  min-width: 860px;
+}
+
+.waf-bundle-table table {
+  min-width: 1240px;
+}
+
+.waf-bundle-table .rules-bundle-col-actions,
+.waf-bundle-table td.actions-cell {
+  width: 230px;
+  min-width: 230px;
+}
+
+.rules-file-table th:nth-child(1),
+.rules-file-table td.actions-cell {
+  width: 105px;
+  min-width: 105px;
 }
 
 .runtime-platform-grid {

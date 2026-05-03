@@ -565,23 +565,24 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
 
   if (selectedDeviceID) {
     return (
-      <div className="content-panel">
-        <section className="content-section device-detail-page">
-          <div className="section-header">
-            <div>
-              <h2 className="section-title">{tx("Device actions")}</h2>
-              <p className="section-note device-detail-id">{selectedDeviceID}</p>
-              {loading ? <p className="section-note">{tx("Loading device details...")}</p> : null}
-            </div>
-            <button type="button" className="secondary" onClick={closeDeviceActions}>
-              {tx("Back to registered devices")}
-            </button>
+      <div className="content-section rules-page device-detail-page">
+        <div className="section-header">
+          <div>
+            <h2>{tx("Device Status")}</h2>
+            <p className="section-note device-detail-id">{selectedDeviceID}</p>
+            {loading ? <p className="section-note">{tx("Loading device details...")}</p> : null}
           </div>
-          {message ? <p className="form-message error">{message}</p> : null}
-          {!loading && !managedDevice ? <div className="empty">{tx("Device not found.")}</div> : null}
-          {managedDevice ? (
-            <>
-              <div className="summary-grid">
+          <button type="button" className="secondary" onClick={closeDeviceActions}>
+            {tx("Back to registered devices")}
+          </button>
+        </div>
+        {message ? <p className="form-message error">{message}</p> : null}
+        {!loading && !managedDevice ? <div className="empty">{tx("Device not found.")}</div> : null}
+        {managedDevice ? (
+          <>
+            <section className="device-detail-section">
+              <h3>{tx("Device actions")}</h3>
+              <div className="summary-grid rules-summary-grid">
                 <div>
                   <span>{tx("Status")}</span>
                   <strong>{tx(managedDevice.status || "-")}</strong>
@@ -623,7 +624,8 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                   </button>
                 ) : null}
               </div>
-              <div className="device-detail-section">
+            </section>
+              <section className="device-detail-section">
                 <div className="device-detail-section-header">
                   <div>
                     <h3>{tx("Platform details")}</h3>
@@ -655,8 +657,8 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                     <strong title={managedDevice.kernel_version || undefined}>{managedDevice.kernel_version || "-"}</strong>
                   </div>
                 </div>
-              </div>
-              <div className="device-detail-section">
+              </section>
+              <section className="device-detail-section">
                 <div className="device-detail-section-header">
                   <div>
                     <h3>{tx("Config snapshots")}</h3>
@@ -723,10 +725,9 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                   </div>
                 </div>
                 {configSnapshotMessage ? <p className="form-message error">{configSnapshotMessage}</p> : null}
-              </div>
+              </section>
             </>
           ) : null}
-        </section>
         {configSnapshotViewer ? (
           <div
             className="config-snapshot-modal-backdrop"

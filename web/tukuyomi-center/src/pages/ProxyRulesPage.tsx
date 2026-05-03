@@ -360,15 +360,16 @@ export default function ProxyRulesPage() {
   }
 
   return (
-    <div className="content-panel rules-page">
-      <section className="content-section">
-        <div className="section-header">
-          <div>
-            <h3 className="section-title">{tx("Proxy Rules")}</h3>
-            <p className="section-note">{deviceID}</p>
-          </div>
+    <div className="content-section rules-page">
+      <div className="section-header">
+        <div>
+          <h2>{tx("Proxy Rules")}</h2>
+          <p className="section-note">{deviceID}</p>
         </div>
+      </div>
 
+      <section className="device-detail-section">
+        <h3>{tx("Current Proxy Rules")}</h3>
         <div className="summary-grid rules-summary-grid">
           <div><span>{tx("Current proxy ETag")}</span><strong title={current?.proxy_etag || undefined}>{current?.proxy_etag || "-"}</strong></div>
           <div><span>{tx("Config revision")}</span><strong title={current?.config_revision || undefined}>{compactRevision(current?.config_revision)}</strong></div>
@@ -376,10 +377,10 @@ export default function ProxyRulesPage() {
         </div>
       </section>
 
-      <section className="content-section">
+      <section className="device-detail-section">
         <div className="section-header">
           <div>
-            <h3 className="section-title">{tx("Proxy Rules editor")}</h3>
+            <h3>{tx("Proxy Rules editor")}</h3>
             <p className="section-note">{tx("Edit the proxy domain for this Gateway.")}</p>
           </div>
           <div className="inline-actions">
@@ -412,8 +413,8 @@ export default function ProxyRulesPage() {
         </div>
       </section>
 
-      <section className="content-section">
-        <h3 className="section-title">{tx("Pending rule requests")}</h3>
+      <section className="device-detail-section">
+        <h3>{tx("Pending rule requests")}</h3>
         {assignmentDispatchActive ? (
           <p className="section-note">{tx("Gateway picked up this request. Waiting for the next apply report.")}</p>
         ) : null}
@@ -461,8 +462,8 @@ export default function ProxyRulesPage() {
         </div>
       </section>
 
-      <section className="content-section">
-        <h3 className="section-title">{tx("Saved rule bundles")}</h3>
+      <section className="device-detail-section">
+        <h3>{tx("Saved rule bundles")}</h3>
         <p className="section-note">{tx("Latest 20 saved bundles. Use Assign to redeploy a saved bundle.")}</p>
         <div className="table-wrap rules-bundle-table">
           <table>

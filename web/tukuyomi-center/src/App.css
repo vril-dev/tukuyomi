@@ -831,6 +831,19 @@ button.danger {
   margin-top: 16px;
 }
 
+.content-panel > .content-section {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.content-panel > .content-section + .content-section {
+  margin-top: 16px;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 14px;
+}
+
 .section-header {
   display: flex;
   align-items: center;
@@ -890,15 +903,15 @@ button.danger {
 .facts {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .fact {
   min-width: 0;
   border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 8px 12px;
-  background: #fafafa;
+  border-radius: 6px;
+  padding: 10px;
+  background: #fbfdff;
 }
 
 .fact span {
@@ -906,19 +919,18 @@ button.danger {
   color: var(--muted);
   font-size: 12px;
   font-weight: 400;
-  letter-spacing: 0.025em;
   line-height: 1rem;
-  text-transform: uppercase;
 }
 
 .fact strong {
   display: block;
-  margin-top: 0;
+  margin-top: 4px;
   overflow: hidden;
+  color: #0f172a;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1rem;
 }
 
@@ -1012,10 +1024,6 @@ button.danger {
 
 .runtime-summary-table .inline-actions {
   flex-wrap: nowrap;
-}
-
-.device-detail-page {
-  max-width: 1160px;
 }
 
 .device-detail-id {
@@ -1611,6 +1619,29 @@ button.danger {
   margin: 0;
 }
 
+.user-page .grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.user-field {
+  display: block;
+  min-width: 0;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.user-field > span:first-child {
+  display: inline-block;
+  margin-bottom: 8px;
+}
+
+.user-field input {
+  width: 100%;
+}
+
 .table-subvalue {
   display: block;
   margin-top: 2px;
@@ -1727,6 +1758,10 @@ button.danger {
 
 @media (max-width: 980px) {
   .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .user-page .grid {
     grid-template-columns: 1fr;
   }
 

@@ -599,21 +599,22 @@ export default function RuntimePage() {
   }
 
   return (
-    <div className="content-panel runtime-page">
-      <section className="content-section">
-        <div className="section-header">
-          <div>
-            <h2 className="section-title">{tx("Runtime")}</h2>
-          </div>
-          <button type="button" className="secondary" onClick={() => void loadDevices()} disabled={loading}>
-            {tx("Refresh")}
-          </button>
+    <div className="content-section rules-page runtime-page">
+      <div className="section-header">
+        <div>
+          <h2>{tx("Runtime")}</h2>
         </div>
-        {message ? <p className="form-message error">{message}</p> : null}
+        <button type="button" className="secondary" onClick={() => void loadDevices()} disabled={loading}>
+          {tx("Refresh")}
+        </button>
+      </div>
+      {message ? <p className="form-message error">{message}</p> : null}
 
-        {selectedDevice ? (
-          <>
-            <div className="summary-grid runtime-platform-grid">
+      {selectedDevice ? (
+        <>
+          <section className="device-detail-section">
+            <h3>{tx("Gateway target")}</h3>
+            <div className="summary-grid rules-summary-grid runtime-platform-grid">
               <div>
                 <span>{tx("Target")}</span>
                 <strong title={deviceRuntimeTarget(selectedDevice)}>{deviceRuntimeTarget(selectedDevice)}</strong>
@@ -627,8 +628,9 @@ export default function RuntimePage() {
                 <strong>{selectedDevice.runtime_deployment_supported ? tx("supported") : tx("unsupported")}</strong>
               </div>
             </div>
+          </section>
 
-            <div className="device-detail-section">
+            <section className="device-detail-section">
               <div className="device-detail-section-header">
                 <div>
                   <h3>{tx("Runtime build")}</h3>
@@ -694,9 +696,9 @@ export default function RuntimePage() {
                   </table>
                 </div>
               ) : null}
-            </div>
+            </section>
 
-            <div className="device-detail-section">
+            <section className="device-detail-section">
               <div className="device-detail-section-header">
                 <div>
                   <h3>{tx("Runtime inventory")}</h3>
@@ -819,9 +821,9 @@ export default function RuntimePage() {
                 </table>
                 {inventory.length === 0 && !deploymentLoading ? <div className="empty">{tx("No runtime inventory reported.")}</div> : null}
               </div>
-            </div>
+            </section>
 
-            <div className="device-detail-section">
+            <section className="device-detail-section">
               <div className="device-detail-section-header">
                 <div>
                   <h3>{tx("Pending runtime requests")}</h3>
@@ -868,9 +870,9 @@ export default function RuntimePage() {
                 </table>
                 {assignments.length === 0 && !deploymentLoading ? <div className="empty">{tx("No pending runtime requests.")}</div> : null}
               </div>
-            </div>
+            </section>
 
-            <div className="device-detail-section">
+            <section className="device-detail-section">
               <div className="device-detail-section-header">
                 <div>
                   <h3>{tx("Built artifacts")}</h3>
@@ -927,12 +929,11 @@ export default function RuntimePage() {
                 </table>
                 {artifacts.length === 0 && !deploymentLoading ? <div className="empty">{tx("No built artifacts.")}</div> : null}
               </div>
-            </div>
+            </section>
           </>
         ) : (
           <div className="empty">{loading ? tx("Loading runtime devices...") : tx("No approved devices.")}</div>
         )}
-      </section>
     </div>
   );
 }

@@ -710,7 +710,7 @@ export default function RuntimeAppsPanel() {
         ) : null}
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[minmax(0,2fr),minmax(360px,1fr)]">
+      <section className="space-y-4">
         <div className="space-y-4">
           {vhosts.length === 0 ? (
             <div className="rounded-xl border border-dashed border-neutral-200 bg-white p-6 text-xs text-neutral-500">
@@ -992,48 +992,6 @@ export default function RuntimeAppsPanel() {
           ))}
         </div>
 
-        <aside className="space-y-4">
-          <section className="rounded-xl border border-neutral-200 bg-white p-4 space-y-2">
-            <h2 className="text-sm font-semibold">{tx("PHP runtime options")}</h2>
-            {builtRuntimeOptions.length === 0 ? (
-              <div className="text-xs text-neutral-500">{tx("No built PHP runtimes are available.")}</div>
-            ) : (
-              <ul className="flex flex-wrap gap-2 text-xs">
-                {builtRuntimeOptions.map((runtime) => (
-                  <li
-                    key={runtime.runtime_id}
-                    className="inline-flex items-center gap-2 rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1.5"
-                    title={runtime.runtime_id}
-                  >
-                    <span className="font-medium">{runtimeLabel(runtime)}</span>
-                    <code className="text-[11px] text-neutral-500">{runtime.runtime_id}</code>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          <section className="rounded-xl border border-neutral-200 bg-white p-4 space-y-2">
-            <h2 className="text-sm font-semibold">{tx("PSGI runtime options")}</h2>
-            {builtPSGIOptions.length === 0 ? (
-              <div className="text-xs text-neutral-500">{tx("No built PSGI runtimes are available.")}</div>
-            ) : (
-              <ul className="flex flex-wrap gap-2 text-xs">
-                {builtPSGIOptions.map((runtime) => (
-                  <li
-                    key={runtime.runtime_id}
-                    className="inline-flex items-center gap-2 rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1.5"
-                    title={runtime.runtime_id}
-                  >
-                    <span className="font-medium">{psgiRuntimeLabel(runtime)}</span>
-                    <code className="text-[11px] text-neutral-500">{runtime.runtime_id}</code>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-        </aside>
       </section>
     </div>
   );

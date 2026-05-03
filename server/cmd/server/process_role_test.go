@@ -30,6 +30,8 @@ func TestParseServerCommandRoles(t *testing.T) {
 		},
 		{name: "db migrate", args: []string{"tukuyomi", "db-migrate"}, want: serverCommandDBMigrate},
 		{name: "scheduled tasks", args: []string{"tukuyomi", "run-scheduled-tasks"}, want: serverCommandRunScheduledTasks},
+		{name: "protected gateway bootstrap", args: []string{"tukuyomi", "bootstrap-center-protected-gateway", "--center-url", "http://127.0.0.1:9092"}, want: serverCommandBootstrapProtectedGateway},
+		{name: "protected center bootstrap", args: []string{"tukuyomi", "bootstrap-center-protected-center", "--in", "identity.json"}, want: serverCommandBootstrapProtectedCenter},
 	}
 
 	for _, tt := range tests {

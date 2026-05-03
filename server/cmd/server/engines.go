@@ -68,6 +68,7 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 	api.GET("/", func(c *gin.Context) {
 		endpoints := []string{
 			config.APIBasePath + "/status",
+			config.APIBasePath + "/status/config-bundle",
 			config.APIBasePath + "/logs",
 			config.APIBasePath + "/rules",
 			config.APIBasePath + "/override-rules",
@@ -144,6 +145,7 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 	})
 
 	api.GET("/status", handler.StatusHandler)
+	api.GET("/status/config-bundle", handler.DownloadRuntimeConfigBundle)
 	api.GET("/metrics", handler.MetricsHandler)
 	api.GET("/logs/read", handler.LogsRead)
 	api.GET("/logs/security-audit", handler.GetSecurityAudit)

@@ -789,6 +789,14 @@ func ValidateProxyRulesRaw(raw string) (ProxyRulesConfig, error) {
 	return prepared.cfg, nil
 }
 
+func NormalizeProxyRulesRawStandalone(raw string) (string, string, ProxyRulesConfig, error) {
+	prepared, err := prepareProxyRulesRawWithSitesAndVhosts(raw, SiteConfigFile{}, VhostConfigFile{})
+	if err != nil {
+		return "", "", ProxyRulesConfig{}, err
+	}
+	return prepared.raw, prepared.etag, prepared.cfg, nil
+}
+
 func ApplyProxyRulesRaw(ifMatch string, raw string) (string, ProxyRulesConfig, error) {
 	return applyProxyRulesRaw(ifMatch, raw, "")
 }

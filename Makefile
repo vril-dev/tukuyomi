@@ -96,7 +96,7 @@ help:
 	@echo "  make env-init                   Create .env from .env.example if missing"
 	@echo "  make crs-install                Run db-migrate, install OWASP CRS seed files, and import WAF rule assets into DB"
 	@echo "  make crs-ensure                 Run db-migrate, install CRS only when missing, and import WAF rule assets into DB"
-	@echo "  make install TARGET=linux-systemd INSTALL_ROLE=gateway|center Install binary runtime onto this Linux host"
+	@echo "  make install TARGET=linux-systemd INSTALL_ROLE=gateway|center|center-protected Install binary runtime onto this Linux host"
 	@echo "    - optional: PREFIX=/opt/tukuyomi INSTALL_USER=<user> INSTALL_ENABLE_SCHEDULED_TASKS=0(disable) INSTALL_DB_SEED=auto|always|never"
 	@echo "  make deploy-render TARGET=ecs|kubernetes|azure-container-apps|container-image IMAGE_URI=... Render deploy artifacts"
 	@echo "    - optional: DEPLOY_RENDER_OUT_DIR=dist/deploy DEPLOY_RENDER_OVERWRITE=1"
@@ -124,6 +124,7 @@ help:
 	@echo "  make center-preview-up          Start Center preview runtime"
 	@echo "    - optional: GATEWAY_PREVIEW_PERSIST=1 keeps preview DB state across down/up"
 	@echo "    - optional: CENTER_PREVIEW_PERSIST=1 keeps Center preview DB state across down/up"
+	@echo "    - optional: CENTER_PROTECTED_PREVIEW=1 routes Center preview through Gateway"
 	@echo "  make fleet-preview-down         Stop Center and gateway preview runtimes"
 	@echo "  make gateway-preview-down       Stop gateway preview runtime and remove temp override"
 	@echo "  make center-preview-down        Stop Center preview runtime and remove temp override"
@@ -350,6 +351,33 @@ install-smoke: build
 	grep -q "WAF_CONFIG_FILE=/opt/tukuyomi/conf/config.center.json" "$$tmp/etc/tukuyomi/tukuyomi-center.env"; \
 	test -f "$$tmp/opt/tukuyomi/db/tukuyomi-center.db"; \
 	python3 -c 'import json, sys; assert json.load(open(sys.argv[1], encoding="utf-8"))["runtime"]["process_model"] == "single"' "$$tmp/opt/tukuyomi/conf/config.center.json"; \
+	protected_tmp="$$tmp/protected"; \
+	TARGET=linux-systemd \
+	INSTALL_ROLE=center-protected \
+	DESTDIR="$$protected_tmp" \
+	PREFIX=/opt/tukuyomi \
+	INSTALL_SKIP_BUILD=1 \
+	INSTALL_ENABLE_BOOT=0 \
+	INSTALL_START=0 \
+	INSTALL_DB_SEED=always \
+	INSTALL_CENTER_API_BASE_PATH=/center-manage-api \
+	INSTALL_CENTER_GATEWAY_API_BASE_PATH=/center-api \
+	./scripts/install_tukuyomi.sh; \
+	test -x "$$protected_tmp/opt/tukuyomi/bin/tukuyomi"; \
+	test -f "$$protected_tmp/opt/tukuyomi/conf/config.json"; \
+	test -f "$$protected_tmp/opt/tukuyomi/conf/config.center.json"; \
+	test -f "$$protected_tmp/etc/tukuyomi/tukuyomi.env"; \
+	test -f "$$protected_tmp/etc/tukuyomi/tukuyomi-center.env"; \
+	grep -q "TUKUYOMI_CENTER_API_BASE_PATH=/center-manage-api" "$$protected_tmp/etc/tukuyomi/tukuyomi-center.env"; \
+	grep -q "TUKUYOMI_CENTER_GATEWAY_API_BASE_PATH=/center-api" "$$protected_tmp/etc/tukuyomi/tukuyomi-center.env"; \
+	grep -q "TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS=127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7" "$$protected_tmp/etc/tukuyomi/tukuyomi-center.env"; \
+	test -f "$$protected_tmp/etc/systemd/system/tukuyomi.service"; \
+	test -f "$$protected_tmp/etc/systemd/system/tukuyomi-center.service"; \
+	test ! -e "$$protected_tmp/etc/systemd/system/tukuyomi-scheduled-tasks.timer"; \
+	test -f "$$protected_tmp/opt/tukuyomi/db/tukuyomi.db"; \
+	test -f "$$protected_tmp/opt/tukuyomi/db/tukuyomi-center.db"; \
+	python3 -c 'import json, sys; seed=json.load(open(sys.argv[1], encoding="utf-8")); domains=seed["domains"]; proxy=domains["proxy"]; bypass=domains["waf_bypass"]; assert seed["source"] == "center-protected-seed"; assert proxy["upstreams"] == [{"enabled": True, "name": "center", "url": "http://127.0.0.1:9092", "weight": 1}]; assert proxy["default_route"] is None; assert [route["name"] for route in proxy["routes"]] == ["center-api", "center-ui"]; assert [route["match"]["path"]["value"] for route in proxy["routes"]] == ["/center-api", "/center-ui"]; assert proxy["routes"][0]["action"]["path_rewrite"]["prefix"] == "/center-manage-api"; assert not any(isinstance(entry, dict) and str(entry.get("path", "")).rstrip("/") in ["/center-api", "/center-manage-api", "/center-ui"] and not str(entry.get("extra_rule", "")).strip() for entry in bypass["default"]["entries"]); assert proxy["health_check_path"] == "/healthz"; assert json.load(open(sys.argv[2], encoding="utf-8"))["runtime"]["process_model"] == "supervised"; center=json.load(open(sys.argv[3], encoding="utf-8")); assert center["runtime"]["process_model"] == "single"; assert center["storage"]["db_path"] == "db/tukuyomi-center.db"' "$$protected_tmp/opt/tukuyomi/seeds/conf/config-bundle.json" "$$protected_tmp/opt/tukuyomi/conf/config.json" "$$protected_tmp/opt/tukuyomi/conf/config.center.json"; \
+	python3 -c 'import sqlite3, sys; gw=sqlite3.connect(sys.argv[1]); center=sqlite3.connect(sys.argv[2]); active=gw.execute("SELECT active_version_id FROM config_domains WHERE domain=?", ("app_config",)).fetchone()[0]; edge=gw.execute("SELECT value_bool FROM app_config_values WHERE version_id=? AND path=?", (active, "edge.enabled")).fetchone()[0]; auth=gw.execute("SELECT value_bool FROM app_config_values WHERE version_id=? AND path=?", (active, "edge.device_auth.enabled")).fetchone()[0]; identity=gw.execute("SELECT device_id, key_id, public_key_fingerprint_sha256, enrollment_status, center_url FROM edge_device_identities WHERE identity_id=1").fetchone(); device=center.execute("SELECT key_id, public_key_fingerprint_sha256, status FROM center_devices WHERE device_id=?", (identity[0],)).fetchone(); assert edge == 1 and auth == 1; assert identity[3] == "approved" and identity[4] == "http://127.0.0.1:9092"; assert device == (identity[1], identity[2], "approved")' "$$protected_tmp/opt/tukuyomi/db/tukuyomi.db" "$$protected_tmp/opt/tukuyomi/db/tukuyomi-center.db"; \
 	if TARGET=linux-systemd INSTALL_ROLE=bad DESTDIR="$$tmp" INSTALL_SKIP_BUILD=1 ./scripts/install_tukuyomi.sh >/dev/null 2>&1; then \
 		echo "[install-smoke][ERROR] invalid INSTALL_ROLE unexpectedly succeeded" >&2; \
 		exit 1; \
@@ -453,13 +481,14 @@ db-import: db-migrate
 	@set -euo pipefail; \
 	workdir="$(DB_MIGRATE_WORKDIR)"; \
 	config_file="$${WAF_CONFIG_FILE:-$(DB_MIGRATE_CONFIG)}"; \
+	seed_bundle_file="$${WAF_DB_IMPORT_SEED_BUNDLE_FILE-$(ROOT_DIR)/seeds/conf/config-bundle.json}"; \
 	seed_conf_dir="$${WAF_DB_IMPORT_SEED_CONF_DIR-$(ROOT_DIR)/seeds/conf}"; \
 	if [[ "$$config_file" != /* && ! -f "$$workdir/$$config_file" && -f "$(ROOT_DIR)/$$config_file" ]]; then \
 		config_file="$(ROOT_DIR)/$$config_file"; \
 	fi; \
-	echo "[db-import] workdir=$$workdir config=$$config_file seed_conf=$$seed_conf_dir"; \
+	echo "[db-import] workdir=$$workdir config=$$config_file seed_bundle=$$seed_bundle_file seed_conf=$$seed_conf_dir"; \
 	cd "$$workdir"; \
-	WAF_DB_IMPORT_SEED_CONF_DIR="$$seed_conf_dir" WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import
+	WAF_DB_IMPORT_SEED_BUNDLE_FILE="$$seed_bundle_file" WAF_DB_IMPORT_SEED_CONF_DIR="$$seed_conf_dir" WAF_CONFIG_FILE="$$config_file" "$(DB_MIGRATE_BIN)" db-import
 
 db-import-waf-rule-assets: db-migrate
 	@set -euo pipefail; \
@@ -564,8 +593,14 @@ center-ui-sync:
 
 center-ui-build-sync: center-ui-build center-ui-sync
 
-fleet-preview-up: gateway-preview-up
-	@$(MAKE) --no-print-directory center-preview-up
+fleet-preview-up:
+	@if [[ "$(CENTER_PROTECTED_PREVIEW)" == "1" ]]; then \
+		$(MAKE) --no-print-directory center-preview-up; \
+		$(MAKE) --no-print-directory gateway-preview-up; \
+	else \
+		$(MAKE) --no-print-directory gateway-preview-up; \
+		$(MAKE) --no-print-directory center-preview-up; \
+	fi
 
 fleet-preview-down: center-preview-down
 	@$(MAKE) --no-print-directory gateway-preview-down
@@ -714,10 +749,13 @@ gotestwaf:
 	if [ -f data/conf/proxy.json ]; then cp data/conf/proxy.json "$$backup"; had_proxy_seed=1; fi; \
 	trap 'if [ "$$had_proxy_seed" = "1" ]; then cp "$$backup" data/conf/proxy.json >/dev/null 2>&1 || true; else rm -f data/conf/proxy.json; fi; rm -f "$$backup"' EXIT; \
 	proxy_source="data/conf/proxy.json"; \
-	if [ ! -f "$$proxy_source" ]; then proxy_source="seeds/conf/proxy.json"; fi; \
 	mkdir -p data/conf; \
 	tmp_proxy="$$(mktemp)"; \
-	jq '.upstreams = [{"name":"gotestwaf-unreachable","url":"http://127.0.0.1:9081","weight":1,"enabled":true}]' "$$proxy_source" > "$$tmp_proxy"; \
+	if [ -f "$$proxy_source" ]; then \
+		jq '.upstreams = [{"name":"gotestwaf-unreachable","url":"http://127.0.0.1:9081","weight":1,"enabled":true}]' "$$proxy_source" > "$$tmp_proxy"; \
+	else \
+		jq '.domains.proxy | .upstreams = [{"name":"gotestwaf-unreachable","url":"http://127.0.0.1:9081","weight":1,"enabled":true}]' seeds/conf/config-bundle.json > "$$tmp_proxy"; \
+	fi; \
 	mv "$$tmp_proxy" data/conf/proxy.json; \
 	HOST_CORAZA_PORT="$(HOST_CORAZA_PORT)" WAF_LISTEN_PORT="$(WAF_LISTEN_PORT)" ./scripts/run_gotestwaf.sh
 

@@ -35,8 +35,16 @@ func AdminAuth() gin.HandlerFunc {
 }
 
 func AdminAuthWithResolver(resolver AdminAuthResolver) gin.HandlerFunc {
+	return adminAuthWithResolver(resolver, true)
+}
+
+func AdminAuthRequiredWithResolver(resolver AdminAuthResolver) gin.HandlerFunc {
+	return adminAuthWithResolver(resolver, false)
+}
+
+func adminAuthWithResolver(resolver AdminAuthResolver, allowDisabled bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if config.APIAuthDisable {
+		if allowDisabled && config.APIAuthDisable {
 			c.Next()
 			return
 		}

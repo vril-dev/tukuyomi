@@ -101,6 +101,17 @@ role:
 make install TARGET=linux-systemd INSTALL_ROLE=center
 ```
 
+To place Center behind a same-host Gateway front, use the protected Center
+role:
+
+```bash
+make install TARGET=linux-systemd INSTALL_ROLE=center-protected
+```
+
+This role enables Gateway IoT / Edge device authentication and locally
+bootstraps the matching Center approval. The Gateway private key remains in the
+Gateway DB; Center stores only the public identity.
+
 Gateway installs use the supervisor/worker runtime internally: the supervisor
 owns TCP listeners and activates the initial worker after readiness. Center is
 installed as a separate control-plane role and does not use the Gateway
@@ -136,6 +147,22 @@ By default, `make gateway-preview-up` uses an isolated preview SQLite DB and res
 that DB plus preview config files on each start. If you use
 `GATEWAY_PREVIEW_PERSIST=1`, preview-specific config and DB state are kept across
 `gateway-preview-down` / `gateway-preview-up`.
+
+For a local preview of the `INSTALL_ROLE=center-protected` topology, route
+Center through the Gateway preview:
+
+```bash
+CENTER_PROTECTED_PREVIEW=1 \
+GATEWAY_PREVIEW_PERSIST=1 \
+CENTER_PREVIEW_PERSIST=1 \
+make fleet-preview-up
+```
+
+Then open Center through Gateway at `http://localhost:9090/center-ui`.
+If a persistent Gateway preview DB already exists, protected routes are not
+reseeded; reset the Gateway preview DB or add the routes from `Proxy Rules`.
+Protected preview also bootstraps Gateway IoT / Edge mode and Center approval
+against the preview Center DB.
 
 ### Runtime Config Model
 

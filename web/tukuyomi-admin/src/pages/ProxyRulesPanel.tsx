@@ -559,7 +559,7 @@ export default function ProxyRulesPanel() {
               </NoticeBar>
             ) : null}
 
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <StatBox label="Upstreams" value={String(routingState.upstreams.length)} />
               <StatBox label="Backend pools" value={String(routingState.backendPools.length)} />
               <StatBox label="Routes" value={String(routingState.routes.length)} />

@@ -8,10 +8,17 @@ PREVIEW_BOOTSTRAP_CONFIG="${CENTER_PREVIEW_CONFIG:-conf/config.center-preview.js
 CENTER_PREVIEW_PORT_VALUE="${CENTER_PREVIEW_PORT:-9092}"
 CENTER_PREVIEW_CONTAINER_PORT_VALUE="${CENTER_PREVIEW_CONTAINER_PORT:-9090}"
 CENTER_PREVIEW_API_BASE_PATH_VALUE="${CENTER_PREVIEW_API_BASE_PATH:-/center-api}"
+CENTER_PREVIEW_GATEWAY_API_BASE_PATH_VALUE="${CENTER_PREVIEW_GATEWAY_API_BASE_PATH:-/center-api}"
 CENTER_PREVIEW_UI_BASE_PATH_VALUE="${CENTER_PREVIEW_UI_BASE_PATH:-/center-ui}"
+CENTER_PREVIEW_CLIENT_ALLOW_CIDRS_VALUE="${CENTER_PREVIEW_CLIENT_ALLOW_CIDRS:-}"
+CENTER_PREVIEW_MANAGE_API_ALLOW_CIDRS_VALUE="${CENTER_PREVIEW_MANAGE_API_ALLOW_CIDRS:-}"
+CENTER_PREVIEW_API_ALLOW_CIDRS_VALUE="${CENTER_PREVIEW_API_ALLOW_CIDRS:-}"
 CENTER_PREVIEW_DB_REL_VALUE="${CENTER_PREVIEW_DB_PATH:-db/tukuyomi-center-preview.db}"
 CENTER_PREVIEW_PERSIST_VALUE="${CENTER_PREVIEW_PERSIST:-0}"
 CENTER_PREVIEW_PROJECT_VALUE="${CENTER_PREVIEW_PROJECT:-tukuyomi-center-preview}"
+CENTER_PROTECTED_PREVIEW_VALUE="${CENTER_PROTECTED_PREVIEW:-0}"
+FLEET_PREVIEW_NETWORK_NAME_VALUE="${FLEET_PREVIEW_NETWORK_NAME:-tukuyomi-fleet-preview}"
+CENTER_PREVIEW_NETWORK_ALIAS_VALUE="${CENTER_PREVIEW_NETWORK_ALIAS:-center-preview}"
 PUID_VALUE="${PUID:-$(id -u)}"
 GUID_VALUE="${GUID:-$(id -g)}"
 
@@ -164,6 +171,37 @@ reset_center_preview_database() {
   rm -f "${db_paths[@]}"
 }
 
+center_protected_preview_enabled() {
+  [[ "$CENTER_PROTECTED_PREVIEW_VALUE" == "1" ]]
+}
+
+ensure_fleet_preview_network() {
+  if ! center_protected_preview_enabled; then
+    return
+  fi
+  docker network inspect "$FLEET_PREVIEW_NETWORK_NAME_VALUE" >/dev/null 2>&1 || docker network create "$FLEET_PREVIEW_NETWORK_NAME_VALUE" >/dev/null
+}
+
+center_preview_host_port_mapping() {
+  if center_protected_preview_enabled && [[ "$CENTER_PREVIEW_PORT_VALUE" != *:* ]]; then
+    printf '127.0.0.1:%s\n' "$CENTER_PREVIEW_PORT_VALUE"
+    return
+  fi
+  printf '%s\n' "$CENTER_PREVIEW_PORT_VALUE"
+}
+
+center_preview_host_url() {
+  if center_protected_preview_enabled; then
+    if [[ "$CENTER_PREVIEW_PORT_VALUE" == *:* ]]; then
+      printf 'http://%s\n' "$CENTER_PREVIEW_PORT_VALUE"
+    else
+      printf 'http://127.0.0.1:%s\n' "$CENTER_PREVIEW_PORT_VALUE"
+    fi
+    return
+  fi
+  printf 'http://localhost:%s\n' "$CENTER_PREVIEW_PORT_VALUE"
+}
+
 write_center_preview_override() {
   mkdir -p "$(dirname "$PREVIEW_OVERRIDE")"
   cat >"$PREVIEW_OVERRIDE" <<EOF
@@ -173,8 +211,21 @@ services:
     environment:
       - TUKUYOMI_CENTER_LISTEN_ADDR=:${CENTER_PREVIEW_CONTAINER_PORT_VALUE}
       - TUKUYOMI_CENTER_API_BASE_PATH=${CENTER_PREVIEW_API_BASE_PATH_VALUE}
+      - TUKUYOMI_CENTER_GATEWAY_API_BASE_PATH=${CENTER_PREVIEW_GATEWAY_API_BASE_PATH_VALUE}
       - TUKUYOMI_CENTER_UI_BASE_PATH=${CENTER_PREVIEW_UI_BASE_PATH_VALUE}
+      - TUKUYOMI_CENTER_CLIENT_ALLOW_CIDRS=${CENTER_PREVIEW_CLIENT_ALLOW_CIDRS_VALUE}
+      - TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS=${CENTER_PREVIEW_MANAGE_API_ALLOW_CIDRS_VALUE}
+      - TUKUYOMI_CENTER_API_ALLOW_CIDRS=${CENTER_PREVIEW_API_ALLOW_CIDRS_VALUE}
 EOF
+  if center_protected_preview_enabled; then
+    cat >>"$PREVIEW_OVERRIDE" <<EOF
+    networks:
+      default: {}
+      fleet-preview:
+        aliases:
+          - ${CENTER_PREVIEW_NETWORK_ALIAS_VALUE}
+EOF
+  fi
   if [[ -S /var/run/docker.sock ]]; then
     docker_sock_gid="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || true)"
     cat >>"$PREVIEW_OVERRIDE" <<EOF
@@ -188,6 +239,34 @@ EOF
 EOF
     fi
   fi
+  if center_protected_preview_enabled; then
+    cat >>"$PREVIEW_OVERRIDE" <<EOF
+networks:
+  fleet-preview:
+    external: true
+    name: ${FLEET_PREVIEW_NETWORK_NAME_VALUE}
+EOF
+  fi
+}
+
+run_center_preview_command() {
+  local command="$1"
+  shift || true
+  local bin="$ROOT_DIR/bin/tukuyomi"
+  local db_rel=""
+  if [[ ! -x "$bin" ]]; then
+    echo "[center-preview][ERROR] missing executable: $bin" >&2
+    return 1
+  fi
+  db_rel="$(center_preview_validate_data_path "$CENTER_PREVIEW_DB_REL_VALUE" "center preview db path")"
+  (
+    cd "$ROOT_DIR/data"
+    WAF_CONFIG_FILE="$PREVIEW_BOOTSTRAP_CONFIG" \
+    WAF_STORAGE_DB_DRIVER="sqlite" \
+    WAF_STORAGE_DB_DSN="" \
+    WAF_STORAGE_DB_PATH="$db_rel" \
+      "$bin" "$command" "$@"
+  )
 }
 
 run_center_preview_compose() {
@@ -203,7 +282,7 @@ run_center_preview_compose() {
   WAF_STORAGE_DB_PATH="data/$db_rel" \
   WAF_LISTEN_PORT="$CENTER_PREVIEW_CONTAINER_PORT_VALUE" \
   WAF_HEALTHCHECK_PORT="$CENTER_PREVIEW_CONTAINER_PORT_VALUE" \
-  CORAZA_PORT="$CENTER_PREVIEW_PORT_VALUE" \
+  CORAZA_PORT="$(center_preview_host_port_mapping)" \
     docker compose -f "$ROOT_DIR/docker-compose.yml" -f "$PREVIEW_OVERRIDE" "$action" "$@"
 }
 
@@ -212,14 +291,20 @@ cd "$ROOT_DIR"
 case "${1:-}" in
   up)
     write_center_preview_bootstrap_config
+    ensure_fleet_preview_network
     write_center_preview_override
     if [[ "$CENTER_PREVIEW_PERSIST_VALUE" != "1" ]]; then
       run_center_preview_compose down --remove-orphans >/dev/null 2>&1 || true
       reset_center_preview_database
     fi
+    run_center_preview_command db-migrate
     run_center_preview_compose up -d --build coraza
-    echo "[center-preview] center ui: http://localhost:${CENTER_PREVIEW_PORT_VALUE}${CENTER_PREVIEW_UI_BASE_PATH_VALUE}"
-    echo "[center-preview] center api: http://localhost:${CENTER_PREVIEW_PORT_VALUE}${CENTER_PREVIEW_API_BASE_PATH_VALUE}"
+    center_preview_base_url="$(center_preview_host_url)"
+    echo "[center-preview] center ui: ${center_preview_base_url}${CENTER_PREVIEW_UI_BASE_PATH_VALUE}"
+    echo "[center-preview] center api: ${center_preview_base_url}${CENTER_PREVIEW_API_BASE_PATH_VALUE}"
+    if center_protected_preview_enabled; then
+      echo "[center-preview] protected network alias: ${CENTER_PREVIEW_NETWORK_ALIAS_VALUE}:${CENTER_PREVIEW_CONTAINER_PORT_VALUE}"
+    fi
     if [[ "$CENTER_PREVIEW_PERSIST_VALUE" == "1" ]]; then
       echo "[center-preview] CENTER_PREVIEW_PERSIST=1 keeps preview DB state across down/up"
     else
@@ -227,6 +312,7 @@ case "${1:-}" in
     fi
     ;;
   down)
+    ensure_fleet_preview_network
     write_center_preview_override
     run_center_preview_compose down --remove-orphans >/dev/null 2>&1 || true
     rm -f "$PREVIEW_OVERRIDE"

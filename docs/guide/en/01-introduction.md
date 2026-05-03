@@ -152,7 +152,7 @@ Concretely, the configuration material is split as follows:
 - DB `waf_rule_assets`: base WAF and CRS rule / data assets.
 - DB `override_rules`: managed bypass rule bodies.
 - DB `php_runtime_*` / `psgi_runtime_*`: PHP-FPM / PSGI runtime inventory.
-- `seeds/conf/*.json`: bundled production seed for an empty DB.
+- `seeds/conf/config-bundle.json`: bundled production seed for an empty DB.
 - `data/conf/proxy.json`, `sites.json`, `upstream-runtime.json`,
   `scheduled-tasks.json` and similar: seed / import / export material.
 - `data/php-fpm/*.json`, `data/psgi/*.json`: seed / import / export material

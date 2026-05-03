@@ -54,6 +54,10 @@ func runMain(args []string) {
 		runScheduledTasksCommand()
 	case serverCommandUpdateCountryDB:
 		runUpdateCountryDBCommand()
+	case serverCommandBootstrapProtectedGateway:
+		runBootstrapCenterProtectedGatewayCommand(cmd.args)
+	case serverCommandBootstrapProtectedCenter:
+		runBootstrapCenterProtectedCenterCommand(cmd.args)
 	case serverCommandSupervisor:
 		if err := runSupervisorServer(); err != nil {
 			log.Fatalf("[SUPERVISOR][FATAL] %v", err)

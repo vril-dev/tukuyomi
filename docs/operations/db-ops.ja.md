@@ -32,9 +32,11 @@ make db-import-waf-rule-assets
 make db-import
 ```
 
-`make db-import` は先に `db-migrate` を実行し、その後にシード／エクスポート素材をバージョン管理された正規化済み DB テーブルへインポートします。`config.json` は組み込みデフォルト適用後の `app_config` シードとして読み込まれますが、同梱設定は意図的に `storage` のブートストラップブロックのみを保持します。`conf/proxy.json` などの設定済みランタイムファイルがあればそちらが優先され、無い場合は `seeds/conf/` の同梱本番シードを読み込んだうえで、互換デフォルトへフォールバックします。`sites`、`vhosts`、`scheduled_tasks`、`upstream_runtime`、PHP-FPM ランタイムインベントリなどのランタイムファイルは、それぞれの機能テーブルへインポートされます。インポート後は、それらの DB レコードを正として扱います。
+`make db-import` は先に `db-migrate` を実行し、その後にシード／エクスポート素材をバージョン管理された正規化済み DB テーブルへインポートします。`config.json` は組み込みデフォルト適用後の `app_config` シードとして読み込まれますが、同梱設定は意図的に `storage` のブートストラップブロックのみを保持します。`conf/proxy.json` などの設定済みランタイムファイルがあればそちらが優先され、無い場合は `seeds/conf/config-bundle.json` の同梱本番シードを読み込んだうえで、互換デフォルトへフォールバックします。`sites`、`vhosts`、`scheduled_tasks`、`upstream_runtime`、PHP-FPM/PSGI ランタイムインベントリなどのランタイムドメインは、それぞれの機能テーブルへインポートされます。インポート後は、それらの DB レコードを正として扱います。
 
-バンドルルート以外からインポートコマンドを実行する場合は、`WAF_DB_IMPORT_SEED_CONF_DIR` に `seeds/conf` ファイルが存在するディレクトリを指定してください。
+バンドルルート以外からインポートコマンドを実行する場合は、`WAF_DB_IMPORT_SEED_BUNDLE_FILE` に config bundle のパスを指定してください。
+
+Gateway Status の `Download config` は、この seed／restore 用 bundle format を出力します。この export は、署名付きステータスポーリングで Center へ送る config snapshot とは意図的に分けています。Center snapshot は fleet status payload であり、import seed ではありません。
 
 ## ドライバの選択
 
@@ -127,7 +129,7 @@ golang-migrate のスキーマバージョン管理テーブルです。`make db
 
 その他の設定済み JSON ／テキストファイルは、ランタイムストレージのバックエンドではありません。あくまで初期シード／インポート／エクスポート用のアーティファクトです。
 
-- 正規化済みドメインが存在しない場合は、現在のシード／エクスポートファイルから DB レコードをインポートします。設定済みファイルが存在しない場合は `seeds/conf/` を使用します
+- 正規化済みドメインが存在しない場合は、現在のシード／エクスポートファイルから DB レコードをインポートします。設定済みファイルが存在しない場合は `seeds/conf/config-bundle.json` を使用します
 - `app_config` が存在する場合は、初回 DB オープン後にそれを適用します。ただし DB 接続関連の項目は、ブートストラップ `config.json` の値を保持します
 - プロキシ、サイト、vhosts、スケジュールタスク、アップストリームランタイム、ポリシードメイン、WAF アセット、レスポンスキャッシュ、PHP-FPM インベントリは、JSON ファイルへ書き戻さず、DB のコンテンツを直接ランタイム状態へ読み込みます
 - 同期、パース、リロードに失敗した場合は、フォールバックせず起動を失敗させます

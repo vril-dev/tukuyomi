@@ -32,6 +32,14 @@ func RegisterAdminAuthRoutesAt(r *gin.Engine, apiBasePath string) {
 }
 
 func RegisterAdminAuthRoutesAtWithCookieNames(r *gin.Engine, apiBasePath string, cookieNames adminauth.CookieNames) {
+	registerAdminAuthRoutesAtWithCookieNames(r, apiBasePath, cookieNames, true)
+}
+
+func RegisterRequiredAdminAuthRoutesAtWithCookieNames(r *gin.Engine, apiBasePath string, cookieNames adminauth.CookieNames) {
+	registerAdminAuthRoutesAtWithCookieNames(r, apiBasePath, cookieNames, false)
+}
+
+func registerAdminAuthRoutesAtWithCookieNames(r *gin.Engine, apiBasePath string, cookieNames adminauth.CookieNames, allowDisabled bool) {
 	if r == nil {
 		return
 	}
@@ -44,13 +52,13 @@ func RegisterAdminAuthRoutesAtWithCookieNames(r *gin.Engine, apiBasePath string,
 		AdminAuthCookieNamesMiddleware(cookieNames),
 	)
 	api.GET("/auth/session", func(c *gin.Context) {
-		getAdminSession(c, cookieNames)
+		getAdminSession(c, cookieNames, allowDisabled)
 	})
 	api.POST("/auth/login", func(c *gin.Context) {
-		postAdminLogin(c, cookieNames)
+		postAdminLogin(c, cookieNames, allowDisabled)
 	})
 	api.POST("/auth/logout", func(c *gin.Context) {
-		postAdminLogout(c, cookieNames)
+		postAdminLogout(c, cookieNames, allowDisabled)
 	})
 }
 
@@ -81,12 +89,12 @@ func normalizeAdminAuthAPIBasePath(apiBasePath string) string {
 }
 
 func GetAdminSessionHandler(c *gin.Context) {
-	getAdminSession(c, adminauth.DefaultCookieNames())
+	getAdminSession(c, adminauth.DefaultCookieNames(), true)
 }
 
-func getAdminSession(c *gin.Context, cookieNames adminauth.CookieNames) {
+func getAdminSession(c *gin.Context, cookieNames adminauth.CookieNames, allowDisabled bool) {
 	cookieNames = cookieNames.Normalized()
-	if config.APIAuthDisable {
+	if allowDisabled && config.APIAuthDisable {
 		c.JSON(http.StatusOK, gin.H{
 			"authenticated":    true,
 			"mode":             "disabled",
@@ -130,12 +138,12 @@ func getAdminSession(c *gin.Context, cookieNames adminauth.CookieNames) {
 }
 
 func PostAdminLoginHandler(c *gin.Context) {
-	postAdminLogin(c, adminauth.DefaultCookieNames())
+	postAdminLogin(c, adminauth.DefaultCookieNames(), true)
 }
 
-func postAdminLogin(c *gin.Context, cookieNames adminauth.CookieNames) {
+func postAdminLogin(c *gin.Context, cookieNames adminauth.CookieNames, allowDisabled bool) {
 	cookieNames = cookieNames.Normalized()
-	if config.APIAuthDisable {
+	if allowDisabled && config.APIAuthDisable {
 		c.JSON(http.StatusOK, gin.H{
 			"ok":               true,
 			"authenticated":    true,
@@ -161,12 +169,12 @@ func postAdminLogin(c *gin.Context, cookieNames adminauth.CookieNames) {
 }
 
 func PostAdminLogoutHandler(c *gin.Context) {
-	postAdminLogout(c, adminauth.DefaultCookieNames())
+	postAdminLogout(c, adminauth.DefaultCookieNames(), true)
 }
 
-func postAdminLogout(c *gin.Context, cookieNames adminauth.CookieNames) {
+func postAdminLogout(c *gin.Context, cookieNames adminauth.CookieNames, allowDisabled bool) {
 	cookieNames = cookieNames.Normalized()
-	if !config.APIAuthDisable {
+	if !allowDisabled || !config.APIAuthDisable {
 		if store := getLogsStatsStore(); store != nil {
 			if token, presented := adminSessionTokenFromRequestWithCookieNames(c.Request, cookieNames); presented {
 				session, ok, err := store.authenticateAdminSessionRequestWithCookieNames(c.Request, token, time.Now().UTC(), cookieNames)

@@ -65,6 +65,13 @@ make install TARGET=linux-systemd
 make install TARGET=linux-systemd INSTALL_ROLE=center
 ```
 
+Center を同じホスト上の Gateway security front 経由で公開したい場合は、
+protected Center role を使います。
+
+```bash
+make install TARGET=linux-systemd INSTALL_ROLE=center-protected
+```
+
 主な override は次のように渡します。
 
 ```bash
@@ -96,21 +103,41 @@ systemd ユニット配置）だけです。
 
 ### 3.3.2　role ごとの挙動
 
-`INSTALL_ROLE=gateway` と `INSTALL_ROLE=center` で、対象になる成果物が変わります。
+`INSTALL_ROLE` で、ホストに入る形が変わります。
 
-| 対象 | gateway | center |
-|---|---|---|
-| service unit | `tukuyomi.service` | `tukuyomi-center.service` |
-| env file | `tukuyomi.env` | `tukuyomi-center.env` |
-| config | `conf/config.json` | `conf/config.center.json` |
-| WAF/CRS import | 実行する | 実行しない |
-| 初回 gateway DB seed | 実行する | 実行しない |
-| scheduled-task timer | 実行する | 実行しない |
-| DB migration | 実行する | 実行する |
+| 対象 | gateway | center | center-protected |
+|---|---|---|---|
+| service unit | `tukuyomi.service` | `tukuyomi-center.service` | 両方 |
+| env file | `tukuyomi.env` | `tukuyomi-center.env` | 両方 |
+| config | `conf/config.json` | `conf/config.center.json` | 両方 |
+| WAF/CRS import | 実行する | 実行しない | Gateway front 用に実行する |
+| 初回 gateway DB seed | 実行する | 実行しない | Center route 入りで実行する |
+| scheduled-task timer | 実行する | 実行しない | 実行しない |
+| DB migration | 実行する | 実行する | 両方の DB に実行する |
 
 Center 側は WAF/CRS import や scheduled tasks を持たない点がポイントです。
 Center は Gateway を承認・管理する control plane なので、edge データプレーンの
 資産は持ちません。
+
+`center-protected` は、Center を同一ホストの Gateway front の背後に置くための
+パッケージ済み role です。Center は loopback listener のまま動かし、Gateway
+front の初期 seed には `/center-ui` と `/center-api` を
+`http://127.0.0.1:9092` へ転送する path-scoped route を入れます。導入時には
+Gateway の IoT / Edge device authentication も有効化し、同じホスト上で Center
+承認済みの device として bootstrap します。Gateway の private key は Gateway DB
+にのみ残り、Center には public key identity だけが入ります。既存 DB に異なる
+device trust がある場合は、黙って置き換えず bootstrap を失敗させます。
+
+Center process 側の API path を非公開名にしたい場合は
+`INSTALL_CENTER_API_BASE_PATH` に内部 path を指定し、
+`INSTALL_CENTER_GATEWAY_API_BASE_PATH` は Gateway で公開する path のままにします。
+Gateway route は公開 path で match し、upstream へ渡すときに Center 側 path へ
+rewrite します。
+
+tukuyomi Gateway を前段に置かず Center を直接露出する場合は、送信元 IP allowlist
+を明示的に設定してください。Center UI client と Gateway/device API は既定では
+任意の送信元を許可します。管理 API は既定で loopback と private/local CIDR を
+許可します。この制御は `X-Forwarded-For` ではなく socket の送信元アドレスで判定します。
 
 ### 3.3.3　DB seed の挙動
 
@@ -267,9 +294,9 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
   です。
 - `conf/sites.json` は DB `sites` の任意 seed / import / export material です。
 - public release bundle は、`conf/config.json` と空 DB 向け runtime seed の
-  `seeds/conf/` を同梱します。
+  `seeds/conf/config-bundle.json` を同梱します。
 - `conf/proxy.json` や policy JSON など configured file が無いときは、
-  `make db-import` は `seeds/conf/` を読み、それも無ければ built-in 互換
+  `make db-import` は `seeds/conf/config-bundle.json` を読み、それも無ければ built-in 互換
   default に fallback します。
 - 既定の base WAF rule seed は、`make crs-install` が
   `seeds/waf/rules/tukuyomi.conf` から一時 stage して DB へ import します。
@@ -337,7 +364,7 @@ account email は任意です。HTTP-01 challenge を使うため、
 `server.tls.redirect_http=true` と `server.tls.http_redirect_addr=:80`、
 または同等の port 80 forwarding を用意してください。
 
-proxy engine 選択は、restart-required な DB `app_config` 設定です。
+proxy engine 設定は、現在 DB `app_config` 上で `tukuyomi_proxy` 固定です。
 
 ```json
 {
@@ -534,6 +561,11 @@ gateway sample ユニットは、`User=tukuyomi` のまま `AmbientCapabilities=
 です。Center ユニットは `tukuyomi center` を起動し、既定では low port bind
 capability を必要としません。
 
+Center 単体 listener の初期値は `tukuyomi-center.env` に置き、初回起動後は
+Center の `Settings` から編集できます。対象は Center listen address、API/UI
+base path、manual TLS の証明書／鍵 path です。listener と TLS の変更は
+`tukuyomi-center` の再起動後に反映されます。
+
 graceful binary replacement が必要な場合は、systemd の **socket activation**
 を推奨します。socket unit が public / admin / redirect / HTTP3 listener を
 保持するため、service process の shutdown / restart と、listener bind race を
@@ -621,9 +653,10 @@ process replacement をまたいでは維持されません。
   を使うのが通例なので、admin listener 用の追加 capability は不要です。
 - `admin.listen_addr` は port 分離だけを行います。到達可否は引き続き
   `admin.external_mode` と `admin.trusted_cidrs` で制御してください。
-- 最初の slice の split listener では、`admin.listen_addr` 側に built-in TLS
+- Gateway の split listener では、`admin.listen_addr` 側に built-in TLS
   はありません。trusted private network か、front proxy 側で TLS を terminate
-  する前提で運用してください。
+  する前提で運用してください。Center 単体には Center `Settings` 側に
+  manual TLS listener 設定があります。
 - `CAP_NET_BIND_SERVICE` は **low port bind 用だけ** の capability です。
   `php-fpm` を `www-data` など `tukuyomi` 以外の UID/GID へ切り替えるには、
   引き続き root 起動が必要です。

@@ -130,7 +130,15 @@ type EnrollmentTokenCreateResponse = {
   record?: EnrollmentTokenRecord;
 };
 
+type CenterSettingsResponse = {
+  config?: {
+    enrollment_token_default_max_uses?: number;
+    enrollment_token_default_ttl_seconds?: number;
+  };
+};
+
 const DEFAULT_ENROLLMENT_TOKEN_MAX_USES = 10;
+const SECONDS_PER_DAY = 24 * 60 * 60;
 const CONFIG_SNAPSHOT_PAGE_SIZE = 6;
 
 function formatUnixTime(value: number, locale: string) {
@@ -163,11 +171,30 @@ function datetimeLocalToUnix(value: string) {
 }
 
 function boundedMaxUses(value: string) {
+  if (!value.trim()) {
+    return 0;
+  }
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    return DEFAULT_ENROLLMENT_TOKEN_MAX_USES;
+    return 0;
   }
   return Math.min(parsed, 1000000);
+}
+
+function normalizeTokenDefaults(settings: CenterSettingsResponse) {
+  const maxUses = Number(settings.config?.enrollment_token_default_max_uses);
+  const ttlSeconds = Number(settings.config?.enrollment_token_default_ttl_seconds);
+  return {
+    maxUses: Number.isFinite(maxUses) && maxUses > 0 ? Math.min(maxUses, 1000000) : DEFAULT_ENROLLMENT_TOKEN_MAX_USES,
+    ttlSeconds: Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? ttlSeconds : 0,
+  };
+}
+
+function tokenDefaultTTLLabel(seconds: number, tx: (key: string, vars?: Record<string, string | number>) => string) {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return tx("no expiration");
+  }
+  return tx("{count} days", { count: Math.ceil(seconds / SECONDS_PER_DAY) });
 }
 
 function tokenEffectiveStatus(token: EnrollmentTokenRecord) {
@@ -263,6 +290,7 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
   const [tokenMessageTone, setTokenMessageTone] = useState<"success" | "error">("success");
   const [showHiddenTokens, setShowHiddenTokens] = useState(false);
   const [showArchivedDevices, setShowArchivedDevices] = useState(false);
+  const [tokenDefaults, setTokenDefaults] = useState({ maxUses: DEFAULT_ENROLLMENT_TOKEN_MAX_USES, ttlSeconds: 0 });
   const [configSnapshots, setConfigSnapshots] = useState<DeviceConfigSnapshotRecord[]>([]);
   const [configSnapshotOffset, setConfigSnapshotOffset] = useState(0);
   const [configSnapshotNextOffset, setConfigSnapshotNextOffset] = useState(0);
@@ -271,7 +299,7 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
   const [configSnapshotViewer, setConfigSnapshotViewer] = useState<{ revision: string; payload: string } | null>(null);
   const [tokenForm, setTokenForm] = useState({
     label: "",
-    maxUses: String(DEFAULT_ENROLLMENT_TOKEN_MAX_USES),
+    maxUses: "",
     expiresAt: "",
   });
 
@@ -280,14 +308,16 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
     setMessage("");
     try {
       const deviceListPath = showArchivedDevices || selectedDeviceID ? "/devices?include_archived=1" : "/devices";
-      const [enrollmentData, tokenData, deviceData] = await Promise.all([
+      const [enrollmentData, tokenData, deviceData, settingsData] = await Promise.all([
         apiGetJson<EnrollmentListResponse>("/devices/enrollments?status=pending&limit=50"),
         apiGetJson<EnrollmentTokenListResponse>("/enrollment-tokens?limit=500"),
         apiGetJson<DeviceListResponse>(deviceListPath),
+        apiGetJson<CenterSettingsResponse>("/settings"),
       ]);
       setEnrollments(Array.isArray(enrollmentData.enrollments) ? enrollmentData.enrollments : []);
       setTokens(Array.isArray(tokenData.tokens) ? tokenData.tokens : []);
       setDevices(Array.isArray(deviceData.devices) ? deviceData.devices : []);
+      setTokenDefaults(normalizeTokenDefaults(settingsData));
     } catch (err) {
       const fallback = tx("Failed to load device approvals");
       setMessage(err instanceof Error ? err.message || fallback : fallback);
@@ -349,6 +379,24 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
     }
     void loadConfigSnapshots(managedDeviceID, configSnapshotOffset);
   }, [managedDeviceID, configSnapshotOffset, loadConfigSnapshots]);
+
+  useEffect(() => {
+    if (!configSnapshotViewer) {
+      return;
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setConfigSnapshotViewer(null);
+      }
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [configSnapshotViewer]);
 
   async function viewConfigSnapshot(deviceID: string, revision: string) {
     setConfigSnapshotMessage("");
@@ -517,23 +565,24 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
 
   if (selectedDeviceID) {
     return (
-      <div className="content-panel">
-        <section className="content-section device-detail-page">
-          <div className="section-header">
-            <div>
-              <h2 className="section-title">{tx("Device actions")}</h2>
-              <p className="section-note device-detail-id">{selectedDeviceID}</p>
-              {loading ? <p className="section-note">{tx("Loading device details...")}</p> : null}
-            </div>
-            <button type="button" className="secondary" onClick={closeDeviceActions}>
-              {tx("Back to registered devices")}
-            </button>
+      <div className="content-section rules-page device-detail-page">
+        <div className="section-header">
+          <div>
+            <h2>{tx("Device Status")}</h2>
+            <p className="section-note device-detail-id">{selectedDeviceID}</p>
+            {loading ? <p className="section-note">{tx("Loading device details...")}</p> : null}
           </div>
-          {message ? <p className="form-message error">{message}</p> : null}
-          {!loading && !managedDevice ? <div className="empty">{tx("Device not found.")}</div> : null}
-          {managedDevice ? (
-            <>
-              <div className="summary-grid">
+          <button type="button" className="secondary" onClick={closeDeviceActions}>
+            {tx("Back to registered devices")}
+          </button>
+        </div>
+        {message ? <p className="form-message error">{message}</p> : null}
+        {!loading && !managedDevice ? <div className="empty">{tx("Device not found.")}</div> : null}
+        {managedDevice ? (
+          <>
+            <section className="device-detail-section">
+              <h3>{tx("Device actions")}</h3>
+              <div className="summary-grid rules-summary-grid">
                 <div>
                   <span>{tx("Status")}</span>
                   <strong>{tx(managedDevice.status || "-")}</strong>
@@ -575,7 +624,8 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                   </button>
                 ) : null}
               </div>
-              <div className="device-detail-section">
+            </section>
+              <section className="device-detail-section">
                 <div className="device-detail-section-header">
                   <div>
                     <h3>{tx("Platform details")}</h3>
@@ -607,8 +657,8 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                     <strong title={managedDevice.kernel_version || undefined}>{managedDevice.kernel_version || "-"}</strong>
                   </div>
                 </div>
-              </div>
-              <div className="device-detail-section">
+              </section>
+              <section className="device-detail-section">
                 <div className="device-detail-section-header">
                   <div>
                     <h3>{tx("Config snapshots")}</h3>
@@ -675,24 +725,41 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                   </div>
                 </div>
                 {configSnapshotMessage ? <p className="form-message error">{configSnapshotMessage}</p> : null}
-                {configSnapshotViewer ? (
-                  <div className="snapshot-viewer">
-                    <div className="device-detail-section-header">
-                      <div>
-                        <h3>{tx("Config JSON")}</h3>
-                        <p className="section-note">R: {shortRevision(configSnapshotViewer.revision)}</p>
-                      </div>
-                      <button type="button" className="secondary" onClick={() => setConfigSnapshotViewer(null)}>
-                        {tx("Close")}
-                      </button>
-                    </div>
-                    <pre>{configSnapshotViewer.payload}</pre>
-                  </div>
-                ) : null}
-              </div>
+              </section>
             </>
           ) : null}
-        </section>
+        {configSnapshotViewer ? (
+          <div
+            className="config-snapshot-modal-backdrop"
+            role="presentation"
+            onMouseDown={() => setConfigSnapshotViewer(null)}
+          >
+            <div
+              className="config-snapshot-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="config-snapshot-modal-title"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <div className="device-detail-section-header">
+                <div>
+                  <h3 id="config-snapshot-modal-title">{tx("Config JSON")}</h3>
+                  <p className="section-note">R: {shortRevision(configSnapshotViewer.revision)}</p>
+                </div>
+                <button type="button" className="secondary" onClick={() => setConfigSnapshotViewer(null)}>
+                  {tx("Close")}
+                </button>
+              </div>
+              <textarea
+                className="rules-json-editor config-snapshot-json"
+                value={configSnapshotViewer.payload}
+                readOnly
+                spellCheck={false}
+                aria-label={tx("Config JSON")}
+              />
+            </div>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -733,8 +800,10 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                 max={1000000}
                 value={tokenForm.maxUses}
                 onChange={(event) => setTokenForm((current) => ({ ...current, maxUses: event.target.value }))}
+                placeholder={String(tokenDefaults.maxUses)}
                 disabled={tokenSaving}
               />
+              <span className="field-hint">{tx("Settings default: {value}", { value: tokenDefaults.maxUses })}</span>
             </label>
             <label>
               <span>{tx("Expires at")}</span>
@@ -744,7 +813,9 @@ export default function DeviceApprovalsPage({ focusApprovals = false }: { focusA
                 onChange={(event) => setTokenForm((current) => ({ ...current, expiresAt: event.target.value }))}
                 disabled={tokenSaving}
               />
-              <span className="field-hint">{tx("Leave blank for no expiration.")}</span>
+              <span className="field-hint">
+                {tx("Settings default: {value}", { value: tokenDefaultTTLLabel(tokenDefaults.ttlSeconds, tx) })}
+              </span>
             </label>
           </div>
           <div className="form-footer">

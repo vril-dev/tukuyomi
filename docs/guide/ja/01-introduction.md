@@ -147,7 +147,7 @@ ON にする optional な機能です。詳細は第16章で扱います。
 - DB `waf_rule_assets`：base WAF と CRS の rule / data asset
 - DB `override_rules`：managed bypass の rule body
 - DB `php_runtime_*` / `psgi_runtime_*`：PHP-FPM / PSGI runtime の inventory
-- `seeds/conf/*.json`：空 DB 向けに同梱される本番 seed set
+- `seeds/conf/config-bundle.json`：空 DB 向けに同梱される本番 seed
 - `data/conf/proxy.json`、`sites.json`、`upstream-runtime.json`、
   `scheduled-tasks.json` など：seed / import / export の素材
 - `data/php-fpm/*.json`、`data/psgi/*.json`：PHP-FPM / PSGI 用の seed / import /

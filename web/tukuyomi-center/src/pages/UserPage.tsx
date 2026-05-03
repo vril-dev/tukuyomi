@@ -129,112 +129,116 @@ export default function UserPage({ onPasswordChanged }: { onPasswordChanged: () 
   }
 
   if (loading) {
-    return <div className="w-full p-4 text-neutral-500">{tx("Loading user...")}</div>;
+    return (
+      <div className="content-panel">
+        <section className="content-section">
+          <p className="section-note">{tx("Loading user...")}</p>
+        </section>
+      </div>
+    );
   }
 
   return (
-    <div className="w-full p-4 space-y-4">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">{tx("User")}</h1>
+    <div className="content-panel user-page">
+      <section className="content-section">
+        <div className="section-header">
+          <div>
+            <h2 className="section-title">{tx("User")}</h2>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-          <span className="rounded bg-neutral-100 px-2 py-1">
-            {tx("user")}: {account?.username || "-"}
-          </span>
-          <span className="rounded bg-neutral-100 px-2 py-1">
-            {tx("role")}: {account?.role || "-"}
-          </span>
-          {account?.must_change_password || session.must_change_password ? (
-            <span className="rounded bg-amber-100 px-2 py-1 text-amber-900">{tx("Password change required")}</span>
-          ) : null}
+        <div className="summary-grid rules-summary-grid">
+          <div>
+            <span>{tx("user")}</span>
+            <strong>{account?.username || "-"}</strong>
+          </div>
+          <div>
+            <span>{tx("role")}</span>
+            <strong>{account?.role || "-"}</strong>
+          </div>
+          <div>
+            <span>{tx("Password")}</span>
+            <strong>{account?.must_change_password || session.must_change_password ? tx("Password change required") : tx("current")}</strong>
+          </div>
         </div>
-      </header>
 
-      {account?.must_change_password || session.must_change_password ? (
-        <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          {tx("Change the initial password before continuing.")}
+        {account?.must_change_password || session.must_change_password ? (
+          <p className="form-message warning">{tx("Change the initial password before continuing.")}</p>
+        ) : null}
+
+        {loadError ? <p className="form-message error">{loadError}</p> : null}
+
+        <div className="device-detail-section">
+          <h3>{tx("Account")}</h3>
+          <form onSubmit={onSaveAccount}>
+            <div className="grid gap-3 md:grid-cols-2">
+              <UserField label={tx("Username")}>
+                <input
+                  value={accountForm.username}
+                  onChange={(event) => setAccountForm((current) => ({ ...current, username: event.target.value }))}
+                  autoComplete="username"
+                  disabled={accountSaving}
+                  required
+                />
+              </UserField>
+              <UserField label={tx("Email")}>
+                <input
+                  value={accountForm.email}
+                  onChange={(event) => setAccountForm((current) => ({ ...current, email: event.target.value }))}
+                  autoComplete="email"
+                  disabled={accountSaving}
+                />
+              </UserField>
+              <UserField label={tx("Current password")} hint={tx("Required to save account changes.")}>
+                <input
+                  type="password"
+                  value={accountForm.currentPassword}
+                  onChange={(event) => setAccountForm((current) => ({ ...current, currentPassword: event.target.value }))}
+                  autoComplete="current-password"
+                  disabled={accountSaving}
+                />
+              </UserField>
+            </div>
+            <div className="form-footer">
+              <button type="submit" disabled={accountSaving}>
+                {accountSaving ? tx("Saving...") : tx("Save Account")}
+              </button>
+              <FormMessage feedback={accountFeedback} />
+            </div>
+          </form>
         </div>
-      ) : null}
 
-      {loadError ? <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">{loadError}</div> : null}
-
-      <section className="rounded-lg border border-neutral-200 bg-white p-4">
-        <form onSubmit={onSaveAccount} className="space-y-3">
-          <div className="text-sm font-medium">{tx("Account")}</div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <UserField label={tx("Username")}>
-              <input
-                value={accountForm.username}
-                onChange={(event) => setAccountForm((current) => ({ ...current, username: event.target.value }))}
-                className="w-full rounded border border-neutral-200 bg-white"
-                autoComplete="username"
-                disabled={accountSaving}
-                required
-              />
-            </UserField>
-            <UserField label={tx("Email")}>
-              <input
-                value={accountForm.email}
-                onChange={(event) => setAccountForm((current) => ({ ...current, email: event.target.value }))}
-                className="w-full rounded border border-neutral-200 bg-white"
-                autoComplete="email"
-                disabled={accountSaving}
-              />
-            </UserField>
-            <UserField label={tx("Current password")} hint={tx("Required to save account changes.")}>
-              <input
-                type="password"
-                value={accountForm.currentPassword}
-                onChange={(event) => setAccountForm((current) => ({ ...current, currentPassword: event.target.value }))}
-                className="w-full rounded border border-neutral-200 bg-white"
-                autoComplete="current-password"
-                disabled={accountSaving}
-              />
-            </UserField>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button type="submit" disabled={accountSaving}>
-              {accountSaving ? tx("Saving...") : tx("Save Account")}
-            </button>
-          </div>
-          <FormMessage feedback={accountFeedback} />
-        </form>
-      </section>
-
-      <section className="rounded-lg border border-neutral-200 bg-white p-4">
-        <form onSubmit={onChangePassword} className="space-y-3">
-          <div className="text-sm font-medium">{tx("Change Password")}</div>
-          <input className="visually-hidden" value={account?.username || ""} readOnly autoComplete="username" tabIndex={-1} />
-          <div className="grid gap-3 md:grid-cols-2">
-            <UserField label={tx("Current password")}>
-              <input
-                type="password"
-                value={passwordForm.currentPassword}
-                onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))}
-                className="w-full rounded border border-neutral-200 bg-white"
-                autoComplete="current-password"
-                disabled={passwordSaving}
-              />
-            </UserField>
-            <UserField label={tx("New password")} hint={tx("12 characters minimum.")}>
-              <input
-                type="password"
-                value={passwordForm.newPassword}
-                onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))}
-                className="w-full rounded border border-neutral-200 bg-white"
-                autoComplete="new-password"
-                disabled={passwordSaving}
-              />
-            </UserField>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button type="submit" disabled={passwordSaving}>
-              {passwordSaving ? tx("Saving...") : tx("Change Password")}
-            </button>
-          </div>
-          <FormMessage feedback={passwordFeedback} />
-        </form>
+        <div className="device-detail-section">
+          <h3>{tx("Change Password")}</h3>
+          <form onSubmit={onChangePassword}>
+            <input className="visually-hidden" value={account?.username || ""} readOnly autoComplete="username" tabIndex={-1} />
+            <div className="grid gap-3 md:grid-cols-2">
+              <UserField label={tx("Current password")}>
+                <input
+                  type="password"
+                  value={passwordForm.currentPassword}
+                  onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))}
+                  autoComplete="current-password"
+                  disabled={passwordSaving}
+                />
+              </UserField>
+              <UserField label={tx("New password")} hint={tx("12 characters minimum.")}>
+                <input
+                  type="password"
+                  value={passwordForm.newPassword}
+                  onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))}
+                  autoComplete="new-password"
+                  disabled={passwordSaving}
+                />
+              </UserField>
+            </div>
+            <div className="form-footer">
+              <button type="submit" disabled={passwordSaving}>
+                {passwordSaving ? tx("Saving...") : tx("Change Password")}
+              </button>
+              <FormMessage feedback={passwordFeedback} />
+            </div>
+          </form>
+        </div>
       </section>
     </div>
   );
@@ -250,10 +254,10 @@ function UserField({
   children: ReactNode;
 }) {
   return (
-    <label className="block space-y-1">
-      <span className="block text-xs text-neutral-600">{label}</span>
+    <label className="user-field">
+      <span>{label}</span>
       {children}
-      {hint ? <span className="block text-[11px] text-neutral-500">{hint}</span> : null}
+      {hint ? <span className="field-hint">{hint}</span> : null}
     </label>
   );
 }
@@ -262,15 +266,9 @@ function FormMessage({ feedback }: { feedback: FormFeedback | null }) {
   if (!feedback) {
     return null;
   }
-  const toneClass =
-    feedback.tone === "error"
-      ? "border-red-300 bg-red-50 text-red-900"
-      : feedback.tone === "success"
-        ? "border-green-300 bg-green-50 text-green-900"
-        : "border-blue-300 bg-blue-50 text-blue-900";
   return (
-    <div className={`rounded-md border px-3 py-2 text-xs ${toneClass}`} role={feedback.tone === "error" ? "alert" : "status"}>
+    <span className={`form-message ${feedback.tone}`} role={feedback.tone === "error" ? "alert" : "status"}>
       {feedback.message}
-    </div>
+    </span>
   );
 }

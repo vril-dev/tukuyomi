@@ -1285,11 +1285,11 @@ export default function OptionsPanel() {
                       <div className="text-xs text-neutral-500">{tx("Stopped At")}</div>
                       <div>{process?.stopped_at || "-"}</div>
                     </div>
-                    <div className="md:col-span-2">
+                    <div>
                       <div className="text-xs text-neutral-500">{tx("Generated Targets")}</div>
                       <code className="break-all">{generatedTargets.length > 0 ? generatedTargets.join(", ") : "-"}</code>
                     </div>
-                    <div className="md:col-span-2">
+                    <div>
                       <div className="text-xs text-neutral-500">{tx("Config File")}</div>
                       <code className="break-all">{process?.config_file || materializedEntry?.config_file || "-"}</code>
                     </div>

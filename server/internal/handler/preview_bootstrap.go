@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 )
 
 const previewDefaultProxyConfigRaw = "{}\n"
+const previewProxySeedFromStartupEnv = "TUKUYOMI_PREVIEW_PROXY_SEED_FROM_STARTUP"
 
 type PreviewBootstrapOptions struct {
 	PublicListenAddr string
@@ -97,7 +99,11 @@ func ImportPreviewConfigStorage(opts PreviewBootstrapOptions) error {
 	}
 	_ = store.DeleteConfigBlob(scheduledTaskConfigBlobKey)
 
-	proxyPrepared, err := prepareProxyRulesRawWithSitesAndVhosts(previewDefaultProxyConfigRaw, sitePrepared.cfg, vhostPrepared.cfg)
+	proxyRaw, err := previewProxyConfigRaw()
+	if err != nil {
+		return err
+	}
+	proxyPrepared, err := prepareProxyRulesRawWithSitesAndVhosts(proxyRaw, sitePrepared.cfg, vhostPrepared.cfg)
 	if err != nil {
 		return err
 	}
@@ -122,6 +128,20 @@ func ImportPreviewConfigStorage(opts PreviewBootstrapOptions) error {
 		return err
 	}
 	return nil
+}
+
+func previewProxyConfigRaw() (string, error) {
+	if strings.TrimSpace(os.Getenv(previewProxySeedFromStartupEnv)) != "1" {
+		return previewDefaultProxyConfigRaw, nil
+	}
+	raw, found, err := readStartupSeedConfFile(startupProxySeedName)
+	if err != nil {
+		return "", fmt.Errorf("read preview proxy seed: %w", err)
+	}
+	if !found || strings.TrimSpace(string(raw)) == "" {
+		return previewDefaultProxyConfigRaw, nil
+	}
+	return string(raw), nil
 }
 
 func importPreviewPolicyConfigStorage() error {
@@ -172,6 +192,15 @@ func previewDefaultCacheRulesPolicyRaw() (string, error) {
 }
 
 func previewDefaultBypassPolicyRaw() (string, error) {
+	if strings.TrimSpace(os.Getenv(previewProxySeedFromStartupEnv)) == "1" {
+		raw, found, err := readStartupSeedConfFile(startupPolicySeedName(bypassConfigBlobKey))
+		if err != nil {
+			return "", fmt.Errorf("read preview bypass seed: %w", err)
+		}
+		if found && strings.TrimSpace(string(raw)) != "" {
+			return string(raw), nil
+		}
+	}
 	raw, err := bypassconf.MarshalJSON(bypassconf.File{Default: bypassconf.Scope{Entries: []bypassconf.Entry{}}})
 	if err != nil {
 		return "", err

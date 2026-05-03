@@ -11,6 +11,16 @@ GUID_VALUE="${GUID:-$(id -g)}"
 GATEWAY_PREVIEW_PERSIST_VALUE="${GATEWAY_PREVIEW_PERSIST:-0}"
 GATEWAY_PREVIEW_PUBLIC_ADDR_VALUE="${GATEWAY_PREVIEW_PUBLIC_ADDR:-}"
 GATEWAY_PREVIEW_ADMIN_ADDR_VALUE="${GATEWAY_PREVIEW_ADMIN_ADDR:-}"
+CENTER_PROTECTED_PREVIEW_VALUE="${CENTER_PROTECTED_PREVIEW:-0}"
+FLEET_PREVIEW_NETWORK_NAME_VALUE="${FLEET_PREVIEW_NETWORK_NAME:-tukuyomi-fleet-preview}"
+CENTER_PREVIEW_NETWORK_ALIAS_VALUE="${CENTER_PREVIEW_NETWORK_ALIAS:-center-preview}"
+CENTER_PREVIEW_CONTAINER_PORT_VALUE="${CENTER_PREVIEW_CONTAINER_PORT:-9090}"
+CENTER_PREVIEW_CONFIG_VALUE="${CENTER_PREVIEW_CONFIG:-conf/config.center-preview.json}"
+CENTER_PREVIEW_DB_REL_VALUE="${CENTER_PREVIEW_DB_PATH:-db/tukuyomi-center-preview.db}"
+GATEWAY_PREVIEW_CENTER_UPSTREAM_URL_VALUE="${GATEWAY_PREVIEW_CENTER_UPSTREAM_URL:-http://${CENTER_PREVIEW_NETWORK_ALIAS_VALUE}:${CENTER_PREVIEW_CONTAINER_PORT_VALUE}}"
+CENTER_PROTECTED_GATEWAY_API_BASE_PATH_VALUE="${CENTER_PROTECTED_GATEWAY_API_BASE_PATH:-${CENTER_PREVIEW_GATEWAY_API_BASE_PATH:-/center-api}}"
+CENTER_PROTECTED_CENTER_API_BASE_PATH_VALUE="${CENTER_PROTECTED_CENTER_API_BASE_PATH:-${CENTER_PREVIEW_API_BASE_PATH:-/center-api}}"
+CENTER_PROTECTED_CENTER_UI_BASE_PATH_VALUE="${CENTER_PROTECTED_CENTER_UI_BASE_PATH:-${CENTER_PREVIEW_UI_BASE_PATH:-/center-ui}}"
 
 preview_config_host_path() {
   local config_ref="$1"
@@ -160,6 +170,26 @@ preview_db_container_path() {
   printf 'data/%s\n' "$preview_db_rel"
 }
 
+preview_validate_data_path() {
+  local ref="$1"
+  local label="$2"
+  python3 - "$ref" "$label" <<'PY'
+import pathlib
+import sys
+
+ref = str(sys.argv[1]).strip()
+label = str(sys.argv[2]).strip()
+if not ref:
+    raise SystemExit(f"{label} is empty")
+path = pathlib.PurePosixPath(ref)
+if path.is_absolute():
+    raise SystemExit(f"{label} must be relative: {ref}")
+if any(part in ("", ".", "..") for part in path.parts):
+    raise SystemExit(f"{label} contains unsafe path segment: {ref}")
+print(path.as_posix())
+PY
+}
+
 cleanup_legacy_preview_artifacts() {
   rm -f \
     "$ROOT_DIR/data/conf/config.ui-preview.json" \
@@ -219,10 +249,147 @@ reset_preview_database() {
   rm -f "${db_paths[@]}"
 }
 
+center_protected_preview_enabled() {
+  [[ "$CENTER_PROTECTED_PREVIEW_VALUE" == "1" ]]
+}
+
+ensure_fleet_preview_network() {
+  if ! center_protected_preview_enabled; then
+    return
+  fi
+  docker network inspect "$FLEET_PREVIEW_NETWORK_NAME_VALUE" >/dev/null 2>&1 || docker network create "$FLEET_PREVIEW_NETWORK_NAME_VALUE" >/dev/null
+}
+
 preview_database_exists() {
   local db_paths=()
   mapfile -t db_paths < <(preview_db_host_paths)
   [[ "${#db_paths[@]}" -gt 0 && -f "${db_paths[0]}" ]]
+}
+
+protected_preview_seed_bundle_path() {
+  printf '%s\n' "$ROOT_DIR/.tmp/gateway-preview/center-protected-config-bundle.json"
+}
+
+preview_seed_bundle_file() {
+  if center_protected_preview_enabled; then
+    protected_preview_seed_bundle_path
+    return
+  fi
+  printf '%s\n' "$ROOT_DIR/seeds/conf/config-bundle.json"
+}
+
+preview_proxy_seed_from_startup() {
+  if center_protected_preview_enabled; then
+    printf '1\n'
+    return
+  fi
+  printf '0\n'
+}
+
+write_center_protected_seed_bundle() {
+  if ! center_protected_preview_enabled; then
+    return
+  fi
+  local src="$ROOT_DIR/seeds/conf/config-bundle.json"
+  local dst=""
+  dst="$(protected_preview_seed_bundle_path)"
+  mkdir -p "$(dirname "$dst")"
+  python3 - "$src" "$dst" "$GATEWAY_PREVIEW_CENTER_UPSTREAM_URL_VALUE" "$CENTER_PROTECTED_GATEWAY_API_BASE_PATH_VALUE" "$CENTER_PROTECTED_CENTER_API_BASE_PATH_VALUE" "$CENTER_PROTECTED_CENTER_UI_BASE_PATH_VALUE" <<'PY'
+import json
+import pathlib
+import posixpath
+import sys
+
+src = pathlib.Path(sys.argv[1])
+dst = pathlib.Path(sys.argv[2])
+upstream_url = str(sys.argv[3]).strip()
+if not upstream_url:
+    raise SystemExit("center upstream URL is empty")
+
+def normalize_base_path(label, raw, fallback):
+    value = str(raw).strip() or fallback
+    if not value.startswith("/"):
+        value = "/" + value
+    if any(part in (".", "..") for part in value.split("/")):
+        raise SystemExit(f"{label} must not contain dot segments")
+    value = posixpath.normpath(value)
+    if value == "/" or "*" in value:
+        raise SystemExit(f"{label} must be a non-root absolute path")
+    return value
+
+gateway_api_base = normalize_base_path("gateway API base path", sys.argv[4], "/center-api")
+center_api_base = normalize_base_path("center API base path", sys.argv[5], "/center-api")
+center_ui_base = normalize_base_path("center UI base path", sys.argv[6], "/center-ui")
+if gateway_api_base == center_ui_base or center_api_base == center_ui_base:
+    raise SystemExit("center API paths and UI base path must differ")
+with src.open(encoding="utf-8") as fh:
+    bundle = json.load(fh)
+if not isinstance(bundle, dict):
+    raise SystemExit("config bundle root must be an object")
+domains = bundle.setdefault("domains", {})
+if not isinstance(domains, dict):
+    raise SystemExit("config bundle domains must be an object")
+proxy = domains.get("proxy")
+if not isinstance(proxy, dict):
+    proxy = {}
+proxy["upstreams"] = [
+    {
+        "enabled": True,
+        "name": "center",
+        "url": upstream_url,
+        "weight": 1,
+    }
+]
+proxy["backend_pools"] = []
+api_action = {"upstream": "center"}
+if gateway_api_base != center_api_base:
+    api_action["path_rewrite"] = {"prefix": center_api_base}
+proxy["routes"] = [
+    {
+        "name": "center-api",
+        "priority": 10,
+        "match": {"path": {"type": "prefix", "value": gateway_api_base}},
+        "action": api_action,
+    },
+    {
+        "name": "center-ui",
+        "priority": 20,
+        "match": {"path": {"type": "prefix", "value": center_ui_base}},
+        "action": {"upstream": "center"},
+    },
+]
+proxy["default_route"] = None
+proxy["health_check_path"] = "/healthz"
+domains["proxy"] = proxy
+waf_bypass = domains.get("waf_bypass")
+protected_bypass_paths = {gateway_api_base, center_api_base, center_ui_base}
+
+def keep_bypass_entry(entry):
+    if not isinstance(entry, dict):
+        return True
+    if str(entry.get("extra_rule", "")).strip():
+        return True
+    return str(entry.get("path", "")).strip().rstrip("/") not in protected_bypass_paths
+
+if isinstance(waf_bypass, dict):
+    scopes = []
+    default_bypass = waf_bypass.get("default")
+    if isinstance(default_bypass, dict):
+        scopes.append(default_bypass)
+    hosts = waf_bypass.get("hosts")
+    if isinstance(hosts, dict):
+        scopes.extend(scope for scope in hosts.values() if isinstance(scope, dict))
+    for scope in scopes:
+        entries = scope.get("entries")
+        if isinstance(entries, list):
+            scope["entries"] = [entry for entry in entries if keep_bypass_entry(entry)]
+bundle["source"] = "center-protected-preview-seed"
+tmp = dst.with_name(dst.name + ".tmp")
+with tmp.open("w", encoding="utf-8") as fh:
+    json.dump(bundle, fh, indent=2, sort_keys=True)
+    fh.write("\n")
+tmp.replace(dst)
+PY
 }
 
 ensure_preview_runtime_dirs() {
@@ -242,7 +409,9 @@ run_preview_command() {
   (
     cd "$ROOT_DIR/data"
     WAF_CONFIG_FILE="$PREVIEW_BOOTSTRAP_CONFIG" \
+    WAF_DB_IMPORT_SEED_BUNDLE_FILE="$(preview_seed_bundle_file)" \
     WAF_DB_IMPORT_SEED_CONF_DIR="$ROOT_DIR/seeds/conf" \
+    TUKUYOMI_PREVIEW_PROXY_SEED_FROM_STARTUP="$(preview_proxy_seed_from_startup)" \
     WAF_STORAGE_DB_DRIVER="sqlite" \
     WAF_STORAGE_DB_DSN="" \
     WAF_STORAGE_DB_PATH="$preview_db_rel" \
@@ -250,6 +419,55 @@ run_preview_command() {
     GATEWAY_PREVIEW_ADMIN_ADDR="$GATEWAY_PREVIEW_ADMIN_ADDR_VALUE" \
       "$bin" "$command" "$@"
   )
+}
+
+run_center_preview_bootstrap_command() {
+  local command="$1"
+  shift || true
+  local bin="$ROOT_DIR/bin/tukuyomi"
+  local center_db_rel=""
+  if [[ ! -x "$bin" ]]; then
+    echo "[gateway-preview][ERROR] missing executable: $bin" >&2
+    return 1
+  fi
+  center_db_rel="$(preview_validate_data_path "$CENTER_PREVIEW_DB_REL_VALUE" "center preview db path")"
+  (
+    cd "$ROOT_DIR/data"
+    WAF_CONFIG_FILE="$CENTER_PREVIEW_CONFIG_VALUE" \
+    WAF_STORAGE_DB_DRIVER="sqlite" \
+    WAF_STORAGE_DB_DSN="" \
+    WAF_STORAGE_DB_PATH="$center_db_rel" \
+      "$bin" "$command" "$@"
+  )
+}
+
+bootstrap_center_protected_preview_enrollment() {
+  center_protected_preview_enabled || return 0
+  local identity_rel="tmp/center-protected-preview-device.json"
+  local approved_rel="tmp/center-protected-preview-approved-device.json"
+  local center_config_path=""
+  center_config_path="$(preview_config_host_path "$CENTER_PREVIEW_CONFIG_VALUE" "center preview config")"
+  if [[ ! -f "$center_config_path" ]]; then
+    echo "[gateway-preview][ERROR] CENTER_PROTECTED_PREVIEW=1 requires center-preview-up before gateway-preview-up" >&2
+    return 1
+  fi
+  ensure_preview_runtime_dirs
+  run_preview_command bootstrap-center-protected-gateway \
+    --center-url "$GATEWAY_PREVIEW_CENTER_UPSTREAM_URL_VALUE" \
+    --gateway-api-base-path "$CENTER_PROTECTED_GATEWAY_API_BASE_PATH_VALUE" \
+    --center-api-base-path "$CENTER_PROTECTED_CENTER_API_BASE_PATH_VALUE" \
+    --center-ui-base-path "$CENTER_PROTECTED_CENTER_UI_BASE_PATH_VALUE" \
+    --out "$identity_rel"
+  run_center_preview_bootstrap_command bootstrap-center-protected-center --in "$identity_rel" --out "$approved_rel"
+  run_preview_command bootstrap-center-protected-gateway \
+    --center-url "$GATEWAY_PREVIEW_CENTER_UPSTREAM_URL_VALUE" \
+    --gateway-api-base-path "$CENTER_PROTECTED_GATEWAY_API_BASE_PATH_VALUE" \
+    --center-api-base-path "$CENTER_PROTECTED_CENTER_API_BASE_PATH_VALUE" \
+    --center-ui-base-path "$CENTER_PROTECTED_CENTER_UI_BASE_PATH_VALUE" \
+    --mark-approved \
+    --out "$identity_rel"
+  rm -f "$ROOT_DIR/data/$identity_rel"
+  rm -f "$ROOT_DIR/data/$approved_rel"
 }
 
 seed_preview_database() {
@@ -280,16 +498,31 @@ load_preview_topology() {
 
 write_preview_override() {
   rm -f "$PREVIEW_OVERRIDE"
-  if [[ "${GATEWAY_PREVIEW_SPLIT_ADMIN:-0}" != "1" ]]; then
+  if [[ "${GATEWAY_PREVIEW_SPLIT_ADMIN:-0}" != "1" ]] && ! center_protected_preview_enabled; then
     return
   fi
   mkdir -p "$(dirname "$PREVIEW_OVERRIDE")"
   cat >"$PREVIEW_OVERRIDE" <<EOF
 services:
   coraza:
+EOF
+  if [[ "${GATEWAY_PREVIEW_SPLIT_ADMIN:-0}" == "1" ]]; then
+    cat >>"$PREVIEW_OVERRIDE" <<EOF
     ports:
       - "${CORAZA_ADMIN_PORT}:${WAF_ADMIN_LISTEN_PORT}"
 EOF
+  fi
+  if center_protected_preview_enabled; then
+    cat >>"$PREVIEW_OVERRIDE" <<EOF
+    networks:
+      default: {}
+      fleet-preview: {}
+networks:
+  fleet-preview:
+    external: true
+    name: ${FLEET_PREVIEW_NETWORK_NAME_VALUE}
+EOF
+  fi
 }
 
 run_preview_compose() {
@@ -328,17 +561,24 @@ cd "$ROOT_DIR"
 
 case "${1:-}" in
   up)
+    preview_db_existed=0
     write_preview_bootstrap_config
     cleanup_legacy_preview_artifacts
+    ensure_fleet_preview_network
+    write_center_protected_seed_bundle
+    if preview_database_exists; then
+      preview_db_existed=1
+    fi
     if [[ "$GATEWAY_PREVIEW_PERSIST_VALUE" != "1" ]]; then
       run_preview_compose down --remove-orphans >/dev/null 2>&1 || true
       reset_preview_database
       seed_preview_database
-    elif preview_database_exists; then
+    elif [[ "$preview_db_existed" == "1" ]]; then
       upgrade_preview_database
     else
       seed_preview_database
     fi
+    bootstrap_center_protected_preview_enrollment
     load_preview_topology
     write_preview_override
     ensure_preview_runtime_dirs
@@ -346,6 +586,14 @@ case "${1:-}" in
     echo "[gateway-preview] public: ${GATEWAY_PREVIEW_PUBLIC_URL}"
     echo "[gateway-preview] admin ui: ${GATEWAY_PREVIEW_ADMIN_UI_URL}"
     echo "[gateway-preview] admin api: ${GATEWAY_PREVIEW_ADMIN_API_URL}"
+    if center_protected_preview_enabled; then
+      echo "[gateway-preview] center ui via gateway: ${GATEWAY_PREVIEW_PUBLIC_URL%/}${CENTER_PROTECTED_CENTER_UI_BASE_PATH_VALUE}"
+      echo "[gateway-preview] center api via gateway: ${GATEWAY_PREVIEW_PUBLIC_URL%/}${CENTER_PROTECTED_GATEWAY_API_BASE_PATH_VALUE}"
+      echo "[gateway-preview] center upstream: ${GATEWAY_PREVIEW_CENTER_UPSTREAM_URL_VALUE}"
+      if [[ "$GATEWAY_PREVIEW_PERSIST_VALUE" == "1" && "$preview_db_existed" == "1" ]]; then
+        echo "[gateway-preview] existing persistent Gateway DB is preserved; protected Center routes are seeded only when the preview DB is created"
+      fi
+    fi
     echo "[gateway-preview] scheduled-task runner is started by gateway-preview-up"
     if [[ "$GATEWAY_PREVIEW_PERSIST_VALUE" == "1" ]]; then
       echo "[gateway-preview] GATEWAY_PREVIEW_PERSIST=1 keeps preview DB state across down/up"
@@ -355,6 +603,7 @@ case "${1:-}" in
     ;;
   down)
     cleanup_legacy_preview_artifacts
+    ensure_fleet_preview_network
     if preview_database_exists; then
       if load_preview_topology; then
         :

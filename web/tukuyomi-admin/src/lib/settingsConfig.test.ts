@@ -97,7 +97,6 @@ test("computeSettingsRuntimeDrift returns labeled mismatches when restart is pen
     "Tracing Enabled",
     "Tracing Service Name",
     "OTLP Endpoint",
-    "Proxy Engine",
     "WAF Engine",
   ]);
 });

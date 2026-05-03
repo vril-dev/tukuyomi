@@ -31,6 +31,7 @@ const navGroups: NavGroup[] = [
 
 const utilityNavItems: NavItem[] = [
   { to: "/user", label: "User", hint: "Manage your Center sign-in account and password." },
+  { to: "/settings", label: "Settings", hint: "Center runtime and policy settings." },
 ];
 
 function isActive(pathname: string, to: string) {
@@ -39,7 +40,7 @@ function isActive(pathname: string, to: string) {
 
 type SelectedDeviceRoute = {
   deviceID: string;
-  page: "status" | "runtime";
+  page: "status" | "runtime" | "proxy-rules" | "waf-rules";
 };
 
 function selectedDeviceRouteFromPath(pathname: string): SelectedDeviceRoute | null {
@@ -52,9 +53,10 @@ function selectedDeviceRouteFromPath(pathname: string): SelectedDeviceRoute | nu
     deviceID = decodeURIComponent(match[1]);
   } catch {
   }
+  const page = match[2] === "runtime" || match[2] === "proxy-rules" || match[2] === "waf-rules" ? match[2] : "status";
   return {
     deviceID,
-    page: match[2] === "runtime" ? "runtime" : "status",
+    page,
   };
 }
 
@@ -66,9 +68,19 @@ function deviceRuntimePath(deviceID: string) {
   return `/device-approvals/devices/${encodeURIComponent(deviceID)}/runtime`;
 }
 
+function deviceProxyRulesPath(deviceID: string) {
+  return `/device-approvals/devices/${encodeURIComponent(deviceID)}/proxy-rules`;
+}
+
+function deviceWAFRulesPath(deviceID: string) {
+  return `/device-approvals/devices/${encodeURIComponent(deviceID)}/waf-rules`;
+}
+
 function deviceMenuItems(deviceID: string): NavItem[] {
   return [
     { to: deviceStatusPath(deviceID), label: "Device Status", hint: "Selected Gateway status and config snapshots." },
+    { to: deviceProxyRulesPath(deviceID), label: "Proxy Rules", hint: "" },
+    { to: deviceWAFRulesPath(deviceID), label: "WAF Rules", hint: "" },
     { to: deviceRuntimePath(deviceID), label: "Runtime", hint: "" },
   ];
 }

@@ -62,15 +62,16 @@ make db-import
   （ただし bundled config は意図的に **`storage` bootstrap block だけ** を
   保持する）
 - `conf/proxy.json` など configured runtime file がある場合はそれが優先
-- 無ければ `seeds/conf/` の同梱本番 seed を読む
+- 無ければ `seeds/conf/config-bundle.json` の同梱本番 seed を読む
 - それも無ければ互換 default に fallback
 - `sites`、`vhosts`、`scheduled_tasks`、`upstream_runtime`、PHP-FPM runtime
   inventory などの runtime file は、各 feature table に import される
 - import 後は **DB row が正**
 
 bundle root 以外から import command を実行する場合は、
-`WAF_DB_IMPORT_SEED_CONF_DIR` に `seeds/conf` file がある directory を
-指定してください。
+`WAF_DB_IMPORT_SEED_BUNDLE_FILE` に config bundle のパスを指定してください。
+
+Gateway Status の `Download config` は、この seed／restore 用 bundle format を出力します。この export は、署名付きステータスポーリングで Center へ送る config snapshot とは意図的に分けています。Center snapshot は fleet status payload であり、import seed ではありません。
 
 ## 13.2　Driver Selection
 
@@ -212,7 +213,7 @@ import 後の本番起動で **必要な file** は、
 **initial seed / import / export artifact** です。
 
 - normalized domain が存在しない場合、現在の seed / export file から DB
-  row を import する。configured file が無い場合は `seeds/conf/` を使う
+  row を import する。configured file が無い場合は `seeds/conf/config-bundle.json` を使う
 - `app_config` が存在する場合、初期 DB open 後に適用する。ただし **DB
   接続項目は bootstrap `config.json` の値を保持** する
 - proxy / sites / vhosts / scheduled tasks / upstream runtime / policy

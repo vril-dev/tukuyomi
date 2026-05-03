@@ -54,6 +54,12 @@ Install Center on a control-plane host:
 make install TARGET=linux-systemd INSTALL_ROLE=center
 ```
 
+Install Center behind a same-host Gateway front:
+
+```bash
+make install TARGET=linux-systemd INSTALL_ROLE=center-protected
+```
+
 Common overrides:
 
 ```bash
@@ -79,6 +85,21 @@ Behavior:
 - `INSTALL_ROLE=center` installs `tukuyomi-center.service`,
   `tukuyomi-center.env`, and `conf/config.center.json`; it runs DB migration
   only and skips WAF/CRS import, gateway seed, and scheduled tasks
+- `INSTALL_ROLE=center-protected` installs both `tukuyomi.service` and
+  `tukuyomi-center.service`; Center listens on loopback, while the Gateway seed
+  routes `/center-ui` and `/center-api` to `http://127.0.0.1:9092`. It also
+  enables Gateway IoT / Edge device authentication and locally bootstraps the
+  matching Center approval. It does not install the scheduled-task timer.
+- `INSTALL_CENTER_API_BASE_PATH` controls the Center process API path, and
+  `INSTALL_CENTER_GATEWAY_API_BASE_PATH` controls the public Gateway route path.
+  When they differ, the generated Gateway route rewrites the public path to the
+  Center path before forwarding upstream.
+- Center has three source IP allowlists for direct exposure:
+  `TUKUYOMI_CENTER_CLIENT_ALLOW_CIDRS` for Center UI clients,
+  `TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS` for the management API, and
+  `TUKUYOMI_CENTER_API_ALLOW_CIDRS` for the Gateway/device API. Empty client
+  and Gateway/device lists allow any source. The management API defaults to
+  loopback plus private/local CIDRs.
 - when `PREFIX` is under the invoking user's home directory,
   `INSTALL_CREATE_USER=auto` uses that user as the runtime user and skips
   `useradd`
@@ -206,12 +227,12 @@ Notes:
 - `config.json` is the DB connection bootstrap; release samples keep only the `storage` block
 - `conf/proxy.json` is optional seed/import/export material for DB `proxy_rules`
 - `conf/sites.json` is optional seed/import/export material for DB `sites`
-- the public release bundle ships `conf/config.json` and bundled empty-DB runtime seeds under `seeds/conf/`
-- when configured files such as `conf/proxy.json` or policy JSON are absent, `make db-import` reads `seeds/conf/` before falling back to built-in compatibility defaults
+- the public release bundle ships `conf/config.json` and the bundled empty-DB runtime seed at `seeds/conf/config-bundle.json`
+- when configured files such as `conf/proxy.json` or policy JSON are absent, `make db-import` reads `seeds/conf/config-bundle.json` before falling back to built-in compatibility defaults
 - `make crs-install` stages the default base WAF rule seed from `seeds/waf/rules/tukuyomi.conf` and imports it into DB
 - CRS files are temporary import material for DB `waf_rule_assets`; `make crs-install` stages them under `data/tmp` and cleans up
-- `sites.json`, `scheduled-tasks.json`, `upstream-runtime.json`, policy JSON,
-  cache-rules JSON, WAF bypass JSON, and PHP-FPM JSON manifests are DB
+- the config bundle domains for sites, scheduled tasks, upstream runtime,
+  policies, cache rules, WAF bypass, and PHP-FPM/PSGI manifests are DB
   seed/export artifacts after DB bootstrap
 - render or mount `config.json` from your secret manager or config-management layer in production for `storage.db_driver`, `storage.db_path`, and `storage.db_dsn`
 - run `make db-migrate`, then `make crs-install` to install/import WAF rule assets, then `make db-import` for the remaining seed material before first start. `db-import` does not re-import WAF rule assets
@@ -448,6 +469,10 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now tukuyomi-center
 sudo systemctl status tukuyomi-center
 ```
+
+After first boot, Center `Settings` can persist standalone listen address,
+API/UI base path, and manual TLS certificate/key settings. Listener and TLS
+changes apply after restarting `tukuyomi-center`.
 
 Socket activation install:
 

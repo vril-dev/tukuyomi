@@ -120,6 +120,12 @@ details reported by the Gateway, and the config snapshot history. The
 snapshot table is the place to view or download the bounded, redacted
 Gateway JSON payload.
 
+This Center snapshot is not the same file as the Gateway Status
+`Download config` export. The Status export is a seed/restore
+`config-bundle.json` artifact; the Center snapshot is a signed
+fleet-status payload with device identity, revision metadata, and
+per-domain `etag`/`raw` entries.
+
 ![Center Runtime screen](../../images/ui-samples/27-center-runtime.png)
 
 `Runtime` uses the Gateway-reported platform target to match runtime
@@ -145,6 +151,31 @@ restarts during a fleet preview, **persist both preview DBs**:
 ```bash
 GATEWAY_PREVIEW_PERSIST=1 CENTER_PREVIEW_PERSIST=1 make fleet-preview-up
 ```
+
+To preview the same topology as `INSTALL_ROLE=center-protected`, enable
+Center protected preview:
+
+```bash
+CENTER_PROTECTED_PREVIEW=1 \
+GATEWAY_PREVIEW_PERSIST=1 \
+CENTER_PREVIEW_PERSIST=1 \
+make fleet-preview-up
+```
+
+In that mode, Center still runs separately, while Gateway seeds `/center-ui`
+and `/center-api` routes to Center over the shared Docker preview network.
+Open Center through Gateway at `http://localhost:9090/center-ui`. Protected
+preview also enables Gateway IoT / Edge mode and bootstraps the matching Center
+approval against the preview Center DB.
+
+When the Center process API path is private, keep
+`CENTER_PREVIEW_GATEWAY_API_BASE_PATH` on the public Gateway path and set
+`CENTER_PREVIEW_API_BASE_PATH` to the Center path. Gateway rewrites the public
+route before forwarding to Center.
+
+With `GATEWAY_PREVIEW_PERSIST=1`, these protected routes are seeded only when
+the Gateway preview DB is created. If an existing persistent Gateway preview DB
+is already present, reset that preview DB or add the routes from `Proxy Rules`.
 
 If the Gateway is running inside a preview container, **do not point
 the Center URL at `http://localhost:9092`**. Inside the Gateway
@@ -232,9 +263,11 @@ Common errors and fixes seen in real deployments:
 | `invalid enrollment token` | The token is wrong, revoked, expired, has hit its use-count limit, or is for a different Center DB. |
 | `local device identity already exists with a different device_id/key_id` | Use the existing local identity values, or **explicitly reset the local Gateway identity state**. |
 
-There are **no `make` commands for enrollment** today. The supported
-operator entrypoint is **`Options > Center Enrollment`** on the Gateway,
-or the admin API behind that screen.
+For normal external Center enrollment, the supported operator entrypoint is
+**`Options > Center Enrollment`** on the Gateway, or the admin API behind that
+screen. `INSTALL_ROLE=center-protected` and `CENTER_PROTECTED_PREVIEW=1` are the
+local same-owner exceptions: they bootstrap Gateway identity and Center approval
+without an enrollment token.
 
 ## 16.10 Recap
 

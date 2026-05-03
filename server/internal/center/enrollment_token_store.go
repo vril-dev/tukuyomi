@@ -60,8 +60,26 @@ func CreateEnrollmentToken(ctx context.Context, in EnrollmentTokenCreate) (Enrol
 	if in.CreatedBy == "" {
 		in.CreatedBy = "unknown"
 	}
+	var settings CenterSettingsConfig
+	settingsLoaded := false
+	loadSettings := func() (CenterSettingsConfig, error) {
+		if settingsLoaded {
+			return settings, nil
+		}
+		loaded, _, err := LoadCenterSettings(ctx)
+		if err != nil {
+			return CenterSettingsConfig{}, err
+		}
+		settings = loaded
+		settingsLoaded = true
+		return settings, nil
+	}
 	if in.MaxUses <= 0 {
-		in.MaxUses = EnrollmentTokenDefaultMaxUses
+		settings, err := loadSettings()
+		if err != nil {
+			return EnrollmentTokenRecord{}, "", err
+		}
+		in.MaxUses = settings.EnrollmentTokenDefaultMaxUses
 	}
 	if in.MaxUses > 1000000 {
 		in.MaxUses = 1000000
@@ -69,6 +87,15 @@ func CreateEnrollmentToken(ctx context.Context, in EnrollmentTokenCreate) (Enrol
 	now := time.Now().UTC().Unix()
 	if in.ExpiresAtUnix < 0 {
 		return EnrollmentTokenRecord{}, "", ErrEnrollmentTokenRequest
+	}
+	if in.ExpiresAtUnix == 0 {
+		settings, err := loadSettings()
+		if err != nil {
+			return EnrollmentTokenRecord{}, "", err
+		}
+		if settings.EnrollmentTokenDefaultTTLSeconds > 0 {
+			in.ExpiresAtUnix = now + settings.EnrollmentTokenDefaultTTLSeconds
+		}
 	}
 	if in.ExpiresAtUnix > 0 && in.ExpiresAtUnix <= now {
 		return EnrollmentTokenRecord{}, "", ErrEnrollmentTokenRequest

@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/configbundle"
 )
 
 func TestImportStartupConfigStorageKeepsDBWAFRuleAssetsWithoutSeedFiles(t *testing.T) {
@@ -130,14 +133,49 @@ func TestReadStartupSeedFileFallsBackToSeedConf(t *testing.T) {
 	}
 }
 
+func TestReadStartupSeedFilePrefersSeedBundleBeforeSeedConf(t *testing.T) {
+	tmp := t.TempDir()
+	seedDir := filepath.Join(tmp, "seeds", "conf")
+	if err := os.MkdirAll(seedDir, 0o755); err != nil {
+		t.Fatalf("mkdir seed dir: %v", err)
+	}
+	bundle := configbundle.New("test", time.Time{})
+	if err := configbundle.SetDomainRaw(&bundle, configbundle.DomainProxy, []byte(`{"source":"bundle"}`)); err != nil {
+		t.Fatalf("set bundle domain: %v", err)
+	}
+	bundleRaw, err := configbundle.Marshal(bundle)
+	if err != nil {
+		t.Fatalf("marshal bundle: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(seedDir, configbundle.DefaultName), bundleRaw, 0o600); err != nil {
+		t.Fatalf("write seed bundle: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(seedDir, startupProxySeedName), []byte(`{"source":"legacy"}`), 0o600); err != nil {
+		t.Fatalf("write legacy seed: %v", err)
+	}
+	t.Setenv(startupSeedConfDirEnv, seedDir)
+
+	raw, found, err := readStartupSeedFile(filepath.Join(tmp, "missing", "proxy.json"), startupProxySeedName)
+	if err != nil {
+		t.Fatalf("read fallback seed: %v", err)
+	}
+	if !found || !strings.Contains(string(raw), `"source": "bundle"`) {
+		t.Fatalf("bundle seed mismatch found=%v raw=%q", found, string(raw))
+	}
+}
+
 func TestBundledStartupSeedConfFilesValidate(t *testing.T) {
 	root := repoRootForStartupSeedTest(t)
 	seedDir := filepath.Join(root, "seeds", "conf")
+	bundle, err := configbundle.LoadFile(filepath.Join(seedDir, configbundle.DefaultName))
+	if err != nil {
+		t.Fatalf("load bundled seed bundle: %v", err)
+	}
 	readSeed := func(name string) string {
 		t.Helper()
-		raw, err := os.ReadFile(filepath.Join(seedDir, name))
-		if err != nil {
-			t.Fatalf("read bundled seed %s: %v", name, err)
+		raw, found, err := bundle.LegacySeedRaw(name)
+		if err != nil || !found {
+			t.Fatalf("read bundled seed %s found=%v err=%v", name, found, err)
 		}
 		return string(raw)
 	}
@@ -185,6 +223,112 @@ func TestBundledStartupSeedConfFilesValidate(t *testing.T) {
 	_ = crsDisabledNamesFromRaw([]byte(readSeed(startupCRSDisabledSeedName)))
 }
 
+func TestBuildRuntimeConfigBundleExportUsesDBAndRedactsSecrets(t *testing.T) {
+	restore := saveStartupConfigForTest()
+	defer restore()
+
+	root := repoRootForStartupSeedTest(t)
+	tmp := t.TempDir()
+	confDir := filepath.Join(tmp, "conf")
+	dbPath := filepath.Join(tmp, "db", "tukuyomi.db")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir conf dir: %v", err)
+	}
+	configPath := filepath.Join(confDir, "config.json")
+	configRaw := fmt.Sprintf(`{
+  "admin": {
+    "session_secret": "very-strong-random-session-secret-12345"
+  },
+  "storage": {
+    "db_driver": "sqlite",
+    "db_path": %q,
+    "db_dsn": "",
+    "db_retention_days": 30,
+    "db_sync_interval_sec": 0
+  }
+}
+`, dbPath)
+	if err := os.WriteFile(configPath, []byte(configRaw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	missingRoot := filepath.Join(tmp, "missing")
+	config.ConfigFile = configPath
+	config.ProxyConfigFile = filepath.Join(missingRoot, "conf", "proxy.json")
+	config.SiteConfigFile = filepath.Join(missingRoot, "sites.json")
+	config.PHPRuntimeInventoryFile = filepath.Join(missingRoot, "inventory.json")
+	config.PSGIRuntimeInventoryFile = filepath.Join(missingRoot, "psgi-inventory.json")
+	config.VhostConfigFile = filepath.Join(missingRoot, "vhosts.json")
+	config.ScheduledTaskConfigFile = filepath.Join(missingRoot, "scheduled-tasks.json")
+	config.UpstreamRuntimeFile = filepath.Join(missingRoot, "upstream-runtime.json")
+	config.CacheStoreFile = filepath.Join(missingRoot, "cache-store.json")
+	config.CacheRulesFile = filepath.Join(missingRoot, "cache-rules.json")
+	config.BypassFile = filepath.Join(missingRoot, "waf-bypass.json")
+	config.CountryBlockFile = filepath.Join(missingRoot, "country-block.json")
+	config.RateLimitFile = filepath.Join(missingRoot, "rate-limit.json")
+	config.BotDefenseFile = filepath.Join(missingRoot, "bot-defense.json")
+	config.SemanticFile = filepath.Join(missingRoot, "semantic.json")
+	config.NotificationFile = filepath.Join(missingRoot, "notifications.json")
+	config.IPReputationFile = filepath.Join(missingRoot, "ip-reputation.json")
+	config.CRSDisabledFile = filepath.Join(missingRoot, "crs-disabled.conf")
+	config.RulesFile = config.DefaultBaseRuleAssetPath
+	config.CRSEnable = false
+	t.Setenv(startupSeedBundleFileEnv, filepath.Join(root, "seeds", "conf", configbundle.DefaultName))
+	t.Setenv(startupSeedConfDirEnv, "")
+
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+	if err := ImportStartupConfigStorage(); err != nil {
+		t.Fatalf("import startup config storage: %v", err)
+	}
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected sqlite store")
+	}
+	proxyCfg, _, found, err := store.loadActiveProxyConfig()
+	if err != nil || !found {
+		t.Fatalf("load active proxy found=%v err=%v", found, err)
+	}
+	proxyCfg.HashKey = "secret-hash-key"
+	proxyCfg.TLSClientKey = "secret-client-key"
+	if len(proxyCfg.Upstreams) > 0 {
+		proxyCfg.Upstreams[0].TLS.ClientKey = "secret-upstream-client-key"
+	}
+	if _, err := store.writeProxyConfigVersion("", proxyCfg, configVersionSourceApply, "", "test secret proxy update", 0); err != nil {
+		t.Fatalf("write secret proxy config: %v", err)
+	}
+
+	raw, err := BuildRuntimeConfigBundleExport()
+	if err != nil {
+		t.Fatalf("export config bundle: %v", err)
+	}
+	if strings.Contains(string(raw), "very-strong-random-session-secret-12345") ||
+		strings.Contains(string(raw), "secret-hash-key") ||
+		strings.Contains(string(raw), "secret-client-key") ||
+		strings.Contains(string(raw), "secret-upstream-client-key") {
+		t.Fatalf("export leaked secret: %s", raw)
+	}
+	bundle, err := configbundle.Decode(raw)
+	if err != nil {
+		t.Fatalf("decode exported bundle: %v", err)
+	}
+	if _, ok := bundle.Domains[configbundle.DomainAdminUsers]; ok {
+		t.Fatalf("status export must not include admin users")
+	}
+	if _, ok := bundle.Domains[configbundle.DomainPSGIRuntimeInventory]; !ok {
+		t.Fatalf("status export missing psgi runtime inventory")
+	}
+	if !strings.Contains(string(bundle.Domains[configbundle.DomainProxy]), "[redacted]") {
+		t.Fatalf("proxy domain was not redacted: %s", bundle.Domains[configbundle.DomainProxy])
+	}
+	if !strings.Contains(string(bundle.Bootstrap.AppConfig), "[redacted]") {
+		t.Fatalf("app_config was not redacted: %s", bundle.Bootstrap.AppConfig)
+	}
+}
+
 func repoRootForStartupSeedTest(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -192,7 +336,7 @@ func repoRootForStartupSeedTest(t *testing.T) string {
 		t.Fatalf("getwd: %v", err)
 	}
 	for i := 0; i < 8; i++ {
-		if _, err := os.Stat(filepath.Join(dir, "seeds", "conf", startupProxySeedName)); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, "seeds", "conf", configbundle.DefaultName)); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
@@ -201,7 +345,7 @@ func repoRootForStartupSeedTest(t *testing.T) string {
 		}
 		dir = parent
 	}
-	t.Fatalf("repository root with seeds/conf/%s not found", startupProxySeedName)
+	t.Fatalf("repository root with seeds/conf/%s not found", configbundle.DefaultName)
 	return ""
 }
 
@@ -210,6 +354,7 @@ func saveStartupConfigForTest() func() {
 	oldProxy := config.ProxyConfigFile
 	oldSites := config.SiteConfigFile
 	oldInventory := config.PHPRuntimeInventoryFile
+	oldPSGIInventory := config.PSGIRuntimeInventoryFile
 	oldVhost := config.VhostConfigFile
 	oldScheduled := config.ScheduledTaskConfigFile
 	oldUpstream := config.UpstreamRuntimeFile
@@ -236,6 +381,7 @@ func saveStartupConfigForTest() func() {
 		config.ProxyConfigFile = oldProxy
 		config.SiteConfigFile = oldSites
 		config.PHPRuntimeInventoryFile = oldInventory
+		config.PSGIRuntimeInventoryFile = oldPSGIInventory
 		config.VhostConfigFile = oldVhost
 		config.ScheduledTaskConfigFile = oldScheduled
 		config.UpstreamRuntimeFile = oldUpstream

@@ -89,6 +89,31 @@ settings and Center tokens/approvals across restarts:
 GATEWAY_PREVIEW_PERSIST=1 CENTER_PREVIEW_PERSIST=1 make fleet-preview-up
 ```
 
+To preview the same shape as `INSTALL_ROLE=center-protected`, start fleet
+preview with Center protected mode:
+
+```bash
+CENTER_PROTECTED_PREVIEW=1 \
+GATEWAY_PREVIEW_PERSIST=1 \
+CENTER_PREVIEW_PERSIST=1 \
+make fleet-preview-up
+```
+
+In this mode, Center still runs as a separate preview process, but Gateway seeds
+`/center-ui` and `/center-api` routes to the Center preview over the shared
+Docker preview network. Open Center through Gateway at
+`http://localhost:9090/center-ui`. Protected preview also enables Gateway
+IoT / Edge mode and bootstraps the matching Center approval against the preview
+Center DB.
+
+For split API paths, set `CENTER_PREVIEW_API_BASE_PATH` to the Center process
+path and `CENTER_PREVIEW_GATEWAY_API_BASE_PATH` to the Gateway-facing path. The
+Gateway preview route rewrites the public path to the Center path upstream.
+
+With `GATEWAY_PREVIEW_PERSIST=1`, those protected routes are seeded only when
+the Gateway preview DB is created. If an existing persistent Gateway preview DB
+is already present, reset that preview DB or add the routes from `Proxy Rules`.
+
 When Gateway runs inside the preview container, do not use
 `http://localhost:9092` as the Center URL. Inside the Gateway container,
 `localhost` points back to Gateway itself.
@@ -192,6 +217,11 @@ The snapshot payload is capped at 2 MiB. It includes runtime/config domains that
 are useful for fleet inspection and avoids storing enrollment tokens or local
 device private keys.
 
+This Center snapshot is not the same file as the Gateway Status `Download
+config` export. The Status export is a seed/restore `config-bundle.json`
+artifact, while the Center snapshot is a signed fleet-status payload with
+device identity, revision metadata, and per-domain `etag`/`raw` entries.
+
 ## Troubleshooting
 
 - `connect: connection refused` with `localhost:9092`: Gateway is trying to
@@ -207,6 +237,8 @@ device private keys.
   the existing local identity values or reset the local Gateway identity state
   intentionally.
 
-There is no `make` command for enrollment yet. The current supported operator
-entrypoint is Gateway `Options > Center Enrollment` or the admin API behind that
-screen.
+For normal external Center enrollment, the supported operator entrypoint is
+Gateway `Options > Center Enrollment` or the admin API behind that screen.
+`INSTALL_ROLE=center-protected` and `CENTER_PROTECTED_PREVIEW=1` are local
+same-owner exceptions that bootstrap Gateway identity and Center approval
+without an enrollment token.

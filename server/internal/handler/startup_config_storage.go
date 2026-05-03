@@ -11,6 +11,8 @@ import (
 
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/configbundle"
+	"tukuyomi/internal/edgeconfigsnapshot"
 	"tukuyomi/internal/storagesync"
 )
 
@@ -19,6 +21,7 @@ const (
 	proxyRulesConfigBlobKey        = "proxy_rules"
 	startupSeedConfDefaultDir      = "seeds/conf"
 	startupSeedConfDirEnv          = "WAF_DB_IMPORT_SEED_CONF_DIR"
+	startupSeedBundleFileEnv       = "WAF_DB_IMPORT_SEED_BUNDLE_FILE"
 	startupProxySeedName           = "proxy.json"
 	startupSitesSeedName           = "sites.json"
 	startupPHPRuntimeSeedName      = "php-runtime-inventory.json"
@@ -534,6 +537,17 @@ func startupSeedConfDir() string {
 	return startupSeedConfDefaultDir
 }
 
+func startupSeedBundlePath() (string, bool) {
+	if raw, ok := os.LookupEnv(startupSeedBundleFileEnv); ok {
+		return strings.TrimSpace(raw), true
+	}
+	seedDir := startupSeedConfDir()
+	if seedDir == "" {
+		return "", false
+	}
+	return filepath.Join(seedDir, configbundle.DefaultName), false
+}
+
 func readStartupSeedFile(primaryPath string, seedName string) ([]byte, bool, error) {
 	primaryPath = strings.TrimSpace(primaryPath)
 	if primaryPath != "" {
@@ -561,6 +575,9 @@ func readStartupSeedConfFile(seedName string) ([]byte, bool, error) {
 	if seedName == ".." || filepath.IsAbs(seedName) || strings.HasPrefix(filepath.ToSlash(seedName), "../") {
 		return nil, false, fmt.Errorf("invalid bundled seed name %q", seedName)
 	}
+	if raw, found, err := readStartupSeedBundleSeed(seedName); err != nil || found {
+		return raw, found, err
+	}
 	seedDir := startupSeedConfDir()
 	if seedDir == "" {
 		return []byte{}, false, nil
@@ -573,6 +590,228 @@ func readStartupSeedConfFile(seedName string) ([]byte, bool, error) {
 		return raw, true, nil
 	}
 	return []byte{}, false, nil
+}
+
+func readStartupSeedBundleSeed(seedName string) ([]byte, bool, error) {
+	if _, ok := configbundle.DomainForLegacySeed(seedName); !ok {
+		return nil, false, nil
+	}
+	path, explicit := startupSeedBundlePath()
+	if path == "" {
+		return nil, false, nil
+	}
+	raw, hadFile, err := readFileMaybe(path)
+	if err != nil {
+		return nil, false, err
+	}
+	if !hadFile {
+		if explicit {
+			return nil, false, fmt.Errorf("configured seed bundle file not found: %s", path)
+		}
+		return nil, false, nil
+	}
+	if strings.TrimSpace(string(raw)) == "" {
+		return nil, false, nil
+	}
+	bundle, err := configbundle.Decode(raw)
+	if err != nil {
+		return nil, false, err
+	}
+	return bundle.LegacySeedRaw(seedName)
+}
+
+func BuildRuntimeConfigBundleExport() ([]byte, error) {
+	store := getLogsStatsStore()
+	if store == nil {
+		return nil, errConfigDBStoreRequired
+	}
+	bundle := configbundle.New("gateway-status-export", time.Now().UTC())
+
+	appRaw, _, _, err := loadAppConfigStorage(false)
+	if err != nil {
+		return nil, fmt.Errorf("read app config: %w", err)
+	}
+	redactedApp, _, err := edgeconfigsnapshot.RedactAppConfigRaw(appRaw)
+	if err != nil {
+		return nil, fmt.Errorf("redact app config: %w", err)
+	}
+	if err := configbundle.SetBootstrapAppConfigRaw(&bundle, redactedApp); err != nil {
+		return nil, err
+	}
+
+	proxyCfg, _, found, err := store.loadActiveProxyConfig()
+	if err != nil {
+		return nil, fmt.Errorf("read proxy config: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("active proxy config missing in db; run make db-import before exporting config bundle")
+	}
+	if err := addRuntimeConfigBundleDomain(&bundle, configbundle.DomainProxy, []byte(mustJSON(proxyCfg))); err != nil {
+		return nil, err
+	}
+	siteCfg, _, found, err := store.loadActiveSiteConfig()
+	if err != nil {
+		return nil, fmt.Errorf("read sites config: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("active sites config missing in db; run make db-import before exporting config bundle")
+	}
+	if err := addRuntimeConfigBundleDomain(&bundle, configbundle.DomainSites, []byte(mustJSON(siteCfg))); err != nil {
+		return nil, err
+	}
+	phpRuntime, _, found, err := store.loadActivePHPRuntimeInventoryPreparedConfig(currentPHPRuntimeInventoryPath())
+	if err != nil {
+		return nil, fmt.Errorf("read php runtime inventory: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("active php runtime inventory missing in db; run make db-import before exporting config bundle")
+	}
+	if err := addRuntimeConfigBundleDomain(&bundle, configbundle.DomainPHPRuntimeInventory, []byte(mustJSON(phpRuntime.cfg))); err != nil {
+		return nil, err
+	}
+	psgiRuntime, _, found, err := store.loadActivePSGIRuntimeInventoryPreparedConfig(currentPSGIRuntimeInventoryPath())
+	if err != nil {
+		return nil, fmt.Errorf("read psgi runtime inventory: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("active psgi runtime inventory missing in db; run make db-import before exporting config bundle")
+	}
+	if err := addRuntimeConfigBundleDomain(&bundle, configbundle.DomainPSGIRuntimeInventory, []byte(mustJSON(psgiRuntime.cfg))); err != nil {
+		return nil, err
+	}
+	vhostCfg, _, found, err := store.loadActiveVhostConfig()
+	if err != nil {
+		return nil, fmt.Errorf("read Runtime Apps config: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("active Runtime Apps config missing in db; run make db-import before exporting config bundle")
+	}
+	if err := addRuntimeConfigBundleDomain(&bundle, configbundle.DomainRuntimeApps, []byte(mustJSON(vhostCfg))); err != nil {
+		return nil, err
+	}
+	scheduledCfg, _, found, err := store.loadActiveScheduledTaskConfig()
+	if err != nil {
+		return nil, fmt.Errorf("read scheduled tasks config: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("active scheduled tasks config missing in db; run make db-import before exporting config bundle")
+	}
+	if err := addRuntimeConfigBundleDomain(&bundle, configbundle.DomainScheduledTasks, []byte(mustJSON(scheduledCfg))); err != nil {
+		return nil, err
+	}
+	upstreamCfg, _, found, err := store.loadActiveUpstreamRuntimeConfig(configuredManagedBackendKeys(proxyCfg))
+	if err != nil {
+		return nil, fmt.Errorf("read upstream runtime: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("active upstream runtime config missing in db; run make db-import before exporting config bundle")
+	}
+	upstreamRaw, err := MarshalUpstreamRuntimeJSON(upstreamCfg)
+	if err != nil {
+		return nil, fmt.Errorf("marshal upstream runtime: %w", err)
+	}
+	if err := addRuntimeConfigBundleDomain(&bundle, configbundle.DomainUpstreamRuntime, upstreamRaw); err != nil {
+		return nil, err
+	}
+	responseCacheCfg, _, found, err := store.loadActiveResponseCacheConfig()
+	if err != nil {
+		return nil, fmt.Errorf("read response cache config: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("active response cache config missing in db; run make db-import before exporting config bundle")
+	}
+	if err := addRuntimeConfigBundleDomain(&bundle, configbundle.DomainCacheStore, []byte(mustJSON(responseCacheCfg))); err != nil {
+		return nil, err
+	}
+
+	for _, item := range []struct {
+		storeDomain  string
+		bundleDomain string
+	}{
+		{cacheConfigBlobKey, configbundle.DomainCacheRules},
+		{bypassConfigBlobKey, configbundle.DomainWAFBypass},
+		{countryBlockConfigBlobKey, configbundle.DomainCountryBlock},
+		{rateLimitConfigBlobKey, configbundle.DomainRateLimit},
+		{botDefenseConfigBlobKey, configbundle.DomainBotDefense},
+		{semanticConfigBlobKey, configbundle.DomainSemantic},
+		{notificationConfigBlobKey, configbundle.DomainNotifications},
+		{ipReputationConfigBlobKey, configbundle.DomainIPReputation},
+	} {
+		raw, _, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(item.storeDomain))
+		if err != nil {
+			return nil, fmt.Errorf("read %s config: %w", item.storeDomain, err)
+		}
+		if !found {
+			return nil, fmt.Errorf("active %s config missing in db; run make db-import before exporting config bundle", item.storeDomain)
+		}
+		if err := addRuntimeConfigBundleDomain(&bundle, item.bundleDomain, raw); err != nil {
+			return nil, err
+		}
+	}
+
+	names, _, found, err := store.loadActiveCRSDisabledConfig()
+	if err != nil {
+		return nil, fmt.Errorf("read crs disabled config: %w", err)
+	}
+	if !found {
+		names = nil
+	}
+	crsRaw, err := json.Marshal(names)
+	if err != nil {
+		return nil, err
+	}
+	if err := addRuntimeConfigBundleDomain(&bundle, configbundle.DomainCRSDisabled, crsRaw); err != nil {
+		return nil, err
+	}
+
+	return configbundle.Marshal(bundle)
+}
+
+func addRuntimeConfigBundleDomain(bundle *configbundle.Bundle, domain string, raw []byte) error {
+	raw = redactRuntimeConfigBundleDomain(domain, raw)
+	if err := configbundle.SetDomainRaw(bundle, domain, raw); err != nil {
+		return fmt.Errorf("add config bundle domain %s: %w", domain, err)
+	}
+	return nil
+}
+
+func redactRuntimeConfigBundleDomain(domain string, raw []byte) []byte {
+	if strings.TrimSpace(domain) != configbundle.DomainProxy || len(raw) == 0 || !json.Valid(raw) {
+		return raw
+	}
+	var obj any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return raw
+	}
+	redactNamedJSONFields(obj, map[string]struct{}{
+		"hash_key":       {},
+		"tls_client_key": {},
+		"client_key":     {},
+	})
+	out, err := json.MarshalIndent(obj, "", "  ")
+	if err != nil {
+		return raw
+	}
+	return append(out, '\n')
+}
+
+func redactNamedJSONFields(v any, names map[string]struct{}) {
+	switch obj := v.(type) {
+	case map[string]any:
+		for key, value := range obj {
+			if _, ok := names[key]; ok {
+				if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+					obj[key] = "[redacted]"
+					continue
+				}
+			}
+			redactNamedJSONFields(value, names)
+		}
+	case []any:
+		for _, item := range obj {
+			redactNamedJSONFields(item, names)
+		}
+	}
 }
 
 func startupPolicySeedName(domain string) string {

@@ -70,6 +70,13 @@ Center on a control-plane host, set it explicitly:
 make install TARGET=linux-systemd INSTALL_ROLE=center
 ```
 
+If the Center should be reachable through a same-host Gateway security
+front, install the protected Center role:
+
+```bash
+make install TARGET=linux-systemd INSTALL_ROLE=center-protected
+```
+
 Common overrides:
 
 ```bash
@@ -103,22 +110,42 @@ user, writing to `/opt/tukuyomi`, installing systemd units).
 
 ### 3.3.2 Per-role behavior
 
-`INSTALL_ROLE=gateway` and `INSTALL_ROLE=center` differ in the
-artifacts they touch:
+`INSTALL_ROLE` decides which host shape is installed:
 
-| Target | gateway | center |
-|---|---|---|
-| service unit | `tukuyomi.service` | `tukuyomi-center.service` |
-| env file | `tukuyomi.env` | `tukuyomi-center.env` |
-| config | `conf/config.json` | `conf/config.center.json` |
-| WAF/CRS import | yes | no |
-| First-run gateway DB seed | yes | no |
-| Scheduled-task timer | yes | no |
-| DB migration | yes | yes |
+| Target | gateway | center | center-protected |
+|---|---|---|---|
+| service unit | `tukuyomi.service` | `tukuyomi-center.service` | both |
+| env file | `tukuyomi.env` | `tukuyomi-center.env` | both |
+| config | `conf/config.json` | `conf/config.center.json` | both |
+| WAF/CRS import | yes | no | yes, for the Gateway front |
+| First-run gateway DB seed | yes | no | yes, with Center routes |
+| Scheduled-task timer | yes | no | no |
+| DB migration | yes | yes | both DBs |
 
 The Center role does not carry WAF/CRS import or scheduled tasks
 because the Center is a control plane that approves and manages
 Gateways; it does not own edge data-plane assets.
+
+The `center-protected` role is the packaged same-host shape for exposing
+Center safely. Center keeps its loopback listener, and the Gateway front
+starts with path-scoped routes for `/center-ui` and `/center-api` to
+`http://127.0.0.1:9092`. During install, the role also enables Gateway
+IoT / Edge device authentication and bootstraps the matching Center approval
+locally. The Gateway private key stays in the Gateway DB; Center receives only
+the public key identity. If an existing DB contains conflicting device trust,
+the bootstrap fails instead of replacing it silently.
+
+If the Center process should keep a private API path, set
+`INSTALL_CENTER_API_BASE_PATH` to that internal path and keep
+`INSTALL_CENTER_GATEWAY_API_BASE_PATH` on the public Gateway path. The Gateway
+route then matches the public path and rewrites upstream requests to the Center
+path.
+
+When Center is exposed without a tukuyomi Gateway in front, configure the
+source IP allowlists deliberately. Center UI client access and the
+Gateway/device API allow any source by default; the management API defaults to
+loopback plus private/local CIDRs. These controls use the socket source address,
+not `X-Forwarded-For`.
 
 ### 3.3.3 DB seeding
 
@@ -281,9 +308,9 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
 - `conf/sites.json` is optional seed / import / export material for DB
   `sites`.
 - The public release bundle ships `conf/config.json` and runtime seed
-  for an empty DB under `seeds/conf/`.
+  for an empty DB at `seeds/conf/config-bundle.json`.
 - When `conf/proxy.json` or a policy JSON is missing, `make db-import`
-  reads `seeds/conf/`, and if even that is absent, falls back to a
+  reads `seeds/conf/config-bundle.json`, and if even that is absent, falls back to a
   built-in compatibility default.
 - The default base WAF rule seed is staged from
   `seeds/waf/rules/tukuyomi.conf` and imported to the DB by
@@ -564,6 +591,11 @@ The Gateway sample unit keeps `User=tukuyomi` while granting
 launches `tukuyomi center` and does not require low-port-bind
 capability by default.
 
+Center standalone listener settings start in `tukuyomi-center.env` and can
+then be edited from Center `Settings`. The editable values are the Center
+listen address, API/UI base paths, and manual TLS certificate/key paths.
+Listener and TLS changes apply after restarting `tukuyomi-center`.
+
 For graceful binary replacement, use systemd **socket activation**.
 The socket units hold the public / admin / redirect / HTTP3 listeners,
 which separates the service-process shutdown / restart from the
@@ -656,9 +688,10 @@ connections do not survive process replacement.
   are not required.
 - `admin.listen_addr` only splits ports. Reachability remains
   controlled by `admin.external_mode` and `admin.trusted_cidrs`.
-- In the first slice of split listening, the `admin.listen_addr` side
+- In Gateway split-listener deployments, the `admin.listen_addr` side
   has no built-in TLS. Operate it on a trusted private network or
-  behind a front proxy that terminates TLS.
+  behind a front proxy that terminates TLS. Center standalone has its
+  own manual TLS listener controls in Center `Settings`.
 - This capability is **for low-port binds only**. Switching `php-fpm`
   to a UID/GID other than `tukuyomi` (for example, `www-data`) still
   needs root start-up.

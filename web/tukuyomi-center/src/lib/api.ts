@@ -150,6 +150,25 @@ export async function apiPostJson<T = unknown>(path: string, body: unknown, init
   return data as T;
 }
 
+export async function apiPostForm<T = unknown>(path: string, body: FormData, init: RequestInit = {}) {
+  const res = await apiFetch(path, {
+    method: "POST",
+    body,
+    ...init,
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const message = await readAPIErrorMessage(res, data);
+    if (res.status === 401) {
+      throw new APIUnauthorizedError(message);
+    }
+    throw new Error(message);
+  }
+
+  return data as T;
+}
+
 export async function apiPutJson<T = unknown>(path: string, body: unknown, init: RequestInit = {}) {
   const headers = new Headers(init.headers || {});
   headers.set("Content-Type", "application/json");

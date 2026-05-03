@@ -422,36 +422,89 @@ export default function RuntimePage() {
     return false;
   };
   const runtimeBuildMessage = (runtimeFamily: string, runtimeID: string) => runtimeBuildCapabilityByKey.get(`${runtimeFamily}:${runtimeID}`)?.message || builder?.message || undefined;
-  const selectedBuildOption = RUNTIME_BUILD_OPTIONS.find((item) => item.runtime_id === buildRuntimeID) || RUNTIME_BUILD_OPTIONS[0];
-  const selectedBuildKey = `${selectedBuildOption.runtime_family}:${selectedBuildOption.runtime_id}`;
-  const selectedBuildSupported = runtimeBuildSupported(selectedBuildOption.runtime_family, selectedBuildOption.runtime_id);
-  const selectedBuildBusy = buildingKey === selectedBuildKey || activeBuildByKey.has(selectedBuildKey);
-  const canStartSelectedBuild = Boolean(selectedDevice?.runtime_deployment_supported && selectedDeviceID && selectedBuildSupported && !selectedBuildBusy);
-  const selectedBuildTitle = activeBuildByKey.has(selectedBuildKey)
-    ? tx("Runtime build is already running.")
-    : runtimeBuildMessage(selectedBuildOption.runtime_family, selectedBuildOption.runtime_id);
   const assignmentByKey = new Map<string, RuntimeAssignmentRecord>(assignments.map((item) => [`${item.runtime_family}:${item.runtime_id}`, item] as const));
   const assignedRevisionByKey = new Map<string, string>(assignments.map((item) => [`${item.runtime_family}:${item.runtime_id}`, item.desired_artifact_revision] as const));
   const statusByKey = new Map<string, RuntimeApplyStatusRecord>(applyStatus.map((item) => [`${item.runtime_family}:${item.runtime_id}`, item] as const));
+  const builtArtifactKeySet = new Set<string>();
+  for (const item of artifacts) {
+    if ((item.storage_state || "").trim() === "stored") {
+      builtArtifactKeySet.add(`${item.runtime_family}:${item.runtime_id}`);
+    }
+  }
+  const builtRuntimeKeySet = new Set<string>(builtArtifactKeySet);
   const installedRevisionByKey = new Map<string, string>();
   for (const item of inventory) {
     const revision = (item.artifact_revision || "").trim();
-    if (!revision) {
-      continue;
-    }
     const key = `${item.runtime_family}:${item.runtime_id}`;
     const source = (item.source || "").trim();
     const state = (item.apply_state || "").trim();
+    if (source === "center" || (state === "installed" && revision)) {
+      builtRuntimeKeySet.add(key);
+    }
     if (state === "installed" || (item.available && source === "center")) {
-      installedRevisionByKey.set(key, revision);
+      if (revision) {
+        installedRevisionByKey.set(key, revision);
+      }
     }
   }
   for (const item of applyStatus) {
     const revision = (item.local_artifact_revision || "").trim();
-    if (revision && item.apply_state === "installed") {
-      installedRevisionByKey.set(`${item.runtime_family}:${item.runtime_id}`, revision);
+    if (item.apply_state === "installed") {
+      const key = `${item.runtime_family}:${item.runtime_id}`;
+      if (revision) {
+        builtRuntimeKeySet.add(key);
+      }
+      if (revision) {
+        installedRevisionByKey.set(key, revision);
+      }
     }
   }
+  const buildOptions = RUNTIME_BUILD_OPTIONS.map((option) => {
+    const key = `${option.runtime_family}:${option.runtime_id}`;
+    const supported = runtimeBuildSupported(option.runtime_family, option.runtime_id);
+    const busy = buildingKey === key || activeBuildByKey.has(key);
+    const built = builtRuntimeKeySet.has(key);
+    const pending = assignedRevisionByKey.has(key);
+    let stateLabel = "";
+    let disabledTitle = "";
+    if (busy) {
+      stateLabel = tx("Building...");
+      disabledTitle = tx("Runtime build is already running.");
+    } else if (pending) {
+      stateLabel = tx("Request pending");
+      disabledTitle = tx("Request pending");
+    } else if (built) {
+      stateLabel = tx("Built");
+      disabledTitle = tx("Built");
+    } else if (!supported) {
+      stateLabel = tx("unsupported");
+      disabledTitle = runtimeBuildMessage(option.runtime_family, option.runtime_id) || tx("Build is not supported for this runtime family yet.");
+    }
+    return {
+      ...option,
+      key,
+      busy,
+      disabled: Boolean(built || pending || busy || !supported),
+      disabledTitle,
+      selectLabel: stateLabel ? `${option.label} (${stateLabel})` : option.label,
+    };
+  });
+  const selectedBuildOption = buildOptions.find((item) => item.runtime_id === buildRuntimeID) || buildOptions.find((item) => !item.disabled) || buildOptions[0];
+  const selectedBuildBusy = selectedBuildOption.busy;
+  const canStartSelectedBuild = Boolean(selectedDevice?.runtime_deployment_supported && selectedDeviceID && !selectedBuildOption.disabled);
+  const selectedBuildTitle = selectedBuildOption.disabledTitle || runtimeBuildMessage(selectedBuildOption.runtime_family, selectedBuildOption.runtime_id);
+  const buildOptionStateKey = buildOptions.map((option) => `${option.key}:${option.disabled ? "1" : "0"}`).join("|");
+
+  useEffect(() => {
+    const current = buildOptions.find((option) => option.runtime_id === buildRuntimeID);
+    if (!current || !current.disabled) {
+      return;
+    }
+    const next = buildOptions.find((option) => !option.disabled);
+    if (next && next.runtime_id !== buildRuntimeID) {
+      setBuildRuntimeID(next.runtime_id);
+    }
+  }, [buildOptionStateKey, buildRuntimeID]);
 
   async function startBuild(runtimeFamily: string, runtimeID: string) {
     if (!selectedDeviceID) {
@@ -546,21 +599,22 @@ export default function RuntimePage() {
   }
 
   return (
-    <div className="content-panel runtime-page">
-      <section className="content-section">
-        <div className="section-header">
-          <div>
-            <h2 className="section-title">{tx("Runtime")}</h2>
-          </div>
-          <button type="button" className="secondary" onClick={() => void loadDevices()} disabled={loading}>
-            {tx("Refresh")}
-          </button>
+    <div className="content-section rules-page runtime-page">
+      <div className="section-header">
+        <div>
+          <h2>{tx("Runtime")}</h2>
         </div>
-        {message ? <p className="form-message error">{message}</p> : null}
+        <button type="button" className="secondary" onClick={() => void loadDevices()} disabled={loading}>
+          {tx("Refresh")}
+        </button>
+      </div>
+      {message ? <p className="form-message error">{message}</p> : null}
 
-        {selectedDevice ? (
-          <>
-            <div className="summary-grid runtime-platform-grid">
+      {selectedDevice ? (
+        <>
+          <section className="device-detail-section">
+            <h3>{tx("Gateway target")}</h3>
+            <div className="summary-grid rules-summary-grid runtime-platform-grid">
               <div>
                 <span>{tx("Target")}</span>
                 <strong title={deviceRuntimeTarget(selectedDevice)}>{deviceRuntimeTarget(selectedDevice)}</strong>
@@ -574,8 +628,9 @@ export default function RuntimePage() {
                 <strong>{selectedDevice.runtime_deployment_supported ? tx("supported") : tx("unsupported")}</strong>
               </div>
             </div>
+          </section>
 
-            <div className="device-detail-section">
+            <section className="device-detail-section">
               <div className="device-detail-section-header">
                 <div>
                   <h3>{tx("Runtime build")}</h3>
@@ -589,9 +644,9 @@ export default function RuntimePage() {
                 <label>
                   <span>{tx("Runtime")}</span>
                   <select value={buildRuntimeID} onChange={(event) => setBuildRuntimeID(event.target.value)}>
-                    {RUNTIME_BUILD_OPTIONS.map((option) => (
-                      <option key={option.runtime_id} value={option.runtime_id}>
-                        {option.label}
+                    {buildOptions.map((option) => (
+                      <option key={option.key} value={option.runtime_id} disabled={option.disabled} title={option.disabledTitle || undefined}>
+                        {option.selectLabel}
                       </option>
                     ))}
                   </select>
@@ -641,9 +696,9 @@ export default function RuntimePage() {
                   </table>
                 </div>
               ) : null}
-            </div>
+            </section>
 
-            <div className="device-detail-section">
+            <section className="device-detail-section">
               <div className="device-detail-section-header">
                 <div>
                   <h3>{tx("Runtime inventory")}</h3>
@@ -766,9 +821,9 @@ export default function RuntimePage() {
                 </table>
                 {inventory.length === 0 && !deploymentLoading ? <div className="empty">{tx("No runtime inventory reported.")}</div> : null}
               </div>
-            </div>
+            </section>
 
-            <div className="device-detail-section">
+            <section className="device-detail-section">
               <div className="device-detail-section-header">
                 <div>
                   <h3>{tx("Pending runtime requests")}</h3>
@@ -815,13 +870,13 @@ export default function RuntimePage() {
                 </table>
                 {assignments.length === 0 && !deploymentLoading ? <div className="empty">{tx("No pending runtime requests.")}</div> : null}
               </div>
-            </div>
+            </section>
 
-            <div className="device-detail-section">
+            <section className="device-detail-section">
               <div className="device-detail-section-header">
                 <div>
-                  <h3>{tx("Compatible artifacts")}</h3>
-                  <p className="section-note">{tx("Artifacts matching this Gateway platform.")}</p>
+                  <h3>{tx("Built artifacts")}</h3>
+                  <p className="section-note">{tx("Stored artifacts matching this Gateway platform.")}</p>
                 </div>
               </div>
               <div className="table-wrap runtime-artifact-table">
@@ -847,7 +902,7 @@ export default function RuntimePage() {
                       const alreadyInstalled = installedRevisionByKey.get(runtimeKey) === artifact.artifact_revision;
                       const canAssign = artifact.storage_state === "stored" && !pendingRevision && !alreadyInstalled;
                       const assignLabel = alreadyInstalled
-                        ? tx("Installed")
+                        ? tx("Current")
                         : pendingRevision
                           ? tx(alreadyRequested ? "Assigned" : "Request pending")
                           : assigningKey === assignKey
@@ -872,14 +927,13 @@ export default function RuntimePage() {
                     })}
                   </tbody>
                 </table>
-                {artifacts.length === 0 && !deploymentLoading ? <div className="empty">{tx("No compatible artifacts.")}</div> : null}
+                {artifacts.length === 0 && !deploymentLoading ? <div className="empty">{tx("No built artifacts.")}</div> : null}
               </div>
-            </div>
+            </section>
           </>
         ) : (
           <div className="empty">{loading ? tx("Loading runtime devices...") : tx("No approved devices.")}</div>
         )}
-      </section>
     </div>
   );
 }

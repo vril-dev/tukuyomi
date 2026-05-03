@@ -336,8 +336,7 @@ Routing model:
   upstream transport. HTTPS `force_attempt` falls back to native
   HTTP/1.1 only when ALPN does not select `h2`.
 - Upgrade / WebSocket handshakes are handled inside `tukuyomi_proxy`.
-- Runtime visibility: `proxy_engine_mode` from
-  `/tukuyomi-api/status` and `Settings → Runtime Inventory`.
+- Runtime visibility: `proxy_engine_mode` from `/tukuyomi-api/status`.
 
 ### A.3.2 WAF engine
 

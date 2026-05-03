@@ -15,6 +15,7 @@ import (
 
 	"tukuyomi/internal/adminauth"
 	"tukuyomi/internal/edgeartifactbundle"
+	"tukuyomi/internal/handler"
 )
 
 type enrollmentDecisionRequest struct {
@@ -56,12 +57,36 @@ type runtimeBuildStartRequest struct {
 	Reason        string `json:"reason"`
 }
 
+type proxyRuleBundleBuildRequest struct {
+	Raw                  string `json:"raw"`
+	SourceConfigRevision string `json:"source_config_revision"`
+	SourceProxyETag      string `json:"source_proxy_etag"`
+	Assign               bool   `json:"assign"`
+	Reason               string `json:"reason"`
+}
+
+type proxyRuleAssignmentRequest struct {
+	BundleRevision string `json:"bundle_revision"`
+	Reason         string `json:"reason"`
+}
+
+type wafRuleAssignmentRequest struct {
+	BundleRevision string `json:"bundle_revision"`
+	Reason         string `json:"reason"`
+}
+
+type proxyRuleValidateRequest struct {
+	Raw string `json:"raw"`
+}
+
 func registerDeviceEnrollmentRoutes(r *gin.Engine) {
 	r.POST("/v1/enroll", postDeviceEnrollment)
 	r.POST("/v1/device-status", postDeviceStatus)
 	r.POST("/v1/device-config-snapshot", postDeviceConfigSnapshot)
 	r.POST("/v1/rule-artifact-bundle", postRuleArtifactBundle)
 	r.POST("/v1/runtime-artifact-download", postRuntimeArtifactDownload)
+	r.POST("/v1/proxy-rules-bundle-download", postProxyRulesBundleDownload)
+	r.POST("/v1/waf-rule-artifact-download", postWAFRuleArtifactDownload)
 }
 
 func registerCenterDeviceAdminRoutes(api *gin.RouterGroup) {
@@ -72,6 +97,19 @@ func registerCenterDeviceAdminRoutes(api *gin.RouterGroup) {
 	api.GET("/devices/:device_id/config-snapshots", getCenterDeviceConfigSnapshots)
 	api.GET("/devices/:device_id/config-snapshots/:revision", getCenterDeviceConfigSnapshotRevision)
 	api.GET("/devices/:device_id/runtime-deployment", getCenterDeviceRuntimeDeployment)
+	api.GET("/devices/:device_id/proxy-rules", getCenterDeviceProxyRules)
+	api.POST("/devices/:device_id/proxy-rules/validate", postCenterDeviceProxyRulesValidate)
+	api.POST("/devices/:device_id/proxy-rules/bundles", postCenterDeviceProxyRuleBundle)
+	api.GET("/devices/:device_id/proxy-rules/bundles/:revision", getCenterDeviceProxyRuleBundle)
+	api.POST("/devices/:device_id/proxy-rules/assignments", postCenterDeviceProxyRuleAssignment)
+	api.POST("/devices/:device_id/proxy-rules/assignments/clear", postCenterDeviceProxyRuleAssignmentClear)
+	api.GET("/devices/:device_id/waf-rules", getCenterDeviceWAFRules)
+	api.GET("/devices/:device_id/waf-rules/bundles/:revision", getCenterDeviceWAFRuleBundle)
+	api.GET("/devices/:device_id/waf-rules/bundles/:revision/download", getCenterDeviceWAFRuleBundleDownload)
+	api.POST("/devices/:device_id/waf-rules/bundles/import", postCenterDeviceWAFRuleBundleImport)
+	api.GET("/devices/:device_id/waf-rules/bundles/:revision/files", getCenterDeviceWAFRuleBundleFile)
+	api.POST("/devices/:device_id/waf-rules/assignments", postCenterDeviceWAFRuleAssignment)
+	api.POST("/devices/:device_id/waf-rules/assignments/clear", postCenterDeviceWAFRuleAssignmentClear)
 	api.POST("/devices/:device_id/runtime-assignments", postCenterDeviceRuntimeAssignment)
 	api.POST("/devices/:device_id/runtime-assignments/remove", postCenterDeviceRuntimeAssignmentRemoval)
 	api.POST("/devices/:device_id/runtime-assignments/clear", postCenterDeviceRuntimeAssignmentClear)
@@ -177,6 +215,8 @@ func postDeviceStatus(c *gin.Context) {
 	}
 	checkedAt := time.Now().UTC().Unix()
 	runtimeAssignments := []RuntimeDeviceAssignment{}
+	var proxyRuleAssignment *ProxyRuleDeviceAssignment
+	var wafRuleAssignment *WAFRuleDeviceAssignment
 	if record.FromApprovedDevice {
 		if err := TouchApprovedDeviceHeartbeat(c.Request.Context(), verified.DeviceID, checkedAt, DeviceRuntimeInventory{
 			RuntimeRole:                verified.RuntimeRole,
@@ -190,9 +230,27 @@ func postDeviceStatus(c *gin.Context) {
 			DistroVersion:              verified.DistroVersion,
 			RuntimeDeploymentSupported: verified.RuntimeDeploymentSupported,
 			RuntimeInventory:           verified.RuntimeInventory,
+			ProxyRuleApplyStatus:       verified.ProxyRuleApplyStatus,
+			WAFRuleApplyStatus:         verified.WAFRuleApplyStatus,
 		}); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update device last seen"})
 			return
+		}
+		if record.Status == DeviceStatusApproved {
+			assignment, err := PendingProxyRuleAssignmentForDevice(c.Request.Context(), verified.DeviceID, checkedAt)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load proxy rule assignment"})
+				return
+			}
+			proxyRuleAssignment = assignment
+		}
+		if record.Status == DeviceStatusApproved {
+			assignment, err := PendingWAFRuleAssignmentForDevice(c.Request.Context(), verified.DeviceID, checkedAt)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load WAF rule assignment"})
+				return
+			}
+			wafRuleAssignment = assignment
 		}
 		if record.Status == DeviceStatusApproved && verified.RuntimeDeploymentSupported {
 			assignments, err := PendingRuntimeAssignmentsForDevice(c.Request.Context(), verified.DeviceID, checkedAt)
@@ -212,6 +270,12 @@ func postDeviceStatus(c *gin.Context) {
 	}
 	if len(runtimeAssignments) > 0 {
 		resp["runtime_assignments"] = runtimeAssignments
+	}
+	if proxyRuleAssignment != nil {
+		resp["proxy_rule_assignment"] = proxyRuleAssignment
+	}
+	if wafRuleAssignment != nil {
+		resp["waf_rule_assignment"] = wafRuleAssignment
 	}
 	c.JSON(http.StatusOK, resp)
 }
@@ -439,6 +503,126 @@ func postRuntimeArtifactDownload(c *gin.Context) {
 	c.Data(http.StatusOK, "application/gzip", body)
 }
 
+func postProxyRulesBundleDownload(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxProxyRulesBundleDownloadBodyBytes)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req ProxyRulesBundleDownloadRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid proxy rules bundle download payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid proxy rules bundle download payload"})
+		return
+	}
+	normalizedReq, _, err := normalizeProxyRulesBundleDownloadRequest(req, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	req = normalizedReq
+	record, err := LookupDeviceStatus(c.Request.Context(), req.DeviceID, req.KeyID, req.PublicKeyFingerprintSHA256)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrDeviceStatusNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "device status not found"})
+		case errors.Is(err, ErrDeviceStatusKeyMismatch):
+			c.JSON(http.StatusForbidden, gin.H{"error": "device key mismatch"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load device status"})
+		}
+		return
+	}
+	if !record.FromApprovedDevice || record.Status != DeviceStatusApproved {
+		c.JSON(http.StatusForbidden, gin.H{"error": "device is not approved"})
+		return
+	}
+	verified, err := VerifyProxyRulesBundleDownloadRequest(req, record.PublicKeyPEM, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	bundle, body, err := ProxyRuleBundleDownloadForDevice(c.Request.Context(), verified.DeviceID, verified.BundleRevision, verified.PayloadHash)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrDeviceStatusNotFound), errors.Is(err, ErrProxyRuleBundleNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "proxy rules bundle not found"})
+		case errors.Is(err, ErrProxyRuleInvalid):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "invalid proxy rules bundle"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load proxy rules bundle"})
+		}
+		return
+	}
+	c.Header("Content-Disposition", "attachment; filename=\"proxy-rules-"+bundle.BundleRevision[:12]+".json\"")
+	c.Header("Content-Length", strconv.FormatInt(int64(len(body)), 10))
+	c.Header("X-Tukuyomi-Proxy-Rules-Bundle-Revision", bundle.BundleRevision)
+	c.Header("X-Tukuyomi-Proxy-Rules-Payload-Hash", bundle.PayloadHash)
+	c.Header("X-Tukuyomi-Proxy-Rules-Payload-ETag", bundle.PayloadETag)
+	c.Header("X-Tukuyomi-Proxy-Rules-Source-ETag", bundle.SourceProxyETag)
+	c.Data(http.StatusOK, "application/json", body)
+}
+
+func postWAFRuleArtifactDownload(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxWAFRuleArtifactDownloadBodyBytes)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req WAFRuleArtifactDownloadRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid WAF rule artifact download payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid WAF rule artifact download payload"})
+		return
+	}
+	normalizedReq, _, err := normalizeWAFRuleArtifactDownloadRequest(req, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	req = normalizedReq
+	record, err := LookupDeviceStatus(c.Request.Context(), req.DeviceID, req.KeyID, req.PublicKeyFingerprintSHA256)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrDeviceStatusNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "device status not found"})
+		case errors.Is(err, ErrDeviceStatusKeyMismatch):
+			c.JSON(http.StatusForbidden, gin.H{"error": "device key mismatch"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load device status"})
+		}
+		return
+	}
+	if !record.FromApprovedDevice || record.Status != DeviceStatusApproved {
+		c.JSON(http.StatusForbidden, gin.H{"error": "device is not approved"})
+		return
+	}
+	verified, err := VerifyWAFRuleArtifactDownloadRequest(req, record.PublicKeyPEM, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	bundle, body, err := WAFRuleArtifactDownloadForDevice(c.Request.Context(), verified.DeviceID, verified.BundleRevision)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrDeviceStatusNotFound), errors.Is(err, ErrWAFRuleBundleNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "WAF rule artifact not found"})
+		case errors.Is(err, ErrWAFRuleInvalid):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "invalid WAF rule artifact"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load WAF rule artifact"})
+		}
+		return
+	}
+	filename := "waf-rules-" + bundle.BundleRevision[:12] + ".tar.gz"
+	c.Header("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	c.Header("Content-Length", strconv.FormatInt(int64(len(body)), 10))
+	c.Header("X-Tukuyomi-WAF-Rule-Bundle-Revision", bundle.BundleRevision)
+	c.Data(http.StatusOK, "application/gzip", body)
+}
+
 func getCenterDevices(c *gin.Context) {
 	devices, err := ListDevices(c.Request.Context(), parseBoolQuery(c.Query("include_archived")))
 	if err != nil {
@@ -563,6 +747,322 @@ func getCenterDeviceRuntimeDeployment(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, view)
+}
+
+func getCenterDeviceProxyRules(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	view, err := ProxyRulesDeploymentForDevice(c.Request.Context(), deviceID)
+	if err != nil {
+		respondProxyRuleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, view)
+}
+
+func postCenterDeviceProxyRulesValidate(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxProxyRulePayloadBytes+8*1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req proxyRuleValidateRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid proxy rules payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid proxy rules payload"})
+		return
+	}
+	_ = deviceID
+	raw, etag, proxy, err := handler.NormalizeProxyRulesRawStandalone(req.Raw)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":       true,
+		"messages": []string{},
+		"raw":      raw,
+		"etag":     etag,
+		"proxy":    proxy,
+	})
+}
+
+func postCenterDeviceProxyRuleBundle(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxProxyRulePayloadBytes+16*1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req proxyRuleBundleBuildRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid proxy rules bundle payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid proxy rules bundle payload"})
+		return
+	}
+	bundle, err := BuildProxyRuleBundleForDevice(c.Request.Context(), ProxyRuleBundleBuild{
+		DeviceID:             deviceID,
+		Raw:                  req.Raw,
+		SourceConfigRevision: req.SourceConfigRevision,
+		SourceProxyETag:      req.SourceProxyETag,
+		CreatedBy:            centerAdminActor(c),
+	})
+	if err != nil {
+		respondProxyRuleError(c, err)
+		return
+	}
+	resp := gin.H{"bundle": bundle}
+	if req.Assign {
+		assignment, err := AssignProxyRuleBundleToDevice(c.Request.Context(), ProxyRuleAssignmentUpdate{
+			DeviceID:       deviceID,
+			BundleRevision: bundle.BundleRevision,
+			Reason:         req.Reason,
+			AssignedBy:     centerAdminActor(c),
+		})
+		if err != nil {
+			respondProxyRuleError(c, err)
+			return
+		}
+		resp["assignment"] = assignment
+	}
+	c.JSON(http.StatusCreated, resp)
+}
+
+func getCenterDeviceProxyRuleBundle(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	revision, ok := parseConfigRevisionParam(c)
+	if !ok {
+		return
+	}
+	bundle, err := LoadProxyRuleBundleForDevice(c.Request.Context(), deviceID, revision)
+	if err != nil {
+		respondProxyRuleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"bundle": bundle,
+		"raw":    string(bundle.PayloadJSON),
+	})
+}
+
+func postCenterDeviceProxyRuleAssignment(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8*1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req proxyRuleAssignmentRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid proxy rule assignment payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid proxy rule assignment payload"})
+		return
+	}
+	assignment, err := AssignProxyRuleBundleToDevice(c.Request.Context(), ProxyRuleAssignmentUpdate{
+		DeviceID:       deviceID,
+		BundleRevision: req.BundleRevision,
+		Reason:         req.Reason,
+		AssignedBy:     centerAdminActor(c),
+	})
+	if err != nil {
+		respondProxyRuleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"assignment": assignment})
+}
+
+func postCenterDeviceProxyRuleAssignmentClear(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	cleared, err := ClearProxyRuleAssignment(c.Request.Context(), deviceID)
+	if err != nil {
+		respondProxyRuleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"cleared": cleared})
+}
+
+func getCenterDeviceWAFRules(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	view, err := WAFRulesDeploymentForDevice(c.Request.Context(), deviceID)
+	if err != nil {
+		respondWAFRuleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, view)
+}
+
+func getCenterDeviceWAFRuleBundle(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	revision, ok := parseConfigRevisionParam(c)
+	if !ok {
+		return
+	}
+	bundle, err := LoadWAFRuleBundleForDevice(c.Request.Context(), deviceID, revision)
+	if err != nil {
+		respondWAFRuleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, bundle)
+}
+
+func getCenterDeviceWAFRuleBundleDownload(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	revision, ok := parseConfigRevisionParam(c)
+	if !ok {
+		return
+	}
+	bundle, body, err := DownloadWAFRuleBundleForDevice(c.Request.Context(), deviceID, revision)
+	if err != nil {
+		respondWAFRuleError(c, err)
+		return
+	}
+	filename := safeWAFRuleBundleFilename(deviceID, bundle.BundleRevision)
+	c.Header("Content-Disposition", `attachment; filename="`+filename+`"`)
+	c.Header("X-Tukuyomi-WAF-Rule-Bundle-Revision", bundle.BundleRevision)
+	c.Header("X-Tukuyomi-WAF-Rule-Bundle-Hash", bundle.BundleHash)
+	c.Data(http.StatusOK, "application/zip", body)
+}
+
+func postCenterDeviceWAFRuleBundleImport(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxRuleArtifactBundleBodyBytes)
+	if err := c.Request.ParseMultipartForm(MaxRuleArtifactBundleBodyBytes); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid WAF rule bundle upload"})
+		return
+	}
+	file, _, err := c.Request.FormFile("bundle")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bundle file is required"})
+		return
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, MaxRuleArtifactBundleBodyBytes+1))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read WAF rule bundle upload"})
+		return
+	}
+	if len(raw) == 0 || len(raw) > MaxRuleArtifactBundleBodyBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid WAF rule bundle upload size"})
+		return
+	}
+	assign := parseBoolQuery(c.PostForm("assign"))
+	reason := strings.TrimSpace(c.PostForm("reason"))
+	if reason == "" {
+		reason = "center WAF rule bundle upload"
+	}
+	result, err := ImportWAFRuleBundleForDevice(c.Request.Context(), WAFRuleBundleImport{
+		DeviceID: deviceID,
+		Archive:  raw,
+		Assign:   assign,
+		Reason:   reason,
+		Actor:    centerAdminActor(c),
+	})
+	if err != nil {
+		respondWAFRuleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func getCenterDeviceWAFRuleBundleFile(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	revision, ok := parseConfigRevisionParam(c)
+	if !ok {
+		return
+	}
+	assetPath := strings.TrimSpace(c.Query("path"))
+	if assetPath == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "path is required"})
+		return
+	}
+	file, err := LoadWAFRuleBundleFileForDevice(c.Request.Context(), deviceID, revision, assetPath)
+	if err != nil {
+		respondWAFRuleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"file": file,
+		"raw":  string(file.Body),
+	})
+}
+
+func postCenterDeviceWAFRuleAssignment(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8*1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req wafRuleAssignmentRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid WAF rule assignment payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid WAF rule assignment payload"})
+		return
+	}
+	assignment, err := AssignWAFRuleBundleToDevice(c.Request.Context(), WAFRuleAssignmentUpdate{
+		DeviceID:       deviceID,
+		BundleRevision: req.BundleRevision,
+		Reason:         req.Reason,
+		AssignedBy:     centerAdminActor(c),
+	})
+	if err != nil {
+		respondWAFRuleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"assignment": assignment})
+}
+
+func postCenterDeviceWAFRuleAssignmentClear(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	cleared, err := ClearWAFRuleAssignment(c.Request.Context(), deviceID)
+	if err != nil {
+		respondWAFRuleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"cleared": cleared})
 }
 
 func postCenterDeviceRuntimeAssignment(c *gin.Context) {
@@ -773,6 +1273,36 @@ func respondRuntimeAssignmentError(c *gin.Context, err error) {
 	}
 }
 
+func respondProxyRuleError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrDeviceStatusNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "device not found"})
+	case errors.Is(err, ErrProxyRuleBundleNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "proxy rules bundle not found"})
+	case errors.Is(err, ErrProxyRuleAssignmentDispatched):
+		c.JSON(http.StatusConflict, gin.H{"error": "proxy rules assignment has already been dispatched"})
+	case errors.Is(err, ErrProxyRuleInvalid):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid proxy rules payload"})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update proxy rules"})
+	}
+}
+
+func respondWAFRuleError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrDeviceStatusNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "device not found"})
+	case errors.Is(err, ErrWAFRuleBundleNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "WAF rule bundle not found"})
+	case errors.Is(err, ErrWAFRuleAssignmentDispatched):
+		c.JSON(http.StatusConflict, gin.H{"error": "WAF rule assignment has already been dispatched"})
+	case errors.Is(err, ErrWAFRuleInvalid):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid WAF rule payload"})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update WAF rules"})
+	}
+}
+
 func respondRuntimeBuildError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, ErrDeviceStatusNotFound):
@@ -936,6 +1466,14 @@ func parseConfigRevisionParam(c *gin.Context) (string, bool) {
 }
 
 func safeConfigSnapshotFilename(deviceID string, revision string) string {
+	return safeDeviceFilenamePrefix(deviceID) + "-config-" + safeRevisionFilenamePart(revision, "snapshot") + ".json"
+}
+
+func safeWAFRuleBundleFilename(deviceID string, revision string) string {
+	return safeDeviceFilenamePrefix(deviceID) + "-waf-rules-" + safeRevisionFilenamePart(revision, "bundle") + ".zip"
+}
+
+func safeDeviceFilenamePrefix(deviceID string) string {
 	deviceID = strings.TrimSpace(deviceID)
 	var b strings.Builder
 	for _, r := range deviceID {
@@ -958,14 +1496,18 @@ func safeConfigSnapshotFilename(deviceID string, revision string) string {
 	if b.Len() == 0 {
 		b.WriteString("device")
 	}
+	return b.String()
+}
+
+func safeRevisionFilenamePart(revision string, fallback string) string {
 	revision = strings.ToLower(strings.TrimSpace(revision))
 	if len(revision) > 12 {
 		revision = revision[:12]
 	}
 	if revision == "" {
-		revision = "snapshot"
+		revision = fallback
 	}
-	return b.String() + "-config-" + revision + ".json"
+	return revision
 }
 
 func centerAdminActor(c *gin.Context) string {

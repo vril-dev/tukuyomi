@@ -430,6 +430,79 @@ func TestProxyCacheCookieBypassIgnoresOnlyAdminCookies(t *testing.T) {
 	}
 }
 
+func TestStripAdminAuthCookiesAllowsCenterCookiesForProtectedCenterRoute(t *testing.T) {
+	oldEdgeEnabled := config.EdgeEnabled
+	oldEdgeDeviceAuthEnabled := config.EdgeDeviceAuthEnabled
+	oldEdgeRequireDeviceApproval := config.EdgeRequireDeviceApproval
+	defer func() {
+		config.EdgeEnabled = oldEdgeEnabled
+		config.EdgeDeviceAuthEnabled = oldEdgeDeviceAuthEnabled
+		config.EdgeRequireDeviceApproval = oldEdgeRequireDeviceApproval
+		_ = InitLogsStatsStore(false, "", 0)
+	}()
+
+	dbPath := filepath.Join(t.TempDir(), "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	config.EdgeEnabled = true
+	config.EdgeDeviceAuthEnabled = true
+	config.EdgeRequireDeviceApproval = true
+
+	store := getLogsStatsStore()
+	if err := upsertEdgeDeviceIdentity(store, edgeDeviceIdentityRecord{
+		DeviceID:                   "tky-protected-center-test",
+		KeyID:                      "default",
+		PublicKeyFingerprintSHA256: "fingerprint",
+		EnrollmentStatus:           edgeEnrollmentStatusApproved,
+		CenterURL:                  "http://center.internal:9090",
+		CreatedAtUnix:              1,
+		UpdatedAtUnix:              1,
+	}); err != nil {
+		t.Fatalf("upsertEdgeDeviceIdentity: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://gateway.test/center-api/status", nil)
+	req.AddCookie(&http.Cookie{Name: adminauth.SessionCookieName, Value: "admin-session"})
+	req.AddCookie(&http.Cookie{Name: adminauth.CSRFCookieName, Value: "admin-csrf"})
+	req.AddCookie(&http.Cookie{Name: adminauth.CenterSessionCookieName, Value: "center-session"})
+	req.AddCookie(&http.Cookie{Name: adminauth.CenterCSRFCookieName, Value: "center-csrf"})
+	ctx := withProxyRouteClassification(req.Context(), proxyRouteClassification{
+		Source:    proxyRouteResolutionRoute,
+		RouteName: "center-api",
+	})
+	ctx = withProxyRouteTransportSelection(ctx, proxyRouteTransportSelection{
+		SelectedUpstream:    "center",
+		SelectedUpstreamURL: "http://center.internal:9090/",
+	})
+	req = req.WithContext(ctx)
+
+	stripAdminAuthCookiesFromProxyRequest(req)
+	if got, want := req.Header.Get("Cookie"), "tukuyomi_center_session=center-session; tukuyomi_center_csrf=center-csrf"; got != want {
+		t.Fatalf("center route cookie header after strip=%q want %q", got, want)
+	}
+	if !shouldBypassProxyResponseCache(req) {
+		t.Fatal("forwarded center cookies must still bypass response cache")
+	}
+
+	mismatch := httptest.NewRequest(http.MethodGet, "http://gateway.test/center-api/status", nil)
+	mismatch.AddCookie(&http.Cookie{Name: adminauth.CenterSessionCookieName, Value: "center-session"})
+	mismatch.AddCookie(&http.Cookie{Name: adminauth.CenterCSRFCookieName, Value: "center-csrf"})
+	mismatchCtx := withProxyRouteClassification(mismatch.Context(), proxyRouteClassification{
+		Source:    proxyRouteResolutionRoute,
+		RouteName: "center-api",
+	})
+	mismatchCtx = withProxyRouteTransportSelection(mismatchCtx, proxyRouteTransportSelection{
+		SelectedUpstream:    "center",
+		SelectedUpstreamURL: "http://other.internal:9090",
+	})
+	mismatch = mismatch.WithContext(mismatchCtx)
+	stripAdminAuthCookiesFromProxyRequest(mismatch)
+	if got := mismatch.Header.Get("Cookie"); got != "" {
+		t.Fatalf("mismatched center target cookie header after strip=%q want empty", got)
+	}
+}
+
 func TestServeProxyWithCache_HostScopeReplacesDefault(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

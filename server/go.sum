@@ -28,6 +28,8 @@ github.com/corazawaf/coraza/v3 v3.6.0 h1:rfsGl6eRBzzUAyADFcpuO7qXLt0DZtYWhfTIuhc
 github.com/corazawaf/coraza/v3 v3.6.0/go.mod h1:q7gszZCSufoHIy9jV2NCgk+glYwZpP2mIKgbu2dZkvE=
 github.com/corazawaf/libinjection-go v0.3.2 h1:9rrKt0lpg4WvUXt+lwS06GywfqRXXsa/7JcOw5cQLwI=
 github.com/corazawaf/libinjection-go v0.3.2/go.mod h1:Ik/+w3UmTWH9yn366RgS9D95K3y7Atb5m/H/gXzzPCk=
+github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
+github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=

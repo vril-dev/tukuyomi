@@ -16,6 +16,7 @@ import (
 	"tukuyomi/internal/adminauth"
 	"tukuyomi/internal/edgeartifactbundle"
 	"tukuyomi/internal/handler"
+	"tukuyomi/internal/middleware"
 )
 
 type enrollmentDecisionRequest struct {
@@ -75,6 +76,19 @@ type wafRuleAssignmentRequest struct {
 	Reason         string `json:"reason"`
 }
 
+type remoteSSHPolicyUpdateRequest struct {
+	Enabled          bool   `json:"enabled"`
+	MaxTTLSec        int64  `json:"max_ttl_sec"`
+	AllowedRunAsUser string `json:"allowed_run_as_user"`
+	RequireReason    *bool  `json:"require_reason"`
+}
+
+type remoteSSHSessionCreateRequest struct {
+	OperatorPublicKey string `json:"operator_public_key"`
+	TTLSec            int64  `json:"ttl_sec"`
+	Reason            string `json:"reason"`
+}
+
 type proxyRuleValidateRequest struct {
 	Raw string `json:"raw"`
 }
@@ -87,6 +101,13 @@ func registerDeviceEnrollmentRoutes(r *gin.Engine) {
 	r.POST("/v1/runtime-artifact-download", postRuntimeArtifactDownload)
 	r.POST("/v1/proxy-rules-bundle-download", postProxyRulesBundleDownload)
 	r.POST("/v1/waf-rule-artifact-download", postWAFRuleArtifactDownload)
+	r.GET("/v1/remote-ssh/gateway-stream", getRemoteSSHGatewayStream)
+	r.GET(
+		"/v1/remote-ssh/operator-stream",
+		handler.AdminAuthCookieNamesMiddleware(centerAdminAuthCookieNames),
+		middleware.AdminAuthRequiredWithResolver(handler.DBAdminAuthResolverWithCookieNames(centerAdminAuthCookieNames)),
+		getRemoteSSHOperatorStream,
+	)
 }
 
 func registerCenterDeviceAdminRoutes(api *gin.RouterGroup) {
@@ -110,6 +131,10 @@ func registerCenterDeviceAdminRoutes(api *gin.RouterGroup) {
 	api.GET("/devices/:device_id/waf-rules/bundles/:revision/files", getCenterDeviceWAFRuleBundleFile)
 	api.POST("/devices/:device_id/waf-rules/assignments", postCenterDeviceWAFRuleAssignment)
 	api.POST("/devices/:device_id/waf-rules/assignments/clear", postCenterDeviceWAFRuleAssignmentClear)
+	api.GET("/devices/:device_id/remote-ssh", getCenterDeviceRemoteSSH)
+	api.PUT("/devices/:device_id/remote-ssh/policy", putCenterDeviceRemoteSSHPolicy)
+	api.POST("/devices/:device_id/remote-ssh/sessions", postCenterDeviceRemoteSSHSession)
+	api.GET("/remote-ssh/signing-key", getCenterRemoteSSHSigningKey)
 	api.POST("/devices/:device_id/runtime-assignments", postCenterDeviceRuntimeAssignment)
 	api.POST("/devices/:device_id/runtime-assignments/remove", postCenterDeviceRuntimeAssignmentRemoval)
 	api.POST("/devices/:device_id/runtime-assignments/clear", postCenterDeviceRuntimeAssignmentClear)
@@ -217,6 +242,7 @@ func postDeviceStatus(c *gin.Context) {
 	runtimeAssignments := []RuntimeDeviceAssignment{}
 	var proxyRuleAssignment *ProxyRuleDeviceAssignment
 	var wafRuleAssignment *WAFRuleDeviceAssignment
+	var remoteSSHSession *RemoteSSHDeviceSession
 	if record.FromApprovedDevice {
 		if err := TouchApprovedDeviceHeartbeat(c.Request.Context(), verified.DeviceID, checkedAt, DeviceRuntimeInventory{
 			RuntimeRole:                verified.RuntimeRole,
@@ -252,6 +278,14 @@ func postDeviceStatus(c *gin.Context) {
 			}
 			wafRuleAssignment = assignment
 		}
+		if record.Status == DeviceStatusApproved {
+			session, err := PendingRemoteSSHSessionForDevice(c.Request.Context(), verified.DeviceID, checkedAt)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load remote ssh session"})
+				return
+			}
+			remoteSSHSession = session
+		}
 		if record.Status == DeviceStatusApproved && verified.RuntimeDeploymentSupported {
 			assignments, err := PendingRuntimeAssignmentsForDevice(c.Request.Context(), verified.DeviceID, checkedAt)
 			if err != nil {
@@ -276,6 +310,9 @@ func postDeviceStatus(c *gin.Context) {
 	}
 	if wafRuleAssignment != nil {
 		resp["waf_rule_assignment"] = wafRuleAssignment
+	}
+	if remoteSSHSession != nil {
+		resp["remote_ssh_session"] = remoteSSHSession
 	}
 	c.JSON(http.StatusOK, resp)
 }
@@ -1256,6 +1293,107 @@ func getCenterRuntimeBuildJob(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"job": job})
 }
 
+func getCenterDeviceRemoteSSH(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	limit := parseBoundedInt(c.Query("limit"), 20, 1, 100)
+	view, err := RemoteSSHViewForDevice(c.Request.Context(), deviceID, limit)
+	if err != nil {
+		respondRemoteSSHError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, view)
+}
+
+func putCenterDeviceRemoteSSHPolicy(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8*1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req remoteSSHPolicyUpdateRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid remote ssh policy payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid remote ssh policy payload"})
+		return
+	}
+	requireReason := true
+	if req.RequireReason != nil {
+		requireReason = *req.RequireReason
+	}
+	principal := centerAdminPrincipal(c)
+	policy, err := UpsertRemoteSSHPolicy(c.Request.Context(), RemoteSSHPolicyUpdate{
+		DeviceID:          deviceID,
+		Enabled:           req.Enabled,
+		MaxTTLSec:         req.MaxTTLSec,
+		AllowedRunAsUser:  req.AllowedRunAsUser,
+		RequireReason:     requireReason,
+		UpdatedByUserID:   principal.UserID,
+		UpdatedByUsername: centerAdminActor(c),
+		UpdatedAtUnix:     time.Now().UTC().Unix(),
+	})
+	if err != nil {
+		respondRemoteSSHError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"policy": policy})
+}
+
+func postCenterDeviceRemoteSSHSession(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 12*1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req remoteSSHSessionCreateRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid remote ssh session payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid remote ssh session payload"})
+		return
+	}
+	principal := centerAdminPrincipal(c)
+	session, err := CreateRemoteSSHSession(c.Request.Context(), RemoteSSHSessionCreate{
+		DeviceID:          deviceID,
+		Reason:            req.Reason,
+		OperatorPublicKey: req.OperatorPublicKey,
+		TTLSec:            req.TTLSec,
+		RequestedByUserID: principal.UserID,
+		RequestedBy:       centerAdminActor(c),
+		OperatorIP:        requestRemoteAddr(c.Request),
+		OperatorUserAgent: c.Request.UserAgent(),
+		CreatedAtUnix:     time.Now().UTC().Unix(),
+	})
+	if err != nil {
+		respondRemoteSSHError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"session": session})
+}
+
+func getCenterRemoteSSHSigningKey(c *gin.Context) {
+	publicKey, err := RemoteSSHCenterSigningPublicKey(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load remote ssh signing key"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"public_key": publicKey,
+		"algorithm":  "ed25519",
+	})
+}
+
 func respondRuntimeAssignmentError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, ErrDeviceStatusNotFound):
@@ -1300,6 +1438,25 @@ func respondWAFRuleError(c *gin.Context, err error) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid WAF rule payload"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update WAF rules"})
+	}
+}
+
+func respondRemoteSSHError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrDeviceStatusNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "device not found"})
+	case errors.Is(err, ErrRemoteSSHDisabled):
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "remote ssh is disabled"})
+	case errors.Is(err, ErrRemoteSSHPolicyDisabled):
+		c.JSON(http.StatusForbidden, gin.H{"error": "remote ssh policy is disabled for this device"})
+	case errors.Is(err, ErrRemoteSSHSessionLimit):
+		c.JSON(http.StatusConflict, gin.H{"error": "remote ssh session limit exceeded"})
+	case errors.Is(err, ErrRemoteSSHInvalid):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid remote ssh payload"})
+	case errors.Is(err, ErrRemoteSSHSessionNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "remote ssh session not found"})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update remote ssh"})
 	}
 }
 
@@ -1526,6 +1683,18 @@ func centerAdminActor(c *gin.Context) string {
 		return actor
 	}
 	return "unknown"
+}
+
+func centerAdminPrincipal(c *gin.Context) adminauth.Principal {
+	if c == nil {
+		return adminauth.Principal{}
+	}
+	if v, ok := c.Get("tukuyomi.admin_principal"); ok {
+		if principal, ok := v.(adminauth.Principal); ok {
+			return principal
+		}
+	}
+	return adminauth.Principal{}
 }
 
 func requestRemoteAddr(r *http.Request) string {

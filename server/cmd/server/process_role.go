@@ -28,6 +28,7 @@ const (
 	serverCommandUpdateCountryDB           serverCommandKind = "update-country-db"
 	serverCommandBootstrapProtectedGateway serverCommandKind = "bootstrap-center-protected-gateway"
 	serverCommandBootstrapProtectedCenter  serverCommandKind = "bootstrap-center-protected-center"
+	serverCommandRemoteSSH                 serverCommandKind = "remote-ssh"
 )
 
 const (
@@ -99,6 +100,8 @@ func parseServerCommandWithEnv(args []string, env []string) (serverCommand, erro
 		return serverCommand{kind: serverCommandBootstrapProtectedGateway, args: args[2:]}, nil
 	case "bootstrap-center-protected-center":
 		return serverCommand{kind: serverCommandBootstrapProtectedCenter, args: args[2:]}, nil
+	case "remote-ssh":
+		return serverCommand{kind: serverCommandRemoteSSH, args: args[2:]}, nil
 	default:
 		return serverCommand{}, fmt.Errorf("unknown command %q", arg)
 	}

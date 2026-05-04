@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+const testRemoteSSHCenterSigningPublicKey = "ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
 func TestValidateAppAdminListenerConfig(t *testing.T) {
 	t.Run("empty admin listen addr preserves single listener mode", func(t *testing.T) {
 		cfg := defaultAppConfigFile()
@@ -144,6 +146,123 @@ func TestValidateAppEdgeDeviceStatusRefreshInterval(t *testing.T) {
 		}
 		if got := err.Error(); got != "edge.device_auth.status_refresh_interval_sec must be between 0 and 3600" {
 			t.Fatalf("error=%q want edge status refresh interval error", got)
+		}
+	})
+}
+
+func TestValidateAppRemoteSSHConfig(t *testing.T) {
+	t.Run("defaults are disabled and valid", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+
+		if err := validateAppConfigFile(cfg); err != nil {
+			t.Fatalf("validateAppConfigFile() error = %v", err)
+		}
+		if cfg.RemoteSSH.Center.Enabled || cfg.RemoteSSH.Gateway.Enabled || cfg.RemoteSSH.Gateway.EmbeddedServer.Enabled {
+			t.Fatal("remote ssh defaults must be disabled")
+		}
+		if cfg.RemoteSSH.Center.MaxTTLSec != DefaultRemoteSSHMaxTTLSec {
+			t.Fatalf("max ttl=%d want=%d", cfg.RemoteSSH.Center.MaxTTLSec, DefaultRemoteSSHMaxTTLSec)
+		}
+	})
+
+	t.Run("rejects center enable without edge", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.RemoteSSH.Center.Enabled = true
+
+		err := validateAppConfigFile(cfg)
+		if err == nil {
+			t.Fatal("expected remote ssh center edge dependency error")
+		}
+		if got := err.Error(); got != "remote_ssh.center.enabled requires edge.enabled=true" {
+			t.Fatalf("error=%q want center edge dependency error", got)
+		}
+	})
+
+	t.Run("accepts explicit center and gateway enable with edge", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.Edge.Enabled = true
+		cfg.RemoteSSH.Center.Enabled = true
+		cfg.RemoteSSH.Gateway.Enabled = true
+		cfg.RemoteSSH.Gateway.EmbeddedServer.Enabled = true
+		cfg.RemoteSSH.Gateway.CenterSigningPublicKey = testRemoteSSHCenterSigningPublicKey
+		cfg.RemoteSSH.Gateway.CenterTLSCABundleFile = " conf/center-ca.pem "
+		cfg.RemoteSSH.Gateway.CenterTLSServerName = " center.example.local "
+		normalizeAppConfigFile(&cfg)
+
+		if err := validateAppConfigFile(cfg); err != nil {
+			t.Fatalf("validateAppConfigFile() error = %v", err)
+		}
+		if cfg.RemoteSSH.Gateway.CenterTLSCABundleFile != "conf/center-ca.pem" || cfg.RemoteSSH.Gateway.CenterTLSServerName != "center.example.local" {
+			t.Fatalf("remote ssh tls settings not normalized: %+v", cfg.RemoteSSH.Gateway)
+		}
+	})
+
+	t.Run("rejects embedded gateway without pinned center signing key", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.Edge.Enabled = true
+		cfg.RemoteSSH.Gateway.Enabled = true
+		cfg.RemoteSSH.Gateway.EmbeddedServer.Enabled = true
+
+		err := validateAppConfigFile(cfg)
+		if err == nil {
+			t.Fatal("expected remote ssh center signing key error")
+		}
+		if got := err.Error(); got != "remote_ssh.gateway.center_signing_public_key is required when remote_ssh.gateway.embedded_server.enabled=true" {
+			t.Fatalf("error=%q want center signing key error", got)
+		}
+	})
+
+	t.Run("rejects embedded server without gateway", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.Edge.Enabled = true
+		cfg.RemoteSSH.Gateway.EmbeddedServer.Enabled = true
+
+		err := validateAppConfigFile(cfg)
+		if err == nil {
+			t.Fatal("expected embedded server gateway dependency error")
+		}
+		if got := err.Error(); got != "remote_ssh.gateway.embedded_server.enabled requires remote_ssh.gateway.enabled=true" {
+			t.Fatalf("error=%q want embedded server gateway dependency error", got)
+		}
+	})
+
+	t.Run("rejects idle timeout beyond ttl", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.RemoteSSH.Center.MaxTTLSec = 120
+		cfg.RemoteSSH.Center.IdleTimeoutSec = 121
+
+		err := validateAppConfigFile(cfg)
+		if err == nil {
+			t.Fatal("expected remote ssh idle timeout error")
+		}
+		if got := err.Error(); got != "remote_ssh.center.idle_timeout_sec must be between 30 and min(3600, remote_ssh.center.max_ttl_sec)" {
+			t.Fatalf("error=%q want idle timeout error", got)
+		}
+	})
+
+	t.Run("rejects relative embedded shell", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.RemoteSSH.Gateway.EmbeddedServer.Shell = "sh"
+
+		err := validateAppConfigFile(cfg)
+		if err == nil {
+			t.Fatal("expected remote ssh shell path error")
+		}
+		if got := err.Error(); got != "remote_ssh.gateway.embedded_server.shell must be an absolute path" {
+			t.Fatalf("error=%q want shell path error", got)
+		}
+	})
+
+	t.Run("rejects invalid center tls server name", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.RemoteSSH.Gateway.CenterTLSServerName = "https://center.example.local"
+
+		err := validateAppConfigFile(cfg)
+		if err == nil {
+			t.Fatal("expected remote ssh center tls server name error")
+		}
+		if got := err.Error(); got != "remote_ssh.gateway.center_tls_server_name contains invalid characters" {
+			t.Fatalf("error=%q want center tls server name error", got)
 		}
 	})
 }

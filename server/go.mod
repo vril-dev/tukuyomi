@@ -7,6 +7,7 @@ go 1.26.2
 require (
 	github.com/andybalholm/brotli v1.2.1
 	github.com/corazawaf/coraza/v3 v3.6.0
+	github.com/creack/pty v1.1.24
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gin-contrib/cors v1.7.6
 	github.com/gin-gonic/gin v1.10.1

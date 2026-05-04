@@ -22,6 +22,8 @@ func runBootstrapCenterProtectedGatewayCommand(args []string) {
 	outPath := fs.String("out", "", "identity JSON output path; stdout when empty")
 	deviceID := fs.String("device-id", "", "optional Gateway device ID")
 	keyID := fs.String("key-id", "", "optional Gateway key ID")
+	centerTLSCABundleFile := fs.String("center-ca-bundle", "", "optional PEM CA bundle for private Center TLS")
+	centerTLSServerName := fs.String("center-server-name", "", "optional TLS server name for Center certificate verification")
 	pollInterval := fs.Int("poll-interval-sec", 0, "optional Center status poll interval")
 	markApproved := fs.Bool("mark-approved", false, "mark local Gateway enrollment status approved")
 	if err := fs.Parse(args); err != nil {
@@ -43,6 +45,8 @@ func runBootstrapCenterProtectedGatewayCommand(args []string) {
 		CenterUIBasePath:         *centerUIBasePath,
 		DeviceID:                 *deviceID,
 		KeyID:                    *keyID,
+		CenterTLSCABundleFile:    *centerTLSCABundleFile,
+		CenterTLSServerName:      *centerTLSServerName,
 		StatusRefreshIntervalSec: *pollInterval,
 		MarkApproved:             *markApproved,
 	})

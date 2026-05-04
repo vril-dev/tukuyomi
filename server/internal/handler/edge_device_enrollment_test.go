@@ -257,11 +257,13 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	}
 
 	first, err := BootstrapCenterProtectedGateway(context.Background(), CenterProtectedGatewayBootstrapOptions{
-		CenterURL:          "http://127.0.0.1:9092",
-		GatewayAPIBasePath: "/center-api",
-		CenterAPIBasePath:  "/center-manage-api",
-		CenterUIBasePath:   "/center-ui",
-		DeviceID:           "gateway-a",
+		CenterURL:             "http://127.0.0.1:9092",
+		GatewayAPIBasePath:    "/center-api",
+		CenterAPIBasePath:     "/center-manage-api",
+		CenterUIBasePath:      "/center-ui",
+		DeviceID:              "gateway-a",
+		CenterTLSCABundleFile: "conf/center-ca.pem",
+		CenterTLSServerName:   "center.example.local",
 	})
 	if err != nil {
 		t.Fatalf("BootstrapCenterProtectedGateway prepare: %v", err)
@@ -288,6 +290,9 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	}
 	if cfg.Edge.DeviceAuth.StatusRefreshIntervalSec != config.DefaultEdgeDeviceStatusRefreshSec {
 		t.Fatalf("poll interval=%d want %d", cfg.Edge.DeviceAuth.StatusRefreshIntervalSec, config.DefaultEdgeDeviceStatusRefreshSec)
+	}
+	if cfg.RemoteSSH.Gateway.CenterTLSCABundleFile != "conf/center-ca.pem" || cfg.RemoteSSH.Gateway.CenterTLSServerName != "center.example.local" {
+		t.Fatalf("center tls trust settings were not bootstrapped: %+v", cfg.RemoteSSH.Gateway)
 	}
 	proxyCfg, _, found, err := store.loadActiveProxyConfig()
 	if err != nil {

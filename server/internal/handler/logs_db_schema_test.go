@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const latestSchemaMigrationVersionForTest = 33
+const latestSchemaMigrationVersionForTest = 34
 
 func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
@@ -96,6 +96,11 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		"center_device_waf_rule_apply_status",
 		"center_device_waf_rule_apply_history",
 		"edge_device_identities",
+		"center_remote_ssh_sessions",
+		"center_remote_ssh_events",
+		"center_device_remote_ssh_policy",
+		"remote_ssh_host_keys",
+		"remote_ssh_accepted_nonces",
 	} {
 		var name string
 		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
@@ -223,6 +228,14 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		{table: "edge_device_identities", column: "rule_artifact_revision"},
 		{table: "edge_device_identities", column: "rule_artifact_pushed_at_unix"},
 		{table: "edge_device_identities", column: "rule_artifact_error"},
+		{table: "center_remote_ssh_sessions", column: "session_id"},
+		{table: "center_remote_ssh_sessions", column: "attach_token_hash"},
+		{table: "center_remote_ssh_sessions", column: "gateway_host_key_fingerprint_sha256"},
+		{table: "center_remote_ssh_sessions", column: "gateway_host_public_key"},
+		{table: "center_remote_ssh_events", column: "event_type"},
+		{table: "center_device_remote_ssh_policy", column: "enabled"},
+		{table: "remote_ssh_host_keys", column: "private_key_pem"},
+		{table: "remote_ssh_accepted_nonces", column: "nonce_hash"},
 	} {
 		var count int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('`+tc.table+`') WHERE name = ?`, tc.column).Scan(&count); err != nil {

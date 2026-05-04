@@ -43,6 +43,7 @@ type RemoteSSHSession = {
 };
 
 type RemoteSSHViewResponse = {
+  center_enabled?: boolean;
   device?: RemoteSSHDevice;
   policy?: RemoteSSHPolicy;
   sessions?: RemoteSSHSession[];
@@ -50,6 +51,26 @@ type RemoteSSHViewResponse = {
 
 type RemoteSSHPolicyResponse = {
   policy?: RemoteSSHPolicy;
+};
+
+type CenterSettingsConfig = {
+  enrollment_token_default_max_uses?: number;
+  enrollment_token_default_ttl_seconds?: number;
+  admin_session_ttl_seconds?: number;
+  remote_ssh?: {
+    center?: {
+      enabled?: boolean;
+      max_ttl_sec?: number;
+      idle_timeout_sec?: number;
+      max_sessions_total?: number;
+      max_sessions_per_device?: number;
+    };
+  };
+};
+
+type CenterSettingsResponse = {
+  etag?: string;
+  config?: CenterSettingsConfig;
 };
 
 type PolicyForm = {
@@ -69,6 +90,9 @@ type CommandForm = {
 };
 
 const DEFAULT_REMOTE_SSH_TTL = 900;
+const DEFAULT_REMOTE_SSH_IDLE_TIMEOUT = 300;
+const DEFAULT_REMOTE_SSH_MAX_SESSIONS_TOTAL = 16;
+const DEFAULT_REMOTE_SSH_MAX_SESSIONS_PER_DEVICE = 1;
 const DEFAULT_REMOTE_SSH_LOCAL_ADDR = "127.0.0.1:0";
 
 function formatUnixTime(value: number, locale: string) {
@@ -171,6 +195,7 @@ export default function RemoteSSHPage() {
   const deviceID = routeDeviceID || "";
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [enablingCenterService, setEnablingCenterService] = useState(false);
   const [copying, setCopying] = useState(false);
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"success" | "error">("success");
@@ -188,7 +213,8 @@ export default function RemoteSSHPage() {
   const policy = view?.policy;
   const device = view?.device;
   const sessions = Array.isArray(view?.sessions) ? view.sessions : [];
-  const canStart = Boolean(device?.device_id && device.status === "approved" && policy?.enabled);
+  const centerEnabled = view?.center_enabled === true;
+  const canStart = Boolean(centerEnabled && device?.device_id && device.status === "approved" && policy?.enabled);
   const command = useMemo(() => remoteSSHCommand(deviceID, commandForm, policy), [commandForm, deviceID, policy]);
 
   const load = useCallback(async () => {
@@ -219,6 +245,46 @@ export default function RemoteSSHPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function enableCenterService() {
+    setEnablingCenterService(true);
+    setMessage("");
+    setMessageTone("success");
+    try {
+      const settings = await apiGetJson<CenterSettingsResponse>("/settings");
+      const etag = settings.etag || "";
+      if (!etag) {
+        throw new Error(tx("Settings revision is missing. Refresh and try again."));
+      }
+      const currentConfig = settings.config || {};
+      const currentRemoteSSH = currentConfig.remote_ssh || {};
+      const currentCenter = currentRemoteSSH.center || {};
+      const nextConfig: CenterSettingsConfig = {
+        ...currentConfig,
+        remote_ssh: {
+          ...currentRemoteSSH,
+          center: {
+            ...currentCenter,
+            enabled: true,
+            max_ttl_sec: currentCenter.max_ttl_sec || DEFAULT_REMOTE_SSH_TTL,
+            idle_timeout_sec: currentCenter.idle_timeout_sec || DEFAULT_REMOTE_SSH_IDLE_TIMEOUT,
+            max_sessions_total: currentCenter.max_sessions_total || DEFAULT_REMOTE_SSH_MAX_SESSIONS_TOTAL,
+            max_sessions_per_device: currentCenter.max_sessions_per_device || DEFAULT_REMOTE_SSH_MAX_SESSIONS_PER_DEVICE,
+          },
+        },
+      };
+      await apiPutJson<CenterSettingsResponse>("/settings", { config: nextConfig }, { headers: { "If-Match": etag } });
+      setMessageTone("success");
+      setMessage(tx("Remote SSH Center service enabled."));
+      await load();
+    } catch (err) {
+      const fallback = tx("Failed to enable Remote SSH Center service");
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message || fallback : fallback);
+    } finally {
+      setEnablingCenterService(false);
+    }
+  }
 
   async function savePolicy(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -307,6 +373,10 @@ export default function RemoteSSHPage() {
                 <strong>{policy?.enabled ? tx("Enabled") : tx("Disabled")}</strong>
               </div>
               <div>
+                <span>{tx("Center service")}</span>
+                <strong>{centerEnabled ? tx("Enabled") : tx("Disabled")}</strong>
+              </div>
+              <div>
                 <span>{tx("Last seen")}</span>
                 <strong>{formatUnixTime(device.last_seen_at_unix, locale)}</strong>
               </div>
@@ -321,15 +391,23 @@ export default function RemoteSSHPage() {
               </div>
             </div>
             <form onSubmit={savePolicy}>
+              {!centerEnabled ? (
+                <div className="form-message error remote-ssh-center-service-warning">
+                  <span>{tx("Remote SSH Center service is OFF. Enable the Center service before enabling a Gateway policy.")}</span>
+                  <button type="button" className="secondary" onClick={() => void enableCenterService()} disabled={enablingCenterService}>
+                    {enablingCenterService ? tx("Working...") : tx("Enable Center service")}
+                  </button>
+                </div>
+              ) : null}
               <div className="form-grid">
                 <label className="checkbox-line remote-ssh-checkbox">
                   <input
                     type="checkbox"
                     checked={policyForm.enabled}
                     onChange={(event) => setPolicyForm((current) => ({ ...current, enabled: event.target.checked }))}
-                    disabled={saving}
+                    disabled={saving || enablingCenterService}
                   />
-                  <span>{tx("Enable Remote SSH")}</span>
+                  <span>{tx("Enable Remote SSH for this Gateway")}</span>
                 </label>
                 <label>
                   <span>{tx("Max TTL seconds")}</span>
@@ -339,7 +417,7 @@ export default function RemoteSSHPage() {
                     max={86400}
                     value={policyForm.maxTTLSec}
                     onChange={(event) => setPolicyForm((current) => ({ ...current, maxTTLSec: event.target.value }))}
-                    disabled={saving}
+                    disabled={saving || enablingCenterService}
                   />
                 </label>
                 <label>
@@ -348,7 +426,7 @@ export default function RemoteSSHPage() {
                     value={policyForm.allowedRunAsUser}
                     onChange={(event) => setPolicyForm((current) => ({ ...current, allowedRunAsUser: event.target.value }))}
                     placeholder="tukuyomi"
-                    disabled={saving}
+                    disabled={saving || enablingCenterService}
                   />
                   <span className="field-hint">{tx("Leave blank to use the Gateway config default.")}</span>
                 </label>
@@ -357,13 +435,13 @@ export default function RemoteSSHPage() {
                     type="checkbox"
                     checked={policyForm.requireReason}
                     onChange={(event) => setPolicyForm((current) => ({ ...current, requireReason: event.target.checked }))}
-                    disabled={saving}
+                    disabled={saving || enablingCenterService}
                   />
                   <span>{tx("Require reason")}</span>
                 </label>
               </div>
               <div className="form-footer">
-                <button type="submit" disabled={saving}>
+                <button type="submit" disabled={saving || enablingCenterService}>
                   {saving ? tx("Saving...") : tx("Save policy")}
                 </button>
                 {policy?.updated_at_unix ? (
@@ -386,7 +464,7 @@ export default function RemoteSSHPage() {
                 {copying ? tx("Copying...") : tx("Copy command")}
               </button>
             </div>
-            {!canStart ? <p className="form-message error">{tx("Remote SSH requires an approved device and an enabled policy.")}</p> : null}
+            {!canStart ? <p className="form-message error">{tx("Remote SSH requires Center service ON, an approved device, and an enabled policy.")}</p> : null}
             <div className="form-grid remote-ssh-command-grid">
               <label>
                 <span>{tx("Reason")}</span>

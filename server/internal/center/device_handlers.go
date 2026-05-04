@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/adminauth"
+	"tukuyomi/internal/config"
 	"tukuyomi/internal/edgeartifactbundle"
 	"tukuyomi/internal/handler"
 	"tukuyomi/internal/middleware"
@@ -89,6 +90,10 @@ type remoteSSHSessionCreateRequest struct {
 	Reason            string `json:"reason"`
 }
 
+type remoteSSHSigningKeyRotateRequest struct {
+	Confirm bool `json:"confirm"`
+}
+
 type proxyRuleValidateRequest struct {
 	Raw string `json:"raw"`
 }
@@ -101,6 +106,7 @@ func registerDeviceEnrollmentRoutes(r *gin.Engine) {
 	r.POST("/v1/runtime-artifact-download", postRuntimeArtifactDownload)
 	r.POST("/v1/proxy-rules-bundle-download", postProxyRulesBundleDownload)
 	r.POST("/v1/waf-rule-artifact-download", postWAFRuleArtifactDownload)
+	r.GET("/v1/remote-ssh/signing-key", getPublicRemoteSSHSigningKey)
 	r.GET("/v1/remote-ssh/gateway-stream", getRemoteSSHGatewayStream)
 	r.GET(
 		"/v1/remote-ssh/operator-stream",
@@ -135,6 +141,7 @@ func registerCenterDeviceAdminRoutes(api *gin.RouterGroup) {
 	api.PUT("/devices/:device_id/remote-ssh/policy", putCenterDeviceRemoteSSHPolicy)
 	api.POST("/devices/:device_id/remote-ssh/sessions", postCenterDeviceRemoteSSHSession)
 	api.GET("/remote-ssh/signing-key", getCenterRemoteSSHSigningKey)
+	api.POST("/remote-ssh/signing-key/rotate", postCenterRemoteSSHSigningKeyRotate)
 	api.POST("/devices/:device_id/runtime-assignments", postCenterDeviceRuntimeAssignment)
 	api.POST("/devices/:device_id/runtime-assignments/remove", postCenterDeviceRuntimeAssignmentRemoval)
 	api.POST("/devices/:device_id/runtime-assignments/clear", postCenterDeviceRuntimeAssignmentClear)
@@ -1383,6 +1390,54 @@ func postCenterDeviceRemoteSSHSession(c *gin.Context) {
 }
 
 func getCenterRemoteSSHSigningKey(c *gin.Context) {
+	publicKey, err := RemoteSSHCenterSigningPublicKey(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load remote ssh signing key"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"public_key": publicKey,
+		"algorithm":  "ed25519",
+	})
+}
+
+func postCenterRemoteSSHSigningKeyRotate(c *gin.Context) {
+	if config.AdminReadOnly {
+		c.JSON(http.StatusForbidden, gin.H{"error": "admin is read-only"})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req remoteSSHSigningKeyRotateRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid remote ssh signing key rotate payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid remote ssh signing key rotate payload"})
+		return
+	}
+	if !req.Confirm {
+		c.JSON(http.StatusPreconditionRequired, gin.H{"error": "confirm is required"})
+		return
+	}
+	publicKey, err := RotateRemoteSSHCenterSigningKey(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rotate remote ssh signing key"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"public_key": publicKey,
+		"algorithm":  "ed25519",
+	})
+}
+
+func getPublicRemoteSSHSigningKey(c *gin.Context) {
+	if !config.RemoteSSHCenterEnabled {
+		c.JSON(http.StatusConflict, gin.H{"error": "remote ssh is disabled"})
+		return
+	}
 	publicKey, err := RemoteSSHCenterSigningPublicKey(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load remote ssh signing key"})

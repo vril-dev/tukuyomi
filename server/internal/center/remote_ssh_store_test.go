@@ -157,6 +157,9 @@ func TestRemoteSSHPolicyAndSessionLifecycle(t *testing.T) {
 	if len(view.Sessions) != 1 || view.Sessions[0].Status != RemoteSSHSessionStatusExpired {
 		t.Fatalf("expired session not recorded in view: %+v", view.Sessions)
 	}
+	if !view.CenterEnabled {
+		t.Fatal("view should include enabled Center Remote SSH runtime state")
+	}
 	if view.Sessions[0].GatewayHostPublicKey != hostPub {
 		t.Fatalf("gateway host public key not retained in view: %+v", view.Sessions[0])
 	}
@@ -193,6 +196,61 @@ func TestRemoteSSHSessionValidation(t *testing.T) {
 	}); !errors.Is(err, ErrRemoteSSHInvalid) {
 		t.Fatalf("CreateRemoteSSHSession invalid key error=%v want ErrRemoteSSHInvalid", err)
 	}
+}
+
+func TestRemoteSSHCenterSigningKeyRotation(t *testing.T) {
+	setupRemoteSSHStoreTest(t)
+	insertRemoteSSHApprovedDeviceForTest(t, "edge-remote-rotate")
+
+	ctx := context.Background()
+	before, err := RemoteSSHCenterSigningPublicKey(ctx)
+	if err != nil {
+		t.Fatalf("RemoteSSHCenterSigningPublicKey before rotate: %v", err)
+	}
+	after, err := RotateRemoteSSHCenterSigningKey(ctx)
+	if err != nil {
+		t.Fatalf("RotateRemoteSSHCenterSigningKey: %v", err)
+	}
+	if after == "" || after == before {
+		t.Fatalf("rotated key=%q before=%q", after, before)
+	}
+	loaded, err := RemoteSSHCenterSigningPublicKey(ctx)
+	if err != nil {
+		t.Fatalf("RemoteSSHCenterSigningPublicKey after rotate: %v", err)
+	}
+	if loaded != after {
+		t.Fatalf("loaded key=%q want rotated=%q", loaded, after)
+	}
+	if _, err := UpsertRemoteSSHPolicy(ctx, RemoteSSHPolicyUpdate{
+		DeviceID:         "edge-remote-rotate",
+		Enabled:          true,
+		MaxTTLSec:        120,
+		AllowedRunAsUser: "tukuyomi",
+		RequireReason:    true,
+		UpdatedAtUnix:    1000,
+	}); err != nil {
+		t.Fatalf("UpsertRemoteSSHPolicy: %v", err)
+	}
+	session, err := CreateRemoteSSHSession(ctx, RemoteSSHSessionCreate{
+		DeviceID:          "edge-remote-rotate",
+		Reason:            "verify rotated key",
+		OperatorPublicKey: remoteSSHPublicKeyForTest(t),
+		CreatedAtUnix:     1000,
+	})
+	if err != nil {
+		t.Fatalf("CreateRemoteSSHSession: %v", err)
+	}
+	pending, err := PendingRemoteSSHSessionForDevice(ctx, "edge-remote-rotate", 1001)
+	if err != nil {
+		t.Fatalf("PendingRemoteSSHSessionForDevice: %v", err)
+	}
+	if pending == nil || pending.SessionID != session.SessionID {
+		t.Fatalf("pending session mismatch after rotate: %+v", pending)
+	}
+	if pending.CenterSigningPublicKey != after {
+		t.Fatalf("pending center signing key=%q want %q", pending.CenterSigningPublicKey, after)
+	}
+	assertRemoteSSHDeviceSessionSignature(t, *pending)
 }
 
 func setupRemoteSSHStoreTest(t *testing.T) {

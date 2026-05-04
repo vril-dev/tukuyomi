@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -428,26 +429,46 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
 	old := struct {
-		dbDriver        string
-		dbRetentionDays int
-		fileRetention   time.Duration
-		adminReadOnly   bool
+		dbDriver                      string
+		dbRetentionDays               int
+		fileRetention                 time.Duration
+		adminReadOnly                 bool
+		remoteSSHCenterEnabled        bool
+		remoteSSHMaxTTL               time.Duration
+		remoteSSHIdleTimeout          time.Duration
+		remoteSSHMaxSessionsTotal     int
+		remoteSSHMaxSessionsPerDevice int
 	}{
-		dbDriver:        config.DBDriver,
-		dbRetentionDays: config.DBRetentionDays,
-		fileRetention:   config.FileRetention,
-		adminReadOnly:   config.AdminReadOnly,
+		dbDriver:                      config.DBDriver,
+		dbRetentionDays:               config.DBRetentionDays,
+		fileRetention:                 config.FileRetention,
+		adminReadOnly:                 config.AdminReadOnly,
+		remoteSSHCenterEnabled:        config.RemoteSSHCenterEnabled,
+		remoteSSHMaxTTL:               config.RemoteSSHMaxTTL,
+		remoteSSHIdleTimeout:          config.RemoteSSHIdleTimeout,
+		remoteSSHMaxSessionsTotal:     config.RemoteSSHMaxSessionsTotal,
+		remoteSSHMaxSessionsPerDevice: config.RemoteSSHMaxSessionsPerDevice,
 	}
 	defer func() {
 		config.DBDriver = old.dbDriver
 		config.DBRetentionDays = old.dbRetentionDays
 		config.FileRetention = old.fileRetention
 		config.AdminReadOnly = old.adminReadOnly
+		config.RemoteSSHCenterEnabled = old.remoteSSHCenterEnabled
+		config.RemoteSSHMaxTTL = old.remoteSSHMaxTTL
+		config.RemoteSSHIdleTimeout = old.remoteSSHIdleTimeout
+		config.RemoteSSHMaxSessionsTotal = old.remoteSSHMaxSessionsTotal
+		config.RemoteSSHMaxSessionsPerDevice = old.remoteSSHMaxSessionsPerDevice
 	}()
 	config.DBDriver = "sqlite"
 	config.DBRetentionDays = 45
 	config.FileRetention = 14 * 24 * time.Hour
 	config.AdminReadOnly = false
+	config.RemoteSSHCenterEnabled = false
+	config.RemoteSSHMaxTTL = time.Duration(config.DefaultRemoteSSHMaxTTLSec) * time.Second
+	config.RemoteSSHIdleTimeout = time.Duration(config.DefaultRemoteSSHIdleTimeoutSec) * time.Second
+	config.RemoteSSHMaxSessionsTotal = config.DefaultRemoteSSHMaxSessionsTotal
+	config.RemoteSSHMaxSessionsPerDevice = config.DefaultRemoteSSHMaxSessionsPerDevice
 
 	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 45); err != nil {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
@@ -475,6 +496,58 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	}
 
 	cookies, csrfCookie := loginCenterForTest(t, engine)
+	signingKey := performRequestWithCookies(engine, http.MethodGet, "/center-api/remote-ssh/signing-key", "", nil, cookies)
+	if signingKey.Code != http.StatusOK {
+		t.Fatalf("signing key code=%d body=%s", signingKey.Code, signingKey.Body.String())
+	}
+	var signingKeyPayload struct {
+		PublicKey string `json:"public_key"`
+		Algorithm string `json:"algorithm"`
+	}
+	if err := json.Unmarshal(signingKey.Body.Bytes(), &signingKeyPayload); err != nil {
+		t.Fatalf("unmarshal signing key: %v", err)
+	}
+	if signingKeyPayload.PublicKey == "" || signingKeyPayload.Algorithm != "ed25519" {
+		t.Fatalf("signing key payload mismatch: %+v", signingKeyPayload)
+	}
+	missingRotateConfirm := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/remote-ssh/signing-key/rotate",
+		`{"confirm":false}`,
+		map[string]string{
+			"Content-Type":           "application/json",
+			adminauth.CSRFHeaderName: csrfCookie.Value,
+		},
+		cookies,
+	)
+	if missingRotateConfirm.Code != http.StatusPreconditionRequired {
+		t.Fatalf("missing rotate confirm code=%d body=%s", missingRotateConfirm.Code, missingRotateConfirm.Body.String())
+	}
+	rotatedSigningKey := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-api/remote-ssh/signing-key/rotate",
+		`{"confirm":true}`,
+		map[string]string{
+			"Content-Type":           "application/json",
+			adminauth.CSRFHeaderName: csrfCookie.Value,
+		},
+		cookies,
+	)
+	if rotatedSigningKey.Code != http.StatusOK {
+		t.Fatalf("rotate signing key code=%d body=%s", rotatedSigningKey.Code, rotatedSigningKey.Body.String())
+	}
+	var rotatedSigningKeyPayload struct {
+		PublicKey string `json:"public_key"`
+		Algorithm string `json:"algorithm"`
+	}
+	if err := json.Unmarshal(rotatedSigningKey.Body.Bytes(), &rotatedSigningKeyPayload); err != nil {
+		t.Fatalf("unmarshal rotated signing key: %v", err)
+	}
+	if rotatedSigningKeyPayload.PublicKey == "" || rotatedSigningKeyPayload.PublicKey == signingKeyPayload.PublicKey || rotatedSigningKeyPayload.Algorithm != "ed25519" {
+		t.Fatalf("rotated signing key payload mismatch: before=%+v after=%+v", signingKeyPayload, rotatedSigningKeyPayload)
+	}
 	settings := performRequestWithCookies(engine, http.MethodGet, "/center-api/settings", "", nil, cookies)
 	if settings.Code != http.StatusOK {
 		t.Fatalf("settings code=%d body=%s", settings.Code, settings.Body.String())
@@ -505,6 +578,14 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 		strings.Join(payload.Config.ManageAPIAllowCIDRs, ",") != strings.Join(defaultCenterManageAPIAllowCIDRs, ",") ||
 		len(payload.Config.CenterAPIAllowCIDRs) != 0 {
 		t.Fatalf("source allowlist settings mismatch: %+v", payload.Config)
+	}
+	if payload.Config.RemoteSSH == nil ||
+		payload.Config.RemoteSSH.Center.Enabled ||
+		payload.Config.RemoteSSH.Center.MaxTTLSec != config.DefaultRemoteSSHMaxTTLSec ||
+		payload.Config.RemoteSSH.Center.IdleTimeoutSec != config.DefaultRemoteSSHIdleTimeoutSec ||
+		payload.Config.RemoteSSH.Center.MaxSessionsTotal != config.DefaultRemoteSSHMaxSessionsTotal ||
+		payload.Config.RemoteSSH.Center.MaxSessionsPerDevice != config.DefaultRemoteSSHMaxSessionsPerDevice {
+		t.Fatalf("remote ssh center settings mismatch: %+v", payload.Config.RemoteSSH)
 	}
 	update := performRequestWithCookies(
 		engine,
@@ -542,13 +623,56 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 		t.Fatalf("token did not use settings defaults: %+v", token)
 	}
 
+	remoteSSHUpdate := performRequestWithCookies(
+		engine,
+		http.MethodPut,
+		"/center-api/settings",
+		`{"config":{"enrollment_token_default_max_uses":3,"enrollment_token_default_ttl_seconds":86400,"admin_session_ttl_seconds":7200,"remote_ssh":{"center":{"enabled":true,"max_ttl_sec":600,"idle_timeout_sec":120,"max_sessions_total":4,"max_sessions_per_device":2}}}}`,
+		map[string]string{
+			"If-Match":               updated.ETag,
+			"Content-Type":           "application/json",
+			adminauth.CSRFHeaderName: csrfCookie.Value,
+		},
+		cookies,
+	)
+	if remoteSSHUpdate.Code != http.StatusOK {
+		t.Fatalf("remote ssh settings code=%d body=%s", remoteSSHUpdate.Code, remoteSSHUpdate.Body.String())
+	}
+	var remoteSSHUpdated centerSettingsPayload
+	if err := json.Unmarshal(remoteSSHUpdate.Body.Bytes(), &remoteSSHUpdated); err != nil {
+		t.Fatalf("unmarshal remote ssh settings: %v", err)
+	}
+	if remoteSSHUpdated.RestartRequired {
+		t.Fatalf("remote ssh settings update should not require restart: %+v", remoteSSHUpdated)
+	}
+	if remoteSSHUpdated.Config.RemoteSSH == nil ||
+		!remoteSSHUpdated.Config.RemoteSSH.Center.Enabled ||
+		remoteSSHUpdated.Config.RemoteSSH.Center.MaxTTLSec != 600 ||
+		remoteSSHUpdated.Config.RemoteSSH.Center.IdleTimeoutSec != 120 ||
+		remoteSSHUpdated.Config.RemoteSSH.Center.MaxSessionsTotal != 4 ||
+		remoteSSHUpdated.Config.RemoteSSH.Center.MaxSessionsPerDevice != 2 ||
+		!config.RemoteSSHCenterEnabled ||
+		config.RemoteSSHMaxTTL != 600*time.Second ||
+		config.RemoteSSHIdleTimeout != 120*time.Second ||
+		config.RemoteSSHMaxSessionsTotal != 4 ||
+		config.RemoteSSHMaxSessionsPerDevice != 2 {
+		t.Fatalf("remote ssh runtime settings mismatch: payload=%+v runtime enabled=%v ttl=%s idle=%s total=%d per=%d",
+			remoteSSHUpdated.Config.RemoteSSH,
+			config.RemoteSSHCenterEnabled,
+			config.RemoteSSHMaxTTL,
+			config.RemoteSSHIdleTimeout,
+			config.RemoteSSHMaxSessionsTotal,
+			config.RemoteSSHMaxSessionsPerDevice,
+		)
+	}
+
 	listenerUpdate := performRequestWithCookies(
 		engine,
 		http.MethodPut,
 		"/center-api/settings",
-		`{"config":{"enrollment_token_default_max_uses":3,"enrollment_token_default_ttl_seconds":86400,"admin_session_ttl_seconds":7200,"listen_addr":"127.0.0.1:19192","api_base_path":"/center-manage-api","gateway_api_base_path":"/center-api","ui_base_path":"/center-ui","tls_mode":"off","tls_min_version":"tls1.3","client_allow_cidrs":["198.51.100.0/24"],"manage_api_allow_cidrs":["127.0.0.1"],"center_api_allow_cidrs":["203.0.113.0/24"]}}`,
+		`{"config":{"enrollment_token_default_max_uses":3,"enrollment_token_default_ttl_seconds":86400,"admin_session_ttl_seconds":7200,"listen_addr":"127.0.0.1:19192","api_base_path":"/center-manage-api","gateway_api_base_path":"/center-api","ui_base_path":"/center-ui","tls_mode":"off","tls_min_version":"tls1.3","client_allow_cidrs":["198.51.100.0/24"],"manage_api_allow_cidrs":["127.0.0.1"],"center_api_allow_cidrs":["203.0.113.0/24"],"remote_ssh":{"center":{"enabled":true,"max_ttl_sec":600,"idle_timeout_sec":120,"max_sessions_total":4,"max_sessions_per_device":2}}}}`,
 		map[string]string{
-			"If-Match":               updated.ETag,
+			"If-Match":               remoteSSHUpdated.ETag,
 			"Content-Type":           "application/json",
 			adminauth.CSRFHeaderName: csrfCookie.Value,
 		},
@@ -2443,6 +2567,56 @@ func TestCenterAccountManagementFlow(t *testing.T) {
 	}
 	if !strings.Contains(update.Body.String(), `"username":"center-admin2"`) || !strings.Contains(update.Body.String(), `"email":"center-admin@example.test"`) {
 		t.Fatalf("updated account body missing identity: %s", update.Body.String())
+	}
+
+	tokenCreateBody := `{"label":"remote ssh cli","scopes":["admin:write"],"current_password":"center-admin-password"}`
+	tokenCreate := performRequestWithCookies(engine, http.MethodPost, "/center-api/auth/api-tokens", tokenCreateBody, map[string]string{
+		"Content-Type":           "application/json",
+		adminauth.CSRFHeaderName: csrfCookie.Value,
+	}, cookies)
+	if tokenCreate.Code != http.StatusCreated {
+		t.Fatalf("token create code=%d body=%s", tokenCreate.Code, tokenCreate.Body.String())
+	}
+	var tokenCreated struct {
+		Token  string `json:"token"`
+		Record struct {
+			TokenID int64 `json:"token_id"`
+			Active  bool  `json:"active"`
+		} `json:"record"`
+	}
+	if err := json.Unmarshal(tokenCreate.Body.Bytes(), &tokenCreated); err != nil {
+		t.Fatalf("decode created token: %v", err)
+	}
+	if tokenCreated.Token == "" || tokenCreated.Record.TokenID <= 0 || !tokenCreated.Record.Active {
+		t.Fatalf("unexpected token create response: %s", tokenCreate.Body.String())
+	}
+
+	tokenList := performRequestWithCookies(engine, http.MethodGet, "/center-api/auth/api-tokens", "", nil, cookies)
+	if tokenList.Code != http.StatusOK {
+		t.Fatalf("token list code=%d body=%s", tokenList.Code, tokenList.Body.String())
+	}
+	if strings.Contains(tokenList.Body.String(), tokenCreated.Token) {
+		t.Fatalf("token list leaked secret token: %s", tokenList.Body.String())
+	}
+
+	tokenSettings := performRequest(engine, http.MethodGet, "/center-api/settings", "", map[string]string{
+		"Authorization": "Bearer " + tokenCreated.Token,
+	})
+	if tokenSettings.Code != http.StatusOK {
+		t.Fatalf("token settings code=%d body=%s", tokenSettings.Code, tokenSettings.Body.String())
+	}
+
+	tokenRevoke := performRequestWithCookies(engine, http.MethodPost, fmt.Sprintf("/center-api/auth/api-tokens/%d/revoke", tokenCreated.Record.TokenID), "", map[string]string{
+		adminauth.CSRFHeaderName: csrfCookie.Value,
+	}, cookies)
+	if tokenRevoke.Code != http.StatusOK {
+		t.Fatalf("token revoke code=%d body=%s", tokenRevoke.Code, tokenRevoke.Body.String())
+	}
+	revokedTokenSettings := performRequest(engine, http.MethodGet, "/center-api/settings", "", map[string]string{
+		"Authorization": "Bearer " + tokenCreated.Token,
+	})
+	if revokedTokenSettings.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked token settings code=%d body=%s", revokedTokenSettings.Code, revokedTokenSettings.Body.String())
 	}
 
 	passwordBody := `{"current_password":"center-admin-password","new_password":"new center password"}`

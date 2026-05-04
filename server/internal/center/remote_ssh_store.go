@@ -143,9 +143,10 @@ type RemoteSSHPolicyRecord struct {
 }
 
 type RemoteSSHDeviceView struct {
-	Device   DeviceRecord             `json:"device"`
-	Policy   RemoteSSHPolicyRecord    `json:"policy"`
-	Sessions []RemoteSSHSessionRecord `json:"sessions"`
+	CenterEnabled bool                     `json:"center_enabled"`
+	Device        DeviceRecord             `json:"device"`
+	Policy        RemoteSSHPolicyRecord    `json:"policy"`
+	Sessions      []RemoteSSHSessionRecord `json:"sessions"`
 }
 
 func CreateRemoteSSHSession(ctx context.Context, in RemoteSSHSessionCreate) (RemoteSSHSessionRecord, error) {
@@ -269,6 +270,7 @@ func RemoteSSHViewForDevice(ctx context.Context, deviceID string, limit int) (Re
 		limit = 20
 	}
 	var out RemoteSSHDeviceView
+	out.CenterEnabled = config.RemoteSSHCenterEnabled
 	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
 		var device DeviceRecord
 		if err := loadDeviceByIDTx(ctx, db, driver, deviceID, &device); err != nil {
@@ -399,6 +401,68 @@ func RemoteSSHCenterSigningPublicKey(ctx context.Context) (string, error) {
 	return publicKey, err
 }
 
+func RotateRemoteSSHCenterSigningKey(ctx context.Context) (string, error) {
+	remoteSSHCenterSigningKeyMu.Lock()
+	defer remoteSSHCenterSigningKeyMu.Unlock()
+
+	var publicKey string
+	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		found, err := remoteSSHCenterSigningKeyBlobExistsTx(ctx, tx, driver)
+		if err != nil {
+			return err
+		}
+		_, raw, encoded, err := newRemoteSSHCenterSigningKeyBlob()
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		etagSum := sha256.Sum256(encoded)
+		if found {
+			_, err = tx.ExecContext(ctx, `
+UPDATE config_blobs
+   SET raw_text = `+placeholder(driver, 1)+`,
+       etag = `+placeholder(driver, 2)+`,
+       updated_at_unix = `+placeholder(driver, 3)+`,
+       updated_at = `+placeholder(driver, 4)+`
+ WHERE config_key = `+placeholder(driver, 5),
+				string(encoded),
+				hex.EncodeToString(etagSum[:]),
+				now.Unix(),
+				now.Format(time.RFC3339Nano),
+				remoteSSHCenterSigningKeyBlobKey,
+			)
+			if err != nil {
+				return err
+			}
+		} else {
+			_, err = tx.ExecContext(ctx, `
+INSERT INTO config_blobs (config_key, raw_text, etag, updated_at_unix, updated_at)
+VALUES (`+placeholders(driver, 5, 1)+`)`,
+				remoteSSHCenterSigningKeyBlobKey,
+				string(encoded),
+				hex.EncodeToString(etagSum[:]),
+				now.Unix(),
+				now.Format(time.RFC3339Nano),
+			)
+			if err != nil {
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		publicKey = raw.PublicKey
+		return nil
+	})
+	return publicKey, err
+}
+
 func signRemoteSSHDeviceSession(ctx context.Context, session *RemoteSSHDeviceSession) error {
 	if session == nil {
 		return ErrRemoteSSHInvalid
@@ -439,19 +503,7 @@ func ensureRemoteSSHCenterSigningKey(ctx context.Context) (ed25519.PrivateKey, s
 			publicKey = loadedPublic
 			return tx.Commit()
 		}
-		pub, priv, err := ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			return err
-		}
-		privateDER, err := x509.MarshalPKCS8PrivateKey(priv)
-		if err != nil {
-			return err
-		}
-		raw := remoteSSHCenterSigningKeyBlob{
-			PrivateKeyPEM: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER})),
-			PublicKey:     remoteSSHCenterSigningPublicKeyString(pub),
-		}
-		encoded, err := json.Marshal(raw)
+		priv, raw, encoded, err := newRemoteSSHCenterSigningKeyBlob()
 		if err != nil {
 			return err
 		}
@@ -477,6 +529,41 @@ VALUES (`+placeholders(driver, 5, 1)+`)`,
 		return nil
 	})
 	return privateKey, publicKey, err
+}
+
+func newRemoteSSHCenterSigningKeyBlob() (ed25519.PrivateKey, remoteSSHCenterSigningKeyBlob, []byte, error) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, remoteSSHCenterSigningKeyBlob{}, nil, err
+	}
+	privateDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, remoteSSHCenterSigningKeyBlob{}, nil, err
+	}
+	raw := remoteSSHCenterSigningKeyBlob{
+		PrivateKeyPEM: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER})),
+		PublicKey:     remoteSSHCenterSigningPublicKeyString(pub),
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, remoteSSHCenterSigningKeyBlob{}, nil, err
+	}
+	return priv, raw, encoded, nil
+}
+
+func remoteSSHCenterSigningKeyBlobExistsTx(ctx context.Context, q queryer, driver string) (bool, error) {
+	row := q.QueryRowContext(ctx, `
+SELECT raw_text
+  FROM config_blobs
+ WHERE config_key = `+placeholder(driver, 1), remoteSSHCenterSigningKeyBlobKey)
+	var ignored string
+	if err := row.Scan(&ignored); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func loadRemoteSSHCenterSigningKeyTx(ctx context.Context, q queryer, driver string) (ed25519.PrivateKey, string, bool, error) {

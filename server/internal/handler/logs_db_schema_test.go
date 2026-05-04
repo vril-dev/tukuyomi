@@ -247,6 +247,41 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 	}
 }
 
+func TestMigrateLogsStatsStoreWithBackendSQLiteRepairsRemoteSSHHostPublicKeyColumn(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
+
+	if err := MigrateLogsStatsStoreWithBackend("db", "sqlite", dbPath, ""); err != nil {
+		t.Fatalf("initial migrate sqlite: %v", err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE center_remote_ssh_sessions DROP COLUMN gateway_host_public_key`); err != nil {
+		_ = db.Close()
+		t.Fatalf("simulate old remote ssh schema: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close old-schema sqlite: %v", err)
+	}
+
+	if err := MigrateLogsStatsStoreWithBackend("db", "sqlite", dbPath, ""); err != nil {
+		t.Fatalf("migrate sqlite: %v", err)
+	}
+	db, err = sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("reopen sqlite: %v", err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('center_remote_ssh_sessions') WHERE name = 'gateway_host_public_key'`).Scan(&count); err != nil {
+		t.Fatalf("query repaired column: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("gateway_host_public_key column count=%d want 1", count)
+	}
+}
+
 func TestMigrateLogsStatsStoreWithBackendSQLiteReplacesLegacyMigrationTable(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
 

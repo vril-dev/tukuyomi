@@ -24,9 +24,10 @@ const (
 )
 
 var appConfigBootstrapOnlyPaths = map[string]struct{}{
-	"storage.db_driver": {},
-	"storage.db_dsn":    {},
-	"storage.db_path":   {},
+	"admin.allow_insecure_defaults": {},
+	"storage.db_driver":             {},
+	"storage.db_dsn":                {},
+	"storage.db_path":               {},
 }
 
 type appConfigScalarValue struct {

@@ -22,6 +22,9 @@ func TestNormalizedRuntimeConfigStoresVersionedTypedRows(t *testing.T) {
 	}
 
 	bootstrapCfg, err := config.LoadAppConfigRaw([]byte(`{
+  "admin": {
+    "allow_insecure_defaults": true
+  },
   "storage": {
     "db_driver": "sqlite",
     "db_path": "bootstrap-only.db"
@@ -38,6 +41,9 @@ func TestNormalizedRuntimeConfigStoresVersionedTypedRows(t *testing.T) {
     "db_driver": "mysql",
     "db_path": "must-not-be-authoritative.db",
     "db_dsn": "must-not-be-authoritative"
+  },
+  "admin": {
+    "allow_insecure_defaults": false
   },
   "paths": {
     "proxy_config_file": "conf/proxy-from-db.json"
@@ -62,6 +68,9 @@ func TestNormalizedRuntimeConfigStoresVersionedTypedRows(t *testing.T) {
 	}
 	if loadedApp.Storage.DBDriver != bootstrapCfg.Storage.DBDriver || loadedApp.Storage.DBPath != bootstrapCfg.Storage.DBPath || loadedApp.Storage.DBDSN != bootstrapCfg.Storage.DBDSN {
 		t.Fatalf("bootstrap DB connection was not preserved: loaded=%+v bootstrap=%+v candidate=%+v", loadedApp.Storage, bootstrapCfg.Storage, appCfg.Storage)
+	}
+	if !loadedApp.Admin.AllowInsecureDefaults {
+		t.Fatal("bootstrap admin.allow_insecure_defaults was not preserved")
 	}
 
 	siteA := SiteConfigFile{Sites: []SiteConfig{{
@@ -198,6 +207,9 @@ func TestNormalizedRuntimeConfigStoresVersionedTypedRows(t *testing.T) {
 	if got := countRowsForRuntimeConfigTest(t, db, "app_config_values"); got == 0 {
 		t.Fatal("app_config_values should contain typed scalar rows")
 	}
+	if got := countRowsForRuntimeConfigPathTest(t, db, "app_config_values", "admin.allow_insecure_defaults"); got != 0 {
+		t.Fatalf("admin.allow_insecure_defaults rows=%d want 0", got)
+	}
 	if got := countRowsForRuntimeConfigTest(t, db, "app_config_lists"); got == 0 {
 		t.Fatal("app_config_lists should contain typed list rows")
 	}
@@ -226,6 +238,15 @@ func countRowsForRuntimeConfigTest(t *testing.T, db *sql.DB, table string) int {
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
 		t.Fatalf("count %s: %v", table, err)
+	}
+	return count
+}
+
+func countRowsForRuntimeConfigPathTest(t *testing.T, db *sql.DB, table string, path string) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE path = ?`, path).Scan(&count); err != nil {
+		t.Fatalf("count %s path %s: %v", table, path, err)
 	}
 	return count
 }

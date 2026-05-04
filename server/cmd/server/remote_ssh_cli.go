@@ -144,6 +144,7 @@ func runRemoteSSH(ctx context.Context, cfg remoteSSHCommandConfig) error {
 	}
 	fmt.Printf("remote ssh session %s ready until %s\n", session.Session.SessionID, time.Unix(session.Session.ExpiresAt, 0).UTC().Format(time.RFC3339))
 	fmt.Printf("ssh -i %s -p %s -o IdentitiesOnly=yes -o UserKnownHostsFile=%s -o StrictHostKeyChecking=yes tukuyomi@%s\n", shellQuote(keyPath), port, shellQuote(knownHostsPath), sshHost)
+	fmt.Printf("keep this process running; open another terminal on this machine and run the ssh command above. Press Ctrl+C here to close the tunnel.\n")
 	connCh := make(chan net.Conn, 1)
 	errCh := make(chan error, 1)
 	go func() {

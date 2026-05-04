@@ -88,7 +88,8 @@ var (
 	edgeDeviceIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 	edgeKeyIDPattern    = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
-	errEdgeDeviceIdentityNotFound = errors.New("edge device identity not found")
+	errEdgeDeviceIdentityNotFound               = errors.New("edge device identity not found")
+	errEdgeRemoteSSHCenterSigningKeyUnavailable = errors.New("center remote ssh signing key unavailable")
 
 	edgeDeviceStatusRefreshTriggerMu sync.RWMutex
 	edgeDeviceStatusRefreshTrigger   chan struct{}
@@ -164,6 +165,10 @@ type edgeDeviceEnrollmentRequest struct {
 	EnrollmentToken string `json:"enrollment_token"`
 	DeviceID        string `json:"device_id"`
 	KeyID           string `json:"key_id"`
+}
+
+type edgeRemoteSSHSigningKeyRefreshRequest struct {
+	Confirm bool `json:"confirm"`
 }
 
 type CenterProtectedGatewayBootstrapOptions struct {
@@ -335,6 +340,11 @@ type edgeDeviceCenterStatusResponse struct {
 	RemoteSSHSession    *edgeRemoteSSHDeviceSession    `json:"remote_ssh_session,omitempty"`
 }
 
+type edgeRemoteSSHCenterSigningKeyResponse struct {
+	PublicKey string `json:"public_key"`
+	Algorithm string `json:"algorithm"`
+}
+
 type edgeRuntimeDeviceAssignment struct {
 	RuntimeFamily    string `json:"runtime_family"`
 	RuntimeID        string `json:"runtime_id"`
@@ -422,6 +432,44 @@ func PostEdgeDeviceStatusRefresh(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, status)
+}
+
+func PostEdgeRemoteSSHSigningKeyRefresh(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req edgeRemoteSSHSigningKeyRefreshRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid remote ssh signing key refresh request"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid remote ssh signing key refresh request"})
+		return
+	}
+	if !req.Confirm {
+		c.JSON(http.StatusPreconditionRequired, gin.H{"error": "confirm is required"})
+		return
+	}
+	identity, err := approvedEdgeDeviceIdentityForRemoteSSHCenterSigningKey()
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	key, err := persistRemoteSSHGatewayCenterSigningKeyFromApprovedCenter(c.Request.Context(), identity, true)
+	if err != nil {
+		switch {
+		case errors.Is(err, errEdgeRemoteSSHCenterSigningKeyUnavailable):
+			c.JSON(http.StatusConflict, gin.H{"error": "center remote ssh signing key is unavailable"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to refresh remote ssh signing key"})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"center_signing_public_key": key,
+		"algorithm":                 "ed25519",
+	})
 }
 
 func PostEdgeDeviceEnrollment(c *gin.Context) {
@@ -683,6 +731,7 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 	identity.CenterProductID = clampEdgeText(payload.ProductID, 191)
 	identity.CenterStatusError = ""
 	if identity.EnrollmentStatus == edgeEnrollmentStatusApproved {
+		importRemoteSSHGatewayCenterSigningKeyFromApprovedCenter(ctx, identity)
 		applyEdgeProxyRuleAssignment(ctx, identity, payload.ProxyRuleAssignment)
 		pruneCompletedEdgeProxyRuleApplyStatus(payload.ProxyRuleAssignment)
 		applyEdgeWAFRuleAssignment(ctx, &identity, payload.WAFRuleAssignment)
@@ -3437,6 +3486,153 @@ func edgeCenterHTTPClient() (*http.Client, error) {
 	return centertls.HTTPClient(edgeCenterTLSConfig())
 }
 
+func edgeCenterHTTPClientForAppConfig(cfg config.AppConfigFile) (*http.Client, error) {
+	return centertls.HTTPClient(centertls.Config{
+		CABundleFile: cfg.RemoteSSH.Gateway.CenterTLSCABundleFile,
+		ServerName:   cfg.RemoteSSH.Gateway.CenterTLSServerName,
+	})
+}
+
+func ensureRemoteSSHGatewayCenterSigningKey(ctx context.Context, cfg *config.AppConfigFile) error {
+	if cfg == nil || !cfg.RemoteSSH.Gateway.Enabled || !cfg.RemoteSSH.Gateway.EmbeddedServer.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(cfg.RemoteSSH.Gateway.CenterSigningPublicKey) != "" {
+		return nil
+	}
+	identity, err := approvedEdgeDeviceIdentityForRemoteSSHCenterSigningKey()
+	if err != nil {
+		return err
+	}
+	key, err := fetchEdgeRemoteSSHCenterSigningPublicKeyForIdentity(ctx, identity, *cfg)
+	if err != nil {
+		return fmt.Errorf("remote ssh gateway could not fetch Center signing key: %w", err)
+	}
+	cfg.RemoteSSH.Gateway.CenterSigningPublicKey = key
+	return nil
+}
+
+func approvedEdgeDeviceIdentityForRemoteSSHCenterSigningKey() (edgeDeviceIdentityRecord, error) {
+	store := getLogsStatsStore()
+	if store == nil {
+		return edgeDeviceIdentityRecord{}, fmt.Errorf("runtime DB store is not initialized")
+	}
+	identity, found, err := loadEdgeDeviceIdentity(store)
+	if err != nil {
+		return edgeDeviceIdentityRecord{}, err
+	}
+	if !found {
+		return edgeDeviceIdentityRecord{}, fmt.Errorf("Center enrollment is required before enabling Remote SSH on Gateway")
+	}
+	if normalizeEdgeStatus(identity.EnrollmentStatus) != edgeEnrollmentStatusApproved {
+		return edgeDeviceIdentityRecord{}, fmt.Errorf("Center enrollment must be approved before enabling Remote SSH on Gateway")
+	}
+	return identity, nil
+}
+
+func fetchEdgeRemoteSSHCenterSigningPublicKeyForIdentity(ctx context.Context, identity edgeDeviceIdentityRecord, cfg config.AppConfigFile) (string, error) {
+	if normalizeEdgeStatus(identity.EnrollmentStatus) != edgeEnrollmentStatusApproved {
+		return "", fmt.Errorf("Center enrollment must be approved before enabling Remote SSH on Gateway")
+	}
+	signingKeyURL, err := centerRemoteSSHSigningKeyURL(identity.CenterURL)
+	if err != nil {
+		return "", err
+	}
+	client, err := edgeCenterHTTPClientForAppConfig(cfg)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, edgeEnrollmentHTTPTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, signingKeyURL, nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, 4*1024))
+	if err != nil {
+		return "", err
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		if res.StatusCode == http.StatusConflict || res.StatusCode == http.StatusNotFound {
+			return "", errEdgeRemoteSSHCenterSigningKeyUnavailable
+		}
+		return "", fmt.Errorf("%s", centerHTTPErrorMessage("center remote ssh signing key fetch failed", res.StatusCode, body))
+	}
+	var payload edgeRemoteSSHCenterSigningKeyResponse
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		return "", fmt.Errorf("center remote ssh signing key response is invalid JSON")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("center remote ssh signing key response is invalid JSON")
+	}
+	if strings.TrimSpace(payload.Algorithm) != "ed25519" {
+		return "", fmt.Errorf("center remote ssh signing key algorithm is unsupported")
+	}
+	publicKey := strings.TrimSpace(payload.PublicKey)
+	if _, err := parseEdgeRemoteSSHCenterSigningPublicKey(publicKey); err != nil {
+		return "", err
+	}
+	return publicKey, nil
+}
+
+func importRemoteSSHGatewayCenterSigningKeyFromApprovedCenter(ctx context.Context, identity edgeDeviceIdentityRecord) {
+	if strings.TrimSpace(config.RemoteSSHGatewayCenterSigningPublicKey) != "" {
+		return
+	}
+	if _, err := persistRemoteSSHGatewayCenterSigningKeyFromApprovedCenter(ctx, identity, false); err != nil {
+		if errors.Is(err, errEdgeRemoteSSHCenterSigningKeyUnavailable) {
+			return
+		}
+		log.Printf("[REMOTE_SSH][WARN] Center signing key import skipped: %v", err)
+	}
+}
+
+func persistRemoteSSHGatewayCenterSigningKeyFromApprovedCenter(ctx context.Context, identity edgeDeviceIdentityRecord, force bool) (string, error) {
+	if normalizeEdgeStatus(identity.EnrollmentStatus) != edgeEnrollmentStatusApproved {
+		return "", nil
+	}
+	raw, etag, cfg, err := loadSettingsAppConfig()
+	if err != nil {
+		return "", err
+	}
+	if existing := strings.TrimSpace(cfg.RemoteSSH.Gateway.CenterSigningPublicKey); existing != "" && !force {
+		config.RemoteSSHGatewayCenterSigningPublicKey = existing
+		return existing, nil
+	}
+	key, err := fetchEdgeRemoteSSHCenterSigningPublicKeyForIdentity(ctx, identity, cfg)
+	if err != nil {
+		return "", err
+	}
+	cfg.RemoteSSH.Gateway.CenterSigningPublicKey = key
+	normalized, err := config.NormalizeAndValidateAppConfigFile(cfg)
+	if err != nil {
+		return "", err
+	}
+	nextRaw, err := marshalAppConfigBlob(normalized)
+	if err != nil {
+		return "", err
+	}
+	if nextRaw != raw {
+		if _, err := persistSettingsAppConfig(normalized, etag); err != nil {
+			return "", err
+		}
+	}
+	config.RemoteSSHGatewayCenterSigningPublicKey = key
+	action := "imported"
+	if force {
+		action = "refreshed"
+	}
+	log.Printf("[REMOTE_SSH] %s Center signing key from approved Center enrollment", action)
+	return key, nil
+}
+
 func sendEdgeDeviceEnrollment(ctx context.Context, enrollURL string, token string, wireReq edgeDeviceEnrollmentWireRequest) (int, []byte, error) {
 	body, err := json.Marshal(wireReq)
 	if err != nil {
@@ -4603,6 +4799,25 @@ func centerRemoteSSHGatewayStreamURL(centerBaseURL string) (string, error) {
 		return "", fmt.Errorf("remote ssh center URL must use https unless admin.allow_insecure_defaults is enabled for local testing")
 	}
 	u.Path = "/v1/remote-ssh/gateway-stream"
+	u.RawPath = ""
+	return u.String(), nil
+}
+
+func centerRemoteSSHSigningKeyURL(centerBaseURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("center URL is not configured")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("center URL is invalid")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("center URL scheme must be http or https")
+	}
+	if u.Scheme != "https" && !config.AllowInsecureDefaults {
+		return "", fmt.Errorf("remote ssh center URL must use https unless admin.allow_insecure_defaults is enabled for local testing")
+	}
+	u.Path = "/v1/remote-ssh/signing-key"
 	u.RawPath = ""
 	return u.String(), nil
 }

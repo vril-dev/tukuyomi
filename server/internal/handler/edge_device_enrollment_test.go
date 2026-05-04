@@ -39,11 +39,23 @@ func TestPostEdgeDeviceEnrollmentCreatesIdentityAndSendsSignedRequest(t *testing
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer InitLogsStatsStore(false, "", 0)
+	restoreConfig := saveConfigFilePathForTest(t, writeSettingsConfigFixture(t))
+	defer restoreConfig()
+	oldAllowInsecureDefaults := config.AllowInsecureDefaults
+	oldRemoteSSHCenterSigningKey := config.RemoteSSHGatewayCenterSigningPublicKey
+	config.AllowInsecureDefaults = true
+	config.RemoteSSHGatewayCenterSigningPublicKey = ""
+	defer func() {
+		config.AllowInsecureDefaults = oldAllowInsecureDefaults
+		config.RemoteSSHGatewayCenterSigningPublicKey = oldRemoteSSHCenterSigningKey
+	}()
 
 	centerCalls := 0
 	statusCalls := 0
 	snapshotCalls := 0
+	signingKeyCalls := 0
 	centerDeviceStatus := "approved"
+	centerSigningPublicKey := "ed25519:" + base64.StdEncoding.EncodeToString(bytesOfLengthForTest(ed25519.PublicKeySize, 0x21))
 	var capturedPublicKey ed25519.PublicKey
 	var capturedFingerprint string
 	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -89,6 +101,9 @@ func TestPostEdgeDeviceEnrollmentCreatesIdentityAndSendsSignedRequest(t *testing
 			}
 			verifySignedEdgeConfigSnapshotForTest(t, req, capturedPublicKey, capturedFingerprint)
 			_, _ = w.Write([]byte(`{"status":"stored","config_revision":` + quoteJSON(req.ConfigRevision) + `,"received_at_unix":1700000001}`))
+		case "/v1/remote-ssh/signing-key":
+			signingKeyCalls++
+			_, _ = w.Write([]byte(`{"public_key":` + quoteJSON(centerSigningPublicKey) + `,"algorithm":"ed25519"}`))
 		default:
 			t.Fatalf("path=%q", r.URL.Path)
 		}
@@ -99,6 +114,7 @@ func TestPostEdgeDeviceEnrollmentCreatesIdentityAndSendsSignedRequest(t *testing
 	router.GET("/edge/device-auth", GetEdgeDeviceAuthStatus)
 	router.POST("/edge/device-auth/enroll", PostEdgeDeviceEnrollment)
 	router.POST("/edge/device-auth/refresh", PostEdgeDeviceStatusRefresh)
+	router.POST("/edge/device-auth/remote-ssh/signing-key/refresh", PostEdgeRemoteSSHSigningKeyRefresh)
 
 	body := `{"center_url":` + quoteJSON(center.URL) + `,"enrollment_token":"tky_enroll_test","device_id":"edge-device-1","key_id":"default"}`
 	rec := performEdgeDeviceRequest(router, http.MethodPost, "/edge/device-auth/enroll", body)
@@ -152,6 +168,45 @@ func TestPostEdgeDeviceEnrollmentCreatesIdentityAndSendsSignedRequest(t *testing
 	}
 	if gate := currentEdgeProxyGateState(); gate.Locked {
 		t.Fatalf("approved identity should unlock proxy, gate=%+v", gate)
+	}
+	_, _, importedCfg, err := loadAppConfigStorage(false)
+	if err != nil {
+		t.Fatalf("load app config after center signing key import: %v", err)
+	}
+	if importedCfg.RemoteSSH.Gateway.CenterSigningPublicKey != centerSigningPublicKey {
+		t.Fatalf("imported center signing key=%q want %q", importedCfg.RemoteSSH.Gateway.CenterSigningPublicKey, centerSigningPublicKey)
+	}
+	if config.RemoteSSHGatewayCenterSigningPublicKey != centerSigningPublicKey {
+		t.Fatalf("runtime center signing key=%q want %q", config.RemoteSSHGatewayCenterSigningPublicKey, centerSigningPublicKey)
+	}
+	if signingKeyCalls != 1 {
+		t.Fatalf("signingKeyCalls=%d want 1", signingKeyCalls)
+	}
+	rotatedCenterSigningPublicKey := "ed25519:" + base64.StdEncoding.EncodeToString(bytesOfLengthForTest(ed25519.PublicKeySize, 0x22))
+	centerSigningPublicKey = rotatedCenterSigningPublicKey
+	missingConfirm := performEdgeDeviceRequest(router, http.MethodPost, "/edge/device-auth/remote-ssh/signing-key/refresh", `{}`)
+	if missingConfirm.Code != http.StatusPreconditionRequired {
+		t.Fatalf("missing confirm signing key refresh code=%d body=%s", missingConfirm.Code, missingConfirm.Body.String())
+	}
+	explicitRefresh := performEdgeDeviceRequest(router, http.MethodPost, "/edge/device-auth/remote-ssh/signing-key/refresh", `{"confirm":true}`)
+	if explicitRefresh.Code != http.StatusOK {
+		t.Fatalf("explicit signing key refresh code=%d body=%s", explicitRefresh.Code, explicitRefresh.Body.String())
+	}
+	if !strings.Contains(explicitRefresh.Body.String(), quoteJSON(rotatedCenterSigningPublicKey)) {
+		t.Fatalf("explicit signing key refresh did not return rotated key: %s", explicitRefresh.Body.String())
+	}
+	_, _, refreshedCfg, err := loadAppConfigStorage(false)
+	if err != nil {
+		t.Fatalf("load app config after explicit signing key refresh: %v", err)
+	}
+	if refreshedCfg.RemoteSSH.Gateway.CenterSigningPublicKey != rotatedCenterSigningPublicKey {
+		t.Fatalf("refreshed center signing key=%q want %q", refreshedCfg.RemoteSSH.Gateway.CenterSigningPublicKey, rotatedCenterSigningPublicKey)
+	}
+	if config.RemoteSSHGatewayCenterSigningPublicKey != rotatedCenterSigningPublicKey {
+		t.Fatalf("runtime refreshed center signing key=%q want %q", config.RemoteSSHGatewayCenterSigningPublicKey, rotatedCenterSigningPublicKey)
+	}
+	if signingKeyCalls != 2 {
+		t.Fatalf("signingKeyCalls=%d want 2", signingKeyCalls)
 	}
 
 	mismatch := `{"center_url":` + quoteJSON(center.URL) + `,"enrollment_token":"tky_enroll_test","device_id":"other-device"}`

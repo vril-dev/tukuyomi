@@ -1109,6 +1109,13 @@ button.danger {
   align-self: end;
 }
 
+.remote-ssh-center-service-warning {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
 .remote-ssh-command {
   min-height: 180px;
   margin-top: 12px;

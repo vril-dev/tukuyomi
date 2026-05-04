@@ -92,7 +92,7 @@ else:
 
 admin["session_secret"] = session_secret
 admin["api_auth_disable"] = False
-admin["allow_insecure_defaults"] = False
+admin["allow_insecure_defaults"] = os.environ.get("CENTER_PROTECTED_PREVIEW", "").strip() == "1"
 
 runtime = payload.get("runtime")
 if not isinstance(runtime, dict):

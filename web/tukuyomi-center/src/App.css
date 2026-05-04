@@ -1101,6 +1101,46 @@ button.danger {
   min-width: 1280px;
 }
 
+.remote-ssh-command-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.remote-ssh-checkbox {
+  align-self: end;
+}
+
+.remote-ssh-command {
+  min-height: 180px;
+  margin-top: 12px;
+}
+
+.remote-ssh-session-table table {
+  min-width: 1180px;
+}
+
+.remote-ssh-session-table th:nth-child(1) {
+  width: 14%;
+}
+
+.remote-ssh-session-table th:nth-child(2) {
+  width: 18%;
+}
+
+.remote-ssh-session-table th:nth-child(3) {
+  width: 13%;
+}
+
+.remote-ssh-session-table th:nth-child(4),
+.remote-ssh-session-table th:nth-child(5),
+.remote-ssh-session-table th:nth-child(6),
+.remote-ssh-session-table th:nth-child(7) {
+  width: 13%;
+}
+
+.remote-ssh-session-table th:nth-child(8) {
+  width: 16%;
+}
+
 .rules-request-col-actions {
   width: 150px;
 }
@@ -1667,13 +1707,26 @@ button.danger {
   color: #166534;
 }
 
+.token-status-pending,
+.token-status-gateway_attached,
+.token-status-operator_attached {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
 .token-status-revoked,
 .token-status-rejected,
 .token-status-expired,
 .token-status-exhausted,
-.token-status-blocked {
+.token-status-blocked,
+.token-status-canceled {
   background: #fee2e2;
   color: #991b1b;
+}
+
+.token-status-closed {
+  background: #e5e7eb;
+  color: #374151;
 }
 
 .token-status-product_changed {

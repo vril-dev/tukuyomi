@@ -4550,12 +4550,20 @@ func verifyEdgeRemoteSSHDeviceSession(ctx context.Context, identity edgeDeviceId
 	if _, err := centerRemoteSSHGatewayStreamURL(identity.CenterURL); err != nil {
 		return err
 	}
-	centerPublicKey, err := parseEdgeRemoteSSHCenterSigningPublicKey(config.RemoteSSHGatewayCenterSigningPublicKey)
+	configuredCenterSigningKey := strings.TrimSpace(config.RemoteSSHGatewayCenterSigningPublicKey)
+	if session.CenterSigningPublicKey != configuredCenterSigningKey {
+		refreshed, refreshErr := persistRemoteSSHGatewayCenterSigningKeyFromApprovedCenter(ctx, identity, true)
+		if refreshErr != nil {
+			return fmt.Errorf("remote ssh center signing key refresh failed: %w", refreshErr)
+		}
+		configuredCenterSigningKey = strings.TrimSpace(refreshed)
+		if session.CenterSigningPublicKey != configuredCenterSigningKey {
+			return fmt.Errorf("remote ssh center signing key mismatch")
+		}
+	}
+	centerPublicKey, err := parseEdgeRemoteSSHCenterSigningPublicKey(configuredCenterSigningKey)
 	if err != nil {
 		return err
-	}
-	if session.CenterSigningPublicKey != strings.TrimSpace(config.RemoteSSHGatewayCenterSigningPublicKey) {
-		return fmt.Errorf("remote ssh center signing key mismatch")
 	}
 	signature, err := base64.StdEncoding.DecodeString(session.Signature)
 	if err != nil || len(signature) != ed25519.SignatureSize {

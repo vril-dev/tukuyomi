@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
 
-import { apiGetJson, apiPutJson } from "@/lib/api";
+import { apiGetJson, apiPostJson, apiPutJson } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { getAPIBasePath } from "@/lib/runtime";
 
@@ -26,6 +29,7 @@ type RemoteSSHSession = {
   session_id: string;
   device_id: string;
   status: string;
+  operator_mode?: string;
   reason: string;
   requested_by_username?: string;
   operator_public_key_fingerprint_sha256?: string;
@@ -51,6 +55,18 @@ type RemoteSSHViewResponse = {
 
 type RemoteSSHPolicyResponse = {
   policy?: RemoteSSHPolicy;
+};
+
+type RemoteSSHWebTerminalResponse = {
+  terminal_id?: string;
+  websocket_path?: string;
+  expires_at_unix?: number;
+  session?: RemoteSSHSession;
+};
+
+type RemoteSSHSessionActionResponse = {
+  status?: string;
+  session?: RemoteSSHSession;
 };
 
 type CenterSettingsConfig = {
@@ -89,11 +105,23 @@ type CommandForm = {
   centerServerName: string;
 };
 
+type WebTerminalForm = {
+  reason: string;
+  ttlSec: string;
+  scrollbackRows: string;
+};
+
 const DEFAULT_REMOTE_SSH_TTL = 900;
 const DEFAULT_REMOTE_SSH_IDLE_TIMEOUT = 300;
 const DEFAULT_REMOTE_SSH_MAX_SESSIONS_TOTAL = 16;
 const DEFAULT_REMOTE_SSH_MAX_SESSIONS_PER_DEVICE = 1;
 const DEFAULT_REMOTE_SSH_LOCAL_ADDR = "127.0.0.1:0";
+const DEFAULT_REMOTE_SSH_TERMINAL_SCROLLBACK = 2000;
+const MIN_REMOTE_SSH_TERMINAL_SCROLLBACK = 100;
+const MAX_REMOTE_SSH_TERMINAL_SCROLLBACK = 10000;
+const REMOTE_SSH_WEB_TERMINAL_PROTOCOL = "tukuyomi.remote-ssh.web-terminal.v1";
+const REMOTE_SSH_SESSION_PAGE_SIZE = 10;
+const REMOTE_SSH_ATTACHABLE_STATUSES = new Set(["pending", "gateway_attached", "operator_attached", "active"]);
 
 function formatUnixTime(value: number, locale: string) {
   if (!value) {
@@ -134,6 +162,15 @@ function boundedTTL(value: string, fallback: number, max = 86400) {
     return Math.min(Math.max(fallback, 60), upper);
   }
   return Math.min(Math.max(parsed, 60), upper);
+}
+
+function boundedScrollbackRows(value: string) {
+  const trimmed = value.trim();
+  const parsed = /^\d+$/.test(trimmed) ? Number.parseInt(trimmed, 10) : NaN;
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_REMOTE_SSH_TERMINAL_SCROLLBACK;
+  }
+  return Math.min(Math.max(parsed, MIN_REMOTE_SSH_TERMINAL_SCROLLBACK), MAX_REMOTE_SSH_TERMINAL_SCROLLBACK);
 }
 
 function shellQuote(value: string) {
@@ -188,6 +225,38 @@ function remoteSSHCommand(deviceID: string, form: CommandForm, policy?: RemoteSS
   ].join("\n");
 }
 
+function webSocketURL(path: string) {
+  const raw = path.trim();
+  if (raw.startsWith("ws://") || raw.startsWith("wss://")) {
+    return raw;
+  }
+  const fullPath = raw.startsWith("/") ? raw : `${getAPIBasePath()}/${raw.replace(/^\/+/, "")}`;
+  if (typeof window === "undefined" || !window.location) {
+    return fullPath;
+  }
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}${fullPath}`;
+}
+
+function sendTerminalMessage(ws: WebSocket | null, payload: unknown) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  ws.send(JSON.stringify(payload));
+}
+
+function closeRemoteSSHSession(sessionID: string) {
+  const trimmed = sessionID.trim();
+  if (!trimmed) {
+    return;
+  }
+  void apiPostJson(`/remote-ssh/sessions/${encodeURIComponent(trimmed)}/close`, {}).catch(() => undefined);
+}
+
+function canTerminateRemoteSSHSession(session: RemoteSSHSession) {
+  return REMOTE_SSH_ATTACHABLE_STATUSES.has((session.status || "").trim());
+}
+
 export default function RemoteSSHPage() {
   const { locale, tx } = useI18n();
   const { deviceID: routeDeviceID = "" } = useParams();
@@ -196,9 +265,18 @@ export default function RemoteSSHPage() {
   const [saving, setSaving] = useState(false);
   const [enablingCenterService, setEnablingCenterService] = useState(false);
   const [copying, setCopying] = useState(false);
+  const [webConnecting, setWebConnecting] = useState(false);
+  const [webTerminalOpen, setWebTerminalOpen] = useState(false);
+  const [webTerminalMessage, setWebTerminalMessage] = useState("");
+  const [webTerminalTone, setWebTerminalTone] = useState<"success" | "error">("success");
+  const [webTerminalSessionID, setWebTerminalSessionID] = useState("");
+  const [terminatingSessionID, setTerminatingSessionID] = useState("");
+  const [sessionActionMessage, setSessionActionMessage] = useState("");
+  const [sessionActionTone, setSessionActionTone] = useState<"success" | "error">("success");
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"success" | "error">("success");
   const [view, setView] = useState<RemoteSSHViewResponse | null>(null);
+  const [sessionPage, setSessionPage] = useState(1);
   const [policyForm, setPolicyForm] = useState<PolicyForm>(() => policyToForm());
   const [commandForm, setCommandForm] = useState<CommandForm>({
     reason: "maintenance",
@@ -208,6 +286,18 @@ export default function RemoteSSHPage() {
     centerCABundle: "",
     centerServerName: "",
   });
+  const [webTerminalForm, setWebTerminalForm] = useState<WebTerminalForm>({
+    reason: "maintenance",
+    ttlSec: String(DEFAULT_REMOTE_SSH_TTL),
+    scrollbackRows: String(DEFAULT_REMOTE_SSH_TERMINAL_SCROLLBACK),
+  });
+  const terminalContainerRef = useRef<HTMLDivElement | null>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const webSocketRef = useRef<WebSocket | null>(null);
+  const webTerminalSessionIDRef = useRef("");
+  const intentionalWebTerminalCloseRef = useRef("");
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
   const policy = view?.policy;
   const device = view?.device;
@@ -215,6 +305,15 @@ export default function RemoteSSHPage() {
   const centerEnabled = view?.center_enabled === true;
   const canStart = Boolean(centerEnabled && device?.device_id && device.status === "approved" && policy?.enabled);
   const command = useMemo(() => remoteSSHCommand(deviceID, commandForm, policy), [commandForm, deviceID, policy]);
+  const sessionPageCount = Math.max(1, Math.ceil(sessions.length / REMOTE_SSH_SESSION_PAGE_SIZE));
+  const currentSessionPage = Math.min(sessionPage, sessionPageCount);
+  const sessionPageStart = sessions.length ? (currentSessionPage - 1) * REMOTE_SSH_SESSION_PAGE_SIZE : 0;
+  const sessionPageEnd = Math.min(sessionPageStart + REMOTE_SSH_SESSION_PAGE_SIZE, sessions.length);
+  const pagedSessions = sessions.slice(sessionPageStart, sessionPageEnd);
+
+  useEffect(() => {
+    setSessionPage((current) => Math.min(Math.max(current, 1), sessionPageCount));
+  }, [sessionPageCount]);
 
   const load = useCallback(async () => {
     if (!deviceID) {
@@ -231,6 +330,10 @@ export default function RemoteSSHPage() {
         ...current,
         ttlSec: current.ttlSec || ttl,
       }));
+      setWebTerminalForm((current) => ({
+        ...current,
+        ttlSec: current.ttlSec || ttl,
+      }));
     } catch (err) {
       const fallback = tx("Failed to load Remote SSH");
       setView(null);
@@ -244,6 +347,44 @@ export default function RemoteSSHPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const closeWebTerminal = useCallback((showMessage = true) => {
+    const sessionID = webTerminalSessionIDRef.current;
+    const ws = webSocketRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      sendTerminalMessage(ws, { type: "close" });
+      ws.close(1000, "closed");
+    } else if (ws && ws.readyState === WebSocket.CONNECTING) {
+      ws.close();
+    }
+    closeRemoteSSHSession(sessionID);
+    webSocketRef.current = null;
+    webTerminalSessionIDRef.current = "";
+    resizeObserverRef.current?.disconnect();
+    resizeObserverRef.current = null;
+    terminalRef.current?.dispose();
+    terminalRef.current = null;
+    fitAddonRef.current = null;
+    if (terminalContainerRef.current) {
+      terminalContainerRef.current.textContent = "";
+    }
+    setWebTerminalOpen(false);
+    setWebConnecting(false);
+    setWebTerminalSessionID("");
+    if (showMessage) {
+      setWebTerminalTone("success");
+      setWebTerminalMessage("Terminal closed.");
+    }
+  }, []);
+
+  useEffect(() => () => closeWebTerminal(false), [closeWebTerminal]);
+
+  useEffect(() => {
+    if (!terminalRef.current) {
+      return;
+    }
+    terminalRef.current.options.scrollback = boundedScrollbackRows(webTerminalForm.scrollbackRows);
+  }, [webTerminalForm.scrollbackRows]);
 
   async function enableCenterService() {
     setEnablingCenterService(true);
@@ -329,6 +470,248 @@ export default function RemoteSSHPage() {
       setMessage(err instanceof Error ? err.message || fallback : fallback);
     } finally {
       setCopying(false);
+    }
+  }
+
+  async function openWebTerminal() {
+    if (!deviceID || !canStart) {
+      return;
+    }
+    closeWebTerminal(false);
+    setWebConnecting(true);
+    setWebTerminalMessage("");
+    setWebTerminalTone("success");
+    try {
+      const ttl = boundedTTL(webTerminalForm.ttlSec, policy?.max_ttl_sec || DEFAULT_REMOTE_SSH_TTL, policy?.max_ttl_sec || 86400);
+      const data = await apiPostJson<RemoteSSHWebTerminalResponse>(`/devices/${encodeURIComponent(deviceID)}/remote-ssh/web-terminal`, {
+        reason: webTerminalForm.reason.trim() || "maintenance",
+        ttl_sec: ttl,
+        rows: 24,
+        cols: 80,
+      });
+      if (!data.websocket_path || !data.terminal_id) {
+        throw new Error(tx("Remote SSH web terminal response is incomplete."));
+      }
+      if (data.session) {
+        webTerminalSessionIDRef.current = data.session.session_id;
+        intentionalWebTerminalCloseRef.current = "";
+        setView((current) => ({
+          ...(current || {}),
+          sessions: [data.session as RemoteSSHSession, ...(current?.sessions || [])].slice(0, 50),
+        }));
+        setSessionPage(1);
+        setWebTerminalSessionID(data.session.session_id);
+      }
+      const container = terminalContainerRef.current;
+      if (!container) {
+        throw new Error(tx("Remote SSH terminal container is unavailable."));
+      }
+      container.textContent = "";
+      const terminal = new Terminal({
+        cursorBlink: true,
+        convertEol: true,
+        fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', monospace",
+        fontSize: 12,
+        lineHeight: 1.2,
+        scrollback: boundedScrollbackRows(webTerminalForm.scrollbackRows),
+        theme: {
+          background: "#0f172a",
+          foreground: "#e5edf7",
+          cursor: "#e5edf7",
+          selectionBackground: "#334155",
+        },
+      });
+      const fitAddon = new FitAddon();
+      terminal.loadAddon(fitAddon);
+      terminal.open(container);
+      terminalRef.current = terminal;
+      fitAddonRef.current = fitAddon;
+      setWebTerminalOpen(true);
+      requestAnimationFrame(() => fitAddon.fit());
+
+      const ws = new WebSocket(webSocketURL(data.websocket_path), REMOTE_SSH_WEB_TERMINAL_PROTOCOL);
+      ws.binaryType = "arraybuffer";
+      webSocketRef.current = ws;
+      const isCurrentSocket = () => webSocketRef.current === ws;
+      const decoder = new TextDecoder();
+      let heartbeatTimer = 0;
+      const outputQueue: string[] = [];
+      let outputWriting = false;
+      const pumpOutputQueue = () => {
+        if (outputWriting || terminalRef.current !== terminal) {
+          return;
+        }
+        const next = outputQueue.shift();
+        if (typeof next === "undefined") {
+          return;
+        }
+        outputWriting = true;
+        terminal.write(next, () => {
+          outputWriting = false;
+          pumpOutputQueue();
+        });
+      };
+      const enqueueOutput = (value: string) => {
+        if (!value) {
+          return;
+        }
+        outputQueue.push(value);
+        pumpOutputQueue();
+      };
+      let resizeFrame = 0;
+      let lastRows = 0;
+      let lastCols = 0;
+      const sendResize = (force = false) => {
+        fitAddon.fit();
+        if (!force && terminal.rows === lastRows && terminal.cols === lastCols) {
+          return;
+        }
+        lastRows = terminal.rows;
+        lastCols = terminal.cols;
+        sendTerminalMessage(ws, { type: "resize", rows: terminal.rows, cols: terminal.cols });
+      };
+      const scheduleResize = (force = false) => {
+        if (resizeFrame) {
+          return;
+        }
+        resizeFrame = window.requestAnimationFrame(() => {
+          resizeFrame = 0;
+          if (webSocketRef.current === ws && terminalRef.current === terminal) {
+            sendResize(force);
+          }
+        });
+      };
+      terminal.onData((input) => {
+        sendTerminalMessage(ws, { type: "input", data: input });
+      });
+      terminal.onResize(({ rows, cols }) => {
+        if (rows !== lastRows || cols !== lastCols) {
+          lastRows = rows;
+          lastCols = cols;
+          sendTerminalMessage(ws, { type: "resize", rows, cols });
+        }
+      });
+      if (typeof ResizeObserver !== "undefined") {
+        const observer = new ResizeObserver(() => scheduleResize());
+        observer.observe(container);
+        resizeObserverRef.current = observer;
+      }
+      ws.onopen = () => {
+        setWebConnecting(false);
+        setWebTerminalTone("success");
+        setWebTerminalMessage(tx("Terminal relay opened. Waiting for Gateway..."));
+        heartbeatTimer = window.setInterval(() => {
+          sendTerminalMessage(ws, { type: "ping" });
+        }, 20000);
+        scheduleResize(true);
+        terminal.focus();
+      };
+      ws.onmessage = async (event) => {
+        if (typeof event.data === "string") {
+          try {
+            const msg = JSON.parse(event.data) as { type?: string; message?: string };
+            if (msg.type === "error") {
+              setWebTerminalTone("error");
+              setWebTerminalMessage(msg.message || tx("Terminal connection failed."));
+            } else if (msg.type === "status") {
+              setWebTerminalTone("success");
+              setWebTerminalMessage(msg.message === "connected" ? tx("Terminal connected.") : msg.message || tx("Opening..."));
+              if (msg.message === "connected") {
+                void load();
+              }
+            } else if (msg.type === "closed") {
+              setWebTerminalTone("success");
+              setWebTerminalMessage(msg.message ? `${tx("Terminal closed.")} ${msg.message}` : tx("Terminal closed."));
+            }
+          } catch {
+            enqueueOutput(event.data);
+          }
+          return;
+        }
+        if (event.data instanceof ArrayBuffer) {
+          enqueueOutput(decoder.decode(event.data, { stream: true }));
+          return;
+        }
+        if (event.data instanceof Blob) {
+          enqueueOutput(decoder.decode(await event.data.arrayBuffer(), { stream: true }));
+        }
+      };
+      ws.onerror = () => {
+        if (!isCurrentSocket() || intentionalWebTerminalCloseRef.current === webTerminalSessionIDRef.current) {
+          return;
+        }
+        setWebConnecting(false);
+        setWebTerminalTone("error");
+        setWebTerminalMessage(tx("Terminal connection failed."));
+      };
+      ws.onclose = () => {
+        if (heartbeatTimer) {
+          window.clearInterval(heartbeatTimer);
+        }
+        if (resizeFrame) {
+          window.cancelAnimationFrame(resizeFrame);
+        }
+        if (!isCurrentSocket()) {
+          return;
+        }
+        const sessionID = webTerminalSessionIDRef.current;
+        const intentionalClose = intentionalWebTerminalCloseRef.current === sessionID;
+        if (!intentionalClose) {
+          closeRemoteSSHSession(sessionID);
+        }
+        intentionalWebTerminalCloseRef.current = "";
+        webTerminalSessionIDRef.current = "";
+        setWebTerminalSessionID("");
+        setWebConnecting(false);
+        setWebTerminalOpen(false);
+        resizeObserverRef.current?.disconnect();
+        resizeObserverRef.current = null;
+        void load();
+      };
+    } catch (err) {
+      const fallback = tx("Failed to open Remote SSH web terminal");
+      closeWebTerminal(false);
+      setWebTerminalTone("error");
+      setWebTerminalMessage(err instanceof Error ? err.message || fallback : fallback);
+    } finally {
+      setWebConnecting(false);
+    }
+  }
+
+  async function terminateSession(session: RemoteSSHSession) {
+    const sessionID = (session.session_id || "").trim();
+    if (!sessionID || terminatingSessionID) {
+      return;
+    }
+    if (!window.confirm(tx("Terminate this Remote SSH session?"))) {
+      return;
+    }
+    setTerminatingSessionID(sessionID);
+    setSessionActionMessage("");
+    setSessionActionTone("success");
+    try {
+      if (sessionID === webTerminalSessionIDRef.current) {
+        intentionalWebTerminalCloseRef.current = sessionID;
+      }
+      const data = await apiPostJson<RemoteSSHSessionActionResponse>(`/remote-ssh/sessions/${encodeURIComponent(sessionID)}/terminate`, {});
+      if (data.session) {
+        setView((current) => ({
+          ...(current || {}),
+          sessions: (current?.sessions || []).map((item) => (item.session_id === sessionID ? (data.session as RemoteSSHSession) : item)),
+        }));
+      }
+      setSessionActionTone("success");
+      setSessionActionMessage(tx("Remote SSH session terminated."));
+      await load();
+    } catch (err) {
+      if (intentionalWebTerminalCloseRef.current === sessionID) {
+        intentionalWebTerminalCloseRef.current = "";
+      }
+      const fallback = tx("Failed to terminate Remote SSH session");
+      setSessionActionTone("error");
+      setSessionActionMessage(err instanceof Error ? err.message || fallback : fallback);
+    } finally {
+      setTerminatingSessionID("");
     }
   }
 
@@ -448,6 +831,68 @@ export default function RemoteSSHPage() {
           <section className="device-detail-section">
             <div className="device-detail-section-header">
               <div>
+                <h3>{tx("Web terminal")}</h3>
+                <p className="section-note">{tx("Open an interactive browser terminal through the existing Remote SSH relay.")}</p>
+              </div>
+            </div>
+            {!canStart ? <p className="form-message error">{tx("Remote SSH requires Center service ON, an approved device, and an enabled policy.")}</p> : null}
+            <div className="waf-upload-row remote-ssh-terminal-toolbar">
+              <label className="remote-ssh-policy-field">
+                <span>{tx("Reason")}</span>
+                <input
+                  value={webTerminalForm.reason}
+                  onChange={(event) => setWebTerminalForm((current) => ({ ...current, reason: event.target.value }))}
+                  placeholder="maintenance"
+                  disabled={webConnecting || webTerminalOpen}
+                />
+              </label>
+              <label className="remote-ssh-policy-field">
+                <span>{tx("TTL seconds")}</span>
+                <input
+                  type="number"
+                  min={60}
+                  max={policy?.max_ttl_sec || 86400}
+                  value={webTerminalForm.ttlSec}
+                  onChange={(event) => setWebTerminalForm((current) => ({ ...current, ttlSec: event.target.value }))}
+                  disabled={webConnecting || webTerminalOpen}
+                />
+              </label>
+              <label className="remote-ssh-policy-field">
+                <span>{tx("Scrollback rows")}</span>
+                <input
+                  type="number"
+                  min={MIN_REMOTE_SSH_TERMINAL_SCROLLBACK}
+                  max={MAX_REMOTE_SSH_TERMINAL_SCROLLBACK}
+                  step={100}
+                  inputMode="numeric"
+                  value={webTerminalForm.scrollbackRows}
+                  onChange={(event) => setWebTerminalForm((current) => ({ ...current, scrollbackRows: event.target.value }))}
+                  onBlur={() =>
+                    setWebTerminalForm((current) => ({
+                      ...current,
+                      scrollbackRows: String(boundedScrollbackRows(current.scrollbackRows)),
+                    }))
+                  }
+                />
+              </label>
+              <button type="button" onClick={() => void openWebTerminal()} disabled={!canStart || webConnecting || webTerminalOpen}>
+                {webConnecting ? tx("Opening...") : tx("Open terminal")}
+              </button>
+              <button type="button" className="secondary" onClick={() => closeWebTerminal()} disabled={!webConnecting && !webTerminalOpen && !webTerminalSessionID}>
+                {tx("Close terminal")}
+              </button>
+            </div>
+            {webTerminalMessage ? (
+              <p className={`form-message ${webTerminalTone}`} role={webTerminalTone === "error" ? "alert" : "status"}>
+                {tx(webTerminalMessage)}
+              </p>
+            ) : null}
+            <div className={`remote-ssh-terminal-shell${webTerminalOpen || webConnecting ? " is-active" : ""}`} ref={terminalContainerRef} />
+          </section>
+
+          <section className="device-detail-section">
+            <div className="device-detail-section-header">
+              <div>
                 <h3>{tx("CLI handoff")}</h3>
                 <p className="section-note">{tx("The browser never generates SSH private keys. Run this command from the operator machine.")}</p>
               </div>
@@ -522,6 +967,7 @@ export default function RemoteSSHPage() {
                 <thead>
                   <tr>
                     <th>{tx("Status")}</th>
+                    <th>{tx("Mode")}</th>
                     <th>{tx("Reason")}</th>
                     <th>{tx("Requested by")}</th>
                     <th>{tx("Created")}</th>
@@ -532,11 +978,26 @@ export default function RemoteSSHPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sessions.map((session) => (
+                  {pagedSessions.map((session) => (
                     <tr key={session.session_id}>
                       <td>
-                        <span className={`token-status token-status-${session.status || "unknown"}`}>{tx(session.status || "-")}</span>
+                        <div className="remote-ssh-status-cell">
+                          <span className={`token-status token-status-${session.status || "unknown"}`}>{tx(session.status || "-")}</span>
+                          {canTerminateRemoteSSHSession(session) ? (
+                            <button
+                              type="button"
+                              className="remote-ssh-terminate-button"
+                              onClick={() => void terminateSession(session)}
+                              disabled={Boolean(terminatingSessionID)}
+                              aria-label={tx("Terminate")}
+                              title={terminatingSessionID === session.session_id ? tx("Terminating...") : tx("Terminate")}
+                            >
+                              <span className="visually-hidden">{terminatingSessionID === session.session_id ? tx("Terminating...") : tx("Terminate")}</span>
+                            </button>
+                          ) : null}
+                        </div>
                       </td>
+                      <td>{tx(session.operator_mode || "cli")}</td>
                       <td title={session.reason}>{session.reason || "-"}</td>
                       <td title={session.operator_ip || undefined}>{session.requested_by_username || "-"}</td>
                       <td title={session.session_id}>{formatUnixTime(session.created_at_unix, locale)}</td>
@@ -560,6 +1021,40 @@ export default function RemoteSSHPage() {
               </table>
               {sessions.length === 0 ? <div className="empty">{tx("No Remote SSH sessions.")}</div> : null}
             </div>
+            {sessionActionMessage ? (
+              <p className={`form-message ${sessionActionTone}`} role={sessionActionTone === "error" ? "alert" : "status"}>
+                {sessionActionMessage}
+              </p>
+            ) : null}
+            {sessions.length > REMOTE_SSH_SESSION_PAGE_SIZE ? (
+              <div className="table-pager remote-ssh-session-pager">
+                <span className="section-note">
+                  {tx("Showing {start}-{end} of {total}", {
+                    start: sessionPageStart + 1,
+                    end: sessionPageEnd,
+                    total: sessions.length,
+                  })}
+                </span>
+                <div className="inline-actions">
+                  <button type="button" onClick={() => setSessionPage((current) => Math.max(1, current - 1))} disabled={currentSessionPage <= 1}>
+                    {tx("Previous")}
+                  </button>
+                  <span className="section-note">
+                    {tx("Page {current} of {total}", {
+                      current: currentSessionPage,
+                      total: sessionPageCount,
+                    })}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSessionPage((current) => Math.min(sessionPageCount, current + 1))}
+                    disabled={currentSessionPage >= sessionPageCount}
+                  >
+                    {tx("Next")}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </section>
         </>
       ) : null}

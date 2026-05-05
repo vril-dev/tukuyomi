@@ -1037,6 +1037,19 @@ button.danger {
   flex-wrap: nowrap;
 }
 
+.table-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.table-pager .inline-actions {
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
 .device-detail-id {
   max-width: min(86vw, 920px);
   overflow-wrap: anywhere;
@@ -1183,31 +1196,115 @@ button.danger {
   margin-top: 12px;
 }
 
+.remote-ssh-terminal-toolbar {
+  align-items: flex-end;
+  margin-top: 10px;
+}
+
+.remote-ssh-terminal-toolbar .remote-ssh-policy-field {
+  min-width: 190px;
+}
+
+.remote-ssh-terminal-shell {
+  display: none;
+  height: clamp(280px, 42vh, 420px);
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid #dbe5f0;
+  border-radius: 6px;
+  background: #0f172a;
+  padding: 8px;
+}
+
+.remote-ssh-terminal-shell.is-active {
+  display: block;
+}
+
+.remote-ssh-terminal-shell .xterm {
+  height: 100%;
+  width: 100%;
+}
+
+.remote-ssh-terminal-shell .xterm-viewport {
+  overflow-y: auto;
+}
+
 .remote-ssh-session-table table {
-  min-width: 1180px;
+  min-width: 1220px;
 }
 
 .remote-ssh-session-table th:nth-child(1) {
-  width: 14%;
+  width: 150px;
 }
 
 .remote-ssh-session-table th:nth-child(2) {
-  width: 18%;
+  width: 80px;
 }
 
 .remote-ssh-session-table th:nth-child(3) {
-  width: 13%;
+  width: 190px;
 }
 
-.remote-ssh-session-table th:nth-child(4),
+.remote-ssh-session-table th:nth-child(4) {
+  width: 135px;
+}
+
 .remote-ssh-session-table th:nth-child(5),
 .remote-ssh-session-table th:nth-child(6),
-.remote-ssh-session-table th:nth-child(7) {
-  width: 13%;
+.remote-ssh-session-table th:nth-child(7),
+.remote-ssh-session-table th:nth-child(8) {
+  width: 135px;
 }
 
-.remote-ssh-session-table th:nth-child(8) {
-  width: 16%;
+.remote-ssh-session-table th:nth-child(9) {
+  width: 160px;
+}
+
+.remote-ssh-status-cell {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.remote-ssh-terminate-button {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  border-color: #fecaca;
+  border-radius: 999px;
+  background: #fff5f5;
+  padding: 0;
+}
+
+.remote-ssh-terminate-button::before,
+.remote-ssh-terminate-button::after {
+  position: absolute;
+  top: 5px;
+  left: 10px;
+  width: 2px;
+  height: 10px;
+  border-radius: 999px;
+  background: #b91c1c;
+  content: "";
+}
+
+.remote-ssh-terminate-button::before {
+  transform: rotate(45deg);
+}
+
+.remote-ssh-terminate-button::after {
+  transform: rotate(-45deg);
+}
+
+.remote-ssh-terminate-button:hover:not(:disabled) {
+  border-color: #fca5a5;
+  background: #fee2e2;
+}
+
+.remote-ssh-terminate-button:disabled {
+  opacity: 0.55;
 }
 
 .rules-request-col-actions {
@@ -1812,7 +1909,8 @@ button.danger {
 .token-status-expired,
 .token-status-exhausted,
 .token-status-blocked,
-.token-status-canceled {
+.token-status-canceled,
+.token-status-terminated {
   background: #fee2e2;
   color: #991b1b;
 }

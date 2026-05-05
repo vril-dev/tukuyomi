@@ -264,6 +264,7 @@ func (e *tukuyomiProxyEngine) serveUpgradeResponse(w http.ResponseWriter, r *htt
 		handleProxyRoundTripError(w, r, fmt.Errorf("hijack failed on protocol switch: %v", hijackErr))
 		return
 	}
+	clearTukuyomiProxyTunnelDeadlines(clientConn)
 	defer func() {
 		_ = clientConn.Close()
 	}()
@@ -294,6 +295,13 @@ func (e *tukuyomiProxyEngine) serveUpgradeResponse(w http.ResponseWriter, r *htt
 	if err := copyTukuyomiProxyTunnel(r, clientConn, brw, backConn); err != nil {
 		logTukuyomiProxyTunnelError(r, "copy tunnel", err)
 	}
+}
+
+func clearTukuyomiProxyTunnelDeadlines(conn net.Conn) {
+	if conn == nil {
+		return
+	}
+	_ = conn.SetDeadline(time.Time{})
 }
 
 func writeTukuyomiProxyUpgradeResponse(w io.Writer, res *http.Response, upgradeType string) error {

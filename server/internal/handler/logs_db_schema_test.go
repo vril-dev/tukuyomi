@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const latestSchemaMigrationVersionForTest = 34
+const latestSchemaMigrationVersionForTest = 35
 
 func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
@@ -130,6 +130,13 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 	}
 	if ruleArtifactSourceColumns != 1 {
 		t.Fatalf("center_rule_artifact_bundles source column count=%d want 1", ruleArtifactSourceColumns)
+	}
+	var remoteSSHOperatorModeColumns int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('center_remote_ssh_sessions') WHERE name = 'operator_mode'`).Scan(&remoteSSHOperatorModeColumns); err != nil {
+		t.Fatalf("query center_remote_ssh_sessions operator_mode column: %v", err)
+	}
+	if remoteSSHOperatorModeColumns != 1 {
+		t.Fatalf("center_remote_ssh_sessions operator_mode column count=%d want 1", remoteSSHOperatorModeColumns)
 	}
 	for _, column := range []string{"acme_environment", "acme_email"} {
 		var count int

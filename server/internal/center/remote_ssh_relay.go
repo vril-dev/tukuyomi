@@ -27,6 +27,8 @@ const (
 	remoteSSHRelayPairWait   = 24 * time.Hour
 )
 
+var errRemoteSSHRelayTerminated = errors.New("operator terminated")
+
 type remoteSSHGatewayStreamRequest struct {
 	DeviceID                   string
 	KeyID                      string
@@ -142,6 +144,7 @@ func hijackRemoteSSHUpgrade(c *gin.Context) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	clearRemoteSSHConnDeadlines(conn)
 	if rw != nil {
 		if rw.Reader != nil && rw.Reader.Buffered() > 0 {
 			_ = conn.Close()
@@ -162,6 +165,15 @@ func hijackRemoteSSHUpgrade(c *gin.Context) (net.Conn, error) {
 		return nil, err
 	}
 	return conn, nil
+}
+
+func clearRemoteSSHConnDeadlines(conn net.Conn) {
+	if conn == nil {
+		return
+	}
+	_ = conn.SetDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Time{})
+	_ = conn.SetWriteDeadline(time.Time{})
 }
 
 func remoteSSHUpgradeRequested(r *http.Request) bool {
@@ -251,6 +263,7 @@ type remoteSSHRelayPair struct {
 	operator             net.Conn
 	ready                chan struct{}
 	done                 chan struct{}
+	doneOnce             sync.Once
 	lastActivityUnixNano atomic.Int64
 	errMu                sync.Mutex
 	err                  error
@@ -279,6 +292,8 @@ func (h *remoteSSHRelayHubState) attach(ctx context.Context, sessionID string, r
 	defer timer.Stop()
 	select {
 	case <-pair.ready:
+	case <-pair.done:
+		return pair.closeErr()
 	case <-ctx.Done():
 		h.removeSide(sessionID, role, conn)
 		_ = conn.Close()
@@ -358,7 +373,7 @@ func (h *remoteSSHRelayHubState) run(sessionID string, pair *remoteSSHRelayPair)
 			delete(h.sessions, sessionID)
 		}
 		h.mu.Unlock()
-		close(pair.done)
+		pair.closeDone()
 	}()
 	var once sync.Once
 	closeBoth := func() {
@@ -398,6 +413,39 @@ func (h *remoteSSHRelayHubState) run(sessionID string, pair *remoteSSHRelayPair)
 	}()
 	_, _ = io.Copy(activityOperator, activityGateway)
 	once.Do(closeBoth)
+}
+
+func (h *remoteSSHRelayHubState) terminate(sessionID string, reason string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "operator terminated"
+	}
+	h.mu.Lock()
+	pair := h.sessions[sessionID]
+	if pair != nil {
+		delete(h.sessions, sessionID)
+	}
+	h.mu.Unlock()
+	if pair == nil {
+		return false
+	}
+	if reason == errRemoteSSHRelayTerminated.Error() {
+		pair.setCloseErr(errRemoteSSHRelayTerminated)
+	} else {
+		pair.setCloseErr(fmt.Errorf("%s", reason))
+	}
+	if pair.gateway != nil {
+		_ = pair.gateway.Close()
+	}
+	if pair.operator != nil {
+		_ = pair.operator.Close()
+	}
+	pair.closeDone()
+	return true
 }
 
 type remoteSSHActivityConn struct {
@@ -440,4 +488,10 @@ func (p *remoteSSHRelayPair) closeErr() error {
 	p.errMu.Lock()
 	defer p.errMu.Unlock()
 	return p.err
+}
+
+func (p *remoteSSHRelayPair) closeDone() {
+	p.doneOnce.Do(func() {
+		close(p.done)
+	})
 }

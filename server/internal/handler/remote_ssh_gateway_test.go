@@ -5,6 +5,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -88,6 +90,88 @@ func TestVerifyEdgeRemoteSSHDeviceSessionRequiresSignatureAndRejectsReplay(t *te
 	tampered.CenterSigningPublicKey = "ed25519:" + base64.StdEncoding.EncodeToString(bytesOfLengthForTest(ed25519.PublicKeySize, 0x42))
 	if err := verifyEdgeRemoteSSHDeviceSession(context.Background(), identity, tampered); err == nil || !strings.Contains(err.Error(), "signing key mismatch") {
 		t.Fatalf("expected signing key mismatch, got %v", err)
+	}
+}
+
+func TestVerifyEdgeRemoteSSHDeviceSessionRefreshesRotatedCenterSigningKey(t *testing.T) {
+	cfgPath := writeSettingsConfigFixture(t)
+	restoreConfig := saveConfigFilePathForTest(t, cfgPath)
+	t.Cleanup(restoreConfig)
+	initSettingsDBStoreForTest(t)
+
+	stalePublicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey stale center: %v", err)
+	}
+	rotatedPublicKey, rotatedPrivateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey rotated center: %v", err)
+	}
+	staleCenterKey := "ed25519:" + base64.StdEncoding.EncodeToString(stalePublicKey)
+	rotatedCenterKey := "ed25519:" + base64.StdEncoding.EncodeToString(rotatedPublicKey)
+
+	oldAllowInsecureDefaults := config.AllowInsecureDefaults
+	oldSigningKey := config.RemoteSSHGatewayCenterSigningPublicKey
+	config.AllowInsecureDefaults = true
+	config.RemoteSSHGatewayCenterSigningPublicKey = staleCenterKey
+	t.Cleanup(func() {
+		config.AllowInsecureDefaults = oldAllowInsecureDefaults
+		config.RemoteSSHGatewayCenterSigningPublicKey = oldSigningKey
+	})
+
+	signingKeyCalls := 0
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/remote-ssh/signing-key" {
+			t.Fatalf("path=%q", r.URL.Path)
+		}
+		signingKeyCalls++
+		_, _ = w.Write([]byte(`{"public_key":` + quoteJSON(rotatedCenterKey) + `,"algorithm":"ed25519"}`))
+	}))
+	t.Cleanup(center.Close)
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("logs stats store is not initialized")
+	}
+	if err := upsertEdgeDeviceIdentity(store, edgeDeviceIdentityRecord{
+		DeviceID:         "edge-refresh-1",
+		KeyID:            "default",
+		EnrollmentStatus: edgeEnrollmentStatusApproved,
+		CenterURL:        center.URL,
+	}); err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+
+	operatorPublicKey, operatorFP := edgeRemoteSSHPublicKeyForTest(t)
+	now := time.Now().UTC().Unix()
+	session := edgeRemoteSSHDeviceSession{
+		DeviceID:                           "edge-refresh-1",
+		SessionID:                          "session-refresh-1",
+		OperatorPublicKey:                  operatorPublicKey,
+		OperatorPublicKeyFingerprintSHA256: operatorFP,
+		ExpiresAtUnix:                      now + 120,
+		CreatedAtUnix:                      now,
+		Nonce:                              "nonce-refresh-1",
+		CenterSigningPublicKey:             rotatedCenterKey,
+	}
+	session.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(rotatedPrivateKey, []byte(edgeRemoteSSHDeviceSessionSignedMessage(session))))
+	identity := edgeDeviceIdentityRecord{DeviceID: session.DeviceID, CenterURL: center.URL, EnrollmentStatus: edgeEnrollmentStatusApproved}
+
+	if err := verifyEdgeRemoteSSHDeviceSession(context.Background(), identity, session); err != nil {
+		t.Fatalf("verifyEdgeRemoteSSHDeviceSession: %v", err)
+	}
+	if signingKeyCalls != 1 {
+		t.Fatalf("signingKeyCalls=%d want 1", signingKeyCalls)
+	}
+	if config.RemoteSSHGatewayCenterSigningPublicKey != rotatedCenterKey {
+		t.Fatalf("runtime center signing key=%q want %q", config.RemoteSSHGatewayCenterSigningPublicKey, rotatedCenterKey)
+	}
+	saved, err := loadSettingsAppConfigOnly()
+	if err != nil {
+		t.Fatalf("loadSettingsAppConfigOnly: %v", err)
+	}
+	if saved.RemoteSSH.Gateway.CenterSigningPublicKey != rotatedCenterKey {
+		t.Fatalf("saved center signing key=%q want %q", saved.RemoteSSH.Gateway.CenterSigningPublicKey, rotatedCenterKey)
 	}
 }
 

@@ -36,6 +36,10 @@ const (
 	RemoteSSHSessionStatusClosed           = "closed"
 	RemoteSSHSessionStatusExpired          = "expired"
 	RemoteSSHSessionStatusCanceled         = "canceled"
+	RemoteSSHSessionStatusTerminated       = "terminated"
+
+	RemoteSSHOperatorModeCLI = "cli"
+	RemoteSSHOperatorModeWeb = "web"
 
 	MaxRemoteSSHReasonBytes      = 1024
 	MaxRemoteSSHPublicKeyBytes   = 8192
@@ -59,6 +63,7 @@ var (
 type RemoteSSHSessionCreate struct {
 	DeviceID          string
 	Reason            string
+	OperatorMode      string
 	OperatorPublicKey string
 	TTLSec            int64
 	RequestedByUserID int64
@@ -88,6 +93,7 @@ type RemoteSSHSessionRecord struct {
 	SessionID                          string `json:"session_id"`
 	DeviceID                           string `json:"device_id"`
 	Status                             string `json:"status"`
+	OperatorMode                       string `json:"operator_mode"`
 	Reason                             string `json:"reason"`
 	RequestedByUserID                  int64  `json:"requested_by_user_id,omitempty"`
 	RequestedByUsername                string `json:"requested_by_username"`
@@ -234,6 +240,7 @@ func CreateRemoteSSHSession(ctx context.Context, in RemoteSSHSessionCreate) (Rem
 			SessionID:                          sessionID,
 			DeviceID:                           normalized.DeviceID,
 			Status:                             RemoteSSHSessionStatusPending,
+			OperatorMode:                       normalized.OperatorMode,
 			Reason:                             normalized.Reason,
 			RequestedByUserID:                  normalized.RequestedByUserID,
 			RequestedByUsername:                normalized.RequestedBy,
@@ -297,6 +304,25 @@ func RemoteSSHViewForDevice(ctx context.Context, deviceID string, limit int) (Re
 		return nil
 	})
 	return out, err
+}
+
+func RemoteSSHSessionByID(ctx context.Context, sessionID string) (RemoteSSHSessionRecord, bool, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return RemoteSSHSessionRecord{}, false, ErrRemoteSSHInvalid
+	}
+	var out RemoteSSHSessionRecord
+	var found bool
+	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		rec, _, ok, err := loadRemoteSSHSessionByIDTx(ctx, db, driver, sessionID)
+		if err != nil {
+			return err
+		}
+		out = rec
+		found = ok
+		return nil
+	})
+	return out, found, err
 }
 
 func UpsertRemoteSSHPolicy(ctx context.Context, in RemoteSSHPolicyUpdate) (RemoteSSHPolicyRecord, error) {
@@ -797,15 +823,83 @@ UPDATE center_remote_ssh_sessions
 	})
 }
 
+func TerminateRemoteSSHSession(ctx context.Context, sessionID string, reason string, endedAtUnix int64) (RemoteSSHSessionRecord, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	reason = truncateRemoteSSHField(strings.TrimSpace(reason), 256)
+	if sessionID == "" {
+		return RemoteSSHSessionRecord{}, ErrRemoteSSHInvalid
+	}
+	if reason == "" {
+		reason = "operator terminated"
+	}
+	if endedAtUnix <= 0 {
+		endedAtUnix = time.Now().UTC().Unix()
+	}
+	var out RemoteSSHSessionRecord
+	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		rec, _, found, err := loadRemoteSSHSessionByIDTx(ctx, tx, driver, sessionID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return ErrRemoteSSHSessionNotFound
+		}
+		out = rec
+		if !remoteSSHSessionAttachable(rec.Status) {
+			return tx.Commit()
+		}
+		_, err = tx.ExecContext(ctx, `
+UPDATE center_remote_ssh_sessions
+   SET status = `+placeholder(driver, 1)+`,
+       ended_at_unix = `+placeholder(driver, 2)+`,
+       close_reason = `+placeholder(driver, 3)+`
+ WHERE session_id = `+placeholder(driver, 4),
+			RemoteSSHSessionStatusTerminated,
+			endedAtUnix,
+			reason,
+			sessionID,
+		)
+		if err != nil {
+			return err
+		}
+		if err := insertRemoteSSHEventTx(ctx, tx, driver, rec.SessionID, rec.DeviceID, RemoteSSHSessionStatusTerminated, reason, endedAtUnix); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		rec.Status = RemoteSSHSessionStatusTerminated
+		rec.EndedAtUnix = endedAtUnix
+		rec.CloseReason = reason
+		out = rec
+		return nil
+	})
+	return out, err
+}
+
 func normalizeRemoteSSHSessionCreate(in RemoteSSHSessionCreate) (RemoteSSHSessionCreate, string, error) {
 	out := in
 	out.DeviceID = strings.TrimSpace(out.DeviceID)
 	out.Reason = strings.TrimSpace(out.Reason)
+	out.OperatorMode = strings.ToLower(strings.TrimSpace(out.OperatorMode))
 	out.OperatorPublicKey = strings.TrimSpace(out.OperatorPublicKey)
 	out.RequestedBy = truncateRemoteSSHField(strings.TrimSpace(out.RequestedBy), MaxRemoteSSHUsernameBytes)
 	out.OperatorIP = truncateRemoteSSHField(strings.TrimSpace(out.OperatorIP), 191)
 	out.OperatorUserAgent = truncateRemoteSSHField(strings.TrimSpace(out.OperatorUserAgent), 512)
 	if !deviceIDPattern.MatchString(out.DeviceID) {
+		return RemoteSSHSessionCreate{}, "", ErrRemoteSSHInvalid
+	}
+	if out.OperatorMode == "" {
+		out.OperatorMode = RemoteSSHOperatorModeCLI
+	}
+	switch out.OperatorMode {
+	case RemoteSSHOperatorModeCLI, RemoteSSHOperatorModeWeb:
+	default:
 		return RemoteSSHSessionCreate{}, "", ErrRemoteSSHInvalid
 	}
 	if out.Reason != "" && len(out.Reason) > MaxRemoteSSHReasonBytes {
@@ -956,15 +1050,16 @@ func insertRemoteSSHSessionTx(ctx context.Context, tx *sql.Tx, driver string, re
 	attachHash := remoteSSHAttachTokenHash(rec.AttachToken)
 	_, err := tx.ExecContext(ctx, `
 INSERT INTO center_remote_ssh_sessions
-    (session_id, device_id, status, reason, requested_by_user_id, requested_by_username, operator_public_key,
+    (session_id, device_id, status, operator_mode, reason, requested_by_user_id, requested_by_username, operator_public_key,
      operator_public_key_fingerprint_sha256, attach_token_hash, gateway_host_key_fingerprint_sha256, gateway_host_public_key,
      ttl_sec, expires_at_unix, created_at_unix,
      operator_ip, operator_user_agent)
 VALUES
-    (`+placeholders(driver, 16, 1)+`)`,
+    (`+placeholders(driver, 17, 1)+`)`,
 		rec.SessionID,
 		rec.DeviceID,
 		rec.Status,
+		rec.OperatorMode,
 		rec.Reason,
 		nullInt64(rec.RequestedByUserID),
 		rec.RequestedByUsername,
@@ -985,7 +1080,7 @@ VALUES
 func loadRemoteSSHSessionByIDTx(ctx context.Context, q queryer, driver string, sessionID string) (RemoteSSHSessionRecord, string, bool, error) {
 	row := q.QueryRowContext(ctx, `
 SELECT session_id, device_id, status, reason, requested_by_user_id, requested_by_username,
-       operator_public_key, operator_public_key_fingerprint_sha256, attach_token_hash,
+       operator_mode, operator_public_key, operator_public_key_fingerprint_sha256, attach_token_hash,
        gateway_host_key_fingerprint_sha256, gateway_host_public_key, ttl_sec, expires_at_unix, created_at_unix,
        gateway_connected_at_unix, operator_connected_at_unix, started_at_unix, ended_at_unix,
        close_reason, operator_ip, operator_user_agent
@@ -1001,6 +1096,7 @@ SELECT session_id, device_id, status, reason, requested_by_user_id, requested_by
 		&rec.Reason,
 		&requestedBy,
 		&rec.RequestedByUsername,
+		&rec.OperatorMode,
 		&rec.OperatorPublicKey,
 		&rec.OperatorPublicKeyFingerprintSHA256,
 		&attachHash,
@@ -1024,6 +1120,9 @@ SELECT session_id, device_id, status, reason, requested_by_user_id, requested_by
 	}
 	if requestedBy.Valid {
 		rec.RequestedByUserID = requestedBy.Int64
+	}
+	if rec.OperatorMode == "" {
+		rec.OperatorMode = RemoteSSHOperatorModeCLI
 	}
 	return rec, attachHash, true, nil
 }
@@ -1056,7 +1155,7 @@ UPDATE center_remote_ssh_sessions
 func listRemoteSSHSessionsTx(ctx context.Context, q queryerWithRows, driver string, deviceID string, limit int) ([]RemoteSSHSessionRecord, error) {
 	rows, err := q.QueryContext(ctx, `
 SELECT session_id, device_id, status, reason, requested_by_user_id, requested_by_username,
-       operator_public_key_fingerprint_sha256, gateway_host_key_fingerprint_sha256, gateway_host_public_key, ttl_sec,
+       operator_mode, operator_public_key_fingerprint_sha256, gateway_host_key_fingerprint_sha256, gateway_host_public_key, ttl_sec,
        expires_at_unix, created_at_unix, gateway_connected_at_unix, operator_connected_at_unix,
        started_at_unix, ended_at_unix, close_reason, operator_ip, operator_user_agent
   FROM center_remote_ssh_sessions
@@ -1078,6 +1177,7 @@ SELECT session_id, device_id, status, reason, requested_by_user_id, requested_by
 			&rec.Reason,
 			&requestedBy,
 			&rec.RequestedByUsername,
+			&rec.OperatorMode,
 			&rec.OperatorPublicKeyFingerprintSHA256,
 			&rec.GatewayHostKeyFingerprintSHA256,
 			&rec.GatewayHostPublicKey,
@@ -1096,6 +1196,9 @@ SELECT session_id, device_id, status, reason, requested_by_user_id, requested_by
 		}
 		if requestedBy.Valid {
 			rec.RequestedByUserID = requestedBy.Int64
+		}
+		if rec.OperatorMode == "" {
+			rec.OperatorMode = RemoteSSHOperatorModeCLI
 		}
 		out = append(out, rec)
 	}

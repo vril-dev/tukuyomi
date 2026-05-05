@@ -67,6 +67,9 @@ func TestRemoteSSHPolicyAndSessionLifecycle(t *testing.T) {
 	if session.Status != RemoteSSHSessionStatusPending || session.TTLSec != 120 || session.ExpiresAtUnix != 1120 {
 		t.Fatalf("session lifecycle fields unexpected: %+v", session)
 	}
+	if session.OperatorMode != RemoteSSHOperatorModeCLI {
+		t.Fatalf("default operator_mode=%q want %q", session.OperatorMode, RemoteSSHOperatorModeCLI)
+	}
 	if session.AttachToken == "" {
 		t.Fatal("create response must include one-time attach token")
 	}
@@ -195,6 +198,117 @@ func TestRemoteSSHSessionValidation(t *testing.T) {
 		CreatedAtUnix:     1000,
 	}); !errors.Is(err, ErrRemoteSSHInvalid) {
 		t.Fatalf("CreateRemoteSSHSession invalid key error=%v want ErrRemoteSSHInvalid", err)
+	}
+
+	if _, err := CreateRemoteSSHSession(ctx, RemoteSSHSessionCreate{
+		DeviceID:          "edge-remote-2",
+		Reason:            "bad operator mode",
+		OperatorMode:      "browser",
+		OperatorPublicKey: remoteSSHPublicKeyForTest(t),
+		CreatedAtUnix:     1000,
+	}); !errors.Is(err, ErrRemoteSSHInvalid) {
+		t.Fatalf("CreateRemoteSSHSession invalid operator mode error=%v want ErrRemoteSSHInvalid", err)
+	}
+}
+
+func TestRemoteSSHWebOperatorModePersists(t *testing.T) {
+	setupRemoteSSHStoreTest(t)
+	insertRemoteSSHApprovedDeviceForTest(t, "edge-remote-web")
+
+	ctx := context.Background()
+	if _, err := UpsertRemoteSSHPolicy(ctx, RemoteSSHPolicyUpdate{
+		DeviceID:      "edge-remote-web",
+		Enabled:       true,
+		MaxTTLSec:     120,
+		RequireReason: true,
+		UpdatedAtUnix: 1000,
+	}); err != nil {
+		t.Fatalf("UpsertRemoteSSHPolicy: %v", err)
+	}
+	session, err := CreateRemoteSSHSession(ctx, RemoteSSHSessionCreate{
+		DeviceID:          "edge-remote-web",
+		Reason:            "web terminal",
+		OperatorMode:      RemoteSSHOperatorModeWeb,
+		OperatorPublicKey: remoteSSHPublicKeyForTest(t),
+		CreatedAtUnix:     1000,
+	})
+	if err != nil {
+		t.Fatalf("CreateRemoteSSHSession web mode: %v", err)
+	}
+	if session.OperatorMode != RemoteSSHOperatorModeWeb {
+		t.Fatalf("created operator_mode=%q want %q", session.OperatorMode, RemoteSSHOperatorModeWeb)
+	}
+	loaded, found, err := RemoteSSHSessionByID(ctx, session.SessionID)
+	if err != nil {
+		t.Fatalf("RemoteSSHSessionByID: %v", err)
+	}
+	if !found || loaded.OperatorMode != RemoteSSHOperatorModeWeb {
+		t.Fatalf("loaded web session mismatch found=%v record=%+v", found, loaded)
+	}
+	view, err := RemoteSSHViewForDevice(ctx, "edge-remote-web", 10)
+	if err != nil {
+		t.Fatalf("RemoteSSHViewForDevice: %v", err)
+	}
+	if len(view.Sessions) != 1 || view.Sessions[0].OperatorMode != RemoteSSHOperatorModeWeb {
+		t.Fatalf("view web session mismatch: %+v", view.Sessions)
+	}
+}
+
+func TestRemoteSSHSessionTerminateReleasesActiveLimit(t *testing.T) {
+	setupRemoteSSHStoreTest(t)
+	insertRemoteSSHApprovedDeviceForTest(t, "edge-remote-terminate")
+
+	ctx := context.Background()
+	if _, err := UpsertRemoteSSHPolicy(ctx, RemoteSSHPolicyUpdate{
+		DeviceID:      "edge-remote-terminate",
+		Enabled:       true,
+		MaxTTLSec:     120,
+		RequireReason: true,
+		UpdatedAtUnix: 1000,
+	}); err != nil {
+		t.Fatalf("UpsertRemoteSSHPolicy: %v", err)
+	}
+	session, err := CreateRemoteSSHSession(ctx, RemoteSSHSessionCreate{
+		DeviceID:          "edge-remote-terminate",
+		Reason:            "terminate me",
+		OperatorPublicKey: remoteSSHPublicKeyForTest(t),
+		CreatedAtUnix:     1000,
+	})
+	if err != nil {
+		t.Fatalf("CreateRemoteSSHSession: %v", err)
+	}
+	terminated, err := TerminateRemoteSSHSession(ctx, session.SessionID, "operator terminated", 1005)
+	if err != nil {
+		t.Fatalf("TerminateRemoteSSHSession: %v", err)
+	}
+	if terminated.Status != RemoteSSHSessionStatusTerminated || terminated.EndedAtUnix != 1005 || terminated.CloseReason != "operator terminated" {
+		t.Fatalf("terminated session mismatch: %+v", terminated)
+	}
+	pending, err := PendingRemoteSSHSessionForDevice(ctx, "edge-remote-terminate", 1006)
+	if err != nil {
+		t.Fatalf("PendingRemoteSSHSessionForDevice: %v", err)
+	}
+	if pending != nil {
+		t.Fatalf("terminated session should not remain pending: %+v", pending)
+	}
+	next, err := CreateRemoteSSHSession(ctx, RemoteSSHSessionCreate{
+		DeviceID:          "edge-remote-terminate",
+		Reason:            "replacement session",
+		OperatorPublicKey: remoteSSHPublicKeyForTest(t),
+		CreatedAtUnix:     1006,
+	})
+	if err != nil {
+		t.Fatalf("CreateRemoteSSHSession after terminate: %v", err)
+	}
+	if next.SessionID == session.SessionID {
+		t.Fatal("replacement session reused terminated session id")
+	}
+	view, err := RemoteSSHViewForDevice(ctx, "edge-remote-terminate", 10)
+	if err != nil {
+		t.Fatalf("RemoteSSHViewForDevice: %v", err)
+	}
+	if len(view.Sessions) != 2 || view.Sessions[1].Status != RemoteSSHSessionStatusTerminated {
+		t.Fatalf("view should retain terminated history: %+v", view.Sessions)
 	}
 }
 

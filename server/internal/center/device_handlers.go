@@ -140,8 +140,12 @@ func registerCenterDeviceAdminRoutes(api *gin.RouterGroup) {
 	api.GET("/devices/:device_id/remote-ssh", getCenterDeviceRemoteSSH)
 	api.PUT("/devices/:device_id/remote-ssh/policy", putCenterDeviceRemoteSSHPolicy)
 	api.POST("/devices/:device_id/remote-ssh/sessions", postCenterDeviceRemoteSSHSession)
+	api.POST("/devices/:device_id/remote-ssh/web-terminal", postCenterDeviceRemoteSSHWebTerminal)
 	api.GET("/remote-ssh/signing-key", getCenterRemoteSSHSigningKey)
 	api.POST("/remote-ssh/signing-key/rotate", postCenterRemoteSSHSigningKeyRotate)
+	api.GET("/remote-ssh/web-terminals/:terminal_id/ws", getCenterRemoteSSHWebTerminalWS)
+	api.POST("/remote-ssh/sessions/:session_id/close", postCenterRemoteSSHSessionClose)
+	api.POST("/remote-ssh/sessions/:session_id/terminate", postCenterRemoteSSHSessionTerminate)
 	api.POST("/devices/:device_id/runtime-assignments", postCenterDeviceRuntimeAssignment)
 	api.POST("/devices/:device_id/runtime-assignments/remove", postCenterDeviceRuntimeAssignmentRemoval)
 	api.POST("/devices/:device_id/runtime-assignments/clear", postCenterDeviceRuntimeAssignmentClear)
@@ -1394,6 +1398,7 @@ func postCenterDeviceRemoteSSHSession(c *gin.Context) {
 	session, err := CreateRemoteSSHSession(c.Request.Context(), RemoteSSHSessionCreate{
 		DeviceID:          deviceID,
 		Reason:            req.Reason,
+		OperatorMode:      RemoteSSHOperatorModeCLI,
 		OperatorPublicKey: req.OperatorPublicKey,
 		TTLSec:            req.TTLSec,
 		RequestedByUserID: principal.UserID,

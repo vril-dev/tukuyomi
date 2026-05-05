@@ -300,7 +300,7 @@ export default function NotificationsPanel() {
   );
 
   return (
-    <div className="w-full p-4 space-y-4">
+    <div className="notification-page w-full p-4 space-y-4">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Notifications")}</h1>
@@ -448,7 +448,7 @@ export default function NotificationsPanel() {
         {editorState.sinks.length === 0 ? <EmptyState>{tx("No notification sinks yet.")}</EmptyState> : null}
         <div className="space-y-4">
           {editorState.sinks.map((sink, sinkIndex) => (
-            <div key={`sink-${sinkIndex}`} className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4 space-y-4">
+            <div key={`sink-${sinkIndex}`} className="notification-sink-card rounded-2xl border border-neutral-200 bg-neutral-50 p-4 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="text-sm font-medium">{sink.name || `${tx("Sink")} ${sinkIndex + 1}`}</div>
@@ -471,7 +471,7 @@ export default function NotificationsPanel() {
                 </ActionButton>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-[minmax(180px,1fr)_minmax(160px,220px)_minmax(120px,160px)]">
+              <div className="notification-sink-grid">
                 <Field label={tx("Name")}>
                   <input
                     className={inputClass}
@@ -495,7 +495,7 @@ export default function NotificationsPanel() {
                     <option value="email">email</option>
                   </select>
                 </Field>
-                <label className="flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs">
+                <label className="notification-checkline">
                   <input
                     type="checkbox"
                     checked={sink.enabled}
@@ -606,7 +606,7 @@ function WebhookSinkEditor({
 }) {
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 lg:grid-cols-[minmax(260px,1fr)_minmax(140px,200px)]">
+      <div className="notification-webhook-grid">
         <Field label={tx("Webhook URL")} hint={tx("Use http or https. The runtime sends aggregate alert state changes to this endpoint.")}>
           <input
             className={inputClass}
@@ -635,7 +635,7 @@ function WebhookSinkEditor({
         {sink.headers.length === 0 ? <EmptyState>{tx("No webhook headers configured.")}</EmptyState> : null}
         <div className="space-y-2">
           {sink.headers.map((header, headerIndex) => (
-            <div key={`sink-${sinkIndex}-header-${headerIndex}`} className="grid gap-2 md:grid-cols-[minmax(140px,240px)_minmax(180px,1fr)_auto]">
+            <div key={`sink-${sinkIndex}-header-${headerIndex}`} className="notification-header-row">
               <input
                 className={inputClass}
                 value={header.key}
@@ -681,7 +681,7 @@ function EmailSinkEditor({
   onSinkChange: (index: number, updater: (sink: NotificationSinkDraft) => NotificationSinkDraft) => void;
 }) {
   return (
-    <div className="grid gap-3 lg:grid-cols-2">
+    <div className="notification-email-grid">
       <Field label={tx("SMTP address")} hint={tx("Host and port for the SMTP server, for example `smtp.example.invalid:587`.")}>
         <input
           className={inputClass}

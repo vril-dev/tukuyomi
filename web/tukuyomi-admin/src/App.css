@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=M+PLUS+1p:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400&family=M+PLUS+1p:wght@400&family=JetBrains+Mono:wght@400&display=swap");
 @import "tailwindcss";
 
 :root {
@@ -95,7 +95,7 @@ select {
   margin: 8px 0 3px;
   line-height: 1.08;
   font-size: 1.04rem;
-  font-weight: 700;
+  font-weight: 400;
   word-break: keep-all;
 }
 
@@ -114,7 +114,7 @@ select {
   background: #dcfce7;
   color: #166534;
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 400;
   text-transform: uppercase;
 }
 
@@ -190,7 +190,7 @@ select {
 
 .app-nav-label {
   @apply text-xs;
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .app-sidebar-footer {
@@ -234,6 +234,7 @@ select {
 .app-topbar-paths {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
@@ -262,7 +263,11 @@ select {
   background: #eef4ff;
   color: #2457c6;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 400;
+}
+
+.app-topbar-paths .app-group-chip {
+  margin: 0;
 }
 
 .app-topbar-sub {
@@ -288,17 +293,16 @@ select {
 }
 
 .app-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid #dbe5f0;
-  border-radius: 999px;
-  padding: 4px 10px;
-  background: #f8fbff;
   color: #334155;
-  font-weight: 600;
   white-space: nowrap;
   box-shadow: none;
+  background: #f8fbff;
+  border-radius: 6px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-weight: 400;
+  display: inline-flex;
 }
 
 .app-pill-ok {
@@ -353,8 +357,22 @@ select {
 
 h1,
 h2,
-h3 {
+h3,
+h4,
+h5,
+h6 {
   letter-spacing: -0.01em;
+  font-weight: 400;
+}
+
+strong,
+b,
+.font-medium,
+.font-semibold,
+.font-bold,
+.font-extrabold,
+.font-black {
+  font-weight: 400;
 }
 
 button {
@@ -365,7 +383,7 @@ button {
   color: var(--ink);
   @apply text-xs;
   line-height: 1rem;
-  font-weight: 600;
+  font-weight: 400;
   white-space: nowrap;
   transition: transform 100ms ease-out, box-shadow 120ms ease-out, border-color 120ms ease-out;
 }
@@ -431,7 +449,7 @@ table {
 }
 
 th {
-  font-weight: 700;
+  font-weight: 400;
 }
 
 tr:nth-child(even) td {
@@ -473,7 +491,7 @@ tr:nth-child(even) td {
 .app-table th {
   color: #526070;
   @apply text-xs;
-  font-weight: 700;
+  font-weight: 400;
   line-height: 1.4;
   letter-spacing: 0.01em;
 }
@@ -514,6 +532,66 @@ pre {
   padding: 16px;
   @apply text-xs;
   line-height: 1.65;
+}
+
+.notification-sink-card {
+  border-radius: 12px;
+}
+
+.notification-sink-card label {
+  min-width: 0;
+  align-content: start;
+}
+
+.notification-sink-grid,
+.notification-webhook-grid,
+.notification-email-grid,
+.notification-header-row {
+  display: grid;
+  gap: 12px;
+  align-items: start;
+}
+
+.notification-sink-grid {
+  grid-template-columns: minmax(260px, 1fr) minmax(180px, 220px) 160px;
+  align-items: end;
+}
+
+.notification-webhook-grid {
+  grid-template-columns: minmax(320px, 1fr) 200px;
+}
+
+.notification-email-grid {
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+}
+
+.notification-header-row {
+  grid-template-columns: minmax(180px, 240px) minmax(240px, 1fr) max-content;
+  align-items: center;
+}
+
+.notification-checkline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  border: 1px solid color-mix(in srgb, var(--edge) 75%, white);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.notification-checkline input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.notification-page textarea {
+  resize: vertical;
 }
 
 @keyframes panel-in {
@@ -582,6 +660,17 @@ pre {
 
   .app-content > div {
     border-radius: 12px;
+  }
+
+  .notification-sink-grid,
+  .notification-webhook-grid,
+  .notification-email-grid,
+  .notification-header-row {
+    grid-template-columns: 1fr;
+  }
+
+  .notification-checkline {
+    width: fit-content;
   }
 }
 

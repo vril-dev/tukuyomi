@@ -959,7 +959,7 @@ func TestApplyEdgeRuntimeRemovalBlocksReferencedPSGIRuntime(t *testing.T) {
 	}
 }
 
-func TestEdgeDeviceStatusAutoRefreshUploadsRuleArtifactOncePerRevision(t *testing.T) {
+func TestEdgeDeviceStatusAutoRefreshUploadsRuleArtifactOncePerRevisionUnlessCenterRequires(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)
 	defer restoreEdgeRuntime()
@@ -1004,7 +1004,15 @@ func TestEdgeDeviceStatusAutoRefreshUploadsRuleArtifactOncePerRevision(t *testin
 				t.Fatalf("decode status: %v", err)
 			}
 			verifySignedEdgeStatusForTest(t, req, capturedPublicKey, capturedFingerprint)
-			_, _ = w.Write([]byte(`{"status":"approved","device_id":"edge-device-rule","key_id":"default","product_id":"product-a","checked_at_unix":1700000000}`))
+			resp := `{"status":"approved","device_id":"edge-device-rule","key_id":"default","product_id":"product-a","checked_at_unix":1700000000`
+			if statusCalls == 3 {
+				resp += `,"rule_artifact_upload_required":true`
+			}
+			if statusCalls == 4 {
+				resp += `,"config_snapshot_upload_required":true`
+			}
+			resp += `}`
+			_, _ = w.Write([]byte(resp))
 		case "/v1/rule-artifact-bundle":
 			artifactCalls++
 			var req edgeRuleArtifactBundleWireRequest
@@ -1066,6 +1074,34 @@ func TestEdgeDeviceStatusAutoRefreshUploadsRuleArtifactOncePerRevision(t *testin
 	}
 	if artifactCalls != 1 || snapshotCalls != 1 {
 		t.Fatalf("unchanged revision should not reupload: artifact=%d snapshot=%d status=%+v", artifactCalls, snapshotCalls, status)
+	}
+
+	status, attempted, err = autoRefreshEdgeDeviceCenterStatus(context.Background())
+	if err != nil {
+		t.Fatalf("third autoRefreshEdgeDeviceCenterStatus: %v", err)
+	}
+	if !attempted {
+		t.Fatal("third auto refresh should attempt")
+	}
+	if statusCalls != 3 {
+		t.Fatalf("statusCalls=%d want 3", statusCalls)
+	}
+	if artifactCalls != 2 || snapshotCalls != 1 {
+		t.Fatalf("center-required upload should resend artifact without rebuilding snapshot: artifact=%d snapshot=%d status=%+v", artifactCalls, snapshotCalls, status)
+	}
+
+	status, attempted, err = autoRefreshEdgeDeviceCenterStatus(context.Background())
+	if err != nil {
+		t.Fatalf("fourth autoRefreshEdgeDeviceCenterStatus: %v", err)
+	}
+	if !attempted {
+		t.Fatal("fourth auto refresh should attempt")
+	}
+	if statusCalls != 4 {
+		t.Fatalf("statusCalls=%d want 4", statusCalls)
+	}
+	if artifactCalls != 2 || snapshotCalls != 2 {
+		t.Fatalf("center-required config snapshot upload should resend snapshot only: artifact=%d snapshot=%d status=%+v", artifactCalls, snapshotCalls, status)
 	}
 }
 

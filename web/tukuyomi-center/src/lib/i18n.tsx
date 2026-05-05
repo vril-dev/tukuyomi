@@ -259,8 +259,8 @@ const JA_STRINGS: Record<string, string> = {
   "Pending WAF rule requests": "保留中の WAF rule 要求",
   "No pending WAF rule requests.": "保留中の WAF rule 要求はありません。",
   "Saved WAF rule bundles": "保存済み WAF rule bundle",
-  "Latest 20 Center-uploaded bundles. Use Assign to redeploy a saved bundle.":
-    "最新20件の Center アップロード済み bundle です。Assign で保存済み bundle を再配布します。",
+  "Latest 20 saved or Gateway-reported bundles. Use Assign to redeploy a saved bundle.":
+    "最新20件の保存済みまたは Gateway 報告済み bundle です。Assign で保存済み bundle を再配布します。",
   "Bundle hash": "Bundle hash",
   "View files": "ファイルを表示",
   Download: "ダウンロード",

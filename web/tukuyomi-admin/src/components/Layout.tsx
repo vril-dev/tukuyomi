@@ -310,12 +310,11 @@ export default function Layout() {
         <header className="app-topbar">
           <div className="app-topbar-main">
             <div className="app-topbar-heading">
-              <p className="app-kicker">{tx("Current Group")}</p>
-              {currentGroup ? <p className="app-group-chip">{tx(currentGroup.label)}</p> : null}
               <h2>{tx(current?.label ?? "Dashboard")}</h2>
               {currentGroup?.hint ? <p className="app-topbar-sub">{tx(currentGroup.hint)}</p> : null}
             </div>
             <div className="app-topbar-paths">
+              {currentGroup ? <span className="app-group-chip">{tx(currentGroup.label)}</span> : null}
               <code>{getAPIBasePath()}</code>
               <code>{pathname}</code>
             </div>

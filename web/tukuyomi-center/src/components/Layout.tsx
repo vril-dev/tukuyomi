@@ -193,12 +193,11 @@ export default function Layout() {
         <header className="app-topbar">
           <div className="app-topbar-main">
             <div className="app-topbar-heading">
-              <p className="app-kicker">{tx("Current Group")}</p>
-              <p className="app-group-chip">{tx(currentGroup.label)}</p>
               <h2>{tx(current?.label ?? "Status")}</h2>
               {current?.hint ? <p className="app-topbar-sub">{tx(current.hint)}</p> : null}
             </div>
             <div className="app-topbar-paths">
+              <span className="app-group-chip">{tx(currentGroup.label)}</span>
               <code>{getAPIBasePath()}</code>
               <code>{pathname}</code>
             </div>

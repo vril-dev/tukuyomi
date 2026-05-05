@@ -329,15 +329,17 @@ type edgeWAFRuleArtifactDownloadWireRequest struct {
 }
 
 type edgeDeviceCenterStatusResponse struct {
-	Status              string                         `json:"status"`
-	DeviceID            string                         `json:"device_id"`
-	KeyID               string                         `json:"key_id"`
-	ProductID           string                         `json:"product_id"`
-	CheckedAtUnix       int64                          `json:"checked_at_unix"`
-	RuntimeAssignments  []edgeRuntimeDeviceAssignment  `json:"runtime_assignments,omitempty"`
-	ProxyRuleAssignment *edgeProxyRuleDeviceAssignment `json:"proxy_rule_assignment,omitempty"`
-	WAFRuleAssignment   *edgeWAFRuleDeviceAssignment   `json:"waf_rule_assignment,omitempty"`
-	RemoteSSHSession    *edgeRemoteSSHDeviceSession    `json:"remote_ssh_session,omitempty"`
+	Status                       string                         `json:"status"`
+	DeviceID                     string                         `json:"device_id"`
+	KeyID                        string                         `json:"key_id"`
+	ProductID                    string                         `json:"product_id"`
+	CheckedAtUnix                int64                          `json:"checked_at_unix"`
+	RuleArtifactUploadRequired   bool                           `json:"rule_artifact_upload_required,omitempty"`
+	ConfigSnapshotUploadRequired bool                           `json:"config_snapshot_upload_required,omitempty"`
+	RuntimeAssignments           []edgeRuntimeDeviceAssignment  `json:"runtime_assignments,omitempty"`
+	ProxyRuleAssignment          *edgeProxyRuleDeviceAssignment `json:"proxy_rule_assignment,omitempty"`
+	WAFRuleAssignment            *edgeWAFRuleDeviceAssignment   `json:"waf_rule_assignment,omitempty"`
+	RemoteSSHSession             *edgeRemoteSSHDeviceSession    `json:"remote_ssh_session,omitempty"`
 }
 
 type edgeRemoteSSHCenterSigningKeyResponse struct {
@@ -739,8 +741,8 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 		applyEdgeRuntimeAssignments(ctx, identity, payload.RuntimeAssignments)
 		pruneCompletedEdgeRuntimeApplyStatuses(payload.RuntimeAssignments)
 		applyEdgeRemoteSSHSession(ctx, identity, payload.RemoteSSHSession)
-		if pushEdgeRuleArtifactBundleIfChanged(ctx, &identity) {
-			pushEdgeConfigSnapshotIfChanged(ctx, &identity)
+		if pushEdgeRuleArtifactBundle(ctx, &identity, payload.RuleArtifactUploadRequired) {
+			pushEdgeConfigSnapshot(ctx, &identity, payload.ConfigSnapshotUploadRequired)
 		}
 	}
 	if err := upsertEdgeDeviceIdentity(store, identity); err != nil {
@@ -3849,6 +3851,10 @@ func sendEdgeWAFRuleArtifactDownload(ctx context.Context, downloadURL string, wi
 }
 
 func pushEdgeRuleArtifactBundleIfChanged(ctx context.Context, identity *edgeDeviceIdentityRecord) bool {
+	return pushEdgeRuleArtifactBundle(ctx, identity, false)
+}
+
+func pushEdgeRuleArtifactBundle(ctx context.Context, identity *edgeDeviceIdentityRecord, force bool) bool {
 	if identity == nil {
 		return true
 	}
@@ -3861,7 +3867,7 @@ func pushEdgeRuleArtifactBundleIfChanged(ctx context.Context, identity *edgeDevi
 		identity.RuleArtifactError = ""
 		return true
 	}
-	if bundle.Revision == strings.TrimSpace(identity.RuleArtifactRevision) {
+	if !force && bundle.Revision == strings.TrimSpace(identity.RuleArtifactRevision) {
 		identity.RuleArtifactError = ""
 		return true
 	}
@@ -3931,6 +3937,10 @@ func finishEdgeRuleArtifactUpload(revision string) {
 }
 
 func pushEdgeConfigSnapshotIfChanged(ctx context.Context, identity *edgeDeviceIdentityRecord) {
+	pushEdgeConfigSnapshot(ctx, identity, false)
+}
+
+func pushEdgeConfigSnapshot(ctx context.Context, identity *edgeDeviceIdentityRecord, force bool) {
 	if identity == nil {
 		return
 	}
@@ -3939,7 +3949,7 @@ func pushEdgeConfigSnapshotIfChanged(ctx context.Context, identity *edgeDeviceId
 		identity.ConfigSnapshotError = clampEdgeText(err.Error(), 2048)
 		return
 	}
-	if snapshot.Revision == strings.TrimSpace(identity.ConfigSnapshotRevision) {
+	if !force && snapshot.Revision == strings.TrimSpace(identity.ConfigSnapshotRevision) {
 		identity.ConfigSnapshotError = ""
 		return
 	}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 
 import { apiGetJson, apiPutJson } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -190,7 +190,6 @@ function remoteSSHCommand(deviceID: string, form: CommandForm, policy?: RemoteSS
 
 export default function RemoteSSHPage() {
   const { locale, tx } = useI18n();
-  const navigate = useNavigate();
   const { deviceID: routeDeviceID = "" } = useParams();
   const deviceID = routeDeviceID || "";
   const [loading, setLoading] = useState(true);
@@ -341,14 +340,6 @@ export default function RemoteSSHPage() {
           <p className="section-note device-detail-id">{deviceID}</p>
           {loading ? <p className="section-note">{tx("Loading Remote SSH...")}</p> : null}
         </div>
-        <div className="inline-actions">
-          <button type="button" className="secondary" onClick={() => void load()} disabled={loading}>
-            {tx("Refresh")}
-          </button>
-          <button type="button" className="secondary" onClick={() => navigate(`/device-approvals/devices/${encodeURIComponent(deviceID)}`)}>
-            {tx("Device Status")}
-          </button>
-        </div>
       </div>
 
       {message ? (
@@ -399,8 +390,8 @@ export default function RemoteSSHPage() {
                   </button>
                 </div>
               ) : null}
-              <div className="form-grid">
-                <label className="checkbox-line remote-ssh-checkbox">
+              <div className="waf-upload-row remote-ssh-policy-row">
+                <label className="toggle-row">
                   <input
                     type="checkbox"
                     checked={policyForm.enabled}
@@ -409,7 +400,16 @@ export default function RemoteSSHPage() {
                   />
                   <span>{tx("Enable Remote SSH for this Gateway")}</span>
                 </label>
-                <label>
+                <label className="toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={policyForm.requireReason}
+                    onChange={(event) => setPolicyForm((current) => ({ ...current, requireReason: event.target.checked }))}
+                    disabled={saving || enablingCenterService}
+                  />
+                  <span>{tx("Require reason")}</span>
+                </label>
+                <label className="remote-ssh-policy-field">
                   <span>{tx("Max TTL seconds")}</span>
                   <input
                     type="number"
@@ -420,7 +420,7 @@ export default function RemoteSSHPage() {
                     disabled={saving || enablingCenterService}
                   />
                 </label>
-                <label>
+                <label className="remote-ssh-policy-field remote-ssh-policy-user-field">
                   <span>{tx("Run as user")}</span>
                   <input
                     value={policyForm.allowedRunAsUser}
@@ -430,20 +430,11 @@ export default function RemoteSSHPage() {
                   />
                   <span className="field-hint">{tx("Leave blank to use the Gateway config default.")}</span>
                 </label>
-                <label className="checkbox-line remote-ssh-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={policyForm.requireReason}
-                    onChange={(event) => setPolicyForm((current) => ({ ...current, requireReason: event.target.checked }))}
-                    disabled={saving || enablingCenterService}
-                  />
-                  <span>{tx("Require reason")}</span>
-                </label>
-              </div>
-              <div className="form-footer">
                 <button type="submit" disabled={saving || enablingCenterService}>
                   {saving ? tx("Saving...") : tx("Save policy")}
                 </button>
+              </div>
+              <div className="form-footer remote-ssh-policy-meta">
                 {policy?.updated_at_unix ? (
                   <span className="section-note">
                     {tx("Updated {time}", { time: formatUnixTime(policy.updated_at_unix, locale) })}

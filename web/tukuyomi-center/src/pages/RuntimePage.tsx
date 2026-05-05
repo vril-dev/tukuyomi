@@ -604,9 +604,6 @@ export default function RuntimePage() {
         <div>
           <h2>{tx("Runtime")}</h2>
         </div>
-        <button type="button" className="secondary" onClick={() => void loadDevices()} disabled={loading}>
-          {tx("Refresh")}
-        </button>
       </div>
       {message ? <p className="form-message error">{message}</p> : null}
 

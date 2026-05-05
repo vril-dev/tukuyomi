@@ -1103,6 +1103,23 @@ func TestCenterWAFRuleAssignmentQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build current WAF bundle: %v", err)
 	}
+	parsedCurrent, err := edgeartifactbundle.Parse(currentBuild.Compressed)
+	if err != nil {
+		t.Fatalf("parse current WAF bundle: %v", err)
+	}
+	if _, err := StoreRuleArtifactBundle(context.Background(), RuleArtifactBundleInsert{
+		DeviceID:         fixture.Request.DeviceID,
+		BundleRevision:   parsedCurrent.Revision,
+		BundleHash:       parsedCurrent.BundleHash,
+		CompressedSize:   parsedCurrent.CompressedSize,
+		UncompressedSize: parsedCurrent.UncompressedSize,
+		FileCount:        parsedCurrent.FileCount,
+		Files:            parsedCurrent.Files,
+		ReceivedAtUnix:   time.Now().UTC().Unix(),
+		Source:           RuleArtifactBundleSourceGateway,
+	}); err != nil {
+		t.Fatalf("StoreRuleArtifactBundle current gateway source: %v", err)
+	}
 	builder := edgeconfigsnapshot.New(fixture.Request.DeviceID, fixture.Request.KeyID, "test-build", "go-test")
 	builder.AddValueDomain("waf_rule_assets", "waf-rule-assets:1:current", map[string]any{
 		"bundle_revision": currentBuild.Revision,
@@ -1261,11 +1278,127 @@ func TestCenterWAFRuleAssignmentQueue(t *testing.T) {
 	if view.ApplyStatus == nil || view.ApplyStatus.ApplyState != "applied" {
 		t.Fatalf("apply status missing: %+v", view.ApplyStatus)
 	}
-	if len(view.Bundles) != 1 || view.Bundles[0].ApplyState != "applied" || view.Bundles[0].AppliedAtUnix <= 0 {
+	if len(view.Bundles) != 2 {
 		t.Fatalf("bundle apply history missing: %+v", view.Bundles)
 	}
-	if view.Bundles[0].BundleRevision == parsedGatewayReported.Revision {
-		t.Fatalf("gateway-reported WAF bundle leaked into saved bundles: %+v", view.Bundles)
+	var foundApplied, foundCurrent, foundUnreferencedGateway bool
+	for _, bundle := range view.Bundles {
+		switch bundle.BundleRevision {
+		case parsedNext.Revision:
+			foundApplied = bundle.ApplyState == "applied" && bundle.AppliedAtUnix > 0
+		case parsedCurrent.Revision:
+			foundCurrent = bundle.Source == RuleArtifactBundleSourceGateway
+		case parsedGatewayReported.Revision:
+			foundUnreferencedGateway = true
+		}
+	}
+	if !foundApplied || !foundCurrent || foundUnreferencedGateway {
+		t.Fatalf("saved WAF bundles mismatch: applied=%v current=%v unreferenced=%v bundles=%+v", foundApplied, foundCurrent, foundUnreferencedGateway, view.Bundles)
+	}
+}
+
+func TestCenterWAFRuleArtifactUploadRequiredForMissingBundle(t *testing.T) {
+	restore := configureCenterAuthTest(t)
+	defer restore()
+
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 32); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer handler.InitLogsStatsStore(false, "", 0)
+
+	fixture := signedEnrollmentFixtureForTest(t, "waf-rule-missing-device", "key-1", "nonce-waf-rule-missing", time.Now().UTC())
+	publicKeyPEM, err := base64.StdEncoding.DecodeString(fixture.Request.PublicKeyPEMB64)
+	if err != nil {
+		t.Fatalf("decode public key: %v", err)
+	}
+	if _, err := BootstrapApprovedDevice(context.Background(), BootstrapApprovedDeviceInput{
+		DeviceID:                   fixture.Request.DeviceID,
+		KeyID:                      fixture.Request.KeyID,
+		PublicKeyPEM:               string(publicKeyPEM),
+		PublicKeyFingerprintSHA256: fixture.Fingerprint,
+		Actor:                      "test",
+	}); err != nil {
+		t.Fatalf("BootstrapApprovedDevice: %v", err)
+	}
+	configRequired, err := DeviceConfigSnapshotUploadRequiredForDevice(context.Background(), fixture.Request.DeviceID)
+	if err != nil {
+		t.Fatalf("DeviceConfigSnapshotUploadRequiredForDevice missing: %v", err)
+	}
+	if !configRequired {
+		t.Fatal("missing config snapshot should require upload")
+	}
+
+	build, err := edgeartifactbundle.BuildBundle([]edgeartifactbundle.RuleFile{
+		{Path: "rules/tukuyomi.conf", Kind: "base", ETag: "rule-etag-current", Body: []byte("SecRuleEngine On\n")},
+	}, time.Unix(1000, 0).UTC())
+	if err != nil {
+		t.Fatalf("build WAF bundle: %v", err)
+	}
+	builder := edgeconfigsnapshot.New(fixture.Request.DeviceID, fixture.Request.KeyID, "test-build", "go-test")
+	builder.AddValueDomain("waf_rule_assets", "waf-rule-assets:1:current", map[string]any{
+		"bundle_revision": build.Revision,
+		"assets": []map[string]any{
+			{
+				"path":       "rules/tukuyomi.conf",
+				"kind":       "base",
+				"etag":       "rule-etag-current",
+				"disabled":   false,
+				"size_bytes": len("SecRuleEngine On\n"),
+			},
+		},
+	})
+	snapshot, err := builder.Build()
+	if err != nil {
+		t.Fatalf("build config snapshot: %v", err)
+	}
+	if _, err := StoreDeviceConfigSnapshot(context.Background(), DeviceConfigSnapshotInsert{
+		DeviceID:       fixture.Request.DeviceID,
+		Revision:       snapshot.Revision,
+		PayloadHash:    snapshot.PayloadHash,
+		PayloadJSON:    snapshot.PayloadRaw,
+		ReceivedAtUnix: time.Now().UTC().Unix(),
+	}); err != nil {
+		t.Fatalf("StoreDeviceConfigSnapshot: %v", err)
+	}
+	configRequired, err = DeviceConfigSnapshotUploadRequiredForDevice(context.Background(), fixture.Request.DeviceID)
+	if err != nil {
+		t.Fatalf("DeviceConfigSnapshotUploadRequiredForDevice stored: %v", err)
+	}
+	if configRequired {
+		t.Fatal("stored config snapshot should not require upload")
+	}
+
+	required, err := WAFRuleArtifactUploadRequiredForDevice(context.Background(), fixture.Request.DeviceID)
+	if err != nil {
+		t.Fatalf("WAFRuleArtifactUploadRequiredForDevice missing: %v", err)
+	}
+	if !required {
+		t.Fatal("missing current WAF bundle should require upload")
+	}
+
+	parsed, err := edgeartifactbundle.Parse(build.Compressed)
+	if err != nil {
+		t.Fatalf("parse WAF bundle: %v", err)
+	}
+	if _, err := StoreRuleArtifactBundle(context.Background(), RuleArtifactBundleInsert{
+		DeviceID:         fixture.Request.DeviceID,
+		BundleRevision:   parsed.Revision,
+		BundleHash:       parsed.BundleHash,
+		CompressedSize:   parsed.CompressedSize,
+		UncompressedSize: parsed.UncompressedSize,
+		FileCount:        parsed.FileCount,
+		Files:            parsed.Files,
+		ReceivedAtUnix:   time.Now().UTC().Unix(),
+		Source:           RuleArtifactBundleSourceGateway,
+	}); err != nil {
+		t.Fatalf("StoreRuleArtifactBundle: %v", err)
+	}
+	required, err = WAFRuleArtifactUploadRequiredForDevice(context.Background(), fixture.Request.DeviceID)
+	if err != nil {
+		t.Fatalf("WAFRuleArtifactUploadRequiredForDevice stored: %v", err)
+	}
+	if required {
+		t.Fatal("stored current WAF bundle should not require upload")
 	}
 }
 

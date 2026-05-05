@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=M+PLUS+1p:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400&family=M+PLUS+1p:wght@400&family=JetBrains+Mono:wght@400&display=swap");
 @import "tailwindcss";
 
 :root {
@@ -95,7 +95,7 @@ select {
   margin: 8px 0 3px;
   line-height: 1.08;
   font-size: 1.04rem;
-  font-weight: 700;
+  font-weight: 400;
   word-break: keep-all;
 }
 
@@ -114,7 +114,7 @@ select {
   background: #dcfce7;
   color: #166534;
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 400;
   text-transform: uppercase;
 }
 
@@ -195,7 +195,7 @@ select {
 
 .app-nav-label {
   @apply text-xs;
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .app-nav-sublink {
@@ -223,7 +223,7 @@ select {
   overflow: hidden;
   color: #64748b;
   font-size: 9px;
-  font-weight: 700;
+  font-weight: 400;
   line-height: 1.1;
   text-overflow: ellipsis;
   text-transform: uppercase;
@@ -295,6 +295,7 @@ select {
 .app-topbar-paths {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
@@ -323,7 +324,11 @@ select {
   background: #eef4ff;
   color: #2457c6;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 400;
+}
+
+.app-topbar-paths .app-group-chip {
+  margin: 0;
 }
 
 .app-topbar-sub {
@@ -349,17 +354,16 @@ select {
 }
 
 .app-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid #dbe5f0;
-  border-radius: 999px;
-  padding: 4px 10px;
-  background: #f8fbff;
   color: #334155;
-  font-weight: 600;
   white-space: nowrap;
   box-shadow: none;
+  background: #f8fbff;
+  border-radius: 6px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-weight: 400;
+  display: inline-flex;
 }
 
 .app-pill-ok {
@@ -414,8 +418,17 @@ select {
 
 h1,
 h2,
-h3 {
+h3,
+h4,
+h5,
+h6 {
   letter-spacing: -0.01em;
+  font-weight: 400;
+}
+
+strong,
+b {
+  font-weight: 400;
 }
 
 button {
@@ -426,7 +439,7 @@ button {
   color: var(--ink);
   @apply text-xs;
   line-height: 1rem;
-  font-weight: 600;
+  font-weight: 400;
   white-space: nowrap;
   transition: transform 100ms ease-out, box-shadow 120ms ease-out, border-color 120ms ease-out;
 }
@@ -492,7 +505,7 @@ table {
 }
 
 th {
-  font-weight: 700;
+  font-weight: 400;
 }
 
 tr:nth-child(even) td {
@@ -534,7 +547,7 @@ tr:nth-child(even) td {
 .app-table th {
   color: #526070;
   @apply text-xs;
-  font-weight: 700;
+  font-weight: 400;
   line-height: 1.4;
   letter-spacing: 0.01em;
 }
@@ -737,7 +750,7 @@ pre {
   margin: 0 0 8px;
   color: #737373;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 400;
   letter-spacing: 0.3em;
   text-transform: uppercase;
 }
@@ -745,7 +758,7 @@ pre {
 .login-card-header h1 {
   margin: 0;
   font-size: 30px;
-  font-weight: 600;
+  font-weight: 400;
   line-height: 1.1;
 }
 
@@ -766,7 +779,7 @@ pre {
   min-width: 0;
   color: #0f172a;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .login-form label > span:not(.field-hint),
@@ -778,19 +791,19 @@ pre {
 .login-form input {
   width: 100%;
   border-color: #d4d4d4;
-  border-radius: 12px;
+  border-radius: 6px;
   background: #ffffff;
 }
 
 .login-submit {
   width: 100%;
   border-color: #0a0a0a;
-  border-radius: 12px;
+  border-radius: 6px;
   padding: 0.625rem 1rem;
   background: #0a0a0a;
   color: #ffffff;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
 }
 
 button.danger {
@@ -809,7 +822,7 @@ button.danger {
   background: linear-gradient(180deg, #ffffff, #f7fbf9);
   color: var(--ink);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
   line-height: 1rem;
   text-decoration: none;
   white-space: nowrap;
@@ -855,7 +868,7 @@ button.danger {
 .section-title {
   margin: 0 0 12px;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 400;
   line-height: 1.2;
 }
 
@@ -865,8 +878,7 @@ button.danger {
 
 .section-subtitle {
   margin: 18px 0 10px;
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 12px;
   line-height: 1.2;
 }
 
@@ -885,13 +897,12 @@ button.danger {
 }
 
 .toggle-row {
-  display: inline-flex;
+  color: #0f172a;
   align-items: center;
   gap: 8px;
   min-height: 32px;
-  color: #0f172a;
   font-size: 12px;
-  font-weight: 600;
+  display: inline-flex;
 }
 
 .toggle-row input {
@@ -930,7 +941,7 @@ button.danger {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
   line-height: 1rem;
 }
 
@@ -960,7 +971,7 @@ button.danger {
   background: linear-gradient(180deg, #fbfcff 0%, #f3f6fb 100%);
   color: #526070;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 400;
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1077,19 +1088,32 @@ button.danger {
 }
 
 .checkbox-line {
-  display: inline-flex;
+  min-height: 34px;
+  color: var(--ink);
   align-items: center;
   gap: 7px;
-  min-height: 34px;
   font-size: 12px;
-  font-weight: 600;
-  color: var(--ink);
+  display: inline-flex;
 }
 
 .checkbox-line input {
   width: 14px;
   height: 14px;
   margin: 0;
+}
+
+.form-grid label.checkbox-line,
+.form-grid label.toggle-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 400;
+}
+
+.form-grid label.checkbox-line > span:not(.field-hint),
+.form-grid label.toggle-row > span:not(.field-hint) {
+  display: inline;
+  margin-bottom: 0;
 }
 
 .rules-request-table table,
@@ -1105,8 +1129,46 @@ button.danger {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.remote-ssh-checkbox {
-  align-self: end;
+.remote-ssh-policy-row {
+  align-items: flex-end;
+  margin-top: 10px;
+  padding-bottom: 20px;
+}
+
+.remote-ssh-policy-row .toggle-row {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 32px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.remote-ssh-policy-field {
+  display: grid;
+  gap: 6px;
+  min-width: 210px;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.remote-ssh-policy-field input {
+  width: 100%;
+}
+
+.remote-ssh-policy-user-field {
+  position: relative;
+  min-width: 280px;
+}
+
+.remote-ssh-policy-user-field .field-hint {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  margin-top: 0;
 }
 
 .remote-ssh-center-service-warning {
@@ -1234,7 +1296,7 @@ button.danger {
   border-radius: 5px;
   padding: 2px 8px;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 400;
   line-height: 1.2;
 }
 
@@ -1314,7 +1376,7 @@ button.danger {
 }
 
 .rules-file-table table {
-  min-width: 980px;
+  min-width: 1060px;
 }
 
 .waf-request-table table {
@@ -1331,10 +1393,30 @@ button.danger {
   min-width: 230px;
 }
 
-.rules-file-table th:nth-child(1),
+.rules-file-col-actions,
 .rules-file-table td.actions-cell {
   width: 105px;
   min-width: 105px;
+}
+
+.rules-file-col-path {
+  width: 420px;
+}
+
+.rules-file-col-kind {
+  width: 96px;
+}
+
+.rules-file-col-state {
+  width: 90px;
+}
+
+.rules-file-col-size {
+  width: 88px;
+}
+
+.rules-file-col-sha {
+  width: 260px;
 }
 
 .runtime-platform-grid {
@@ -1358,7 +1440,7 @@ button.danger {
 .device-detail-section-header h3 {
   margin: 0;
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 400;
   line-height: 1.2;
 }
 
@@ -1374,7 +1456,7 @@ button.danger {
   min-width: 0;
   color: #0f172a;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .runtime-build-controls label > span {
@@ -1442,7 +1524,7 @@ button.danger {
   overflow: hidden;
   color: #0f172a;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
   line-height: 1rem;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1464,7 +1546,7 @@ button.danger {
   display: block;
   color: #1e3a8a;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .token-created input {
@@ -1677,16 +1759,20 @@ button.danger {
   min-width: 0;
   color: #0f172a;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .user-field > span:first-child {
-  display: inline-block;
+  display: block;
   margin-bottom: 8px;
 }
 
-.user-field input {
+.user-field input,
+.user-field select,
+.user-field textarea {
+  display: block;
   width: 100%;
+  min-width: 0;
 }
 
 .table-subvalue {
@@ -1705,7 +1791,7 @@ button.danger {
   background: #f1f5f9;
   color: #334155;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .token-status-active,
@@ -1771,7 +1857,7 @@ button.danger {
   align-items: start;
 }
 
-.form-grid input,
+.form-grid input:not([type="checkbox"]):not([type="radio"]),
 .form-grid select,
 .form-grid textarea {
   width: 100%;
@@ -1797,7 +1883,6 @@ button.danger {
   min-height: 20px;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 700;
 }
 
 .form-message.info {
@@ -1828,6 +1913,21 @@ button.danger {
   .runtime-build-controls {
     grid-template-columns: 1fr;
     align-items: stretch;
+  }
+
+  .remote-ssh-policy-row {
+    align-items: stretch;
+    padding-bottom: 0;
+  }
+
+  .remote-ssh-policy-field,
+  .remote-ssh-policy-user-field {
+    min-width: min(100%, 320px);
+  }
+
+  .remote-ssh-policy-user-field .field-hint {
+    position: static;
+    margin-top: 6px;
   }
 
   .facts {

@@ -249,6 +249,8 @@ func postDeviceStatus(c *gin.Context) {
 	runtimeAssignments := []RuntimeDeviceAssignment{}
 	var proxyRuleAssignment *ProxyRuleDeviceAssignment
 	var wafRuleAssignment *WAFRuleDeviceAssignment
+	ruleArtifactUploadRequired := false
+	configSnapshotUploadRequired := false
 	var remoteSSHSession *RemoteSSHDeviceSession
 	if record.FromApprovedDevice {
 		if err := TouchApprovedDeviceHeartbeat(c.Request.Context(), verified.DeviceID, checkedAt, DeviceRuntimeInventory{
@@ -270,6 +272,12 @@ func postDeviceStatus(c *gin.Context) {
 			return
 		}
 		if record.Status == DeviceStatusApproved {
+			required, err := DeviceConfigSnapshotUploadRequiredForDevice(c.Request.Context(), verified.DeviceID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to inspect config snapshot storage"})
+				return
+			}
+			configSnapshotUploadRequired = required
 			assignment, err := PendingProxyRuleAssignmentForDevice(c.Request.Context(), verified.DeviceID, checkedAt)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load proxy rule assignment"})
@@ -284,6 +292,12 @@ func postDeviceStatus(c *gin.Context) {
 				return
 			}
 			wafRuleAssignment = assignment
+			required, err := WAFRuleArtifactUploadRequiredForDevice(c.Request.Context(), verified.DeviceID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to inspect WAF rule artifact storage"})
+				return
+			}
+			ruleArtifactUploadRequired = required
 		}
 		if record.Status == DeviceStatusApproved {
 			session, err := PendingRemoteSSHSessionForDevice(c.Request.Context(), verified.DeviceID, checkedAt)
@@ -317,6 +331,12 @@ func postDeviceStatus(c *gin.Context) {
 	}
 	if wafRuleAssignment != nil {
 		resp["waf_rule_assignment"] = wafRuleAssignment
+	}
+	if ruleArtifactUploadRequired {
+		resp["rule_artifact_upload_required"] = true
+	}
+	if configSnapshotUploadRequired {
+		resp["config_snapshot_upload_required"] = true
 	}
 	if remoteSSHSession != nil {
 		resp["remote_ssh_session"] = remoteSSHSession

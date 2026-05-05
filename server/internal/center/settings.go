@@ -195,6 +195,19 @@ func displayCenterSettingsConfig(runtimeCfg RuntimeConfig, cfg CenterSettingsCon
 	if cfg.CenterAPIAllowCIDRs == nil {
 		cfg.CenterAPIAllowCIDRs = append([]string(nil), runtimeCfg.CenterAPIAllowCIDRs...)
 	}
+	if cfg.RemoteSSH == nil {
+		cfg.RemoteSSH = &CenterSettingsRemoteSSHConfig{
+			Center: CenterSettingsRemoteSSHCenterConfig{
+				Enabled:              config.RemoteSSHCenterEnabled,
+				MaxTTLSec:            centerSettingsRemoteSSHDurationSec(config.RemoteSSHMaxTTL, config.DefaultRemoteSSHMaxTTLSec),
+				IdleTimeoutSec:       centerSettingsRemoteSSHDurationSec(config.RemoteSSHIdleTimeout, config.DefaultRemoteSSHIdleTimeoutSec),
+				MaxSessionsTotal:     centerSettingsRemoteSSHInt(config.RemoteSSHMaxSessionsTotal, config.DefaultRemoteSSHMaxSessionsTotal),
+				MaxSessionsPerDevice: centerSettingsRemoteSSHInt(config.RemoteSSHMaxSessionsPerDevice, config.DefaultRemoteSSHMaxSessionsPerDevice),
+			},
+		}
+	} else if remoteSSH, err := normalizeCenterSettingsRemoteSSH(*cfg.RemoteSSH); err == nil {
+		cfg.RemoteSSH = &remoteSSH
+	}
 	return cfg
 }
 
@@ -206,7 +219,33 @@ func applyCenterMutableSettings(cfg CenterSettingsConfig) error {
 	if cfg.AdminSessionTTLSeconds != 0 {
 		config.AdminSessionTTL = time.Duration(cfg.AdminSessionTTLSeconds) * time.Second
 	}
+	if cfg.RemoteSSH != nil {
+		applyCenterRemoteSSHSettings(cfg.RemoteSSH.Center)
+	}
 	return nil
+}
+
+func applyCenterRemoteSSHSettings(center CenterSettingsRemoteSSHCenterConfig) {
+	config.RemoteSSHCenterEnabled = center.Enabled
+	config.RemoteSSHMaxTTL = time.Duration(center.MaxTTLSec) * time.Second
+	config.RemoteSSHIdleTimeout = time.Duration(center.IdleTimeoutSec) * time.Second
+	config.RemoteSSHMaxSessionsTotal = center.MaxSessionsTotal
+	config.RemoteSSHMaxSessionsPerDevice = center.MaxSessionsPerDevice
+}
+
+func centerSettingsRemoteSSHDurationSec(value time.Duration, fallback int64) int64 {
+	sec := int64(value / time.Second)
+	if sec <= 0 {
+		return fallback
+	}
+	return sec
+}
+
+func centerSettingsRemoteSSHInt(value int, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func centerSettingsRestartRequired(runtimeCfg RuntimeConfig, cfg CenterSettingsConfig) bool {

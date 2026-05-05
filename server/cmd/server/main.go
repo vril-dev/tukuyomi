@@ -58,6 +58,8 @@ func runMain(args []string) {
 		runBootstrapCenterProtectedGatewayCommand(cmd.args)
 	case serverCommandBootstrapProtectedCenter:
 		runBootstrapCenterProtectedCenterCommand(cmd.args)
+	case serverCommandRemoteSSH:
+		runRemoteSSHCommand(cmd.args)
 	case serverCommandSupervisor:
 		if err := runSupervisorServer(); err != nil {
 			log.Fatalf("[SUPERVISOR][FATAL] %v", err)

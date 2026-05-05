@@ -43,7 +43,7 @@ export default function Login() {
             </span>
             <input
               type="text"
-              className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-neutral-900/10"
+              className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-neutral-900/10"
               value={identifier}
               onChange={(event) => setIdentifier(event.target.value)}
               autoComplete="username"
@@ -57,7 +57,7 @@ export default function Login() {
             </span>
             <input
               type="password"
-              className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-neutral-900/10"
+              className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-neutral-900/10"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               autoComplete="current-password"
@@ -76,7 +76,7 @@ export default function Login() {
             disabled={
               loading || identifier.trim() === "" || password.trim() === ""
             }
-            className="w-full rounded-xl bg-neutral-950 px-4 py-2.5 text-xs font-medium text-white disabled:opacity-50"
+            className="w-full rounded-md bg-neutral-950 px-4 py-2.5 text-xs font-medium text-white disabled:opacity-50"
           >
             {loading ? tx("Signing in...") : tx("Sign In")}
           </button>

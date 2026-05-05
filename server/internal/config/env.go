@@ -13,103 +13,116 @@ import (
 )
 
 var (
-	ConfigFile                          string
-	ProxyConfigFile                     string
-	SiteConfigFile                      string
-	PHPRuntimeInventoryFile             string
-	PSGIRuntimeInventoryFile            string
-	VhostConfigFile                     string
-	ScheduledTaskConfigFile             string
-	SecurityAuditFile                   string
-	SecurityAuditBlobDir                string
-	CacheStoreFile                      string
-	CacheRulesFile                      string
-	UIBasePath                          string
-	UpstreamRuntimeFile                 string
-	ProxyRollbackMax                    int
-	ProxyAuditFile                      string
-	ProxyEngineMode                     string
-	WAFEngineMode                       string
-	EdgeEnabled                         bool
-	EdgeDeviceAuthEnabled               bool
-	EdgeRequireDeviceApproval           bool
-	EdgeDeviceStatusRefreshInterval     time.Duration
-	SecurityAuditEnabled                bool
-	SecurityAuditCaptureMode            string
-	SecurityAuditCaptureHeaders         bool
-	SecurityAuditCaptureBody            bool
-	SecurityAuditMaxBodyBytes           int64
-	SecurityAuditRedactHeaders          []string
-	SecurityAuditRedactBodyContentTypes []string
-	SecurityAuditKeySource              string
-	SecurityAuditEncryptionKey          string
-	SecurityAuditEncryptionKeyID        string
-	SecurityAuditHMACKey                string
-	SecurityAuditHMACKeyID              string
-	ListenAddr                          string
-	ServerReadTimeout                   time.Duration
-	ServerReadHeaderTimeout             time.Duration
-	ServerWriteTimeout                  time.Duration
-	ServerIdleTimeout                   time.Duration
-	ServerGracefulShutdownTimeout       time.Duration
-	ServerMaxHeaderBytes                int
-	ServerMaxConcurrentReqs             int
-	ServerMaxQueuedReqs                 int
-	ServerQueuedRequestTimeout          time.Duration
-	ServerMaxConcurrentProxy            int
-	ServerMaxQueuedProxy                int
-	ServerQueuedProxyRequestTimeout     time.Duration
-	ServerProxyProtocolEnabled          bool
-	ServerProxyProtocolTrustedCIDRs     []string
-	ServerTLSEnabled                    bool
-	ServerTLSCertFile                   string
-	ServerTLSKeyFile                    string
-	ServerTLSMinVersion                 string
-	ServerTLSRedirectHTTP               bool
-	ServerTLSHTTPRedirectAddr           string
-	ServerHTTP3Enabled                  bool
-	ServerHTTP3AltSvcMaxAgeSec          int
-	ServerTLSACMEEnabled                bool
-	ServerTLSACMEEmail                  string
-	ServerTLSACMEDomains                []string
-	ServerTLSACMECacheDir               string
-	ServerTLSACMEStaging                bool
-	RuntimeGOMAXPROCS                   int
-	RuntimeMemoryLimitMB                int
-	RuntimeProcessModel                 string
-	RequestCountryMode                  string
-	RulesFile                           string
-	OverrideRulesDir                    string
-	BypassFile                          string
-	CountryBlockFile                    string
-	RateLimitFile                       string
-	BotDefenseFile                      string
-	SemanticFile                        string
-	NotificationFile                    string
-	IPReputationFile                    string
-	LogFile                             string
-	StrictOverride                      bool
-	APIBasePath                         string
-	AdminListenAddr                     string
-	AdminReadOnly                       bool
-	AdminExternalMode                   string
-	AdminTrustedCIDRs                   []string
-	AdminTrustForwardedFor              bool
-	AdminProxyProtocolEnabled           bool
-	AdminProxyProtocolTrustedCIDRs      []string
-	AdminSessionSecret                  string
-	AdminSessionTTL                     time.Duration
-	APIAuthDisable                      bool
-	APICORSOrigins                      []string
-	AdminRateLimitEnabled               bool
-	AdminRateLimitRPS                   int
-	AdminRateLimitBurst                 int
-	AdminRateLimitStatusCode            int
-	AdminRateLimitRetryAfter            int
-	CRSEnable                           bool
-	CRSSetupFile                        string
-	CRSRulesDir                         string
-	CRSDisabledFile                     string
+	ConfigFile                             string
+	ProxyConfigFile                        string
+	SiteConfigFile                         string
+	PHPRuntimeInventoryFile                string
+	PSGIRuntimeInventoryFile               string
+	VhostConfigFile                        string
+	ScheduledTaskConfigFile                string
+	SecurityAuditFile                      string
+	SecurityAuditBlobDir                   string
+	CacheStoreFile                         string
+	CacheRulesFile                         string
+	UIBasePath                             string
+	UpstreamRuntimeFile                    string
+	ProxyRollbackMax                       int
+	ProxyAuditFile                         string
+	ProxyEngineMode                        string
+	WAFEngineMode                          string
+	EdgeEnabled                            bool
+	EdgeDeviceAuthEnabled                  bool
+	EdgeRequireDeviceApproval              bool
+	EdgeDeviceStatusRefreshInterval        time.Duration
+	RemoteSSHCenterEnabled                 bool
+	RemoteSSHGatewayEnabled                bool
+	RemoteSSHGatewayEmbeddedEnabled        bool
+	RemoteSSHGatewayCenterSigningPublicKey string
+	RemoteSSHGatewayCenterTLSCABundleFile  string
+	RemoteSSHGatewayCenterTLSServerName    string
+	RemoteSSHGatewayShell                  string
+	RemoteSSHGatewayWorkingDir             string
+	RemoteSSHGatewayRunAsUser              string
+	RemoteSSHMaxTTL                        time.Duration
+	RemoteSSHIdleTimeout                   time.Duration
+	RemoteSSHMaxSessionsTotal              int
+	RemoteSSHMaxSessionsPerDevice          int
+	SecurityAuditEnabled                   bool
+	SecurityAuditCaptureMode               string
+	SecurityAuditCaptureHeaders            bool
+	SecurityAuditCaptureBody               bool
+	SecurityAuditMaxBodyBytes              int64
+	SecurityAuditRedactHeaders             []string
+	SecurityAuditRedactBodyContentTypes    []string
+	SecurityAuditKeySource                 string
+	SecurityAuditEncryptionKey             string
+	SecurityAuditEncryptionKeyID           string
+	SecurityAuditHMACKey                   string
+	SecurityAuditHMACKeyID                 string
+	ListenAddr                             string
+	ServerReadTimeout                      time.Duration
+	ServerReadHeaderTimeout                time.Duration
+	ServerWriteTimeout                     time.Duration
+	ServerIdleTimeout                      time.Duration
+	ServerGracefulShutdownTimeout          time.Duration
+	ServerMaxHeaderBytes                   int
+	ServerMaxConcurrentReqs                int
+	ServerMaxQueuedReqs                    int
+	ServerQueuedRequestTimeout             time.Duration
+	ServerMaxConcurrentProxy               int
+	ServerMaxQueuedProxy                   int
+	ServerQueuedProxyRequestTimeout        time.Duration
+	ServerProxyProtocolEnabled             bool
+	ServerProxyProtocolTrustedCIDRs        []string
+	ServerTLSEnabled                       bool
+	ServerTLSCertFile                      string
+	ServerTLSKeyFile                       string
+	ServerTLSMinVersion                    string
+	ServerTLSRedirectHTTP                  bool
+	ServerTLSHTTPRedirectAddr              string
+	ServerHTTP3Enabled                     bool
+	ServerHTTP3AltSvcMaxAgeSec             int
+	ServerTLSACMEEnabled                   bool
+	ServerTLSACMEEmail                     string
+	ServerTLSACMEDomains                   []string
+	ServerTLSACMECacheDir                  string
+	ServerTLSACMEStaging                   bool
+	RuntimeGOMAXPROCS                      int
+	RuntimeMemoryLimitMB                   int
+	RuntimeProcessModel                    string
+	RequestCountryMode                     string
+	RulesFile                              string
+	OverrideRulesDir                       string
+	BypassFile                             string
+	CountryBlockFile                       string
+	RateLimitFile                          string
+	BotDefenseFile                         string
+	SemanticFile                           string
+	NotificationFile                       string
+	IPReputationFile                       string
+	LogFile                                string
+	StrictOverride                         bool
+	APIBasePath                            string
+	AdminListenAddr                        string
+	AdminReadOnly                          bool
+	AdminExternalMode                      string
+	AdminTrustedCIDRs                      []string
+	AdminTrustForwardedFor                 bool
+	AdminProxyProtocolEnabled              bool
+	AdminProxyProtocolTrustedCIDRs         []string
+	AdminSessionSecret                     string
+	AdminSessionTTL                        time.Duration
+	APIAuthDisable                         bool
+	APICORSOrigins                         []string
+	AdminRateLimitEnabled                  bool
+	AdminRateLimitRPS                      int
+	AdminRateLimitBurst                    int
+	AdminRateLimitStatusCode               int
+	AdminRateLimitRetryAfter               int
+	CRSEnable                              bool
+	CRSSetupFile                           string
+	CRSRulesDir                            string
+	CRSDisabledFile                        string
 
 	AllowInsecureDefaults bool
 
@@ -235,6 +248,25 @@ func applyAppConfig(cfg appConfigFile) {
 	} else {
 		EdgeDeviceStatusRefreshInterval = 0
 	}
+	RemoteSSHCenterEnabled = cfg.RemoteSSH.Center.Enabled
+	RemoteSSHGatewayEnabled = cfg.RemoteSSH.Gateway.Enabled
+	RemoteSSHGatewayEmbeddedEnabled = cfg.RemoteSSH.Gateway.Enabled && cfg.RemoteSSH.Gateway.EmbeddedServer.Enabled
+	RemoteSSHGatewayCenterSigningPublicKey = strings.TrimSpace(cfg.RemoteSSH.Gateway.CenterSigningPublicKey)
+	RemoteSSHGatewayCenterTLSCABundleFile = strings.TrimSpace(cfg.RemoteSSH.Gateway.CenterTLSCABundleFile)
+	RemoteSSHGatewayCenterTLSServerName = strings.TrimSpace(cfg.RemoteSSH.Gateway.CenterTLSServerName)
+	RemoteSSHGatewayShell = strings.TrimSpace(cfg.RemoteSSH.Gateway.EmbeddedServer.Shell)
+	if RemoteSSHGatewayShell == "" {
+		RemoteSSHGatewayShell = "/bin/sh"
+	}
+	RemoteSSHGatewayWorkingDir = strings.TrimSpace(cfg.RemoteSSH.Gateway.EmbeddedServer.WorkingDir)
+	if RemoteSSHGatewayWorkingDir == "" {
+		RemoteSSHGatewayWorkingDir = "/"
+	}
+	RemoteSSHGatewayRunAsUser = strings.TrimSpace(cfg.RemoteSSH.Gateway.EmbeddedServer.RunAsUser)
+	RemoteSSHMaxTTL = time.Duration(cfg.RemoteSSH.Center.MaxTTLSec) * time.Second
+	RemoteSSHIdleTimeout = time.Duration(cfg.RemoteSSH.Center.IdleTimeoutSec) * time.Second
+	RemoteSSHMaxSessionsTotal = cfg.RemoteSSH.Center.MaxSessionsTotal
+	RemoteSSHMaxSessionsPerDevice = cfg.RemoteSSH.Center.MaxSessionsPerDevice
 	if override := strings.TrimSpace(os.Getenv("WAF_PROXY_AUDIT_FILE")); override != "" {
 		ProxyAuditFile = override
 	}

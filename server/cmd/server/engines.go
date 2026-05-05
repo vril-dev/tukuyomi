@@ -239,6 +239,7 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 	api.GET("/edge/device-auth", handler.GetEdgeDeviceAuthStatus)
 	api.POST("/edge/device-auth/enroll", adminMutate, handler.PostEdgeDeviceEnrollment)
 	api.POST("/edge/device-auth/refresh", adminMutate, handler.PostEdgeDeviceStatusRefresh)
+	api.POST("/edge/device-auth/remote-ssh/signing-key/refresh", adminMutate, handler.PostEdgeRemoteSSHSigningKeyRefresh)
 	api.GET("/auth/account", handler.GetAdminAccount)
 	api.PUT("/auth/account", adminMutate, handler.PutAdminAccount)
 	api.PUT("/auth/password", adminMutate, handler.PutAdminPassword)

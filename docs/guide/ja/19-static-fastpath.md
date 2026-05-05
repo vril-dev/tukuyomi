@@ -1,10 +1,10 @@
-# 第18章　Static Fast-path 評価
+# 第19章　Static Fast-path 評価
 
 第VII部の締めくくりとして、本章では **static fast-path / zero-copy** に
 対する tukuyomi の判断を整理します。第14章（listener fan-out / reuse-port）
 と同じく、**「やらない判断」を再現可能な形で残す** ことが目的です。
 
-## 18.1　判断 ── 進めない
+## 19.1　判断 ── 進めない
 
 `tukuyomi` は `nginx` のような **純粋な file-serving proxy ではありません**。
 そのうえで、現在の runtime 責務を踏まえると、
@@ -13,7 +13,7 @@
 
 というのが結論です。
 
-## 18.2　なぜ進めないのか
+## 19.2　なぜ進めないのか
 
 `tukuyomi` のレスポンス処理は、今も **user space で扱うのが自然な layer**
 を複数持っています。
@@ -32,18 +32,18 @@
 レスポンスにしか効かない一方で、**通常 runtime の複雑さだけを増やしやすい**、
 というトレードオフになります。
 
-## 18.3　Zero-copy が噛み合いにくい場所
+## 19.3　Zero-copy が噛み合いにくい場所
 
 「噛み合いにくい」と言っても抽象的なので、具体的に 2 箇所挙げておきます。
 
-### 18.3.1　live upstream response
+### 19.3.1　live upstream response
 
 - body は通常 **local file ではなく upstream socket** から届く
 - `tukuyomi` はその周辺で **buffering / compression / sanitize / retry** を
   行うことがある
 - その layer を通したあとに **clean な zero-copy handoff** を作るのは難しい
 
-### 18.3.2　cache replay を general 戦略にすること
+### 19.3.2　cache replay を general 戦略にすること
 
 - **cached replay 自体はすでに upstream latency を避けている**
 - 現在の cache design は次の 2 段:
@@ -56,7 +56,7 @@
 cache 設計でかなり吸収できています。さらに踏み込んで zero-copy にする
 価値が現実の workload にあるか、を見極めるのが先です。
 
-## 18.4　すでにある bounded fast-path
+## 19.4　すでにある bounded fast-path
 
 `tukuyomi` には、generic な static-file fast-path より **workload に合った
 小さな最適化** がすでに入っています。
@@ -66,13 +66,13 @@ cache 設計でかなり吸収できています。さらに踏み込んで zero
 - **file-backed cache hit でも upstream call 自体は回避** できる
 - **upgrade / websocket 系トラフィック** は buffering や response compression
   を通らない
-- runtime preset（第17章）で **low-latency / buffered-control** を切り替え
+- runtime preset（第18章）で **low-latency / buffered-control** を切り替え
   られる
 
 これらは「全部のレスポンスを zero-copy にする」のではなく、**用途に応じた
 bounded な fast-path を積んでいる**、という設計です。
 
-## 18.5　再検討する条件
+## 19.5　再検討する条件
 
 今後この方針を reopen してもよいのは、**現在の cache / compression 方針を
 入れたあとでも、cached body replay が実測ボトルネックだと分かった時だけ**
@@ -90,7 +90,7 @@ bounded な fast-path を積んでいる**、という設計です。
 逆に言えば、これらの根拠が無いまま **「sendfile 的な fast-path を入れる」
 という方向に舵を切らない** のが、現在の方針です。
 
-## 18.6　Reopen 時の narrow slice
+## 19.6　Reopen 時の narrow slice
 
 将来 reopen する場合でも、変更の **slice は極小に限定** します。
 
@@ -106,7 +106,7 @@ bounded な fast-path を積んでいる**、という設計です。
 safety rule）は、いずれの最適化でも崩さない、というのがここでの強い
 コミットメントです。
 
-## 18.7　ここまでの整理
+## 19.7　ここまでの整理
 
 - generic な static fast-path / zero-copy は **採用しない**。
 - 理由は、`tukuyomi` の response 処理に **user space で扱うべき layer**
@@ -117,7 +117,7 @@ safety rule）は、いずれの最適化でも崩さない、というのがこ
 - reopen は、**実測ボトルネック が cache replay copy path にあるとわかった
   ときだけ**。reopen 時も WAF / sanitize / cache safety rule は崩さない。
 
-## 18.8　次章への橋渡し
+## 19.8　次章への橋渡し
 
 これで本書の本編は完結です。続く付録では、第3章以降で何度も参照してきた
 **運用リファレンス**（`data/conf/config.json` と DB `app_config_*` の

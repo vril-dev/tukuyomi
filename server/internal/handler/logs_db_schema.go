@@ -65,7 +65,98 @@ func applyEmbeddedDBMigrations(db *sql.DB, driver string) error {
 	if runErr != nil && !errors.Is(runErr, migrate.ErrNoChange) {
 		return fmt.Errorf("apply migrations for driver %s: %w", driver, runErr)
 	}
+	if err := repairEmbeddedDBSchemaCompatibility(db, driver); err != nil {
+		return err
+	}
 	return nil
+}
+
+func repairEmbeddedDBSchemaCompatibility(db *sql.DB, driver string) error {
+	if err := repairRemoteSSHSessionHostPublicKeyColumn(db, driver); err != nil {
+		return err
+	}
+	return nil
+}
+
+func repairRemoteSSHSessionHostPublicKeyColumn(db *sql.DB, driver string) error {
+	const tableName = "center_remote_ssh_sessions"
+	const columnName = "gateway_host_public_key"
+	exists, err := dbColumnExists(db, driver, tableName, columnName)
+	if err != nil {
+		return fmt.Errorf("inspect %s.%s column: %w", tableName, columnName, err)
+	}
+	if exists {
+		return nil
+	}
+	var statements []string
+	switch driver {
+	case logStatsDBDriverSQLite:
+		statements = []string{
+			`ALTER TABLE center_remote_ssh_sessions ADD COLUMN gateway_host_public_key TEXT NOT NULL DEFAULT ''`,
+		}
+	case logStatsDBDriverMySQL:
+		statements = []string{
+			`ALTER TABLE center_remote_ssh_sessions ADD COLUMN gateway_host_public_key TEXT NULL AFTER gateway_host_key_fingerprint_sha256`,
+			`UPDATE center_remote_ssh_sessions SET gateway_host_public_key = '' WHERE gateway_host_public_key IS NULL`,
+			`ALTER TABLE center_remote_ssh_sessions MODIFY COLUMN gateway_host_public_key TEXT NOT NULL`,
+		}
+	case logStatsDBDriverPostgres:
+		statements = []string{
+			`ALTER TABLE center_remote_ssh_sessions ADD COLUMN gateway_host_public_key TEXT NOT NULL DEFAULT ''`,
+		}
+	default:
+		return fmt.Errorf("unsupported db driver: %s", driver)
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			return fmt.Errorf("repair %s.%s column: %w", tableName, columnName, err)
+		}
+	}
+	return nil
+}
+
+func dbColumnExists(db *sql.DB, driver string, tableName string, columnName string) (bool, error) {
+	var count int
+	switch driver {
+	case logStatsDBDriverSQLite:
+		rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)
+		if err != nil {
+			return false, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var cid int
+			var name, dataType string
+			var notNull int
+			var defaultValue any
+			var pk int
+			if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
+				return false, err
+			}
+			if strings.EqualFold(name, columnName) {
+				return true, nil
+			}
+		}
+		return false, rows.Err()
+	case logStatsDBDriverMySQL:
+		err := db.QueryRow(`
+SELECT COUNT(*)
+  FROM information_schema.columns
+ WHERE table_schema = DATABASE()
+   AND table_name = ?
+   AND column_name = ?`, tableName, columnName).Scan(&count)
+		return count > 0, err
+	case logStatsDBDriverPostgres:
+		err := db.QueryRow(`
+SELECT COUNT(*)
+  FROM information_schema.columns
+ WHERE table_schema = current_schema()
+   AND table_name = $1
+   AND column_name = $2`, tableName, columnName).Scan(&count)
+		return count > 0, err
+	default:
+		return false, fmt.Errorf("unsupported db driver: %s", driver)
+	}
 }
 
 func migrationDatabaseName(driver string) string {

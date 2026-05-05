@@ -4,6 +4,8 @@ Coraza + CRS WAF 搭載のリバースプロキシ／API Gateway
 
 [English](README.md) | [日本語](README.ja.md)
 
+> このREADMEは、英語版をもとにした自動翻訳ベースの文書です。
+
 ![管理画面トップ](docs/images/ui-samples/01-status.png)
 
 ## 概要

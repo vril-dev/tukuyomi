@@ -917,6 +917,47 @@ SELECT s.device_id, s.revision, s.payload_hash, s.payload_json, s.size_bytes, s.
 	return out, err
 }
 
+func DeviceConfigSnapshotUploadRequiredForDevice(ctx context.Context, deviceID string) (bool, error) {
+	deviceID = strings.TrimSpace(deviceID)
+	if !deviceIDPattern.MatchString(deviceID) {
+		return false, ErrDeviceStatusNotFound
+	}
+	required := false
+	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		var device DeviceRecord
+		if err := loadDeviceByIDTx(ctx, db, driver, deviceID, &device); err != nil {
+			return err
+		}
+		if device.Status != DeviceStatusApproved {
+			return ErrDeviceStatusNotFound
+		}
+		revision := strings.ToLower(strings.TrimSpace(device.ConfigSnapshotRevision))
+		if !hex64Pattern.MatchString(revision) {
+			required = true
+			return nil
+		}
+		row := db.QueryRowContext(ctx, `
+SELECT 1
+  FROM center_device_config_snapshots
+ WHERE device_id = `+placeholder(driver, 1)+`
+   AND revision = `+placeholder(driver, 2)+`
+ LIMIT 1`,
+			deviceID,
+			revision,
+		)
+		var found int
+		if err := row.Scan(&found); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				required = true
+				return nil
+			}
+			return err
+		}
+		return nil
+	})
+	return required, err
+}
+
 func ListDeviceConfigSnapshots(ctx context.Context, deviceID string, limit int, offset int) (DeviceConfigSnapshotListResult, error) {
 	deviceID = strings.TrimSpace(deviceID)
 	if !deviceIDPattern.MatchString(deviceID) {

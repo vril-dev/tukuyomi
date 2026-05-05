@@ -808,6 +808,44 @@ const JA_STRINGS: Record<string, string> = {
     "左メニューの IoT ON は、実行中 process が edge.enabled=true を読み込んだ後に表示されます。この startup 設定を反映するには保存後に再起動してください。",
   "IoT ON": "IoT ON",
   "IoT OFF": "IoT OFF",
+  "Remote SSH Gateway": "Remote SSH Gateway",
+  "Allow this Gateway to attach short-lived embedded SSH sessions requested from Center. This is startup config and requires restart.":
+    "Center から要求された短時間の embedded SSH session に、この Gateway が接続できるようにします。startup 設定のため再起動が必要です。",
+  "Remote SSH runtime ON": "Remote SSH runtime ON",
+  "Remote SSH runtime OFF": "Remote SSH runtime OFF",
+  Configured: "設定値",
+  "Running process": "実行中 process",
+  "Enable Remote SSH on this Gateway": "この Gateway で Remote SSH を有効化",
+  "Advanced Remote SSH Gateway trust and shell": "Remote SSH Gateway の詳細 trust / shell 設定",
+  "Center signing public key": "Center signing public key",
+  "auto fetched from enrolled Center on save": "保存時に enrolled Center から自動取得",
+  "Gateway auto-fetches and pins this Center key when Remote SSH is enabled and the field is empty.":
+    "Remote SSH 有効化時にこの欄が空なら、Gateway が Center key を自動取得して pin します。",
+  "Refresh key from approved Center": "承認済み Center から key を更新",
+  "Refreshing...": "更新中...",
+  "Center signing public key refreshed from approved Center.": "Center signing public key を承認済み Center から更新しました。",
+  "Center CA bundle file": "Center CA bundle file",
+  "Optional when Center uses a public CA certificate.":
+    "Center が public CA 証明書を使う場合は省略できます。",
+  "Center TLS server name": "Center TLS server name",
+  "Use this when Gateway reaches Center by IP but the certificate uses a DNS name.":
+    "Gateway が Center に IP で到達し、証明書が DNS 名で発行されている場合に使います。",
+  Shell: "shell",
+  "Working directory": "作業ディレクトリ",
+  "Run as user": "実行ユーザー",
+  "Required when the tukuyomi process runs as root.":
+    "tukuyomi process が root で動く場合は必須です。",
+  "Use Center device Remote SSH ON and this Gateway ON. Center service must be enabled in Center Settings. Restart tukuyomi after saving Gateway config.":
+    "Center の device Remote SSH とこの Gateway を ON にします。Center service は Center Settings で有効化してください。Gateway 設定を保存した後は tukuyomi を再起動してください。",
+  "Save Remote SSH": "Remote SSH を保存",
+  "Remote SSH Gateway settings saved. Restart tukuyomi to apply them.":
+    "Remote SSH Gateway 設定を保存しました。反映するには tukuyomi を再起動してください。",
+  "Enable IoT / Edge mode first, save, and restart before enabling Remote SSH.":
+    "Remote SSH を有効化する前に IoT / Edge mode を有効化して保存し、再起動してください。",
+  "Shell path must be an absolute executable path such as /bin/sh.":
+    "shell path は /bin/sh のような絶対実行パスにしてください。",
+  "Working directory must be an absolute path.":
+    "working directory は絶対パスにしてください。",
   "Database storage policy and bootstrap connection status. Driver, path, and DSN are read from the bootstrap config file before DB is opened.":
     "DB storage policy と bootstrap 接続状態です。driver、path、DSN は DB を開く前に bootstrap 設定ファイルから読みます。",
   "DB connection is bootstrap-only. Current DSN status: {state}. Change db_driver, db_path, or db_dsn in the bootstrap config file, run migrations/import as needed, then restart.":

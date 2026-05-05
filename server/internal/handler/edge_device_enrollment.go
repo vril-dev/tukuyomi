@@ -18,9 +18,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"os/user"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -29,15 +32,20 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/ssh"
 
 	"tukuyomi/internal/buildinfo"
 	"tukuyomi/internal/bypassconf"
+	"tukuyomi/internal/centertls"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/edgeartifactbundle"
 	"tukuyomi/internal/edgeconfigsnapshot"
+	"tukuyomi/internal/remotestream"
 	"tukuyomi/internal/runtimeartifactbundle"
 	"tukuyomi/internal/waf"
 )
@@ -80,7 +88,8 @@ var (
 	edgeDeviceIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 	edgeKeyIDPattern    = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
-	errEdgeDeviceIdentityNotFound = errors.New("edge device identity not found")
+	errEdgeDeviceIdentityNotFound               = errors.New("edge device identity not found")
+	errEdgeRemoteSSHCenterSigningKeyUnavailable = errors.New("center remote ssh signing key unavailable")
 
 	edgeDeviceStatusRefreshTriggerMu sync.RWMutex
 	edgeDeviceStatusRefreshTrigger   chan struct{}
@@ -158,6 +167,10 @@ type edgeDeviceEnrollmentRequest struct {
 	KeyID           string `json:"key_id"`
 }
 
+type edgeRemoteSSHSigningKeyRefreshRequest struct {
+	Confirm bool `json:"confirm"`
+}
+
 type CenterProtectedGatewayBootstrapOptions struct {
 	CenterURL                string
 	GatewayAPIBasePath       string
@@ -165,6 +178,8 @@ type CenterProtectedGatewayBootstrapOptions struct {
 	CenterUIBasePath         string
 	DeviceID                 string
 	KeyID                    string
+	CenterTLSCABundleFile    string
+	CenterTLSServerName      string
 	StatusRefreshIntervalSec int
 	MarkApproved             bool
 }
@@ -314,14 +329,22 @@ type edgeWAFRuleArtifactDownloadWireRequest struct {
 }
 
 type edgeDeviceCenterStatusResponse struct {
-	Status              string                         `json:"status"`
-	DeviceID            string                         `json:"device_id"`
-	KeyID               string                         `json:"key_id"`
-	ProductID           string                         `json:"product_id"`
-	CheckedAtUnix       int64                          `json:"checked_at_unix"`
-	RuntimeAssignments  []edgeRuntimeDeviceAssignment  `json:"runtime_assignments,omitempty"`
-	ProxyRuleAssignment *edgeProxyRuleDeviceAssignment `json:"proxy_rule_assignment,omitempty"`
-	WAFRuleAssignment   *edgeWAFRuleDeviceAssignment   `json:"waf_rule_assignment,omitempty"`
+	Status                       string                         `json:"status"`
+	DeviceID                     string                         `json:"device_id"`
+	KeyID                        string                         `json:"key_id"`
+	ProductID                    string                         `json:"product_id"`
+	CheckedAtUnix                int64                          `json:"checked_at_unix"`
+	RuleArtifactUploadRequired   bool                           `json:"rule_artifact_upload_required,omitempty"`
+	ConfigSnapshotUploadRequired bool                           `json:"config_snapshot_upload_required,omitempty"`
+	RuntimeAssignments           []edgeRuntimeDeviceAssignment  `json:"runtime_assignments,omitempty"`
+	ProxyRuleAssignment          *edgeProxyRuleDeviceAssignment `json:"proxy_rule_assignment,omitempty"`
+	WAFRuleAssignment            *edgeWAFRuleDeviceAssignment   `json:"waf_rule_assignment,omitempty"`
+	RemoteSSHSession             *edgeRemoteSSHDeviceSession    `json:"remote_ssh_session,omitempty"`
+}
+
+type edgeRemoteSSHCenterSigningKeyResponse struct {
+	PublicKey string `json:"public_key"`
+	Algorithm string `json:"algorithm"`
 }
 
 type edgeRuntimeDeviceAssignment struct {
@@ -411,6 +434,44 @@ func PostEdgeDeviceStatusRefresh(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, status)
+}
+
+func PostEdgeRemoteSSHSigningKeyRefresh(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req edgeRemoteSSHSigningKeyRefreshRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid remote ssh signing key refresh request"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid remote ssh signing key refresh request"})
+		return
+	}
+	if !req.Confirm {
+		c.JSON(http.StatusPreconditionRequired, gin.H{"error": "confirm is required"})
+		return
+	}
+	identity, err := approvedEdgeDeviceIdentityForRemoteSSHCenterSigningKey()
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	key, err := persistRemoteSSHGatewayCenterSigningKeyFromApprovedCenter(c.Request.Context(), identity, true)
+	if err != nil {
+		switch {
+		case errors.Is(err, errEdgeRemoteSSHCenterSigningKeyUnavailable):
+			c.JSON(http.StatusConflict, gin.H{"error": "center remote ssh signing key is unavailable"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to refresh remote ssh signing key"})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"center_signing_public_key": key,
+		"algorithm":                 "ed25519",
+	})
 }
 
 func PostEdgeDeviceEnrollment(c *gin.Context) {
@@ -672,14 +733,16 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 	identity.CenterProductID = clampEdgeText(payload.ProductID, 191)
 	identity.CenterStatusError = ""
 	if identity.EnrollmentStatus == edgeEnrollmentStatusApproved {
+		importRemoteSSHGatewayCenterSigningKeyFromApprovedCenter(ctx, identity)
 		applyEdgeProxyRuleAssignment(ctx, identity, payload.ProxyRuleAssignment)
 		pruneCompletedEdgeProxyRuleApplyStatus(payload.ProxyRuleAssignment)
 		applyEdgeWAFRuleAssignment(ctx, &identity, payload.WAFRuleAssignment)
 		pruneCompletedEdgeWAFRuleApplyStatus(payload.WAFRuleAssignment)
 		applyEdgeRuntimeAssignments(ctx, identity, payload.RuntimeAssignments)
 		pruneCompletedEdgeRuntimeApplyStatuses(payload.RuntimeAssignments)
-		if pushEdgeRuleArtifactBundleIfChanged(ctx, &identity) {
-			pushEdgeConfigSnapshotIfChanged(ctx, &identity)
+		applyEdgeRemoteSSHSession(ctx, identity, payload.RemoteSSHSession)
+		if pushEdgeRuleArtifactBundle(ctx, &identity, payload.RuleArtifactUploadRequired) {
+			pushEdgeConfigSnapshot(ctx, &identity, payload.ConfigSnapshotUploadRequired)
 		}
 	}
 	if err := upsertEdgeDeviceIdentity(store, identity); err != nil {
@@ -750,7 +813,7 @@ func BootstrapCenterProtectedGateway(ctx context.Context, opts CenterProtectedGa
 		return CenterProtectedGatewayBootstrapResult{}, fmt.Errorf("db store is not initialized")
 	}
 
-	appUpdated, err := bootstrapCenterProtectedGatewayAppConfig(opts.StatusRefreshIntervalSec)
+	appUpdated, err := bootstrapCenterProtectedGatewayAppConfig(opts.StatusRefreshIntervalSec, opts.CenterTLSCABundleFile, opts.CenterTLSServerName)
 	if err != nil {
 		return CenterProtectedGatewayBootstrapResult{}, err
 	}
@@ -797,12 +860,14 @@ func BootstrapCenterProtectedGateway(ctx context.Context, opts CenterProtectedGa
 	}, nil
 }
 
-func bootstrapCenterProtectedGatewayAppConfig(statusRefreshIntervalSec int) (bool, error) {
+func bootstrapCenterProtectedGatewayAppConfig(statusRefreshIntervalSec int, centerTLSCABundleFile string, centerTLSServerName string) (bool, error) {
 	_, etag, cfg, err := loadAppConfigStorage(true)
 	if err != nil {
 		return false, err
 	}
 	changed := false
+	centerTLSCABundleFile = strings.TrimSpace(centerTLSCABundleFile)
+	centerTLSServerName = strings.TrimSpace(centerTLSServerName)
 	if !cfg.Edge.Enabled {
 		cfg.Edge.Enabled = true
 		changed = true
@@ -816,6 +881,14 @@ func bootstrapCenterProtectedGatewayAppConfig(statusRefreshIntervalSec int) (boo
 		changed = true
 	} else if cfg.Edge.DeviceAuth.StatusRefreshIntervalSec == 0 {
 		cfg.Edge.DeviceAuth.StatusRefreshIntervalSec = config.DefaultEdgeDeviceStatusRefreshSec
+		changed = true
+	}
+	if centerTLSCABundleFile != "" && cfg.RemoteSSH.Gateway.CenterTLSCABundleFile != centerTLSCABundleFile {
+		cfg.RemoteSSH.Gateway.CenterTLSCABundleFile = centerTLSCABundleFile
+		changed = true
+	}
+	if centerTLSServerName != "" && cfg.RemoteSSH.Gateway.CenterTLSServerName != centerTLSServerName {
+		cfg.RemoteSSH.Gateway.CenterTLSServerName = centerTLSServerName
 		changed = true
 	}
 	if !changed {
@@ -3404,6 +3477,164 @@ func parseEdgeDevicePrivateKey(raw string) (ed25519.PrivateKey, []byte, error) {
 	return privateKey, publicDER, nil
 }
 
+func edgeCenterTLSConfig() centertls.Config {
+	return centertls.Config{
+		CABundleFile: config.RemoteSSHGatewayCenterTLSCABundleFile,
+		ServerName:   config.RemoteSSHGatewayCenterTLSServerName,
+	}
+}
+
+func edgeCenterHTTPClient() (*http.Client, error) {
+	return centertls.HTTPClient(edgeCenterTLSConfig())
+}
+
+func edgeCenterHTTPClientForAppConfig(cfg config.AppConfigFile) (*http.Client, error) {
+	return centertls.HTTPClient(centertls.Config{
+		CABundleFile: cfg.RemoteSSH.Gateway.CenterTLSCABundleFile,
+		ServerName:   cfg.RemoteSSH.Gateway.CenterTLSServerName,
+	})
+}
+
+func ensureRemoteSSHGatewayCenterSigningKey(ctx context.Context, cfg *config.AppConfigFile) error {
+	if cfg == nil || !cfg.RemoteSSH.Gateway.Enabled || !cfg.RemoteSSH.Gateway.EmbeddedServer.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(cfg.RemoteSSH.Gateway.CenterSigningPublicKey) != "" {
+		return nil
+	}
+	identity, err := approvedEdgeDeviceIdentityForRemoteSSHCenterSigningKey()
+	if err != nil {
+		return err
+	}
+	key, err := fetchEdgeRemoteSSHCenterSigningPublicKeyForIdentity(ctx, identity, *cfg)
+	if err != nil {
+		return fmt.Errorf("remote ssh gateway could not fetch Center signing key: %w", err)
+	}
+	cfg.RemoteSSH.Gateway.CenterSigningPublicKey = key
+	return nil
+}
+
+func approvedEdgeDeviceIdentityForRemoteSSHCenterSigningKey() (edgeDeviceIdentityRecord, error) {
+	store := getLogsStatsStore()
+	if store == nil {
+		return edgeDeviceIdentityRecord{}, fmt.Errorf("runtime DB store is not initialized")
+	}
+	identity, found, err := loadEdgeDeviceIdentity(store)
+	if err != nil {
+		return edgeDeviceIdentityRecord{}, err
+	}
+	if !found {
+		return edgeDeviceIdentityRecord{}, fmt.Errorf("Center enrollment is required before enabling Remote SSH on Gateway")
+	}
+	if normalizeEdgeStatus(identity.EnrollmentStatus) != edgeEnrollmentStatusApproved {
+		return edgeDeviceIdentityRecord{}, fmt.Errorf("Center enrollment must be approved before enabling Remote SSH on Gateway")
+	}
+	return identity, nil
+}
+
+func fetchEdgeRemoteSSHCenterSigningPublicKeyForIdentity(ctx context.Context, identity edgeDeviceIdentityRecord, cfg config.AppConfigFile) (string, error) {
+	if normalizeEdgeStatus(identity.EnrollmentStatus) != edgeEnrollmentStatusApproved {
+		return "", fmt.Errorf("Center enrollment must be approved before enabling Remote SSH on Gateway")
+	}
+	signingKeyURL, err := centerRemoteSSHSigningKeyURL(identity.CenterURL)
+	if err != nil {
+		return "", err
+	}
+	client, err := edgeCenterHTTPClientForAppConfig(cfg)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, edgeEnrollmentHTTPTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, signingKeyURL, nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, 4*1024))
+	if err != nil {
+		return "", err
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		if res.StatusCode == http.StatusConflict || res.StatusCode == http.StatusNotFound {
+			return "", errEdgeRemoteSSHCenterSigningKeyUnavailable
+		}
+		return "", fmt.Errorf("%s", centerHTTPErrorMessage("center remote ssh signing key fetch failed", res.StatusCode, body))
+	}
+	var payload edgeRemoteSSHCenterSigningKeyResponse
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		return "", fmt.Errorf("center remote ssh signing key response is invalid JSON")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("center remote ssh signing key response is invalid JSON")
+	}
+	if strings.TrimSpace(payload.Algorithm) != "ed25519" {
+		return "", fmt.Errorf("center remote ssh signing key algorithm is unsupported")
+	}
+	publicKey := strings.TrimSpace(payload.PublicKey)
+	if _, err := parseEdgeRemoteSSHCenterSigningPublicKey(publicKey); err != nil {
+		return "", err
+	}
+	return publicKey, nil
+}
+
+func importRemoteSSHGatewayCenterSigningKeyFromApprovedCenter(ctx context.Context, identity edgeDeviceIdentityRecord) {
+	if strings.TrimSpace(config.RemoteSSHGatewayCenterSigningPublicKey) != "" {
+		return
+	}
+	if _, err := persistRemoteSSHGatewayCenterSigningKeyFromApprovedCenter(ctx, identity, false); err != nil {
+		if errors.Is(err, errEdgeRemoteSSHCenterSigningKeyUnavailable) {
+			return
+		}
+		log.Printf("[REMOTE_SSH][WARN] Center signing key import skipped: %v", err)
+	}
+}
+
+func persistRemoteSSHGatewayCenterSigningKeyFromApprovedCenter(ctx context.Context, identity edgeDeviceIdentityRecord, force bool) (string, error) {
+	if normalizeEdgeStatus(identity.EnrollmentStatus) != edgeEnrollmentStatusApproved {
+		return "", nil
+	}
+	raw, etag, cfg, err := loadSettingsAppConfig()
+	if err != nil {
+		return "", err
+	}
+	if existing := strings.TrimSpace(cfg.RemoteSSH.Gateway.CenterSigningPublicKey); existing != "" && !force {
+		config.RemoteSSHGatewayCenterSigningPublicKey = existing
+		return existing, nil
+	}
+	key, err := fetchEdgeRemoteSSHCenterSigningPublicKeyForIdentity(ctx, identity, cfg)
+	if err != nil {
+		return "", err
+	}
+	cfg.RemoteSSH.Gateway.CenterSigningPublicKey = key
+	normalized, err := config.NormalizeAndValidateAppConfigFile(cfg)
+	if err != nil {
+		return "", err
+	}
+	nextRaw, err := marshalAppConfigBlob(normalized)
+	if err != nil {
+		return "", err
+	}
+	if nextRaw != raw {
+		if _, err := persistSettingsAppConfig(normalized, etag); err != nil {
+			return "", err
+		}
+	}
+	config.RemoteSSHGatewayCenterSigningPublicKey = key
+	action := "imported"
+	if force {
+		action = "refreshed"
+	}
+	log.Printf("[REMOTE_SSH] %s Center signing key from approved Center enrollment", action)
+	return key, nil
+}
+
 func sendEdgeDeviceEnrollment(ctx context.Context, enrollURL string, token string, wireReq edgeDeviceEnrollmentWireRequest) (int, []byte, error) {
 	body, err := json.Marshal(wireReq)
 	if err != nil {
@@ -3417,7 +3648,11 @@ func sendEdgeDeviceEnrollment(ctx context.Context, enrollURL string, token strin
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Enrollment-Token", token)
-	res, err := http.DefaultClient.Do(req)
+	client, err := edgeCenterHTTPClient()
+	if err != nil {
+		return 0, nil, err
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -3441,7 +3676,11 @@ func sendEdgeDeviceStatus(ctx context.Context, statusURL string, wireReq edgeDev
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	res, err := http.DefaultClient.Do(req)
+	client, err := edgeCenterHTTPClient()
+	if err != nil {
+		return 0, nil, err
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -3465,7 +3704,11 @@ func sendEdgeDeviceConfigSnapshot(ctx context.Context, snapshotURL string, wireR
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	res, err := http.DefaultClient.Do(req)
+	client, err := edgeCenterHTTPClient()
+	if err != nil {
+		return 0, nil, err
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -3489,7 +3732,11 @@ func sendEdgeRuleArtifactBundle(ctx context.Context, bundleURL string, wireReq e
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	res, err := http.DefaultClient.Do(req)
+	client, err := edgeCenterHTTPClient()
+	if err != nil {
+		return 0, nil, err
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -3516,7 +3763,11 @@ func sendEdgeRuntimeArtifactDownload(ctx context.Context, downloadURL string, wi
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	res, err := http.DefaultClient.Do(req)
+	client, err := edgeCenterHTTPClient()
+	if err != nil {
+		return 0, nil, err
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -3546,7 +3797,11 @@ func sendEdgeProxyRulesBundleDownload(ctx context.Context, downloadURL string, w
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	res, err := http.DefaultClient.Do(req)
+	client, err := edgeCenterHTTPClient()
+	if err != nil {
+		return 0, nil, err
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -3576,7 +3831,11 @@ func sendEdgeWAFRuleArtifactDownload(ctx context.Context, downloadURL string, wi
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	res, err := http.DefaultClient.Do(req)
+	client, err := edgeCenterHTTPClient()
+	if err != nil {
+		return 0, nil, err
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -3592,6 +3851,10 @@ func sendEdgeWAFRuleArtifactDownload(ctx context.Context, downloadURL string, wi
 }
 
 func pushEdgeRuleArtifactBundleIfChanged(ctx context.Context, identity *edgeDeviceIdentityRecord) bool {
+	return pushEdgeRuleArtifactBundle(ctx, identity, false)
+}
+
+func pushEdgeRuleArtifactBundle(ctx context.Context, identity *edgeDeviceIdentityRecord, force bool) bool {
 	if identity == nil {
 		return true
 	}
@@ -3604,7 +3867,7 @@ func pushEdgeRuleArtifactBundleIfChanged(ctx context.Context, identity *edgeDevi
 		identity.RuleArtifactError = ""
 		return true
 	}
-	if bundle.Revision == strings.TrimSpace(identity.RuleArtifactRevision) {
+	if !force && bundle.Revision == strings.TrimSpace(identity.RuleArtifactRevision) {
 		identity.RuleArtifactError = ""
 		return true
 	}
@@ -3674,6 +3937,10 @@ func finishEdgeRuleArtifactUpload(revision string) {
 }
 
 func pushEdgeConfigSnapshotIfChanged(ctx context.Context, identity *edgeDeviceIdentityRecord) {
+	pushEdgeConfigSnapshot(ctx, identity, false)
+}
+
+func pushEdgeConfigSnapshot(ctx context.Context, identity *edgeDeviceIdentityRecord, force bool) {
 	if identity == nil {
 		return
 	}
@@ -3682,7 +3949,7 @@ func pushEdgeConfigSnapshotIfChanged(ctx context.Context, identity *edgeDeviceId
 		identity.ConfigSnapshotError = clampEdgeText(err.Error(), 2048)
 		return
 	}
-	if snapshot.Revision == strings.TrimSpace(identity.ConfigSnapshotRevision) {
+	if !force && snapshot.Revision == strings.TrimSpace(identity.ConfigSnapshotRevision) {
 		identity.ConfigSnapshotError = ""
 		return
 	}
@@ -4042,4 +4309,558 @@ func normalizeEdgeHex64(raw string) string {
 		}
 	}
 	return raw
+}
+
+type edgeRemoteSSHDeviceSession struct {
+	DeviceID                           string `json:"device_id"`
+	SessionID                          string `json:"session_id"`
+	OperatorPublicKey                  string `json:"operator_public_key"`
+	OperatorPublicKeyFingerprintSHA256 string `json:"operator_public_key_fingerprint_sha256"`
+	ExpiresAtUnix                      int64  `json:"expires_at_unix"`
+	CreatedAtUnix                      int64  `json:"created_at_unix"`
+	Nonce                              string `json:"nonce"`
+	CenterSigningPublicKey             string `json:"center_signing_public_key"`
+	Signature                          string `json:"signature"`
+}
+
+var edgeRemoteSSHActive sync.Map
+
+var edgeRemoteSSHHostKeyMu sync.Mutex
+
+func applyEdgeRemoteSSHSession(ctx context.Context, identity edgeDeviceIdentityRecord, session *edgeRemoteSSHDeviceSession) {
+	if session == nil || !config.RemoteSSHGatewayEnabled || !config.RemoteSSHGatewayEmbeddedEnabled {
+		return
+	}
+	if err := verifyEdgeRemoteSSHDeviceSession(ctx, identity, *session); err != nil {
+		log.Printf("[REMOTE_SSH][WARN] rejected pending session: %v", err)
+		return
+	}
+	if _, loaded := edgeRemoteSSHActive.LoadOrStore(session.SessionID, struct{}{}); loaded {
+		return
+	}
+	go func() {
+		defer edgeRemoteSSHActive.Delete(session.SessionID)
+		runCtx := context.Background()
+		if deadline := time.Unix(session.ExpiresAtUnix, 0).UTC(); time.Now().UTC().Before(deadline) {
+			var cancel context.CancelFunc
+			runCtx, cancel = context.WithDeadline(runCtx, deadline)
+			defer cancel()
+		}
+		if err := runEdgeRemoteSSHSession(runCtx, identity, *session); err != nil {
+			log.Printf("[REMOTE_SSH][WARN] session %s failed: %v", session.SessionID, err)
+		}
+	}()
+	_ = ctx
+}
+
+func runEdgeRemoteSSHSession(ctx context.Context, identity edgeDeviceIdentityRecord, session edgeRemoteSSHDeviceSession) error {
+	signer, hostFP, err := ensureEdgeRemoteSSHHostSigner(ctx)
+	if err != nil {
+		return err
+	}
+	streamURL, err := centerRemoteSSHGatewayStreamURL(identity.CenterURL)
+	if err != nil {
+		return err
+	}
+	hostPublicKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
+	headers, err := signedEdgeRemoteSSHGatewayStreamHeaders(identity, session.SessionID, hostFP, hostPublicKey)
+	if err != nil {
+		return err
+	}
+	tlsConfig, err := centertls.BuildTLSConfig(edgeCenterTLSConfig())
+	if err != nil {
+		return err
+	}
+	conn, err := remotestream.DialUpgradeWithOptions(ctx, streamURL, headers, remotestream.DialOptions{TLSConfig: tlsConfig})
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return serveEdgeRemoteSSHConn(ctx, conn, session, signer)
+}
+
+func serveEdgeRemoteSSHConn(ctx context.Context, conn net.Conn, session edgeRemoteSSHDeviceSession, signer ssh.Signer) error {
+	allowedKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(strings.TrimSpace(session.OperatorPublicKey)))
+	if err != nil {
+		return fmt.Errorf("parse operator public key: %w", err)
+	}
+	serverConfig := &ssh.ServerConfig{
+		ServerVersion: "SSH-2.0-tukuyomi-remote-ssh",
+		PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			if string(key.Marshal()) != string(allowedKey.Marshal()) {
+				return nil, fmt.Errorf("unauthorized remote ssh key")
+			}
+			return &ssh.Permissions{Extensions: map[string]string{"username": meta.User()}}, nil
+		},
+	}
+	serverConfig.AddHostKey(signer)
+	sshConn, channels, requests, err := ssh.NewServerConn(conn, serverConfig)
+	if err != nil {
+		return err
+	}
+	defer sshConn.Close()
+	go ssh.DiscardRequests(requests)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for newChannel := range channels {
+			if newChannel.ChannelType() != "session" {
+				_ = newChannel.Reject(ssh.UnknownChannelType, "only session channels are allowed")
+				continue
+			}
+			channel, reqs, err := newChannel.Accept()
+			if err != nil {
+				continue
+			}
+			handleEdgeRemoteSSHSessionChannel(ctx, channel, reqs)
+		}
+	}()
+	select {
+	case <-ctx.Done():
+		_ = sshConn.Close()
+		return ctx.Err()
+	case <-done:
+		return nil
+	}
+}
+
+type edgeRemoteSSHPTYRequest struct {
+	Term     string
+	Columns  uint32
+	Rows     uint32
+	WidthPX  uint32
+	HeightPX uint32
+	Modes    string
+}
+
+type edgeRemoteSSHWindowChangeRequest struct {
+	Columns  uint32
+	Rows     uint32
+	WidthPX  uint32
+	HeightPX uint32
+}
+
+func handleEdgeRemoteSSHSessionChannel(ctx context.Context, channel ssh.Channel, requests <-chan *ssh.Request) {
+	defer channel.Close()
+	var (
+		ptyReq  = edgeRemoteSSHPTYRequest{Term: "xterm", Columns: 80, Rows: 24}
+		ptyFile *os.File
+		started bool
+		done    chan struct{}
+	)
+	for req := range requests {
+		switch req.Type {
+		case "pty-req":
+			if started {
+				replySSHRequest(req, false)
+				continue
+			}
+			var parsed edgeRemoteSSHPTYRequest
+			if err := ssh.Unmarshal(req.Payload, &parsed); err != nil || parsed.Columns == 0 || parsed.Rows == 0 || parsed.Columns > 1000 || parsed.Rows > 1000 {
+				replySSHRequest(req, false)
+				continue
+			}
+			ptyReq = parsed
+			replySSHRequest(req, true)
+		case "window-change":
+			var parsed edgeRemoteSSHWindowChangeRequest
+			if err := ssh.Unmarshal(req.Payload, &parsed); err != nil || parsed.Columns == 0 || parsed.Rows == 0 || parsed.Columns > 1000 || parsed.Rows > 1000 {
+				continue
+			}
+			if ptyFile != nil {
+				_ = pty.Setsize(ptyFile, &pty.Winsize{Rows: uint16(parsed.Rows), Cols: uint16(parsed.Columns)})
+			}
+		case "shell":
+			if started {
+				replySSHRequest(req, false)
+				continue
+			}
+			started = true
+			var startErr error
+			ptyFile, done, startErr = startEdgeRemoteSSHShell(ctx, channel, ptyReq)
+			replySSHRequest(req, startErr == nil)
+			if startErr != nil {
+				return
+			}
+		default:
+			replySSHRequest(req, false)
+		}
+	}
+	if ptyFile != nil {
+		_ = ptyFile.Close()
+	}
+	if done != nil {
+		<-done
+	}
+}
+
+func startEdgeRemoteSSHShell(ctx context.Context, channel ssh.Channel, req edgeRemoteSSHPTYRequest) (*os.File, chan struct{}, error) {
+	if os.Geteuid() == 0 && strings.TrimSpace(config.RemoteSSHGatewayRunAsUser) == "" {
+		return nil, nil, fmt.Errorf("remote ssh refuses to run shell as root without remote_ssh.gateway.embedded_server.run_as_user")
+	}
+	cmd := exec.CommandContext(ctx, config.RemoteSSHGatewayShell)
+	cmd.Dir = config.RemoteSSHGatewayWorkingDir
+	cmd.Env = buildEdgeRemoteSSHShellEnv(req.Term, config.RemoteSSHGatewayRunAsUser)
+	if runAs := strings.TrimSpace(config.RemoteSSHGatewayRunAsUser); runAs != "" {
+		cred, err := remoteSSHCredentialForUser(runAs)
+		if err != nil {
+			return nil, nil, err
+		}
+		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred}
+	}
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(req.Rows), Cols: uint16(req.Columns)})
+	if err != nil {
+		return nil, nil, err
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer ptmx.Close()
+		go func() {
+			_, _ = io.Copy(ptmx, channel)
+			_ = ptmx.Close()
+		}()
+		_, _ = io.Copy(channel, ptmx)
+		_ = cmd.Wait()
+	}()
+	return ptmx, done, nil
+}
+
+func verifyEdgeRemoteSSHDeviceSession(ctx context.Context, identity edgeDeviceIdentityRecord, session edgeRemoteSSHDeviceSession) error {
+	session.DeviceID = strings.TrimSpace(session.DeviceID)
+	session.SessionID = strings.TrimSpace(session.SessionID)
+	session.OperatorPublicKey = strings.TrimSpace(session.OperatorPublicKey)
+	session.OperatorPublicKeyFingerprintSHA256 = strings.ToLower(strings.TrimSpace(session.OperatorPublicKeyFingerprintSHA256))
+	session.Nonce = strings.TrimSpace(session.Nonce)
+	session.CenterSigningPublicKey = strings.TrimSpace(session.CenterSigningPublicKey)
+	session.Signature = strings.TrimSpace(session.Signature)
+	if session.DeviceID != identity.DeviceID {
+		return fmt.Errorf("remote ssh session device mismatch")
+	}
+	if session.SessionID == "" || session.OperatorPublicKey == "" || session.Nonce == "" || session.ExpiresAtUnix <= time.Now().UTC().Unix() {
+		return fmt.Errorf("remote ssh session payload is incomplete")
+	}
+	operatorKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(session.OperatorPublicKey))
+	if err != nil {
+		return fmt.Errorf("remote ssh operator key is invalid: %w", err)
+	}
+	if got := remoteSSHPublicKeyFingerprintHex(operatorKey); got != session.OperatorPublicKeyFingerprintSHA256 {
+		return fmt.Errorf("remote ssh operator key fingerprint mismatch")
+	}
+	if _, err := centerRemoteSSHGatewayStreamURL(identity.CenterURL); err != nil {
+		return err
+	}
+	configuredCenterSigningKey := strings.TrimSpace(config.RemoteSSHGatewayCenterSigningPublicKey)
+	if session.CenterSigningPublicKey != configuredCenterSigningKey {
+		refreshed, refreshErr := persistRemoteSSHGatewayCenterSigningKeyFromApprovedCenter(ctx, identity, true)
+		if refreshErr != nil {
+			return fmt.Errorf("remote ssh center signing key refresh failed: %w", refreshErr)
+		}
+		configuredCenterSigningKey = strings.TrimSpace(refreshed)
+		if session.CenterSigningPublicKey != configuredCenterSigningKey {
+			return fmt.Errorf("remote ssh center signing key mismatch")
+		}
+	}
+	centerPublicKey, err := parseEdgeRemoteSSHCenterSigningPublicKey(configuredCenterSigningKey)
+	if err != nil {
+		return err
+	}
+	signature, err := base64.StdEncoding.DecodeString(session.Signature)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return fmt.Errorf("remote ssh session signature is invalid")
+	}
+	if !ed25519.Verify(centerPublicKey, []byte(edgeRemoteSSHDeviceSessionSignedMessage(session)), signature) {
+		return fmt.Errorf("remote ssh session signature verification failed")
+	}
+	return acceptEdgeRemoteSSHSessionNonce(ctx, session.SessionID, session.Nonce, session.ExpiresAtUnix)
+}
+
+func parseEdgeRemoteSSHCenterSigningPublicKey(value string) (ed25519.PublicKey, error) {
+	value = strings.TrimSpace(value)
+	raw, ok := strings.CutPrefix(value, "ed25519:")
+	if !ok || raw == "" {
+		return nil, fmt.Errorf("remote ssh center signing public key is not configured")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil || len(decoded) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("remote ssh center signing public key is invalid")
+	}
+	return ed25519.PublicKey(decoded), nil
+}
+
+func edgeRemoteSSHDeviceSessionSignedMessage(session edgeRemoteSSHDeviceSession) string {
+	return strings.Join([]string{
+		"tukuyomi-remote-ssh-pending-v1",
+		strings.TrimSpace(session.DeviceID),
+		strings.TrimSpace(session.SessionID),
+		strings.TrimSpace(session.OperatorPublicKey),
+		strings.ToLower(strings.TrimSpace(session.OperatorPublicKeyFingerprintSHA256)),
+		strconv.FormatInt(session.ExpiresAtUnix, 10),
+		strconv.FormatInt(session.CreatedAtUnix, 10),
+		strings.TrimSpace(session.Nonce),
+	}, "\n")
+}
+
+func acceptEdgeRemoteSSHSessionNonce(ctx context.Context, sessionID string, nonce string, expiresAtUnix int64) error {
+	sessionID = strings.TrimSpace(sessionID)
+	nonce = strings.TrimSpace(nonce)
+	if sessionID == "" || nonce == "" || expiresAtUnix <= time.Now().UTC().Unix() {
+		return fmt.Errorf("remote ssh nonce payload is invalid")
+	}
+	sum := sha256.Sum256([]byte("remote-ssh-session-nonce\n" + sessionID + "\n" + nonce))
+	nonceHash := hex.EncodeToString(sum[:])
+	now := time.Now().UTC().Unix()
+	return WithConfigDBStore(func(db *sql.DB, driver string) error {
+		if _, err := db.ExecContext(ctx, `DELETE FROM remote_ssh_accepted_nonces WHERE expires_at_unix <= `+remoteSSHPlaceholder(driver, 1), now); err != nil {
+			return err
+		}
+		_, err := db.ExecContext(ctx, `
+INSERT INTO remote_ssh_accepted_nonces (nonce_hash, session_id, expires_at_unix, accepted_at_unix)
+VALUES (`+remoteSSHPlaceholders(driver, 4, 1)+`)`,
+			nonceHash,
+			sessionID,
+			expiresAtUnix,
+			now,
+		)
+		if err != nil {
+			return fmt.Errorf("remote ssh session nonce replay rejected")
+		}
+		return nil
+	})
+}
+
+func remoteSSHPlaceholder(driver string, index int) string {
+	if driver == "pgsql" {
+		return fmt.Sprintf("$%d", index)
+	}
+	return "?"
+}
+
+func buildEdgeRemoteSSHShellEnv(term string, runAsUser string) []string {
+	env := []string{
+		"TERM=" + clampRemoteSSHTerm(term),
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	}
+	username := strings.TrimSpace(runAsUser)
+	home := ""
+	if username != "" {
+		if u, err := user.Lookup(username); err == nil {
+			home = strings.TrimSpace(u.HomeDir)
+		}
+	} else if u, err := user.Current(); err == nil {
+		username = strings.TrimSpace(u.Username)
+		home = strings.TrimSpace(u.HomeDir)
+		if slash := strings.LastIndex(username, string(os.PathSeparator)); slash >= 0 {
+			username = username[slash+1:]
+		}
+	}
+	if username != "" {
+		env = append(env, "USER="+username, "LOGNAME="+username)
+	}
+	if strings.HasPrefix(home, "/") {
+		env = append(env, "HOME="+home)
+	}
+	return env
+}
+
+func replySSHRequest(req *ssh.Request, ok bool) {
+	if req.WantReply {
+		_ = req.Reply(ok, nil)
+	}
+}
+
+func remoteSSHCredentialForUser(name string) (*syscall.Credential, error) {
+	u, err := user.Lookup(name)
+	if err != nil {
+		return nil, err
+	}
+	uid, err := strconv.ParseUint(u.Uid, 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("invalid uid for %s", name)
+	}
+	gid, err := strconv.ParseUint(u.Gid, 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("invalid gid for %s", name)
+	}
+	return &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}, nil
+}
+
+func ensureEdgeRemoteSSHHostSigner(ctx context.Context) (ssh.Signer, string, error) {
+	edgeRemoteSSHHostKeyMu.Lock()
+	defer edgeRemoteSSHHostKeyMu.Unlock()
+
+	var signer ssh.Signer
+	var fingerprint string
+	err := WithConfigDBStore(func(db *sql.DB, driver string) error {
+		row := db.QueryRowContext(ctx, `
+SELECT private_key_pem, public_key_fingerprint_sha256
+  FROM remote_ssh_host_keys
+ ORDER BY created_at_unix ASC
+ LIMIT 1`)
+		var privatePEM string
+		if err := row.Scan(&privatePEM, &fingerprint); err == nil {
+			parsed, parseErr := signerFromRemoteSSHPrivateKeyPEM(privatePEM)
+			if parseErr != nil {
+				return parseErr
+			}
+			signer = parsed
+			return nil
+		} else if err != sql.ErrNoRows {
+			return err
+		}
+		_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return err
+		}
+		privateDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+		if err != nil {
+			return err
+		}
+		privatePEM = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER}))
+		parsed, err := ssh.NewSignerFromKey(privateKey)
+		if err != nil {
+			return err
+		}
+		fingerprint = remoteSSHPublicKeyFingerprintHex(parsed.PublicKey())
+		keyID, err := remoteSSHHostKeyID()
+		if err != nil {
+			return err
+		}
+		_, err = db.ExecContext(ctx, `
+INSERT INTO remote_ssh_host_keys
+    (key_id, private_key_pem, public_key_fingerprint_sha256, created_at_unix, rotated_at_unix)
+VALUES
+    (`+remoteSSHPlaceholders(driver, 5, 1)+`)`,
+			keyID,
+			privatePEM,
+			fingerprint,
+			time.Now().UTC().Unix(),
+			int64(0),
+		)
+		if err != nil {
+			return err
+		}
+		signer = parsed
+		return nil
+	})
+	return signer, fingerprint, err
+}
+
+func signerFromRemoteSSHPrivateKeyPEM(raw string) (ssh.Signer, error) {
+	block, rest := pem.Decode([]byte(raw))
+	if block == nil || block.Type != "PRIVATE KEY" || strings.TrimSpace(string(rest)) != "" {
+		return nil, fmt.Errorf("invalid remote ssh host key")
+	}
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	return ssh.NewSignerFromKey(key)
+}
+
+func remoteSSHPublicKeyFingerprintHex(key ssh.PublicKey) string {
+	sum := sha256.Sum256(key.Marshal())
+	return hex.EncodeToString(sum[:])
+}
+
+func remoteSSHHostKeyID() (string, error) {
+	var raw [12]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return "host-" + hex.EncodeToString(raw[:]), nil
+}
+
+func signedEdgeRemoteSSHGatewayStreamHeaders(identity edgeDeviceIdentityRecord, sessionID string, hostKeyFingerprint string, hostPublicKey string) (http.Header, error) {
+	privateKey, _, err := parseEdgeDevicePrivateKey(identity.PrivateKeyPEM)
+	if err != nil {
+		return nil, err
+	}
+	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	nonce, err := randomEdgeIdentifier("nonce")
+	if err != nil {
+		return nil, err
+	}
+	bodyHash := edgeRemoteSSHGatewayStreamBodyHash(sessionID, hostKeyFingerprint, hostPublicKey)
+	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(identity.DeviceID, identity.KeyID, timestamp, nonce, bodyHash)))
+	headers := http.Header{}
+	headers.Set("X-Tukuyomi-Device-ID", identity.DeviceID)
+	headers.Set("X-Tukuyomi-Key-ID", identity.KeyID)
+	headers.Set("X-Tukuyomi-Public-Key-Fingerprint-SHA256", identity.PublicKeyFingerprintSHA256)
+	headers.Set("X-Tukuyomi-Remote-SSH-Session-ID", strings.TrimSpace(sessionID))
+	headers.Set("X-Tukuyomi-Remote-SSH-Host-Key-Fingerprint-SHA256", strings.ToLower(strings.TrimSpace(hostKeyFingerprint)))
+	headers.Set("X-Tukuyomi-Remote-SSH-Host-Public-Key", strings.TrimSpace(hostPublicKey))
+	headers.Set("X-Tukuyomi-Timestamp", timestamp)
+	headers.Set("X-Tukuyomi-Nonce", nonce)
+	headers.Set("X-Tukuyomi-Body-Hash", bodyHash)
+	headers.Set("X-Tukuyomi-Signature", base64.StdEncoding.EncodeToString(signature))
+	return headers, nil
+}
+
+func edgeRemoteSSHGatewayStreamBodyHash(sessionID string, hostKeyFingerprint string, hostPublicKey string) string {
+	sum := sha256.Sum256([]byte("remote-ssh-gateway-stream\n" + strings.TrimSpace(sessionID) + "\n" + strings.ToLower(strings.TrimSpace(hostKeyFingerprint)) + "\n" + strings.TrimSpace(hostPublicKey)))
+	return hex.EncodeToString(sum[:])
+}
+
+func centerRemoteSSHGatewayStreamURL(centerBaseURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("center URL is not configured")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("center URL is invalid")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("center URL scheme must be http or https")
+	}
+	if u.Scheme != "https" && !config.AllowInsecureDefaults {
+		return "", fmt.Errorf("remote ssh center URL must use https unless admin.allow_insecure_defaults is enabled for local testing")
+	}
+	u.Path = "/v1/remote-ssh/gateway-stream"
+	u.RawPath = ""
+	return u.String(), nil
+}
+
+func centerRemoteSSHSigningKeyURL(centerBaseURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("center URL is not configured")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("center URL is invalid")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("center URL scheme must be http or https")
+	}
+	if u.Scheme != "https" && !config.AllowInsecureDefaults {
+		return "", fmt.Errorf("remote ssh center URL must use https unless admin.allow_insecure_defaults is enabled for local testing")
+	}
+	u.Path = "/v1/remote-ssh/signing-key"
+	u.RawPath = ""
+	return u.String(), nil
+}
+
+func remoteSSHPlaceholders(driver string, count int, start int) string {
+	parts := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		if driver == "pgsql" {
+			parts = append(parts, fmt.Sprintf("$%d", start+i))
+		} else {
+			parts = append(parts, "?")
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func clampRemoteSSHTerm(term string) string {
+	term = strings.TrimSpace(term)
+	if term == "" || len(term) > 64 {
+		return "xterm"
+	}
+	for _, r := range term {
+		if r < 32 || r > 126 || r == '=' {
+			return "xterm"
+		}
+	}
+	return term
 }

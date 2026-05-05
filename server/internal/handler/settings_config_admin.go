@@ -167,6 +167,34 @@ type settingsListenerAdminEdgeConfig struct {
 	DeviceAuth            settingsListenerAdminEdgeDeviceAuthConfig `json:"device_auth"`
 }
 
+type settingsListenerAdminRemoteSSHCenterConfig struct {
+	Enabled              bool `json:"enabled"`
+	MaxTTLSec            int  `json:"max_ttl_sec"`
+	IdleTimeoutSec       int  `json:"idle_timeout_sec"`
+	MaxSessionsTotal     int  `json:"max_sessions_total"`
+	MaxSessionsPerDevice int  `json:"max_sessions_per_device"`
+}
+
+type settingsListenerAdminRemoteSSHEmbeddedConfig struct {
+	Enabled    bool   `json:"enabled"`
+	Shell      string `json:"shell"`
+	WorkingDir string `json:"working_dir"`
+	RunAsUser  string `json:"run_as_user"`
+}
+
+type settingsListenerAdminRemoteSSHGatewayConfig struct {
+	Enabled                bool                                         `json:"enabled"`
+	CenterSigningPublicKey string                                       `json:"center_signing_public_key"`
+	CenterTLSCABundleFile  string                                       `json:"center_tls_ca_bundle_file"`
+	CenterTLSServerName    string                                       `json:"center_tls_server_name"`
+	EmbeddedServer         settingsListenerAdminRemoteSSHEmbeddedConfig `json:"embedded_server"`
+}
+
+type settingsListenerAdminRemoteSSHConfig struct {
+	Center  settingsListenerAdminRemoteSSHCenterConfig  `json:"center"`
+	Gateway settingsListenerAdminRemoteSSHGatewayConfig `json:"gateway"`
+}
+
 type settingsListenerAdminCRSConfig struct {
 	Enable bool `json:"enable"`
 }
@@ -224,6 +252,7 @@ type settingsListenerAdminConfig struct {
 	Proxy         settingsListenerAdminProxyConfig             `json:"proxy"`
 	WAF           settingsListenerAdminWAFConfig               `json:"waf"`
 	Edge          settingsListenerAdminEdgeConfig              `json:"edge"`
+	RemoteSSH     *settingsListenerAdminRemoteSSHConfig        `json:"remote_ssh,omitempty"`
 	CRS           settingsListenerAdminCRSConfig               `json:"crs"`
 	FPTuner       settingsListenerAdminFPTunerConfig           `json:"fp_tuner"`
 	Observability settingsListenerAdminObservabilityConfig     `json:"observability"`
@@ -288,6 +317,9 @@ type settingsListenerAdminRuntimeStatus struct {
 	EdgeEnabled                        bool                   `json:"edge_enabled"`
 	EdgeDeviceAuthEnabled              bool                   `json:"edge_device_auth_enabled"`
 	EdgeDeviceStatusRefreshIntervalSec int                    `json:"edge_device_status_refresh_interval_sec"`
+	RemoteSSHCenterEnabled             bool                   `json:"remote_ssh_center_enabled"`
+	RemoteSSHGatewayEnabled            bool                   `json:"remote_ssh_gateway_enabled"`
+	RemoteSSHGatewayEmbeddedEnabled    bool                   `json:"remote_ssh_gateway_embedded_enabled"`
 	StorageDBDriver                    string                 `json:"storage_db_driver"`
 	StorageDBPath                      string                 `json:"storage_db_path"`
 	StorageDBRetentionDays             int                    `json:"storage_db_retention_days"`
@@ -387,6 +419,10 @@ func PutSettingsListenerAdmin(c *gin.Context) {
 	applySettingsListenerAdminConfig(&current, in.Config)
 	if _, bootstrap, err := loadBootstrapAppConfig(); err == nil {
 		preserveBootstrapDBConnection(&current, bootstrap)
+	}
+	if err := ensureRemoteSSHGatewayCenterSigningKey(c.Request.Context(), &current); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
+		return
 	}
 	normalized, err := config.NormalizeAndValidateAppConfigFile(current)
 	if err != nil {
@@ -612,6 +648,27 @@ func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListener
 				StatusRefreshIntervalSec: cfg.Edge.DeviceAuth.StatusRefreshIntervalSec,
 			},
 		},
+		RemoteSSH: &settingsListenerAdminRemoteSSHConfig{
+			Center: settingsListenerAdminRemoteSSHCenterConfig{
+				Enabled:              cfg.RemoteSSH.Center.Enabled,
+				MaxTTLSec:            cfg.RemoteSSH.Center.MaxTTLSec,
+				IdleTimeoutSec:       cfg.RemoteSSH.Center.IdleTimeoutSec,
+				MaxSessionsTotal:     cfg.RemoteSSH.Center.MaxSessionsTotal,
+				MaxSessionsPerDevice: cfg.RemoteSSH.Center.MaxSessionsPerDevice,
+			},
+			Gateway: settingsListenerAdminRemoteSSHGatewayConfig{
+				Enabled:                cfg.RemoteSSH.Gateway.Enabled,
+				CenterSigningPublicKey: cfg.RemoteSSH.Gateway.CenterSigningPublicKey,
+				CenterTLSCABundleFile:  cfg.RemoteSSH.Gateway.CenterTLSCABundleFile,
+				CenterTLSServerName:    cfg.RemoteSSH.Gateway.CenterTLSServerName,
+				EmbeddedServer: settingsListenerAdminRemoteSSHEmbeddedConfig{
+					Enabled:    cfg.RemoteSSH.Gateway.EmbeddedServer.Enabled,
+					Shell:      cfg.RemoteSSH.Gateway.EmbeddedServer.Shell,
+					WorkingDir: cfg.RemoteSSH.Gateway.EmbeddedServer.WorkingDir,
+					RunAsUser:  cfg.RemoteSSH.Gateway.EmbeddedServer.RunAsUser,
+				},
+			},
+		},
 		CRS: settingsListenerAdminCRSConfig{
 			Enable: cfg.CRS.Enable,
 		},
@@ -738,6 +795,21 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 	cfg.Edge.RequireDeviceApproval = next.Edge.RequireDeviceApproval
 	cfg.Edge.DeviceAuth.Enabled = next.Edge.DeviceAuth.Enabled
 	cfg.Edge.DeviceAuth.StatusRefreshIntervalSec = next.Edge.DeviceAuth.StatusRefreshIntervalSec
+	if next.RemoteSSH != nil {
+		cfg.RemoteSSH.Center.Enabled = next.RemoteSSH.Center.Enabled
+		cfg.RemoteSSH.Center.MaxTTLSec = next.RemoteSSH.Center.MaxTTLSec
+		cfg.RemoteSSH.Center.IdleTimeoutSec = next.RemoteSSH.Center.IdleTimeoutSec
+		cfg.RemoteSSH.Center.MaxSessionsTotal = next.RemoteSSH.Center.MaxSessionsTotal
+		cfg.RemoteSSH.Center.MaxSessionsPerDevice = next.RemoteSSH.Center.MaxSessionsPerDevice
+		cfg.RemoteSSH.Gateway.Enabled = next.RemoteSSH.Gateway.Enabled
+		cfg.RemoteSSH.Gateway.CenterSigningPublicKey = next.RemoteSSH.Gateway.CenterSigningPublicKey
+		cfg.RemoteSSH.Gateway.CenterTLSCABundleFile = next.RemoteSSH.Gateway.CenterTLSCABundleFile
+		cfg.RemoteSSH.Gateway.CenterTLSServerName = next.RemoteSSH.Gateway.CenterTLSServerName
+		cfg.RemoteSSH.Gateway.EmbeddedServer.Enabled = next.RemoteSSH.Gateway.EmbeddedServer.Enabled
+		cfg.RemoteSSH.Gateway.EmbeddedServer.Shell = next.RemoteSSH.Gateway.EmbeddedServer.Shell
+		cfg.RemoteSSH.Gateway.EmbeddedServer.WorkingDir = next.RemoteSSH.Gateway.EmbeddedServer.WorkingDir
+		cfg.RemoteSSH.Gateway.EmbeddedServer.RunAsUser = next.RemoteSSH.Gateway.EmbeddedServer.RunAsUser
+	}
 	cfg.CRS.Enable = next.CRS.Enable
 
 	cfg.FPTuner.Mode = ""
@@ -808,6 +880,9 @@ func buildSettingsListenerAdminRuntimeStatus() settingsListenerAdminRuntimeStatu
 		EdgeEnabled:                        config.EdgeEnabled,
 		EdgeDeviceAuthEnabled:              config.EdgeDeviceAuthEnabled,
 		EdgeDeviceStatusRefreshIntervalSec: int(config.EdgeDeviceStatusRefreshInterval / time.Second),
+		RemoteSSHCenterEnabled:             config.RemoteSSHCenterEnabled,
+		RemoteSSHGatewayEnabled:            config.RemoteSSHGatewayEnabled,
+		RemoteSSHGatewayEmbeddedEnabled:    config.RemoteSSHGatewayEmbeddedEnabled,
 		StorageDBDriver:                    config.DBDriver,
 		StorageDBPath:                      config.DBPath,
 		StorageDBRetentionDays:             config.DBRetentionDays,

@@ -412,7 +412,7 @@ Proxy engine selection is a restart-required DB `app_config` setting:
   WebSocket frame payloads after `101 Switching Protocols` are
   treated as tunnel data.
 - Benchmark with real workloads before rolling out to production
-  (Chapter 17).
+  (Chapter 18).
 - `waf.engine.mode` currently accepts only the `coraza` engine.
   `mod_security` is a known mode reserved for a future adapter; it
   fails closed in config validation until that adapter is compiled

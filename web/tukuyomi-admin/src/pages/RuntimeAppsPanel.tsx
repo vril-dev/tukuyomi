@@ -128,7 +128,32 @@ type PSGIRuntimesResponse = {
   processes?: PSGIRuntimeProcessStatus[];
 };
 
+let runtimeAppFormIDSequence = 0;
+
+function nextRuntimeAppFormID(prefix: string) {
+  runtimeAppFormIDSequence += 1;
+  return `${prefix}-${runtimeAppFormIDSequence}`;
+}
+
+type RuntimeAppRewriteRuleFormState = {
+  formID: string;
+  pattern: string;
+  replacement: string;
+  flag: RewriteFlag;
+  preserveQuery: boolean;
+};
+
+type RuntimeAppAccessRuleFormState = {
+  formID: string;
+  pathPattern: string;
+  action: "allow" | "deny";
+  cidrsText: string;
+  authRealm: string;
+  authUsersText: string;
+};
+
 type RuntimeAppFormState = {
+  formID: string;
   name: string;
   mode: RuntimeAppMode;
   hostname: string;
@@ -136,19 +161,8 @@ type RuntimeAppFormState = {
   documentRoot: string;
   runtimeID: string;
   tryFilesText: string;
-  rewriteRules: Array<{
-    pattern: string;
-    replacement: string;
-    flag: RewriteFlag;
-    preserveQuery: boolean;
-  }>;
-  accessRules: Array<{
-    pathPattern: string;
-    action: "allow" | "deny";
-    cidrsText: string;
-    authRealm: string;
-    authUsersText: string;
-  }>;
+  rewriteRules: RuntimeAppRewriteRuleFormState[];
+  accessRules: RuntimeAppAccessRuleFormState[];
   basicAuthRealm: string;
   basicAuthUsersText: string;
   phpValueText: string;
@@ -161,8 +175,30 @@ type RuntimeAppFormState = {
   envText: string;
 };
 
+function createEmptyRewriteRule(): RuntimeAppRewriteRuleFormState {
+  return {
+    formID: nextRuntimeAppFormID("rewrite-rule"),
+    pattern: "",
+    replacement: "",
+    flag: "break",
+    preserveQuery: false,
+  };
+}
+
+function createEmptyAccessRule(): RuntimeAppAccessRuleFormState {
+  return {
+    formID: nextRuntimeAppFormID("access-rule"),
+    pathPattern: "/",
+    action: "allow",
+    cidrsText: "",
+    authRealm: "",
+    authUsersText: "",
+  };
+}
+
 function createEmptyRuntimeApp(index: number): RuntimeAppFormState {
   return {
+    formID: nextRuntimeAppFormID("runtime-app"),
     name: `app-${index}`,
     mode: "php-fpm",
     hostname: "127.0.0.1",
@@ -286,6 +322,7 @@ function parseRuntimeAppsResponse(data?: RuntimeAppsResponse): RuntimeAppFormSta
     return [];
   }
   return entries.map((app, index) => ({
+    formID: nextRuntimeAppFormID("runtime-app"),
     name: app.name || `app-${index + 1}`,
     mode: (app.mode || "static") as RuntimeAppMode,
     hostname: app.hostname || "",
@@ -295,6 +332,7 @@ function parseRuntimeAppsResponse(data?: RuntimeAppsResponse): RuntimeAppFormSta
     tryFilesText: stringListToText(app.try_files),
     rewriteRules: Array.isArray(app.rewrite_rules)
       ? app.rewrite_rules.map((rule) => ({
+          formID: nextRuntimeAppFormID("rewrite-rule"),
           pattern: rule.pattern || "",
           replacement: rule.replacement || "",
           flag: (rule.flag || "break") as RewriteFlag,
@@ -303,6 +341,7 @@ function parseRuntimeAppsResponse(data?: RuntimeAppsResponse): RuntimeAppFormSta
       : [],
     accessRules: Array.isArray(app.access_rules)
       ? app.access_rules.map((rule) => ({
+          formID: nextRuntimeAppFormID("access-rule"),
           pathPattern: rule.path_pattern || "",
           action: (rule.action || "allow") as "allow" | "deny",
           cidrsText: stringListToText(rule.cidrs),
@@ -719,7 +758,7 @@ export default function RuntimeAppsPanel() {
           ) : null}
 
           {vhosts.map((app, index) => (
-            <article key={`${app.name}:${index}`} className="rounded-xl border border-neutral-200 bg-white p-4 space-y-4">
+            <article key={app.formID} className="rounded-xl border border-neutral-200 bg-white p-4 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h2 className="text-sm font-semibold">{app.name || `app-${index + 1}`}</h2>
@@ -880,13 +919,13 @@ export default function RuntimeAppsPanel() {
                   <section className="space-y-2">
                     <div className="flex items-center justify-between gap-2">
                       <h3 className="text-sm font-semibold">{tx("Rewrite Rules")}</h3>
-                      <button type="button" onClick={() => updateRuntimeApp(index, { ...app, rewriteRules: [...app.rewriteRules, { pattern: "", replacement: "", flag: "break", preserveQuery: false }] })} disabled={readOnly || saving}>
+                      <button type="button" onClick={() => updateRuntimeApp(index, { ...app, rewriteRules: [...app.rewriteRules, createEmptyRewriteRule()] })} disabled={readOnly || saving}>
                         {tx("Add rule")}
                       </button>
                     </div>
                     <div className="space-y-3">
                       {app.rewriteRules.map((rule, ruleIndex) => (
-                        <div key={`${rule.pattern}:${ruleIndex}`} className="rounded-lg border border-neutral-200 p-3 grid gap-3 md:grid-cols-2">
+                        <div key={rule.formID} className="rounded-lg border border-neutral-200 p-3 grid gap-3 md:grid-cols-2">
                           <label className="space-y-1 text-xs">
                             <span className="block text-xs text-neutral-600">{tx("Pattern")}</span>
                             <input value={rule.pattern} onChange={(e) => updateRuntimeApp(index, { ...app, rewriteRules: app.rewriteRules.map((entry, currentIndex) => currentIndex === ruleIndex ? { ...entry, pattern: e.target.value } : entry) })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white font-mono text-xs" />
@@ -919,13 +958,13 @@ export default function RuntimeAppsPanel() {
                   <section className="space-y-2">
                     <div className="flex items-center justify-between gap-2">
                       <h3 className="text-sm font-semibold">{tx("Access Rules")}</h3>
-                      <button type="button" onClick={() => updateRuntimeApp(index, { ...app, accessRules: [...app.accessRules, { pathPattern: "/", action: "allow", cidrsText: "", authRealm: "", authUsersText: "" }] })} disabled={readOnly || saving}>
+                      <button type="button" onClick={() => updateRuntimeApp(index, { ...app, accessRules: [...app.accessRules, createEmptyAccessRule()] })} disabled={readOnly || saving}>
                         {tx("Add rule")}
                       </button>
                     </div>
                     <div className="space-y-3">
                       {app.accessRules.map((rule, ruleIndex) => (
-                        <div key={`${rule.pathPattern}:${ruleIndex}`} className="rounded-lg border border-neutral-200 p-3 grid gap-3 md:grid-cols-2">
+                        <div key={rule.formID} className="rounded-lg border border-neutral-200 p-3 grid gap-3 md:grid-cols-2">
                           <label className="space-y-1 text-xs">
                             <span className="block text-xs text-neutral-600">{tx("Path pattern")}</span>
                             <input value={rule.pathPattern} onChange={(e) => updateRuntimeApp(index, { ...app, accessRules: app.accessRules.map((entry, currentIndex) => currentIndex === ruleIndex ? { ...entry, pathPattern: e.target.value } : entry) })} className="w-full rounded border border-neutral-200 px-3 py-2 bg-white" />

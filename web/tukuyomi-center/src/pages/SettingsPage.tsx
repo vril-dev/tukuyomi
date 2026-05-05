@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
-import { apiGetJson, apiPutJson } from "@/lib/api";
+import { apiGetJson, apiPostJson, apiPutJson } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 type SettingsConfig = {
@@ -18,6 +18,15 @@ type SettingsConfig = {
   client_allow_cidrs?: string[];
   manage_api_allow_cidrs?: string[];
   center_api_allow_cidrs?: string[];
+  remote_ssh?: {
+    center?: {
+      enabled?: boolean;
+      max_ttl_sec?: number;
+      idle_timeout_sec?: number;
+      max_sessions_total?: number;
+      max_sessions_per_device?: number;
+    };
+  };
 };
 
 type CenterSettings = {
@@ -35,6 +44,11 @@ type CenterSettings = {
   config?: SettingsConfig;
 };
 
+type RemoteSSHSigningKeyResponse = {
+  public_key?: string;
+  algorithm?: string;
+};
+
 type Tx = (key: string, vars?: Record<string, string | number | boolean | null | undefined>) => string;
 
 const DEFAULT_TOKEN_MAX_USES = 10;
@@ -47,6 +61,10 @@ const DEFAULT_CENTER_API_BASE_PATH = "/center-api";
 const DEFAULT_CENTER_GATEWAY_API_BASE_PATH = "/center-api";
 const DEFAULT_CENTER_UI_BASE_PATH = "/center-ui";
 const DEFAULT_MANAGE_API_ALLOW_CIDRS = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"];
+const DEFAULT_REMOTE_SSH_MAX_TTL_SEC = 900;
+const DEFAULT_REMOTE_SSH_IDLE_TIMEOUT_SEC = 300;
+const DEFAULT_REMOTE_SSH_MAX_SESSIONS_TOTAL = 16;
+const DEFAULT_REMOTE_SSH_MAX_SESSIONS_PER_DEVICE = 1;
 
 function boolLabel(value: boolean | undefined, tx: Tx) {
   if (typeof value !== "boolean") {
@@ -77,6 +95,7 @@ function normalizeForm(config: SettingsConfig | undefined) {
   const sessionTTLSeconds = Number.isFinite(config?.admin_session_ttl_seconds)
     ? Number(config?.admin_session_ttl_seconds)
     : DEFAULT_SESSION_TTL_MINUTES * 60;
+  const remoteSSHCenter = config?.remote_ssh?.center;
   return {
     defaultMaxUses: String(Math.max(1, Math.min(maxUses, 1000000))),
     defaultTTLDays: ttlSeconds > 0 ? String(Math.floor(ttlSeconds / SECONDS_PER_DAY)) : "0",
@@ -92,6 +111,21 @@ function normalizeForm(config: SettingsConfig | undefined) {
     clientAllowCIDRs: allowCIDRText(config?.client_allow_cidrs),
     manageApiAllowCIDRs: allowCIDRText(config?.manage_api_allow_cidrs, DEFAULT_MANAGE_API_ALLOW_CIDRS),
     centerApiAllowCIDRs: allowCIDRText(config?.center_api_allow_cidrs),
+    remoteSSHCenterEnabled: remoteSSHCenter?.enabled === true,
+    remoteSSHMaxTTLSec: String(
+      Number.isFinite(remoteSSHCenter?.max_ttl_sec) ? Number(remoteSSHCenter?.max_ttl_sec) : DEFAULT_REMOTE_SSH_MAX_TTL_SEC,
+    ),
+    remoteSSHIdleTimeoutSec: String(
+      Number.isFinite(remoteSSHCenter?.idle_timeout_sec) ? Number(remoteSSHCenter?.idle_timeout_sec) : DEFAULT_REMOTE_SSH_IDLE_TIMEOUT_SEC,
+    ),
+    remoteSSHMaxSessionsTotal: String(
+      Number.isFinite(remoteSSHCenter?.max_sessions_total) ? Number(remoteSSHCenter?.max_sessions_total) : DEFAULT_REMOTE_SSH_MAX_SESSIONS_TOTAL,
+    ),
+    remoteSSHMaxSessionsPerDevice: String(
+      Number.isFinite(remoteSSHCenter?.max_sessions_per_device)
+        ? Number(remoteSSHCenter?.max_sessions_per_device)
+        : DEFAULT_REMOTE_SSH_MAX_SESSIONS_PER_DEVICE,
+    ),
   };
 }
 
@@ -114,17 +148,23 @@ export default function SettingsPage() {
   const { tx } = useI18n();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [rotatingSigningKey, setRotatingSigningKey] = useState(false);
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"success" | "error">("success");
   const [settings, setSettings] = useState<CenterSettings>({});
+  const [remoteSSHSigningPublicKey, setRemoteSSHSigningPublicKey] = useState("");
   const [form, setForm] = useState(() => normalizeForm(undefined));
 
   const load = useCallback(async () => {
     setLoading(true);
     setMessage("");
     try {
-      const data = await apiGetJson<CenterSettings>("/settings");
+      const [data, signingKey] = await Promise.all([
+        apiGetJson<CenterSettings>("/settings"),
+        apiGetJson<RemoteSSHSigningKeyResponse>("/remote-ssh/signing-key"),
+      ]);
       setSettings(data);
+      setRemoteSSHSigningPublicKey(signingKey.public_key || "");
       setForm(normalizeForm(data.config));
     } catch (err) {
       const fallback = tx("Failed to load Center settings");
@@ -154,7 +194,12 @@ export default function SettingsPage() {
     form.tlsMinVersion !== currentForm.tlsMinVersion ||
     form.clientAllowCIDRs !== currentForm.clientAllowCIDRs ||
     form.manageApiAllowCIDRs !== currentForm.manageApiAllowCIDRs ||
-    form.centerApiAllowCIDRs !== currentForm.centerApiAllowCIDRs;
+    form.centerApiAllowCIDRs !== currentForm.centerApiAllowCIDRs ||
+    form.remoteSSHCenterEnabled !== currentForm.remoteSSHCenterEnabled ||
+    form.remoteSSHMaxTTLSec !== currentForm.remoteSSHMaxTTLSec ||
+    form.remoteSSHIdleTimeoutSec !== currentForm.remoteSSHIdleTimeoutSec ||
+    form.remoteSSHMaxSessionsTotal !== currentForm.remoteSSHMaxSessionsTotal ||
+    form.remoteSSHMaxSessionsPerDevice !== currentForm.remoteSSHMaxSessionsPerDevice;
   const readOnly = settings.access?.read_only === true;
 
   async function save(event: FormEvent<HTMLFormElement>) {
@@ -164,6 +209,10 @@ export default function SettingsPage() {
     const defaultMaxUses = parsePositiveInt(form.defaultMaxUses, DEFAULT_TOKEN_MAX_USES);
     const defaultTTLDays = parsePositiveInt(form.defaultTTLDays, 0);
     const sessionTTLMinutes = parsePositiveInt(form.sessionTTLMinutes, DEFAULT_SESSION_TTL_MINUTES);
+    const remoteSSHMaxTTLSec = parsePositiveInt(form.remoteSSHMaxTTLSec, DEFAULT_REMOTE_SSH_MAX_TTL_SEC);
+    const remoteSSHIdleTimeoutSec = parsePositiveInt(form.remoteSSHIdleTimeoutSec, DEFAULT_REMOTE_SSH_IDLE_TIMEOUT_SEC);
+    const remoteSSHMaxSessionsTotal = parsePositiveInt(form.remoteSSHMaxSessionsTotal, DEFAULT_REMOTE_SSH_MAX_SESSIONS_TOTAL);
+    const remoteSSHMaxSessionsPerDevice = parsePositiveInt(form.remoteSSHMaxSessionsPerDevice, DEFAULT_REMOTE_SSH_MAX_SESSIONS_PER_DEVICE);
     if (defaultMaxUses < 1 || defaultMaxUses > 1000000) {
       setMessageTone("error");
       setMessage(tx("Default max uses must be between 1 and 1000000."));
@@ -177,6 +226,26 @@ export default function SettingsPage() {
     if (sessionTTLMinutes < MIN_SESSION_TTL_MINUTES || sessionTTLMinutes > MAX_SESSION_TTL_MINUTES) {
       setMessageTone("error");
       setMessage(tx("Session TTL must be between 5 minutes and 7 days."));
+      return;
+    }
+    if (remoteSSHMaxTTLSec < 60 || remoteSSHMaxTTLSec > 86400) {
+      setMessageTone("error");
+      setMessage(tx("Remote SSH max TTL must be between 60 and 86400 seconds."));
+      return;
+    }
+    if (remoteSSHIdleTimeoutSec < 30 || remoteSSHIdleTimeoutSec > 3600 || remoteSSHIdleTimeoutSec > remoteSSHMaxTTLSec) {
+      setMessageTone("error");
+      setMessage(tx("Remote SSH idle timeout must be between 30 and 3600 seconds and not exceed max TTL."));
+      return;
+    }
+    if (remoteSSHMaxSessionsTotal < 1 || remoteSSHMaxSessionsTotal > 128) {
+      setMessageTone("error");
+      setMessage(tx("Remote SSH max sessions total must be between 1 and 128."));
+      return;
+    }
+    if (remoteSSHMaxSessionsPerDevice < 1 || remoteSSHMaxSessionsPerDevice > 8) {
+      setMessageTone("error");
+      setMessage(tx("Remote SSH max sessions per Gateway must be between 1 and 8."));
       return;
     }
     const listenAddr = form.listenAddr.trim();
@@ -235,6 +304,15 @@ export default function SettingsPage() {
             client_allow_cidrs: clientAllowCIDRs,
             manage_api_allow_cidrs: manageApiAllowCIDRs,
             center_api_allow_cidrs: centerApiAllowCIDRs,
+            remote_ssh: {
+              center: {
+                enabled: form.remoteSSHCenterEnabled,
+                max_ttl_sec: remoteSSHMaxTTLSec,
+                idle_timeout_sec: remoteSSHIdleTimeoutSec,
+                max_sessions_total: remoteSSHMaxSessionsTotal,
+                max_sessions_per_device: remoteSSHMaxSessionsPerDevice,
+              },
+            },
           },
         },
         { headers: { "If-Match": etag } },
@@ -249,6 +327,32 @@ export default function SettingsPage() {
       setMessage(err instanceof Error ? err.message || fallback : fallback);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function rotateRemoteSSHSigningKey() {
+    setMessage("");
+    setMessageTone("success");
+    if (readOnly) {
+      setMessageTone("error");
+      setMessage(tx("Admin read-only mode disables settings changes."));
+      return;
+    }
+    if (typeof window !== "undefined" && !window.confirm(tx("Rotate Remote SSH Center signing key? Gateways must refresh their pinned key before new sessions work."))) {
+      return;
+    }
+    setRotatingSigningKey(true);
+    try {
+      const next = await apiPostJson<RemoteSSHSigningKeyResponse>("/remote-ssh/signing-key/rotate", { confirm: true });
+      setRemoteSSHSigningPublicKey(next.public_key || "");
+      setMessageTone("success");
+      setMessage(tx("Remote SSH Center signing key rotated. Refresh each approved Gateway key pin before opening new sessions."));
+    } catch (err) {
+      const fallback = tx("Failed to rotate Remote SSH Center signing key");
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message || fallback : fallback);
+    } finally {
+      setRotatingSigningKey(false);
     }
   }
 
@@ -271,6 +375,78 @@ export default function SettingsPage() {
             <SettingItem label={tx("DB path")} value={settings.storage?.db_path || "-"} />
             <SettingItem label={tx("DB retention")} value={daysLabel(settings.storage?.db_retention_days, tx)} />
             <SettingItem label={tx("File retention")} value={daysLabel(settings.storage?.file_retention_days, tx)} />
+          </div>
+          <h3 className="section-subtitle">{tx("Remote SSH service")}</h3>
+          <div className="form-grid">
+            <label className="checkbox-line remote-ssh-checkbox">
+              <input
+                type="checkbox"
+                checked={form.remoteSSHCenterEnabled}
+                onChange={(event) => setForm((current) => ({ ...current, remoteSSHCenterEnabled: event.target.checked }))}
+                disabled={loading || saving || readOnly}
+              />
+              <span>{tx("Enable Remote SSH on this Center")}</span>
+            </label>
+            <label>
+              <span>{tx("Max TTL seconds")}</span>
+              <input
+                type="number"
+                min={60}
+                max={86400}
+                value={form.remoteSSHMaxTTLSec}
+                onChange={(event) => setForm((current) => ({ ...current, remoteSSHMaxTTLSec: event.target.value }))}
+                disabled={loading || saving || readOnly}
+              />
+            </label>
+            <label>
+              <span>{tx("Idle timeout seconds")}</span>
+              <input
+                type="number"
+                min={30}
+                max={3600}
+                value={form.remoteSSHIdleTimeoutSec}
+                onChange={(event) => setForm((current) => ({ ...current, remoteSSHIdleTimeoutSec: event.target.value }))}
+                disabled={loading || saving || readOnly}
+              />
+            </label>
+            <label>
+              <span>{tx("Max sessions total")}</span>
+              <input
+                type="number"
+                min={1}
+                max={128}
+                value={form.remoteSSHMaxSessionsTotal}
+                onChange={(event) => setForm((current) => ({ ...current, remoteSSHMaxSessionsTotal: event.target.value }))}
+                disabled={loading || saving || readOnly}
+              />
+            </label>
+            <label>
+              <span>{tx("Max sessions per Gateway")}</span>
+              <input
+                type="number"
+                min={1}
+                max={8}
+                value={form.remoteSSHMaxSessionsPerDevice}
+                onChange={(event) => setForm((current) => ({ ...current, remoteSSHMaxSessionsPerDevice: event.target.value }))}
+                disabled={loading || saving || readOnly}
+              />
+            </label>
+          </div>
+          <p className="section-note">{tx("This Center service setting is applied immediately after saving.")}</p>
+          <h3 className="section-subtitle">{tx("Remote SSH trust")}</h3>
+          <div className="form-grid">
+            <label>
+              <span>{tx("Center signing public key")}</span>
+              <textarea className="mono" rows={3} value={remoteSSHSigningPublicKey || "-"} readOnly />
+              <span className="field-hint">{tx("Gateways pin this key after approved enrollment. Rotate only when the fleet can refresh the pin.")}</span>
+            </label>
+            <label>
+              <span>{tx("Signing key rotation")}</span>
+              <button type="button" onClick={() => void rotateRemoteSSHSigningKey()} disabled={loading || saving || rotatingSigningKey || readOnly}>
+                {rotatingSigningKey ? tx("Rotating...") : tx("Rotate signing key")}
+              </button>
+              <span className="field-hint">{tx("Existing Gateway pins are not silently overwritten. Refresh them from Gateway Options after rotation.")}</span>
+            </label>
           </div>
           <h3 className="section-subtitle">{tx("Standalone listener")}</h3>
           <div className="form-grid">

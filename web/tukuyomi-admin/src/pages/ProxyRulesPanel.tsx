@@ -598,7 +598,7 @@ export default function ProxyRulesPanel() {
                     <div className="flex items-center gap-3">
                       <button
                         type="button"
-                        className="text-xs text-neutral-700 underline"
+                        className="text-xs text-neutral-700"
                         disabled={loading || saving || upstream.discovery.enabled || !upstream.name.trim() || !upstream.url.trim()}
                         onClick={() => void probeUpstream(index, upstream)}
                       >
@@ -606,7 +606,7 @@ export default function ProxyRulesPanel() {
                       </button>
                       <button
                         type="button"
-                        className="text-xs text-red-700 underline"
+                        className="text-xs text-red-700"
                         disabled={readOnly}
                         onClick={() => {
                           if (upstreamProbeResult?.index === index) {
@@ -1390,7 +1390,7 @@ function RouteEditorCard({
           <div className="text-xs text-neutral-500">{tx("Priority decides order. The first matching route wins.")}</div>
         </div>
         {onRemove ? (
-          <button type="button" className="text-xs text-red-700 underline" onClick={onRemove}>
+          <button type="button" className="text-xs text-red-700" onClick={onRemove}>
             {tx("Remove")}
           </button>
         ) : null}
@@ -1631,7 +1631,7 @@ function BackendPoolEditorCard({
           <div className="text-xs text-neutral-500">{tx("Pools scope balancing to selected named upstream members. Routes bind to pools; Backends keeps runtime node controls.")}</div>
         </div>
         {onRemove ? (
-          <button type="button" className="text-xs text-red-700 underline" onClick={onRemove}>
+          <button type="button" className="text-xs text-red-700" onClick={onRemove}>
             {tx("Remove")}
           </button>
         ) : null}
@@ -2253,7 +2253,7 @@ function DiffPreviewModal({
             <p className="text-xs text-neutral-500">{preview.description}</p>
             {preview.note ? <p className="mt-1 text-xs text-amber-700">{preview.note}</p> : null}
           </div>
-          <button type="button" className="text-xs underline" onClick={onCancel} disabled={applying}>
+          <button type="button" className="text-xs" onClick={onCancel} disabled={applying}>
             {tx("close")}
           </button>
         </div>

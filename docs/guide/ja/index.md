@@ -3,7 +3,7 @@ title: "tukuyomi 運用ガイド"
 subtitle: "Coraza + CRS WAF を中核とする application-edge control plane の導入と運用"
 language: ja
 audience: "tukuyomi を導入・運用するエンジニア（インフラ／SRE／プラットフォーム担当）"
-version: "1.2.0 ベース"
+version: "1.3.0 ベース"
 build: "pandoc → HTML → Chrome headless で PDF 化"
 ---
 
@@ -97,18 +97,22 @@ build: "pandoc → HTML → Chrome headless で PDF 化"
   HTTP/3 の専用 listener、`server.tls.redirect_http`、HTTP/3 public-entry smoke。
   （source: operator-reference.ja.md, docs/operations/http3-public-entry-smoke.ja.md）
 - **第16章　IoT / Edge デバイス登録** — 役割、運用フロー、Center 管理の
-  device 画面、runtime deployment、preview URL、Center URL ルール、
-  Identity と fingerprint、token の扱い、troubleshooting。
+  device 画面、runtime 配備、preview URL、Center URL ルール、
+  Identity と fingerprint、token の扱い、トラブルシューティング。
   （source: docs/operations/device-auth-enrollment.ja.md）
+- **第17章　Remote SSH** — Gateway のインバウンド SSH ポートを開けない
+  Center 管理の保守接続、Web Terminal、CLI handoff、セッションポリシー、
+  強制終了、スクロールバック、トラブルシューティング。
+  （source: docs/remote-ssh.ja.md）
 
 ### 第VII部　性能と回帰検証
 
-- **第17章　ベンチマークと回帰マトリクス** — `make bench-proxy` / `make bench-waf` /
+- **第18章　ベンチマークと回帰マトリクス** — `make bench-proxy` / `make bench-waf` /
   `make bench-full`、入力パラメータ、出力の正本、profile capture、
-  閾値ポリシー、`make smoke` 系の役割と保証マトリクス、推奨 confidence ladder、
-  release-binary smoke。
+  閾値ポリシー、`make smoke` 系の役割と保証マトリクス、推奨する確認段階、
+  リリースバイナリの smoke。
   （source: benchmark-baseline.ja.md, regression-matrix.ja.md, release-binary-smoke.ja.md）
-- **第18章　Static Fast-path 評価** — 判断と理由、zero-copy が噛み合いにくい場所、
+- **第19章　Static Fast-path 評価** — 判断と理由、zero-copy が噛み合いにくい場所、
   すでにある bounded fast-path、再検討する条件。
   （source: docs/operations/static-fastpath-evaluation.ja.md）
 
@@ -119,8 +123,9 @@ build: "pandoc → HTML → Chrome headless で PDF 化"
   Storage、Host Network Hardening、管理ダッシュボード、Make ターゲット一覧、
   管理 API。
   （source: docs/reference/operator-reference.ja.md, docs/api/admin-openapi.yaml）
-- **付録B　リリースノート（v1.2.0 / v1.1.0）** — Center 追加、IoT / Edge
-  enrollment、`INSTALL_ROLE`、device approval lifecycle（v1.2.0）と、
+- **付録B　リリースノート（v1.3.0 / v1.2.0 / v1.1.0）** — Remote SSH
+  Web Terminal とセッション制御（v1.3.0）、Center 追加、IoT / Edge
+  enrollment、`INSTALL_ROLE`、device approval lifecycle（v1.2.0）、
   DB-backed runtime authority、admin 認証刷新、`make install` 整備（v1.1.0）。
   （source: GitHub Releases の release tag）
 
@@ -132,7 +137,7 @@ books/tukuyomi/
 ├── 00-preface.md       … はじめに
 ├── 01-introduction.md  … 第1章
 ├── 02-quickstart.md    … 第2章
-├── 03-...〜18-...md   … 第3〜18章
+├── 03-...〜19-...md   … 第3〜19章
 ├── A-operator-reference.md
 └── B-release-notes.md
 ```

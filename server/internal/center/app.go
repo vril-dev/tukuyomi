@@ -322,6 +322,7 @@ func registerCenterAPI(r *gin.Engine, runtimeCfg RuntimeConfig) {
 				apiBase + "/auth/logout",
 				apiBase + "/auth/account",
 				apiBase + "/auth/password",
+				apiBase + "/auth/api-tokens",
 				apiBase + "/settings",
 				apiBase + "/devices",
 				apiBase + "/devices/enrollments",
@@ -350,6 +351,9 @@ func registerCenterAPI(r *gin.Engine, runtimeCfg RuntimeConfig) {
 	api.GET("/auth/account", handler.GetAdminAccount)
 	api.PUT("/auth/account", handler.PutAdminAccount)
 	api.PUT("/auth/password", handler.PutAdminPassword)
+	api.GET("/auth/api-tokens", handler.GetAdminAPITokens)
+	api.POST("/auth/api-tokens", handler.PostAdminAPIToken)
+	api.POST("/auth/api-tokens/:token_id/revoke", handler.PostAdminAPITokenRevoke)
 	registerCenterDeviceAdminRoutes(api)
 }
 

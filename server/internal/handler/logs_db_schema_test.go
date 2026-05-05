@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const latestSchemaMigrationVersionForTest = 33
+const latestSchemaMigrationVersionForTest = 35
 
 func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
@@ -96,6 +96,11 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		"center_device_waf_rule_apply_status",
 		"center_device_waf_rule_apply_history",
 		"edge_device_identities",
+		"center_remote_ssh_sessions",
+		"center_remote_ssh_events",
+		"center_device_remote_ssh_policy",
+		"remote_ssh_host_keys",
+		"remote_ssh_accepted_nonces",
 	} {
 		var name string
 		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
@@ -125,6 +130,13 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 	}
 	if ruleArtifactSourceColumns != 1 {
 		t.Fatalf("center_rule_artifact_bundles source column count=%d want 1", ruleArtifactSourceColumns)
+	}
+	var remoteSSHOperatorModeColumns int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('center_remote_ssh_sessions') WHERE name = 'operator_mode'`).Scan(&remoteSSHOperatorModeColumns); err != nil {
+		t.Fatalf("query center_remote_ssh_sessions operator_mode column: %v", err)
+	}
+	if remoteSSHOperatorModeColumns != 1 {
+		t.Fatalf("center_remote_ssh_sessions operator_mode column count=%d want 1", remoteSSHOperatorModeColumns)
 	}
 	for _, column := range []string{"acme_environment", "acme_email"} {
 		var count int
@@ -223,6 +235,14 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		{table: "edge_device_identities", column: "rule_artifact_revision"},
 		{table: "edge_device_identities", column: "rule_artifact_pushed_at_unix"},
 		{table: "edge_device_identities", column: "rule_artifact_error"},
+		{table: "center_remote_ssh_sessions", column: "session_id"},
+		{table: "center_remote_ssh_sessions", column: "attach_token_hash"},
+		{table: "center_remote_ssh_sessions", column: "gateway_host_key_fingerprint_sha256"},
+		{table: "center_remote_ssh_sessions", column: "gateway_host_public_key"},
+		{table: "center_remote_ssh_events", column: "event_type"},
+		{table: "center_device_remote_ssh_policy", column: "enabled"},
+		{table: "remote_ssh_host_keys", column: "private_key_pem"},
+		{table: "remote_ssh_accepted_nonces", column: "nonce_hash"},
 	} {
 		var count int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('`+tc.table+`') WHERE name = ?`, tc.column).Scan(&count); err != nil {
@@ -231,6 +251,41 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		if count != 1 {
 			t.Fatalf("%s.%s column count=%d want 1", tc.table, tc.column, count)
 		}
+	}
+}
+
+func TestMigrateLogsStatsStoreWithBackendSQLiteRepairsRemoteSSHHostPublicKeyColumn(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
+
+	if err := MigrateLogsStatsStoreWithBackend("db", "sqlite", dbPath, ""); err != nil {
+		t.Fatalf("initial migrate sqlite: %v", err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE center_remote_ssh_sessions DROP COLUMN gateway_host_public_key`); err != nil {
+		_ = db.Close()
+		t.Fatalf("simulate old remote ssh schema: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close old-schema sqlite: %v", err)
+	}
+
+	if err := MigrateLogsStatsStoreWithBackend("db", "sqlite", dbPath, ""); err != nil {
+		t.Fatalf("migrate sqlite: %v", err)
+	}
+	db, err = sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("reopen sqlite: %v", err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('center_remote_ssh_sessions') WHERE name = 'gateway_host_public_key'`).Scan(&count); err != nil {
+		t.Fatalf("query repaired column: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("gateway_host_public_key column count=%d want 1", count)
 	}
 }
 

@@ -32,6 +32,7 @@ func TestParseServerCommandRoles(t *testing.T) {
 		{name: "scheduled tasks", args: []string{"tukuyomi", "run-scheduled-tasks"}, want: serverCommandRunScheduledTasks},
 		{name: "protected gateway bootstrap", args: []string{"tukuyomi", "bootstrap-center-protected-gateway", "--center-url", "http://127.0.0.1:9092"}, want: serverCommandBootstrapProtectedGateway},
 		{name: "protected center bootstrap", args: []string{"tukuyomi", "bootstrap-center-protected-center", "--in", "identity.json"}, want: serverCommandBootstrapProtectedCenter},
+		{name: "remote ssh", args: []string{"tukuyomi", "remote-ssh", "--center", "http://127.0.0.1:9092", "--device", "edge-1"}, want: serverCommandRemoteSSH},
 	}
 
 	for _, tt := range tests {

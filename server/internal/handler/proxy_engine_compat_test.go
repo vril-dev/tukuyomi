@@ -854,6 +854,41 @@ func TestServeProxyTukuyomiEngineNativeUpgradeReleasesBackend(t *testing.T) {
 	}
 }
 
+func TestServeProxyTukuyomiEngineUpgradeClearsClientReadDeadline(t *testing.T) {
+	setProxyEngineModeForTest(t, config.ProxyEngineModeTukuyomiProxy)
+	upstream := newRawUpgradeServer(t, "websocket", func(conn net.Conn) {
+		_, _ = io.Copy(conn, conn)
+	})
+	defer upstream.Close()
+	initProxyEngineCompatRuntime(t, upstream.URL, "")
+
+	srv := httptest.NewUnstartedServer(httpHandlerFunc(ServeProxy))
+	srv.Config.ReadTimeout = 50 * time.Millisecond
+	srv.Start()
+	defer srv.Close()
+
+	res := doUpgradeRequestWithClient(t, srv.URL+"/ws/socket", "websocket", &http.Client{})
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status=%d want=101", res.StatusCode)
+	}
+	body, ok := res.Body.(io.ReadWriteCloser)
+	if !ok {
+		t.Fatalf("upgrade response body type=%T does not support write", res.Body)
+	}
+	time.Sleep(120 * time.Millisecond)
+	if _, err := body.Write([]byte("ping")); err != nil {
+		t.Fatalf("write tunnel after server read timeout: %v", err)
+	}
+	buf := make([]byte, len("ping"))
+	if _, err := io.ReadFull(body, buf); err != nil {
+		t.Fatalf("read tunnel echo after server read timeout: %v", err)
+	}
+	if string(buf) != "ping" {
+		t.Fatalf("echo=%q want=ping", string(buf))
+	}
+}
+
 func TestCopyTukuyomiProxyTunnelReturnsWhenHalfCloseUnavailable(t *testing.T) {
 	client := eofTunnelConn{}
 	backend := newBlockingTunnelConn()

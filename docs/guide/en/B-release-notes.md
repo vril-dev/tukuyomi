@@ -1,19 +1,58 @@
 # Appendix B. Release notes
 
-This appendix collects excerpts from the release notes for the latest two
-releases — including this book's reference version — polished for
-book reading. They are presented newest-first: **v1.2.0** then
-**v1.1.0**. For later releases, treat the release notes attached to
-GitHub Releases tags as the authoritative source.
+This appendix collects excerpts from the release notes for the latest releases
+— including this book's reference version — polished for book reading. They are
+presented newest-first: **v1.3.0**, **v1.2.0**, then **v1.1.0**. For later
+releases, treat the release notes attached to GitHub Releases tags as the
+authoritative source.
 
-This book is written against **v1.2.0**. Center / IoT / Edge
-enrollment first appear in v1.2.0. v1.1.0 is included as the
-preceding major step (DB-backed runtime authority, the admin auth
-overhaul, and `make install`).
+This book is written against **v1.3.0**. Remote SSH first appears as an
+operator-facing chapter in v1.3.0. Center / IoT / Edge enrollment first appears
+in v1.2.0. v1.1.0 is included as the preceding major step (DB-backed runtime
+authority, the admin auth overhaul, and `make install`).
 
 ---
 
-# Section B-1 — v1.2.0 release notes
+# Section B-1 — v1.3.0 release notes
+
+> Reference base: v1.2.x
+
+v1.3.0 extends the Center-managed Gateway model with **Remote SSH**. The
+feature behind **Chapter 17** lets operators open short-lived maintenance
+sessions through Center without exposing an inbound SSH port on the Gateway.
+
+## B1.1 Major changes
+
+- **Remote SSH Web Terminal** is added to the Center device menu.
+- **CLI handoff** remains available through `tukuyomi remote-ssh`.
+- Center records Remote SSH session state, mode, reason, TTL, timestamps,
+  Gateway attachment, operator attachment, close reason, and termination.
+- Gateway runs an embedded SSH server only for signed, Center-approved pending
+  sessions.
+- Browser terminal scrollback is configurable per Web Terminal session.
+- Operators can terminate pending or active sessions from Center.
+
+## B1.2 Operational notes
+
+- Remote SSH is disabled by default on both Center and Gateway.
+- A Gateway must be approved by Center before Remote SSH can be used.
+- Web Terminal connection pickup depends on the Gateway's Center polling
+  interval. A wait near one polling interval can be normal.
+- TTL and idle timeout close sessions even if the browser remains open.
+- Browser scrollback is display history, not an audit recording.
+- Gateway refuses to start a shell as root unless a run-as user is configured.
+
+## B1.3 Compatibility and migration
+
+- A DB migration adds the Remote SSH operator mode used to distinguish CLI and
+  Web Terminal sessions.
+- Existing Gateway proxy traffic behavior is unchanged while Remote SSH remains
+  disabled.
+- The CLI path remains supported for emergency and automation workflows.
+
+---
+
+# Section B-2 — v1.2.0 release notes
 
 > Reference base: v1.1.8
 
@@ -22,7 +61,7 @@ v1.2.0 adds **Tukuyomi Center**, **IoT / Edge enrollment**, and the
 frontend build safety. The features behind **Chapter 16** of this book
 ship in this release.
 
-## B1.1 Major changes
+## B2.1 Major changes
 
 - **Center mode is added to the same single binary.** Use
   `INSTALL_ROLE` at host install time to install Gateway and Center
@@ -45,7 +84,7 @@ ship in this release.
   are resolved**. The Gateway UI is **page-level code-split**, and
   Vite's chunk-size warning is gone.
 
-## B1.2 Operational notes
+## B2.2 Operational notes
 
 - **IoT / Edge mode is OFF by default.** On Web / VPS deployments,
   enable it only when you intentionally want this Gateway approved by
@@ -76,7 +115,7 @@ ship in this release.
 - `tukuyomi center` is a separate process mode from the Gateway, but
   the binary is the **same single binary**.
 
-## B1.3 Deployment
+## B2.3 Deployment
 
 - `make install TARGET=linux-systemd INSTALL_ROLE=gateway` installs
   the Gateway.
@@ -95,7 +134,7 @@ ship in this release.
 - `CENTER_PREVIEW_PERSIST=1` keeps Center preview DB state across
   preview restarts.
 
-## B1.4 Admin UI
+## B2.4 Admin UI
 
 - Gateway Options gains **IoT / Edge mode**, **Center enrollment
   status**, **Center URL**, **enrollment token entry**, and
@@ -114,7 +153,7 @@ ship in this release.
 - **Browser sessions for Gateway and Center are separated** — you can
   be logged into both UIs from the same browser at once.
 
-## B1.5 Build / development
+## B2.5 Build / development
 
 - Gateway / Center UI build requires **Node.js 24 LTS** and
   **`npm >=11`**.
@@ -127,7 +166,7 @@ ship in this release.
   `npm audit --audit-level=moderate` is **0 findings** for both
   Gateway and Center UIs.
 
-## B1.6 Documentation
+## B2.6 Documentation
 
 - Device-enrollment operation docs are added: **Center token
   creation, Gateway approval request, Center approval, status
@@ -140,7 +179,7 @@ ship in this release.
   documented as a single product with Gateway / Center / Web / IoT
   capability**, not as separate product names.
 
-## B1.7 Compatibility and migration
+## B2.7 Compatibility and migration
 
 - **A DB migration is required before starting v1.2.0.**
 - The new schema adds **Center enrollment tokens, the Gateway edge
@@ -155,7 +194,7 @@ ship in this release.
 - **UI builds on Node 18 are not supported.** Follow `.nvmrc` and the
   package `engines` and use Node 24 LTS.
 
-## B1.8 Known limitations
+## B2.8 Known limitations
 
 - The current Center scope is **device enrollment and approval**.
   Gateway config push, log collection, and Gateway binary upgrade
@@ -167,7 +206,7 @@ ship in this release.
 
 ---
 
-# Section B-2 — v1.1.0 release notes
+# Section B-3 — v1.1.0 release notes
 
 > Reference base: v1.0.1
 
@@ -177,7 +216,7 @@ multiple environments**. The rule that this book references throughout
 — "the DB is the runtime authority, JSON is seed / import / export" —
 is established firmly in this release.
 
-## B2.1 Major changes
+## B3.1 Major changes
 
 - **Normalized runtime configuration is now authoritative in the
   DB.** `config.json` mostly carries the bootstrap minimum needed to
@@ -201,7 +240,7 @@ is established firmly in this release.
   install. **`make deploy-render`** generates deployment artifacts
   for container platforms.
 
-## B2.2 Operational notes
+## B3.2 Operational notes
 
 - **The file-backed runtime fallback for policy / rule domains is
   removed from the active runtime path.** Restore or seed via the DB
@@ -234,7 +273,7 @@ is established firmly in this release.
   Replace it with your real backend endpoint before sending real
   proxy traffic.
 
-## B2.3 Admin UI
+## B3.3 Admin UI
 
 - The admin UI logs in with **username / password** and issues a
   **signed browser session cookie**.
@@ -251,7 +290,7 @@ is established firmly in this release.
   session state, and operator identity metadata. Credentials are
   not stored.
 
-## B2.4 Deployment
+## B3.4 Deployment
 
 - **`make install TARGET=linux-systemd`** runs build, runtime tree
   creation, DB migration, WAF / CRS asset import, the optional
@@ -267,7 +306,7 @@ is established firmly in this release.
 - The runtime layout **separates responsibilities** for persistent
   data, temporary material, cache, audit output, and the DB file.
 
-## B2.5 Fixes
+## B3.5 Fixes
 
 - After moving to the DB-backed runtime, **PHP runtime inventory
   auto-discovery is preserved**.
@@ -292,7 +331,7 @@ is established firmly in this release.
 - `make ui-preview-up` **starts on the preview-only configuration
   even when** the startup config has no `admin.session_secret`.
 
-## B2.6 Compatibility and migration
+## B3.6 Compatibility and migration
 
 - **A DB migration is required before starting v1.1.0.**
 - The admin authentication migration adds **`admin_users` /
@@ -309,9 +348,9 @@ is established firmly in this release.
 
 ---
 
-That covers the v1.2.0 and v1.1.0 release notes, the main body, and
+That covers the v1.3.0, v1.2.0, and v1.1.0 release notes, the main body, and
 appendices A and B.
 
-The book follows the upstream repository
-(`/home/ky491/git/vril/tukuyomi`) — `README.md` and `docs/**/*.md` —
-as primary sources. When in doubt, prefer the upstream documentation.
+The book follows the upstream repository documentation -- `README.md` and
+`docs/**/*.md` -- as primary sources. When in doubt, prefer the upstream
+documentation.

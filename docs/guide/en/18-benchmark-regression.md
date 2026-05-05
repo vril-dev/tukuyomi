@@ -1,4 +1,4 @@
-# Chapter 17. Benchmark and the regression matrix
+# Chapter 18. Benchmark and the regression matrix
 
 Part VII begins. This chapter consolidates the **benchmark and
 regression-check frameworks** tukuyomi ships with:
@@ -15,7 +15,7 @@ regression-check frameworks** tukuyomi ships with:
 This is the chapter that lives behind every "benchmark with `make
 bench`" instruction earlier in the book.
 
-## 17.1 Benchmark — what these commands are for
+## 18.1 Benchmark — what these commands are for
 
 tukuyomi's benchmarks exist to provide a **controlled local baseline
 for comparing proxy / WAF behavior**.
@@ -34,7 +34,7 @@ a **controlled local baseline**. Even so, it is enough for:
 - Comparing artifacts across branches at identical settings.
 - Pre-release confirmation that no large regression has slipped in.
 
-### 17.1.1 What `make bench-proxy` does
+### 18.1.1 What `make bench-proxy` does
 
 `make bench` and `make bench-proxy` wrap
 `./scripts/benchmark_proxy_tuning.sh`, which runs:
@@ -56,7 +56,7 @@ a **controlled local baseline**. Even so, it is enough for:
 The upstream mock is a **Go HTTP server** rather than Python's
 `http.server` so that it does not serialize at high concurrency.
 
-### 17.1.2 What `make bench-waf` does
+### 18.1.2 What `make bench-waf` does
 
 `make bench-waf` wraps `./scripts/benchmark_waf.sh`. It does similar
 preparation as the proxy side, then measures WAF scenarios. The
@@ -75,7 +75,7 @@ corpora and false-positive regressions remain the responsibility of
 GoTestWAF.** This command is for **"throughput / latency on a path
 that includes WAF inspection has not regressed"**.
 
-### 17.1.3 When to run
+### 18.1.3 When to run
 
 Recommended timing:
 
@@ -85,7 +85,7 @@ Recommended timing:
   or latency.
 - When comparing presets on the same machine.
 
-### 17.1.4 Standard commands
+### 18.1.4 Standard commands
 
 A simple check:
 
@@ -109,7 +109,7 @@ production: proxy + WAF inspection**. Use
 `BENCH_PROXY_MODE=proxy-only` only when you want to profile the proxy
 hot path on its own.
 
-### 17.1.5 Prerequisites
+### 18.1.5 Prerequisites
 
 - Docker and Docker Compose are available.
 - `ab` is installed locally.
@@ -119,7 +119,7 @@ hot path on its own.
 For branch comparison, run on **the same host, the same concurrency,
 and the same request count**.
 
-### 17.1.6 Major input parameters
+### 18.1.6 Major input parameters
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -140,7 +140,7 @@ and the same request count**.
 | `BENCH_MIN_RPS` | unset | Per-row minimum-RPS gate. |
 | `WAF_BENCH_SCENARIOS` | `allow,block-xss` | Scenarios `make bench-waf` runs. |
 
-### 17.1.7 Canonical output
+### 18.1.7 Canonical output
 
 The canonical output for the proxy benchmark is two files (plus an
 optional profile):
@@ -163,7 +163,7 @@ These are the canonical artifacts for **branch comparison**, **release
 note summaries**, **tuning discussions**, and **automation that does
 not want to parse Markdown**.
 
-### 17.1.8 Hot-path logging and profile capture
+### 18.1.8 Hot-path logging and profile capture
 
 The framework's request log is **disabled by default** because it
 overlaps the proxy's product access log. Enable
@@ -176,7 +176,7 @@ inside the container only**; it is never exposed on the public proxy
 port. **Raw `.pprof` files are local-investigation artifacts and are
 not committed**.
 
-### 17.1.9 Threshold policy
+### 18.1.9 Threshold policy
 
 Thresholds are **opt-in, not mandatory**:
 
@@ -205,7 +205,7 @@ Rules:
   Decisions need either `BENCH_REQUESTS>=600` or **the median of three
   or more runs at identical settings**.
 
-### 17.1.10 Why benchmarks are not in the regular CI
+### 18.1.10 Why benchmarks are not in the regular CI
 
 `make bench` is **not** wired into `ci-local` or the regular GitHub
 CI for these reasons:
@@ -219,7 +219,7 @@ CI for these reasons:
 This is **a performance baseline for humans to read**, not a
 deterministic unit test.
 
-### 17.1.11 Current presets
+### 18.1.11 Current presets
 
 | Preset | Key settings | Use case |
 |---|---|---|
@@ -227,7 +227,7 @@ deterministic unit test.
 | `low-latency` | `force_http2=false`, `disable_compression=true`, `buffer_request_body=false`, `flush_interval_ms=0` | Latency-sensitive API / SSE |
 | `buffered-guard` | `force_http2=false`, `buffer_request_body=true`, `max_response_buffer_bytes=1048576`, `flush_interval_ms=0` | Emphasizes buffer control and response-size cap |
 
-## 17.2 The regression matrix — what each command guarantees
+## 18.2 The regression matrix — what each command guarantees
 
 Where benchmarks are about performance, the `make smoke` family is
 about **behavioral correctness**:
@@ -246,7 +246,7 @@ about **behavioral correctness**:
 | `make bench-waf` | WAF allow / block throughput / latency baseline | After WAF inspection / CRS / bypass / logging changes |
 | `make bench-full` | Performance baseline for both proxy and WAF | Before releases that may move performance |
 
-### 17.2.1 The assurance matrix
+### 18.2.1 The assurance matrix
 
 A single table summarizes "what each command directly guarantees".
 `yes` means directly checked, `partial` means indirectly covered,
@@ -275,7 +275,7 @@ A single table summarizes "what each command directly guarantees".
 > and can fail at arbitrary thresholds, but they are not a regular
 > CI gate.
 
-### 17.2.2 What each command actually does
+### 18.2.2 What each command actually does
 
 Brief notes on the major commands:
 
@@ -307,7 +307,7 @@ Brief notes on the major commands:
 - **`make bench` / `make bench-proxy` / `make bench-waf` /
   `make bench-full`**: see §17.1.
 
-## 17.3 Release-binary smoke — verifying the public artifact
+## 18.3 Release-binary smoke — verifying the public artifact
 
 For the public-facing tarball, there is a dedicated top-level smoke:
 
@@ -322,7 +322,7 @@ Optional variables:
 - `RELEASE_BINARY_SMOKE_KEEP_EXTRACTED=1`
 - `RELEASE_BINARY_SMOKE_ALLOW_CROSS_ARCH=1`
 
-### 17.3.1 vs. `make deployment-smoke`
+### 18.3.1 vs. `make deployment-smoke`
 
 The two have different roles:
 
@@ -335,7 +335,7 @@ The two have different roles:
 In other words, `release-binary-smoke` is the top-level command for
 **"does it work when someone downloads the public artifact?"**.
 
-### 17.3.2 What it checks
+### 18.3.2 What it checks
 
 From the unpacked public bundle:
 
@@ -349,7 +349,7 @@ From the unpacked public bundle:
 - **Client-facing gzip** works from the public artifact.
 - **A deterministic WAF block** fires from the public artifact.
 
-### 17.3.3 Multi-arch policy
+### 18.3.3 Multi-arch policy
 
 The local release-binary smoke targets **host-native artifacts** by
 default:
@@ -369,7 +369,7 @@ This override is **best-effort**. There is no guarantee that Docker,
 the unpacked binary, and the local host can handle the artifact
 without additional emulation.
 
-## 17.4 Recommended confidence ladder
+## 18.4 Recommended confidence ladder
 
 The mapping from intent to commands:
 
@@ -387,7 +387,7 @@ The mapping from intent to commands:
 | Direct HTTPS / HTTP/3 entry readiness | `make http3-public-entry-smoke` |
 | Public binary release readiness | `make ci-local-extended && make gotestwaf && make release-binary-smoke VERSION=vX.Y.Z` |
 
-## 17.5 Gaps not yet covered by routine validation
+## 18.5 Gaps not yet covered by routine validation
 
 What is currently outside routine validation:
 
@@ -401,7 +401,7 @@ This is a future improvement. Today the practical decision is to
 **verify production releases on appropriate hardware**, which we
 state explicitly here.
 
-## 17.6 Recap
+## 18.6 Recap
 
 - Performance comparison is **`make bench-proxy` / `make bench-waf` /
   `make bench-full`**. Not production reproduction — **a controlled
@@ -413,9 +413,9 @@ state explicitly here.
 - "How much reassurance do you need?" maps to the **confidence
   ladder**.
 
-## 17.7 Bridge to the next chapter
+## 18.7 Bridge to the next chapter
 
-One chapter remains in Part VII. Chapter 18 covers the **static
+One chapter remains in Part VII. Chapter 19 covers the **static
 fast-path evaluation**: why a generic zero-copy / cache replay is
 not adopted, the bounded fast-paths already in place, and the
 conditions for reopening.

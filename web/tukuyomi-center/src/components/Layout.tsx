@@ -40,7 +40,7 @@ function isActive(pathname: string, to: string) {
 
 type SelectedDeviceRoute = {
   deviceID: string;
-  page: "status" | "runtime" | "proxy-rules" | "waf-rules";
+  page: "status" | "runtime" | "proxy-rules" | "waf-rules" | "remote-ssh";
 };
 
 function selectedDeviceRouteFromPath(pathname: string): SelectedDeviceRoute | null {
@@ -53,7 +53,10 @@ function selectedDeviceRouteFromPath(pathname: string): SelectedDeviceRoute | nu
     deviceID = decodeURIComponent(match[1]);
   } catch {
   }
-  const page = match[2] === "runtime" || match[2] === "proxy-rules" || match[2] === "waf-rules" ? match[2] : "status";
+  const page =
+    match[2] === "runtime" || match[2] === "proxy-rules" || match[2] === "waf-rules" || match[2] === "remote-ssh"
+      ? match[2]
+      : "status";
   return {
     deviceID,
     page,
@@ -76,11 +79,16 @@ function deviceWAFRulesPath(deviceID: string) {
   return `/device-approvals/devices/${encodeURIComponent(deviceID)}/waf-rules`;
 }
 
+function deviceRemoteSSHPath(deviceID: string) {
+  return `/device-approvals/devices/${encodeURIComponent(deviceID)}/remote-ssh`;
+}
+
 function deviceMenuItems(deviceID: string): NavItem[] {
   return [
     { to: deviceStatusPath(deviceID), label: "Device Status", hint: "Selected Gateway status and config snapshots." },
     { to: deviceProxyRulesPath(deviceID), label: "Proxy Rules", hint: "" },
     { to: deviceWAFRulesPath(deviceID), label: "WAF Rules", hint: "" },
+    { to: deviceRemoteSSHPath(deviceID), label: "Remote SSH", hint: "" },
     { to: deviceRuntimePath(deviceID), label: "Runtime", hint: "" },
   ];
 }
@@ -185,12 +193,11 @@ export default function Layout() {
         <header className="app-topbar">
           <div className="app-topbar-main">
             <div className="app-topbar-heading">
-              <p className="app-kicker">{tx("Current Group")}</p>
-              <p className="app-group-chip">{tx(currentGroup.label)}</p>
               <h2>{tx(current?.label ?? "Status")}</h2>
               {current?.hint ? <p className="app-topbar-sub">{tx(current.hint)}</p> : null}
             </div>
             <div className="app-topbar-paths">
+              <span className="app-group-chip">{tx(currentGroup.label)}</span>
               <code>{getAPIBasePath()}</code>
               <code>{pathname}</code>
             </div>

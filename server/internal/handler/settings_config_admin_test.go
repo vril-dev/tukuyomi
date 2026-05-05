@@ -14,6 +14,8 @@ import (
 	"tukuyomi/internal/config"
 )
 
+const testSettingsRemoteSSHCenterSigningPublicKey = "ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
 func TestGetSettingsListenerAdmin(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -64,6 +66,15 @@ func TestGetSettingsListenerAdmin(t *testing.T) {
 	}
 	if !out.Config.Edge.DeviceAuth.Enabled {
 		t.Fatal("edge.device_auth.enabled must default to true")
+	}
+	if out.Config.RemoteSSH == nil {
+		t.Fatal("expected remote_ssh config to be present")
+	}
+	if out.Config.RemoteSSH.Gateway.Enabled || out.Config.RemoteSSH.Gateway.EmbeddedServer.Enabled {
+		t.Fatal("remote ssh gateway must default to disabled")
+	}
+	if out.Config.RemoteSSH.Center.MaxTTLSec != config.DefaultRemoteSSHMaxTTLSec {
+		t.Fatalf("remote ssh max ttl=%d want=%d", out.Config.RemoteSSH.Center.MaxTTLSec, config.DefaultRemoteSSHMaxTTLSec)
 	}
 	if !out.Secrets.AdminSessionSecretConfigured {
 		t.Fatal("expected session secret configured metadata")
@@ -173,6 +184,14 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	next.WAF.Engine.Mode = config.WAFEngineModeCoraza
 	next.Edge.Enabled = true
 	next.Edge.DeviceAuth.Enabled = false
+	next.RemoteSSH.Gateway.Enabled = true
+	next.RemoteSSH.Gateway.CenterSigningPublicKey = testSettingsRemoteSSHCenterSigningPublicKey
+	next.RemoteSSH.Gateway.CenterTLSCABundleFile = "conf/center-ca.pem"
+	next.RemoteSSH.Gateway.CenterTLSServerName = "center.example.local"
+	next.RemoteSSH.Gateway.EmbeddedServer.Enabled = true
+	next.RemoteSSH.Gateway.EmbeddedServer.Shell = "/bin/sh"
+	next.RemoteSSH.Gateway.EmbeddedServer.WorkingDir = "/"
+	next.RemoteSSH.Gateway.EmbeddedServer.RunAsUser = "tukuyomi"
 	next.CRS.Enable = false
 	next.FPTuner.Endpoint = "https://fp.example.test/api"
 	next.FPTuner.Model = "gpt-test"
@@ -277,6 +296,18 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	}
 	if saved.Edge.DeviceAuth.Enabled {
 		t.Fatal("expected edge.device_auth.enabled=false after save")
+	}
+	if !saved.RemoteSSH.Gateway.Enabled || !saved.RemoteSSH.Gateway.EmbeddedServer.Enabled {
+		t.Fatal("expected remote ssh gateway embedded server enabled after save")
+	}
+	if saved.RemoteSSH.Gateway.CenterSigningPublicKey != testSettingsRemoteSSHCenterSigningPublicKey {
+		t.Fatalf("saved remote ssh center signing key=%q", saved.RemoteSSH.Gateway.CenterSigningPublicKey)
+	}
+	if saved.RemoteSSH.Gateway.CenterTLSCABundleFile != "conf/center-ca.pem" || saved.RemoteSSH.Gateway.CenterTLSServerName != "center.example.local" {
+		t.Fatalf("saved remote ssh tls settings=%+v", saved.RemoteSSH.Gateway)
+	}
+	if saved.RemoteSSH.Gateway.EmbeddedServer.RunAsUser != "tukuyomi" {
+		t.Fatalf("saved remote ssh run_as_user=%q want tukuyomi", saved.RemoteSSH.Gateway.EmbeddedServer.RunAsUser)
 	}
 	if saved.CRS.Enable {
 		t.Fatal("expected crs.enable=false after save")
@@ -539,6 +570,23 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 			Enabled: false,
 			DeviceAuth: settingsListenerAdminEdgeDeviceAuthConfig{
 				Enabled: true,
+			},
+		},
+		RemoteSSH: &settingsListenerAdminRemoteSSHConfig{
+			Center: settingsListenerAdminRemoteSSHCenterConfig{
+				Enabled:              false,
+				MaxTTLSec:            config.DefaultRemoteSSHMaxTTLSec,
+				IdleTimeoutSec:       config.DefaultRemoteSSHIdleTimeoutSec,
+				MaxSessionsTotal:     config.DefaultRemoteSSHMaxSessionsTotal,
+				MaxSessionsPerDevice: config.DefaultRemoteSSHMaxSessionsPerDevice,
+			},
+			Gateway: settingsListenerAdminRemoteSSHGatewayConfig{
+				Enabled: false,
+				EmbeddedServer: settingsListenerAdminRemoteSSHEmbeddedConfig{
+					Enabled:    false,
+					Shell:      "/bin/sh",
+					WorkingDir: "/",
+				},
 			},
 		},
 		CRS: settingsListenerAdminCRSConfig{

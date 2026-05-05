@@ -34,20 +34,33 @@ var (
 )
 
 type CenterSettingsConfig struct {
-	EnrollmentTokenDefaultMaxUses    int64    `json:"enrollment_token_default_max_uses"`
-	EnrollmentTokenDefaultTTLSeconds int64    `json:"enrollment_token_default_ttl_seconds"`
-	AdminSessionTTLSeconds           int64    `json:"admin_session_ttl_seconds,omitempty"`
-	ListenAddr                       string   `json:"listen_addr,omitempty"`
-	APIBasePath                      string   `json:"api_base_path,omitempty"`
-	GatewayAPIBasePath               string   `json:"gateway_api_base_path,omitempty"`
-	UIBasePath                       string   `json:"ui_base_path,omitempty"`
-	TLSMode                          string   `json:"tls_mode,omitempty"`
-	TLSCertFile                      string   `json:"tls_cert_file,omitempty"`
-	TLSKeyFile                       string   `json:"tls_key_file,omitempty"`
-	TLSMinVersion                    string   `json:"tls_min_version,omitempty"`
-	ClientAllowCIDRs                 []string `json:"client_allow_cidrs,omitempty"`
-	ManageAPIAllowCIDRs              []string `json:"manage_api_allow_cidrs,omitempty"`
-	CenterAPIAllowCIDRs              []string `json:"center_api_allow_cidrs,omitempty"`
+	EnrollmentTokenDefaultMaxUses    int64                          `json:"enrollment_token_default_max_uses"`
+	EnrollmentTokenDefaultTTLSeconds int64                          `json:"enrollment_token_default_ttl_seconds"`
+	AdminSessionTTLSeconds           int64                          `json:"admin_session_ttl_seconds,omitempty"`
+	ListenAddr                       string                         `json:"listen_addr,omitempty"`
+	APIBasePath                      string                         `json:"api_base_path,omitempty"`
+	GatewayAPIBasePath               string                         `json:"gateway_api_base_path,omitempty"`
+	UIBasePath                       string                         `json:"ui_base_path,omitempty"`
+	TLSMode                          string                         `json:"tls_mode,omitempty"`
+	TLSCertFile                      string                         `json:"tls_cert_file,omitempty"`
+	TLSKeyFile                       string                         `json:"tls_key_file,omitempty"`
+	TLSMinVersion                    string                         `json:"tls_min_version,omitempty"`
+	ClientAllowCIDRs                 []string                       `json:"client_allow_cidrs,omitempty"`
+	ManageAPIAllowCIDRs              []string                       `json:"manage_api_allow_cidrs,omitempty"`
+	CenterAPIAllowCIDRs              []string                       `json:"center_api_allow_cidrs,omitempty"`
+	RemoteSSH                        *CenterSettingsRemoteSSHConfig `json:"remote_ssh,omitempty"`
+}
+
+type CenterSettingsRemoteSSHConfig struct {
+	Center CenterSettingsRemoteSSHCenterConfig `json:"center"`
+}
+
+type CenterSettingsRemoteSSHCenterConfig struct {
+	Enabled              bool  `json:"enabled"`
+	MaxTTLSec            int64 `json:"max_ttl_sec"`
+	IdleTimeoutSec       int64 `json:"idle_timeout_sec"`
+	MaxSessionsTotal     int   `json:"max_sessions_total"`
+	MaxSessionsPerDevice int   `json:"max_sessions_per_device"`
 }
 
 func defaultCenterSettingsConfig() CenterSettingsConfig {
@@ -211,6 +224,13 @@ func normalizeCenterSettingsConfig(cfg CenterSettingsConfig) (CenterSettingsConf
 	if cfg.CenterAPIAllowCIDRs, err = normalizeCenterSourceCIDRStrings("center_api_allow_cidrs", cfg.CenterAPIAllowCIDRs); err != nil {
 		return CenterSettingsConfig{}, fmt.Errorf("%w: %v", ErrCenterSettingsInvalid, err)
 	}
+	if cfg.RemoteSSH != nil {
+		remoteSSH, err := normalizeCenterSettingsRemoteSSH(*cfg.RemoteSSH)
+		if err != nil {
+			return CenterSettingsConfig{}, err
+		}
+		cfg.RemoteSSH = &remoteSSH
+	}
 	if err := validateCenterTLSMinVersion(cfg.TLSMinVersion); err != nil {
 		return CenterSettingsConfig{}, fmt.Errorf("%w: tls_min_version %v", ErrCenterSettingsInvalid, err)
 	}
@@ -284,6 +304,36 @@ func normalizeCenterSettingsConfig(cfg CenterSettingsConfig) (CenterSettingsConf
 		}
 	}
 	return cfg, nil
+}
+
+func normalizeCenterSettingsRemoteSSH(in CenterSettingsRemoteSSHConfig) (CenterSettingsRemoteSSHConfig, error) {
+	center := in.Center
+	if center.MaxTTLSec == 0 {
+		center.MaxTTLSec = config.DefaultRemoteSSHMaxTTLSec
+	}
+	if center.IdleTimeoutSec == 0 {
+		center.IdleTimeoutSec = config.DefaultRemoteSSHIdleTimeoutSec
+	}
+	if center.MaxSessionsTotal == 0 {
+		center.MaxSessionsTotal = config.DefaultRemoteSSHMaxSessionsTotal
+	}
+	if center.MaxSessionsPerDevice == 0 {
+		center.MaxSessionsPerDevice = config.DefaultRemoteSSHMaxSessionsPerDevice
+	}
+	if center.MaxTTLSec < config.MinRemoteSSHMaxTTLSec || center.MaxTTLSec > config.MaxRemoteSSHMaxTTLSec {
+		return CenterSettingsRemoteSSHConfig{}, fmt.Errorf("%w: remote_ssh.center.max_ttl_sec must be between %d and %d", ErrCenterSettingsInvalid, config.MinRemoteSSHMaxTTLSec, config.MaxRemoteSSHMaxTTLSec)
+	}
+	if center.IdleTimeoutSec < config.MinRemoteSSHIdleTimeoutSec || center.IdleTimeoutSec > config.MaxRemoteSSHIdleTimeoutSec || center.IdleTimeoutSec > center.MaxTTLSec {
+		return CenterSettingsRemoteSSHConfig{}, fmt.Errorf("%w: remote_ssh.center.idle_timeout_sec must be between %d and min(%d, remote_ssh.center.max_ttl_sec)", ErrCenterSettingsInvalid, config.MinRemoteSSHIdleTimeoutSec, config.MaxRemoteSSHIdleTimeoutSec)
+	}
+	if center.MaxSessionsTotal < 1 || center.MaxSessionsTotal > config.MaxRemoteSSHMaxSessionsTotal {
+		return CenterSettingsRemoteSSHConfig{}, fmt.Errorf("%w: remote_ssh.center.max_sessions_total must be between 1 and %d", ErrCenterSettingsInvalid, config.MaxRemoteSSHMaxSessionsTotal)
+	}
+	if center.MaxSessionsPerDevice < 1 || center.MaxSessionsPerDevice > config.MaxRemoteSSHMaxSessionsPerDevice {
+		return CenterSettingsRemoteSSHConfig{}, fmt.Errorf("%w: remote_ssh.center.max_sessions_per_device must be between 1 and %d", ErrCenterSettingsInvalid, config.MaxRemoteSSHMaxSessionsPerDevice)
+	}
+	in.Center = center
+	return in, nil
 }
 
 func normalizeCenterTLSMinVersion(value string) string {

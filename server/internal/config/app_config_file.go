@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -13,21 +15,31 @@ import (
 )
 
 const (
-	ProxyEngineModeTukuyomiProxy      = "tukuyomi_proxy"
-	DefaultProxyEngineMode            = ProxyEngineModeTukuyomiProxy
-	WAFEngineModeCoraza               = wafengine.ModeCoraza
-	DefaultWAFEngineMode              = wafengine.DefaultMode
-	DefaultEdgeDeviceStatusRefreshSec = 30
-	MaxEdgeDeviceStatusRefreshSec     = 3600
-	PersistentStorageBackendLocal     = "local"
-	PersistentStorageBackendS3        = "s3"
-	PersistentStorageBackendAzureBlob = "azure_blob"
-	PersistentStorageBackendGCS       = "gcs"
-	DefaultPersistentStorageBackend   = PersistentStorageBackendLocal
-	DefaultPersistentStorageLocalDir  = "data/persistent"
-	RuntimeProcessModelSingle         = "single"
-	RuntimeProcessModelSupervised     = "supervised"
-	DefaultRuntimeProcessModel        = RuntimeProcessModelSingle
+	ProxyEngineModeTukuyomiProxy         = "tukuyomi_proxy"
+	DefaultProxyEngineMode               = ProxyEngineModeTukuyomiProxy
+	WAFEngineModeCoraza                  = wafengine.ModeCoraza
+	DefaultWAFEngineMode                 = wafengine.DefaultMode
+	DefaultEdgeDeviceStatusRefreshSec    = 30
+	MaxEdgeDeviceStatusRefreshSec        = 3600
+	DefaultRemoteSSHMaxTTLSec            = 900
+	MinRemoteSSHMaxTTLSec                = 60
+	MaxRemoteSSHMaxTTLSec                = 86400
+	DefaultRemoteSSHIdleTimeoutSec       = 300
+	MinRemoteSSHIdleTimeoutSec           = 30
+	MaxRemoteSSHIdleTimeoutSec           = 3600
+	DefaultRemoteSSHMaxSessionsTotal     = 16
+	MaxRemoteSSHMaxSessionsTotal         = 128
+	DefaultRemoteSSHMaxSessionsPerDevice = 1
+	MaxRemoteSSHMaxSessionsPerDevice     = 8
+	PersistentStorageBackendLocal        = "local"
+	PersistentStorageBackendS3           = "s3"
+	PersistentStorageBackendAzureBlob    = "azure_blob"
+	PersistentStorageBackendGCS          = "gcs"
+	DefaultPersistentStorageBackend      = PersistentStorageBackendLocal
+	DefaultPersistentStorageLocalDir     = "data/persistent"
+	RuntimeProcessModelSingle            = "single"
+	RuntimeProcessModelSupervised        = "supervised"
+	DefaultRuntimeProcessModel           = RuntimeProcessModelSingle
 )
 
 type appConfigFile struct {
@@ -39,6 +51,7 @@ type appConfigFile struct {
 	Proxy         appProxyConfig             `json:"proxy"`
 	WAF           appWAFConfig               `json:"waf"`
 	Edge          appEdgeConfig              `json:"edge"`
+	RemoteSSH     appRemoteSSHConfig         `json:"remote_ssh"`
 	SecurityAudit appSecurityAuditConfig     `json:"security_audit"`
 	CRS           appCRSConfig               `json:"crs"`
 	FPTuner       appFPTunerConfig           `json:"fp_tuner"`
@@ -188,6 +201,34 @@ type appEdgeConfig struct {
 type appEdgeDeviceAuthConfig struct {
 	Enabled                  bool `json:"enabled"`
 	StatusRefreshIntervalSec int  `json:"status_refresh_interval_sec"`
+}
+
+type appRemoteSSHConfig struct {
+	Center  appRemoteSSHCenterConfig  `json:"center"`
+	Gateway appRemoteSSHGatewayConfig `json:"gateway"`
+}
+
+type appRemoteSSHCenterConfig struct {
+	Enabled              bool `json:"enabled"`
+	MaxTTLSec            int  `json:"max_ttl_sec"`
+	IdleTimeoutSec       int  `json:"idle_timeout_sec"`
+	MaxSessionsTotal     int  `json:"max_sessions_total"`
+	MaxSessionsPerDevice int  `json:"max_sessions_per_device"`
+}
+
+type appRemoteSSHGatewayConfig struct {
+	Enabled                bool                       `json:"enabled"`
+	CenterSigningPublicKey string                     `json:"center_signing_public_key"`
+	CenterTLSCABundleFile  string                     `json:"center_tls_ca_bundle_file"`
+	CenterTLSServerName    string                     `json:"center_tls_server_name"`
+	EmbeddedServer         appRemoteSSHEmbeddedConfig `json:"embedded_server"`
+}
+
+type appRemoteSSHEmbeddedConfig struct {
+	Enabled    bool   `json:"enabled"`
+	Shell      string `json:"shell"`
+	WorkingDir string `json:"working_dir"`
+	RunAsUser  string `json:"run_as_user"`
 }
 
 type appSecurityAuditConfig struct {
@@ -406,6 +447,24 @@ func defaultAppConfigFile() appConfigFile {
 				StatusRefreshIntervalSec: DefaultEdgeDeviceStatusRefreshSec,
 			},
 		},
+		RemoteSSH: appRemoteSSHConfig{
+			Center: appRemoteSSHCenterConfig{
+				Enabled:              false,
+				MaxTTLSec:            DefaultRemoteSSHMaxTTLSec,
+				IdleTimeoutSec:       DefaultRemoteSSHIdleTimeoutSec,
+				MaxSessionsTotal:     DefaultRemoteSSHMaxSessionsTotal,
+				MaxSessionsPerDevice: DefaultRemoteSSHMaxSessionsPerDevice,
+			},
+			Gateway: appRemoteSSHGatewayConfig{
+				Enabled: false,
+				EmbeddedServer: appRemoteSSHEmbeddedConfig{
+					Enabled:    false,
+					Shell:      "/bin/sh",
+					WorkingDir: "/",
+					RunAsUser:  "",
+				},
+			},
+		},
 		SecurityAudit: appSecurityAuditConfig{
 			Enabled:                false,
 			CaptureMode:            "off",
@@ -523,6 +582,7 @@ func normalizeAppConfigFile(cfg *appConfigFile) {
 	cfg.FPTuner.Model = strings.TrimSpace(cfg.FPTuner.Model)
 	cfg.Proxy.Engine.Mode = normalizeAppProxyEngineMode(cfg.Proxy.Engine.Mode)
 	cfg.WAF.Engine.Mode = normalizeAppWAFEngineMode(cfg.WAF.Engine.Mode)
+	normalizeAppRemoteSSHConfig(&cfg.RemoteSSH)
 	cfg.SecurityAudit.CaptureMode = strings.ToLower(strings.TrimSpace(cfg.SecurityAudit.CaptureMode))
 	cfg.SecurityAudit.KeySource = strings.ToLower(strings.TrimSpace(cfg.SecurityAudit.KeySource))
 	cfg.SecurityAudit.EncryptionKey = strings.TrimSpace(cfg.SecurityAudit.EncryptionKey)
@@ -779,6 +839,9 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	if cfg.Edge.DeviceAuth.StatusRefreshIntervalSec < 0 || cfg.Edge.DeviceAuth.StatusRefreshIntervalSec > MaxEdgeDeviceStatusRefreshSec {
 		return fmt.Errorf("edge.device_auth.status_refresh_interval_sec must be between 0 and %d", MaxEdgeDeviceStatusRefreshSec)
 	}
+	if err := validateAppRemoteSSHConfig(cfg); err != nil {
+		return err
+	}
 	if cfg.Storage.FileRotateBytes < 0 || cfg.Storage.FileMaxBytes < 0 || cfg.Storage.FileRetentionDays < 0 {
 		return fmt.Errorf("storage.file_* values must be >= 0")
 	}
@@ -807,6 +870,142 @@ func validateAppConfigFile(cfg appConfigFile) error {
 		}
 		if cfg.Observability.Tracing.ServiceName == "" {
 			return fmt.Errorf("observability.tracing.service_name is required when enabled=true")
+		}
+	}
+	return nil
+}
+
+func normalizeAppRemoteSSHConfig(cfg *appRemoteSSHConfig) {
+	cfg.Gateway.CenterSigningPublicKey = strings.TrimSpace(cfg.Gateway.CenterSigningPublicKey)
+	cfg.Gateway.CenterTLSCABundleFile = strings.TrimSpace(cfg.Gateway.CenterTLSCABundleFile)
+	cfg.Gateway.CenterTLSServerName = strings.TrimSpace(cfg.Gateway.CenterTLSServerName)
+	cfg.Gateway.EmbeddedServer.Shell = strings.TrimSpace(cfg.Gateway.EmbeddedServer.Shell)
+	if cfg.Gateway.EmbeddedServer.Shell == "" {
+		cfg.Gateway.EmbeddedServer.Shell = "/bin/sh"
+	}
+	cfg.Gateway.EmbeddedServer.WorkingDir = strings.TrimSpace(cfg.Gateway.EmbeddedServer.WorkingDir)
+	if cfg.Gateway.EmbeddedServer.WorkingDir == "" {
+		cfg.Gateway.EmbeddedServer.WorkingDir = "/"
+	}
+	cfg.Gateway.EmbeddedServer.RunAsUser = strings.TrimSpace(cfg.Gateway.EmbeddedServer.RunAsUser)
+}
+
+func validateAppRemoteSSHConfig(cfg appConfigFile) error {
+	if cfg.RemoteSSH.Center.Enabled && !cfg.Edge.Enabled {
+		return fmt.Errorf("remote_ssh.center.enabled requires edge.enabled=true")
+	}
+	if cfg.RemoteSSH.Gateway.Enabled && !cfg.Edge.Enabled {
+		return fmt.Errorf("remote_ssh.gateway.enabled requires edge.enabled=true")
+	}
+	center := cfg.RemoteSSH.Center
+	if center.MaxTTLSec < MinRemoteSSHMaxTTLSec || center.MaxTTLSec > MaxRemoteSSHMaxTTLSec {
+		return fmt.Errorf("remote_ssh.center.max_ttl_sec must be between %d and %d", MinRemoteSSHMaxTTLSec, MaxRemoteSSHMaxTTLSec)
+	}
+	if center.IdleTimeoutSec < MinRemoteSSHIdleTimeoutSec || center.IdleTimeoutSec > MaxRemoteSSHIdleTimeoutSec || center.IdleTimeoutSec > center.MaxTTLSec {
+		return fmt.Errorf("remote_ssh.center.idle_timeout_sec must be between %d and min(%d, remote_ssh.center.max_ttl_sec)", MinRemoteSSHIdleTimeoutSec, MaxRemoteSSHIdleTimeoutSec)
+	}
+	if center.MaxSessionsTotal < 1 || center.MaxSessionsTotal > MaxRemoteSSHMaxSessionsTotal {
+		return fmt.Errorf("remote_ssh.center.max_sessions_total must be between 1 and %d", MaxRemoteSSHMaxSessionsTotal)
+	}
+	if center.MaxSessionsPerDevice < 1 || center.MaxSessionsPerDevice > MaxRemoteSSHMaxSessionsPerDevice {
+		return fmt.Errorf("remote_ssh.center.max_sessions_per_device must be between 1 and %d", MaxRemoteSSHMaxSessionsPerDevice)
+	}
+	embedded := cfg.RemoteSSH.Gateway.EmbeddedServer
+	if embedded.Enabled && !cfg.RemoteSSH.Gateway.Enabled {
+		return fmt.Errorf("remote_ssh.gateway.embedded_server.enabled requires remote_ssh.gateway.enabled=true")
+	}
+	if embedded.Enabled && strings.TrimSpace(cfg.RemoteSSH.Gateway.CenterSigningPublicKey) == "" {
+		return fmt.Errorf("remote_ssh.gateway.center_signing_public_key is required when remote_ssh.gateway.embedded_server.enabled=true")
+	}
+	if err := validateAppRemoteSSHPath("remote_ssh.gateway.embedded_server.shell", embedded.Shell); err != nil {
+		return err
+	}
+	if err := validateAppRemoteSSHPath("remote_ssh.gateway.embedded_server.working_dir", embedded.WorkingDir); err != nil {
+		return err
+	}
+	if err := validateAppRemoteSSHRunAsUser(embedded.RunAsUser); err != nil {
+		return err
+	}
+	if err := validateAppRemoteSSHCenterSigningPublicKey(cfg.RemoteSSH.Gateway.CenterSigningPublicKey); err != nil {
+		return err
+	}
+	if err := validateAppRemoteSSHTLSConfig(cfg.RemoteSSH.Gateway); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateAppRemoteSSHPath(field string, value string) error {
+	if strings.Contains(value, "\x00") {
+		return fmt.Errorf("%s contains invalid NUL byte", field)
+	}
+	if !strings.HasPrefix(value, "/") {
+		return fmt.Errorf("%s must be an absolute path", field)
+	}
+	if field == "remote_ssh.gateway.embedded_server.shell" && value == "/" {
+		return fmt.Errorf("%s must point to an executable file path", field)
+	}
+	return nil
+}
+
+func validateAppRemoteSSHRunAsUser(value string) error {
+	if value == "" {
+		return nil
+	}
+	if len(value) > 64 {
+		return fmt.Errorf("remote_ssh.gateway.embedded_server.run_as_user must be 64 bytes or less")
+	}
+	for i, r := range value {
+		if r >= 128 {
+			return fmt.Errorf("remote_ssh.gateway.embedded_server.run_as_user contains invalid characters")
+		}
+		if i == 0 && !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_') {
+			return fmt.Errorf("remote_ssh.gateway.embedded_server.run_as_user contains invalid characters")
+		}
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
+			continue
+		}
+		if r == '$' && i == len(value)-1 {
+			continue
+		}
+		return fmt.Errorf("remote_ssh.gateway.embedded_server.run_as_user contains invalid characters")
+	}
+	return nil
+}
+
+func validateAppRemoteSSHCenterSigningPublicKey(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	raw, ok := strings.CutPrefix(value, "ed25519:")
+	if !ok {
+		return fmt.Errorf("remote_ssh.gateway.center_signing_public_key must use ed25519:<base64-raw-public-key>")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil || len(decoded) != ed25519.PublicKeySize {
+		return fmt.Errorf("remote_ssh.gateway.center_signing_public_key must contain a valid Ed25519 public key")
+	}
+	return nil
+}
+
+func validateAppRemoteSSHTLSConfig(cfg appRemoteSSHGatewayConfig) error {
+	if strings.Contains(cfg.CenterTLSCABundleFile, "\x00") {
+		return fmt.Errorf("remote_ssh.gateway.center_tls_ca_bundle_file contains invalid NUL byte")
+	}
+	serverName := strings.TrimSpace(cfg.CenterTLSServerName)
+	if serverName == "" {
+		return nil
+	}
+	if len(serverName) > 253 {
+		return fmt.Errorf("remote_ssh.gateway.center_tls_server_name must be 253 bytes or less")
+	}
+	if net.ParseIP(serverName) != nil {
+		return nil
+	}
+	for _, r := range serverName {
+		if r <= 0x20 || r == 0x7f || r == '/' || r == '\\' || r == ':' {
+			return fmt.Errorf("remote_ssh.gateway.center_tls_server_name contains invalid characters")
 		}
 	}
 	return nil

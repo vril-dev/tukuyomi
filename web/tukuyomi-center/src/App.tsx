@@ -8,6 +8,7 @@ import { getUIBasePath } from "@/lib/runtime";
 import DeviceApprovalsPage from "@/pages/DeviceApprovalsPage";
 import Login from "@/pages/Login";
 import ProxyRulesPage from "@/pages/ProxyRulesPage";
+import RemoteSSHPage from "@/pages/RemoteSSHPage";
 import RuntimePage from "@/pages/RuntimePage";
 import SettingsPage from "@/pages/SettingsPage";
 import StatusPage from "@/pages/StatusPage";
@@ -93,6 +94,7 @@ function CenterRoutes() {
         <Route path="device-approvals/devices/:deviceID/runtime" element={<RuntimePage />} />
         <Route path="device-approvals/devices/:deviceID/proxy-rules" element={<ProxyRulesPage />} />
         <Route path="device-approvals/devices/:deviceID/waf-rules" element={<WAFRulesPage />} />
+        <Route path="device-approvals/devices/:deviceID/remote-ssh" element={<RemoteSSHPage />} />
         <Route path="device-approvals/devices/:deviceID/rules" element={<LegacyRulesRedirect />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="runtimes" element={<Navigate to="/device-approvals" replace />} />

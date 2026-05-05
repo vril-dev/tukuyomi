@@ -156,8 +156,35 @@ type EdgeModeConfig = {
   };
 };
 
+type RemoteSSHCenterConfig = {
+  enabled?: boolean;
+  max_ttl_sec?: number;
+  idle_timeout_sec?: number;
+  max_sessions_total?: number;
+  max_sessions_per_device?: number;
+};
+
+type RemoteSSHGatewayConfig = {
+  enabled?: boolean;
+  center_signing_public_key?: string;
+  center_tls_ca_bundle_file?: string;
+  center_tls_server_name?: string;
+  embedded_server?: {
+    enabled?: boolean;
+    shell?: string;
+    working_dir?: string;
+    run_as_user?: string;
+  };
+};
+
+type RemoteSSHConfig = {
+  center?: RemoteSSHCenterConfig;
+  gateway?: RemoteSSHGatewayConfig;
+};
+
 type EdgeSettingsConfig = Record<string, unknown> & {
   edge?: EdgeModeConfig;
+  remote_ssh?: RemoteSSHConfig;
 };
 
 type EdgeSettingsResponse = {
@@ -168,7 +195,15 @@ type EdgeSettingsResponse = {
     edge_enabled?: boolean;
     edge_device_auth_enabled?: boolean;
     edge_device_status_refresh_interval_sec?: number;
+    remote_ssh_center_enabled?: boolean;
+    remote_ssh_gateway_enabled?: boolean;
+    remote_ssh_gateway_embedded_enabled?: boolean;
   };
+};
+
+type RemoteSSHGatewaySigningKeyRefreshResponse = {
+  center_signing_public_key?: string;
+  algorithm?: string;
 };
 
 type EdgeDeviceAuthStatus = {
@@ -221,6 +256,101 @@ function normalizeEdgeStatusRefreshInterval(value: string) {
     return 30;
   }
   return Math.min(parsed, 3600);
+}
+
+type RemoteSSHGatewayForm = {
+  enabled: boolean;
+  centerSigningPublicKey: string;
+  centerTLSCABundleFile: string;
+  centerTLSServerName: string;
+  shell: string;
+  workingDir: string;
+  runAsUser: string;
+};
+
+function defaultRemoteSSHGatewayForm(): RemoteSSHGatewayForm {
+  return {
+    enabled: false,
+    centerSigningPublicKey: "",
+    centerTLSCABundleFile: "",
+    centerTLSServerName: "",
+    shell: "/bin/sh",
+    workingDir: "/",
+    runAsUser: "",
+  };
+}
+
+function remoteSSHGatewayFormFromConfig(config: EdgeSettingsConfig | null | undefined): RemoteSSHGatewayForm {
+  const gateway = config?.remote_ssh?.gateway;
+  const embedded = gateway?.embedded_server;
+  return {
+    enabled: gateway?.enabled === true && embedded?.enabled === true,
+    centerSigningPublicKey: gateway?.center_signing_public_key ?? "",
+    centerTLSCABundleFile: gateway?.center_tls_ca_bundle_file ?? "",
+    centerTLSServerName: gateway?.center_tls_server_name ?? "",
+    shell: embedded?.shell || "/bin/sh",
+    workingDir: embedded?.working_dir || "/",
+    runAsUser: embedded?.run_as_user ?? "",
+  };
+}
+
+function trimRemoteSSHGatewayForm(form: RemoteSSHGatewayForm): RemoteSSHGatewayForm {
+  return {
+    enabled: form.enabled,
+    centerSigningPublicKey: form.centerSigningPublicKey.trim(),
+    centerTLSCABundleFile: form.centerTLSCABundleFile.trim(),
+    centerTLSServerName: form.centerTLSServerName.trim(),
+    shell: form.shell.trim() || "/bin/sh",
+    workingDir: form.workingDir.trim() || "/",
+    runAsUser: form.runAsUser.trim(),
+  };
+}
+
+function remoteSSHGatewayFormChanged(config: EdgeSettingsConfig | null | undefined, form: RemoteSSHGatewayForm) {
+  const current = trimRemoteSSHGatewayForm(remoteSSHGatewayFormFromConfig(config));
+  const next = trimRemoteSSHGatewayForm(form);
+  return JSON.stringify(current) !== JSON.stringify(next);
+}
+
+function buildRemoteSSHConfig(current: RemoteSSHConfig | undefined, form: RemoteSSHGatewayForm): RemoteSSHConfig {
+  const normalized = trimRemoteSSHGatewayForm(form);
+  return {
+    center: {
+      enabled: current?.center?.enabled === true,
+      max_ttl_sec: current?.center?.max_ttl_sec ?? 900,
+      idle_timeout_sec: current?.center?.idle_timeout_sec ?? 300,
+      max_sessions_total: current?.center?.max_sessions_total ?? 16,
+      max_sessions_per_device: current?.center?.max_sessions_per_device ?? 1,
+    },
+    gateway: {
+      ...(current?.gateway ?? {}),
+      enabled: normalized.enabled,
+      center_signing_public_key: normalized.centerSigningPublicKey,
+      center_tls_ca_bundle_file: normalized.centerTLSCABundleFile,
+      center_tls_server_name: normalized.centerTLSServerName,
+      embedded_server: {
+        ...(current?.gateway?.embedded_server ?? {}),
+        enabled: normalized.enabled,
+        shell: normalized.shell,
+        working_dir: normalized.workingDir,
+        run_as_user: normalized.runAsUser,
+      },
+    },
+  };
+}
+
+function remoteSSHGatewayFormValidationError(form: RemoteSSHGatewayForm, edgeEnabled: boolean) {
+  const normalized = trimRemoteSSHGatewayForm(form);
+  if (normalized.enabled && !edgeEnabled) {
+    return "Enable IoT / Edge mode first, save, and restart before enabling Remote SSH.";
+  }
+  if (normalized.enabled && (!normalized.shell.startsWith("/") || normalized.shell === "/")) {
+    return "Shell path must be an absolute executable path such as /bin/sh.";
+  }
+  if (normalized.enabled && !normalized.workingDir.startsWith("/")) {
+    return "Working directory must be an absolute path.";
+  }
+  return "";
 }
 
 function processActionLabel(process: PHPRuntimeProcessStatus | undefined, materialized: boolean) {
@@ -341,6 +471,12 @@ export default function OptionsPanel() {
   const [edgeSaving, setEdgeSaving] = useState(false);
   const [edgeNotice, setEdgeNotice] = useState("");
   const [edgeError, setEdgeError] = useState("");
+  const [remoteSSHGatewayForm, setRemoteSSHGatewayForm] = useState<RemoteSSHGatewayForm>(() => defaultRemoteSSHGatewayForm());
+  const [remoteSSHRuntimeEmbeddedEnabled, setRemoteSSHRuntimeEmbeddedEnabled] = useState(false);
+  const [remoteSSHSaving, setRemoteSSHSaving] = useState(false);
+  const [remoteSSHSigningKeyRefreshing, setRemoteSSHSigningKeyRefreshing] = useState(false);
+  const [remoteSSHNotice, setRemoteSSHNotice] = useState("");
+  const [remoteSSHError, setRemoteSSHError] = useState("");
   const [edgeDeviceStatus, setEdgeDeviceStatus] = useState<EdgeDeviceAuthStatus | null>(null);
   const [edgeEnrollForm, setEdgeEnrollForm] = useState({
     centerURL: "",
@@ -414,6 +550,8 @@ export default function OptionsPanel() {
       setEdgeEnabled(settings.config?.edge?.enabled === true);
       setEdgeRuntimeEnabled(settings.runtime?.edge_enabled === true);
       setEdgeStatusRefreshIntervalSec(edgeStatusRefreshIntervalFromConfig(settings.config));
+      setRemoteSSHGatewayForm(remoteSSHGatewayFormFromConfig(settings.config));
+      setRemoteSSHRuntimeEmbeddedEnabled(settings.runtime?.remote_ssh_gateway_embedded_enabled === true);
       setEdgeDeviceStatus(edgeAuthStatus);
       setEdgeEnrollForm((current) => ({
         centerURL: current.centerURL || edgeAuthStatus.center_url || "",
@@ -608,6 +746,8 @@ export default function OptionsPanel() {
       setEdgeEnabled(next.config?.edge?.enabled === true);
       setEdgeRuntimeEnabled(next.runtime?.edge_enabled === true);
       setEdgeStatusRefreshIntervalSec(edgeStatusRefreshIntervalFromConfig(next.config ?? nextConfig));
+      setRemoteSSHGatewayForm(remoteSSHGatewayFormFromConfig(next.config ?? nextConfig));
+      setRemoteSSHRuntimeEmbeddedEnabled(next.runtime?.remote_ssh_gateway_embedded_enabled === true);
       setEdgeNotice(tx("IoT / Edge mode saved. Restart the process to apply the new mode and polling interval."));
     } catch (err: unknown) {
       setEdgeError(err instanceof Error ? err.message : String(err));
@@ -618,11 +758,82 @@ export default function OptionsPanel() {
         setEdgeEnabled(current.config?.edge?.enabled === true);
         setEdgeRuntimeEnabled(current.runtime?.edge_enabled === true);
         setEdgeStatusRefreshIntervalSec(edgeStatusRefreshIntervalFromConfig(current.config));
+        setRemoteSSHGatewayForm(remoteSSHGatewayFormFromConfig(current.config));
+        setRemoteSSHRuntimeEmbeddedEnabled(current.runtime?.remote_ssh_gateway_embedded_enabled === true);
       } catch {
         //
       }
     } finally {
       setEdgeSaving(false);
+    }
+  }
+
+  async function onSaveRemoteSSHGateway() {
+    if (!edgeSettings || !edgeETag) return;
+    const validationError = remoteSSHGatewayFormValidationError(remoteSSHGatewayForm, edgeSettings.edge?.enabled === true);
+    if (validationError) {
+      setRemoteSSHError(tx(validationError));
+      return;
+    }
+    setRemoteSSHSaving(true);
+    setRemoteSSHNotice("");
+    setRemoteSSHError("");
+    try {
+      const nextConfig: EdgeSettingsConfig = {
+        ...edgeSettings,
+        remote_ssh: buildRemoteSSHConfig(edgeSettings.remote_ssh, remoteSSHGatewayForm),
+      };
+      const next = await apiPutJson<EdgeSettingsResponse>(
+        "/settings/listener-admin",
+        { config: nextConfig },
+        { headers: { "If-Match": edgeETag } },
+      );
+      setEdgeSettings(next.config ?? nextConfig);
+      setEdgeETag(next.etag ?? "");
+      setEdgeEnabled(next.config?.edge?.enabled === true);
+      setEdgeRuntimeEnabled(next.runtime?.edge_enabled === true);
+      setEdgeStatusRefreshIntervalSec(edgeStatusRefreshIntervalFromConfig(next.config ?? nextConfig));
+      setRemoteSSHGatewayForm(remoteSSHGatewayFormFromConfig(next.config ?? nextConfig));
+      setRemoteSSHRuntimeEmbeddedEnabled(next.runtime?.remote_ssh_gateway_embedded_enabled === true);
+      setRemoteSSHNotice(tx("Remote SSH Gateway settings saved. Restart tukuyomi to apply them."));
+    } catch (err: unknown) {
+      setRemoteSSHError(err instanceof Error ? err.message : String(err));
+      try {
+        const current = await apiGetJson<EdgeSettingsResponse>("/settings/listener-admin");
+        setEdgeSettings(current.config ?? null);
+        setEdgeETag(current.etag ?? "");
+        setEdgeEnabled(current.config?.edge?.enabled === true);
+        setEdgeRuntimeEnabled(current.runtime?.edge_enabled === true);
+        setEdgeStatusRefreshIntervalSec(edgeStatusRefreshIntervalFromConfig(current.config));
+        setRemoteSSHGatewayForm(remoteSSHGatewayFormFromConfig(current.config));
+        setRemoteSSHRuntimeEmbeddedEnabled(current.runtime?.remote_ssh_gateway_embedded_enabled === true);
+      } catch {
+        //
+      }
+    } finally {
+      setRemoteSSHSaving(false);
+    }
+  }
+
+  async function onRefreshRemoteSSHGatewaySigningKey() {
+    setRemoteSSHSigningKeyRefreshing(true);
+    setRemoteSSHNotice("");
+    setRemoteSSHError("");
+    try {
+      await apiPostJson<RemoteSSHGatewaySigningKeyRefreshResponse>("/edge/device-auth/remote-ssh/signing-key/refresh", { confirm: true });
+      const current = await apiGetJson<EdgeSettingsResponse>("/settings/listener-admin");
+      setEdgeSettings(current.config ?? null);
+      setEdgeETag(current.etag ?? "");
+      setEdgeEnabled(current.config?.edge?.enabled === true);
+      setEdgeRuntimeEnabled(current.runtime?.edge_enabled === true);
+      setEdgeStatusRefreshIntervalSec(edgeStatusRefreshIntervalFromConfig(current.config));
+      setRemoteSSHGatewayForm(remoteSSHGatewayFormFromConfig(current.config));
+      setRemoteSSHRuntimeEmbeddedEnabled(current.runtime?.remote_ssh_gateway_embedded_enabled === true);
+      setRemoteSSHNotice(tx("Center signing public key refreshed from approved Center."));
+    } catch (err: unknown) {
+      setRemoteSSHError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRemoteSSHSigningKeyRefreshing(false);
     }
   }
 
@@ -767,6 +978,15 @@ export default function OptionsPanel() {
   const edgeCanRequestApproval =
     edgeDeviceStatus?.identity_configured === true ? edgeRequestableStatuses.has(edgeEnrollmentStatus) : edgeDeviceStatus?.identity_configured !== undefined;
   const edgeEnrollButtonText = edgeNeedsReapproval ? tx("Request re-approval") : tx("Request Center approval");
+  const remoteSSHGatewayBusy = remoteSSHSaving || remoteSSHSigningKeyRefreshing;
+  const remoteSSHValidationError = remoteSSHGatewayFormValidationError(remoteSSHGatewayForm, edgeSettings?.edge?.enabled === true);
+  const remoteSSHSaveDisabled =
+    readOnly ||
+    remoteSSHGatewayBusy ||
+    !edgeSettings ||
+    !edgeETag ||
+    !remoteSSHGatewayFormChanged(edgeSettings, remoteSSHGatewayForm) ||
+    remoteSSHValidationError !== "";
 
   return (
     <div className="w-full p-4 space-y-4">
@@ -1001,6 +1221,129 @@ export default function OptionsPanel() {
               {edgeEnrollError || edgeDeviceStatus?.last_enrollment_error || edgeDeviceStatus?.center_status_error}
             </div>
           ) : null}
+        </div>
+
+        <div className="border-t border-neutral-200 pt-4 space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold">{tx("Remote SSH Gateway")}</h3>
+              <p className="text-xs text-neutral-500">
+                {tx("Allow this Gateway to attach short-lived embedded SSH sessions requested from Center. This is startup config and requires restart.")}
+              </p>
+            </div>
+            <span className={`rounded px-2 py-1 text-xs ${remoteSSHRuntimeEmbeddedEnabled ? "bg-green-100 text-green-800" : "bg-neutral-100 text-neutral-700"}`}>
+              {remoteSSHRuntimeEmbeddedEnabled ? tx("Remote SSH runtime ON") : tx("Remote SSH runtime OFF")}
+            </span>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2 text-xs">
+            <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2">
+              <div className="text-xs text-neutral-500">{tx("Configured")}</div>
+              <div>{remoteSSHGatewayForm.enabled ? tx("enabled") : tx("disabled")}</div>
+            </div>
+            <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2">
+              <div className="text-xs text-neutral-500">{tx("Running process")}</div>
+              <div>{remoteSSHRuntimeEmbeddedEnabled ? tx("enabled") : tx("disabled")}</div>
+            </div>
+          </div>
+
+          <div className="grid gap-3 text-xs">
+            <label className="flex items-center gap-2 rounded border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-700">
+              <input
+                type="checkbox"
+                checked={remoteSSHGatewayForm.enabled}
+                onChange={(e) => setRemoteSSHGatewayForm((current) => ({ ...current, enabled: e.target.checked }))}
+                disabled={readOnly || remoteSSHGatewayBusy || !edgeSettings || !edgeETag}
+              />
+              {tx("Enable Remote SSH on this Gateway")}
+            </label>
+          </div>
+
+          <details className="rounded border border-neutral-200 bg-neutral-50/40 text-xs">
+            <summary className="cursor-pointer select-none px-3 py-2 font-semibold text-neutral-700">{tx("Advanced Remote SSH Gateway trust and shell")}</summary>
+            <div className="grid gap-3 border-t border-neutral-200 p-3 md:grid-cols-2">
+            <label className="grid gap-1 md:col-span-2">
+              <span className="text-xs font-semibold">{tx("Center signing public key")}</span>
+              <textarea
+                className="min-h-20 font-mono text-xs"
+                value={remoteSSHGatewayForm.centerSigningPublicKey}
+                onChange={(e) => setRemoteSSHGatewayForm((current) => ({ ...current, centerSigningPublicKey: e.target.value }))}
+                placeholder={tx("auto fetched from enrolled Center on save")}
+                disabled={readOnly || remoteSSHGatewayBusy || !edgeSettings || !edgeETag}
+              />
+              <span className="text-xs text-neutral-500">{tx("Gateway auto-fetches and pins this Center key when Remote SSH is enabled and the field is empty.")}</span>
+              <button
+                type="button"
+                onClick={() => void onRefreshRemoteSSHGatewaySigningKey()}
+                disabled={readOnly || remoteSSHGatewayBusy || !edgeSettings || !edgeETag}
+              >
+                {remoteSSHSigningKeyRefreshing ? tx("Refreshing...") : tx("Refresh key from approved Center")}
+              </button>
+            </label>
+            <label className="grid gap-1">
+              <span className="text-xs font-semibold">{tx("Center CA bundle file")}</span>
+              <input
+                value={remoteSSHGatewayForm.centerTLSCABundleFile}
+                onChange={(e) => setRemoteSSHGatewayForm((current) => ({ ...current, centerTLSCABundleFile: e.target.value }))}
+                placeholder="conf/center-ca.pem"
+                disabled={readOnly || remoteSSHGatewayBusy || !edgeSettings || !edgeETag}
+              />
+              <span className="text-xs text-neutral-500">{tx("Optional when Center uses a public CA certificate.")}</span>
+            </label>
+            <label className="grid gap-1">
+              <span className="text-xs font-semibold">{tx("Center TLS server name")}</span>
+              <input
+                value={remoteSSHGatewayForm.centerTLSServerName}
+                onChange={(e) => setRemoteSSHGatewayForm((current) => ({ ...current, centerTLSServerName: e.target.value }))}
+                placeholder="center.example.local"
+                disabled={readOnly || remoteSSHGatewayBusy || !edgeSettings || !edgeETag}
+              />
+              <span className="text-xs text-neutral-500">{tx("Use this when Gateway reaches Center by IP but the certificate uses a DNS name.")}</span>
+            </label>
+            <label className="grid gap-1">
+              <span className="text-xs font-semibold">{tx("Shell")}</span>
+              <input
+                value={remoteSSHGatewayForm.shell}
+                onChange={(e) => setRemoteSSHGatewayForm((current) => ({ ...current, shell: e.target.value }))}
+                placeholder="/bin/sh"
+                disabled={readOnly || remoteSSHGatewayBusy || !edgeSettings || !edgeETag}
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-xs font-semibold">{tx("Working directory")}</span>
+              <input
+                value={remoteSSHGatewayForm.workingDir}
+                onChange={(e) => setRemoteSSHGatewayForm((current) => ({ ...current, workingDir: e.target.value }))}
+                placeholder="/"
+                disabled={readOnly || remoteSSHGatewayBusy || !edgeSettings || !edgeETag}
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-xs font-semibold">{tx("Run as user")}</span>
+              <input
+                value={remoteSSHGatewayForm.runAsUser}
+                onChange={(e) => setRemoteSSHGatewayForm((current) => ({ ...current, runAsUser: e.target.value }))}
+                placeholder="tukuyomi"
+                disabled={readOnly || remoteSSHGatewayBusy || !edgeSettings || !edgeETag}
+              />
+              <span className="text-xs text-neutral-500">{tx("Required when the tukuyomi process runs as root.")}</span>
+            </label>
+            </div>
+          </details>
+
+          {remoteSSHValidationError ? (
+            <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">{tx(remoteSSHValidationError)}</div>
+          ) : null}
+          <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            {tx("Use Center device Remote SSH ON and this Gateway ON. Center service must be enabled in Center Settings. Restart tukuyomi after saving Gateway config.")}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => void onSaveRemoteSSHGateway()} disabled={remoteSSHSaveDisabled}>
+              {remoteSSHGatewayBusy ? tx("Working...") : tx("Save Remote SSH")}
+            </button>
+          </div>
+          {remoteSSHNotice ? <div className="rounded border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-900">{remoteSSHNotice}</div> : null}
+          {remoteSSHError ? <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">{remoteSSHError}</div> : null}
         </div>
       </div>
 

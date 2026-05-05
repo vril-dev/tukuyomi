@@ -448,7 +448,7 @@ export default function WAFRulesPage() {
 
       <section className="device-detail-section">
         <h3>{tx("Saved WAF rule bundles")}</h3>
-        <p className="section-subtitle">{tx("Latest 20 Center-uploaded bundles. Use Assign to redeploy a saved bundle.")}</p>
+        <p className="section-subtitle">{tx("Latest 20 saved or Gateway-reported bundles. Use Assign to redeploy a saved bundle.")}</p>
         <div className="table-wrap rules-bundle-table waf-bundle-table">
           <table>
             <colgroup>
@@ -570,6 +570,14 @@ export default function WAFRulesPage() {
             </div>
             <div className="table-wrap rules-file-table">
               <table>
+                <colgroup>
+                  <col className="rules-file-col-actions" />
+                  <col className="rules-file-col-path" />
+                  <col className="rules-file-col-kind" />
+                  <col className="rules-file-col-state" />
+                  <col className="rules-file-col-size" />
+                  <col className="rules-file-col-sha" />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>{tx("Actions")}</th>

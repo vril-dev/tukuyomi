@@ -203,6 +203,12 @@ func WAFRulesDeploymentForDevice(ctx context.Context, deviceID string) (WAFRules
 		if err != nil {
 			return err
 		}
+		if out.Current != nil {
+			bundles, err = includeCurrentWAFRuleBundleTx(ctx, db, driver, deviceID, out.Current.BundleRevision, bundles)
+			if err != nil {
+				return err
+			}
+		}
 		out.Bundles = bundles
 		if assignment, found, err := loadWAFRuleAssignmentTx(ctx, db, driver, deviceID); err != nil {
 			return err
@@ -223,6 +229,43 @@ func WAFRulesDeploymentForDevice(ctx context.Context, deviceID string) (WAFRules
 		return nil
 	})
 	return out, err
+}
+
+func WAFRuleArtifactUploadRequiredForDevice(ctx context.Context, deviceID string) (bool, error) {
+	deviceID = strings.TrimSpace(deviceID)
+	if !deviceIDPattern.MatchString(deviceID) {
+		return false, ErrDeviceStatusNotFound
+	}
+	required := false
+	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		var device DeviceRecord
+		if err := loadDeviceByIDTx(ctx, db, driver, deviceID, &device); err != nil {
+			return err
+		}
+		if device.Status != DeviceStatusApproved {
+			return ErrDeviceStatusNotFound
+		}
+		current, snapshotFound, err := latestWAFRuleSnapshotTx(ctx, db, driver, deviceID)
+		if err != nil {
+			return err
+		}
+		if snapshotFound && hex64Pattern.MatchString(current.BundleRevision) {
+			if _, bundleFound, err := loadWAFRuleBundleTx(ctx, db, driver, deviceID, current.BundleRevision); err != nil {
+				return err
+			} else if !bundleFound {
+				required = true
+				return nil
+			}
+			return nil
+		}
+		hasBundle, err := hasAnyWAFRuleBundleTx(ctx, db, driver, deviceID)
+		if err != nil {
+			return err
+		}
+		required = !hasBundle
+		return nil
+	})
+	return required, err
 }
 
 func LoadWAFRuleBundleForDevice(ctx context.Context, deviceID, revision string) (WAFRuleBundleDetail, error) {
@@ -1113,6 +1156,24 @@ SELECT device_id, bundle_revision, bundle_hash, compressed_size_bytes, uncompres
 	return rec, true, nil
 }
 
+func hasAnyWAFRuleBundleTx(ctx context.Context, q queryer, driver, deviceID string) (bool, error) {
+	row := q.QueryRowContext(ctx, `
+SELECT 1
+  FROM center_rule_artifact_bundles
+ WHERE device_id = `+placeholder(driver, 1)+`
+ LIMIT 1`,
+		deviceID,
+	)
+	var found int
+	if err := row.Scan(&found); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 func listWAFRuleBundlesForDeviceTx(ctx context.Context, q queryerWithRows, driver string, deviceID string, limit int) ([]WAFRuleBundleRecord, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 20
@@ -1168,6 +1229,23 @@ SELECT b.device_id, b.bundle_revision, b.bundle_hash, b.compressed_size_bytes, b
 		out = append(out, rec)
 	}
 	return out, rows.Err()
+}
+
+func includeCurrentWAFRuleBundleTx(ctx context.Context, q queryerWithRows, driver, deviceID, revision string, bundles []WAFRuleBundleRecord) ([]WAFRuleBundleRecord, error) {
+	revision = strings.ToLower(strings.TrimSpace(revision))
+	if !hex64Pattern.MatchString(revision) {
+		return bundles, nil
+	}
+	for _, bundle := range bundles {
+		if bundle.BundleRevision == revision {
+			return bundles, nil
+		}
+	}
+	current, found, err := loadWAFRuleBundleTx(ctx, q, driver, deviceID, revision)
+	if err != nil || !found {
+		return bundles, err
+	}
+	return append([]WAFRuleBundleRecord{current}, bundles...), nil
 }
 
 func listWAFRuleBundleFilesTx(ctx context.Context, q queryerWithRows, driver, deviceID, revision string, includeBody bool) ([]WAFRuleBundleFileRecord, error) {

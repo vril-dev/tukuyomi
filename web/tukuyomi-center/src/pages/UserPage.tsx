@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 
-import { apiGetJson, apiPutJson } from "@/lib/api";
+import { apiGetJson, apiPostJson, apiPutJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 
@@ -12,10 +12,54 @@ type AdminAccount = {
   must_change_password?: boolean;
 };
 
+type AdminAPIToken = {
+  token_id: number;
+  label: string;
+  prefix: string;
+  scopes: string[];
+  created_at: string;
+  expires_at?: string;
+  last_used_at?: string;
+  revoked_at?: string;
+  active: boolean;
+};
+
+type AdminAPITokenListResponse = {
+  tokens?: AdminAPIToken[];
+};
+
+type AdminAPITokenCreateResponse = {
+  token: string;
+  record: AdminAPIToken;
+};
+
 type FormFeedback = {
   tone: "info" | "success" | "error";
   message: string;
 };
+
+function formatAdminTokenTime(value?: string) {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
+}
+
+function localDateTimeToRFC3339(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return date.toISOString();
+}
 
 export default function UserPage({ onPasswordChanged }: { onPasswordChanged: () => void }) {
   const { tx } = useI18n();
@@ -23,10 +67,15 @@ export default function UserPage({ onPasswordChanged }: { onPasswordChanged: () 
   const [loading, setLoading] = useState(true);
   const [accountSaving, setAccountSaving] = useState(false);
   const [passwordSaving, setPasswordSaving] = useState(false);
+  const [tokenSaving, setTokenSaving] = useState(false);
+  const [tokenRevokingID, setTokenRevokingID] = useState<number | null>(null);
   const [account, setAccount] = useState<AdminAccount | null>(null);
+  const [apiTokens, setAPITokens] = useState<AdminAPIToken[]>([]);
+  const [createdToken, setCreatedToken] = useState("");
   const [loadError, setLoadError] = useState("");
   const [accountFeedback, setAccountFeedback] = useState<FormFeedback | null>(null);
   const [passwordFeedback, setPasswordFeedback] = useState<FormFeedback | null>(null);
+  const [tokenFeedback, setTokenFeedback] = useState<FormFeedback | null>(null);
   const [accountForm, setAccountForm] = useState({
     username: "",
     email: "",
@@ -36,18 +85,28 @@ export default function UserPage({ onPasswordChanged }: { onPasswordChanged: () 
     currentPassword: "",
     newPassword: "",
   });
+  const [tokenForm, setTokenForm] = useState({
+    label: "",
+    scope: "admin:write",
+    expiresAt: "",
+    currentPassword: "",
+  });
 
   const loadAccount = useCallback(async () => {
     setLoading(true);
     setLoadError("");
     try {
-      const data = await apiGetJson<AdminAccount>("/auth/account");
+      const [data, tokenData] = await Promise.all([
+        apiGetJson<AdminAccount>("/auth/account"),
+        apiGetJson<AdminAPITokenListResponse>("/auth/api-tokens"),
+      ]);
       setAccount(data);
       setAccountForm({
         username: data.username || "",
         email: data.email || "",
         currentPassword: "",
       });
+      setAPITokens(Array.isArray(tokenData.tokens) ? tokenData.tokens : []);
     } catch (err) {
       const fallback = tx("Failed to load account");
       setLoadError(err instanceof Error ? err.message || fallback : fallback);
@@ -62,8 +121,10 @@ export default function UserPage({ onPasswordChanged }: { onPasswordChanged: () 
 
   async function onSaveAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setCreatedToken("");
     setAccountFeedback(null);
     setPasswordFeedback(null);
+    setTokenFeedback(null);
     if (!accountForm.username.trim()) {
       setAccountFeedback({ tone: "error", message: tx("Username is required.") });
       return;
@@ -99,8 +160,10 @@ export default function UserPage({ onPasswordChanged }: { onPasswordChanged: () 
 
   async function onChangePassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setCreatedToken("");
     setAccountFeedback(null);
     setPasswordFeedback(null);
+    setTokenFeedback(null);
     if (!passwordForm.currentPassword) {
       setPasswordFeedback({ tone: "error", message: tx("Enter your current password to change password.") });
       return;
@@ -125,6 +188,84 @@ export default function UserPage({ onPasswordChanged }: { onPasswordChanged: () 
       setPasswordFeedback({ tone: "error", message: err instanceof Error ? err.message || fallback : fallback });
     } finally {
       setPasswordSaving(false);
+    }
+  }
+
+  async function onCreateAPIToken(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCreatedToken("");
+    setAccountFeedback(null);
+    setPasswordFeedback(null);
+    setTokenFeedback(null);
+    if (!tokenForm.label.trim()) {
+      setTokenFeedback({ tone: "error", message: tx("Token label is required.") });
+      return;
+    }
+    if (!tokenForm.currentPassword) {
+      setTokenFeedback({ tone: "error", message: tx("Enter your current password to create a token.") });
+      return;
+    }
+    const expiresAt = localDateTimeToRFC3339(tokenForm.expiresAt);
+    if (tokenForm.expiresAt.trim() && !expiresAt) {
+      setTokenFeedback({ tone: "error", message: tx("Token expiration is invalid.") });
+      return;
+    }
+
+    setTokenSaving(true);
+    setTokenFeedback({ tone: "info", message: tx("Creating token...") });
+    try {
+      const data = await apiPostJson<AdminAPITokenCreateResponse>("/auth/api-tokens", {
+        label: tokenForm.label,
+        scopes: [tokenForm.scope],
+        expires_at: expiresAt,
+        current_password: tokenForm.currentPassword,
+      });
+      setCreatedToken(data.token);
+      setTokenForm({
+        label: "",
+        scope: "admin:write",
+        expiresAt: "",
+        currentPassword: "",
+      });
+      const tokenData = await apiGetJson<AdminAPITokenListResponse>("/auth/api-tokens");
+      setAPITokens(Array.isArray(tokenData.tokens) ? tokenData.tokens : [data.record]);
+      setTokenFeedback({ tone: "success", message: tx("Personal access token created.") });
+    } catch (err) {
+      const fallback = tx("Failed to create personal access token");
+      setTokenFeedback({ tone: "error", message: err instanceof Error ? err.message || fallback : fallback });
+    } finally {
+      setTokenSaving(false);
+    }
+  }
+
+  async function onRevokeAPIToken(tokenID: number) {
+    setCreatedToken("");
+    setAccountFeedback(null);
+    setPasswordFeedback(null);
+    setTokenFeedback({ tone: "info", message: tx("Revoking token...") });
+    setTokenRevokingID(tokenID);
+    try {
+      const data = await apiPostJson<AdminAPITokenListResponse>(`/auth/api-tokens/${tokenID}/revoke`, {});
+      setAPITokens(Array.isArray(data.tokens) ? data.tokens : []);
+      setTokenFeedback({ tone: "success", message: tx("Personal access token revoked.") });
+    } catch (err) {
+      const fallback = tx("Failed to revoke personal access token");
+      setTokenFeedback({ tone: "error", message: err instanceof Error ? err.message || fallback : fallback });
+    } finally {
+      setTokenRevokingID(null);
+    }
+  }
+
+  async function onCopyCreatedToken() {
+    if (!createdToken || !navigator.clipboard) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(createdToken);
+      setTokenFeedback({ tone: "success", message: tx("Personal access token copied.") });
+    } catch (err) {
+      const fallback = tx("Failed to copy personal access token");
+      setTokenFeedback({ tone: "error", message: err instanceof Error ? err.message || fallback : fallback });
     }
   }
 
@@ -238,6 +379,113 @@ export default function UserPage({ onPasswordChanged }: { onPasswordChanged: () 
               <FormMessage feedback={passwordFeedback} />
             </div>
           </form>
+        </div>
+
+        <div className="device-detail-section">
+          <h3>{tx("Personal Access Tokens")}</h3>
+          <form onSubmit={onCreateAPIToken}>
+            <div className="grid gap-3 md:grid-cols-2">
+              <UserField label={tx("Label")}>
+                <input
+                  value={tokenForm.label}
+                  onChange={(event) => setTokenForm((current) => ({ ...current, label: event.target.value }))}
+                  disabled={tokenSaving}
+                  placeholder="remote ssh cli"
+                />
+              </UserField>
+              <UserField label={tx("Scope")}>
+                <select
+                  value={tokenForm.scope}
+                  onChange={(event) => setTokenForm((current) => ({ ...current, scope: event.target.value }))}
+                  disabled={tokenSaving}
+                >
+                  <option value="admin:read">{tx("Read only")}</option>
+                  <option value="admin:write">{tx("Read and write")}</option>
+                </select>
+              </UserField>
+              <UserField label={tx("Expires at")} hint={tx("Leave blank for no expiration.")}>
+                <input
+                  type="datetime-local"
+                  value={tokenForm.expiresAt}
+                  onChange={(event) => setTokenForm((current) => ({ ...current, expiresAt: event.target.value }))}
+                  disabled={tokenSaving}
+                />
+              </UserField>
+              <UserField label={tx("Current password")} hint={tx("Required to create a token.")}>
+                <input
+                  type="password"
+                  value={tokenForm.currentPassword}
+                  onChange={(event) => setTokenForm((current) => ({ ...current, currentPassword: event.target.value }))}
+                  autoComplete="current-password"
+                  disabled={tokenSaving}
+                />
+              </UserField>
+            </div>
+            <div className="form-footer">
+              <button type="submit" disabled={tokenSaving}>
+                {tokenSaving ? tx("Creating token...") : tx("Create Token")}
+              </button>
+              <FormMessage feedback={tokenFeedback} />
+            </div>
+          </form>
+        </div>
+
+        {createdToken ? (
+          <div className="device-detail-section token-created">
+            <h3>{tx("New Personal Access Token")}</h3>
+            <label>
+              <span>{tx("Generated token")}</span>
+              <input value={createdToken} readOnly spellCheck={false} onFocus={(event) => event.currentTarget.select()} />
+            </label>
+            <p>{tx("Copy and store this token now. It will not be shown again.")}</p>
+            <div className="form-footer">
+              <button type="button" onClick={() => void onCopyCreatedToken()}>
+                {tx("Copy Token")}
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="device-detail-section">
+          <h3>{tx("Existing Personal Access Tokens")}</h3>
+          {apiTokens.length === 0 ? (
+            <div className="empty">{tx("No personal access tokens.")}</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>{tx("Label")}</th>
+                    <th>{tx("Prefix")}</th>
+                    <th>{tx("Scope")}</th>
+                    <th>{tx("Created")}</th>
+                    <th>{tx("Last used")}</th>
+                    <th>{tx("Expires")}</th>
+                    <th>{tx("Status")}</th>
+                    <th>{tx("Action")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {apiTokens.map((token) => (
+                    <tr key={token.token_id}>
+                      <td>{token.label}</td>
+                      <td className="mono">{token.prefix}</td>
+                      <td>{token.scopes.join(", ")}</td>
+                      <td>{formatAdminTokenTime(token.created_at)}</td>
+                      <td>{formatAdminTokenTime(token.last_used_at)}</td>
+                      <td>{formatAdminTokenTime(token.expires_at)}</td>
+                      <td>{token.active ? tx("active") : tx("inactive")}</td>
+                      <td>
+                        <button type="button" onClick={() => void onRevokeAPIToken(token.token_id)} disabled={!token.active || tokenRevokingID === token.token_id}>
+                          {tokenRevokingID === token.token_id ? tx("Revoking...") : tx("Revoke")}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </section>
     </div>

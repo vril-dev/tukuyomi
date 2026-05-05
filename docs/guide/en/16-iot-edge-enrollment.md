@@ -283,8 +283,6 @@ without an enrollment token.
 
 ## 16.11 Bridge to the next chapter
 
-Part VI ends here. Part VII — "Performance and regression" — covers
-the **benchmarking and regression frameworks** tukuyomi ships with.
-Chapter 17 walks through the roles of `make bench-proxy` /
-`make bench-waf` / `make smoke`, the assurance matrix,
-release-binary smoke, and the recommended confidence ladder.
+Chapter 17 builds directly on the Center-managed device flow described here.
+It covers **Remote SSH**: short-lived operator maintenance access through
+Center, without opening an inbound SSH port on the Gateway.

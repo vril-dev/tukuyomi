@@ -3,7 +3,7 @@ title: "tukuyomi Operation Guide"
 subtitle: "Deploying and operating an application-edge control plane built around Coraza + CRS WAF"
 language: en
 audience: "Engineers who deploy and operate tukuyomi (infra / SRE / platform)"
-version: "based on 1.2.0"
+version: "based on 1.3.0"
 build: "pandoc → HTML → Chrome headless"
 ---
 
@@ -103,16 +103,19 @@ can read it from cover to cover.
   Center-managed device views, runtime deployment, preview URL, Center URL
   rules, identity and fingerprint, token handling, troubleshooting.
   (source: docs/operations/device-auth-enrollment.md)
+- **Chapter 17. Remote SSH** — Center-managed maintenance access without an
+  inbound Gateway SSH port, Web Terminal, CLI handoff, session policy,
+  termination, scrollback, troubleshooting. (source: docs/remote-ssh.md)
 
 ### Part VII — Performance and regression
 
-- **Chapter 17. Benchmark and regression matrix** — `make bench-proxy` /
+- **Chapter 18. Benchmark and regression matrix** — `make bench-proxy` /
   `make bench-waf` / `make bench-full`, input parameters, the canonical
   output, profile capture, threshold policy, the role of the `make smoke`
   family, the recommended confidence ladder, release-binary smoke.
   (sources: benchmark-baseline.md, regression-matrix.md,
   release-binary-smoke.md)
-- **Chapter 18. Static fast-path evaluation** — The decision and reasons,
+- **Chapter 19. Static fast-path evaluation** — The decision and reasons,
   where zero-copy fits poorly, the bounded fast-paths already in place,
   conditions for reopening. (source: docs/operations/static-fastpath-evaluation.md)
 
@@ -123,9 +126,10 @@ can read it from cover to cover.
   persistent file storage, host-network hardening, the admin dashboard, the
   Make target index, the admin API.
   (sources: docs/reference/operator-reference.md, docs/api/admin-openapi.yaml)
-- **Appendix B. Release notes (v1.2.0 / v1.1.0)** — Center, IoT / Edge
-  enrollment, `INSTALL_ROLE`, device approval lifecycle (v1.2.0); DB-backed
-  runtime authority, admin authentication overhaul, `make install` (v1.1.0).
+- **Appendix B. Release notes (v1.3.0 / v1.2.0 / v1.1.0)** — Remote SSH
+  Web Terminal and session controls (v1.3.0); Center, IoT / Edge enrollment,
+  `INSTALL_ROLE`, device approval lifecycle (v1.2.0); DB-backed runtime
+  authority, admin authentication overhaul, `make install` (v1.1.0).
   (source: GitHub Releases tags)
 
 ## File layout
@@ -136,7 +140,7 @@ books/tukuyomi-en/
 ├── 00-preface.md       … Preface
 ├── 01-introduction.md  … Chapter 1
 ├── 02-quickstart.md    … Chapter 2
-├── 03-...〜18-...md    … Chapters 3 to 18
+├── 03-...〜19-...md    … Chapters 3 to 19
 ├── A-operator-reference.md
 └── B-release-notes.md
 ```

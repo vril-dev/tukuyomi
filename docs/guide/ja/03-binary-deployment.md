@@ -134,7 +134,7 @@ Center process 側の API path を非公開名にしたい場合は
 Gateway route は公開 path で match し、upstream へ渡すときに Center 側 path へ
 rewrite します。
 
-tukuyomi Gateway を前段に置かず Center を直接露出する場合は、送信元 IP allowlist
+tukuyomi Gateway を前段に置かず Center を直接公開する場合は、送信元 IP allowlist
 を明示的に設定してください。Center UI client と Gateway/device API は既定では
 任意の送信元を許可します。管理 API は既定で loopback と private/local CIDR を
 許可します。この制御は `X-Forwarded-For` ではなく socket の送信元アドレスで判定します。

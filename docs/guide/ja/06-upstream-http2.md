@@ -37,7 +37,8 @@ model では、次の 3 種類のモードを使い分けます。
   **Go の client transport へ暗黙委譲しない**。代わりに、native HTTP/1.1
   transport へ **明示 fallback** する
 - これは HTTPS upstream で HTTP/2 をより強く優先する設定であり、
-  **すべての upstream request を必ず HTTP/2 にする保証ではありません**
+  **すべての upstream request が必ず HTTP/2 になることを保証するものでは
+  ありません**
 
 つまり「HTTPS upstream は ALPN で `h2` が取れたら HTTP/2、取れなければ
 HTTP/1.1」の挙動です。

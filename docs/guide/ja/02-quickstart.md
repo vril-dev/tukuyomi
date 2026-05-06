@@ -93,9 +93,9 @@ make gateway-preview-up
 - Gateway UI: `http://localhost:9090/tukuyomi-ui`
 - Gateway API: `http://localhost:9090/tukuyomi-api`
 
-最初に `tukuyomi-ui` を開くと、設定済みの管理者でログインを求められます。
-`minimal` preset が用意した初期 credential を入力すると、ステータス画面（第1章で
-掲示したスクリーンショットの画面）が表示されます。
+最初に `tukuyomi-ui` を開くと、設定済みの管理者アカウントでログインを
+求められます。`minimal` preset が用意した初期 credential を入力すると、
+ステータス画面（第1章で示したスクリーンショットの画面）が表示されます。
 
 ## 2.5　Preview の状態を保持したいとき
 

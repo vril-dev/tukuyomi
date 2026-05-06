@@ -313,7 +313,7 @@ scripts/test_fp_tuner_claude_command.sh
 ```
 
 OpenAI / Claude のどちらの場合も、provider が出力する `proposal.rule_line`
-は、5 章までの safety contract（scoped exclusion 形式 / strict allow-list /
+は、本章の safety contract（scoped exclusion 形式 / strict allow-list /
 approval token）に従います。**FP Tuner の安全境界は provider 種別に関係なく
 同じ** という点が、本章で押さえておきたい設計ポイントです。
 

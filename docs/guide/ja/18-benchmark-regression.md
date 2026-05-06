@@ -282,7 +282,7 @@ make bench
   block** できるか、necessary なら **false-positive / bypass** のしきい値
   も維持されるか。`data/tmp/gotestwaf/` にレポート。
 - **`make bench` / `make bench-proxy` / `make bench-waf` / `make bench-full`**:
-  17.1 節を参照。
+  18.1 節を参照。
 
 ## 18.3　Release-binary smoke ── 公開配布物そのものを確認する
 

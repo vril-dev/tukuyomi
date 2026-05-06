@@ -1,6 +1,7 @@
 package center
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -9,16 +10,20 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/adminauth"
+	"tukuyomi/internal/appdeploybundle"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/edgeartifactbundle"
 	"tukuyomi/internal/handler"
 	"tukuyomi/internal/middleware"
 )
+
+var centerExperimentalAppDeployDeviceAPI atomic.Bool
 
 type enrollmentDecisionRequest struct {
 	Reason string `json:"reason"`
@@ -57,6 +62,25 @@ type runtimeBuildStartRequest struct {
 	RuntimeID     string `json:"runtime_id"`
 	Assign        bool   `json:"assign"`
 	Reason        string `json:"reason"`
+}
+
+type appDeployRequestCreateRequest struct {
+	AppID               string                `json:"app_id"`
+	Operation           string                `json:"operation"`
+	PackageRevision     string                `json:"package_revision"`
+	BasePackageRevision string                `json:"base_package_revision"`
+	RuntimeFamily       string                `json:"runtime_family"`
+	RuntimeID           string                `json:"runtime_id"`
+	Roots               []AppDeployRootRecord `json:"roots"`
+	RestartBehavior     string                `json:"restart_behavior"`
+	ScriptTimeoutSec    int64                 `json:"script_timeout_sec"`
+	PreSwitchScript     string                `json:"pre_switch_script"`
+	PostSwitchScript    string                `json:"post_switch_script"`
+	Reason              string                `json:"reason"`
+}
+
+type appDeployRequestClearRequest struct {
+	AppID string `json:"app_id"`
 }
 
 type proxyRuleBundleBuildRequest struct {
@@ -98,7 +122,8 @@ type proxyRuleValidateRequest struct {
 	Raw string `json:"raw"`
 }
 
-func registerDeviceEnrollmentRoutes(r *gin.Engine) {
+func registerDeviceEnrollmentRoutes(r *gin.Engine, runtimeCfg RuntimeConfig) {
+	centerExperimentalAppDeployDeviceAPI.Store(runtimeCfg.ExperimentalAppDeployEnabled)
 	r.POST("/v1/enroll", postDeviceEnrollment)
 	r.POST("/v1/device-status", postDeviceStatus)
 	r.POST("/v1/device-config-snapshot", postDeviceConfigSnapshot)
@@ -106,6 +131,10 @@ func registerDeviceEnrollmentRoutes(r *gin.Engine) {
 	r.POST("/v1/runtime-artifact-download", postRuntimeArtifactDownload)
 	r.POST("/v1/proxy-rules-bundle-download", postProxyRulesBundleDownload)
 	r.POST("/v1/waf-rule-artifact-download", postWAFRuleArtifactDownload)
+	if runtimeCfg.ExperimentalAppDeployEnabled {
+		r.POST("/v1/app-deploy-package-download", postAppDeployPackageDownload)
+		r.POST("/v1/app-deploy-baseline-upload", postAppDeployBaselineUpload)
+	}
 	r.GET("/v1/remote-ssh/signing-key", getPublicRemoteSSHSigningKey)
 	r.GET("/v1/remote-ssh/gateway-stream", getRemoteSSHGatewayStream)
 	r.GET(
@@ -116,7 +145,7 @@ func registerDeviceEnrollmentRoutes(r *gin.Engine) {
 	)
 }
 
-func registerCenterDeviceAdminRoutes(api *gin.RouterGroup) {
+func registerCenterDeviceAdminRoutes(api *gin.RouterGroup, runtimeCfg RuntimeConfig) {
 	api.GET("/devices", getCenterDevices)
 	api.POST("/devices/:device_id/revoke", postCenterDeviceRevoke)
 	api.POST("/devices/:device_id/archive", postCenterDeviceArchive)
@@ -146,6 +175,16 @@ func registerCenterDeviceAdminRoutes(api *gin.RouterGroup) {
 	api.GET("/remote-ssh/web-terminals/:terminal_id/ws", getCenterRemoteSSHWebTerminalWS)
 	api.POST("/remote-ssh/sessions/:session_id/close", postCenterRemoteSSHSessionClose)
 	api.POST("/remote-ssh/sessions/:session_id/terminate", postCenterRemoteSSHSessionTerminate)
+	if runtimeCfg.ExperimentalAppDeployEnabled {
+		api.GET("/devices/:device_id/app-deployments", getCenterDeviceAppDeployments)
+		api.GET("/devices/:device_id/app-deployments/packages/:revision", getCenterDeviceAppDeployPackage)
+		api.GET("/devices/:device_id/app-deployments/packages/:revision/diff", getCenterDeviceAppDeployPackageDiff)
+		api.GET("/devices/:device_id/app-deployments/packages/:revision/download", getCenterDeviceAppDeployPackageDownload)
+		api.GET("/devices/:device_id/app-deployments/packages/:revision/files", getCenterDeviceAppDeployPackageFile)
+		api.POST("/devices/:device_id/app-deployments/packages/import", postCenterDeviceAppDeployPackageImport)
+		api.POST("/devices/:device_id/app-deployments/requests", postCenterDeviceAppDeployRequest)
+		api.POST("/devices/:device_id/app-deployments/requests/clear", postCenterDeviceAppDeployRequestClear)
+	}
 	api.POST("/devices/:device_id/runtime-assignments", postCenterDeviceRuntimeAssignment)
 	api.POST("/devices/:device_id/runtime-assignments/remove", postCenterDeviceRuntimeAssignmentRemoval)
 	api.POST("/devices/:device_id/runtime-assignments/clear", postCenterDeviceRuntimeAssignmentClear)
@@ -253,6 +292,7 @@ func postDeviceStatus(c *gin.Context) {
 	runtimeAssignments := []RuntimeDeviceAssignment{}
 	var proxyRuleAssignment *ProxyRuleDeviceAssignment
 	var wafRuleAssignment *WAFRuleDeviceAssignment
+	var appDeployAssignment *AppDeployDeviceAssignment
 	ruleArtifactUploadRequired := false
 	configSnapshotUploadRequired := false
 	var remoteSSHSession *RemoteSSHDeviceSession
@@ -269,8 +309,10 @@ func postDeviceStatus(c *gin.Context) {
 			DistroVersion:              verified.DistroVersion,
 			RuntimeDeploymentSupported: verified.RuntimeDeploymentSupported,
 			RuntimeInventory:           verified.RuntimeInventory,
+			AppDeployCandidates:        verified.AppDeployCandidates,
 			ProxyRuleApplyStatus:       verified.ProxyRuleApplyStatus,
 			WAFRuleApplyStatus:         verified.WAFRuleApplyStatus,
+			AppDeployApplyStatus:       verified.AppDeployApplyStatus,
 		}); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update device last seen"})
 			return
@@ -311,6 +353,14 @@ func postDeviceStatus(c *gin.Context) {
 			}
 			remoteSSHSession = session
 		}
+		if record.Status == DeviceStatusApproved && centerExperimentalAppDeployDeviceAPI.Load() {
+			assignment, err := PendingAppDeployAssignmentForDevice(c.Request.Context(), verified.DeviceID, checkedAt)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load app deploy assignment"})
+				return
+			}
+			appDeployAssignment = assignment
+		}
 		if record.Status == DeviceStatusApproved && verified.RuntimeDeploymentSupported {
 			assignments, err := PendingRuntimeAssignmentsForDevice(c.Request.Context(), verified.DeviceID, checkedAt)
 			if err != nil {
@@ -344,6 +394,9 @@ func postDeviceStatus(c *gin.Context) {
 	}
 	if remoteSSHSession != nil {
 		resp["remote_ssh_session"] = remoteSSHSession
+	}
+	if appDeployAssignment != nil {
+		resp["app_deploy_assignment"] = appDeployAssignment
 	}
 	c.JSON(http.StatusOK, resp)
 }
@@ -689,6 +742,146 @@ func postWAFRuleArtifactDownload(c *gin.Context) {
 	c.Header("Content-Length", strconv.FormatInt(int64(len(body)), 10))
 	c.Header("X-Tukuyomi-WAF-Rule-Bundle-Revision", bundle.BundleRevision)
 	c.Data(http.StatusOK, "application/gzip", body)
+}
+
+func postAppDeployPackageDownload(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxAppDeployPackageDownloadBodyBytes)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req AppDeployPackageDownloadRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid app deploy package download payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid app deploy package download payload"})
+		return
+	}
+	normalizedReq, _, err := normalizeAppDeployPackageDownloadRequest(req, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	req = normalizedReq
+	record, err := LookupDeviceStatus(c.Request.Context(), req.DeviceID, req.KeyID, req.PublicKeyFingerprintSHA256)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrDeviceStatusNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "device status not found"})
+		case errors.Is(err, ErrDeviceStatusKeyMismatch):
+			c.JSON(http.StatusForbidden, gin.H{"error": "device key mismatch"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load device status"})
+		}
+		return
+	}
+	if !record.FromApprovedDevice || record.Status != DeviceStatusApproved {
+		c.JSON(http.StatusForbidden, gin.H{"error": "device is not approved"})
+		return
+	}
+	verified, err := VerifyAppDeployPackageDownloadRequest(req, record.PublicKeyPEM, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	pkg, body, err := AppDeployPackageDownloadForDevice(
+		c.Request.Context(),
+		verified.DeviceID,
+		verified.AppID,
+		verified.PackageRevision,
+		verified.PackageHash,
+	)
+	if err != nil {
+		respondAppDeployError(c, err)
+		return
+	}
+	filename := safeAppDeployPackageFilename(pkg.AppID, pkg.PackageRevision)
+	c.Header("Content-Disposition", `attachment; filename="`+filename+`"`)
+	c.Header("Content-Length", strconv.FormatInt(int64(len(body)), 10))
+	c.Header("X-Tukuyomi-App-Deploy-App-ID", pkg.AppID)
+	c.Header("X-Tukuyomi-App-Deploy-Package-Revision", pkg.PackageRevision)
+	c.Header("X-Tukuyomi-App-Deploy-Package-Hash", pkg.PackageHash)
+	c.Data(http.StatusOK, "application/zip", body)
+}
+
+func postAppDeployBaselineUpload(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxAppDeployBaselineUploadBodyBytes)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req AppDeployBaselineUploadRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid app deploy baseline upload payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid app deploy baseline upload payload"})
+		return
+	}
+	normalizedReq, _, err := normalizeAppDeployBaselineUploadRequest(req, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	req = normalizedReq
+	record, err := LookupDeviceStatus(c.Request.Context(), req.DeviceID, req.KeyID, req.PublicKeyFingerprintSHA256)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrDeviceStatusNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "device status not found"})
+		case errors.Is(err, ErrDeviceStatusKeyMismatch):
+			c.JSON(http.StatusForbidden, gin.H{"error": "device key mismatch"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load device status"})
+		}
+		return
+	}
+	if !record.FromApprovedDevice || record.Status != DeviceStatusApproved {
+		c.JSON(http.StatusForbidden, gin.H{"error": "device is not approved"})
+		return
+	}
+	verified, err := VerifyAppDeployBaselineUploadRequest(req, record.PublicKeyPEM, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	var request AppDeployRequestRecord
+	if err := withCenterDB(c.Request.Context(), func(db *sql.DB, driver string) error {
+		rec, found, err := loadAppDeployRequestForAppTx(c.Request.Context(), db, driver, verified.DeviceID, verified.AppID)
+		if err != nil {
+			return err
+		}
+		if !found || rec.Operation != AppDeployOperationAdopt || rec.ProfileRevision != verified.ProfileRevision {
+			return ErrAppDeployNotFound
+		}
+		if mustMarshalAppDeployRoots(rec.Roots) != mustMarshalAppDeployRoots(verified.Roots) {
+			return ErrAppDeployInvalid
+		}
+		request = rec
+		return nil
+	}); err != nil {
+		respondAppDeployError(c, err)
+		return
+	}
+	pkg, err := StoreAppDeployPackage(c.Request.Context(), AppDeployPackageImport{
+		DeviceID:        verified.DeviceID,
+		AppID:           verified.AppID,
+		RuntimeFamily:   verified.RuntimeFamily,
+		RuntimeID:       verified.RuntimeID,
+		Roots:           request.Roots,
+		Label:           "Gateway baseline",
+		Note:            "Adopted from Gateway current Runtime App source.",
+		SourceType:      AppDeploySourceGatewayBaseline,
+		Archive:         verified.Package,
+		UploadedBy:      "gateway:" + verified.DeviceID,
+		UploadedAtUnix:  time.Now().UTC().Unix(),
+		UpsertProfile:   true,
+		ProfileRevision: request.ProfileRevision,
+	})
+	if err != nil {
+		respondAppDeployError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"package": pkg})
 }
 
 func getCenterDevices(c *gin.Context) {
@@ -1133,6 +1326,242 @@ func postCenterDeviceWAFRuleAssignmentClear(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"cleared": cleared})
 }
 
+func getCenterDeviceAppDeployments(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	view, err := AppDeploymentsForDevice(c.Request.Context(), deviceID)
+	if err != nil {
+		respondAppDeployError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, view)
+}
+
+func getCenterDeviceAppDeployPackage(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	revision, ok := parseConfigRevisionParam(c)
+	if !ok {
+		return
+	}
+	detail, err := LoadAppDeployPackageForDevice(c.Request.Context(), deviceID, revision)
+	if err != nil {
+		respondAppDeployError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, detail)
+}
+
+func getCenterDeviceAppDeployPackageDiff(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	revision, ok := parseConfigRevisionParam(c)
+	if !ok {
+		return
+	}
+	diff, err := DiffAppDeployPackagesForDevice(c.Request.Context(), deviceID, c.Query("base_revision"), revision)
+	if err != nil {
+		respondAppDeployError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"diff": diff})
+}
+
+func getCenterDeviceAppDeployPackageDownload(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	revision, ok := parseConfigRevisionParam(c)
+	if !ok {
+		return
+	}
+	pkg, body, err := DownloadAppDeployPackageForDevice(c.Request.Context(), deviceID, revision)
+	if err != nil {
+		respondAppDeployError(c, err)
+		return
+	}
+	c.Header("Content-Disposition", `attachment; filename="`+safeAppDeployPackageFilename(pkg.AppID, pkg.PackageRevision)+`"`)
+	c.Header("X-Tukuyomi-App-Deploy-App-ID", pkg.AppID)
+	c.Header("X-Tukuyomi-App-Deploy-Package-Revision", pkg.PackageRevision)
+	c.Header("X-Tukuyomi-App-Deploy-Package-Hash", pkg.PackageHash)
+	c.Data(http.StatusOK, "application/zip", body)
+}
+
+func getCenterDeviceAppDeployPackageFile(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	revision, ok := parseConfigRevisionParam(c)
+	if !ok {
+		return
+	}
+	assetPath := strings.TrimSpace(c.Query("path"))
+	if assetPath == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "path is required"})
+		return
+	}
+	file, err := LoadAppDeployPackageFileForDevice(c.Request.Context(), deviceID, revision, assetPath)
+	if err != nil {
+		respondAppDeployError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"file": file.File,
+		"raw":  file.Raw,
+	})
+}
+
+func postCenterDeviceAppDeployPackageImport(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, appdeploybundle.MaxCompressedBytes+64*1024)
+	if err := c.Request.ParseMultipartForm(appdeploybundle.MaxCompressedBytes + 64*1024); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid app deploy package upload"})
+		return
+	}
+	file, _, err := c.Request.FormFile("package")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "package file is required"})
+		return
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, appdeploybundle.MaxCompressedBytes+1))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read app deploy package upload"})
+		return
+	}
+	if len(raw) == 0 || len(raw) > appdeploybundle.MaxCompressedBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid app deploy package upload size"})
+		return
+	}
+	now := time.Now().UTC().Unix()
+	roots, err := parseAppDeployRootsJSON(c.PostForm("roots_json"))
+	if err != nil {
+		respondAppDeployError(c, err)
+		return
+	}
+	pkg, err := StoreAppDeployPackage(c.Request.Context(), AppDeployPackageImport{
+		DeviceID:       deviceID,
+		AppID:          c.PostForm("app_id"),
+		RuntimeFamily:  c.PostForm("runtime_family"),
+		RuntimeID:      c.PostForm("runtime_id"),
+		Roots:          roots,
+		Label:          c.PostForm("label"),
+		Note:           c.PostForm("note"),
+		Archive:        raw,
+		UploadedBy:     centerAdminActor(c),
+		UploadedAtUnix: now,
+		UpsertProfile:  true,
+	})
+	if err != nil {
+		respondAppDeployError(c, err)
+		return
+	}
+	resp := gin.H{"package": pkg}
+	if parseBoolQuery(c.PostForm("assign")) {
+		reason := strings.TrimSpace(c.PostForm("reason"))
+		if reason == "" {
+			reason = "center app package upload and deploy"
+		}
+		req, err := CreateAppDeployRequest(c.Request.Context(), AppDeployRequestUpdate{
+			DeviceID:            deviceID,
+			AppID:               pkg.AppID,
+			Operation:           AppDeployOperationDeploy,
+			PackageRevision:     pkg.PackageRevision,
+			BasePackageRevision: c.PostForm("base_package_revision"),
+			RestartBehavior:     c.PostForm("restart_behavior"),
+			ScriptTimeoutSec:    parseFormInt64(c.PostForm("script_timeout_sec"), 60),
+			PreSwitchScript:     c.PostForm("pre_switch_script"),
+			PostSwitchScript:    c.PostForm("post_switch_script"),
+			Reason:              reason,
+			RequestedBy:         centerAdminActor(c),
+			RequestedAtUnix:     now,
+		})
+		if err != nil {
+			respondAppDeployError(c, err)
+			return
+		}
+		resp["request"] = req
+	}
+	c.JSON(http.StatusCreated, resp)
+}
+
+func postCenterDeviceAppDeployRequest(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, appdeploybundle.MaxScriptBytes*2+16*1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req appDeployRequestCreateRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid app deploy request payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid app deploy request payload"})
+		return
+	}
+	record, err := CreateAppDeployRequest(c.Request.Context(), AppDeployRequestUpdate{
+		DeviceID:            deviceID,
+		AppID:               req.AppID,
+		Operation:           req.Operation,
+		PackageRevision:     req.PackageRevision,
+		BasePackageRevision: req.BasePackageRevision,
+		RuntimeFamily:       req.RuntimeFamily,
+		RuntimeID:           req.RuntimeID,
+		Roots:               req.Roots,
+		RestartBehavior:     req.RestartBehavior,
+		ScriptTimeoutSec:    req.ScriptTimeoutSec,
+		PreSwitchScript:     req.PreSwitchScript,
+		PostSwitchScript:    req.PostSwitchScript,
+		Reason:              req.Reason,
+		RequestedBy:         centerAdminActor(c),
+		RequestedAtUnix:     time.Now().UTC().Unix(),
+	})
+	if err != nil {
+		respondAppDeployError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"request": record})
+}
+
+func postCenterDeviceAppDeployRequestClear(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8*1024)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req appDeployRequestClearRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid app deploy request payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid app deploy request payload"})
+		return
+	}
+	cleared, err := ClearAppDeployRequest(c.Request.Context(), deviceID, req.AppID)
+	if err != nil {
+		respondAppDeployError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"cleared": cleared})
+}
+
 func postCenterDeviceRuntimeAssignment(c *gin.Context) {
 	deviceID, ok := parseDeviceIDParam(c)
 	if !ok {
@@ -1557,6 +1986,21 @@ func respondRuntimeBuildError(c *gin.Context, err error) {
 	}
 }
 
+func respondAppDeployError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrDeviceStatusNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "device not found"})
+	case errors.Is(err, ErrAppDeployNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "app deploy package not found"})
+	case errors.Is(err, ErrAppDeployIncompatible):
+		c.JSON(http.StatusConflict, gin.H{"error": "app deploy request is incompatible with this device"})
+	case errors.Is(err, ErrAppDeployInvalid):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid app deploy payload"})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update app deployments"})
+	}
+}
+
 func getCenterDeviceEnrollments(c *gin.Context) {
 	limit := parseBoundedInt(c.Query("limit"), 100, 1, 500)
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
@@ -1710,6 +2154,26 @@ func safeWAFRuleBundleFilename(deviceID string, revision string) string {
 	return safeDeviceFilenamePrefix(deviceID) + "-waf-rules-" + safeRevisionFilenamePart(revision, "bundle") + ".zip"
 }
 
+func safeAppDeployPackageFilename(appID string, revision string) string {
+	return safeDeviceFilenamePrefix(appID) + "-app-deploy-" + safeRevisionFilenamePart(revision, "package") + ".zip"
+}
+
+func parseAppDeployRootsJSON(raw string) ([]AppDeployRootRecord, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, ErrAppDeployInvalid
+	}
+	var roots []AppDeployRootRecord
+	if err := json.Unmarshal([]byte(raw), &roots); err != nil {
+		return nil, ErrAppDeployInvalid
+	}
+	normalized, _, err := normalizeAppDeployRoots(roots)
+	if err != nil {
+		return nil, err
+	}
+	return normalized, nil
+}
+
 func safeDeviceFilenamePrefix(deviceID string) string {
 	deviceID = strings.TrimSpace(deviceID)
 	var b strings.Builder
@@ -1801,6 +2265,18 @@ func parseBoundedInt(raw string, def int, min int, max int) int {
 	}
 	if n > max {
 		return max
+	}
+	return n
+}
+
+func parseFormInt64(raw string, def int64) int64 {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return def
 	}
 	return n
 }

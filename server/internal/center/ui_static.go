@@ -20,7 +20,7 @@ import (
 //go:embed center_ui_dist
 var centerUIEmbedFS embed.FS
 
-func registerCenterUI(r *gin.Engine, apiBase, gatewayAPIBase, uiBase string) {
+func registerCenterUI(r *gin.Engine, apiBase, gatewayAPIBase, uiBase string, experimentalAppDeployEnabled bool) {
 	uiFS, err := fs.Sub(centerUIEmbedFS, "center_ui_dist")
 	if err != nil {
 		return
@@ -40,7 +40,7 @@ func registerCenterUI(r *gin.Engine, apiBase, gatewayAPIBase, uiBase string) {
 			return
 		}
 		if resolvedPath == "index.html" {
-			raw = centerHTML(raw, centerHTMLAPIBase(c.Request, apiBase, gatewayAPIBase), uiBase)
+			raw = centerHTML(raw, centerHTMLAPIBase(c.Request, apiBase, gatewayAPIBase), uiBase, experimentalAppDeployEnabled)
 		}
 		c.Data(http.StatusOK, centerContentType(raw, resolvedPath, placeholder), raw)
 	}
@@ -58,10 +58,11 @@ func registerCenterUI(r *gin.Engine, apiBase, gatewayAPIBase, uiBase string) {
 	})
 }
 
-func centerHTML(raw []byte, apiBase, uiBase string) []byte {
-	settings, _ := json.Marshal(map[string]string{
-		"apiBasePath": apiBase,
-		"uiBasePath":  uiBase,
+func centerHTML(raw []byte, apiBase, uiBase string, experimentalAppDeployEnabled bool) []byte {
+	settings, _ := json.Marshal(map[string]any{
+		"apiBasePath":                  apiBase,
+		"uiBasePath":                   uiBase,
+		"experimentalAppDeployEnabled": experimentalAppDeployEnabled,
 	})
 	raw = bytes.Replace(raw, []byte("__CENTER_SETTINGS__"), settings, 1)
 	return bytes.Replace(raw, []byte("__CENTER_UI_BASE_HREF__"), []byte(uiBase+"/"), 1)

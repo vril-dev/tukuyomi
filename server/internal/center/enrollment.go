@@ -19,18 +19,21 @@ import (
 	"strings"
 	"time"
 
+	"tukuyomi/internal/appdeploybundle"
 	"tukuyomi/internal/edgeartifactbundle"
 )
 
 const (
 	MaxEnrollmentBodyBytes               = 64 * 1024
-	MaxDeviceStatusBodyBytes             = 64 * 1024
+	MaxDeviceStatusBodyBytes             = 512 * 1024
 	MaxDeviceConfigSnapshotBodyBytes     = 3 * 1024 * 1024
 	MaxDeviceConfigSnapshotPayloadBytes  = 2 * 1024 * 1024
 	MaxRuleArtifactBundleBodyBytes       = 12 * 1024 * 1024
 	MaxRuntimeArtifactDownloadBodyBytes  = 16 * 1024
 	MaxProxyRulesBundleDownloadBodyBytes = 16 * 1024
 	MaxWAFRuleArtifactDownloadBodyBytes  = 16 * 1024
+	MaxAppDeployPackageDownloadBodyBytes = 16 * 1024
+	MaxAppDeployBaselineUploadBodyBytes  = appdeploybundle.MaxCompressedBytes*2 + 64*1024
 	enrollmentFreshness                  = 10 * time.Minute
 )
 
@@ -57,26 +60,28 @@ type EnrollmentRequest struct {
 }
 
 type DeviceStatusRequest struct {
-	DeviceID                   string                      `json:"device_id"`
-	KeyID                      string                      `json:"key_id"`
-	PublicKeyFingerprintSHA256 string                      `json:"public_key_fingerprint_sha256"`
-	Timestamp                  string                      `json:"timestamp"`
-	Nonce                      string                      `json:"nonce"`
-	RuntimeRole                string                      `json:"runtime_role,omitempty"`
-	BuildVersion               string                      `json:"build_version,omitempty"`
-	GoVersion                  string                      `json:"go_version,omitempty"`
-	OS                         string                      `json:"os,omitempty"`
-	Arch                       string                      `json:"arch,omitempty"`
-	KernelVersion              string                      `json:"kernel_version,omitempty"`
-	DistroID                   string                      `json:"distro_id,omitempty"`
-	DistroIDLike               string                      `json:"distro_id_like,omitempty"`
-	DistroVersion              string                      `json:"distro_version,omitempty"`
-	RuntimeDeploymentSupported bool                        `json:"runtime_deployment_supported,omitempty"`
-	RuntimeInventory           []DeviceRuntimeSummary      `json:"runtime_inventory,omitempty"`
-	ProxyRuleApplyStatus       *DeviceProxyRuleApplyStatus `json:"proxy_rule_apply_status,omitempty"`
-	WAFRuleApplyStatus         *DeviceWAFRuleApplyStatus   `json:"waf_rule_apply_status,omitempty"`
-	BodyHash                   string                      `json:"body_hash"`
-	SignatureB64               string                      `json:"signature_b64"`
+	DeviceID                   string                       `json:"device_id"`
+	KeyID                      string                       `json:"key_id"`
+	PublicKeyFingerprintSHA256 string                       `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string                       `json:"timestamp"`
+	Nonce                      string                       `json:"nonce"`
+	RuntimeRole                string                       `json:"runtime_role,omitempty"`
+	BuildVersion               string                       `json:"build_version,omitempty"`
+	GoVersion                  string                       `json:"go_version,omitempty"`
+	OS                         string                       `json:"os,omitempty"`
+	Arch                       string                       `json:"arch,omitempty"`
+	KernelVersion              string                       `json:"kernel_version,omitempty"`
+	DistroID                   string                       `json:"distro_id,omitempty"`
+	DistroIDLike               string                       `json:"distro_id_like,omitempty"`
+	DistroVersion              string                       `json:"distro_version,omitempty"`
+	RuntimeDeploymentSupported bool                         `json:"runtime_deployment_supported,omitempty"`
+	RuntimeInventory           []DeviceRuntimeSummary       `json:"runtime_inventory,omitempty"`
+	AppDeployCandidates        []DeviceAppDeployCandidate   `json:"app_deploy_candidates,omitempty"`
+	ProxyRuleApplyStatus       *DeviceProxyRuleApplyStatus  `json:"proxy_rule_apply_status,omitempty"`
+	WAFRuleApplyStatus         *DeviceWAFRuleApplyStatus    `json:"waf_rule_apply_status,omitempty"`
+	AppDeployApplyStatus       []DeviceAppDeployApplyStatus `json:"app_deploy_apply_status,omitempty"`
+	BodyHash                   string                       `json:"body_hash"`
+	SignatureB64               string                       `json:"signature_b64"`
 }
 
 type DeviceRuntimeSummary struct {
@@ -111,6 +116,24 @@ type DeviceWAFRuleApplyStatus struct {
 	LocalBundleRevision   string `json:"local_bundle_revision,omitempty"`
 	ApplyState            string `json:"apply_state,omitempty"`
 	ApplyError            string `json:"apply_error,omitempty"`
+}
+
+type DeviceAppDeployApplyStatus struct {
+	AppID                  string `json:"app_id"`
+	DesiredPackageRevision string `json:"desired_package_revision,omitempty"`
+	LocalPackageRevision   string `json:"local_package_revision,omitempty"`
+	LocalPackageHash       string `json:"local_package_hash,omitempty"`
+	ApplyState             string `json:"apply_state,omitempty"`
+	ApplyError             string `json:"apply_error,omitempty"`
+	OutputTail             string `json:"output_tail,omitempty"`
+}
+
+type DeviceAppDeployCandidate struct {
+	AppID         string                `json:"app_id"`
+	RuntimeFamily string                `json:"runtime_family"`
+	RuntimeID     string                `json:"runtime_id,omitempty"`
+	Roots         []AppDeployRootRecord `json:"roots,omitempty"`
+	Managed       bool                  `json:"managed,omitempty"`
 }
 
 type DeviceConfigSnapshotRequest struct {
@@ -179,6 +202,39 @@ type WAFRuleArtifactDownloadRequest struct {
 	SignatureB64               string `json:"signature_b64"`
 }
 
+type AppDeployPackageDownloadRequest struct {
+	DeviceID                   string `json:"device_id"`
+	KeyID                      string `json:"key_id"`
+	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string `json:"timestamp"`
+	Nonce                      string `json:"nonce"`
+	AppID                      string `json:"app_id"`
+	PackageRevision            string `json:"package_revision"`
+	PackageHash                string `json:"package_hash"`
+	BodyHash                   string `json:"body_hash"`
+	SignatureB64               string `json:"signature_b64"`
+}
+
+type AppDeployBaselineUploadRequest struct {
+	DeviceID                   string                `json:"device_id"`
+	KeyID                      string                `json:"key_id"`
+	PublicKeyFingerprintSHA256 string                `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string                `json:"timestamp"`
+	Nonce                      string                `json:"nonce"`
+	AppID                      string                `json:"app_id"`
+	RuntimeFamily              string                `json:"runtime_family"`
+	RuntimeID                  string                `json:"runtime_id,omitempty"`
+	ProfileRevision            string                `json:"profile_revision"`
+	Roots                      []AppDeployRootRecord `json:"roots"`
+	PackageHash                string                `json:"package_hash"`
+	CompressedSize             int64                 `json:"compressed_size"`
+	UncompressedSize           int64                 `json:"uncompressed_size"`
+	FileCount                  int                   `json:"file_count"`
+	BodyHash                   string                `json:"body_hash"`
+	SignatureB64               string                `json:"signature_b64"`
+	PackageB64                 string                `json:"package_b64"`
+}
+
 type verifiedEnrollment struct {
 	DeviceID                   string
 	KeyID                      string
@@ -206,8 +262,10 @@ type verifiedDeviceStatusRequest struct {
 	DistroVersion              string
 	RuntimeDeploymentSupported bool
 	RuntimeInventory           []DeviceRuntimeSummary
+	AppDeployCandidates        []DeviceAppDeployCandidate
 	ProxyRuleApplyStatus       *DeviceProxyRuleApplyStatus
 	WAFRuleApplyStatus         *DeviceWAFRuleApplyStatus
+	AppDeployApplyStatus       []DeviceAppDeployApplyStatus
 	BodyHash                   string
 	SignatureB64               string
 }
@@ -271,6 +329,35 @@ type verifiedWAFRuleArtifactDownloadRequest struct {
 	BundleRevision             string
 	BodyHash                   string
 	SignatureB64               string
+}
+
+type verifiedAppDeployPackageDownloadRequest struct {
+	DeviceID                   string
+	KeyID                      string
+	PublicKeyFingerprintSHA256 string
+	Timestamp                  time.Time
+	AppID                      string
+	PackageRevision            string
+	PackageHash                string
+	BodyHash                   string
+	SignatureB64               string
+}
+
+type verifiedAppDeployBaselineUploadRequest struct {
+	DeviceID                   string
+	KeyID                      string
+	PublicKeyFingerprintSHA256 string
+	Timestamp                  time.Time
+	AppID                      string
+	RuntimeFamily              string
+	RuntimeID                  string
+	ProfileRevision            string
+	Roots                      []AppDeployRootRecord
+	PackageHash                string
+	CompressedSize             int64
+	UncompressedSize           int64
+	FileCount                  int
+	Package                    []byte
 }
 
 func VerifyEnrollmentRequest(req EnrollmentRequest, now time.Time) (verifiedEnrollment, error) {
@@ -392,8 +479,10 @@ func VerifyDeviceStatusRequest(req DeviceStatusRequest, publicKeyPEM string, now
 		DistroVersion:              req.DistroVersion,
 		RuntimeDeploymentSupported: req.RuntimeDeploymentSupported,
 		RuntimeInventory:           append([]DeviceRuntimeSummary(nil), req.RuntimeInventory...),
+		AppDeployCandidates:        append([]DeviceAppDeployCandidate(nil), req.AppDeployCandidates...),
 		ProxyRuleApplyStatus:       req.ProxyRuleApplyStatus,
 		WAFRuleApplyStatus:         req.WAFRuleApplyStatus,
+		AppDeployApplyStatus:       append([]DeviceAppDeployApplyStatus(nil), req.AppDeployApplyStatus...),
 		BodyHash:                   req.BodyHash,
 		SignatureB64:               req.SignatureB64,
 	}, nil
@@ -598,6 +687,95 @@ func VerifyWAFRuleArtifactDownloadRequest(req WAFRuleArtifactDownloadRequest, pu
 	}, nil
 }
 
+func VerifyAppDeployPackageDownloadRequest(req AppDeployPackageDownloadRequest, publicKeyPEM string, now time.Time) (verifiedAppDeployPackageDownloadRequest, error) {
+	normalized, ts, err := normalizeAppDeployPackageDownloadRequest(req, now)
+	if err != nil {
+		return verifiedAppDeployPackageDownloadRequest{}, err
+	}
+	req = normalized
+
+	publicKeyDER, publicKey, err := parseStoredEnrollmentPublicKey(publicKeyPEM)
+	if err != nil {
+		return verifiedAppDeployPackageDownloadRequest{}, err
+	}
+	fingerprint := sha256.Sum256(publicKeyDER)
+	if !secureEqualHex(hex.EncodeToString(fingerprint[:]), req.PublicKeyFingerprintSHA256) {
+		return verifiedAppDeployPackageDownloadRequest{}, fmt.Errorf("%w: public key fingerprint mismatch", ErrInvalidEnrollment)
+	}
+	if !secureEqualHex(appDeployPackageDownloadBodyHash(req), req.BodyHash) {
+		return verifiedAppDeployPackageDownloadRequest{}, fmt.Errorf("%w: body_hash mismatch", ErrInvalidEnrollment)
+	}
+	signature, err := base64.StdEncoding.DecodeString(req.SignatureB64)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return verifiedAppDeployPackageDownloadRequest{}, fmt.Errorf("%w: invalid signature", ErrInvalidEnrollment)
+	}
+	if !ed25519.Verify(publicKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)), signature) {
+		return verifiedAppDeployPackageDownloadRequest{}, fmt.Errorf("%w: signature verification failed", ErrInvalidEnrollment)
+	}
+	return verifiedAppDeployPackageDownloadRequest{
+		DeviceID:                   req.DeviceID,
+		KeyID:                      req.KeyID,
+		PublicKeyFingerprintSHA256: req.PublicKeyFingerprintSHA256,
+		Timestamp:                  ts.UTC(),
+		AppID:                      req.AppID,
+		PackageRevision:            req.PackageRevision,
+		PackageHash:                req.PackageHash,
+		BodyHash:                   req.BodyHash,
+		SignatureB64:               req.SignatureB64,
+	}, nil
+}
+
+func VerifyAppDeployBaselineUploadRequest(req AppDeployBaselineUploadRequest, publicKeyPEM string, now time.Time) (verifiedAppDeployBaselineUploadRequest, error) {
+	normalized, ts, err := normalizeAppDeployBaselineUploadRequest(req, now)
+	if err != nil {
+		return verifiedAppDeployBaselineUploadRequest{}, err
+	}
+	req = normalized
+
+	publicKeyDER, publicKey, err := parseStoredEnrollmentPublicKey(publicKeyPEM)
+	if err != nil {
+		return verifiedAppDeployBaselineUploadRequest{}, err
+	}
+	fingerprint := sha256.Sum256(publicKeyDER)
+	if !secureEqualHex(hex.EncodeToString(fingerprint[:]), req.PublicKeyFingerprintSHA256) {
+		return verifiedAppDeployBaselineUploadRequest{}, fmt.Errorf("%w: public key fingerprint mismatch", ErrInvalidEnrollment)
+	}
+	if !secureEqualHex(appDeployBaselineUploadBodyHash(req), req.BodyHash) {
+		return verifiedAppDeployBaselineUploadRequest{}, fmt.Errorf("%w: body_hash mismatch", ErrInvalidEnrollment)
+	}
+	signature, err := base64.StdEncoding.DecodeString(req.SignatureB64)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return verifiedAppDeployBaselineUploadRequest{}, fmt.Errorf("%w: invalid signature", ErrInvalidEnrollment)
+	}
+	if !ed25519.Verify(publicKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)), signature) {
+		return verifiedAppDeployBaselineUploadRequest{}, fmt.Errorf("%w: signature verification failed", ErrInvalidEnrollment)
+	}
+	body, err := base64.StdEncoding.DecodeString(req.PackageB64)
+	if err != nil || len(body) == 0 || int64(len(body)) != req.CompressedSize || int64(len(body)) > appdeploybundle.MaxCompressedBytes {
+		return verifiedAppDeployBaselineUploadRequest{}, fmt.Errorf("%w: invalid package", ErrInvalidEnrollment)
+	}
+	sum := sha256.Sum256(body)
+	if !secureEqualHex(hex.EncodeToString(sum[:]), req.PackageHash) {
+		return verifiedAppDeployBaselineUploadRequest{}, fmt.Errorf("%w: package hash mismatch", ErrInvalidEnrollment)
+	}
+	return verifiedAppDeployBaselineUploadRequest{
+		DeviceID:                   req.DeviceID,
+		KeyID:                      req.KeyID,
+		PublicKeyFingerprintSHA256: req.PublicKeyFingerprintSHA256,
+		Timestamp:                  ts.UTC(),
+		AppID:                      req.AppID,
+		RuntimeFamily:              req.RuntimeFamily,
+		RuntimeID:                  req.RuntimeID,
+		ProfileRevision:            req.ProfileRevision,
+		Roots:                      append([]AppDeployRootRecord(nil), req.Roots...),
+		PackageHash:                req.PackageHash,
+		CompressedSize:             req.CompressedSize,
+		UncompressedSize:           req.UncompressedSize,
+		FileCount:                  req.FileCount,
+		Package:                    body,
+	}, nil
+}
+
 func normalizeDeviceStatusRequest(req DeviceStatusRequest, now time.Time) (DeviceStatusRequest, time.Time, error) {
 	req.DeviceID = strings.TrimSpace(req.DeviceID)
 	req.KeyID = strings.TrimSpace(req.KeyID)
@@ -618,11 +796,19 @@ func normalizeDeviceStatusRequest(req DeviceStatusRequest, now time.Time) (Devic
 	if err != nil {
 		return DeviceStatusRequest{}, time.Time{}, err
 	}
+	req.AppDeployCandidates, err = normalizeDeviceAppDeployCandidates(req.AppDeployCandidates)
+	if err != nil {
+		return DeviceStatusRequest{}, time.Time{}, err
+	}
 	req.ProxyRuleApplyStatus, err = normalizeDeviceProxyRuleApplyStatus(req.ProxyRuleApplyStatus)
 	if err != nil {
 		return DeviceStatusRequest{}, time.Time{}, err
 	}
 	req.WAFRuleApplyStatus, err = normalizeDeviceWAFRuleApplyStatus(req.WAFRuleApplyStatus)
+	if err != nil {
+		return DeviceStatusRequest{}, time.Time{}, err
+	}
+	req.AppDeployApplyStatus, err = normalizeDeviceAppDeployApplyStatuses(req.AppDeployApplyStatus)
 	if err != nil {
 		return DeviceStatusRequest{}, time.Time{}, err
 	}
@@ -740,6 +926,110 @@ func normalizeDeviceWAFRuleApplyStatus(status *DeviceWAFRuleApplyStatus) (*Devic
 		return nil, fmt.Errorf("%w: invalid waf_rule_apply_status.apply_error", ErrInvalidEnrollment)
 	}
 	return &out, nil
+}
+
+func normalizeDeviceAppDeployApplyStatuses(items []DeviceAppDeployApplyStatus) ([]DeviceAppDeployApplyStatus, error) {
+	if len(items) > 32 {
+		return nil, fmt.Errorf("%w: invalid app_deploy_apply_status", ErrInvalidEnrollment)
+	}
+	out := make([]DeviceAppDeployApplyStatus, 0, len(items))
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		item.AppID = strings.TrimSpace(item.AppID)
+		item.DesiredPackageRevision = strings.ToLower(strings.TrimSpace(item.DesiredPackageRevision))
+		item.LocalPackageRevision = strings.ToLower(strings.TrimSpace(item.LocalPackageRevision))
+		item.LocalPackageHash = strings.ToLower(strings.TrimSpace(item.LocalPackageHash))
+		item.ApplyState = strings.TrimSpace(item.ApplyState)
+		item.ApplyError = strings.TrimSpace(item.ApplyError)
+		item.OutputTail = strings.TrimSpace(item.OutputTail)
+		if item.AppID == "" && item.DesiredPackageRevision == "" && item.LocalPackageRevision == "" && item.LocalPackageHash == "" && item.ApplyState == "" && item.ApplyError == "" && item.OutputTail == "" {
+			continue
+		}
+		if !runtimeIDPattern.MatchString(item.AppID) {
+			return nil, fmt.Errorf("%w: invalid app_deploy_apply_status.app_id", ErrInvalidEnrollment)
+		}
+		if _, exists := seen[item.AppID]; exists {
+			return nil, fmt.Errorf("%w: duplicate app_deploy_apply_status.app_id", ErrInvalidEnrollment)
+		}
+		seen[item.AppID] = struct{}{}
+		if item.DesiredPackageRevision != "" && !hex64Pattern.MatchString(item.DesiredPackageRevision) {
+			return nil, fmt.Errorf("%w: invalid app_deploy_apply_status.desired_package_revision", ErrInvalidEnrollment)
+		}
+		if item.LocalPackageRevision != "" && !hex64Pattern.MatchString(item.LocalPackageRevision) {
+			return nil, fmt.Errorf("%w: invalid app_deploy_apply_status.local_package_revision", ErrInvalidEnrollment)
+		}
+		if item.LocalPackageHash != "" && !hex64Pattern.MatchString(item.LocalPackageHash) {
+			return nil, fmt.Errorf("%w: invalid app_deploy_apply_status.local_package_hash", ErrInvalidEnrollment)
+		}
+		if !metadataPattern.MatchString(item.ApplyState) || len(item.ApplyState) > 32 {
+			return nil, fmt.Errorf("%w: invalid app_deploy_apply_status.apply_state", ErrInvalidEnrollment)
+		}
+		if !isValidDeviceDeployText(item.ApplyError, 2048) {
+			return nil, fmt.Errorf("%w: invalid app_deploy_apply_status.apply_error", ErrInvalidEnrollment)
+		}
+		if !isValidDeviceDeployText(item.OutputTail, 32768) {
+			return nil, fmt.Errorf("%w: invalid app_deploy_apply_status.output_tail", ErrInvalidEnrollment)
+		}
+		out = append(out, item)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].AppID < out[j].AppID
+	})
+	return out, nil
+}
+
+func normalizeDeviceAppDeployCandidates(items []DeviceAppDeployCandidate) ([]DeviceAppDeployCandidate, error) {
+	if len(items) > 64 {
+		return nil, fmt.Errorf("%w: invalid app_deploy_candidates", ErrInvalidEnrollment)
+	}
+	out := make([]DeviceAppDeployCandidate, 0, len(items))
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		item.AppID = strings.TrimSpace(item.AppID)
+		item.RuntimeFamily = normalizeAppDeployRuntimeFamily(item.RuntimeFamily)
+		item.RuntimeID = strings.TrimSpace(item.RuntimeID)
+		if item.AppID == "" && item.RuntimeFamily == "" && item.RuntimeID == "" && len(item.Roots) == 0 {
+			continue
+		}
+		if !runtimeIDPattern.MatchString(item.AppID) {
+			return nil, fmt.Errorf("%w: invalid app_deploy_candidates.app_id", ErrInvalidEnrollment)
+		}
+		if _, exists := seen[item.AppID]; exists {
+			return nil, fmt.Errorf("%w: duplicate app_deploy_candidates.app_id", ErrInvalidEnrollment)
+		}
+		seen[item.AppID] = struct{}{}
+		if item.RuntimeFamily == "" {
+			return nil, fmt.Errorf("%w: invalid app_deploy_candidates.runtime_family", ErrInvalidEnrollment)
+		}
+		if item.RuntimeID != "" && !runtimeIDPattern.MatchString(item.RuntimeID) {
+			return nil, fmt.Errorf("%w: invalid app_deploy_candidates.runtime_id", ErrInvalidEnrollment)
+		}
+		roots, _, err := normalizeAppDeployRoots(item.Roots)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid app_deploy_candidates.roots", ErrInvalidEnrollment)
+		}
+		item.Roots = roots
+		out = append(out, item)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].AppID < out[j].AppID
+	})
+	return out, nil
+}
+
+func isValidDeviceDeployText(value string, maxBytes int) bool {
+	if len(value) > maxBytes {
+		return false
+	}
+	for _, r := range value {
+		if r == '\n' || r == '\r' || r == '\t' {
+			continue
+		}
+		if r < 0x20 || r > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeDeviceRuntimeSummaries(items []DeviceRuntimeSummary) ([]DeviceRuntimeSummary, error) {
@@ -1153,6 +1443,134 @@ func normalizeWAFRuleArtifactDownloadRequest(req WAFRuleArtifactDownloadRequest,
 	return req, ts.UTC(), nil
 }
 
+func normalizeAppDeployPackageDownloadRequest(req AppDeployPackageDownloadRequest, now time.Time) (AppDeployPackageDownloadRequest, time.Time, error) {
+	req.DeviceID = strings.TrimSpace(req.DeviceID)
+	req.KeyID = strings.TrimSpace(req.KeyID)
+	req.PublicKeyFingerprintSHA256 = strings.ToLower(strings.TrimSpace(req.PublicKeyFingerprintSHA256))
+	req.Timestamp = strings.TrimSpace(req.Timestamp)
+	req.Nonce = strings.TrimSpace(req.Nonce)
+	req.AppID = strings.TrimSpace(req.AppID)
+	req.PackageRevision = strings.ToLower(strings.TrimSpace(req.PackageRevision))
+	req.PackageHash = strings.ToLower(strings.TrimSpace(req.PackageHash))
+	req.BodyHash = strings.ToLower(strings.TrimSpace(req.BodyHash))
+	req.SignatureB64 = strings.TrimSpace(req.SignatureB64)
+
+	if !deviceIDPattern.MatchString(req.DeviceID) {
+		return AppDeployPackageDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid device_id", ErrInvalidEnrollment)
+	}
+	if !keyIDPattern.MatchString(req.KeyID) {
+		return AppDeployPackageDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid key_id", ErrInvalidEnrollment)
+	}
+	if !noncePattern.MatchString(req.Nonce) {
+		return AppDeployPackageDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid nonce", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.PublicKeyFingerprintSHA256) {
+		return AppDeployPackageDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid public key fingerprint", ErrInvalidEnrollment)
+	}
+	if !runtimeIDPattern.MatchString(req.AppID) {
+		return AppDeployPackageDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid app_id", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.PackageRevision) {
+		return AppDeployPackageDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid package_revision", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.PackageHash) {
+		return AppDeployPackageDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid package_hash", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.BodyHash) {
+		return AppDeployPackageDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid body_hash", ErrInvalidEnrollment)
+	}
+	if req.SignatureB64 == "" || len(req.SignatureB64) > 4096 {
+		return AppDeployPackageDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid signature", ErrInvalidEnrollment)
+	}
+
+	ts, err := time.Parse(time.RFC3339Nano, req.Timestamp)
+	if err != nil {
+		return AppDeployPackageDownloadRequest{}, time.Time{}, fmt.Errorf("%w: invalid timestamp", ErrInvalidEnrollment)
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if ts.After(now.Add(enrollmentFreshness)) || ts.Before(now.Add(-enrollmentFreshness)) {
+		return AppDeployPackageDownloadRequest{}, time.Time{}, fmt.Errorf("%w: stale timestamp", ErrInvalidEnrollment)
+	}
+	return req, ts.UTC(), nil
+}
+
+func normalizeAppDeployBaselineUploadRequest(req AppDeployBaselineUploadRequest, now time.Time) (AppDeployBaselineUploadRequest, time.Time, error) {
+	req.DeviceID = strings.TrimSpace(req.DeviceID)
+	req.KeyID = strings.TrimSpace(req.KeyID)
+	req.PublicKeyFingerprintSHA256 = strings.ToLower(strings.TrimSpace(req.PublicKeyFingerprintSHA256))
+	req.Timestamp = strings.TrimSpace(req.Timestamp)
+	req.Nonce = strings.TrimSpace(req.Nonce)
+	req.AppID = strings.TrimSpace(req.AppID)
+	req.RuntimeFamily = normalizeAppDeployRuntimeFamily(req.RuntimeFamily)
+	req.RuntimeID = strings.TrimSpace(req.RuntimeID)
+	req.ProfileRevision = strings.ToLower(strings.TrimSpace(req.ProfileRevision))
+	req.PackageHash = strings.ToLower(strings.TrimSpace(req.PackageHash))
+	req.BodyHash = strings.ToLower(strings.TrimSpace(req.BodyHash))
+	req.SignatureB64 = strings.TrimSpace(req.SignatureB64)
+	req.PackageB64 = strings.TrimSpace(req.PackageB64)
+
+	if !deviceIDPattern.MatchString(req.DeviceID) {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid device_id", ErrInvalidEnrollment)
+	}
+	if !keyIDPattern.MatchString(req.KeyID) {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid key_id", ErrInvalidEnrollment)
+	}
+	if !noncePattern.MatchString(req.Nonce) {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid nonce", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.PublicKeyFingerprintSHA256) {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid public key fingerprint", ErrInvalidEnrollment)
+	}
+	if !runtimeIDPattern.MatchString(req.AppID) {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid app_id", ErrInvalidEnrollment)
+	}
+	if req.RuntimeFamily == "" {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid runtime_family", ErrInvalidEnrollment)
+	}
+	if req.RuntimeID != "" && !runtimeIDPattern.MatchString(req.RuntimeID) {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid runtime_id", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.ProfileRevision) {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid profile_revision", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.PackageHash) {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid package_hash", ErrInvalidEnrollment)
+	}
+	if req.CompressedSize <= 0 || req.CompressedSize > appdeploybundle.MaxCompressedBytes ||
+		req.UncompressedSize <= 0 || req.UncompressedSize > appdeploybundle.MaxUncompressedBytes ||
+		req.FileCount <= 0 || req.FileCount > appdeploybundle.MaxFiles {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid package metadata", ErrInvalidEnrollment)
+	}
+	roots, _, err := normalizeAppDeployRoots(req.Roots)
+	if err != nil {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid roots", ErrInvalidEnrollment)
+	}
+	req.Roots = roots
+	if !hex64Pattern.MatchString(req.BodyHash) {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid body_hash", ErrInvalidEnrollment)
+	}
+	if req.SignatureB64 == "" || len(req.SignatureB64) > 4096 {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid signature", ErrInvalidEnrollment)
+	}
+	if req.PackageB64 == "" || len(req.PackageB64) > MaxAppDeployBaselineUploadBodyBytes {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid package", ErrInvalidEnrollment)
+	}
+
+	ts, err := time.Parse(time.RFC3339Nano, req.Timestamp)
+	if err != nil {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid timestamp", ErrInvalidEnrollment)
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if ts.After(now.Add(enrollmentFreshness)) || ts.Before(now.Add(-enrollmentFreshness)) {
+		return AppDeployBaselineUploadRequest{}, time.Time{}, fmt.Errorf("%w: stale timestamp", ErrInvalidEnrollment)
+	}
+	return req, ts.UTC(), nil
+}
+
 func parseEnrollmentPublicKey(publicKeyPEMB64 string) ([]byte, []byte, ed25519.PublicKey, error) {
 	pemBytes, err := base64.StdEncoding.DecodeString(publicKeyPEMB64)
 	if err != nil {
@@ -1199,11 +1617,17 @@ func enrollmentBodyHash(req EnrollmentRequest) string {
 
 func deviceStatusBodyHash(req DeviceStatusRequest) string {
 	body := deviceStatusBodyCanonical(req) + "\n" + strconv.FormatBool(req.RuntimeDeploymentSupported) + "\n" + deviceRuntimeInventoryCanonical(req.RuntimeInventory)
+	if len(req.AppDeployCandidates) > 0 {
+		body += "\n" + deviceAppDeployCandidatesCanonical(req.AppDeployCandidates)
+	}
 	if req.ProxyRuleApplyStatus != nil {
 		body += "\n" + deviceProxyRuleApplyStatusCanonical(*req.ProxyRuleApplyStatus)
 	}
 	if req.WAFRuleApplyStatus != nil {
 		body += "\n" + deviceWAFRuleApplyStatusCanonical(*req.WAFRuleApplyStatus)
+	}
+	if len(req.AppDeployApplyStatus) > 0 {
+		body += "\n" + deviceAppDeployApplyStatusesCanonical(req.AppDeployApplyStatus)
 	}
 	sum := sha256.Sum256([]byte(body))
 	return hex.EncodeToString(sum[:])
@@ -1290,6 +1714,96 @@ func deviceWAFRuleApplyStatusCanonical(status DeviceWAFRuleApplyStatus) string {
 		status.ApplyError
 }
 
+func deviceAppDeployApplyStatusesCanonical(items []DeviceAppDeployApplyStatus) string {
+	if len(items) == 0 {
+		return "0"
+	}
+	sorted := append([]DeviceAppDeployApplyStatus(nil), items...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].AppID < sorted[j].AppID
+	})
+	var b strings.Builder
+	b.WriteString(strconv.Itoa(len(sorted)))
+	for _, item := range sorted {
+		b.WriteByte('\n')
+		b.WriteString(item.AppID)
+		b.WriteByte('\t')
+		b.WriteString(item.DesiredPackageRevision)
+		b.WriteByte('\t')
+		b.WriteString(item.LocalPackageRevision)
+		b.WriteByte('\t')
+		b.WriteString(item.LocalPackageHash)
+		b.WriteByte('\t')
+		b.WriteString(item.ApplyState)
+		b.WriteByte('\t')
+		b.WriteString(item.ApplyError)
+		b.WriteByte('\t')
+		b.WriteString(item.OutputTail)
+	}
+	return b.String()
+}
+
+func deviceAppDeployCandidatesCanonical(items []DeviceAppDeployCandidate) string {
+	if len(items) == 0 {
+		return "0"
+	}
+	sorted := append([]DeviceAppDeployCandidate(nil), items...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].AppID < sorted[j].AppID
+	})
+	var b strings.Builder
+	b.WriteString(strconv.Itoa(len(sorted)))
+	for _, item := range sorted {
+		b.WriteByte('\n')
+		b.WriteString(item.AppID)
+		b.WriteByte('\t')
+		b.WriteString(item.RuntimeFamily)
+		b.WriteByte('\t')
+		b.WriteString(item.RuntimeID)
+		b.WriteByte('\t')
+		b.WriteString(strconv.FormatBool(item.Managed))
+		b.WriteByte('\t')
+		b.WriteString(deviceAppDeployRootsCanonical(item.Roots))
+	}
+	return b.String()
+}
+
+func deviceAppDeployRootsCanonical(items []AppDeployRootRecord) string {
+	if len(items) == 0 {
+		return "0"
+	}
+	sorted := append([]AppDeployRootRecord(nil), items...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].RootID < sorted[j].RootID
+	})
+	var b strings.Builder
+	b.WriteString(strconv.Itoa(len(sorted)))
+	for _, item := range sorted {
+		b.WriteByte('\n')
+		b.WriteString(item.RootID)
+		b.WriteByte('\t')
+		b.WriteString(item.RuntimeField)
+		b.WriteByte('\t')
+		b.WriteString(item.SourcePath)
+		b.WriteByte('\t')
+		b.WriteString(item.PackagePrefix)
+		b.WriteByte('\t')
+		b.WriteString(item.TargetSubpath)
+		b.WriteByte('\t')
+		b.WriteString(appDeployRootRuntimeSubpath(item))
+		b.WriteByte('\t')
+		b.WriteString(strconv.FormatBool(item.Required))
+	}
+	return b.String()
+}
+
+func appDeployRootRuntimeSubpath(item AppDeployRootRecord) string {
+	if strings.TrimSpace(item.RuntimeSubpath) != "" {
+		return item.RuntimeSubpath
+	}
+	return item.TargetSubpath
+}
+
 func deviceConfigSnapshotBodyHash(req DeviceConfigSnapshotRequest) string {
 	sum := sha256.Sum256([]byte(
 		req.DeviceID + "\n" +
@@ -1359,11 +1873,45 @@ func wafRuleArtifactDownloadBodyHash(req WAFRuleArtifactDownloadRequest) string 
 	return hex.EncodeToString(sum[:])
 }
 
+func appDeployPackageDownloadBodyHash(req AppDeployPackageDownloadRequest) string {
+	sum := sha256.Sum256([]byte(
+		req.DeviceID + "\n" +
+			req.KeyID + "\n" +
+			req.PublicKeyFingerprintSHA256 + "\n" +
+			req.Timestamp + "\n" +
+			req.Nonce + "\n" +
+			req.AppID + "\n" +
+			req.PackageRevision + "\n" +
+			req.PackageHash,
+	))
+	return hex.EncodeToString(sum[:])
+}
+
+func appDeployBaselineUploadBodyHash(req AppDeployBaselineUploadRequest) string {
+	sum := sha256.Sum256([]byte(
+		req.DeviceID + "\n" +
+			req.KeyID + "\n" +
+			req.PublicKeyFingerprintSHA256 + "\n" +
+			req.Timestamp + "\n" +
+			req.Nonce + "\n" +
+			req.AppID + "\n" +
+			req.RuntimeFamily + "\n" +
+			req.RuntimeID + "\n" +
+			req.ProfileRevision + "\n" +
+			deviceAppDeployRootsCanonical(req.Roots) + "\n" +
+			req.PackageHash + "\n" +
+			strconv.FormatInt(req.CompressedSize, 10) + "\n" +
+			strconv.FormatInt(req.UncompressedSize, 10) + "\n" +
+			strconv.Itoa(req.FileCount),
+	))
+	return hex.EncodeToString(sum[:])
+}
+
 func deviceStatusBodyHashMatches(req DeviceStatusRequest) bool {
 	if secureEqualHex(deviceStatusBodyHash(req), req.BodyHash) {
 		return true
 	}
-	if req.ProxyRuleApplyStatus != nil || req.WAFRuleApplyStatus != nil {
+	if req.ProxyRuleApplyStatus != nil || req.WAFRuleApplyStatus != nil || len(req.AppDeployCandidates) > 0 || len(req.AppDeployApplyStatus) > 0 {
 		return false
 	}
 	if req.RuntimeDeploymentSupported || len(req.RuntimeInventory) > 0 {

@@ -1490,6 +1490,81 @@ button.danger {
   min-width: 230px;
 }
 
+.app-deploy-upload-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.app-deploy-wide {
+  grid-column: span 2;
+}
+
+.app-deploy-script {
+  grid-column: span 3;
+}
+
+.app-deploy-script textarea {
+  min-height: 96px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.app-deploy-status-table table,
+.app-deploy-request-table table,
+.app-deploy-history-table table {
+  min-width: 1040px;
+}
+
+.app-deploy-package-table table {
+  min-width: 1480px;
+}
+
+.app-deploy-file-table table {
+  min-width: 960px;
+}
+
+.app-deploy-col-actions {
+  width: 140px;
+}
+
+.app-deploy-col-actions-wide,
+.app-deploy-package-table td.actions-cell {
+  width: 270px;
+  min-width: 270px;
+}
+
+.app-deploy-col-app {
+  width: 130px;
+}
+
+.app-deploy-col-revision {
+  width: 150px;
+}
+
+.app-deploy-col-state {
+  width: 130px;
+}
+
+.app-deploy-col-runtime {
+  width: 160px;
+}
+
+.app-deploy-col-time {
+  width: 170px;
+}
+
+.app-deploy-col-hash {
+  width: 305px;
+}
+
+.app-deploy-col-size {
+  width: 90px;
+}
+
+.app-deploy-col-message {
+  width: 280px;
+}
+
 .rules-file-col-actions,
 .rules-file-table td.actions-cell {
   width: 105px;
@@ -2002,6 +2077,11 @@ button.danger {
 @media (max-width: 980px) {
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .app-deploy-wide,
+  .app-deploy-script {
+    grid-column: auto;
   }
 
   .user-page .grid {

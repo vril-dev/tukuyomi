@@ -5,6 +5,7 @@ import Layout from "@/components/Layout";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { getUIBasePath } from "@/lib/runtime";
+import AppDeployPage from "@/pages/AppDeployPage";
 import DeviceApprovalsPage from "@/pages/DeviceApprovalsPage";
 import Login from "@/pages/Login";
 import ProxyRulesPage from "@/pages/ProxyRulesPage";
@@ -95,6 +96,7 @@ function CenterRoutes() {
         <Route path="device-approvals/devices/:deviceID/proxy-rules" element={<ProxyRulesPage />} />
         <Route path="device-approvals/devices/:deviceID/waf-rules" element={<WAFRulesPage />} />
         <Route path="device-approvals/devices/:deviceID/remote-ssh" element={<RemoteSSHPage />} />
+        <Route path="device-approvals/devices/:deviceID/app-deploy" element={<AppDeployPage />} />
         <Route path="device-approvals/devices/:deviceID/rules" element={<LegacyRulesRedirect />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="runtimes" element={<Navigate to="/device-approvals" replace />} />

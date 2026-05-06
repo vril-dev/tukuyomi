@@ -132,8 +132,10 @@ type DeviceRuntimeInventory struct {
 	DistroVersion              string
 	RuntimeDeploymentSupported bool
 	RuntimeInventory           []DeviceRuntimeSummary
+	AppDeployCandidates        []DeviceAppDeployCandidate
 	ProxyRuleApplyStatus       *DeviceProxyRuleApplyStatus
 	WAFRuleApplyStatus         *DeviceWAFRuleApplyStatus
+	AppDeployApplyStatus       []DeviceAppDeployApplyStatus
 }
 
 type BootstrapApprovedDeviceInput struct {
@@ -645,6 +647,40 @@ UPDATE center_devices
 		if err := updateRuntimeApplyStatusFromSummariesTx(ctx, tx, driver, deviceID, inventory.RuntimeInventory, seenAtUnix); err != nil {
 			return err
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM center_device_app_deploy_candidates WHERE device_id = `+placeholder(driver, 1), deviceID); err != nil {
+			return err
+		}
+		for _, item := range inventory.AppDeployCandidates {
+			candidate, err := normalizeAppDeployCandidate(AppDeployCandidateRecord{
+				DeviceID:      deviceID,
+				AppID:         item.AppID,
+				RuntimeFamily: item.RuntimeFamily,
+				RuntimeID:     item.RuntimeID,
+				Roots:         item.Roots,
+				Managed:       item.Managed,
+			}, seenAtUnix)
+			if err != nil {
+				return err
+			}
+			rootsJSON, err := marshalAppDeployRoots(candidate.Roots)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `
+INSERT INTO center_device_app_deploy_candidates
+    (device_id, app_id, runtime_family, runtime_id, roots_json, managed, detected_at_unix)
+VALUES (`+placeholders(driver, 7, 1)+`)`,
+				candidate.DeviceID,
+				candidate.AppID,
+				candidate.RuntimeFamily,
+				candidate.RuntimeID,
+				rootsJSON,
+				dbBool(driver, candidate.Managed),
+				candidate.DetectedAtUnix,
+			); err != nil {
+				return err
+			}
+		}
 		if inventory.ProxyRuleApplyStatus != nil {
 			status := ProxyRuleApplyStatusRecord{
 				DeviceID:              deviceID,
@@ -681,6 +717,47 @@ UPDATE center_devices
 			}
 			if err := deleteTerminalWAFRuleAssignmentForStatusTx(ctx, tx, driver, status); err != nil {
 				return err
+			}
+		}
+		for _, item := range inventory.AppDeployApplyStatus {
+			status, err := normalizeAppDeployApplyStatus(AppDeployApplyStatusRecord{
+				DeviceID:               deviceID,
+				AppID:                  item.AppID,
+				DesiredPackageRevision: item.DesiredPackageRevision,
+				LocalPackageRevision:   item.LocalPackageRevision,
+				LocalPackageHash:       item.LocalPackageHash,
+				ApplyState:             item.ApplyState,
+				ApplyError:             item.ApplyError,
+				OutputTail:             item.OutputTail,
+			}, seenAtUnix)
+			if err != nil {
+				return err
+			}
+			if err := upsertAppDeployApplyStatusTx(ctx, tx, driver, status); err != nil {
+				return err
+			}
+			if request, found, err := loadAppDeployRequestForAppTx(ctx, tx, driver, status.DeviceID, status.AppID); err != nil {
+				return err
+			} else if found && appDeployApplyStatusMatchesTerminal(status, request) {
+				if err := insertAppDeployHistoryTx(ctx, tx, driver, AppDeployHistoryRecord{
+					DeviceID:        status.DeviceID,
+					AppID:           status.AppID,
+					Operation:       request.Operation,
+					PackageRevision: request.PackageRevision,
+					PackageHash:     request.PackageHash,
+					ApplyState:      status.ApplyState,
+					ApplyError:      status.ApplyError,
+					OutputTail:      status.OutputTail,
+					RequestedBy:     request.RequestedBy,
+					RequestedAtUnix: request.RequestedAtUnix,
+					AppliedAtUnix:   status.LastAttemptAtUnix,
+					UpdatedAtUnix:   status.UpdatedAtUnix,
+				}); err != nil {
+					return err
+				}
+				if err := deleteAppDeployRequestTx(ctx, tx, driver, status.DeviceID, status.AppID); err != nil {
+					return err
+				}
 			}
 		}
 		return tx.Commit()

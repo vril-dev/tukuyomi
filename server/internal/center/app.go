@@ -41,25 +41,27 @@ const (
 	TLSKeyFileEnv    = "TUKUYOMI_CENTER_TLS_KEY_FILE"
 	TLSMinVersionEnv = "TUKUYOMI_CENTER_TLS_MIN_VERSION"
 
-	ClientAllowCIDRsEnv    = "TUKUYOMI_CENTER_CLIENT_ALLOW_CIDRS"
-	ManageAPIAllowCIDRsEnv = "TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS"
-	CenterAPIAllowCIDRsEnv = "TUKUYOMI_CENTER_API_ALLOW_CIDRS"
+	ClientAllowCIDRsEnv      = "TUKUYOMI_CENTER_CLIENT_ALLOW_CIDRS"
+	ManageAPIAllowCIDRsEnv   = "TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS"
+	CenterAPIAllowCIDRsEnv   = "TUKUYOMI_CENTER_API_ALLOW_CIDRS"
+	ExperimentalAppDeployEnv = "TUKUYOMI_CENTER_EXPERIMENTAL_APP_DEPLOY_ENABLED"
 )
 
 var centerAdminAuthCookieNames = adminauth.CenterCookieNames()
 
 type RuntimeConfig struct {
-	ListenAddr          string
-	APIBasePath         string
-	GatewayAPIBasePath  string
-	UIBasePath          string
-	TLSEnabled          bool
-	TLSCertFile         string
-	TLSKeyFile          string
-	TLSMinVersion       string
-	ClientAllowCIDRs    []string
-	ManageAPIAllowCIDRs []string
-	CenterAPIAllowCIDRs []string
+	ListenAddr                   string
+	APIBasePath                  string
+	GatewayAPIBasePath           string
+	UIBasePath                   string
+	TLSEnabled                   bool
+	TLSCertFile                  string
+	TLSKeyFile                   string
+	TLSMinVersion                string
+	ClientAllowCIDRs             []string
+	ManageAPIAllowCIDRs          []string
+	CenterAPIAllowCIDRs          []string
+	ExperimentalAppDeployEnabled bool
 }
 
 func RuntimeConfigFromEnv() (RuntimeConfig, error) {
@@ -67,15 +69,20 @@ func RuntimeConfigFromEnv() (RuntimeConfig, error) {
 	if err != nil {
 		return RuntimeConfig{}, err
 	}
+	experimentalAppDeployEnabled, err := parseCenterBoolEnv(ExperimentalAppDeployEnv, true)
+	if err != nil {
+		return RuntimeConfig{}, err
+	}
 	cfg := RuntimeConfig{
-		ListenAddr:         strings.TrimSpace(os.Getenv(ListenAddrEnv)),
-		APIBasePath:        strings.TrimSpace(os.Getenv(APIBasePathEnv)),
-		GatewayAPIBasePath: strings.TrimSpace(os.Getenv(GatewayAPIBasePathEnv)),
-		UIBasePath:         strings.TrimSpace(os.Getenv(UIBasePathEnv)),
-		TLSEnabled:         tlsEnabled,
-		TLSCertFile:        strings.TrimSpace(os.Getenv(TLSCertFileEnv)),
-		TLSKeyFile:         strings.TrimSpace(os.Getenv(TLSKeyFileEnv)),
-		TLSMinVersion:      normalizeCenterTLSMinVersion(os.Getenv(TLSMinVersionEnv)),
+		ListenAddr:                   strings.TrimSpace(os.Getenv(ListenAddrEnv)),
+		APIBasePath:                  strings.TrimSpace(os.Getenv(APIBasePathEnv)),
+		GatewayAPIBasePath:           strings.TrimSpace(os.Getenv(GatewayAPIBasePathEnv)),
+		UIBasePath:                   strings.TrimSpace(os.Getenv(UIBasePathEnv)),
+		TLSEnabled:                   tlsEnabled,
+		TLSCertFile:                  strings.TrimSpace(os.Getenv(TLSCertFileEnv)),
+		TLSKeyFile:                   strings.TrimSpace(os.Getenv(TLSKeyFileEnv)),
+		TLSMinVersion:                normalizeCenterTLSMinVersion(os.Getenv(TLSMinVersionEnv)),
+		ExperimentalAppDeployEnabled: experimentalAppDeployEnabled,
 	}
 	if err := validateCenterTLSMinVersion(cfg.TLSMinVersion); err != nil {
 		return RuntimeConfig{}, fmt.Errorf("%s %w", TLSMinVersionEnv, err)
@@ -205,22 +212,23 @@ func NewEngine(cfg RuntimeConfig) (*gin.Engine, error) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "mode": "center"})
 	})
 
-	registerDeviceEnrollmentRoutes(r)
+	registerDeviceEnrollmentRoutes(r, RuntimeConfig{ExperimentalAppDeployEnabled: cfg.ExperimentalAppDeployEnabled})
 	handler.RegisterRequiredAdminAuthRoutesAtWithCookieNames(r, apiBase, centerAdminAuthCookieNames)
 	registerCenterAPI(r, RuntimeConfig{
-		ListenAddr:          strings.TrimSpace(cfg.ListenAddr),
-		APIBasePath:         apiBase,
-		GatewayAPIBasePath:  gatewayAPIBase,
-		UIBasePath:          uiBase,
-		TLSEnabled:          cfg.TLSEnabled,
-		TLSCertFile:         strings.TrimSpace(cfg.TLSCertFile),
-		TLSKeyFile:          strings.TrimSpace(cfg.TLSKeyFile),
-		TLSMinVersion:       cfg.TLSMinVersion,
-		ClientAllowCIDRs:    append([]string(nil), cfg.ClientAllowCIDRs...),
-		ManageAPIAllowCIDRs: append([]string(nil), cfg.ManageAPIAllowCIDRs...),
-		CenterAPIAllowCIDRs: append([]string(nil), cfg.CenterAPIAllowCIDRs...),
+		ListenAddr:                   strings.TrimSpace(cfg.ListenAddr),
+		APIBasePath:                  apiBase,
+		GatewayAPIBasePath:           gatewayAPIBase,
+		UIBasePath:                   uiBase,
+		TLSEnabled:                   cfg.TLSEnabled,
+		TLSCertFile:                  strings.TrimSpace(cfg.TLSCertFile),
+		TLSKeyFile:                   strings.TrimSpace(cfg.TLSKeyFile),
+		TLSMinVersion:                cfg.TLSMinVersion,
+		ClientAllowCIDRs:             append([]string(nil), cfg.ClientAllowCIDRs...),
+		ManageAPIAllowCIDRs:          append([]string(nil), cfg.ManageAPIAllowCIDRs...),
+		CenterAPIAllowCIDRs:          append([]string(nil), cfg.CenterAPIAllowCIDRs...),
+		ExperimentalAppDeployEnabled: cfg.ExperimentalAppDeployEnabled,
 	})
-	registerCenterUI(r, apiBase, gatewayAPIBase, uiBase)
+	registerCenterUI(r, apiBase, gatewayAPIBase, uiBase, cfg.ExperimentalAppDeployEnabled)
 	return r, nil
 }
 
@@ -354,7 +362,7 @@ func registerCenterAPI(r *gin.Engine, runtimeCfg RuntimeConfig) {
 	api.GET("/auth/api-tokens", handler.GetAdminAPITokens)
 	api.POST("/auth/api-tokens", handler.PostAdminAPIToken)
 	api.POST("/auth/api-tokens/:token_id/revoke", handler.PostAdminAPITokenRevoke)
-	registerCenterDeviceAdminRoutes(api)
+	registerCenterDeviceAdminRoutes(api, runtimeCfg)
 }
 
 func normalizeBasePath(raw, fallback string) (string, error) {

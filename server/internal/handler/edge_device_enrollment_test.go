@@ -2155,6 +2155,125 @@ func writeTestPSGIRuntimeArtifact(t *testing.T, inventoryPath string, runtimeID 
 	}
 }
 
+func TestEdgePHPFPMAppDeployRootsUseSourceParentForPublicDocumentRoot(t *testing.T) {
+	roots := edgePHPFPMAppDeployRoots(VhostConfig{
+		DocumentRoot: "data/vhosts/samples/php-site/public",
+	})
+	if len(roots) != 1 {
+		t.Fatalf("len(roots)=%d want 1", len(roots))
+	}
+	root := roots[0]
+	if root.RootID != "source_root" {
+		t.Fatalf("RootID=%q want source_root", root.RootID)
+	}
+	if root.RuntimeField != "document_root" {
+		t.Fatalf("RuntimeField=%q want document_root", root.RuntimeField)
+	}
+	if root.SourcePath != "data/vhosts/samples/php-site" {
+		t.Fatalf("SourcePath=%q want data/vhosts/samples/php-site", root.SourcePath)
+	}
+	if root.PackagePrefix != "" || root.TargetSubpath != "" {
+		t.Fatalf("package/target=%q/%q want root/root", root.PackagePrefix, root.TargetSubpath)
+	}
+	if root.RuntimeSubpath != "public" {
+		t.Fatalf("RuntimeSubpath=%q want public", root.RuntimeSubpath)
+	}
+	if !root.Required {
+		t.Fatalf("Required=false want true")
+	}
+}
+
+func TestEdgePHPFPMAppDeployRootsFallbackForNonPublicDocumentRoot(t *testing.T) {
+	roots := edgePHPFPMAppDeployRoots(VhostConfig{
+		DocumentRoot: "data/vhosts/plain-site",
+	})
+	if len(roots) != 1 {
+		t.Fatalf("len(roots)=%d want 1", len(roots))
+	}
+	root := roots[0]
+	if root.RootID != "document_root" {
+		t.Fatalf("RootID=%q want document_root", root.RootID)
+	}
+	if root.SourcePath != "data/vhosts/plain-site" {
+		t.Fatalf("SourcePath=%q want data/vhosts/plain-site", root.SourcePath)
+	}
+	if root.PackagePrefix != "public" || root.TargetSubpath != "public" || root.RuntimeSubpath != "public" {
+		t.Fatalf("package/target/runtime=%q/%q/%q want public/public/public", root.PackagePrefix, root.TargetSubpath, root.RuntimeSubpath)
+	}
+}
+
+func TestNormalizeEdgeAppDeployRootAllowsSourceRootAndRejectsUnsafeSourcePath(t *testing.T) {
+	root, ok := normalizeEdgeAppDeployRoot(edgeAppDeployRoot{
+		RootID:         "source_root",
+		RuntimeField:   "document_root",
+		SourcePath:     "data/vhosts/app",
+		PackagePrefix:  ".",
+		TargetSubpath:  ".",
+		RuntimeSubpath: "public",
+		Required:       true,
+	})
+	if !ok {
+		t.Fatalf("normalizeEdgeAppDeployRoot rejected valid source root")
+	}
+	if root.SourcePath != "data/vhosts/app" {
+		t.Fatalf("SourcePath=%q want data/vhosts/app", root.SourcePath)
+	}
+	if root.PackagePrefix != "" || root.TargetSubpath != "" {
+		t.Fatalf("package/target=%q/%q want empty", root.PackagePrefix, root.TargetSubpath)
+	}
+	if root.RuntimeSubpath != "public" {
+		t.Fatalf("RuntimeSubpath=%q want public", root.RuntimeSubpath)
+	}
+	for _, sourcePath := range []string{"/srv/app", "etc", "data"} {
+		if _, ok := normalizeEdgeAppDeployRoot(edgeAppDeployRoot{
+			RootID:        "source_root",
+			RuntimeField:  "document_root",
+			SourcePath:    sourcePath,
+			PackagePrefix: ".",
+			TargetSubpath: ".",
+		}); ok {
+			t.Fatalf("normalizeEdgeAppDeployRoot accepted unsafe source path %q", sourcePath)
+		}
+	}
+}
+
+func TestEdgeAppDeployRootForArchivePathAllowsRootPackagePrefix(t *testing.T) {
+	root, rel, ok := edgeAppDeployRootForArchivePath([]edgeAppDeployBoundRoot{{
+		Root: edgeAppDeployRoot{
+			RootID:        "source_root",
+			PackagePrefix: "",
+		},
+	}}, "public/index.php")
+	if !ok {
+		t.Fatalf("edgeAppDeployRootForArchivePath rejected root package prefix")
+	}
+	if root.Root.RootID != "source_root" {
+		t.Fatalf("RootID=%q want source_root", root.Root.RootID)
+	}
+	if rel != "public/index.php" {
+		t.Fatalf("rel=%q want public/index.php", rel)
+	}
+}
+
+func TestEdgeAppDeployBindingRootsRejectsUnsafeAdoptionSourceFallback(t *testing.T) {
+	_, _, err := edgeAppDeployBindingRoots("app-1", VhostConfig{
+		DocumentRoot: "/etc",
+	}, edgeAppDeployDeviceAssignment{
+		Operation: "adopt",
+		Roots: []edgeAppDeployRoot{{
+			RootID:         "source_root",
+			RuntimeField:   "document_root",
+			PackagePrefix:  "",
+			TargetSubpath:  "",
+			RuntimeSubpath: "public",
+			Required:       true,
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "source_path must be under data/vhosts") {
+		t.Fatalf("err=%v want source_path boundary error", err)
+	}
+}
+
 func quoteJSON(value string) string {
 	raw, _ := json.Marshal(value)
 	return string(raw)

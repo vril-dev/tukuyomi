@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const latestSchemaMigrationVersionForTest = 35
+const latestSchemaMigrationVersionForTest = 37
 
 func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
@@ -101,6 +101,14 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		"center_device_remote_ssh_policy",
 		"remote_ssh_host_keys",
 		"remote_ssh_accepted_nonces",
+		"center_app_deploy_profiles",
+		"center_app_deploy_profile_roots",
+		"center_app_deploy_packages",
+		"center_app_deploy_package_files",
+		"center_device_app_deploy_candidates",
+		"center_device_app_deploy_requests",
+		"center_device_app_deploy_apply_status",
+		"center_device_app_deploy_history",
 	} {
 		var name string
 		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
@@ -243,6 +251,17 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		{table: "center_device_remote_ssh_policy", column: "enabled"},
 		{table: "remote_ssh_host_keys", column: "private_key_pem"},
 		{table: "remote_ssh_accepted_nonces", column: "nonce_hash"},
+		{table: "center_app_deploy_profiles", column: "profile_revision"},
+		{table: "center_app_deploy_profiles", column: "roots_json"},
+		{table: "center_app_deploy_profile_roots", column: "package_prefix"},
+		{table: "center_device_app_deploy_candidates", column: "roots_json"},
+		{table: "center_app_deploy_packages", column: "profile_revision"},
+		{table: "center_app_deploy_packages", column: "roots_json"},
+		{table: "center_device_app_deploy_requests", column: "base_package_revision"},
+		{table: "center_device_app_deploy_requests", column: "profile_revision"},
+		{table: "center_device_app_deploy_requests", column: "roots_json"},
+		{table: "center_device_app_deploy_history", column: "base_package_revision"},
+		{table: "center_device_app_deploy_history", column: "profile_revision"},
 	} {
 		var count int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('`+tc.table+`') WHERE name = ?`, tc.column).Scan(&count); err != nil {

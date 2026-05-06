@@ -1655,6 +1655,28 @@ button.danger {
   margin-top: 12px;
 }
 
+.runtime-build-active-table {
+  margin-top: 10px;
+}
+
+.runtime-build-history-section details {
+  display: block;
+}
+
+.runtime-build-history-section summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  cursor: pointer;
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.runtime-build-history-section summary::marker {
+  color: #64748b;
+}
+
 .runtime-build-job {
   display: flex;
   flex-wrap: wrap;
@@ -1806,9 +1828,8 @@ button.danger {
   min-width: 1180px;
 }
 
-.runtime-assignment-table table,
-.runtime-artifact-table table {
-  min-width: 1080px;
+.runtime-assignment-table table {
+  min-width: 1160px;
 }
 
 .runtime-summary-table th:nth-child(1) {
@@ -1833,28 +1854,24 @@ button.danger {
   width: 12%;
 }
 
-.runtime-assignment-table th:nth-child(1),
-.runtime-artifact-table th:nth-child(1) {
+.runtime-assignment-table th:nth-child(1) {
   width: 14%;
 }
 
 .runtime-assignment-table th:nth-child(2),
 .runtime-assignment-table th:nth-child(3),
-.runtime-assignment-table th:nth-child(6),
-.runtime-artifact-table th:nth-child(2),
-.runtime-artifact-table th:nth-child(3),
-.runtime-artifact-table th:nth-child(8) {
+.runtime-assignment-table th:nth-child(4) {
   width: 10%;
 }
 
-.runtime-assignment-table th:nth-child(4),
 .runtime-assignment-table th:nth-child(5),
-.runtime-assignment-table th:nth-child(7),
-.runtime-artifact-table th:nth-child(4),
-.runtime-artifact-table th:nth-child(5),
-.runtime-artifact-table th:nth-child(6),
-.runtime-artifact-table th:nth-child(7) {
+.runtime-assignment-table th:nth-child(6),
+.runtime-assignment-table th:nth-child(8) {
   width: 14%;
+}
+
+.runtime-assignment-table th:nth-child(7) {
+  width: 12%;
 }
 
 .config-snapshot-table th:nth-child(1) {

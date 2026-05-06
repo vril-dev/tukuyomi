@@ -43,7 +43,7 @@ Center でデバイスを承認した後、Gateway は Center をポーリング
 
 Center runtime build は、Center host 側の builder support を前提にします。たとえば Docker を使う PHP-FPM ／ PSGI build flow です。Center deployment のために Gateway 側へ Docker は不要です。Gateway はポーリングで pending request を受け取り、artifact metadata と target を検証し、圧縮済み artifact をダウンロードして Gateway ローカルの runtime をインストールまたは削除します。
 
-runtime request は配送 queue です。Gateway が取得する前であれば取り消せます。dispatch 後は、Gateway 側の apply status と runtime inventory を正とします。runtime 削除は Center と Gateway の両側で安全確認を行います。Center は最新の usage state から削除可能な場合だけ操作を有効化し、Gateway も local runtime file を削除する直前に Runtime App 参照と実行中プロセスを再確認します。
+runtime request は配信キューです。Gateway が取得する前であれば取り消せます。dispatch 後は、Gateway 側の apply status と runtime inventory を正とします。runtime 削除は Center と Gateway の両側で安全確認を行います。Center は最新の usage state から削除可能な場合だけ操作を有効化し、Gateway も local runtime file を削除する直前に Runtime App 参照と実行中プロセスを再確認します。
 
 ## プレビュー URL
 

@@ -55,6 +55,7 @@ type FileManifest struct {
 	SHA256      string `json:"sha256"`
 	SizeBytes   int64  `json:"size_bytes"`
 	Mode        int64  `json:"mode"`
+	LinkTarget  string `json:"link_target,omitempty"`
 }
 
 type Manifest struct {
@@ -76,6 +77,7 @@ type File struct {
 	FileKind    string
 	Mode        int64
 	Body        []byte
+	LinkTarget  string
 }
 
 type BuildInput struct {
@@ -126,10 +128,11 @@ type runtimeJSON struct {
 }
 
 type actualFile struct {
-	SHA256    string
-	SizeBytes int64
-	Mode      int64
-	Body      []byte
+	SHA256     string
+	SizeBytes  int64
+	Mode       int64
+	Body       []byte
+	LinkTarget string
 }
 
 func BuildBundle(input BuildInput) (Build, error) {
@@ -161,14 +164,37 @@ func BuildBundle(input BuildInput) (Build, error) {
 		BuilderProfile:  normalized.BuilderProfile,
 		Files:           make([]FileManifest, 0, len(files)),
 	}
+	regularByPath := make(map[string]FileManifest, len(files))
 	for _, file := range files {
+		if file.LinkTarget != "" {
+			continue
+		}
 		sum := sha256.Sum256(file.Body)
-		manifest.Files = append(manifest.Files, FileManifest{
+		entry := FileManifest{
 			ArchivePath: file.ArchivePath,
 			FileKind:    file.FileKind,
 			SHA256:      hex.EncodeToString(sum[:]),
 			SizeBytes:   int64(len(file.Body)),
 			Mode:        file.Mode,
+		}
+		regularByPath[file.ArchivePath] = entry
+	}
+	for _, file := range files {
+		if file.LinkTarget == "" {
+			manifest.Files = append(manifest.Files, regularByPath[file.ArchivePath])
+			continue
+		}
+		target, ok := regularByPath[file.LinkTarget]
+		if !ok {
+			return Build{}, fmt.Errorf("runtime artifact hardlink target %q is missing", file.LinkTarget)
+		}
+		manifest.Files = append(manifest.Files, FileManifest{
+			ArchivePath: file.ArchivePath,
+			FileKind:    file.FileKind,
+			SHA256:      target.SHA256,
+			SizeBytes:   target.SizeBytes,
+			Mode:        target.Mode,
+			LinkTarget:  file.LinkTarget,
 		})
 	}
 	if err := validateManifest(manifest); err != nil {
@@ -192,6 +218,9 @@ func BuildBundle(input BuildInput) (Build, error) {
 	}
 	uncompressedSize += int64(len(manifestRaw))
 	for _, file := range files {
+		if file.LinkTarget != "" {
+			continue
+		}
 		if err := writeTarFile(tw, file.ArchivePath, file.Body, file.Mode); err != nil {
 			return Build{}, err
 		}
@@ -199,6 +228,14 @@ func BuildBundle(input BuildInput) (Build, error) {
 		if uncompressedSize > MaxUncompressedBytes {
 			_ = tw.Close()
 			return Build{}, fmt.Errorf("runtime artifact exceeds %d uncompressed bytes", MaxUncompressedBytes)
+		}
+	}
+	for _, file := range files {
+		if file.LinkTarget == "" {
+			continue
+		}
+		if err := writeTarHardlink(tw, file.ArchivePath, file.LinkTarget, file.Mode); err != nil {
+			return Build{}, err
 		}
 	}
 	if err := tw.Close(); err != nil {
@@ -264,10 +301,10 @@ func Parse(compressed []byte) (Parsed, error) {
 			}
 			continue
 		}
-		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA && hdr.Typeflag != tar.TypeLink {
 			return Parsed{}, fmt.Errorf("runtime artifact contains non-regular entry %q", hdr.Name)
 		}
-		if hdr.Size < 0 {
+		if hdr.Size < 0 || (hdr.Typeflag == tar.TypeLink && hdr.Size != 0) {
 			return Parsed{}, fmt.Errorf("runtime artifact contains invalid entry size")
 		}
 		name, err := cleanArchivePath(hdr.Name)
@@ -291,6 +328,23 @@ func Parse(compressed []byte) (Parsed, error) {
 		}
 		if _, exists := filesByArchivePath[name]; exists {
 			return Parsed{}, fmt.Errorf("runtime artifact contains duplicate archive path %q", name)
+		}
+		if hdr.Typeflag == tar.TypeLink {
+			linkTarget, err := cleanArchivePath(hdr.Linkname)
+			if err != nil {
+				return Parsed{}, err
+			}
+			if !allowedRuntimeArchivePath(linkTarget) || name == linkTarget {
+				return Parsed{}, fmt.Errorf("runtime artifact contains unsafe hardlink target")
+			}
+			filesByArchivePath[name] = actualFile{
+				Mode:       int64(hdr.Mode) & 0o777,
+				LinkTarget: linkTarget,
+			}
+			if len(filesByArchivePath) > MaxFiles {
+				return Parsed{}, fmt.Errorf("runtime artifact exceeds %d files", MaxFiles)
+			}
+			continue
 		}
 		actual, err := hashEntry(tr, hdr.Size, int64(hdr.Mode)&0o777, keepMetadataBody(name))
 		if err != nil {
@@ -340,6 +394,20 @@ func Parse(compressed []byte) (Parsed, error) {
 		actual, exists := filesByArchivePath[entry.ArchivePath]
 		if !exists {
 			return Parsed{}, fmt.Errorf("runtime artifact file %q is missing", entry.ArchivePath)
+		}
+		if entry.LinkTarget != "" {
+			if actual.LinkTarget != entry.LinkTarget {
+				return Parsed{}, fmt.Errorf("runtime artifact hardlink target mismatch for %q", entry.ArchivePath)
+			}
+			target, exists := filesByArchivePath[entry.LinkTarget]
+			if !exists || target.LinkTarget != "" {
+				return Parsed{}, fmt.Errorf("runtime artifact hardlink target %q is missing", entry.LinkTarget)
+			}
+			actual.SHA256 = target.SHA256
+			actual.SizeBytes = target.SizeBytes
+			actual.Mode = target.Mode
+		} else if actual.LinkTarget != "" {
+			return Parsed{}, fmt.Errorf("runtime artifact unexpected hardlink for %q", entry.ArchivePath)
 		}
 		if actual.SizeBytes != entry.SizeBytes || !secureEqualHex(actual.SHA256, entry.SHA256) || actual.Mode != entry.Mode {
 			return Parsed{}, fmt.Errorf("runtime artifact file metadata mismatch for %q", entry.ArchivePath)
@@ -417,11 +485,22 @@ func normalizeFiles(files []File) ([]File, error) {
 			return nil, fmt.Errorf("runtime artifact contains unexpected archive path %q", archivePath)
 		}
 		file.ArchivePath = archivePath
+		if strings.TrimSpace(file.LinkTarget) != "" {
+			linkTarget, err := cleanArchivePath(file.LinkTarget)
+			if err != nil {
+				return nil, err
+			}
+			if !strings.HasPrefix(archivePath, "rootfs/") || !strings.HasPrefix(linkTarget, "rootfs/") || archivePath == linkTarget {
+				return nil, fmt.Errorf("runtime artifact contains unsafe hardlink target")
+			}
+			file.LinkTarget = linkTarget
+			file.Body = nil
+		}
 		file.FileKind = strings.TrimSpace(file.FileKind)
 		if !fileKindPattern.MatchString(file.FileKind) {
 			return nil, fmt.Errorf("invalid runtime artifact file kind")
 		}
-		if len(file.Body) == 0 && !strings.HasPrefix(archivePath, "rootfs/") {
+		if len(file.Body) == 0 && file.LinkTarget == "" && !strings.HasPrefix(archivePath, "rootfs/") {
 			return nil, fmt.Errorf("runtime artifact file %q is empty", file.ArchivePath)
 		}
 		if file.Mode == 0 {
@@ -500,6 +579,18 @@ func validateRuntimePayloadFiles(runtimeFamily string, files []FileManifest) err
 	for _, file := range files {
 		byPath[file.ArchivePath] = file
 	}
+	for _, file := range files {
+		if file.LinkTarget == "" {
+			continue
+		}
+		target, ok := byPath[file.LinkTarget]
+		if !ok || target.LinkTarget != "" {
+			return fmt.Errorf("runtime artifact hardlink target %q is missing", file.LinkTarget)
+		}
+		if target.SHA256 != file.SHA256 || target.SizeBytes != file.SizeBytes || target.Mode != file.Mode {
+			return fmt.Errorf("runtime artifact hardlink metadata mismatch for %q", file.ArchivePath)
+		}
+	}
 	if !runtimePayloadHasDynamicLoader(byPath) {
 		return fmt.Errorf("runtime artifact rootfs dynamic loader is missing")
 	}
@@ -557,6 +648,15 @@ func validateManifestFile(file FileManifest) error {
 	}
 	if archivePath != file.ArchivePath || !allowedRuntimeArchivePath(archivePath) {
 		return fmt.Errorf("runtime artifact contains unexpected archive path %q", file.ArchivePath)
+	}
+	if file.LinkTarget != "" {
+		linkTarget, err := cleanArchivePath(file.LinkTarget)
+		if err != nil {
+			return err
+		}
+		if linkTarget != file.LinkTarget || !strings.HasPrefix(archivePath, "rootfs/") || !strings.HasPrefix(linkTarget, "rootfs/") || archivePath == linkTarget {
+			return fmt.Errorf("runtime artifact contains unsafe hardlink target")
+		}
 	}
 	if !fileKindPattern.MatchString(file.FileKind) || !hex64Pattern.MatchString(strings.ToLower(strings.TrimSpace(file.SHA256))) {
 		return fmt.Errorf("invalid runtime artifact file metadata")
@@ -813,6 +913,23 @@ func writeTarFile(tw *tar.Writer, name string, body []byte, mode int64) error {
 	}
 	if _, err := tw.Write(body); err != nil {
 		return fmt.Errorf("write runtime artifact body %q: %w", name, err)
+	}
+	return nil
+}
+
+func writeTarHardlink(tw *tar.Writer, name string, linkTarget string, mode int64) error {
+	if mode == 0 {
+		mode = 0o644
+	}
+	hdr := &tar.Header{
+		Name:     name,
+		Linkname: linkTarget,
+		Typeflag: tar.TypeLink,
+		Mode:     mode & 0o777,
+		ModTime:  time.Unix(0, 0).UTC(),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return fmt.Errorf("write runtime artifact hardlink header %q: %w", name, err)
 	}
 	return nil
 }

@@ -803,8 +803,8 @@ export default function RuntimeAppsPanel() {
                         }}
                         className="w-full rounded border border-neutral-200 px-3 py-2 bg-white"
                       >
-                        <option value="php-fpm">php-fpm</option>
-                        <option value="psgi">psgi</option>
+                        <option value="php-fpm" disabled={!hasBuiltPHPRuntime}>php-fpm</option>
+                        <option value="psgi" disabled={!hasBuiltPSGIRuntime}>psgi</option>
                       </select>
                     </label>
                     <label className="space-y-1 text-xs">

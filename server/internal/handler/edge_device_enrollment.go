@@ -4125,6 +4125,11 @@ func extractEdgeRuntimeArtifactToStage(compressed []byte, parsed runtimeartifact
 	defer gr.Close()
 	tr := tar.NewReader(gr)
 	written := map[string]struct{}{}
+	type pendingRuntimeHardlink struct {
+		name   string
+		target string
+	}
+	var hardlinks []pendingRuntimeHardlink
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -4136,7 +4141,7 @@ func extractEdgeRuntimeArtifactToStage(compressed []byte, parsed runtimeartifact
 		if hdr == nil || hdr.Typeflag == tar.TypeDir {
 			continue
 		}
-		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA && hdr.Typeflag != tar.TypeLink {
 			return fmt.Errorf("runtime artifact contains non-regular entry %q", hdr.Name)
 		}
 		name, err := cleanEdgeRuntimeArchivePath(hdr.Name)
@@ -4154,6 +4159,20 @@ func extractEdgeRuntimeArtifactToStage(compressed []byte, parsed runtimeartifact
 			return fmt.Errorf("runtime artifact contains duplicate archive path %q", name)
 		}
 		written[name] = struct{}{}
+		if hdr.Typeflag == tar.TypeLink {
+			linkTarget, err := cleanEdgeRuntimeArchivePath(hdr.Linkname)
+			if err != nil {
+				return err
+			}
+			if manifestFile.LinkTarget == "" || manifestFile.LinkTarget != linkTarget {
+				return fmt.Errorf("runtime artifact hardlink target mismatch for %q", name)
+			}
+			hardlinks = append(hardlinks, pendingRuntimeHardlink{name: name, target: linkTarget})
+			continue
+		}
+		if manifestFile.LinkTarget != "" {
+			return fmt.Errorf("runtime artifact expected hardlink for %q", name)
+		}
 		target := filepath.Join(stageAbs, filepath.FromSlash(name))
 		if !edgePathWithin(stageAbs, target) {
 			return fmt.Errorf("runtime artifact path escapes install directory")
@@ -4163,6 +4182,22 @@ func extractEdgeRuntimeArtifactToStage(compressed []byte, parsed runtimeartifact
 		}
 		if err := writeEdgeRuntimeArtifactFile(target, tr, manifestFile.SizeBytes, manifestFile.Mode); err != nil {
 			return err
+		}
+	}
+	for _, link := range hardlinks {
+		target := filepath.Join(stageAbs, filepath.FromSlash(link.name))
+		source := filepath.Join(stageAbs, filepath.FromSlash(link.target))
+		if !edgePathWithin(stageAbs, target) || !edgePathWithin(stageAbs, source) {
+			return fmt.Errorf("runtime artifact path escapes install directory")
+		}
+		if _, exists := written[link.target]; !exists {
+			return fmt.Errorf("runtime artifact hardlink target %q was not installed", link.target)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		if err := os.Link(source, target); err != nil {
+			return fmt.Errorf("create runtime artifact hardlink %q: %w", link.name, err)
 		}
 	}
 	for _, file := range parsed.Manifest.Files {

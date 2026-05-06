@@ -2274,6 +2274,69 @@ func TestEdgeAppDeployBindingRootsRejectsUnsafeAdoptionSourceFallback(t *testing
 	}
 }
 
+func TestExtractEdgeRuntimeArtifactCreatesHardlinks(t *testing.T) {
+	build := buildTestRuntimeArtifactWithHardlink(t)
+	parsed, err := runtimeartifactbundle.Parse(build.Compressed)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	stageDir := t.TempDir()
+	if err := extractEdgeRuntimeArtifactToStage(build.Compressed, parsed, stageDir); err != nil {
+		t.Fatalf("extractEdgeRuntimeArtifactToStage: %v", err)
+	}
+	sourceInfo, err := os.Stat(filepath.Join(stageDir, "rootfs", "usr", "lib", "x86_64-linux-gnu", "ld-linux-x86-64.so.2"))
+	if err != nil {
+		t.Fatalf("stat source: %v", err)
+	}
+	linkInfo, err := os.Stat(filepath.Join(stageDir, "rootfs", "lib", "ld-linux-x86-64.so.2"))
+	if err != nil {
+		t.Fatalf("stat hardlink: %v", err)
+	}
+	if !os.SameFile(sourceInfo, linkInfo) {
+		t.Fatalf("runtime hardlink was not preserved as same file")
+	}
+}
+
+func buildTestRuntimeArtifactWithHardlink(t *testing.T) runtimeartifactbundle.Build {
+	t.Helper()
+	build, err := runtimeartifactbundle.BuildBundle(runtimeartifactbundle.BuildInput{
+		RuntimeFamily:   runtimeartifactbundle.RuntimeFamilyPSGI,
+		RuntimeID:       "perl540",
+		DisplayName:     "Perl 5.40",
+		DetectedVersion: "v5.40.0",
+		Target: runtimeartifactbundle.TargetKey{
+			OS:            "linux",
+			Arch:          "amd64",
+			KernelVersion: "6.8.0-test",
+			DistroID:      "ubuntu",
+			DistroIDLike:  "debian",
+			DistroVersion: "24.04",
+		},
+		BuilderVersion: "test-builder",
+		BuilderProfile: "ubuntu-24.04-amd64",
+		GeneratedAt:    time.Unix(1000, 0).UTC(),
+		Files: []runtimeartifactbundle.File{
+			{
+				ArchivePath: "runtime.json",
+				FileKind:    "metadata",
+				Mode:        0o644,
+				Body:        []byte(`{"runtime_id":"perl540","display_name":"Perl 5.40","detected_version":"v5.40.0","perl_path":"data/psgi/binaries/perl540/perl","starman_path":"data/psgi/binaries/perl540/starman","source":"bundled"}`),
+			},
+			{ArchivePath: "modules.json", FileKind: "metadata", Mode: 0o644, Body: []byte(`["plack","starman"]`)},
+			{ArchivePath: "perl", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "starman", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "rootfs/usr/local/bin/perl", FileKind: "rootfs", Mode: 0o755, Body: []byte("perl-binary")},
+			{ArchivePath: "rootfs/usr/local/bin/starman", FileKind: "rootfs", Mode: 0o755, Body: []byte("starman-binary")},
+			{ArchivePath: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2", FileKind: "rootfs", Mode: 0o755, Body: []byte("loader")},
+			{ArchivePath: "rootfs/lib/ld-linux-x86-64.so.2", FileKind: "rootfs", LinkTarget: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	return build
+}
+
 func quoteJSON(value string) string {
 	raw, _ := json.Marshal(value)
 	return string(raw)

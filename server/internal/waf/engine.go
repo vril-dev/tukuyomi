@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/corazawaf/coraza/v3"
@@ -80,7 +81,7 @@ func (e corazaEngine) InspectRequest(req *http.Request) (Decision, error) {
 	}()
 
 	tx.ProcessURI(req.URL.String(), req.Method, req.Proto)
-	tx.AddRequestHeader("Host", req.Host)
+	addCorazaRequestHeaders(tx, req)
 
 	var errs []error
 	_ = tx.ProcessRequestHeaders()
@@ -99,6 +100,45 @@ func (e corazaEngine) InspectRequest(req *http.Request) (Decision, error) {
 	}
 
 	return decision, errors.Join(errs...)
+}
+
+func addCorazaRequestHeaders(tx corazaTypes.Transaction, req *http.Request) {
+	if tx == nil || req == nil {
+		return
+	}
+	if req.Host != "" {
+		tx.AddRequestHeader("Host", req.Host)
+	}
+	for key, values := range req.Header {
+		key = strings.TrimSpace(key)
+		if key == "" || strings.EqualFold(key, "Host") {
+			continue
+		}
+		for _, value := range values {
+			tx.AddRequestHeader(key, value)
+		}
+	}
+	if req.Header.Get("Content-Length") == "" && shouldAddSyntheticContentLength(req) {
+		tx.AddRequestHeader("Content-Length", strconv.FormatInt(req.ContentLength, 10))
+	}
+	if req.Header.Get("Transfer-Encoding") == "" && len(req.TransferEncoding) > 0 {
+		tx.AddRequestHeader("Transfer-Encoding", strings.Join(req.TransferEncoding, ", "))
+	}
+}
+
+func shouldAddSyntheticContentLength(req *http.Request) bool {
+	if req == nil || req.ContentLength < 0 {
+		return false
+	}
+	if req.ContentLength > 0 {
+		return true
+	}
+	switch req.Method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch:
+		return true
+	default:
+		return false
+	}
 }
 
 func GetBaseEngine() Engine {

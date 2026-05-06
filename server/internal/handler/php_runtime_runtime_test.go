@@ -27,6 +27,7 @@ func TestValidateVhostConfigRawRequiresKnownRuntime(t *testing.T) {
 				BinaryPath: "data/php-fpm/binaries/php82/php-fpm",
 				Modules:    []string{"mbstring", "redis"},
 				Source:     "bundled",
+				Available:  true,
 			},
 		},
 	}
@@ -62,6 +63,7 @@ func TestValidateVhostConfigRawAcceptsKnownRuntimeWithoutSupportToggle(t *testin
 				BinaryPath: "data/php-fpm/binaries/php82/php-fpm",
 				Modules:    []string{"mbstring", "redis"},
 				Source:     "bundled",
+				Available:  true,
 			},
 		},
 	}
@@ -80,6 +82,89 @@ func TestValidateVhostConfigRawAcceptsKnownRuntimeWithoutSupportToggle(t *testin
   ]
 }`
 	if _, err := ValidateVhostConfigRawWithInventory(raw, inventory); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateVhostConfigRawRejectsUnavailablePHPRuntime(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	inventory := PHPRuntimeInventoryFile{
+		Runtimes: []PHPRuntimeRecord{
+			{
+				RuntimeID:           "php82",
+				BinaryPath:          "data/php-fpm/binaries/php82/php-fpm",
+				Modules:             []string{"mbstring", "redis"},
+				Source:              "bundled",
+				Available:           false,
+				AvailabilityMessage: "binary missing",
+			},
+		},
+	}
+	raw := `{
+  "vhosts": [
+    {
+      "name": "app",
+      "mode": "php-fpm",
+      "hostname": "app.example.com",
+      "listen_port": 9081,
+      "document_root": "apps/app/public",
+      "generated_target": "app-php",
+      "runtime_id": "php82",
+      "linked_upstream_name": "app"
+    }
+  ]
+}`
+	if _, err := ValidateVhostConfigRawWithInventory(raw, inventory); err == nil {
+		t.Fatal("expected unavailable runtime validation error")
+	} else if !strings.Contains(err.Error(), `references unavailable runtime "php82": binary missing`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateVhostConfigRawRejectsSensitiveDocumentRoot(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	raw := `{
+  "vhosts": [
+    {
+      "name": "docs",
+      "mode": "static",
+      "hostname": "127.0.0.1",
+      "listen_port": 9081,
+      "document_root": "/etc",
+      "generated_target": "docs-static"
+    }
+  ]
+}`
+	if _, err := ValidateVhostConfigRawWithInventory(raw, PHPRuntimeInventoryFile{}); err == nil {
+		t.Fatal("expected sensitive document_root validation error")
+	} else if !strings.Contains(err.Error(), "document_root: must not point to a system directory") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateVhostConfigRawRejectsEscapingRuntimeRoots(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	raw := `{
+  "vhosts": [
+    {
+      "name": "docs",
+      "mode": "static",
+      "hostname": "127.0.0.1",
+      "listen_port": 9081,
+      "document_root": "../etc",
+      "generated_target": "docs-static"
+    }
+  ]
+}`
+	if _, err := ValidateVhostConfigRawWithInventory(raw, PHPRuntimeInventoryFile{}); err == nil {
+		t.Fatal("expected escaping document_root validation error")
+	} else if !strings.Contains(err.Error(), "document_root: must not contain '..' path segments") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -149,7 +234,7 @@ func TestValidateVhostConfigRawAcceptsPSGIRuntime(t *testing.T) {
   }]
 }`
 	cfg, err := ValidateVhostConfigRawWithInventories(raw, PHPRuntimeInventoryFile{}, PSGIRuntimeInventoryFile{
-		Runtimes: []PSGIRuntimeRecord{{RuntimeID: "perl538", PerlPath: "perl", StarmanPath: "starman"}},
+		Runtimes: []PSGIRuntimeRecord{{RuntimeID: "perl538", PerlPath: "perl", StarmanPath: "starman", Available: true}},
 	})
 	if err != nil {
 		t.Fatalf("ValidateVhostConfigRawWithInventories: %v", err)
@@ -195,7 +280,7 @@ func TestPSGIVhostRuntimePreflightRequiresPSGIFile(t *testing.T) {
   }]
 }`
 	inventory := PSGIRuntimeInventoryFile{
-		Runtimes: []PSGIRuntimeRecord{{RuntimeID: "perl538", PerlPath: exe, StarmanPath: exe}},
+		Runtimes: []PSGIRuntimeRecord{{RuntimeID: "perl538", PerlPath: exe, StarmanPath: exe, Available: true}},
 	}
 	cfg, err := ValidateVhostConfigRawWithInventories(raw, PHPRuntimeInventoryFile{}, inventory)
 	if err != nil {
@@ -237,7 +322,7 @@ func TestPSGIVhostRuntimePreflightDoesNotRequireMovableTypeConfig(t *testing.T) 
   }]
 }`
 	inventory := PSGIRuntimeInventoryFile{
-		Runtimes: []PSGIRuntimeRecord{{RuntimeID: "perl538", PerlPath: exe, StarmanPath: exe}},
+		Runtimes: []PSGIRuntimeRecord{{RuntimeID: "perl538", PerlPath: exe, StarmanPath: exe, Available: true}},
 	}
 	cfg, err := ValidateVhostConfigRawWithInventories(raw, PHPRuntimeInventoryFile{}, inventory)
 	if err != nil {
@@ -264,6 +349,33 @@ func TestValidateVhostConfigRawRejectsUnknownPSGIRuntime(t *testing.T) {
 	_, err := ValidateVhostConfigRawWithInventories(raw, PHPRuntimeInventoryFile{}, PSGIRuntimeInventoryFile{})
 	if err == nil || !strings.Contains(err.Error(), `unknown psgi runtime "perl538"`) {
 		t.Fatalf("err=%v want unknown psgi runtime", err)
+	}
+}
+
+func TestValidateVhostConfigRawRejectsUnavailablePSGIRuntime(t *testing.T) {
+	raw := `{
+  "vhosts": [{
+    "name": "mt-site",
+    "mode": "psgi",
+    "hostname": "mt.example.test",
+    "listen_port": 9501,
+    "document_root": "data/mt/mt-static",
+    "runtime_id": "perl538",
+    "app_root": "data/mt/MT-9.0.7",
+    "psgi_file": "mt.psgi"
+  }]
+}`
+	_, err := ValidateVhostConfigRawWithInventories(raw, PHPRuntimeInventoryFile{}, PSGIRuntimeInventoryFile{
+		Runtimes: []PSGIRuntimeRecord{{
+			RuntimeID:           "perl538",
+			PerlPath:            "data/psgi/binaries/perl538/perl",
+			StarmanPath:         "data/psgi/binaries/perl538/starman",
+			Available:           false,
+			AvailabilityMessage: "module manifest not found",
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), `references unavailable psgi runtime "perl538": module manifest not found`) {
+		t.Fatalf("err=%v want unavailable psgi runtime", err)
 	}
 }
 
@@ -385,6 +497,7 @@ func TestValidateVhostConfigRawGeneratesHiddenTargetWhenOmitted(t *testing.T) {
 				BinaryPath: "data/php-fpm/binaries/php82/php-fpm",
 				Modules:    []string{"mbstring", "redis"},
 				Source:     "bundled",
+				Available:  true,
 			},
 		},
 	}
@@ -436,6 +549,7 @@ func TestValidateVhostConfigRawAllowsOmittedLinkedUpstreamName(t *testing.T) {
 				BinaryPath: "data/php-fpm/binaries/php82/php-fpm",
 				Modules:    []string{"mbstring", "redis"},
 				Source:     "bundled",
+				Available:  true,
 			},
 		},
 	}
@@ -472,6 +586,7 @@ func TestValidateVhostConfigRawRejectsDuplicateLinkedUpstreamNames(t *testing.T)
 				BinaryPath: "data/php-fpm/binaries/php82/php-fpm",
 				Modules:    []string{"mbstring", "redis"},
 				Source:     "bundled",
+				Available:  true,
 			},
 		},
 	}
@@ -515,6 +630,7 @@ func TestValidateVhostConfigRawAllowsSamePortOnDifferentListenHosts(t *testing.T
 				BinaryPath: "data/php-fpm/binaries/php82/php-fpm",
 				Modules:    []string{"mbstring"},
 				Source:     "bundled",
+				Available:  true,
 			},
 		},
 	}
@@ -564,6 +680,7 @@ func TestValidateVhostConfigRawRejectsDuplicateListenTarget(t *testing.T) {
 				BinaryPath: "data/php-fpm/binaries/php82/php-fpm",
 				Modules:    []string{"mbstring"},
 				Source:     "bundled",
+				Available:  true,
 			},
 		},
 	}

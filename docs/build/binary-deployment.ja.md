@@ -73,7 +73,7 @@ make install TARGET=linux-systemd \
 - `INSTALL_ROLE=center` は `tukuyomi-center.service`、`tukuyomi-center.env`、`conf/config.center.json` を対象とし、DB マイグレーションのみを実行します。WAF／CRS インポート、Gateway シード、スケジュールタスクは実行しません
 - `INSTALL_ROLE=center-protected` は `tukuyomi.service` と `tukuyomi-center.service` の両方を導入します。Center は loopback で待ち受け、Gateway seed は `/center-ui` と `/center-api` を `http://127.0.0.1:9092` へ転送します。Gateway の IoT / Edge device authentication を有効化し、対応する Center 承認もローカルで bootstrap します。scheduled-task timer は導入しません
 - `INSTALL_CENTER_API_BASE_PATH` は Center process が受ける API path、`INSTALL_CENTER_GATEWAY_API_BASE_PATH` は Gateway で公開する API route path です。両者が異なる場合、生成される Gateway route は公開 path を Center 側 path へ rewrite してから upstream へ転送します
-- Center を直接露出する場合の送信元 IP allowlist は 3 種類あります。`TUKUYOMI_CENTER_CLIENT_ALLOW_CIDRS` は Center UI client、`TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS` は管理 API、`TUKUYOMI_CENTER_API_ALLOW_CIDRS` は Gateway/device API に適用します。client と Gateway/device は空欄なら任意の送信元を許可し、管理 API は既定で loopback と private/local CIDR を許可します
+- Center を直接公開する場合の送信元 IP allowlist は 3 種類あります。`TUKUYOMI_CENTER_CLIENT_ALLOW_CIDRS` は Center UI client、`TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS` は管理 API、`TUKUYOMI_CENTER_API_ALLOW_CIDRS` は Gateway/device API に適用します。client と Gateway/device は空欄なら任意の送信元を許可し、管理 API は既定で loopback と private/local CIDR を許可します
 - `PREFIX` が実行ユーザーのホーム配下にある場合、`INSTALL_CREATE_USER=auto` は実行ユーザーをそのままランタイムユーザーとし、`useradd` は実行しません
 - ホーム配下にインストールしたランタイムツリーは、その login ユーザーとプライマリグループの所有になります
 - `/opt/tukuyomi` などのシステムパスの場合、既定では `tukuyomi` システムユーザー／グループを作成または再利用します
@@ -359,9 +359,9 @@ make php-fpm-copy RUNTIME=php85 DEST="$HOME/tukuyomi"
 
 ## シークレットの取り扱い
 
-- `admin.session_secret` は管理対象のアプリ設定に保持し、ブラウザへ露出しないでください
+- `admin.session_secret` は管理対象のアプリケーション設定に保持し、ブラウザーへ露出しないでください
 - `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` ／ `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` は、管理ユーザーテーブルが空の状態での初回オーナーブートストラップにのみ使用してください
-- ブラウザ操作するオペレーターはユーザー名／パスワードでサインインし、同一オリジンの DB ベースセッションクッキーを受け取ります
+- ブラウザー操作するオペレーターはユーザー名／パスワードでサインインし、同一オリジンの DB ベースセッションクッキーを受け取ります
 - CLI ／自動化処理では、共有の管理 API キーではなくユーザー単位の個人アクセストークンを使用してください
 - `tukuyomi` の既定方針は `admin.external_mode=api_only_external` です。リモート管理 API が不要であれば `deny_external` にしてください
 - 非ループバックリスナー上で `admin.external_mode=full_external` を使う場合は、起動時の警告だけに頼らず、フロント側で許可リスト／認証を追加してください

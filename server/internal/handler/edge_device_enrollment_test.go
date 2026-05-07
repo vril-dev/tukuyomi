@@ -2202,6 +2202,48 @@ func TestEdgePHPFPMAppDeployRootsFallbackForNonPublicDocumentRoot(t *testing.T) 
 	}
 }
 
+func TestEdgeRuntimeAvailableForAppDeployRequiresInstalledRuntime(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	tmp := t.TempDir()
+	phpInventoryPath := filepath.Join(tmp, "php-inventory.json")
+	psgiInventoryPath := filepath.Join(tmp, "psgi-inventory.json")
+	if err := os.WriteFile(phpInventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write php inventory: %v", err)
+	}
+	if err := os.WriteFile(psgiInventoryPath, []byte(defaultPSGIRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write psgi inventory: %v", err)
+	}
+	if err := InitPHPRuntimeInventoryRuntime(phpInventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+	if err := InitPSGIRuntimeInventoryRuntime(psgiInventoryPath, 2); err != nil {
+		t.Fatalf("InitPSGIRuntimeInventoryRuntime: %v", err)
+	}
+	if ok, message := edgeRuntimeAvailableForAppDeploy("php-fpm", "php85"); ok || !strings.Contains(message, "not installed") {
+		t.Fatalf("php availability ok=%v message=%q want not installed", ok, message)
+	}
+	if ok, message := edgeRuntimeAvailableForAppDeploy("psgi", "perl538"); ok || !strings.Contains(message, "not installed") {
+		t.Fatalf("psgi availability ok=%v message=%q want not installed", ok, message)
+	}
+
+	writeTestPHPRuntimeArtifact(t, phpInventoryPath, "php85", testPHPRuntimeArtifactOptions{})
+	writeTestPSGIRuntimeArtifact(t, psgiInventoryPath, "perl538")
+	if err := InitPHPRuntimeInventoryRuntime(phpInventoryPath, 2); err != nil {
+		t.Fatalf("reinit php inventory: %v", err)
+	}
+	if err := InitPSGIRuntimeInventoryRuntime(psgiInventoryPath, 2); err != nil {
+		t.Fatalf("reinit psgi inventory: %v", err)
+	}
+	if ok, message := edgeRuntimeAvailableForAppDeploy("php-fpm", "php85"); !ok {
+		t.Fatalf("php availability ok=false message=%q", message)
+	}
+	if ok, message := edgeRuntimeAvailableForAppDeploy("psgi", "perl538"); !ok {
+		t.Fatalf("psgi availability ok=false message=%q", message)
+	}
+}
+
 func TestNormalizeEdgeAppDeployRootAllowsSourceRootAndRejectsUnsafeSourcePath(t *testing.T) {
 	root, ok := normalizeEdgeAppDeployRoot(edgeAppDeployRoot{
 		RootID:         "source_root",
@@ -2271,6 +2313,61 @@ func TestEdgeAppDeployBindingRootsRejectsUnsafeAdoptionSourceFallback(t *testing
 	})
 	if err == nil || !strings.Contains(err.Error(), "source_path must be under data/vhosts") {
 		t.Fatalf("err=%v want source_path boundary error", err)
+	}
+}
+
+func TestEdgeAppDeployBindingRootsAllowsInitialManagedTransition(t *testing.T) {
+	managedRoot, roots, err := edgeAppDeployBindingRoots("app-1", VhostConfig{
+		DocumentRoot: "data/vhosts/app/public",
+	}, edgeAppDeployDeviceAssignment{
+		Operation: "deploy",
+		Roots: []edgeAppDeployRoot{{
+			RootID:         "source_root",
+			RuntimeField:   "document_root",
+			SourcePath:     "data/vhosts/app/public",
+			PackagePrefix:  "public",
+			TargetSubpath:  "public",
+			RuntimeSubpath: "public",
+			Required:       true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("edgeAppDeployBindingRoots: %v", err)
+	}
+	if !strings.HasSuffix(filepath.ToSlash(managedRoot), "data/app-deployments/app-1") {
+		t.Fatalf("managedRoot=%q", managedRoot)
+	}
+	if len(roots) != 1 {
+		t.Fatalf("roots=%d want 1", len(roots))
+	}
+	if got, want := filepath.ToSlash(roots[0].RuntimePath), filepath.ToSlash(roots[0].SourcePath); got != want {
+		t.Fatalf("RuntimePath=%q SourcePath=%q want initial transition from source path", got, want)
+	}
+	if got := edgeAppDeployManagedRuntimePath("app-1", roots[0].Root); got != "data/app-deployments/app-1/current/public" {
+		t.Fatalf("managed runtime path=%q", got)
+	}
+	if !strings.HasSuffix(filepath.ToSlash(roots[0].ExpectedPath), "data/app-deployments/app-1/current/public") {
+		t.Fatalf("ExpectedPath=%q", roots[0].ExpectedPath)
+	}
+}
+
+func TestEdgeAppDeployBindingRootsRejectsUnexpectedUnmanagedDeployPath(t *testing.T) {
+	_, _, err := edgeAppDeployBindingRoots("app-1", VhostConfig{
+		DocumentRoot: "data/vhosts/other/public",
+	}, edgeAppDeployDeviceAssignment{
+		Operation: "deploy",
+		Roots: []edgeAppDeployRoot{{
+			RootID:         "source_root",
+			RuntimeField:   "document_root",
+			SourcePath:     "data/vhosts/app/public",
+			PackagePrefix:  "public",
+			TargetSubpath:  "public",
+			RuntimeSubpath: "public",
+			Required:       true,
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "must point to data/app-deployments/app-1/current/public") {
+		t.Fatalf("err=%v want managed path error", err)
 	}
 }
 

@@ -723,6 +723,13 @@ pre {
   font-size: 12px;
 }
 
+.center-screen-panel {
+  flex-direction: column;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+}
+
 .login-screen {
   display: flex;
   align-items: center;
@@ -1459,7 +1466,6 @@ button.danger {
 }
 
 .rules-bundle-modal-facts {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 12px;
 }
 
@@ -1503,8 +1509,9 @@ button.danger {
   grid-column: span 3;
 }
 
+.app-deploy-roots textarea,
 .app-deploy-script textarea {
-  min-height: 96px;
+  min-height: 192px;
   resize: vertical;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
@@ -1695,6 +1702,10 @@ button.danger {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+}
+
+.summary-grid.rules-bundle-modal-facts {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .summary-grid > div {

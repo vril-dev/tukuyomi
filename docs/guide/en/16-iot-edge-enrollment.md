@@ -174,6 +174,17 @@ paths, so Center cannot replace an arbitrary document root or app root.
 Rollback is manual: choose an older saved package, review the diff, and
 confirm the rollback request.
 
+Once baseline adoption or the first Center-managed deploy succeeds, the
+Gateway rewrites the matching Runtime Apps binding to the managed path.
+For PHP-FPM, `document_root` typically moves from the original source
+under `data/vhosts/...` to
+`data/app-deployments/<app-id>/current/public`. For PSGI, `app_root`
+and/or `document_root` move to the matching `current/<runtime-subpath>`
+entries. After that switch, the old `data/vhosts/...` directory is only
+the source that was adopted. Operators should upload a new package from
+Center for future changes, or deliberately point Runtime Apps back at a
+local path before leaving Center-managed deployment.
+
 The feature is guarded by
 `TUKUYOMI_CENTER_EXPERIMENTAL_APP_DEPLOY_ENABLED` on the Center side so
 it can be removed from the operator surface without changing the core

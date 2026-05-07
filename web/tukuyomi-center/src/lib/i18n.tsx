@@ -16,6 +16,8 @@ const DEFAULT_LOCALE: Locale = "en";
 
 const JA_STRINGS: Record<string, string> = {
   "Checking admin session...": "管理セッションを確認しています...",
+  "Admin session check failed.": "管理セッションの確認に失敗しました。",
+  Retry: "再試行",
   "Admin Sign In": "管理ログイン",
   "Sign in with your admin user to create a browser session.": "管理ユーザーでログインしてブラウザセッションを作成します。",
   "Username or email": "ユーザー名またはメールアドレス",
@@ -222,6 +224,8 @@ const JA_STRINGS: Record<string, string> = {
   "Upload package": "パッケージをアップロード",
   "App package uploaded and deployment request queued.": "アプリパッケージをアップロードし、配信要求を登録しました。",
   "App package uploaded.": "アプリパッケージをアップロードしました。",
+  "App package uploaded. Use Deploy in Saved app packages to apply it.":
+    "アプリパッケージをアップロードしました。Saved app packages の Deploy から配信します。",
   "Failed to upload app package": "アプリパッケージのアップロードに失敗しました",
   "Pending app deploy request": "保留中のアプリ配信要求",
   "No pending app deployment request.": "保留中のアプリ配信要求はありません。",

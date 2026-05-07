@@ -2066,6 +2066,9 @@ func currentEdgeAppDeployCandidates() []edgeAppDeployCandidate {
 		}
 		family := normalizeVhostMode(vhost.Mode)
 		runtimeID := clampEdgeMetadataText(vhost.RuntimeID, 64)
+		if ok, _ := edgeRuntimeAvailableForAppDeploy(family, runtimeID); !ok {
+			continue
+		}
 		var roots []edgeAppDeployRoot
 		switch family {
 		case "php-fpm":
@@ -2112,6 +2115,40 @@ func currentEdgeAppDeployCandidates() []edgeAppDeployCandidate {
 		out = out[:64]
 	}
 	return out
+}
+
+func edgeRuntimeAvailableForAppDeploy(family string, runtimeID string) (bool, string) {
+	family = strings.ToLower(strings.TrimSpace(family))
+	runtimeID = clampEdgeMetadataText(runtimeID, 64)
+	if runtimeID == "" {
+		return false, "Runtime Apps binding runtime_id is empty"
+	}
+	switch family {
+	case "php-fpm":
+		for _, runtime := range currentPHPRuntimeInventoryConfig().Runtimes {
+			if strings.TrimSpace(runtime.RuntimeID) != runtimeID {
+				continue
+			}
+			if !runtime.Available {
+				return false, "php-fpm runtime " + runtimeID + " is unavailable" + runtimeAvailabilitySuffix(runtime.AvailabilityMessage)
+			}
+			return true, ""
+		}
+		return false, "php-fpm runtime " + runtimeID + " is not installed"
+	case "psgi":
+		for _, runtime := range currentPSGIRuntimeInventoryConfig().Runtimes {
+			if strings.TrimSpace(runtime.RuntimeID) != runtimeID {
+				continue
+			}
+			if !runtime.Available {
+				return false, "psgi runtime " + runtimeID + " is unavailable" + runtimeAvailabilitySuffix(runtime.AvailabilityMessage)
+			}
+			return true, ""
+		}
+		return false, "psgi runtime " + runtimeID + " is not installed"
+	default:
+		return false, "Runtime Apps binding family is unsupported"
+	}
 }
 
 func edgePHPFPMAppDeployRoots(vhost VhostConfig) []edgeAppDeployRoot {
@@ -2831,9 +2868,13 @@ func applyEdgeAppDeployAssignment(ctx context.Context, identity edgeDeviceIdenti
 	}
 	defer endEdgeAppDeployAssignmentOp(normalized.AppID)
 
+	desiredRevision := normalized.PackageRevision
+	if normalized.Operation == "adopt" {
+		desiredRevision = normalized.ProfileRevision
+	}
 	status := edgeAppDeployApplyStatus{
 		AppID:                  normalized.AppID,
-		DesiredPackageRevision: normalized.PackageRevision,
+		DesiredPackageRevision: desiredRevision,
 		ApplyState:             "applying",
 	}
 	setEdgeAppDeployApplyStatus(status)
@@ -2847,7 +2888,7 @@ func applyEdgeAppDeployAssignment(ctx context.Context, identity edgeDeviceIdenti
 	}
 
 	if normalized.Operation == "adopt" {
-		revision, hash, output, err := uploadEdgeAppDeployBaseline(ctx, identity, normalized, binding)
+		downloaded, output, err := uploadEdgeAppDeployBaseline(ctx, identity, normalized, binding)
 		status.OutputTail = output
 		if err != nil {
 			status.ApplyState = "failed"
@@ -2855,10 +2896,64 @@ func applyEdgeAppDeployAssignment(ctx context.Context, identity edgeDeviceIdenti
 			setEdgeAppDeployApplyStatus(status)
 			return
 		}
+		releaseDir, installOutput, err := installEdgeAppDeployPackage(ctx, binding, normalized, downloaded)
+		status.OutputTail = edgeMergeOutputTail(output, installOutput)
+		if err != nil {
+			status.ApplyState = "failed"
+			status.ApplyError = err.Error()
+			setEdgeAppDeployApplyStatus(status)
+			return
+		}
+		if err := switchEdgeAppDeployCurrent(binding.ManagedRoot, downloaded.PackageRevision); err != nil {
+			status.ApplyState = "failed"
+			status.ApplyError = err.Error()
+			setEdgeAppDeployApplyStatus(status)
+			return
+		}
+		if err := updateEdgeAppDeployRuntimeBinding(binding); err != nil {
+			status.ApplyState = "failed_after_switch"
+			status.ApplyError = err.Error()
+			status.LocalPackageRevision = downloaded.PackageRevision
+			status.LocalPackageHash = downloaded.PackageHash
+			setEdgeAppDeployApplyStatus(status)
+			return
+		}
+		postOutput, err := runEdgeAppDeployScript(ctx, normalized.PostSwitchScript, releaseDir, normalized.ScriptTimeoutSec, binding, downloaded.PackageRevision, downloaded.Parsed)
+		status.OutputTail = edgeMergeOutputTail(status.OutputTail, postOutput)
+		if err != nil {
+			status.ApplyState = "failed_after_switch"
+			status.ApplyError = err.Error()
+			status.LocalPackageRevision = downloaded.PackageRevision
+			status.LocalPackageHash = downloaded.PackageHash
+			setEdgeAppDeployApplyStatus(status)
+			return
+		}
+		if err := restartEdgeAppDeployRuntime(binding, normalized.RestartBehavior); err != nil {
+			status.ApplyState = "failed_after_switch"
+			status.ApplyError = err.Error()
+			status.LocalPackageRevision = downloaded.PackageRevision
+			status.LocalPackageHash = downloaded.PackageHash
+			setEdgeAppDeployApplyStatus(status)
+			return
+		}
+		if err := writeEdgeAppDeployState(binding.ManagedRoot, edgeAppDeployStateFile{
+			SchemaVersion:   1,
+			AppID:           binding.AppID,
+			PackageRevision: downloaded.PackageRevision,
+			PackageHash:     downloaded.PackageHash,
+			AppliedAtUnix:   time.Now().UTC().Unix(),
+		}); err != nil {
+			status.ApplyState = "failed_after_switch"
+			status.ApplyError = err.Error()
+			status.LocalPackageRevision = downloaded.PackageRevision
+			status.LocalPackageHash = downloaded.PackageHash
+			setEdgeAppDeployApplyStatus(status)
+			return
+		}
 		status.ApplyState = "applied"
 		status.ApplyError = ""
-		status.LocalPackageRevision = revision
-		status.LocalPackageHash = hash
+		status.LocalPackageRevision = downloaded.PackageRevision
+		status.LocalPackageHash = downloaded.PackageHash
 		setEdgeAppDeployApplyStatus(status)
 		return
 	}
@@ -2885,6 +2980,14 @@ func applyEdgeAppDeployAssignment(ctx context.Context, identity edgeDeviceIdenti
 		status.ApplyState = "failed"
 		status.ApplyError = err.Error()
 		status.OutputTail = output
+		setEdgeAppDeployApplyStatus(status)
+		return
+	}
+	if err := updateEdgeAppDeployRuntimeBinding(binding); err != nil {
+		status.ApplyState = "failed_after_switch"
+		status.ApplyError = err.Error()
+		status.LocalPackageRevision = downloaded.PackageRevision
+		status.LocalPackageHash = downloaded.PackageHash
 		setEdgeAppDeployApplyStatus(status)
 		return
 	}
@@ -2988,6 +3091,8 @@ func normalizeEdgeAppDeployAssignment(in edgeAppDeployDeviceAssignment) (edgeApp
 			out.FileCount <= 0 || out.FileCount > appdeploybundle.MaxFiles {
 			return edgeAppDeployDeviceAssignment{}, false
 		}
+	} else if out.ProfileRevision == "" {
+		return edgeAppDeployDeviceAssignment{}, false
 	}
 	return out, true
 }
@@ -3092,6 +3197,9 @@ func edgeAppDeployBindingForAssignment(assignment edgeAppDeployDeviceAssignment)
 		if assignment.RuntimeID != "" && runtimeID != "" && assignment.RuntimeID != runtimeID {
 			return edgeAppDeployBinding{}, fmt.Errorf("Runtime Apps binding runtime_id does not match assignment")
 		}
+		if ok, message := edgeRuntimeAvailableForAppDeploy(family, runtimeID); !ok {
+			return edgeAppDeployBinding{}, fmt.Errorf("Runtime Apps binding runtime is unavailable: %s", message)
+		}
 		root, boundRoots, err := edgeAppDeployBindingRoots(appID, vhost, assignment)
 		if err != nil {
 			return edgeAppDeployBinding{}, err
@@ -3125,7 +3233,6 @@ func edgeAppDeployBindingRoots(appID string, vhost VhostConfig, assignment edgeA
 	if err != nil {
 		return "", nil, err
 	}
-	currentAbs := filepath.Join(managedRoot, "current")
 	bound := make([]edgeAppDeployBoundRoot, 0, len(assignment.Roots))
 	seen := map[string]struct{}{}
 	for _, root := range assignment.Roots {
@@ -3141,10 +3248,6 @@ func edgeAppDeployBindingRoots(appID string, vhost VhostConfig, assignment edgeA
 		if err != nil {
 			return "", nil, err
 		}
-		expectedAbs := filepath.Join(currentAbs, filepath.FromSlash(edgeAppDeployRuntimeSubpath(root)))
-		if assignment.Operation != "adopt" && filepath.Clean(targetAbs) != filepath.Clean(expectedAbs) {
-			return "", nil, fmt.Errorf("Runtime Apps %s must point to data/app-deployments/%s/current/%s", root.RuntimeField, appID, edgeAppDeployRuntimeSubpath(root))
-		}
 		sourcePath := strings.TrimSpace(root.SourcePath)
 		if sourcePath == "" && assignment.Operation == "adopt" {
 			sourcePath = edgeAppDeploySafeSourcePath(runtimePath)
@@ -3159,6 +3262,16 @@ func edgeAppDeployBindingRoots(appID string, vhost VhostConfig, assignment edgeA
 				return "", nil, err
 			}
 		}
+		expectedRuntimePath := edgeAppDeployManagedRuntimePath(appID, root)
+		expectedAbs, err := filepath.Abs(filepath.Clean(expectedRuntimePath))
+		if err != nil {
+			return "", nil, err
+		}
+		if assignment.Operation != "adopt" && filepath.Clean(targetAbs) != filepath.Clean(expectedAbs) {
+			if sourceAbs == "" || filepath.Clean(targetAbs) != filepath.Clean(sourceAbs) {
+				return "", nil, fmt.Errorf("Runtime Apps %s must point to %s", root.RuntimeField, expectedRuntimePath)
+			}
+		}
 		bound = append(bound, edgeAppDeployBoundRoot{
 			Root:         root,
 			RuntimePath:  targetAbs,
@@ -3167,6 +3280,14 @@ func edgeAppDeployBindingRoots(appID string, vhost VhostConfig, assignment edgeA
 		})
 	}
 	return managedRoot, bound, nil
+}
+
+func edgeAppDeployManagedRuntimePath(appID string, root edgeAppDeployRoot) string {
+	parts := []string{"data", "app-deployments", appID, "current"}
+	if subpath := edgeAppDeployRuntimeSubpath(root); subpath != "" {
+		parts = append(parts, filepath.FromSlash(subpath))
+	}
+	return filepath.ToSlash(filepath.Join(parts...))
 }
 
 func edgeAppDeployRuntimeSubpath(root edgeAppDeployRoot) string {
@@ -3185,6 +3306,42 @@ func edgeRuntimePathForDeployRoot(vhost VhostConfig, runtimeField string) string
 	default:
 		return ""
 	}
+}
+
+func updateEdgeAppDeployRuntimeBinding(binding edgeAppDeployBinding) error {
+	_, etag, cfg, _ := VhostConfigSnapshot()
+	if len(cfg.Vhosts) == 0 {
+		return fmt.Errorf("Runtime Apps config has no bindings")
+	}
+	updated := false
+	for i := range cfg.Vhosts {
+		if !edgeVhostMatchesAppID(cfg.Vhosts[i], binding.AppID) {
+			continue
+		}
+		for _, root := range binding.Roots {
+			nextPath := edgeAppDeployManagedRuntimePath(binding.AppID, root.Root)
+			switch strings.ToLower(strings.TrimSpace(root.Root.RuntimeField)) {
+			case "document_root":
+				if cfg.Vhosts[i].DocumentRoot != nextPath {
+					cfg.Vhosts[i].DocumentRoot = nextPath
+					updated = true
+				}
+			case "app_root":
+				if cfg.Vhosts[i].AppRoot != nextPath {
+					cfg.Vhosts[i].AppRoot = nextPath
+					updated = true
+				}
+			default:
+				return fmt.Errorf("Runtime Apps binding has unsupported deploy field")
+			}
+		}
+		if !updated {
+			return nil
+		}
+		_, _, err := ApplyVhostConfigRaw(etag, mustJSON(cfg))
+		return err
+	}
+	return fmt.Errorf("Runtime Apps binding for app_id %q was not found", binding.AppID)
 }
 
 func downloadEdgeAppDeployPackage(ctx context.Context, identity edgeDeviceIdentityRecord, assignment edgeAppDeployDeviceAssignment, binding edgeAppDeployBinding) (edgeDownloadedAppDeployPackage, error) {
@@ -3227,36 +3384,41 @@ func downloadEdgeAppDeployPackage(ctx context.Context, identity edgeDeviceIdenti
 	}, nil
 }
 
-func uploadEdgeAppDeployBaseline(ctx context.Context, identity edgeDeviceIdentityRecord, assignment edgeAppDeployDeviceAssignment, binding edgeAppDeployBinding) (string, string, string, error) {
+func uploadEdgeAppDeployBaseline(ctx context.Context, identity edgeDeviceIdentityRecord, assignment edgeAppDeployDeviceAssignment, binding edgeAppDeployBinding) (edgeDownloadedAppDeployPackage, string, error) {
 	uploadURL, err := centerAppDeployBaselineUploadURL(identity.CenterURL)
 	if err != nil {
-		return "", "", "", err
+		return edgeDownloadedAppDeployPackage{}, "", err
 	}
 	body, parsed, err := buildEdgeAppDeployBaselineArchive(binding)
 	if err != nil {
-		return "", "", "", err
+		return edgeDownloadedAppDeployPackage{}, "", err
 	}
 	wireReq, err := signedEdgeAppDeployBaselineUploadRequest(identity, assignment, parsed, body)
 	if err != nil {
-		return "", "", "", err
+		return edgeDownloadedAppDeployPackage{}, "", err
 	}
 	httpStatus, respBody, err := sendEdgeAppDeployBaselineUpload(ctx, uploadURL, wireReq)
 	if err != nil {
-		return "", "", "", err
+		return edgeDownloadedAppDeployPackage{}, "", err
 	}
 	if httpStatus < 200 || httpStatus >= 300 {
-		return "", "", "", fmt.Errorf("%s", centerHTTPErrorMessage("center app deploy baseline upload failed", httpStatus, respBody))
+		return edgeDownloadedAppDeployPackage{}, "", fmt.Errorf("%s", centerHTTPErrorMessage("center app deploy baseline upload failed", httpStatus, respBody))
 	}
 	var decoded edgeAppDeployBaselineUploadResponse
 	if err := json.Unmarshal(respBody, &decoded); err != nil {
-		return "", "", "", fmt.Errorf("decode center app deploy baseline response: %w", err)
+		return edgeDownloadedAppDeployPackage{}, "", fmt.Errorf("decode center app deploy baseline response: %w", err)
 	}
 	revision := normalizeEdgeHex64(decoded.Package.PackageRevision)
 	hash := normalizeEdgeHex64(decoded.Package.PackageHash)
 	if revision == "" || hash == "" || hash != parsed.PackageHash {
-		return "", "", "", fmt.Errorf("center app deploy baseline response is invalid")
+		return edgeDownloadedAppDeployPackage{}, "", fmt.Errorf("center app deploy baseline response is invalid")
 	}
-	return revision, hash, "", nil
+	return edgeDownloadedAppDeployPackage{
+		PackageRevision: revision,
+		PackageHash:     hash,
+		Compressed:      append([]byte(nil), body...),
+		Parsed:          parsed,
+	}, "", nil
 }
 
 func buildEdgeAppDeployBaselineArchive(binding edgeAppDeployBinding) ([]byte, appdeploybundle.Parsed, error) {

@@ -17,17 +17,33 @@ import UserPage from "@/pages/UserPage";
 import WAFRulesPage from "@/pages/WAFRulesPage";
 
 function ProtectedLayout() {
-  const { loading, session } = useAuth();
+  const { loading, session, sessionError, refresh } = useAuth();
   const { tx } = useI18n();
   const location = useLocation();
 
   if (loading) {
     return <div className="center-screen-message">{tx("Checking admin session...")}</div>;
   }
+  if (sessionError) {
+    return <SessionCheckError message={sessionError} onRetry={() => void refresh()} />;
+  }
   if (!session.authenticated) {
     return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}${location.hash}` }} />;
   }
   return <Layout />;
+}
+
+function SessionCheckError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const { tx } = useI18n();
+  return (
+    <div className="center-screen-message center-screen-panel">
+      <span>{tx("Admin session check failed.")}</span>
+      <span>{message}</span>
+      <button type="button" className="secondary-btn" onClick={onRetry}>
+        {tx("Retry")}
+      </button>
+    </div>
+  );
 }
 
 function LoginRoute({

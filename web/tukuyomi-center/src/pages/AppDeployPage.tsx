@@ -265,6 +265,24 @@ function defaultRootsForFamily(runtimeFamily: string): AppDeployRootRecord[] {
   ];
 }
 
+function rootsForEditor(roots: AppDeployRootRecord[] | undefined, runtimeFamily: string): AppDeployRootRecord[] {
+  return (roots && roots.length > 0 ? roots : defaultRootsForFamily(runtimeFamily)).map((root) => ({
+    ...root,
+    source_path: root.source_path || "",
+  }));
+}
+
+function packagesWithUploadedPackage(packages: AppDeployPackageRecord[] | undefined, pkg: AppDeployPackageRecord) {
+  const out = [pkg, ...(packages || []).filter((item) => item.package_revision !== pkg.package_revision)];
+  out.sort((a, b) => {
+    if (a.uploaded_at_unix !== b.uploaded_at_unix) {
+      return b.uploaded_at_unix - a.uploaded_at_unix;
+    }
+    return b.package_revision.localeCompare(a.package_revision);
+  });
+  return out.slice(0, 50);
+}
+
 function prettyRoots(roots: AppDeployRootRecord[] | undefined) {
   if (!roots || roots.length === 0) {
     return "-";
@@ -347,6 +365,14 @@ export default function AppDeployPage() {
     return out;
   }, [profiles]);
 
+  const candidateByApp = useMemo(() => {
+    const out = new Map<string, AppDeployCandidateRecord>();
+    for (const candidate of candidates) {
+      out.set(candidate.app_id, candidate);
+    }
+    return out;
+  }, [candidates]);
+
   const latestHistoryByPackage = useMemo(() => {
     const out = new Map<string, AppDeployHistoryRecord>();
     for (const item of history) {
@@ -389,6 +415,29 @@ export default function AppDeployPage() {
     return () => window.clearInterval(timer);
   }, [request, loadDeployments]);
 
+  useEffect(() => {
+    if (candidates.length === 0 || candidateByApp.has(appID.trim())) {
+      return;
+    }
+    const candidate = candidates[0];
+    setAppID(candidate.app_id);
+    setRuntimeFamily(candidate.runtime_family);
+    setRuntimeID(candidate.runtime_id || "");
+    setRootsJSON(JSON.stringify(rootsForEditor(candidate.roots, candidate.runtime_family), null, 2));
+  }, [appID, candidateByApp, candidates]);
+
+  const selectedCandidate = candidateByApp.get(appID.trim());
+  const uploadTargetReady =
+    Boolean(selectedCandidate) &&
+    selectedCandidate?.runtime_family === runtimeFamily &&
+    (selectedCandidate?.runtime_id || "") === runtimeID;
+  const uploadTargetMessage =
+    candidates.length === 0
+      ? tx("No deployable Runtime App is reported. Install a runtime and bind a Runtime App first.")
+      : !uploadTargetReady
+        ? tx("Choose a Runtime App candidate before uploading a package.")
+        : "";
+
   const uploadPackage = async () => {
     if (!deviceID || !uploadFile || busy === "upload") {
       return;
@@ -416,10 +465,22 @@ export default function AppDeployPage() {
       );
       setUploadFile(null);
       setUploadInputKey((value) => value + 1);
+      if (result.package) {
+        setView((current) =>
+          current ? { ...current, packages: packagesWithUploadedPackage(current.packages, result.package) } : current,
+        );
+      }
       await loadDeployments();
+      if (result.package) {
+        setView((current) =>
+          current ? { ...current, packages: packagesWithUploadedPackage(current.packages, result.package) } : current,
+        );
+      }
       setUploadMessage({
         kind: "success",
-        text: result.package ? tx("App package uploaded.") : tx("App package uploaded."),
+        text: result.request
+          ? tx("App package uploaded and deployment request queued.")
+          : tx("App package uploaded. Use Deploy in Saved app packages to apply it."),
       });
     } catch (err) {
       setUploadMessage({ kind: "error", text: err instanceof Error ? err.message : tx("Failed to upload app package") });
@@ -432,7 +493,7 @@ export default function AppDeployPage() {
     setAppID(candidate.app_id);
     setRuntimeFamily(candidate.runtime_family);
     setRuntimeID(candidate.runtime_id || "");
-    setRootsJSON(JSON.stringify(candidate.roots || defaultRootsForFamily(candidate.runtime_family), null, 2));
+    setRootsJSON(JSON.stringify(rootsForEditor(candidate.roots, candidate.runtime_family), null, 2));
   };
 
   const createAdoptionRequest = async (candidate: AppDeployCandidateRecord) => {
@@ -677,16 +738,14 @@ export default function AppDeployPage() {
                           <button type="button" className="secondary-btn" onClick={() => useCandidateRoots(candidate)}>
                             {tx("Use roots")}
                           </button>
-                          {!profile ? (
-                            <button
-                              type="button"
-                              className="secondary-btn"
-                              disabled={Boolean(request) || busy === `adopt:${candidate.app_id}`}
-                              onClick={() => void createAdoptionRequest(candidate)}
-                            >
-                              {tx("Adopt current source")}
-                            </button>
-                          ) : null}
+                          <button
+                            type="button"
+                            className="secondary-btn"
+                            disabled={Boolean(request) || busy === `adopt:${candidate.app_id}`}
+                            onClick={() => void createAdoptionRequest(candidate)}
+                          >
+                            {tx("Adopt current source")}
+                          </button>
                         </div>
                       </td>
                       <td>{candidate.app_id}</td>
@@ -719,12 +778,32 @@ export default function AppDeployPage() {
         <div className="form-grid app-deploy-upload-grid">
           <label>
             <span>{tx("App ID")}</span>
-            <input value={appID} onChange={(event) => setAppID(event.currentTarget.value)} placeholder="app-1" />
+            <select
+              value={appID}
+              disabled={candidates.length === 0}
+              onChange={(event) => {
+                const candidate = candidateByApp.get(event.currentTarget.value);
+                if (candidate) {
+                  useCandidateRoots(candidate);
+                }
+              }}
+            >
+              {candidates.length === 0 ? (
+                <option value={appID}>{tx("No Runtime App candidates")}</option>
+              ) : (
+                candidates.map((candidate) => (
+                  <option key={candidate.app_id} value={candidate.app_id}>
+                    {candidate.app_id}
+                  </option>
+                ))
+              )}
+            </select>
           </label>
           <label>
             <span>{tx("Runtime family")}</span>
             <select
               value={runtimeFamily}
+              disabled
               onChange={(event) => {
                 const next = event.currentTarget.value;
                 setRuntimeFamily(next);
@@ -737,7 +816,7 @@ export default function AppDeployPage() {
           </label>
           <label>
             <span>{tx("Runtime ID")}</span>
-            <input value={runtimeID} onChange={(event) => setRuntimeID(event.currentTarget.value)} placeholder="php85" />
+            <input value={runtimeID} readOnly placeholder="php85" />
           </label>
           <label>
             <span>{tx("Label")}</span>
@@ -769,7 +848,7 @@ export default function AppDeployPage() {
             <span>{tx("Reason")}</span>
             <input value={reason} onChange={(event) => setReason(event.currentTarget.value)} />
           </label>
-          <label className="app-deploy-wide">
+          <label className="app-deploy-wide app-deploy-roots">
             <span>{tx("Deployment roots JSON")}</span>
             <textarea value={rootsJSON} onChange={(event) => setRootsJSON(event.currentTarget.value)} />
           </label>
@@ -792,12 +871,13 @@ export default function AppDeployPage() {
           <button
             type="button"
             className="secondary-btn"
-            disabled={!uploadFile || !appID.trim() || !runtimeFamily.trim() || busy === "upload"}
+            disabled={!uploadFile || !appID.trim() || !runtimeFamily.trim() || !uploadTargetReady || busy === "upload"}
             onClick={() => void uploadPackage()}
           >
             {busy === "upload" ? tx("Uploading...") : tx("Upload package")}
           </button>
         </div>
+        {uploadTargetMessage ? <p className="form-message error">{uploadTargetMessage}</p> : null}
         {uploadMessage ? <p className={`form-message ${uploadMessage.kind}`}>{uploadMessage.text}</p> : null}
       </section>
 
@@ -896,6 +976,7 @@ export default function AppDeployPage() {
                   const isCurrent = currentStatus?.local_package_revision === pkg.package_revision;
                   const requested = request?.app_id === pkg.app_id && request.package_revision === pkg.package_revision;
                   const latestHistory = latestHistoryByPackage.get(`${pkg.app_id}:${pkg.package_revision}`);
+                  const deployTargetReady = candidateByApp.has(pkg.app_id);
                   const state = requested
                     ? request?.dispatched_at_unix
                       ? "picked_up"
@@ -924,7 +1005,12 @@ export default function AppDeployPage() {
                             <button
                               type="button"
                               className="secondary-btn"
-                              disabled={Boolean(request) || busy === `diff:${pkg.package_revision}` || busy === `request:${pkg.package_revision}`}
+                              disabled={
+                                !deployTargetReady ||
+                                Boolean(request) ||
+                                busy === `diff:${pkg.package_revision}` ||
+                                busy === `request:${pkg.package_revision}`
+                              }
                               onClick={() => void openDiff(pkg)}
                             >
                               {operationLabel}

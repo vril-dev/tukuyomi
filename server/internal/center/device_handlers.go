@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -1997,6 +1998,7 @@ func respondAppDeployError(c *gin.Context, err error) {
 	case errors.Is(err, ErrAppDeployInvalid):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid app deploy payload"})
 	default:
+		log.Printf("[CENTER][APP_DEPLOY][ERROR] %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update app deployments"})
 	}
 }

@@ -114,6 +114,7 @@ Notes:
 - TLS bindings are independent Host/SNI certificate objects. They can protect hosts routed by Sites, Proxy Rules, Runtime Apps, or any other route source.
 - TLS-managed ACME supports DNS hostnames only. IP address certificates are intentionally outside this flow; use a DNS name or a manually managed certificate if an IP endpoint is unavoidable.
 - ACME HTTP-01 requires port 80 to reach `server.tls.http_redirect_addr`. Select Let's Encrypt `staging` or `production` from the TLS screen.
+- For direct-host rollout, use explicit `server.public_listeners` rows when adding `:443` so the existing setup port can stay online during validation. When this mode is set, express port-80 HTTPS redirect as an HTTP listener row with `http_behavior=redirect`; do not combine it with legacy `server.tls.redirect_http`.
 - `paths.site_config_file` defaults to `conf/sites.json`; in DB-backed runtime this is the empty-DB seed/export path, not the live source of truth.
 - `paths.tls_binding_config_file` defaults to `conf/tls-bindings.json`; in DB-backed runtime this is also a seed/export path.
 

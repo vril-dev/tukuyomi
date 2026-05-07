@@ -399,7 +399,31 @@ ACME は、`TLS` 画面で TLS binding の `mode=acme` を選びます。
 `production` / `staging` は Let's Encrypt の本番 CA / staging CA の選択で、
 account email は任意です。HTTP-01 challenge を使うため、
 `server.tls.redirect_http=true` と `server.tls.http_redirect_addr=:80`、
-または同等の port 80 forwarding を用意してください。
+または同等の port 80 forwarding を用意してください。VPS / bare metal に
+直接配備する場合は、`:443` へ移行する間だけ `server.public_listeners` を使う
+構成を優先してください。動作確認済みの初期設定用ポートを残したまま、HTTPS
+到達性を確認できます。
+
+安全な listener 移行の例:
+
+```json
+{
+  "server": {
+    "listen_addr": ":9090",
+    "public_listeners": [
+      { "name": "setup", "listen_addr": ":9090", "protocol": "http", "http_behavior": "serve", "enabled": true },
+      { "name": "https", "listen_addr": ":443", "protocol": "https", "http_behavior": "serve", "enabled": true },
+      { "name": "http", "listen_addr": ":80", "protocol": "http", "http_behavior": "redirect", "redirect_to": "https", "enabled": true }
+    ],
+    "tls": {
+      "enabled": true
+    }
+  }
+}
+```
+
+`https://<host>/tukuyomi-ui/` で管理画面に入れることを確認してから、高ポートの
+入口が不要であれば `setup` listener 行を削除します。
 
 proxy engine 設定は、現在 DB `app_config` 上で `tukuyomi_proxy` 固定です。
 
@@ -460,10 +484,16 @@ operator contract は次のとおりです。
 - `server.listen_addr` は public listener のままです。
 - `admin.listen_addr` を入れると、admin UI / API / auth は public listener から
   外れます。
+- `server.public_listeners` を設定した場合は、その行が単一の public listener
+  の代わりに使われます。`:9090` を残したまま `:443` と `:80` redirect を
+  追加するような段階移行に使います。
 - `admin.external_mode` と `admin.trusted_cidrs` は admin listener 上でも継続
   して効きます。
 - built-in TLS / HTTP redirect / HTTP/3 は、この slice では public listener
   専用です。
+- 明示的な `server.public_listeners` を使う場合、port 80 redirect は
+  `http_behavior=redirect` の HTTP listener 行として表現します。legacy の
+  `server.tls.redirect_http` とは併用しません。
 - `admin.listen_addr` は `server.listen_addr` および
   `server.tls.http_redirect_addr` と衝突できません。
 

@@ -8,6 +8,7 @@ import (
 )
 
 type AppConfigFile = appConfigFile
+type AppServerPublicListenerConfig = appServerPublicListenerConfig
 
 func LoadAppConfigFile(path string) (AppConfigFile, error) {
 	return loadAppConfigFile(path)

@@ -61,22 +61,32 @@ type appConfigFile struct {
 }
 
 type appServerConfig struct {
-	ListenAddr                  string                         `json:"listen_addr"`
-	ReadTimeoutSec              int                            `json:"read_timeout_sec"`
-	ReadHeaderTimeoutSec        int                            `json:"read_header_timeout_sec"`
-	WriteTimeoutSec             int                            `json:"write_timeout_sec"`
-	IdleTimeoutSec              int                            `json:"idle_timeout_sec"`
-	GracefulShutdownTimeoutSec  int                            `json:"graceful_shutdown_timeout_sec"`
-	MaxHeaderBytes              int                            `json:"max_header_bytes"`
-	MaxConcurrentRequests       int                            `json:"max_concurrent_requests"`
-	MaxQueuedRequests           int                            `json:"max_queued_requests"`
-	QueuedRequestTimeoutMS      int                            `json:"queued_request_timeout_ms"`
-	MaxConcurrentProxyRequests  int                            `json:"max_concurrent_proxy_requests"`
-	MaxQueuedProxyRequests      int                            `json:"max_queued_proxy_requests"`
-	QueuedProxyRequestTimeoutMS int                            `json:"queued_proxy_request_timeout_ms"`
-	ProxyProtocol               appListenerProxyProtocolConfig `json:"proxy_protocol"`
-	TLS                         appServerTLSConfig             `json:"tls"`
-	HTTP3                       appServerHTTP3Config           `json:"http3"`
+	ListenAddr                  string                          `json:"listen_addr"`
+	PublicListeners             []appServerPublicListenerConfig `json:"public_listeners,omitempty"`
+	ReadTimeoutSec              int                             `json:"read_timeout_sec"`
+	ReadHeaderTimeoutSec        int                             `json:"read_header_timeout_sec"`
+	WriteTimeoutSec             int                             `json:"write_timeout_sec"`
+	IdleTimeoutSec              int                             `json:"idle_timeout_sec"`
+	GracefulShutdownTimeoutSec  int                             `json:"graceful_shutdown_timeout_sec"`
+	MaxHeaderBytes              int                             `json:"max_header_bytes"`
+	MaxConcurrentRequests       int                             `json:"max_concurrent_requests"`
+	MaxQueuedRequests           int                             `json:"max_queued_requests"`
+	QueuedRequestTimeoutMS      int                             `json:"queued_request_timeout_ms"`
+	MaxConcurrentProxyRequests  int                             `json:"max_concurrent_proxy_requests"`
+	MaxQueuedProxyRequests      int                             `json:"max_queued_proxy_requests"`
+	QueuedProxyRequestTimeoutMS int                             `json:"queued_proxy_request_timeout_ms"`
+	ProxyProtocol               appListenerProxyProtocolConfig  `json:"proxy_protocol"`
+	TLS                         appServerTLSConfig              `json:"tls"`
+	HTTP3                       appServerHTTP3Config            `json:"http3"`
+}
+
+type appServerPublicListenerConfig struct {
+	Name         string `json:"name"`
+	ListenAddr   string `json:"listen_addr"`
+	Protocol     string `json:"protocol"`
+	HTTPBehavior string `json:"http_behavior,omitempty"`
+	RedirectTo   string `json:"redirect_to,omitempty"`
+	Enabled      bool   `json:"enabled"`
 }
 
 type appServerTLSConfig struct {
@@ -564,6 +574,7 @@ func loadAppConfigFile(path string) (appConfigFile, error) {
 
 func normalizeAppConfigFile(cfg *appConfigFile) {
 	cfg.Server.ListenAddr = strings.TrimSpace(cfg.Server.ListenAddr)
+	normalizeAppServerPublicListeners(cfg.Server.PublicListeners)
 	normalizeAppServerTLSConfig(&cfg.Server.TLS)
 	cfg.RequestMeta.Country.Mode = strings.ToLower(strings.TrimSpace(cfg.RequestMeta.Country.Mode))
 	cfg.Admin.APIBasePath = strings.TrimSpace(cfg.Admin.APIBasePath)
@@ -708,6 +719,9 @@ func validateAppConfigFile(cfg appConfigFile) error {
 		}
 	}
 	if err := validateAppListenerProxyProtocolConfig("server.proxy_protocol", cfg.Server.ProxyProtocol); err != nil {
+		return err
+	}
+	if err := validateAppServerPublicListenersConfig(cfg); err != nil {
 		return err
 	}
 	if err := validateAppAdminListenerConfig(cfg); err != nil {
@@ -1122,6 +1136,9 @@ func validateAppAdminListenerConfig(cfg appConfigFile) error {
 	normalizedAdminAddr, err := normalizeValidatedListenAddr(adminAddr)
 	if err != nil {
 		return fmt.Errorf("admin.listen_addr invalid: %w", err)
+	}
+	if len(cfg.Server.PublicListeners) > 0 {
+		return nil
 	}
 	publicAddr, err := normalizeValidatedListenAddr(cfg.Server.ListenAddr)
 	if err != nil {

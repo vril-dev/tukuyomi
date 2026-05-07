@@ -1,7 +1,7 @@
 # Chapter 15. HTTP/3 and TLS
 
 Chapter 14 framed the current listener-topology decision. This chapter
-covers **what TLS and HTTP/3 do on top of that single listener**:
+covers **what TLS and HTTP/3 do on the public listener path**:
 
 1. Enabling built-in TLS termination and the available options.
 2. TLS binding ACME (Let's Encrypt automatic certificate refresh).
@@ -44,6 +44,10 @@ Key points:
   UDP**.
 - `server.tls.redirect_http=true` adds a plain HTTP listener on
   `http_redirect_addr`.
+- `server.public_listeners` can be used for staged moves such as keeping
+  `:9090` online while adding `:443` and a `:80` redirect. In that mode,
+  express the redirect as an HTTP listener row with
+  `http_behavior=redirect`.
 - ACME auto TLS is selected from TLS bindings. The ACME account key,
   challenge tokens, and certificate cache live under the **`acme/`
   namespace of `persistent_storage`**.
@@ -83,6 +87,9 @@ boundary**:
 - The TLS public listener **advertises HTTP/1.1** on this native
   server path. HTTP/3 is handled on a **dedicated HTTP/3 listener**
   even when enabled.
+- Explicit `server.public_listeners` currently focuses on HTTP/1.1 /
+  HTTPS rollout. Do not enable `server.http3.enabled` together with
+  `server.public_listeners`.
 
 ## 15.3 TLS Binding ACME
 
@@ -95,7 +102,8 @@ and the account email is optional.
 When you use ACME:
 
 - Because HTTP-01 challenge is used, **port 80 must reach
-  `server.tls.http_redirect_addr`**.
+  `server.tls.http_redirect_addr`**, or an HTTP `server.public_listeners`
+  row whose `http_behavior` redirects to the HTTPS row.
 - The certificate cache, ACME account key, and challenge tokens are
   stored under the **`acme/` namespace of `persistent_storage`**.
 - For single-node VPS / on-prem, **back up

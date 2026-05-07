@@ -83,6 +83,18 @@ func newDynamicHTTPRedirectServer(addr string, tlsListenAddr string, runtime *ma
 }
 
 func buildManagedServerTLSConfig() (*tls.Config, *http.Server, error) {
+	tlsConfig, runtime, err := buildManagedServerTLSRuntimeConfig()
+	if err != nil || tlsConfig == nil {
+		return tlsConfig, nil, err
+	}
+	var redirectSrv *http.Server
+	if config.ServerTLSRedirectHTTP {
+		redirectSrv = newDynamicHTTPRedirectServer(config.ServerTLSHTTPRedirectAddr, config.ListenAddr, runtime)
+	}
+	return tlsConfig, redirectSrv, nil
+}
+
+func buildManagedServerTLSRuntimeConfig() (*tls.Config, *managedServerTLSRuntime, error) {
 	handler.ResetServerTLSRuntimeStatus()
 	if !config.ServerTLSEnabled {
 		return nil, nil, nil
@@ -103,11 +115,7 @@ func buildManagedServerTLSConfig() (*tls.Config, *http.Server, error) {
 
 	tlsConfig := &tls.Config{MinVersion: minVersion}
 	tlsConfig.GetCertificate = runtime.GetCertificate
-	var redirectSrv *http.Server
-	if config.ServerTLSRedirectHTTP {
-		redirectSrv = newDynamicHTTPRedirectServer(config.ServerTLSHTTPRedirectAddr, config.ListenAddr, runtime)
-	}
-	return tlsConfig, redirectSrv, nil
+	return tlsConfig, runtime, nil
 }
 
 func buildACMEManager(profile handler.ServerTLSACMEProfile, cache autocert.Cache) *autocert.Manager {

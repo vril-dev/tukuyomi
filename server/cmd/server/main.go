@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"log"
 	"net/http"
 	"os"
@@ -425,6 +426,32 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 			}
 			return adminSrv.Serve(adminListener)
 		}, adminSrv.Shutdown, adminSrv.Close)
+	}
+
+	if config.ServerPublicListenersConfigured {
+		var tlsConfig *tls.Config
+		var tlsRuntime *managedServerTLSRuntime
+		if publicListenersNeedTLS(config.ServerPublicListeners) {
+			tlsConfig, tlsRuntime, err = buildManagedServerTLSRuntimeConfig()
+			if err != nil {
+				fatalf("[FATAL] build server tls config: %v", err)
+			}
+		}
+		if err := runConfiguredPublicListeners(lifecycle, activation, publicHandler, publicSrv, publicListenerRuntime, tlsConfig, tlsRuntime); err != nil {
+			fatalf("[FATAL] start configured public listeners: %v", err)
+		}
+		log.Printf("[SERVER] configured public listeners=%d tls=%t", len(config.ServerPublicListeners), tlsConfig != nil)
+		if config.ServerProxyProtocolEnabled {
+			log.Printf("[SERVER] public proxy protocol enabled trusted_cidrs=%s", strings.Join(config.ServerProxyProtocolTrustedCIDRs, ","))
+		}
+		activation.CloseUnused()
+		if err := notifyWorkerReady(workerReady); err != nil {
+			fatalf("[WORKER][FATAL] readiness notify failed: %v", err)
+		}
+		if err := lifecycle.WaitWithSignals(sigCh); err != nil {
+			fatalf("[FATAL] server lifecycle stopped: %v", err)
+		}
+		return
 	}
 
 	publicListener, publicInherited, err := buildManagedTCPListenerForRole("public", config.ListenAddr, publicListenerRuntime, activation)

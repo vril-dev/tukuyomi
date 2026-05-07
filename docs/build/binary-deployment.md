@@ -318,7 +318,30 @@ Configure ACME on the `TLS` page by adding a TLS binding with `mode=acme`.
 `production` / `staging` selects the Let's Encrypt production or staging CA,
 and account email is optional. ACME HTTP-01 needs
 `server.tls.redirect_http=true` with `server.tls.http_redirect_addr=:80`, or
-equivalent port 80 forwarding.
+equivalent port 80 forwarding. For new direct-host deployments, prefer
+explicit `server.public_listeners` rows so the existing setup listener can stay
+available while `:443` is introduced.
+
+Example safe listener rollout:
+
+```json
+{
+  "server": {
+    "listen_addr": ":9090",
+    "public_listeners": [
+      { "name": "setup", "listen_addr": ":9090", "protocol": "http", "http_behavior": "serve", "enabled": true },
+      { "name": "https", "listen_addr": ":443", "protocol": "https", "http_behavior": "serve", "enabled": true },
+      { "name": "http", "listen_addr": ":80", "protocol": "http", "http_behavior": "redirect", "redirect_to": "https", "enabled": true }
+    ],
+    "tls": {
+      "enabled": true
+    }
+  }
+}
+```
+
+This keeps `:9090` usable while `:443` and `:80` are validated. After external
+HTTPS access is confirmed, remove the setup row if it is no longer needed.
 
 Proxy engine selection is a restart-required DB `app_config` setting:
 
@@ -488,6 +511,8 @@ The gateway sample unit keeps `User=tukuyomi` and adds
 `AmbientCapabilities=CAP_NET_BIND_SERVICE`, so `:80` / `:443` binds work without
 running the service as root full-time. The Center unit starts `tukuyomi center`
 and does not require low-port bind capabilities by default.
+If you use explicit `server.public_listeners`, every enabled low-port listener
+has the same low-port requirement.
 For graceful binary replacement, prefer systemd socket activation. The socket
 units hold the public/admin/redirect/HTTP3 listeners while the service process
 shuts down and restarts.

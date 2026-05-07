@@ -61,6 +61,8 @@ var (
 	SecurityAuditHMACKey                   string
 	SecurityAuditHMACKeyID                 string
 	ListenAddr                             string
+	ServerPublicListenersConfigured        bool
+	ServerPublicListeners                  []ServerPublicListener
 	ServerReadTimeout                      time.Duration
 	ServerReadHeaderTimeout                time.Duration
 	ServerWriteTimeout                     time.Duration
@@ -328,6 +330,11 @@ func applyAppConfig(cfg appConfigFile) {
 		SecurityAuditBlobDir = override
 	}
 	ListenAddr = parseListenAddr(cfg.Server.ListenAddr)
+	ServerPublicListenersConfigured = len(cfg.Server.PublicListeners) > 0
+	ServerPublicListeners = effectiveServerPublicListeners(cfg)
+	if ServerPublicListenersConfigured {
+		ListenAddr = primaryPublicListenAddr(ServerPublicListeners, ListenAddr)
+	}
 	ServerReadTimeout = time.Duration(parseServerTimeoutSec(strconv.Itoa(cfg.Server.ReadTimeoutSec), 30, false)) * time.Second
 	ServerReadHeaderTimeout = time.Duration(parseServerTimeoutSec(strconv.Itoa(cfg.Server.ReadHeaderTimeoutSec), 5, false)) * time.Second
 	ServerWriteTimeout = time.Duration(parseServerTimeoutSec(strconv.Itoa(cfg.Server.WriteTimeoutSec), 0, true)) * time.Second

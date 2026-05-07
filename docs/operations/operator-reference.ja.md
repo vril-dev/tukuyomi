@@ -105,6 +105,7 @@
 - TLS binding は Host/SNI 名に対する証明書設定です。Sites、Proxy Rules、Runtime Apps など、どのルートで転送しているホストにも紐づけられます
 - TLS 管理の ACME は DNS ホスト名のみ対応します。IP アドレス証明書はこの経路では扱いません。IP endpoint が避けられない場合は、DNS 名を用意するか、手動管理の証明書を使用してください
 - ACME HTTP-01 を使用するため、ポート 80 を `server.tls.http_redirect_addr` へ到達させてください。Let's Encrypt の `staging` ／ `production` は TLS 画面で選択します
+- 直接公開するホストで `:443` を追加する場合は、`server.public_listeners` 行を使うと、既存の初期設定用ポートを残したまま到達性を確認できます。この mode では、port 80 から HTTPS への redirect は `http_behavior=redirect` の HTTP listener 行で表現し、legacy の `server.tls.redirect_http` とは併用しません
 - `paths.site_config_file` の既定は `conf/sites.json` です。DB を正とするランタイムでは、これは空 DB 向けのシード／エクスポートパスであり、稼働中の正となるソースではありません
 - `paths.tls_binding_config_file` の既定は `conf/tls-bindings.json` です。DB を正とするランタイムでは、これもシード／エクスポートパスです
 

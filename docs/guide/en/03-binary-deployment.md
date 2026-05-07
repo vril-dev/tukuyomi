@@ -422,7 +422,30 @@ ACME selects `mode=acme` on the `TLS` screen. `production` / `staging`
 chooses Let's Encrypt's production or staging CA, and the account email is
 optional. Because HTTP-01 is used, set `server.tls.redirect_http=true` and
 `server.tls.http_redirect_addr=:80`, or arrange equivalent port-80
-forwarding.
+forwarding. For direct VPS / bare-metal deployments, prefer explicit
+`server.public_listeners` rows while you are moving to `:443`; this lets the
+known-working setup port remain available until HTTPS is confirmed.
+
+Safe listener rollout example:
+
+```json
+{
+  "server": {
+    "listen_addr": ":9090",
+    "public_listeners": [
+      { "name": "setup", "listen_addr": ":9090", "protocol": "http", "http_behavior": "serve", "enabled": true },
+      { "name": "https", "listen_addr": ":443", "protocol": "https", "http_behavior": "serve", "enabled": true },
+      { "name": "http", "listen_addr": ":80", "protocol": "http", "http_behavior": "redirect", "redirect_to": "https", "enabled": true }
+    ],
+    "tls": {
+      "enabled": true
+    }
+  }
+}
+```
+
+After `https://<host>/tukuyomi-ui/` is confirmed, remove the temporary
+`setup` listener row if you no longer want the high-port entrypoint.
 
 Proxy engine selection is a restart-required DB `app_config` setting:
 
@@ -487,10 +510,16 @@ Operator contract:
 - `server.listen_addr` stays the public listener.
 - Setting `admin.listen_addr` removes the admin UI / API / auth from
   the public listener.
+- If `server.public_listeners` is set, those rows replace the single
+  public listener. Use them for staged moves such as `:9090` + `:443`
+  + `:80` redirect.
 - `admin.external_mode` and `admin.trusted_cidrs` continue to apply on
   the admin listener.
 - Built-in TLS / HTTP redirect / HTTP/3 are public-listener-only in
   this slice.
+- With explicit `server.public_listeners`, express the port-80 redirect
+  as an HTTP listener row with `http_behavior=redirect`. Do not combine
+  it with legacy `server.tls.redirect_http`.
 - `admin.listen_addr` cannot collide with `server.listen_addr` or
   `server.tls.http_redirect_addr`.
 

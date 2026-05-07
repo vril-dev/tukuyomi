@@ -312,13 +312,14 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	}
 
 	first, err := BootstrapCenterProtectedGateway(context.Background(), CenterProtectedGatewayBootstrapOptions{
-		CenterURL:             "http://127.0.0.1:9092",
-		GatewayAPIBasePath:    "/center-api",
-		CenterAPIBasePath:     "/center-manage-api",
-		CenterUIBasePath:      "/center-ui",
-		DeviceID:              "gateway-a",
-		CenterTLSCABundleFile: "conf/center-ca.pem",
-		CenterTLSServerName:   "center.example.local",
+		CenterURL:                "http://127.0.0.1:9092",
+		GatewayAPIBasePath:       "/center-api",
+		CenterAPIBasePath:        "/center-manage-api",
+		CenterUIBasePath:         "/center-ui",
+		DeviceID:                 "gateway-a",
+		CenterTLSCABundleFile:    "conf/center-ca.pem",
+		CenterTLSServerName:      "center.example.local",
+		GatewayAdminExternalMode: "full_external",
 	})
 	if err != nil {
 		t.Fatalf("BootstrapCenterProtectedGateway prepare: %v", err)
@@ -348,6 +349,9 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	}
 	if cfg.RemoteSSH.Gateway.CenterTLSCABundleFile != "conf/center-ca.pem" || cfg.RemoteSSH.Gateway.CenterTLSServerName != "center.example.local" {
 		t.Fatalf("center tls trust settings were not bootstrapped: %+v", cfg.RemoteSSH.Gateway)
+	}
+	if cfg.Admin.ExternalMode != "full_external" {
+		t.Fatalf("admin external mode=%q want full_external", cfg.Admin.ExternalMode)
 	}
 	proxyCfg, _, found, err := store.loadActiveProxyConfig()
 	if err != nil {
@@ -414,6 +418,19 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	}
 	if status.EnrollmentStatus != edgeEnrollmentStatusApproved || status.CenterURL != "http://127.0.0.1:9092" {
 		t.Fatalf("unexpected current status: %+v", status)
+	}
+}
+
+func TestBootstrapCenterProtectedGatewayRejectsInvalidAdminExternalMode(t *testing.T) {
+	_, err := BootstrapCenterProtectedGateway(context.Background(), CenterProtectedGatewayBootstrapOptions{
+		CenterURL:                "http://127.0.0.1:9092",
+		GatewayAdminExternalMode: "public",
+	})
+	if err == nil {
+		t.Fatal("expected invalid admin external mode error")
+	}
+	if !strings.Contains(err.Error(), "gateway admin external mode") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

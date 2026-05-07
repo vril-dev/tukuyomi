@@ -121,7 +121,14 @@ Behavior:
   `tukuyomi-center.service`; Center listens on loopback, while the Gateway seed
   routes `/center-ui` and `/center-api` to `http://127.0.0.1:9092`. It also
   enables Gateway IoT / Edge device authentication and locally bootstraps the
-  matching Center approval. It does not install the scheduled-task timer.
+  matching Center approval. For first-host setup, this role also opens the
+  embedded Gateway admin UI with `admin.external_mode=full_external` so the
+  operator can finish TLS / Let's Encrypt, listener port, and Gateway front
+  settings. After setup, close it from Gateway Settings by changing
+  `admin.external_mode` back to `api_only_external` or `deny_external`. To keep
+  the stricter first-boot posture, install with
+  `INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE=api_only_external`.
+  It does not install the scheduled-task timer.
 - `INSTALL_CENTER_API_BASE_PATH` controls the Center process API path, and
   `INSTALL_CENTER_GATEWAY_API_BASE_PATH` controls the public Gateway route path.
   When they differ, the generated Gateway route rewrites the public path to the
@@ -152,7 +159,8 @@ Behavior:
 - after DB migration, host install runs the admin bootstrap for each installed
   role DB. If no bootstrap password is provided, or if the development
   placeholder password is still present, the installer generates a random
-  first-login password and prints it once. Existing admin users are never reset.
+  first-login password and prints it once at the end of the install log.
+  Existing admin users are never reset.
 - `INSTALL_DB_SEED=auto` runs `db-import` only when the SQLite DB is not present yet
 - the first DB seed creates a default upstream named `primary`; update it to
   the real backend endpoint before exposing the proxy to traffic
@@ -456,7 +464,7 @@ Keep overload controls in DB `app_config` under `server`:
   HTTPS or a TLS-terminating front proxy before real production exposure.
 - browser operators sign in with username/password and receive same-origin DB-backed session cookies
 - CLI / automation should use per-user personal access tokens, not shared admin API keys
-- default `tukuyomi` posture is `admin.external_mode=api_only_external`; move to `deny_external` if remote admin API access is unnecessary
+- default `tukuyomi` posture is `admin.external_mode=api_only_external`; move to `deny_external` if remote admin API access is unnecessary. `INSTALL_ROLE=center-protected` is the exception: it starts with `full_external` so operators can complete first-host TLS and listener setup, then should be tightened again from Gateway Settings.
 - if you intentionally set `admin.external_mode=full_external` on a non-loopback listener, add front-side allowlists/auth because startup will only warn, not block
 - widening `admin.trusted_cidrs` to public or catch-all networks also re-exposes the embedded admin UI/API to those sources and only triggers a warning
 - if `security_audit.key_source=env`, keep the encryption and HMAC keys in the env file instead of `config.json`

@@ -188,6 +188,7 @@ type CenterProtectedGatewayBootstrapOptions struct {
 	CenterTLSCABundleFile    string
 	CenterTLSServerName      string
 	StatusRefreshIntervalSec int
+	GatewayAdminExternalMode string
 	MarkApproved             bool
 }
 
@@ -909,12 +910,16 @@ func BootstrapCenterProtectedGateway(ctx context.Context, opts CenterProtectedGa
 	if opts.StatusRefreshIntervalSec < 0 || opts.StatusRefreshIntervalSec > config.MaxEdgeDeviceStatusRefreshSec {
 		return CenterProtectedGatewayBootstrapResult{}, fmt.Errorf("status refresh interval must be between 0 and %d", config.MaxEdgeDeviceStatusRefreshSec)
 	}
+	gatewayAdminExternalMode, err := normalizeCenterProtectedGatewayAdminExternalMode(opts.GatewayAdminExternalMode)
+	if err != nil {
+		return CenterProtectedGatewayBootstrapResult{}, err
+	}
 	store := getLogsStatsStore()
 	if store == nil {
 		return CenterProtectedGatewayBootstrapResult{}, fmt.Errorf("db store is not initialized")
 	}
 
-	appUpdated, err := bootstrapCenterProtectedGatewayAppConfig(opts.StatusRefreshIntervalSec, opts.CenterTLSCABundleFile, opts.CenterTLSServerName)
+	appUpdated, err := bootstrapCenterProtectedGatewayAppConfig(opts.StatusRefreshIntervalSec, opts.CenterTLSCABundleFile, opts.CenterTLSServerName, gatewayAdminExternalMode)
 	if err != nil {
 		return CenterProtectedGatewayBootstrapResult{}, err
 	}
@@ -961,7 +966,17 @@ func BootstrapCenterProtectedGateway(ctx context.Context, opts CenterProtectedGa
 	}, nil
 }
 
-func bootstrapCenterProtectedGatewayAppConfig(statusRefreshIntervalSec int, centerTLSCABundleFile string, centerTLSServerName string) (bool, error) {
+func normalizeCenterProtectedGatewayAdminExternalMode(raw string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	switch mode {
+	case "", "deny_external", "api_only_external", "full_external":
+		return mode, nil
+	default:
+		return "", fmt.Errorf("gateway admin external mode must be one of: deny_external, api_only_external, full_external")
+	}
+}
+
+func bootstrapCenterProtectedGatewayAppConfig(statusRefreshIntervalSec int, centerTLSCABundleFile string, centerTLSServerName string, gatewayAdminExternalMode string) (bool, error) {
 	_, etag, cfg, err := loadAppConfigStorage(true)
 	if err != nil {
 		return false, err
@@ -990,6 +1005,10 @@ func bootstrapCenterProtectedGatewayAppConfig(statusRefreshIntervalSec int, cent
 	}
 	if centerTLSServerName != "" && cfg.RemoteSSH.Gateway.CenterTLSServerName != centerTLSServerName {
 		cfg.RemoteSSH.Gateway.CenterTLSServerName = centerTLSServerName
+		changed = true
+	}
+	if gatewayAdminExternalMode != "" && cfg.Admin.ExternalMode != gatewayAdminExternalMode {
+		cfg.Admin.ExternalMode = gatewayAdminExternalMode
 		changed = true
 	}
 	if !changed {

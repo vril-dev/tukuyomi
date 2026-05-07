@@ -162,6 +162,15 @@ locally. The Gateway private key stays in the Gateway DB; Center receives only
 the public key identity. If an existing DB contains conflicting device trust,
 the bootstrap fails instead of replacing it silently.
 
+For first-host setup, `center-protected` opens the embedded Gateway admin UI
+with `admin.external_mode=full_external`. This lets the operator finish TLS /
+Let's Encrypt, listener port, and Gateway front settings before the host is put
+behind stricter network controls. After those settings are complete, close
+Gateway UI exposure from Gateway Settings by changing `admin.external_mode`
+back to `api_only_external` or `deny_external`. If the first boot must stay
+closed, install with
+`INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE=api_only_external`.
+
 If the Center process should keep a private API path, set
 `INSTALL_CENTER_API_BASE_PATH` to that internal path and keep
 `INSTALL_CENTER_GATEWAY_API_BASE_PATH` on the public Gateway path. The Gateway
@@ -188,8 +197,8 @@ not `X-Forwarded-For`.
 - After migration, host install bootstraps the first owner for each
   installed role DB. If `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` is not set,
   or still contains the development placeholder, the installer generates
-  a random first-login password and prints it once. Existing admin users
-  are never reset.
+  a random first-login password and prints it once at the end of the
+  install log. Existing admin users are never reset.
 
 ### 3.3.4 Enabling scheduled tasks
 
@@ -597,6 +606,9 @@ Principles for secret handling:
   shared admin API key.
 - The default posture is `admin.external_mode=api_only_external`.
   Tighten to `deny_external` if remote admin API is not needed.
+  `INSTALL_ROLE=center-protected` intentionally starts with
+  `full_external` for first-host setup; tighten it again from Gateway
+  Settings after TLS and listener setup are complete.
 - When you must use `admin.external_mode=full_external` on a
   non-loopback listener, do not rely solely on the startup warning —
   add front-side allowlisting / authentication.

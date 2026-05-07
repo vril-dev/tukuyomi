@@ -89,7 +89,7 @@ make install TARGET=linux-systemd \
 ```
 
 初回ログイン用の owner を明示したい場合は、インストール時に次のように渡します。
-省略した場合、インストーラーがランダムな初期パスワードを生成して 1 回だけ表示します。
+省略した場合、インストーラーがランダムな初期パスワードを生成し、インストールログの最後に 1 回だけ表示します。
 
 ```bash
 TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME=admin \
@@ -103,7 +103,7 @@ make install TARGET=linux-systemd INSTALL_ROLE=center-protected
 - `INSTALL_ROLE=gateway` は `tukuyomi.service`、`tukuyomi.env`、`conf/config.json`、WAF／CRS アセットのインポート、Gateway 用初回 DB シード、スケジュールタスク用タイマーを対象にします
 - Gateway インストールは `runtime.process_model=supervised` を書き込みます。スーパーバイザーが TCP リスナーを所有し、レディネス確認後に初期ワーカーをアクティブ化します。既存 Gateway 設定に対しては、インストール時に `runtime.process_model` のみをピンポイントで更新します。レガシーなシングルプロセス Gateway からの初回移行は、リスナーの所有者が変わるため通常のサービス再起動が必要です。HTTP/3 は UDP ハンドオフ実装が完了するまで拒否されます
 - `INSTALL_ROLE=center` は `tukuyomi-center.service`、`tukuyomi-center.env`、`conf/config.center.json` を対象とし、DB マイグレーションのみを実行します。WAF／CRS インポート、Gateway シード、スケジュールタスクは実行しません
-- `INSTALL_ROLE=center-protected` は `tukuyomi.service` と `tukuyomi-center.service` の両方を導入します。Center は loopback で待ち受け、Gateway seed は `/center-ui` と `/center-api` を `http://127.0.0.1:9092` へ転送します。Gateway の IoT / Edge device authentication を有効化し、対応する Center 承認もローカルで bootstrap します。scheduled-task timer は導入しません
+- `INSTALL_ROLE=center-protected` は `tukuyomi.service` と `tukuyomi-center.service` の両方を導入します。Center は loopback で待ち受け、Gateway seed は `/center-ui` と `/center-api` を `http://127.0.0.1:9092` へ転送します。Gateway の IoT / Edge device authentication を有効化し、対応する Center 承認もローカルで bootstrap します。初回ホスト設定で TLS / Let's Encrypt、リスナーポート、Gateway front 設定を終えられるよう、この role だけは Gateway 管理 UI を `admin.external_mode=full_external` で外部から到達可能にします。初期設定後は Gateway Settings で `admin.external_mode` を `api_only_external` または `deny_external` に戻してください。初回から厳しく閉じたい場合は `INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE=api_only_external` を指定します。scheduled-task timer は導入しません
 - `INSTALL_CENTER_API_BASE_PATH` は Center process が受ける API path、`INSTALL_CENTER_GATEWAY_API_BASE_PATH` は Gateway で公開する API route path です。両者が異なる場合、生成される Gateway route は公開 path を Center 側 path へ rewrite してから upstream へ転送します
 - Center を直接公開する場合の送信元 IP allowlist は 3 種類あります。`TUKUYOMI_CENTER_CLIENT_ALLOW_CIDRS` は Center UI client、`TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS` は管理 API、`TUKUYOMI_CENTER_API_ALLOW_CIDRS` は Gateway/device API に適用します。client と Gateway/device は空欄なら任意の送信元を許可し、管理 API は既定で loopback と private/local CIDR を許可します
 - `PREFIX` が実行ユーザーのホーム配下にある場合、`INSTALL_CREATE_USER=auto` は実行ユーザーをそのままランタイムユーザーとし、`useradd` は実行しません
@@ -115,7 +115,7 @@ make install TARGET=linux-systemd INSTALL_ROLE=center-protected
 - 初回作成する env ファイルと systemd ユニットは `PREFIX` に合わせて生成されます
 - ロール用の設定ファイルは root 所有 `0640` とし、サービスグループに読み取りのみを与えます
 - env ファイルはシークレットを含む前提で root 所有 `0640` のまま保持します
-- DB マイグレーション後、ホストインストールは導入対象 role ごとの DB に初期 owner bootstrap を実行します。bootstrap password が未指定、または開発用プレースホルダーのままの場合は、ランダムな初期パスワードを生成してインストールログに 1 回だけ表示します。既存の管理ユーザーはリセットしません
+- DB マイグレーション後、ホストインストールは導入対象 role ごとの DB に初期 owner bootstrap を実行します。bootstrap password が未指定、または開発用プレースホルダーのままの場合は、ランダムな初期パスワードを生成してインストールログの最後に 1 回だけ表示します。既存の管理ユーザーはリセットしません
 - `INSTALL_DB_SEED=auto` は SQLite DB がまだ存在しない初回のみ `db-import` を実行します
 - 初回 DB シードでは `primary` という既定アップストリームが作成されます。プロキシにトラフィックを流す前に、実際のバックエンドエンドポイントへ調整してください
 - 既存 DB がある状態での再実行時は、DB マイグレーションと WAF／CRS アセットのリフレッシュを行います
@@ -397,7 +397,7 @@ make php-fpm-copy RUNTIME=php85 DEST="$HOME/tukuyomi"
 - `/auth/login` の POST が HTTP 401 を返す場合は、入力した認証情報が既存の管理ユーザーと一致していません。HTTP でアクセスしていること自体が 401 の原因ではありません。ただし本番公開前には HTTPS、または前段の TLS 終端を必ず用意してください
 - ブラウザー操作するオペレーターはユーザー名／パスワードでサインインし、同一オリジンの DB ベースセッションクッキーを受け取ります
 - CLI ／自動化処理では、共有の管理 API キーではなくユーザー単位の個人アクセストークンを使用してください
-- `tukuyomi` の既定方針は `admin.external_mode=api_only_external` です。リモート管理 API が不要であれば `deny_external` にしてください
+- `tukuyomi` の既定方針は `admin.external_mode=api_only_external` です。リモート管理 API が不要であれば `deny_external` にしてください。例外として `INSTALL_ROLE=center-protected` は、初回ホスト設定で TLS とリスナー設定を終えられるよう `full_external` で開始します。設定後は Gateway Settings で再度絞ってください
 - 非ループバックリスナー上で `admin.external_mode=full_external` を使う場合は、起動時の警告だけに頼らず、フロント側で許可リスト／認証を追加してください
 - `admin.trusted_cidrs` を公開／包括的なネットワークまで広げた場合、埋め込みの管理 UI／API はその信頼ソースに対しても再公開され、起動時には警告が出るのみです
 - `security_audit.key_source=env` を使用する場合に限り、暗号鍵と HMAC 鍵を env ファイル側に置いてください

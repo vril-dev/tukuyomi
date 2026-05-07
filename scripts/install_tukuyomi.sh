@@ -32,6 +32,7 @@ INSTALL_CENTER_UPSTREAM_URL_VALUE="${INSTALL_CENTER_UPSTREAM_URL:-http://127.0.0
 INSTALL_CENTER_CLIENT_ALLOW_CIDRS_VALUE="${INSTALL_CENTER_CLIENT_ALLOW_CIDRS:-}"
 INSTALL_CENTER_MANAGE_API_ALLOW_CIDRS_VALUE="${INSTALL_CENTER_MANAGE_API_ALLOW_CIDRS:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}"
 INSTALL_CENTER_API_ALLOW_CIDRS_VALUE="${INSTALL_CENTER_API_ALLOW_CIDRS:-}"
+INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE="${INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE:-full_external}"
 INSTALL_DEV_BOOTSTRAP_PASSWORD="dev-only-change-this-password-please"
 
 INSTALL_CONFIG_REL=""
@@ -45,6 +46,7 @@ INSTALL_ADMIN_BOOTSTRAP_PASSWORD_VALUE=""
 INSTALL_ADMIN_BOOTSTRAP_EMAIL_VALUE=""
 INSTALL_ADMIN_BOOTSTRAP_PASSWORD_GENERATED="0"
 INSTALL_ADMIN_BOOTSTRAP_PASSWORD_REPORTED="0"
+INSTALL_ADMIN_BOOTSTRAP_ATTEMPTED="0"
 
 log() {
   echo "[install] $*"
@@ -116,6 +118,24 @@ install_role_includes_center() {
   [[ "${INSTALL_ROLE}" == "center" || "${INSTALL_ROLE}" == "center-protected" ]]
 }
 
+normalize_center_protected_gateway_admin_external_mode() {
+  if ! install_role_is_center_protected; then
+    INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE=""
+    return
+  fi
+  local mode
+  mode="$(printf '%s' "${INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  [[ -n "${mode}" ]] || mode="full_external"
+  case "${mode}" in
+    deny_external|api_only_external|full_external)
+      INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE="${mode}"
+      ;;
+    *)
+      die "INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE must be deny_external, api_only_external, or full_external"
+      ;;
+  esac
+}
+
 configure_install_role() {
   case "${INSTALL_ROLE}" in
     gateway)
@@ -143,6 +163,7 @@ configure_install_role() {
   else
     INSTALL_DERIVED_PROCESS_MODEL="single"
   fi
+  normalize_center_protected_gateway_admin_external_mode
 }
 
 use_login_user_home_install() {
@@ -661,7 +682,7 @@ bootstrap_admin_owner_for_config() {
       return
     fi
   fi
-  report_admin_bootstrap_credentials
+  INSTALL_ADMIN_BOOTSTRAP_ATTEMPTED="1"
   log "bootstrap initial admin owner for ${label}"
   run_runtime_with_config "${config_rel}" \
     "TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME=${INSTALL_ADMIN_BOOTSTRAP_USERNAME_VALUE}" \
@@ -731,6 +752,7 @@ bootstrap_center_protected_enrollment() {
     --gateway-api-base-path "${INSTALL_CENTER_GATEWAY_API_BASE_PATH_VALUE}" \
     --center-api-base-path "${INSTALL_CENTER_API_BASE_PATH_VALUE}" \
     --center-ui-base-path "${INSTALL_CENTER_UI_BASE_PATH_VALUE}" \
+    --gateway-admin-external-mode "${INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE}" \
     --out "${identity_rel}"
   run_runtime_with_config "${INSTALL_CENTER_CONFIG_REL}" bootstrap-center-protected-center --in "${identity_rel}" --out "${approved_rel}"
   run_runtime bootstrap-center-protected-gateway \
@@ -738,6 +760,7 @@ bootstrap_center_protected_enrollment() {
     --gateway-api-base-path "${INSTALL_CENTER_GATEWAY_API_BASE_PATH_VALUE}" \
     --center-api-base-path "${INSTALL_CENTER_API_BASE_PATH_VALUE}" \
     --center-ui-base-path "${INSTALL_CENTER_UI_BASE_PATH_VALUE}" \
+    --gateway-admin-external-mode "${INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE}" \
     --mark-approved \
     --out "${identity_rel}"
   run_priv rm -f "${RUNTIME_DIR}/${identity_rel}" || true
@@ -1012,3 +1035,6 @@ initialize_db
 activate_systemd
 
 log "completed TARGET=${TARGET} INSTALL_ROLE=${INSTALL_ROLE} PROCESS_MODEL=${INSTALL_DERIVED_PROCESS_MODEL} PREFIX=${PREFIX} INSTALL_USER=${INSTALL_USER} INSTALL_CREATE_USER=${INSTALL_CREATE_USER}${DESTDIR:+ DESTDIR=${DESTDIR}}"
+if [[ "${INSTALL_ADMIN_BOOTSTRAP_ATTEMPTED}" == "1" ]]; then
+  report_admin_bootstrap_credentials
+fi

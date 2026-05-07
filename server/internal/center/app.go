@@ -159,6 +159,11 @@ func InitializeRuntime() error {
 	); err != nil {
 		return fmt.Errorf("initialize center db store: %w", err)
 	}
+	if stats, err := MigrateCenterPayloadBlobs(context.Background()); err != nil {
+		return fmt.Errorf("migrate center payload blobs: %w", err)
+	} else if stats.Total() > 0 || stats.RuntimeArtifactBlobColumnDropped || stats.AppPackageBlobColumnDropped || stats.RuntimePayloadOrphansRemoved > 0 || stats.AppPayloadOrphansRemoved > 0 {
+		log.Printf("[CENTER][PAYLOAD] migrated legacy DB blobs to file storage runtime_artifacts=%d app_packages=%d dropped_runtime_blob_column=%v dropped_app_blob_column=%v vacuumed=%v removed_runtime_payload_orphans=%d removed_app_payload_orphans=%d", stats.RuntimeArtifacts, stats.AppPackages, stats.RuntimeArtifactBlobColumnDropped, stats.AppPackageBlobColumnDropped, stats.Vacuumed, stats.RuntimePayloadOrphansRemoved, stats.AppPayloadOrphansRemoved)
+	}
 	if created, err := handler.EnsureAdminBootstrapOwnerFromEnv(); err != nil {
 		return fmt.Errorf("bootstrap center admin owner: %w", err)
 	} else if created {

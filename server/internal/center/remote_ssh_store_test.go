@@ -380,15 +380,18 @@ func setupRemoteSSHStoreTest(t *testing.T) {
 	oldMaxTTL := config.RemoteSSHMaxTTL
 	oldMaxTotal := config.RemoteSSHMaxSessionsTotal
 	oldMaxPerDevice := config.RemoteSSHMaxSessionsPerDevice
+	oldPersistentLocalBaseDir := config.PersistentStorageLocalBaseDir
 	config.RemoteSSHCenterEnabled = true
 	config.RemoteSSHMaxTTL = 15 * time.Minute
 	config.RemoteSSHMaxSessionsTotal = 16
 	config.RemoteSSHMaxSessionsPerDevice = 1
+	config.PersistentStorageLocalBaseDir = filepath.Join(t.TempDir(), "persistent")
 	t.Cleanup(func() {
 		config.RemoteSSHCenterEnabled = oldCenterEnabled
 		config.RemoteSSHMaxTTL = oldMaxTTL
 		config.RemoteSSHMaxSessionsTotal = oldMaxTotal
 		config.RemoteSSHMaxSessionsPerDevice = oldMaxPerDevice
+		config.PersistentStorageLocalBaseDir = oldPersistentLocalBaseDir
 	})
 }
 

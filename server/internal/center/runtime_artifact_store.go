@@ -180,6 +180,45 @@ func StoreRuntimeArtifact(ctx context.Context, in RuntimeArtifactInsert) (Runtim
 	createdAt := time.Unix(normalized.CreatedAtUnix, 0).UTC().Format(time.RFC3339)
 	out := runtimeArtifactRecordFromInsert(normalized, storageState, createdAt)
 
+	var existingFound bool
+	if err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		existing, found, err := loadRuntimeArtifactByRevisionTx(ctx, db, driver, normalized.ArtifactRevision)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return nil
+		}
+		if !runtimeArtifactDuplicateMatches(existing, out) {
+			return fmt.Errorf("%w: artifact revision already exists with different metadata", ErrRuntimeArtifactInvalid)
+		}
+		existing.Stored = false
+		out = existing
+		existingFound = true
+		return nil
+	}); err != nil {
+		return RuntimeArtifactRecord{}, err
+	}
+	if existingFound {
+		return out, nil
+	}
+
+	payloadExisted := false
+	if storageState == RuntimeArtifactStorageStored {
+		var writeErr error
+		payloadExisted, writeErr = writeCenterPayloadFile(
+			centerPayloadRuntimeArtifacts,
+			normalized.ArtifactRevision,
+			centerPayloadRuntimeArtifactExt,
+			normalized.ArtifactBytes,
+			normalized.CompressedSize,
+			normalized.ArtifactHash,
+		)
+		if writeErr != nil {
+			return RuntimeArtifactRecord{}, fmt.Errorf("%w: %v", ErrRuntimeArtifactInvalid, writeErr)
+		}
+	}
+
 	err = withCenterDB(ctx, func(db *sql.DB, driver string) error {
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
@@ -224,6 +263,9 @@ func StoreRuntimeArtifact(ctx context.Context, in RuntimeArtifactInsert) (Runtim
 		out.Stored = true
 		return tx.Commit()
 	})
+	if err != nil && storageState == RuntimeArtifactStorageStored && !payloadExisted {
+		removeCenterPayloadFile(centerPayloadRuntimeArtifacts, normalized.ArtifactRevision, centerPayloadRuntimeArtifactExt)
+	}
 	return out, err
 }
 
@@ -725,7 +767,6 @@ func RuntimeArtifactDownloadForDevice(ctx context.Context, deviceID, runtimeFami
 	}
 
 	var out RuntimeArtifactRecord
-	var blob []byte
 	err = withCenterDB(ctx, func(db *sql.DB, driver string) error {
 		var device DeviceRecord
 		if err := loadDeviceByIDTx(ctx, db, driver, deviceID, &device); err != nil {
@@ -734,14 +775,14 @@ func RuntimeArtifactDownloadForDevice(ctx context.Context, deviceID, runtimeFami
 		if device.Status != DeviceStatusApproved || !device.RuntimeDeploymentSupported {
 			return ErrRuntimeArtifactIncompatible
 		}
-		rec, artifactBlob, found, err := loadAssignedRuntimeArtifactBlobTx(ctx, db, driver, deviceID, family, id, revision, hash)
+		rec, found, err := loadAssignedRuntimeArtifactTx(ctx, db, driver, deviceID, family, id, revision, hash)
 		if err != nil {
 			return err
 		}
 		if !found {
 			return ErrRuntimeArtifactNotFound
 		}
-		if rec.StorageState != RuntimeArtifactStorageStored || len(artifactBlob) == 0 {
+		if rec.StorageState != RuntimeArtifactStorageStored {
 			return ErrRuntimeArtifactNotFound
 		}
 		if !runtimeArtifactCompatibleWithDevice(rec, device) {
@@ -754,21 +795,75 @@ func RuntimeArtifactDownloadForDevice(ctx context.Context, deviceID, runtimeFami
 		if !payloadReady {
 			return ErrRuntimeArtifactInvalid
 		}
-		if int64(len(artifactBlob)) != rec.CompressedSize {
-			return ErrRuntimeArtifactInvalid
-		}
-		sum := sha256.Sum256(artifactBlob)
-		if !secureEqualHex(hex.EncodeToString(sum[:]), rec.ArtifactHash) {
-			return ErrRuntimeArtifactInvalid
-		}
 		out = rec
-		blob = artifactBlob
 		return nil
 	})
 	if err != nil {
 		return RuntimeArtifactRecord{}, nil, err
 	}
+	blob, err := readCenterPayloadFile(centerPayloadRuntimeArtifacts, out.ArtifactRevision, centerPayloadRuntimeArtifactExt, out.CompressedSize, out.ArtifactHash)
+	if errors.Is(err, errCenterPayloadFileNotFound) {
+		blob, err = loadLegacyRuntimeArtifactBlobAndMigrate(ctx, out)
+	}
+	if err != nil {
+		return RuntimeArtifactRecord{}, nil, ErrRuntimeArtifactNotFound
+	}
 	return out, append([]byte(nil), blob...), nil
+}
+
+func loadLegacyRuntimeArtifactBlobAndMigrate(ctx context.Context, rec RuntimeArtifactRecord) ([]byte, error) {
+	var blob []byte
+	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		exists, err := centerDBColumnExists(db, driver, "center_runtime_artifacts", "artifact_blob")
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return ErrRuntimeArtifactNotFound
+		}
+		row := db.QueryRowContext(ctx, `
+SELECT artifact_blob
+  FROM center_runtime_artifacts
+ WHERE artifact_revision = `+placeholder(driver, 1), rec.ArtifactRevision)
+		if err := row.Scan(&blob); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrRuntimeArtifactNotFound
+			}
+			return err
+		}
+		if int64(len(blob)) != rec.CompressedSize || !centerPayloadBytesHashMatches(blob, rec.ArtifactHash) {
+			return ErrRuntimeArtifactInvalid
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := writeCenterPayloadFile(
+		centerPayloadRuntimeArtifacts,
+		rec.ArtifactRevision,
+		centerPayloadRuntimeArtifactExt,
+		blob,
+		rec.CompressedSize,
+		rec.ArtifactHash,
+	); err != nil {
+		return nil, err
+	}
+	err = withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		exists, err := centerDBColumnExists(db, driver, "center_runtime_artifacts", "artifact_blob")
+		if err != nil || !exists {
+			return err
+		}
+		_, err = db.ExecContext(ctx, `
+UPDATE center_runtime_artifacts
+   SET artifact_blob = NULL
+ WHERE artifact_revision = `+placeholder(driver, 1), rec.ArtifactRevision)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return blob, nil
 }
 
 func updateRuntimeApplyStatusFromSummariesTx(ctx context.Context, tx *sql.Tx, driver, deviceID string, summaries []DeviceRuntimeSummary, updatedAtUnix int64) error {
@@ -1080,10 +1175,10 @@ func insertRuntimeArtifactTx(ctx context.Context, tx *sql.Tx, driver string, in 
 INSERT INTO center_runtime_artifacts
     (artifact_revision, artifact_hash, runtime_family, runtime_id, detected_version,
      target_os, target_arch, target_kernel_version, target_distro_id, target_distro_id_like, target_distro_version,
-     compressed_size_bytes, uncompressed_size_bytes, file_count, manifest_json, artifact_blob, storage_state,
+     compressed_size_bytes, uncompressed_size_bytes, file_count, manifest_json, storage_state,
      builder_version, builder_profile, created_by, created_at_unix, created_at)
 VALUES
-    (`+placeholders(driver, 22, 1)+`)`,
+    (`+placeholders(driver, 21, 1)+`)`,
 		in.ArtifactRevision,
 		in.ArtifactHash,
 		in.RuntimeFamily,
@@ -1099,7 +1194,6 @@ VALUES
 		in.UncompressedSize,
 		in.FileCount,
 		manifestJSON,
-		in.ArtifactBytes,
 		storageState,
 		in.BuilderVersion,
 		in.BuilderProfile,
@@ -1139,8 +1233,12 @@ func loadRuntimeArtifactByRevisionTx(ctx context.Context, q queryer, driver stri
 	return rec, true, nil
 }
 
-func loadAssignedRuntimeArtifactBlobTx(ctx context.Context, q queryer, driver, deviceID, runtimeFamily, runtimeID, revision, hash string) (RuntimeArtifactRecord, []byte, bool, error) {
-	row := q.QueryRowContext(ctx, runtimeArtifactWithBlobSelectSQL()+`
+func loadAssignedRuntimeArtifactTx(ctx context.Context, q queryer, driver, deviceID, runtimeFamily, runtimeID, revision, hash string) (RuntimeArtifactRecord, bool, error) {
+	row := q.QueryRowContext(ctx, `
+SELECT r.artifact_revision, r.artifact_hash, r.runtime_family, r.runtime_id, r.detected_version,
+       r.target_os, r.target_arch, r.target_kernel_version, r.target_distro_id, r.target_distro_id_like, r.target_distro_version,
+       r.compressed_size_bytes, r.uncompressed_size_bytes, r.file_count, r.storage_state,
+       r.builder_version, r.builder_profile, r.created_by, r.created_at_unix, r.created_at
   FROM center_device_runtime_assignments a
   JOIN center_runtime_artifacts r ON r.artifact_revision = a.desired_artifact_revision
  WHERE a.device_id = `+placeholder(driver, 1)+`
@@ -1155,14 +1253,13 @@ func loadAssignedRuntimeArtifactBlobTx(ctx context.Context, q queryer, driver, d
 		hash,
 	)
 	var rec RuntimeArtifactRecord
-	var artifactBlob []byte
-	if err := scanRuntimeArtifactRecordWithBlob(row, &rec, &artifactBlob); err != nil {
+	if err := scanRuntimeArtifactRecord(row, &rec); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return RuntimeArtifactRecord{}, nil, false, nil
+			return RuntimeArtifactRecord{}, false, nil
 		}
-		return RuntimeArtifactRecord{}, nil, false, err
+		return RuntimeArtifactRecord{}, false, err
 	}
-	return rec, artifactBlob, true, nil
+	return rec, true, nil
 }
 
 func runtimeArtifactSelectSQL() string {
@@ -1172,14 +1269,6 @@ SELECT artifact_revision, artifact_hash, runtime_family, runtime_id, detected_ve
        compressed_size_bytes, uncompressed_size_bytes, file_count, storage_state,
        builder_version, builder_profile, created_by, created_at_unix, created_at
   FROM center_runtime_artifacts`
-}
-
-func runtimeArtifactWithBlobSelectSQL() string {
-	return `
-SELECT r.artifact_revision, r.artifact_hash, r.runtime_family, r.runtime_id, r.detected_version,
-       r.target_os, r.target_arch, r.target_kernel_version, r.target_distro_id, r.target_distro_id_like, r.target_distro_version,
-       r.compressed_size_bytes, r.uncompressed_size_bytes, r.file_count, r.storage_state,
-       r.builder_version, r.builder_profile, r.created_by, r.created_at_unix, r.created_at, r.artifact_blob`
 }
 
 func scanRuntimeArtifactRecord(scanner rowScanner, rec *RuntimeArtifactRecord) error {
@@ -1204,32 +1293,6 @@ func scanRuntimeArtifactRecord(scanner rowScanner, rec *RuntimeArtifactRecord) e
 		&rec.CreatedBy,
 		&rec.CreatedAtUnix,
 		&rec.CreatedAt,
-	)
-}
-
-func scanRuntimeArtifactRecordWithBlob(scanner rowScanner, rec *RuntimeArtifactRecord, artifactBlob *[]byte) error {
-	return scanner.Scan(
-		&rec.ArtifactRevision,
-		&rec.ArtifactHash,
-		&rec.RuntimeFamily,
-		&rec.RuntimeID,
-		&rec.DetectedVersion,
-		&rec.Target.OS,
-		&rec.Target.Arch,
-		&rec.Target.KernelVersion,
-		&rec.Target.DistroID,
-		&rec.Target.DistroIDLike,
-		&rec.Target.DistroVersion,
-		&rec.CompressedSize,
-		&rec.UncompressedSize,
-		&rec.FileCount,
-		&rec.StorageState,
-		&rec.BuilderVersion,
-		&rec.BuilderProfile,
-		&rec.CreatedBy,
-		&rec.CreatedAtUnix,
-		&rec.CreatedAt,
-		artifactBlob,
 	)
 }
 

@@ -326,13 +326,12 @@ func DownloadAppDeployPackageForDevice(ctx context.Context, deviceID, revision s
 		return AppDeployPackageRecord{}, nil, ErrAppDeployInvalid
 	}
 	var out AppDeployPackageRecord
-	var blob []byte
 	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
 		var device DeviceRecord
 		if err := loadDeviceByIDTx(ctx, db, driver, deviceID, &device); err != nil {
 			return err
 		}
-		pkg, body, found, err := loadAppDeployPackageBlobTx(ctx, db, driver, revision)
+		pkg, found, err := loadAppDeployPackageTx(ctx, db, driver, revision)
 		if err != nil {
 			return err
 		}
@@ -340,9 +339,12 @@ func DownloadAppDeployPackageForDevice(ctx context.Context, deviceID, revision s
 			return ErrAppDeployNotFound
 		}
 		out = pkg
-		blob = append([]byte(nil), body...)
 		return nil
 	})
+	if err != nil {
+		return AppDeployPackageRecord{}, nil, err
+	}
+	blob, err := readAppDeployPackageBody(ctx, out)
 	if err != nil {
 		return AppDeployPackageRecord{}, nil, err
 	}
@@ -357,40 +359,49 @@ func LoadAppDeployPackageFileForDevice(ctx context.Context, deviceID, revision, 
 		return AppDeployPackageFileDetail{}, ErrAppDeployInvalid
 	}
 	var detail AppDeployPackageFileDetail
+	var pkg AppDeployPackageRecord
 	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
 		var device DeviceRecord
 		if err := loadDeviceByIDTx(ctx, db, driver, deviceID, &device); err != nil {
 			return err
 		}
-		pkg, blob, found, err := loadAppDeployPackageBlobTx(ctx, db, driver, revision)
+		foundPkg, found, err := loadAppDeployPackageTx(ctx, db, driver, revision)
 		if err != nil {
 			return err
 		}
-		if !found || pkg.DeviceID != deviceID {
+		if !found || foundPkg.DeviceID != deviceID {
 			return ErrAppDeployNotFound
 		}
-		parsed, err := parseAppDeployPackageArchive(blob, pkg.Roots)
-		if err != nil {
-			return fmt.Errorf("%w: %v", ErrAppDeployInvalid, err)
-		}
-		for _, file := range parsed.Files {
-			if file.Path != assetPath {
-				continue
-			}
-			detail.File = AppDeployPackageFileRecord{
-				Path:      file.Path,
-				RootID:    rootIDForAppDeployPath(pkg.Roots, file.Path),
-				SHA256:    file.SHA256,
-				SizeBytes: file.SizeBytes,
-				Mode:      file.Mode,
-			}
-			detail.Body = append([]byte(nil), file.Body...)
-			detail.Raw = string(file.Body)
-			return nil
-		}
-		return ErrAppDeployNotFound
+		pkg = foundPkg
+		return nil
 	})
-	return detail, err
+	if err != nil {
+		return detail, err
+	}
+	blob, err := readAppDeployPackageBody(ctx, pkg)
+	if err != nil {
+		return detail, err
+	}
+	parsed, err := parseAppDeployPackageArchive(blob, pkg.Roots)
+	if err != nil {
+		return detail, fmt.Errorf("%w: %v", ErrAppDeployInvalid, err)
+	}
+	for _, file := range parsed.Files {
+		if file.Path != assetPath {
+			continue
+		}
+		detail.File = AppDeployPackageFileRecord{
+			Path:      file.Path,
+			RootID:    rootIDForAppDeployPath(pkg.Roots, file.Path),
+			SHA256:    file.SHA256,
+			SizeBytes: file.SizeBytes,
+			Mode:      file.Mode,
+		}
+		detail.Body = append([]byte(nil), file.Body...)
+		detail.Raw = string(file.Body)
+		return detail, nil
+	}
+	return detail, ErrAppDeployNotFound
 }
 
 func StoreAppDeployPackage(ctx context.Context, in AppDeployPackageImport) (AppDeployPackageRecord, error) {
@@ -426,6 +437,17 @@ func StoreAppDeployPackage(ctx context.Context, in AppDeployPackageImport) (AppD
 		UploadedAtUnix:   normalized.UploadedAtUnix,
 		UploadedAt:       uploadedAt,
 	}
+	payloadExisted, err := writeCenterPayloadFile(
+		centerPayloadAppDeploy,
+		packageRevision,
+		centerPayloadAppDeployExt,
+		normalized.Archive,
+		parsed.CompressedSize,
+		parsed.PackageHash,
+	)
+	if err != nil {
+		return AppDeployPackageRecord{}, fmt.Errorf("%w: %v", ErrAppDeployInvalid, err)
+	}
 	err = withCenterDB(ctx, func(db *sql.DB, driver string) error {
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
@@ -439,23 +461,27 @@ func StoreAppDeployPackage(ctx context.Context, in AppDeployPackageImport) (AppD
 		if device.Status != DeviceStatusApproved {
 			return ErrAppDeployIncompatible
 		}
+		profile := AppDeployProfileRecord{
+			DeviceID:        normalized.DeviceID,
+			AppID:           normalized.AppID,
+			RuntimeFamily:   normalized.RuntimeFamily,
+			RuntimeID:       normalized.RuntimeID,
+			ProfileRevision: profileRevision,
+			Roots:           normalized.Roots,
+			CreatedBy:       normalized.UploadedBy,
+			UpdatedBy:       normalized.UploadedBy,
+			CreatedAtUnix:   normalized.UploadedAtUnix,
+			UpdatedAtUnix:   normalized.UploadedAtUnix,
+		}
+		if err := ensureAppDeployCandidateMatchesProfileTx(ctx, tx, driver, profile); err != nil {
+			return err
+		}
 		if normalized.UpsertProfile {
-			if _, err := replaceAppDeployProfileTx(ctx, tx, driver, AppDeployProfileRecord{
-				DeviceID:        normalized.DeviceID,
-				AppID:           normalized.AppID,
-				RuntimeFamily:   normalized.RuntimeFamily,
-				RuntimeID:       normalized.RuntimeID,
-				ProfileRevision: profileRevision,
-				Roots:           normalized.Roots,
-				CreatedBy:       normalized.UploadedBy,
-				UpdatedBy:       normalized.UploadedBy,
-				CreatedAtUnix:   normalized.UploadedAtUnix,
-				UpdatedAtUnix:   normalized.UploadedAtUnix,
-			}); err != nil {
+			if _, err := replaceAppDeployProfileTx(ctx, tx, driver, profile); err != nil {
 				return err
 			}
 		}
-		if err := insertAppDeployPackageTx(ctx, tx, driver, out, manifestJSON, rootsJSON, normalized.Archive); err != nil {
+		if err := insertAppDeployPackageTx(ctx, tx, driver, out, manifestJSON, rootsJSON); err != nil {
 			if isUniqueConstraintError(err) {
 				existing, found, loadErr := loadAppDeployPackageTx(ctx, tx, driver, packageRevision)
 				if loadErr != nil {
@@ -475,6 +501,9 @@ func StoreAppDeployPackage(ctx context.Context, in AppDeployPackageImport) (AppD
 		}
 		return tx.Commit()
 	})
+	if err != nil && !payloadExisted {
+		removeCenterPayloadFile(centerPayloadAppDeploy, packageRevision, centerPayloadAppDeployExt)
+	}
 	return out, err
 }
 
@@ -533,6 +562,9 @@ func CreateAppDeployRequest(ctx context.Context, in AppDeployRequestUpdate) (App
 			if _, err := replaceAppDeployProfileTx(ctx, tx, driver, profile); err != nil {
 				return err
 			}
+		}
+		if err := ensureAppDeployCandidateMatchesProfileTx(ctx, tx, driver, profile); err != nil {
+			return err
 		}
 		if err := replaceAppDeployRequestTx(ctx, tx, driver, normalized, profile, hash); err != nil {
 			return err
@@ -623,7 +655,6 @@ func AppDeployPackageDownloadForDevice(ctx context.Context, deviceID, appID, rev
 		return AppDeployPackageRecord{}, nil, ErrAppDeployInvalid
 	}
 	var out AppDeployPackageRecord
-	var blob []byte
 	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
 		var device DeviceRecord
 		if err := loadDeviceByIDTx(ctx, db, driver, deviceID, &device); err != nil {
@@ -639,25 +670,93 @@ func AppDeployPackageDownloadForDevice(ctx context.Context, deviceID, appID, rev
 		if !found || request.PackageRevision != revision || request.PackageHash != hash {
 			return ErrAppDeployNotFound
 		}
-		rec, packageBlob, found, err := loadAppDeployPackageBlobTx(ctx, db, driver, revision)
+		rec, found, err := loadAppDeployPackageTx(ctx, db, driver, revision)
 		if err != nil {
 			return err
 		}
 		if !found || rec.PackageHash != hash || rec.DeviceID != deviceID || rec.AppID != appID {
 			return ErrAppDeployNotFound
 		}
-		sum := sha256.Sum256(packageBlob)
-		if !secureEqualHex(hex.EncodeToString(sum[:]), rec.PackageHash) {
-			return ErrAppDeployInvalid
-		}
 		out = rec
-		blob = packageBlob
 		return nil
 	})
 	if err != nil {
 		return AppDeployPackageRecord{}, nil, err
 	}
+	blob, err := readAppDeployPackageBody(ctx, out)
+	if err != nil {
+		return AppDeployPackageRecord{}, nil, err
+	}
 	return out, append([]byte(nil), blob...), nil
+}
+
+func readAppDeployPackageBody(ctx context.Context, pkg AppDeployPackageRecord) ([]byte, error) {
+	blob, err := readCenterPayloadFile(centerPayloadAppDeploy, pkg.PackageRevision, centerPayloadAppDeployExt, pkg.CompressedSize, pkg.PackageHash)
+	if errors.Is(err, errCenterPayloadFileNotFound) {
+		blob, err = loadLegacyAppDeployPackageBlobAndMigrate(ctx, pkg)
+	}
+	if err != nil {
+		if errors.Is(err, ErrAppDeployInvalid) || errors.Is(err, ErrAppDeployNotFound) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %v", ErrAppDeployInvalid, err)
+	}
+	return blob, nil
+}
+
+func loadLegacyAppDeployPackageBlobAndMigrate(ctx context.Context, pkg AppDeployPackageRecord) ([]byte, error) {
+	var blob []byte
+	err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		exists, err := centerDBColumnExists(db, driver, "center_app_deploy_packages", "package_blob")
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return ErrAppDeployNotFound
+		}
+		row := db.QueryRowContext(ctx, `
+SELECT package_blob
+  FROM center_app_deploy_packages
+ WHERE package_revision = `+placeholder(driver, 1), pkg.PackageRevision)
+		if err := row.Scan(&blob); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrAppDeployNotFound
+			}
+			return err
+		}
+		if int64(len(blob)) != pkg.CompressedSize || !centerPayloadBytesHashMatches(blob, pkg.PackageHash) {
+			return ErrAppDeployInvalid
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := writeCenterPayloadFile(
+		centerPayloadAppDeploy,
+		pkg.PackageRevision,
+		centerPayloadAppDeployExt,
+		blob,
+		pkg.CompressedSize,
+		pkg.PackageHash,
+	); err != nil {
+		return nil, err
+	}
+	err = withCenterDB(ctx, func(db *sql.DB, driver string) error {
+		exists, err := centerDBColumnExists(db, driver, "center_app_deploy_packages", "package_blob")
+		if err != nil || !exists {
+			return err
+		}
+		_, err = db.ExecContext(ctx, `
+UPDATE center_app_deploy_packages
+   SET package_blob = `+placeholder(driver, 1)+`
+ WHERE package_revision = `+placeholder(driver, 2), []byte{}, pkg.PackageRevision)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return blob, nil
 }
 
 func UpsertAppDeployCandidates(ctx context.Context, deviceID string, candidates []AppDeployCandidateRecord, updatedAtUnix int64) error {
@@ -1195,8 +1294,18 @@ func appDeployApplyStatusMatchesTerminal(status AppDeployApplyStatusRecord, requ
 	if status.DeviceID != request.DeviceID || status.AppID != request.AppID {
 		return false
 	}
-	if request.Operation != AppDeployOperationAdopt && status.DesiredPackageRevision != "" && status.DesiredPackageRevision != request.PackageRevision {
+	if request.DispatchedAtUnix <= 0 || status.LastAttemptAtUnix < request.DispatchedAtUnix {
 		return false
+	}
+	switch request.Operation {
+	case AppDeployOperationAdopt:
+		if status.DesiredPackageRevision == "" || status.DesiredPackageRevision != request.ProfileRevision {
+			return false
+		}
+	default:
+		if status.DesiredPackageRevision != "" && status.DesiredPackageRevision != request.PackageRevision {
+			return false
+		}
 	}
 	switch status.ApplyState {
 	case "applied", "failed", "failed_after_switch", "blocked":
@@ -1288,13 +1397,13 @@ func sortedDirsForFiles(files []AppDeployPackageFileRecord) []string {
 	return out
 }
 
-func insertAppDeployPackageTx(ctx context.Context, tx *sql.Tx, driver string, rec AppDeployPackageRecord, manifestJSON string, rootsJSON string, blob []byte) error {
+func insertAppDeployPackageTx(ctx context.Context, tx *sql.Tx, driver string, rec AppDeployPackageRecord, manifestJSON string, rootsJSON string) error {
 	_, err := tx.ExecContext(ctx, `
 INSERT INTO center_app_deploy_packages
     (package_revision, package_hash, device_id, app_id, runtime_family, runtime_id, profile_revision, roots_json,
-     label, note, source_type, compressed_size, uncompressed_size, file_count, manifest_json, package_blob,
+     label, note, source_type, compressed_size, uncompressed_size, file_count, manifest_json,
      uploaded_by, uploaded_at_unix, uploaded_at)
-VALUES (`+placeholders(driver, 19, 1)+`)`,
+VALUES (`+placeholders(driver, 18, 1)+`)`,
 		rec.PackageRevision,
 		rec.PackageHash,
 		rec.DeviceID,
@@ -1310,7 +1419,6 @@ VALUES (`+placeholders(driver, 19, 1)+`)`,
 		rec.UncompressedSize,
 		rec.FileCount,
 		manifestJSON,
-		blob,
 		rec.UploadedBy,
 		rec.UploadedAtUnix,
 		rec.UploadedAt,
@@ -1471,26 +1579,6 @@ func loadAppDeployPackageTx(ctx context.Context, q queryer, driver string, revis
 	return rec, true, nil
 }
 
-func loadAppDeployPackageBlobTx(ctx context.Context, q queryer, driver string, revision string) (AppDeployPackageRecord, []byte, bool, error) {
-	row := q.QueryRowContext(ctx, `
-SELECT package_revision, package_hash, device_id, app_id, runtime_family, runtime_id, profile_revision,
-       COALESCE(roots_json, '[]'), label, note, source_type, compressed_size, uncompressed_size, file_count,
-       uploaded_by, uploaded_at_unix, uploaded_at, package_blob
-  FROM center_app_deploy_packages
- WHERE package_revision = `+placeholder(driver, 1), revision)
-	var rec AppDeployPackageRecord
-	var rootsJSON string
-	var blob []byte
-	if err := scannerScanAppDeployPackage(row, &rec, &rootsJSON, &blob); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return AppDeployPackageRecord{}, nil, false, nil
-		}
-		return AppDeployPackageRecord{}, nil, false, err
-	}
-	rec.Roots = unmarshalAppDeployRoots(rootsJSON)
-	return rec, blob, true, nil
-}
-
 func appDeployPackageSelectSQL() string {
 	return `
 SELECT package_revision, package_hash, device_id, app_id, runtime_family, runtime_id, profile_revision,
@@ -1524,29 +1612,6 @@ func scanAppDeployPackage(scanner rowScanner, rec *AppDeployPackageRecord) error
 	}
 	rec.Roots = unmarshalAppDeployRoots(rootsJSON)
 	return nil
-}
-
-func scannerScanAppDeployPackage(scanner rowScanner, rec *AppDeployPackageRecord, rootsJSON *string, blob *[]byte) error {
-	return scanner.Scan(
-		&rec.PackageRevision,
-		&rec.PackageHash,
-		&rec.DeviceID,
-		&rec.AppID,
-		&rec.RuntimeFamily,
-		&rec.RuntimeID,
-		&rec.ProfileRevision,
-		rootsJSON,
-		&rec.Label,
-		&rec.Note,
-		&rec.SourceType,
-		&rec.CompressedSize,
-		&rec.UncompressedSize,
-		&rec.FileCount,
-		&rec.UploadedBy,
-		&rec.UploadedAtUnix,
-		&rec.UploadedAt,
-		blob,
-	)
 }
 
 func listAppDeployPackagesForDeviceTx(ctx context.Context, q queryerWithRows, driver string, deviceID string, limit int) ([]AppDeployPackageRecord, error) {
@@ -1640,6 +1705,40 @@ SELECT device_id, app_id, runtime_family, runtime_id, COALESCE(roots_json, '[]')
 		out = append(out, rec)
 	}
 	return out, rows.Err()
+}
+
+func loadAppDeployCandidateForAppTx(ctx context.Context, q queryer, driver string, deviceID string, appID string) (AppDeployCandidateRecord, bool, error) {
+	row := q.QueryRowContext(ctx, `
+SELECT device_id, app_id, runtime_family, runtime_id, COALESCE(roots_json, '[]'), managed, detected_at_unix
+  FROM center_device_app_deploy_candidates
+ WHERE device_id = `+placeholder(driver, 1)+`
+   AND app_id = `+placeholder(driver, 2), deviceID, appID)
+	var rec AppDeployCandidateRecord
+	var rootsJSON string
+	var managed any
+	if err := row.Scan(&rec.DeviceID, &rec.AppID, &rec.RuntimeFamily, &rec.RuntimeID, &rootsJSON, &managed, &rec.DetectedAtUnix); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AppDeployCandidateRecord{}, false, nil
+		}
+		return AppDeployCandidateRecord{}, false, err
+	}
+	rec.Roots = unmarshalAppDeployRoots(rootsJSON)
+	rec.Managed = dbValueBool(managed)
+	return rec, true, nil
+}
+
+func ensureAppDeployCandidateMatchesProfileTx(ctx context.Context, q queryer, driver string, profile AppDeployProfileRecord) error {
+	candidate, found, err := loadAppDeployCandidateForAppTx(ctx, q, driver, profile.DeviceID, profile.AppID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrAppDeployIncompatible
+	}
+	if candidate.RuntimeFamily != profile.RuntimeFamily || candidate.RuntimeID != profile.RuntimeID {
+		return ErrAppDeployIncompatible
+	}
+	return nil
 }
 
 func appDeployRequestSelectSQL() string {

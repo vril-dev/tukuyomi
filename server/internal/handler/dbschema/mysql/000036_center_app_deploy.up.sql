@@ -12,7 +12,6 @@ CREATE TABLE IF NOT EXISTS center_app_deploy_packages (
   uncompressed_size BIGINT NOT NULL,
   file_count INT NOT NULL,
   manifest_json MEDIUMTEXT NOT NULL,
-  package_blob LONGBLOB NOT NULL,
   uploaded_by VARCHAR(191) NOT NULL DEFAULT '',
   uploaded_at_unix BIGINT NOT NULL,
   uploaded_at VARCHAR(64) NOT NULL

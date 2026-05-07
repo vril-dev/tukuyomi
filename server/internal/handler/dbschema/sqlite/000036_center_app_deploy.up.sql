@@ -12,7 +12,6 @@ CREATE TABLE IF NOT EXISTS center_app_deploy_packages (
   uncompressed_size INTEGER NOT NULL,
   file_count INTEGER NOT NULL,
   manifest_json TEXT NOT NULL DEFAULT '{}',
-  package_blob BLOB NOT NULL,
   uploaded_by TEXT NOT NULL DEFAULT '',
   uploaded_at_unix INTEGER NOT NULL,
   uploaded_at TEXT NOT NULL

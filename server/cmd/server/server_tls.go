@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,6 +24,7 @@ import (
 )
 
 const letsEncryptStagingDirectoryURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
+const acmeHTTPChallengePathPrefix = "/.well-known/acme-challenge/"
 
 type managedServerTLSRuntime struct {
 	minVersion uint16
@@ -70,16 +72,30 @@ func newDynamicHTTPRedirectServer(addr string, tlsListenAddr string, runtime *ma
 		Addr:              addr,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if runtime != nil {
-				if manager := runtime.acmeManagerForHost(r.Host); manager != nil {
-					manager.HTTPHandler(redirect).ServeHTTP(w, r)
-					return
-				}
-			}
-			redirect.ServeHTTP(w, r)
-		}),
+		Handler:           withACMEHTTPChallengeHandler(redirect, runtime),
 	}
+}
+
+func withACMEHTTPChallengeHandler(next http.Handler, runtime *managedServerTLSRuntime) http.Handler {
+	if next == nil {
+		next = http.NotFoundHandler()
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		challengeRequest := strings.HasPrefix(r.URL.Path, acmeHTTPChallengePathPrefix)
+		if runtime != nil {
+			if manager := runtime.acmeManagerForHost(r.Host); manager != nil {
+				if challengeRequest {
+					log.Printf("[TLS][ACME] HTTP-01 challenge request host=%q matched=true", r.Host)
+				}
+				manager.HTTPHandler(next).ServeHTTP(w, r)
+				return
+			}
+		}
+		if challengeRequest {
+			log.Printf("[TLS][ACME][WARN] HTTP-01 challenge request host=%q matched=false", r.Host)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func buildManagedServerTLSConfig() (*tls.Config, *http.Server, error) {
@@ -235,6 +251,7 @@ func (rt *managedServerTLSRuntime) GetCertificate(hello *tls.ClientHelloInfo) (*
 				}
 				cert, err := getCertificate(hello)
 				if err != nil {
+					log.Printf("[TLS][ACME][WARN] certificate request failed host=%q profile=%q error=%v", hello.ServerName, match.ACMEProfile, err)
 					handler.RecordServerTLSACMEFailure(err)
 					return nil, err
 				}

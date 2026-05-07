@@ -203,11 +203,47 @@ func TestValidateTLSBindingConfigRawRejectsACMEIPAddressHost(t *testing.T) {
 	}
 }
 
+func TestValidateTLSBindingConfigRawRejectsACMEWithoutPort80HTTPListener(t *testing.T) {
+	restore := setSiteTLSGlobalsForTest(t)
+	defer restore()
+
+	config.ServerTLSEnabled = true
+	config.ServerPublicListenersConfigured = true
+	config.ServerPublicListeners = []config.ServerPublicListener{
+		{Name: "setup", ListenAddr: ":9090", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "https", ListenAddr: ":443", Protocol: config.PublicListenerProtocolHTTPS, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+	}
+
+	raw := `{
+  "bindings": [
+    {
+      "name": "center",
+      "hosts": ["center.example.com"],
+      "mode": "acme"
+    }
+  ]
+}`
+
+	_, _, err := ValidateTLSBindingConfigRaw(raw)
+	if err == nil {
+		t.Fatal("expected acme port 80 validation error")
+	}
+	if !strings.Contains(err.Error(), "requires an enabled HTTP public listener on port 80") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateTLSBindingConfigRawAllowsACMEWithoutSite(t *testing.T) {
 	restore := setSiteTLSGlobalsForTest(t)
 	defer restore()
 
 	config.ServerTLSEnabled = true
+	config.ServerPublicListenersConfigured = true
+	config.ServerPublicListeners = []config.ServerPublicListener{
+		{Name: "setup", ListenAddr: ":9090", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "https", ListenAddr: ":443", Protocol: config.PublicListenerProtocolHTTPS, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "http", ListenAddr: ":80", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorRedirect, RedirectTo: "https", Enabled: true},
+	}
 
 	raw := `{
   "bindings": [
@@ -304,6 +340,12 @@ func TestEffectiveServerTLSACMEProfilesIncludeEnabledTLSBindings(t *testing.T) {
 	defer restore()
 
 	config.ServerTLSEnabled = true
+	config.ServerPublicListenersConfigured = true
+	config.ServerPublicListeners = []config.ServerPublicListener{
+		{Name: "setup", ListenAddr: ":9090", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "https", ListenAddr: ":443", Protocol: config.PublicListenerProtocolHTTPS, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "http", ListenAddr: ":80", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorRedirect, RedirectTo: "https", Enabled: true},
+	}
 
 	tmp := t.TempDir()
 	tlsPath := filepath.Join(tmp, "tls-bindings.json")
@@ -418,6 +460,12 @@ func TestApplyTLSBindingConfigRawReloadsServerTLSRuntime(t *testing.T) {
 	defer restore()
 
 	config.ServerTLSEnabled = true
+	config.ServerPublicListenersConfigured = true
+	config.ServerPublicListeners = []config.ServerPublicListener{
+		{Name: "setup", ListenAddr: ":9090", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "https", ListenAddr: ":443", Protocol: config.PublicListenerProtocolHTTPS, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "http", ListenAddr: ":80", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorRedirect, RedirectTo: "https", Enabled: true},
+	}
 
 	etag, _ := initTLSBindingRuntimeForTest(t, defaultTLSBindingConfigRaw)
 	var (
@@ -479,6 +527,12 @@ func TestApplyTLSBindingConfigRawRollsBackWhenTLSReloadFails(t *testing.T) {
 	defer restore()
 
 	config.ServerTLSEnabled = true
+	config.ServerPublicListenersConfigured = true
+	config.ServerPublicListeners = []config.ServerPublicListener{
+		{Name: "setup", ListenAddr: ":9090", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "https", ListenAddr: ":443", Protocol: config.PublicListenerProtocolHTTPS, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "http", ListenAddr: ":80", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorRedirect, RedirectTo: "https", Enabled: true},
+	}
 
 	etag, _ := initTLSBindingRuntimeForTest(t, defaultTLSBindingConfigRaw)
 	SetServerTLSReloadHook(func(bindings TLSBindingConfigFile, statuses []TLSBindingRuntimeStatus) error {
@@ -541,6 +595,8 @@ func setSiteTLSGlobalsForTest(t *testing.T) func() {
 	prevKeyFile := config.ServerTLSKeyFile
 	prevACMEEnabled := config.ServerTLSACMEEnabled
 	prevACMEDomains := append([]string(nil), config.ServerTLSACMEDomains...)
+	prevPublicListenersConfigured := config.ServerPublicListenersConfigured
+	prevPublicListeners := append([]config.ServerPublicListener(nil), config.ServerPublicListeners...)
 	prevSiteConfigFile := config.SiteConfigFile
 	prevTLSBindingConfigFile := config.TLSBindingConfigFile
 	prevProxyConfigFile := config.ProxyConfigFile
@@ -563,6 +619,8 @@ func setSiteTLSGlobalsForTest(t *testing.T) func() {
 		config.ServerTLSKeyFile = prevKeyFile
 		config.ServerTLSACMEEnabled = prevACMEEnabled
 		config.ServerTLSACMEDomains = prevACMEDomains
+		config.ServerPublicListenersConfigured = prevPublicListenersConfigured
+		config.ServerPublicListeners = prevPublicListeners
 		config.SiteConfigFile = prevSiteConfigFile
 		config.TLSBindingConfigFile = prevTLSBindingConfigFile
 		config.ProxyConfigFile = prevProxyConfigFile

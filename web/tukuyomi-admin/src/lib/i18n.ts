@@ -957,6 +957,8 @@ const JA_STRINGS: Record<string, string> = {
     "ここでの ACME は DNS ホスト名のみ対応します。IP アドレス証明書は Sites では管理しません。",
   "ACME here supports DNS hostnames only. IP address certificates are not managed by TLS bindings.":
     "ここでの ACME は DNS ホスト名のみ対応します。IP アドレス証明書は TLS binding では管理しません。",
+  "Let's Encrypt HTTP-01 validation uses the public DNS hostname on port 80. Keep an enabled plain HTTP listener on :80 while ACME is in use.":
+    "Let's Encrypt の HTTP-01 検証は、公開 DNS 名の 80 番ポートに届く HTTP リクエストで行われます。ACME を使う間は、`:80` の平文 HTTP リスナーを有効にしておいてください。",
   "Required. Sites create generated host fallback routes. Use TLS for certificate-only hostname coverage.":
     "必須です。Sites はホスト単位のフォールバックルートを生成します。証明書だけを紐づける場合は TLS を使用してください。",
   "SNI hostnames and certificate mode": "SNI ホスト名と証明書モード",

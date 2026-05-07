@@ -283,6 +283,9 @@ export default function TLSPanel() {
                     <div className="text-xs text-neutral-500 md:col-span-2">
                       {tx("ACME here supports DNS hostnames only. IP address certificates are not managed by TLS bindings.")}
                     </div>
+                    <div className="text-xs text-amber-700 md:col-span-2">
+                      {tx("Let's Encrypt HTTP-01 validation uses the public DNS hostname on port 80. Keep an enabled plain HTTP listener on :80 while ACME is in use.")}
+                    </div>
                   </>
                 ) : null}
               </div>

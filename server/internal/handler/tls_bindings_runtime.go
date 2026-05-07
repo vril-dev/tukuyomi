@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -606,6 +607,9 @@ func validateTLSRuntimeBinding(index int, binding TLSBindingConfig) (siteTLSBind
 		if err := validateSiteTLSACMEEmail(binding.ACME.Email); err != nil {
 			return siteTLSBinding{}, "", fmt.Errorf("tls_bindings[%d].acme.email %w", index, err)
 		}
+		if !serverACMEHTTP01ListenerAvailable() {
+			return siteTLSBinding{}, "", fmt.Errorf("tls_bindings[%d].mode=acme requires an enabled HTTP public listener on port 80 for Let's Encrypt HTTP-01 validation", index)
+		}
 		return siteTLSBinding{
 			Name:        binding.Name,
 			Hosts:       append([]string(nil), binding.Hosts...),
@@ -621,6 +625,33 @@ func validateTLSRuntimeBinding(index int, binding TLSBindingConfig) (siteTLSBind
 	default:
 		return siteTLSBinding{}, "", fmt.Errorf("tls_bindings[%d].mode must be manual, acme, or legacy", index)
 	}
+}
+
+func serverACMEHTTP01ListenerAvailable() bool {
+	if config.ServerPublicListenersConfigured {
+		for _, listener := range config.ServerPublicListeners {
+			if !listener.Enabled || listener.Protocol != config.PublicListenerProtocolHTTP {
+				continue
+			}
+			if listenAddrUsesPort(listener.ListenAddr, "80") {
+				return true
+			}
+		}
+		return false
+	}
+	return config.ServerTLSRedirectHTTP && listenAddrUsesPort(config.ServerTLSHTTPRedirectAddr, "80")
+}
+
+func listenAddrUsesPort(addr string, wantPort string) bool {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return false
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	return port == wantPort
 }
 
 func TLSBindingForHost(host string) siteBindingMatch {

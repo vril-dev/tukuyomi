@@ -28,6 +28,7 @@ func TestACMEHTTPRedirectServerPreservesChallengePath(t *testing.T) {
 	defer restore()
 
 	config.ServerTLSEnabled = true
+	configureServerACMEHTTP01ListenerForTest()
 	tmp := t.TempDir()
 	tlsPath := filepath.Join(tmp, "tls-bindings.json")
 	raw := `{
@@ -76,6 +77,62 @@ func TestACMEHTTPRedirectServerPreservesChallengePath(t *testing.T) {
 	}
 	if location := appRes.Header().Get("Location"); location != "https://proxy.example.com:9443/app" {
 		t.Fatalf("unexpected redirect location: %q", location)
+	}
+}
+
+func TestACMEHTTPServeHandlerPreservesChallengePath(t *testing.T) {
+	restore := setServerTLSGlobalsForTest(t)
+	defer restore()
+
+	config.ServerTLSEnabled = true
+	configureServerACMEHTTP01ListenerForTest()
+	tmp := t.TempDir()
+	tlsPath := filepath.Join(tmp, "tls-bindings.json")
+	raw := `{
+  "bindings": [
+    {
+      "name": "proxy",
+      "hosts": ["proxy.example.com"],
+      "mode": "acme"
+    }
+  ]
+}`
+	if err := os.WriteFile(tlsPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile(tls-bindings): %v", err)
+	}
+	if err := handler.InitTLSBindingRuntime(tlsPath, 2); err != nil {
+		t.Fatalf("InitTLSBindingRuntime: %v", err)
+	}
+	_, _, bindings, _, _ := handler.TLSBindingConfigSnapshot()
+	profiles := handler.EffectiveServerTLSACMEProfilesForTLSBindings(bindings)
+	if len(profiles) != 1 {
+		t.Fatalf("profiles=%#v want one", profiles)
+	}
+	manager := &autocert.Manager{
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist("proxy.example.com"),
+		Cache:      autocert.DirCache(t.TempDir()),
+	}
+	runtime := &managedServerTLSRuntime{}
+	runtime.mu.Lock()
+	runtime.acmeManagers = map[string]*autocert.Manager{profiles[0].Key: manager}
+	runtime.mu.Unlock()
+	handler := withACMEHTTPChallengeHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), runtime)
+
+	challengeReq := httptest.NewRequest(http.MethodGet, "http://proxy.example.com/.well-known/acme-challenge/token", nil)
+	challengeRes := httptest.NewRecorder()
+	handler.ServeHTTP(challengeRes, challengeReq)
+	if challengeRes.Code == http.StatusNoContent {
+		t.Fatal("acme challenge path should not fall through to the application handler")
+	}
+
+	appReq := httptest.NewRequest(http.MethodGet, "http://proxy.example.com/app", nil)
+	appRes := httptest.NewRecorder()
+	handler.ServeHTTP(appRes, appReq)
+	if appRes.Code != http.StatusNoContent {
+		t.Fatalf("unexpected app status: %d", appRes.Code)
 	}
 }
 
@@ -151,6 +208,7 @@ func TestBuildManagedServerTLSConfigEnablesTLSBindingACMEWithoutGlobalFlag(t *te
 	config.ServerTLSACMEEnabled = false
 	config.PersistentStorageBackend = config.PersistentStorageBackendLocal
 	config.PersistentStorageLocalBaseDir = t.TempDir()
+	configureServerACMEHTTP01ListenerForTest()
 
 	tmp := t.TempDir()
 	tlsPath := filepath.Join(tmp, "tls-bindings.json")
@@ -195,6 +253,7 @@ func TestBuildManagedServerTLSConfigRejectsS3ACMECacheWithoutCredentials(t *test
 	config.PersistentStorageS3Bucket = "runtime-bucket"
 	config.PersistentStorageS3Endpoint = "http://127.0.0.1:9000"
 	config.PersistentStorageS3ForcePathStyle = true
+	configureServerACMEHTTP01ListenerForTest()
 
 	tmp := t.TempDir()
 	tlsPath := filepath.Join(tmp, "tls-bindings.json")
@@ -259,6 +318,8 @@ func setServerTLSGlobalsForTest(t *testing.T) func() {
 	prevACMEDomains := append([]string(nil), config.ServerTLSACMEDomains...)
 	prevACMECacheDir := config.ServerTLSACMECacheDir
 	prevACMEStaging := config.ServerTLSACMEStaging
+	prevPublicListenersConfigured := config.ServerPublicListenersConfigured
+	prevPublicListeners := append([]config.ServerPublicListener(nil), config.ServerPublicListeners...)
 	prevPersistentStorageBackend := config.PersistentStorageBackend
 	prevPersistentStorageLocalBaseDir := config.PersistentStorageLocalBaseDir
 	prevPersistentStorageS3Bucket := config.PersistentStorageS3Bucket
@@ -281,6 +342,8 @@ func setServerTLSGlobalsForTest(t *testing.T) func() {
 		config.ServerTLSACMEDomains = prevACMEDomains
 		config.ServerTLSACMECacheDir = prevACMECacheDir
 		config.ServerTLSACMEStaging = prevACMEStaging
+		config.ServerPublicListenersConfigured = prevPublicListenersConfigured
+		config.ServerPublicListeners = prevPublicListeners
 		config.PersistentStorageBackend = prevPersistentStorageBackend
 		config.PersistentStorageLocalBaseDir = prevPersistentStorageLocalBaseDir
 		config.PersistentStorageS3Bucket = prevPersistentStorageS3Bucket
@@ -292,6 +355,15 @@ func setServerTLSGlobalsForTest(t *testing.T) func() {
 		config.ServerTLSHTTPRedirectAddr = prevRedirectAddr
 		config.ListenAddr = prevListenAddr
 		handler.SetServerTLSReloadHook(nil)
+	}
+}
+
+func configureServerACMEHTTP01ListenerForTest() {
+	config.ServerPublicListenersConfigured = true
+	config.ServerPublicListeners = []config.ServerPublicListener{
+		{Name: "setup", ListenAddr: ":9090", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "https", ListenAddr: ":443", Protocol: config.PublicListenerProtocolHTTPS, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "http", ListenAddr: ":80", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorRedirect, RedirectTo: "https", Enabled: true},
 	}
 }
 

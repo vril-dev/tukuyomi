@@ -40,18 +40,22 @@ func runConfiguredPublicListeners(
 	if len(config.ServerPublicListeners) == 0 {
 		return fmt.Errorf("server public listeners are not configured")
 	}
-	serverFor := func(first bool) *handler.NativeHTTP1Server {
-		if first && baseServer != nil {
-			return baseServer
-		}
+	newServer := func(httpHandler http.Handler) *handler.NativeHTTP1Server {
 		return &handler.NativeHTTP1Server{
-			Handler:           publicHandler,
+			Handler:           httpHandler,
 			ReadTimeout:       config.ServerReadTimeout,
 			ReadHeaderTimeout: config.ServerReadHeaderTimeout,
 			WriteTimeout:      config.ServerWriteTimeout,
 			IdleTimeout:       config.ServerIdleTimeout,
 			MaxHeaderBytes:    config.ServerMaxHeaderBytes,
 		}
+	}
+	serverFor := func(first bool, httpHandler http.Handler) *handler.NativeHTTP1Server {
+		if first && baseServer != nil {
+			baseServer.Handler = httpHandler
+			return baseServer
+		}
+		return newServer(httpHandler)
 	}
 
 	firstServeListener := true
@@ -73,7 +77,7 @@ func runConfiguredPublicListeners(
 				return fmt.Errorf("create %s listener: %w", role, err)
 			}
 			ln = lifecycle.TrackListener(role, ln)
-			srv := serverFor(firstServeListener)
+			srv := serverFor(firstServeListener, publicHandler)
 			firstServeListener = false
 			started++
 			lifecycle.Go(role, func() error {
@@ -108,7 +112,8 @@ func runConfiguredPublicListeners(
 				return fmt.Errorf("create %s listener: %w", role, err)
 			}
 			ln = lifecycle.TrackListener(role, ln)
-			srv := serverFor(firstServeListener)
+			serveHandler := withACMEHTTPChallengeHandler(publicHandler, tlsRuntime)
+			srv := serverFor(firstServeListener, serveHandler)
 			firstServeListener = false
 			started++
 			lifecycle.Go(role, func() error {

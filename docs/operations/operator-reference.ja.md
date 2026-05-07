@@ -236,7 +236,7 @@ make compose-down
 
 - バイナリ配備: [../build/binary-deployment.ja.md](../build/binary-deployment.ja.md)
 - コンテナ配備: [../build/container-deployment.ja.md](../build/container-deployment.ja.md)
-- リクエスト時セキュリティプラグイン: [../request_security_plugins.ja.md](../request_security_plugins.ja.md)
+- リクエスト時セキュリティプラグイン: [request_security_plugins.ja.md](request_security_plugins.ja.md)
 - 回帰テストマトリクス: [../operations/regression-matrix.ja.md](../operations/regression-matrix.ja.md)
 - ベンチマークベースライン: [../operations/benchmark-baseline.ja.md](../operations/benchmark-baseline.ja.md)
 - アップストリーム HTTP/2: [../operations/upstream-http2.ja.md](../operations/upstream-http2.ja.md)

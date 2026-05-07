@@ -7,7 +7,7 @@ it as the place to look up a configuration key directly when reading
 the main text.
 
 Each section keeps the structure of the upstream
-`docs/reference/operator-reference.md` while polishing the prose for a
+`docs/operations/operator-reference.md` while polishing the prose for a
 book-length read.
 
 ## A.1 Runtime configuration

@@ -114,7 +114,7 @@ tukuyomi bootstrap-center-protected-gateway \
 
 ## Center UI Operation
 
-![Center Remote SSH screen](images/ui-samples/28-center-remote-ssh.png)
+![Center Remote SSH screen](../images/ui-samples/28-center-remote-ssh.png)
 
 1. Open `Device Approvals`.
 2. Select a registered Gateway and open `Manage`.

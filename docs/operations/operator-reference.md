@@ -250,7 +250,7 @@ make compose-down
 
 - binary deployment: [../build/binary-deployment.md](../build/binary-deployment.md)
 - container deployment: [../build/container-deployment.md](../build/container-deployment.md)
-- request-time security plugins: [../request_security_plugins.md](../request_security_plugins.md)
+- request-time security plugins: [request_security_plugins.md](request_security_plugins.md)
 - regression matrix: [../operations/regression-matrix.md](../operations/regression-matrix.md)
 - benchmark baseline: [../operations/benchmark-baseline.md](../operations/benchmark-baseline.md)
 - upstream HTTP/2: [../operations/upstream-http2.md](../operations/upstream-http2.md)

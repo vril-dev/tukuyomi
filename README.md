@@ -196,7 +196,7 @@ upstream runtime, response cache, and PHP-FPM inventory domains after
 
 For the detailed operator model, see:
 
-- [docs/reference/operator-reference.md](docs/reference/operator-reference.md)
+- [docs/operations/operator-reference.md](docs/operations/operator-reference.md)
 - [docs/operations/listener-topology.md](docs/operations/listener-topology.md)
 
 `Proxy Rules > Upstreams` is the catalog for direct backend nodes outside
@@ -298,11 +298,11 @@ Container platform examples:
 ### Core Operator Reference
 
 - Operator reference:
-  - [docs/reference/operator-reference.md](docs/reference/operator-reference.md)
+  - [docs/operations/operator-reference.md](docs/operations/operator-reference.md)
 - Admin API OpenAPI:
   - [docs/api/admin-openapi.yaml](docs/api/admin-openapi.yaml)
 - Request security plugin model:
-  - [docs/request_security_plugins.md](docs/request_security_plugins.md)
+  - [docs/operations/request_security_plugins.md](docs/operations/request_security_plugins.md)
 
 ### Security and Tuning
 

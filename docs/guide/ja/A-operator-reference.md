@@ -5,7 +5,7 @@
 Cache を **辞書代わりに引ける形** でまとめたものです。本文で「設定 key
 を直接引きたい」と感じたとき、ここに戻ってきてください。
 
-各セクションは、上流の `docs/reference/operator-reference.ja.md` を
+各セクションは、上流の `docs/operations/operator-reference.ja.md` を
 日本語書籍向けに整文しつつ、構造はそのまま保つようにしています。
 
 ## A.1　実行時設定

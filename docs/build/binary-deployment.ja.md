@@ -13,6 +13,29 @@
 
 作業端末またはビルドホストで実行します。
 
+事前に必要なもの:
+
+- `make`
+- Go toolchain 1.26.2 以上
+- Gateway ／ Center UI をビルドするための Node.js 24 LTS + npm 11+、または Docker
+
+Node.js 24 LTS + npm 11+ がローカルに無い場合、既定の `tools/npm-node24.sh` は
+Docker イメージ `node:24-alpine` を使います。この場合、インストール実行ユーザーが
+Docker API にアクセスできる必要があります。Docker をインストールしただけでは足りず、
+通常は `docker` グループへの追加後に再ログインが必要です。
+
+最小構成の Ubuntu VPS では、たとえば次のように準備します。
+
+```bash
+sudo apt update
+sudo apt install -y make curl ca-certificates git docker.io
+sudo usermod -aG docker "$USER"
+```
+
+いったんログアウトして再ログインした後、`docker ps` が通ることを確認してください。
+Go はディストリビューションのパッケージが古い場合があるため、Go 公式 tarball から
+1.26.2 以上を入れてください。
+
 ```bash
 make setup
 make build
@@ -65,6 +88,15 @@ make install TARGET=linux-systemd \
   INSTALL_DB_SEED=auto
 ```
 
+初回ログイン用の owner を明示したい場合は、インストール時に次のように渡します。
+省略した場合、インストーラーがランダムな初期パスワードを生成して 1 回だけ表示します。
+
+```bash
+TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME=admin \
+TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD='replace-with-a-long-random-password' \
+make install TARGET=linux-systemd INSTALL_ROLE=center-protected
+```
+
 挙動:
 
 - `PREFIX` の既定値は `/opt/tukuyomi`
@@ -83,6 +115,7 @@ make install TARGET=linux-systemd \
 - 初回作成する env ファイルと systemd ユニットは `PREFIX` に合わせて生成されます
 - ロール用の設定ファイルは root 所有 `0640` とし、サービスグループに読み取りのみを与えます
 - env ファイルはシークレットを含む前提で root 所有 `0640` のまま保持します
+- DB マイグレーション後、ホストインストールは導入対象 role ごとの DB に初期 owner bootstrap を実行します。bootstrap password が未指定、または開発用プレースホルダーのままの場合は、ランダムな初期パスワードを生成してインストールログに 1 回だけ表示します。既存の管理ユーザーはリセットしません
 - `INSTALL_DB_SEED=auto` は SQLite DB がまだ存在しない初回のみ `db-import` を実行します
 - 初回 DB シードでは `primary` という既定アップストリームが作成されます。プロキシにトラフィックを流す前に、実際のバックエンドエンドポイントへ調整してください
 - 既存 DB がある状態での再実行時は、DB マイグレーションと WAF／CRS アセットのリフレッシュを行います
@@ -361,6 +394,7 @@ make php-fpm-copy RUNTIME=php85 DEST="$HOME/tukuyomi"
 
 - `admin.session_secret` は管理対象のアプリケーション設定に保持し、ブラウザーへ露出しないでください
 - `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` ／ `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` は、管理ユーザーテーブルが空の状態での初回オーナーブートストラップにのみ使用してください
+- `/auth/login` の POST が HTTP 401 を返す場合は、入力した認証情報が既存の管理ユーザーと一致していません。HTTP でアクセスしていること自体が 401 の原因ではありません。ただし本番公開前には HTTPS、または前段の TLS 終端を必ず用意してください
 - ブラウザー操作するオペレーターはユーザー名／パスワードでサインインし、同一オリジンの DB ベースセッションクッキーを受け取ります
 - CLI ／自動化処理では、共有の管理 API キーではなくユーザー単位の個人アクセストークンを使用してください
 - `tukuyomi` の既定方針は `admin.external_mode=api_only_external` です。リモート管理 API が不要であれば `deny_external` にしてください

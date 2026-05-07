@@ -31,6 +31,24 @@ afterwards".
 
 First, build the tukuyomi binary on the build host or your workstation.
 
+You need `make`, Go toolchain 1.26.2 or newer, and Node.js 24 LTS + npm 11+
+for the Gateway / Center UI build. When local Node.js 24 LTS + npm 11+ is not
+available, the default `tools/npm-node24.sh` wrapper uses Docker image
+`node:24-alpine`. On a minimal VPS, that means Docker must not only be
+installed; the installing user must also be able to access the Docker API.
+
+On Ubuntu VPS hosts, prepare the prerequisites for example with:
+
+```bash
+sudo apt update
+sudo apt install -y make curl ca-certificates git docker.io
+sudo usermod -aG docker "$USER"
+```
+
+The `docker` group change requires a new login session. After logging in again,
+confirm that `docker ps` works. If the distribution Go package is too old,
+install Go 1.26.2 or newer from the official Go tarball.
+
 ```bash
 make setup
 make build
@@ -87,6 +105,14 @@ make install TARGET=linux-systemd \
   INSTALL_DB_SEED=auto
 ```
 
+Set the first-login owner explicitly when you do not want a generated password:
+
+```bash
+TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME=admin \
+TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD='replace-with-a-long-random-password' \
+make install TARGET=linux-systemd INSTALL_ROLE=center-protected
+```
+
 Each behavior is described below.
 
 ### 3.3.1 PREFIX and the runtime user
@@ -121,6 +147,7 @@ user, writing to `/opt/tukuyomi`, installing systemd units).
 | First-run gateway DB seed | yes | no | yes, with Center routes |
 | Scheduled-task timer | yes | no | no |
 | DB migration | yes | yes | both DBs |
+| Initial owner bootstrap | yes | yes | both DBs |
 
 The Center role does not carry WAF/CRS import or scheduled tasks
 because the Center is a control plane that approves and manages
@@ -158,6 +185,11 @@ not `X-Forwarded-For`.
   asset refresh happen.
 - For an empty MySQL or PostgreSQL DB, pass `INSTALL_DB_SEED=always`
   explicitly.
+- After migration, host install bootstraps the first owner for each
+  installed role DB. If `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` is not set,
+  or still contains the development placeholder, the installer generates
+  a random first-login password and prints it once. Existing admin users
+  are never reset.
 
 ### 3.3.4 Enabling scheduled tasks
 
@@ -555,6 +587,10 @@ Principles for secret handling:
 - `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` /
   `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` are only for the **first-run
   owner bootstrap** when the admin user table is empty.
+- HTTP 401 from `POST /auth/login` means the submitted credentials did
+  not match an existing admin user. Plain HTTP is not the cause of that
+  status, although production exposure should still use HTTPS or a
+  TLS-terminating front proxy.
 - Browser operators sign in with a username / password and receive a
   same-origin DB-backed session cookie.
 - CLI / automation use **per-user personal access tokens**, not a

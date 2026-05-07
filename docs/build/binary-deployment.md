@@ -13,6 +13,29 @@ Typical environments:
 
 Build on a workstation or build host:
 
+Prerequisites:
+
+- `make`
+- Go toolchain 1.26.2 or newer
+- Node.js 24 LTS + npm 11+ for Gateway / Center UI builds, or Docker
+
+When local Node.js 24 LTS + npm 11+ is unavailable, the default
+`tools/npm-node24.sh` wrapper uses Docker image `node:24-alpine`. In that case,
+the installing user must be able to access the Docker API. Installing Docker is
+not enough by itself; on a typical Linux host the user must be added to the
+`docker` group and then log in again.
+
+On a minimal Ubuntu VPS, prepare the host for example with:
+
+```bash
+sudo apt update
+sudo apt install -y make curl ca-certificates git docker.io
+sudo usermod -aG docker "$USER"
+```
+
+After logging in again, confirm that `docker ps` works. If the distribution Go
+package is too old, install Go 1.26.2 or newer from the official Go tarball.
+
 ```bash
 make setup
 make build
@@ -70,6 +93,15 @@ make install TARGET=linux-systemd \
   INSTALL_DB_SEED=auto
 ```
 
+Set the first-login owner explicitly when you do not want the installer to
+generate one:
+
+```bash
+TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME=admin \
+TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD='replace-with-a-long-random-password' \
+make install TARGET=linux-systemd INSTALL_ROLE=center-protected
+```
+
 Behavior:
 
 - `PREFIX` defaults to `/opt/tukuyomi`
@@ -117,6 +149,10 @@ Behavior:
 - role config files are root-owned `0640` with read access granted only through
   the service group
 - env files stay root-owned `0640` because they are expected to carry secrets
+- after DB migration, host install runs the admin bootstrap for each installed
+  role DB. If no bootstrap password is provided, or if the development
+  placeholder password is still present, the installer generates a random
+  first-login password and prints it once. Existing admin users are never reset.
 - `INSTALL_DB_SEED=auto` runs `db-import` only when the SQLite DB is not present yet
 - the first DB seed creates a default upstream named `primary`; update it to
   the real backend endpoint before exposing the proxy to traffic
@@ -415,6 +451,9 @@ Keep overload controls in DB `app_config` under `server`:
 
 - keep `admin.session_secret` in managed app config, not in the browser
 - use `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` / `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` only for first-owner bootstrap when the admin user table is empty
+- `POST /auth/login` returning HTTP 401 means the submitted credentials did not
+  match an existing admin user. Plain HTTP is not the cause of that status; use
+  HTTPS or a TLS-terminating front proxy before real production exposure.
 - browser operators sign in with username/password and receive same-origin DB-backed session cookies
 - CLI / automation should use per-user personal access tokens, not shared admin API keys
 - default `tukuyomi` posture is `admin.external_mode=api_only_external`; move to `deny_external` if remote admin API access is unnecessary

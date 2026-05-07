@@ -48,6 +48,8 @@ func runMain(args []string) {
 		runDBImportPreviewCommand()
 	case serverCommandDBImportWAFRuleAssets:
 		runDBImportWAFRuleAssetsCommand()
+	case serverCommandAdminBootstrap:
+		runAdminBootstrapCommand()
 	case serverCommandPreviewPrintTopology:
 		runPreviewPrintTopologyCommand()
 	case serverCommandRunScheduledTasks:
@@ -561,6 +563,20 @@ func runDBImportWAFRuleAssetsCommand() {
 		log.Fatalf("[DB][IMPORT][WAF_RULE_ASSETS][FATAL] %v", err)
 	}
 	log.Printf("[DB][IMPORT][WAF_RULE_ASSETS] completed")
+}
+
+func runAdminBootstrapCommand() {
+	config.LoadEnv()
+	initRuntimeDBStoreOrFatal("[ADMIN][BOOTSTRAP][DB]")
+	created, err := handler.EnsureAdminBootstrapOwnerFromEnv()
+	if err != nil {
+		log.Fatalf("[ADMIN][BOOTSTRAP][FATAL] %v", err)
+	}
+	if created {
+		log.Printf("[ADMIN][BOOTSTRAP] created initial owner from environment")
+		return
+	}
+	log.Printf("[ADMIN][BOOTSTRAP] skipped; admin user already exists or bootstrap env is empty")
 }
 
 func runScheduledTasksCommand() {

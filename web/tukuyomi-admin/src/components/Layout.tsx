@@ -94,7 +94,8 @@ const baseNavGroups: NavGroup[] = [
       { to: "/cache", label: "Cache Rules", hint: "edge cache behavior" },
       { to: "/proxy-rules", label: "Proxy Rules", hint: "upstream and transport tuning" },
       { to: "/backends", label: "Backends", hint: "canonical backend status and direct-upstream runtime ops" },
-      { to: "/sites", label: "Sites", hint: "hostname ownership and tls binding" },
+      { to: "/sites", label: "Sites", hint: "hostname fallback routing" },
+      { to: "/tls", label: "TLS", hint: "certificates and SNI bindings" },
     ],
   },
   {

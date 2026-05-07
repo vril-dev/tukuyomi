@@ -186,6 +186,9 @@
     "sites": {
       "sites": []
     },
+    "tls_bindings": {
+      "bindings": []
+    },
     "upstream_runtime": {
       "version": "v1"
     },

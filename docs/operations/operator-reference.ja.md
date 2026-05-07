@@ -100,9 +100,13 @@
 - `server.http3.enabled=true` には組み込み TLS が必要です
 - HTTP/3 は `server.listen_addr` と同じ番号のポートを UDP で使用します
 - `server.tls.redirect_http=true` を指定すると、平文 HTTP リスナーが追加されます
-- ACME 自動 TLS は、サイトごとの `tls.mode=acme` で選択します。ACME のアカウント鍵、チャレンジトークン、証明書キャッシュは `persistent_storage` の `acme/` 名前空間に保存されます
-- ACME HTTP-01 を使用するため、ポート 80 を `server.tls.http_redirect_addr` へ到達させてください。Let's Encrypt の `staging` ／ `production` は、サイトごとの ACME 環境設定で選択します
+- ACME 自動 TLS は、TLS 画面の binding `mode=acme` で選択します。ACME のアカウント鍵、チャレンジトークン、証明書キャッシュは `persistent_storage` の `acme/` 名前空間に保存されます
+- Sites はルーティング用の設定です。Site はホスト単位のフォールバックルートとアップストリームを生成するため、`default_upstream` は必須です
+- TLS binding は Host/SNI 名に対する証明書設定です。Sites、Proxy Rules、Runtime Apps など、どのルートで転送しているホストにも紐づけられます
+- TLS 管理の ACME は DNS ホスト名のみ対応します。IP アドレス証明書はこの経路では扱いません。IP endpoint が避けられない場合は、DNS 名を用意するか、手動管理の証明書を使用してください
+- ACME HTTP-01 を使用するため、ポート 80 を `server.tls.http_redirect_addr` へ到達させてください。Let's Encrypt の `staging` ／ `production` は TLS 画面で選択します
 - `paths.site_config_file` の既定は `conf/sites.json` です。DB を正とするランタイムでは、これは空 DB 向けのシード／エクスポートパスであり、稼働中の正となるソースではありません
+- `paths.tls_binding_config_file` の既定は `conf/tls-bindings.json` です。DB を正とするランタイムでは、これもシード／エクスポートパスです
 
 ### 永続ファイルストレージ
 
@@ -197,7 +201,8 @@ sudo sysctl --system
 | `/cache` | キャッシュルールと内部キャッシュストア |
 | `/proxy-rules` | Runtime Apps が所有しない直接アップストリーム／バックエンドプール／ルートの編集と、validate ／ probe ／ dry-run ／ apply ／ rollback |
 | `/backends` | 直接指定のアップストリームバックエンドオブジェクト一覧。直接指定された名前付きアップストリームはランタイムでの有効化／ドレイン／無効化／重みオーバーライドに対応し、Runtime App が生成したターゲットは Runtime Apps 側で扱います |
-| `/sites` | サイトオーナーシップと TLS バインディング |
+| `/sites` | ホスト名の所有と、必須の default upstream から生成するフォールバックルート |
+| `/tls` | ルーティングから独立した Host/SNI TLS binding、ACME 証明書モード、証明書ファイル |
 | `/options` | ランタイムインベントリ、オプションのアーティファクト、GeoIP ／国別 DB 管理 |
 | `/runtime-apps` | static ／ `php-fpm` ／ `psgi` アプリケーションのランタイムリスナー、docroot、ランタイム、生成バックエンド管理 |
 | `/scheduled-tasks` | cron 形式のコマンドタスクと前回実行ステータス |

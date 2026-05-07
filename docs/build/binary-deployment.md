@@ -293,7 +293,7 @@ Notes:
 
 Runtime artifacts that must remain durable as files/objects, rather than DB
 rows, are managed by `persistent_storage`. The current primary user is
-site-managed ACME: account keys, challenge tokens, and certificate cache.
+TLS binding ACME: account keys, challenge tokens, and certificate cache.
 
 The default backend is local:
 
@@ -314,9 +314,9 @@ The default backend is local:
 - pass `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` through env or platform secret injection
 - Azure Blob Storage and Google Cloud Storage fail closed until their provider adapters are implemented; they do not silently fall back to local
 
-Configure site-managed ACME per site on the `Sites` page by selecting
-`tls.mode=acme`. `production` / `staging` selects the Let's Encrypt production
-or staging CA, and account email is optional. ACME HTTP-01 needs
+Configure ACME on the `TLS` page by adding a TLS binding with `mode=acme`.
+`production` / `staging` selects the Let's Encrypt production or staging CA,
+and account email is optional. ACME HTTP-01 needs
 `server.tls.redirect_http=true` with `server.tls.http_redirect_addr=:80`, or
 equivalent port 80 forwarding.
 

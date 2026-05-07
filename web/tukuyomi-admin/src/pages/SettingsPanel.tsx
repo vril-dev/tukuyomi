@@ -115,6 +115,7 @@ type ListenerAdminConfig = {
   paths: {
     proxy_config_file: string;
     site_config_file: string;
+    tls_binding_config_file: string;
     php_runtime_inventory_file: string;
     psgi_runtime_inventory_file: string;
     vhost_config_file: string;
@@ -377,6 +378,7 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
     paths: {
       proxy_config_file: "conf/proxy.json",
       site_config_file: "conf/sites.json",
+      tls_binding_config_file: "conf/tls-bindings.json",
       php_runtime_inventory_file: "data/php-fpm/inventory.json",
       psgi_runtime_inventory_file: "data/psgi/inventory.json",
       vhost_config_file: "data/php-fpm/vhosts.json",
@@ -2327,6 +2329,10 @@ export default function SettingsPanel() {
                           {renderPathField(
                             "site_config_file",
                             "Site Seed File",
+                          )}
+                          {renderPathField(
+                            "tls_binding_config_file",
+                            "TLS Binding Seed File",
                           )}
                           {renderPathField(
                             "php_runtime_inventory_file",

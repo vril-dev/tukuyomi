@@ -135,7 +135,7 @@ Gateway UI には、運用上よく使う画面がひととおり揃っていま
    - direct named upstream を、drain / disable / weight override する運用画面
      です（第5章）。
 7. **Sites**
-   - site ownership と TLS binding を編集する画面です（第15章）。
+   - site routing と TLS binding を編集する画面です（第15章）。
 8. **Cache Rules / Country Block / Rate Limit / Bot Defense / Semantic Security
    / IP Reputation / Notifications**
    - 各種リクエスト境界の制御を扱う画面です。第7〜9章で順次扱います。

@@ -150,6 +150,7 @@ type appAdminRateLimitConfig struct {
 type appPathsConfig struct {
 	ProxyConfigFile          string `json:"proxy_config_file"`
 	SiteConfigFile           string `json:"site_config_file"`
+	TLSBindingConfigFile     string `json:"tls_binding_config_file"`
 	PHPRuntimeInventoryFile  string `json:"php_runtime_inventory_file"`
 	PSGIRuntimeInventoryFile string `json:"psgi_runtime_inventory_file"`
 	VhostConfigFile          string `json:"vhost_config_file"`
@@ -404,6 +405,7 @@ func defaultAppConfigFile() appConfigFile {
 		Paths: appPathsConfig{
 			ProxyConfigFile:          "conf/proxy.json",
 			SiteConfigFile:           "conf/sites.json",
+			TLSBindingConfigFile:     "conf/tls-bindings.json",
 			PHPRuntimeInventoryFile:  "data/php-fpm/inventory.json",
 			PSGIRuntimeInventoryFile: "data/psgi/inventory.json",
 			VhostConfigFile:          "data/php-fpm/vhosts.json",
@@ -597,6 +599,10 @@ func normalizeAppConfigFile(cfg *appConfigFile) {
 	}
 	cfg.Paths.ProxyConfigFile = strings.TrimSpace(cfg.Paths.ProxyConfigFile)
 	cfg.Paths.SiteConfigFile = strings.TrimSpace(cfg.Paths.SiteConfigFile)
+	cfg.Paths.TLSBindingConfigFile = strings.TrimSpace(cfg.Paths.TLSBindingConfigFile)
+	if cfg.Paths.TLSBindingConfigFile == "" {
+		cfg.Paths.TLSBindingConfigFile = "conf/tls-bindings.json"
+	}
 	cfg.Paths.PHPRuntimeInventoryFile = strings.TrimSpace(cfg.Paths.PHPRuntimeInventoryFile)
 	cfg.Paths.PSGIRuntimeInventoryFile = strings.TrimSpace(cfg.Paths.PSGIRuntimeInventoryFile)
 	cfg.Paths.VhostConfigFile = strings.TrimSpace(cfg.Paths.VhostConfigFile)
@@ -729,6 +735,9 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	}
 	if cfg.Paths.SiteConfigFile == "" {
 		return fmt.Errorf("paths.site_config_file is required")
+	}
+	if cfg.Paths.TLSBindingConfigFile == "" {
+		return fmt.Errorf("paths.tls_binding_config_file is required")
 	}
 	if cfg.Paths.PHPRuntimeInventoryFile == "" {
 		return fmt.Errorf("paths.php_runtime_inventory_file is required")

@@ -29,25 +29,24 @@ func TestACMEHTTPRedirectServerPreservesChallengePath(t *testing.T) {
 
 	config.ServerTLSEnabled = true
 	tmp := t.TempDir()
-	sitesPath := filepath.Join(tmp, "sites.json")
+	tlsPath := filepath.Join(tmp, "tls-bindings.json")
 	raw := `{
-  "sites": [
+  "bindings": [
     {
       "name": "proxy",
       "hosts": ["proxy.example.com"],
-      "default_upstream": "http://proxy.internal:8080",
-      "tls": {"mode": "acme"}
+      "mode": "acme"
     }
   ]
 }`
-	if err := os.WriteFile(sitesPath, []byte(raw), 0o600); err != nil {
-		t.Fatalf("WriteFile(sites): %v", err)
+	if err := os.WriteFile(tlsPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile(tls-bindings): %v", err)
 	}
-	if err := handler.InitSiteRuntime(sitesPath, 2); err != nil {
-		t.Fatalf("InitSiteRuntime: %v", err)
+	if err := handler.InitTLSBindingRuntime(tlsPath, 2); err != nil {
+		t.Fatalf("InitTLSBindingRuntime: %v", err)
 	}
-	_, _, sites, _, _ := handler.SiteConfigSnapshot()
-	profiles := handler.EffectiveServerTLSACMEProfilesForSites(sites)
+	_, _, bindings, _, _ := handler.TLSBindingConfigSnapshot()
+	profiles := handler.EffectiveServerTLSACMEProfilesForTLSBindings(bindings)
 	if len(profiles) != 1 {
 		t.Fatalf("profiles=%#v want one", profiles)
 	}
@@ -80,7 +79,7 @@ func TestACMEHTTPRedirectServerPreservesChallengePath(t *testing.T) {
 	}
 }
 
-func TestBuildManagedServerTLSConfigPrefersSiteCertificateForMatchingSNI(t *testing.T) {
+func TestBuildManagedServerTLSConfigPrefersTLSBindingCertificateForMatchingSNI(t *testing.T) {
 	restore := setServerTLSGlobalsForTest(t)
 	defer restore()
 
@@ -93,26 +92,23 @@ func TestBuildManagedServerTLSConfigPrefersSiteCertificateForMatchingSNI(t *test
 	config.ServerTLSKeyFile = legacyKeyFile
 
 	tmp := t.TempDir()
-	sitesPath := filepath.Join(tmp, "sites.json")
+	tlsPath := filepath.Join(tmp, "tls-bindings.json")
 	raw := `{
-  "sites": [
+  "bindings": [
     {
       "name": "app",
       "hosts": ["app.example.com"],
-      "default_upstream": "http://app.internal:8080",
-      "tls": {
-        "mode": "manual",
-        "cert_file": ` + jsonStringForServerTLS(siteCertFile) + `,
-        "key_file": ` + jsonStringForServerTLS(siteKeyFile) + `
-      }
+      "mode": "manual",
+      "cert_file": ` + jsonStringForServerTLS(siteCertFile) + `,
+      "key_file": ` + jsonStringForServerTLS(siteKeyFile) + `
     }
   ]
 }`
-	if err := os.WriteFile(sitesPath, []byte(raw), 0o600); err != nil {
-		t.Fatalf("WriteFile(sites): %v", err)
+	if err := os.WriteFile(tlsPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile(tls-bindings): %v", err)
 	}
-	if err := handler.InitSiteRuntime(sitesPath, 2); err != nil {
-		t.Fatalf("InitSiteRuntime: %v", err)
+	if err := handler.InitTLSBindingRuntime(tlsPath, 2); err != nil {
+		t.Fatalf("InitTLSBindingRuntime: %v", err)
 	}
 
 	tlsConfig, _, err := buildManagedServerTLSConfig()
@@ -146,7 +142,7 @@ func TestBuildManagedServerTLSConfigPrefersSiteCertificateForMatchingSNI(t *test
 	}
 }
 
-func TestBuildManagedServerTLSConfigEnablesSiteManagedACMEWithoutGlobalFlag(t *testing.T) {
+func TestBuildManagedServerTLSConfigEnablesTLSBindingACMEWithoutGlobalFlag(t *testing.T) {
 	restore := setServerTLSGlobalsForTest(t)
 	defer restore()
 
@@ -157,22 +153,22 @@ func TestBuildManagedServerTLSConfigEnablesSiteManagedACMEWithoutGlobalFlag(t *t
 	config.PersistentStorageLocalBaseDir = t.TempDir()
 
 	tmp := t.TempDir()
-	sitesPath := filepath.Join(tmp, "sites.json")
+	tlsPath := filepath.Join(tmp, "tls-bindings.json")
 	raw := `{
-  "sites": [
+  "bindings": [
     {
       "name": "app",
       "hosts": ["app.example.com"],
-      "default_upstream": "http://app.internal:8080",
-      "tls": {"mode": "acme", "acme": {"environment": "staging"}}
+      "mode": "acme",
+      "acme": {"environment": "staging"}
     }
   ]
 }`
-	if err := os.WriteFile(sitesPath, []byte(raw), 0o600); err != nil {
-		t.Fatalf("WriteFile(sites): %v", err)
+	if err := os.WriteFile(tlsPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile(tls-bindings): %v", err)
 	}
-	if err := handler.InitSiteRuntime(sitesPath, 2); err != nil {
-		t.Fatalf("InitSiteRuntime: %v", err)
+	if err := handler.InitTLSBindingRuntime(tlsPath, 2); err != nil {
+		t.Fatalf("InitTLSBindingRuntime: %v", err)
 	}
 
 	tlsConfig, _, err := buildManagedServerTLSConfig()
@@ -201,22 +197,22 @@ func TestBuildManagedServerTLSConfigRejectsS3ACMECacheWithoutCredentials(t *test
 	config.PersistentStorageS3ForcePathStyle = true
 
 	tmp := t.TempDir()
-	sitesPath := filepath.Join(tmp, "sites.json")
+	tlsPath := filepath.Join(tmp, "tls-bindings.json")
 	raw := `{
-  "sites": [
+  "bindings": [
     {
       "name": "app",
       "hosts": ["app.example.com"],
-      "default_upstream": "http://app.internal:8080",
-      "tls": {"mode": "acme", "acme": {"environment": "staging"}}
+      "mode": "acme",
+      "acme": {"environment": "staging"}
     }
   ]
 }`
-	if err := os.WriteFile(sitesPath, []byte(raw), 0o600); err != nil {
-		t.Fatalf("WriteFile(sites): %v", err)
+	if err := os.WriteFile(tlsPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile(tls-bindings): %v", err)
 	}
-	if err := handler.InitSiteRuntime(sitesPath, 2); err != nil {
-		t.Fatalf("InitSiteRuntime: %v", err)
+	if err := handler.InitTLSBindingRuntime(tlsPath, 2); err != nil {
+		t.Fatalf("InitTLSBindingRuntime: %v", err)
 	}
 
 	_, _, err := buildManagedServerTLSConfig()

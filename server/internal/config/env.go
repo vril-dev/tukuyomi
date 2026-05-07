@@ -16,6 +16,7 @@ var (
 	ConfigFile                             string
 	ProxyConfigFile                        string
 	SiteConfigFile                         string
+	TLSBindingConfigFile                   string
 	PHPRuntimeInventoryFile                string
 	PSGIRuntimeInventoryFile               string
 	VhostConfigFile                        string
@@ -198,6 +199,10 @@ func applyAppConfig(cfg appConfigFile) {
 	SiteConfigFile = strings.TrimSpace(cfg.Paths.SiteConfigFile)
 	if SiteConfigFile == "" {
 		SiteConfigFile = "conf/sites.json"
+	}
+	TLSBindingConfigFile = strings.TrimSpace(cfg.Paths.TLSBindingConfigFile)
+	if TLSBindingConfigFile == "" {
+		TLSBindingConfigFile = "conf/tls-bindings.json"
 	}
 	PHPRuntimeInventoryFile = strings.TrimSpace(cfg.Paths.PHPRuntimeInventoryFile)
 	if PHPRuntimeInventoryFile == "" {

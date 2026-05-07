@@ -31,6 +31,7 @@ func MetricsHandler(c *gin.Context) {
 	proxyOverload := overloadstate.Snapshot("proxy")
 	_, _, proxyCfg, proxyHealth, _ := ProxyRulesSnapshot()
 	siteStatuses := SiteStatusSnapshot()
+	_, _, _, tlsBindingStatuses, _ := TLSBindingConfigSnapshot()
 	proxyCompressionStatus := proxyResponseCompressionStatusSnapshot()
 	transportMetrics := ProxyTransportMetricsSnapshot()
 	proxyRuntimeReady := proxyRuntimeInstance() != nil
@@ -184,11 +185,17 @@ func MetricsHandler(c *gin.Context) {
 	}
 	writePromGauge(&b, "tukuyomi_sites_total", len(siteStatuses))
 	writePromGauge(&b, "tukuyomi_sites_enabled_total", countEnabledSiteStatuses(siteStatuses))
-	writePromGauge(&b, "tukuyomi_sites_tls_covered_total", countSiteStatuses(siteStatuses, "covered"))
 	for _, site := range siteStatuses {
 		name := sanitizePromLabel(site.Name)
-		fmt.Fprintf(&b, "# TYPE tukuyomi_site_tls_covered gauge\ntukuyomi_site_tls_covered{site=%q,mode=%q} %d\n", name, site.TLSMode, boolGauge(site.Enabled && site.TLSStatus == "covered"))
-		fmt.Fprintf(&b, "# TYPE tukuyomi_site_enabled gauge\ntukuyomi_site_enabled{site=%q,mode=%q} %d\n", name, site.TLSMode, boolGauge(site.Enabled))
+		fmt.Fprintf(&b, "# TYPE tukuyomi_site_enabled gauge\ntukuyomi_site_enabled{site=%q} %d\n", name, boolGauge(site.Enabled))
+	}
+	writePromGauge(&b, "tukuyomi_tls_bindings_total", len(tlsBindingStatuses))
+	writePromGauge(&b, "tukuyomi_tls_bindings_enabled_total", countEnabledTLSBindingStatuses(tlsBindingStatuses))
+	writePromGauge(&b, "tukuyomi_tls_bindings_covered_total", countTLSBindingStatuses(tlsBindingStatuses, "covered"))
+	for _, binding := range tlsBindingStatuses {
+		name := sanitizePromLabel(binding.Name)
+		mode := sanitizePromLabel(binding.Mode)
+		fmt.Fprintf(&b, "# TYPE tukuyomi_tls_binding_covered gauge\ntukuyomi_tls_binding_covered{binding=%q,mode=%q} %d\n", name, mode, boolGauge(binding.Enabled && binding.Status == "covered"))
 	}
 
 	c.Data(200, "text/plain; version=0.0.4; charset=utf-8", []byte(b.String()))
@@ -326,10 +333,20 @@ func countEnabledSiteStatuses(statuses []SiteRuntimeStatus) int {
 	return total
 }
 
-func countSiteStatuses(statuses []SiteRuntimeStatus, want string) int {
+func countEnabledTLSBindingStatuses(statuses []TLSBindingRuntimeStatus) int {
 	total := 0
 	for _, status := range statuses {
-		if status.TLSStatus == want {
+		if status.Enabled {
+			total++
+		}
+	}
+	return total
+}
+
+func countTLSBindingStatuses(statuses []TLSBindingRuntimeStatus, want string) int {
+	total := 0
+	for _, status := range statuses {
+		if status.Status == want {
 			total++
 		}
 	}

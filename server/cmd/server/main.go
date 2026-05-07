@@ -157,6 +157,9 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 	if err := handler.InitSiteRuntime(config.SiteConfigFile, config.ProxyRollbackMax); err != nil {
 		fatalf("[FATAL] failed to initialize site runtime: %v", err)
 	}
+	if err := handler.InitTLSBindingRuntime(config.TLSBindingConfigFile, config.ProxyRollbackMax); err != nil {
+		fatalf("[FATAL] failed to initialize tls binding runtime: %v", err)
+	}
 	if err := handler.InitProxyRuntime(config.ProxyConfigFile, config.ProxyRollbackMax); err != nil {
 		fatalf("[FATAL] failed to initialize proxy runtime: %v", err)
 	}

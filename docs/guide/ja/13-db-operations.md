@@ -184,7 +184,7 @@ import 後の本番起動で **必要な file** は、
 これは **config authority の話** です。runtime byte artifact は別扱いです。
 たとえば、
 
-- site-managed ACME を local backend で使う場合の
+- TLS binding ACME を local backend で使う場合の
   `persistent_storage.local.base_dir`（既定 `data/persistent`）
 - internal response cache を有効化した場合の `cache_store.store_dir`
 - security / FP tuner / proxy rules audit

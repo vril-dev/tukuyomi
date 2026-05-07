@@ -115,6 +115,7 @@ type settingsListenerAdminPersistentStorageGCSConfig struct {
 type settingsListenerAdminPathsConfig struct {
 	ProxyConfigFile          string `json:"proxy_config_file"`
 	SiteConfigFile           string `json:"site_config_file"`
+	TLSBindingConfigFile     string `json:"tls_binding_config_file"`
 	PHPRuntimeInventoryFile  string `json:"php_runtime_inventory_file"`
 	PSGIRuntimeInventoryFile string `json:"psgi_runtime_inventory_file"`
 	VhostConfigFile          string `json:"vhost_config_file"`
@@ -606,6 +607,7 @@ func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListener
 		Paths: settingsListenerAdminPathsConfig{
 			ProxyConfigFile:          cfg.Paths.ProxyConfigFile,
 			SiteConfigFile:           cfg.Paths.SiteConfigFile,
+			TLSBindingConfigFile:     cfg.Paths.TLSBindingConfigFile,
 			PHPRuntimeInventoryFile:  cfg.Paths.PHPRuntimeInventoryFile,
 			PSGIRuntimeInventoryFile: cfg.Paths.PSGIRuntimeInventoryFile,
 			VhostConfigFile:          cfg.Paths.VhostConfigFile,
@@ -761,6 +763,7 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 
 	cfg.Paths.ProxyConfigFile = next.Paths.ProxyConfigFile
 	cfg.Paths.SiteConfigFile = next.Paths.SiteConfigFile
+	cfg.Paths.TLSBindingConfigFile = next.Paths.TLSBindingConfigFile
 	cfg.Paths.PHPRuntimeInventoryFile = next.Paths.PHPRuntimeInventoryFile
 	if strings.TrimSpace(next.Paths.PSGIRuntimeInventoryFile) != "" {
 		cfg.Paths.PSGIRuntimeInventoryFile = next.Paths.PSGIRuntimeInventoryFile

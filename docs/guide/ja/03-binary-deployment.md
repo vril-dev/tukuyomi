@@ -368,7 +368,7 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
 ## 3.5　永続 byte storage
 
 DB ではなく file / object として保持する runtime artifact は、`persistent_storage`
-block で管理します。現在の主用途は **site-managed ACME の account key、challenge
+block で管理します。現在の主用途は **TLS binding ACME の account key、challenge
 token、証明書 cache** です。
 
 既定は local backend です。
@@ -395,7 +395,7 @@ token、証明書 cache** です。
 - Azure Blob Storage / Google Cloud Storage は、provider adapter が入るまで
   fail-closed のままで、local への暗黙 fallback は行いません。
 
-site-managed ACME は、`Sites` 画面で site ごとに `tls.mode=acme` を選びます。
+ACME は、`TLS` 画面で TLS binding の `mode=acme` を選びます。
 `production` / `staging` は Let's Encrypt の本番 CA / staging CA の選択で、
 account email は任意です。HTTP-01 challenge を使うため、
 `server.tls.redirect_http=true` と `server.tls.http_redirect_addr=:80`、

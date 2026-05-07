@@ -436,7 +436,7 @@ func StatusHandler(c *gin.Context) {
 		"server_tls_last_error":                               serverTLSStatus.LastError,
 		"server_tls_acme_enabled":                             serverTLSStatus.Source == "acme" || serverTLSStatus.Source == "composite",
 		"server_tls_acme_domains":                             EffectiveServerTLSACMEDomains(),
-		"server_tls_acme_staging":                             siteACMEUsesStaging(currentSiteConfig()),
+		"server_tls_acme_staging":                             tlsBindingACMEUsesStaging(currentTLSBindingConfig()),
 		"server_tls_acme_success_total":                       serverTLSStatus.ACMESuccessTotal,
 		"server_tls_acme_failure_total":                       serverTLSStatus.ACMEFailureTotal,
 		"server_http3_enabled":                                config.ServerHTTP3Enabled,

@@ -114,15 +114,19 @@ container 起動で通常必要になる env:
 - `server.http3.enabled=true` には built-in TLS が必須
 - HTTP/3 は `server.listen_addr` と同じ numeric port を **UDP** で使う
 - `server.tls.redirect_http=true` で plain HTTP listener を追加
-- ACME auto TLS は site ごとの `tls.mode=acme` で選択。ACME account key /
+- ACME 自動 TLS は TLS binding で選択します。ACME account key /
   challenge token / 証明書 cache は `persistent_storage` の `acme/`
-  namespace に保存
+  namespace に保存されます
+- Sites はルーティング用の設定で、`default_upstream` が必須です。TLS binding
+  は Host/SNI 名に対する証明書設定であり、Sites や Proxy Rules から独立して
+  紐づきます
 - ACME HTTP-01 のため、port 80 を `server.tls.http_redirect_addr` に
   到達させる
-- Let's Encrypt の `staging` / `production` は site ごとの ACME environment
-  で選ぶ
+- Let's Encrypt の `staging` / `production` は TLS binding ごとに選びます
 - `paths.site_config_file` の既定は `conf/sites.json`。DB-backed runtime
   では空 DB の seed / export path
+- `paths.tls_binding_config_file` の既定は `conf/tls-bindings.json`。DB-backed
+  runtime ではこれも seed / export path です
 
 ### A.1.6　Persistent File Storage
 
@@ -226,7 +230,8 @@ sudo sysctl --system
 | `/cache` | cache rules と internal cache store |
 | `/proxy-rules` | Runtime Apps が所有しない direct upstream / backend pool / route 編集と validate / probe / dry-run / apply / rollback |
 | `/backends` | direct upstream backend object の一覧。direct named upstream は runtime enable / drain / disable / weight override に対応。Runtime App generated target は Runtime Apps 側 |
-| `/sites` | site ownership と TLS binding |
+| `/sites` | site ownership と、必須の default upstream から生成する fallback route |
+| `/tls` | ルーティングから独立した Host/SNI TLS binding、ACME mode、証明書ファイル |
 | `/options` | runtime inventory / optional artifact / GeoIP / Country DB 管理 |
 | `/runtime-apps` | static / `php-fpm` / `psgi` の runtime listener / docroot / runtime / generated backend 管理 |
 | `/scheduled-tasks` | cron-style command task と last-run status |

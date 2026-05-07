@@ -24,6 +24,7 @@ const (
 	startupSeedBundleFileEnv       = "WAF_DB_IMPORT_SEED_BUNDLE_FILE"
 	startupProxySeedName           = "proxy.json"
 	startupSitesSeedName           = "sites.json"
+	startupTLSBindingsSeedName     = "tls-bindings.json"
 	startupPHPRuntimeSeedName      = "php-runtime-inventory.json"
 	startupPSGIRuntimeSeedName     = "psgi-runtime-inventory.json"
 	startupVhostsSeedName          = "vhosts.json"
@@ -35,6 +36,7 @@ const (
 
 var storageSyncRunner = storagesync.NewRunner([]storagesync.Task{
 	{Name: "sites", Run: SyncSiteStorage},
+	{Name: "tls-bindings", Run: SyncTLSBindingStorage},
 	{Name: "scheduled-tasks", Run: SyncScheduledTaskStorage},
 	{Name: "upstream-runtime", Run: SyncUpstreamRuntimeStorage},
 	{Name: "rules", Run: SyncRuleFilesStorage},
@@ -80,6 +82,9 @@ func ImportStartupConfigStorage() error {
 		return err
 	}
 	if err := importSiteConfigStorage(); err != nil {
+		return err
+	}
+	if err := importTLSBindingConfigStorage(); err != nil {
 		return err
 	}
 	if err := importPHPRuntimeInventoryStorage(); err != nil {
@@ -268,6 +273,50 @@ func importSiteConfigStorage() error {
 		return fmt.Errorf("import normalized sites config: %w", err)
 	}
 	_ = store.DeleteConfigBlob(siteConfigBlobKey)
+	return nil
+}
+
+func importTLSBindingConfigStorage() error {
+	store := getLogsStatsStore()
+	if store == nil {
+		return fmt.Errorf("db store is not initialized")
+	}
+	if siteCfg, _, found, err := store.loadActiveSiteConfig(); err != nil {
+		return fmt.Errorf("read sites config for tls binding seed: %w", err)
+	} else if found {
+		derived := deriveTLSBindingsFromSites(siteCfg)
+		if len(derived.Bindings) > 0 {
+			prepared, err := prepareTLSBindingConfigRaw(mustJSON(derived))
+			if err != nil {
+				return fmt.Errorf("validate derived tls bindings: %w", err)
+			}
+			if _, err := store.writeTLSBindingConfigVersion("", prepared.cfg, configVersionSourceImport, "", "derived tls bindings seed import", 0); err != nil {
+				return fmt.Errorf("import derived tls bindings config: %w", err)
+			}
+			return nil
+		}
+	}
+
+	path := strings.TrimSpace(config.TLSBindingConfigFile)
+	if path == "" {
+		path = "conf/tls-bindings.json"
+	}
+	raw, _, err := readStartupSeedFile(path, startupTLSBindingsSeedName)
+	if err != nil {
+		return fmt.Errorf("read tls bindings seed file: %w", err)
+	}
+	rawText := string(raw)
+	if strings.TrimSpace(rawText) == "" {
+		rawText = defaultTLSBindingConfigRaw
+	}
+	prepared, err := prepareTLSBindingConfigRaw(rawText)
+	if err != nil {
+		return fmt.Errorf("validate tls bindings seed file: %w", err)
+	}
+	if _, err := store.writeTLSBindingConfigVersion("", prepared.cfg, configVersionSourceImport, "", "tls bindings seed import", 0); err != nil {
+		return fmt.Errorf("import normalized tls bindings config: %w", err)
+	}
+	_ = store.DeleteConfigBlob(tlsBindingConfigBlobKey)
 	return nil
 }
 
@@ -657,6 +706,16 @@ func BuildRuntimeConfigBundleExport() ([]byte, error) {
 		return nil, fmt.Errorf("active sites config missing in db; run make db-import before exporting config bundle")
 	}
 	if err := addRuntimeConfigBundleDomain(&bundle, configbundle.DomainSites, []byte(mustJSON(siteCfg))); err != nil {
+		return nil, err
+	}
+	tlsBindingCfg, _, found, err := store.loadActiveTLSBindingConfig()
+	if err != nil {
+		return nil, fmt.Errorf("read tls bindings config: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("active tls bindings config missing in db; run make db-import before exporting config bundle")
+	}
+	if err := addRuntimeConfigBundleDomain(&bundle, configbundle.DomainTLSBindings, []byte(mustJSON(tlsBindingCfg))); err != nil {
 		return nil, err
 	}
 	phpRuntime, _, found, err := store.loadActivePHPRuntimeInventoryPreparedConfig(currentPHPRuntimeInventoryPath())

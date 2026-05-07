@@ -109,9 +109,13 @@ Notes:
 - `server.http3.enabled=true` requires built-in TLS termination.
 - HTTP/3 uses the same numeric port as `server.listen_addr`, but over UDP.
 - `server.tls.redirect_http=true` starts a second plain HTTP listener that redirects to HTTPS.
-- ACME auto TLS is selected per site with `tls.mode=acme`; ACME account keys, challenge tokens, and certificate cache are stored below the `acme/` namespace in `persistent_storage`.
-- ACME HTTP-01 requires port 80 to reach `server.tls.http_redirect_addr`. Select Let's Encrypt `staging` or `production` per site through the ACME environment.
+- ACME auto TLS is selected from the TLS screen with binding `mode=acme`; ACME account keys, challenge tokens, and certificate cache are stored below the `acme/` namespace in `persistent_storage`.
+- Sites are routing objects. `default_upstream` is required because a Site creates a generated host fallback route and upstream.
+- TLS bindings are independent Host/SNI certificate objects. They can protect hosts routed by Sites, Proxy Rules, Runtime Apps, or any other route source.
+- TLS-managed ACME supports DNS hostnames only. IP address certificates are intentionally outside this flow; use a DNS name or a manually managed certificate if an IP endpoint is unavoidable.
+- ACME HTTP-01 requires port 80 to reach `server.tls.http_redirect_addr`. Select Let's Encrypt `staging` or `production` from the TLS screen.
 - `paths.site_config_file` defaults to `conf/sites.json`; in DB-backed runtime this is the empty-DB seed/export path, not the live source of truth.
+- `paths.tls_binding_config_file` defaults to `conf/tls-bindings.json`; in DB-backed runtime this is also a seed/export path.
 
 ### Persistent File Storage
 
@@ -211,7 +215,8 @@ Main screens:
 | `/cache` | Cache rules and internal cache store controls |
 | `/proxy-rules` | Structured direct upstream/backend-pool/route editor for traffic not owned by Runtime Apps, with validate/probe/dry-run/apply/rollback |
 | `/backends` | Direct upstream backend inventory. Direct named upstreams support runtime enable/drain/disable and weight override; Runtime App-generated targets stay on the Runtime Apps surface |
-| `/sites` | Site ownership and TLS binding |
+| `/sites` | Hostname ownership and generated fallback routing with a required default upstream |
+| `/tls` | Host/SNI TLS bindings, ACME certificate mode, and certificate files independent of routing |
 | `/options` | Runtime inventory, optional artifacts, GeoIP/Country DB management |
 | `/runtime-apps` | Static / `php-fpm` / `psgi` application listener, docroot, runtime, and generated-backend ownership |
 | `/scheduled-tasks` | Command-based cron task definitions and run status |

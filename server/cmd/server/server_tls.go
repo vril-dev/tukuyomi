@@ -93,9 +93,9 @@ func buildManagedServerTLSConfig() (*tls.Config, *http.Server, error) {
 		return nil, nil, err
 	}
 
-	_, _, sites, statuses, _ := handler.SiteConfigSnapshot()
+	_, _, bindings, statuses, _ := handler.TLSBindingConfigSnapshot()
 	runtime := &managedServerTLSRuntime{minVersion: minVersion}
-	if err := runtime.Reload(sites, statuses); err != nil {
+	if err := runtime.Reload(bindings, statuses); err != nil {
 		handler.RecordServerTLSError(err)
 		return nil, nil, err
 	}
@@ -123,7 +123,7 @@ func buildACMEManager(profile handler.ServerTLSACMEProfile, cache autocert.Cache
 	return manager
 }
 
-func (rt *managedServerTLSRuntime) Reload(sites handler.SiteConfigFile, statuses []handler.SiteRuntimeStatus) error {
+func (rt *managedServerTLSRuntime) Reload(bindings handler.TLSBindingConfigFile, statuses []handler.TLSBindingRuntimeStatus) error {
 	var (
 		legacyTLSConfig *tls.Config
 		legacyCert      *tls.Certificate
@@ -145,7 +145,7 @@ func (rt *managedServerTLSRuntime) Reload(sites handler.SiteConfigFile, statuses
 	var (
 		managers            map[string]*autocert.Manager
 		getCertificateFuncs map[string]func(*tls.ClientHelloInfo) (*tls.Certificate, error)
-		profiles            = handler.EffectiveServerTLSACMEProfilesForSites(sites)
+		profiles            = handler.EffectiveServerTLSACMEProfilesForTLSBindings(bindings)
 		hasACME             = len(profiles) > 0
 	)
 	if hasACME {
@@ -171,15 +171,15 @@ func (rt *managedServerTLSRuntime) Reload(sites handler.SiteConfigFile, statuses
 	}
 
 	hasManual := legacyCert != nil
-	siteManualNotAfter := latestManualSiteNotAfter(statuses)
-	for _, site := range statuses {
-		if site.Enabled && site.TLSMode == "manual" {
+	siteManualNotAfter := latestManualBindingNotAfter(statuses)
+	for _, binding := range statuses {
+		if binding.Enabled && binding.Mode == "manual" {
 			hasManual = true
 			break
 		}
 	}
 	if !hasManual && !hasACME {
-		err := fmt.Errorf("server tls enabled but no legacy or site-managed certificate source is configured")
+		err := fmt.Errorf("server tls enabled but no legacy or TLS binding certificate source is configured")
 		handler.RecordServerTLSError(err)
 		return err
 	}
@@ -212,7 +212,7 @@ func (rt *managedServerTLSRuntime) GetCertificate(hello *tls.ClientHelloInfo) (*
 	rt.mu.RUnlock()
 
 	if hello != nil {
-		if match := handler.SiteBindingForHost(hello.ServerName); match.Mode != "" {
+		if match := handler.TLSBindingForHost(hello.ServerName); match.Mode != "" {
 			switch match.Mode {
 			case "manual":
 				if match.Certificate != nil {
@@ -253,7 +253,7 @@ func (rt *managedServerTLSRuntime) acmeManagerForHost(host string) *autocert.Man
 	if rt == nil {
 		return nil
 	}
-	match := handler.SiteBindingForHost(host)
+	match := handler.TLSBindingForHost(host)
 	if match.Mode != "acme" || strings.TrimSpace(match.ACMEProfile) == "" {
 		return nil
 	}
@@ -298,13 +298,13 @@ func buildServerTLSACMECache(profile handler.ServerTLSACMEProfile) (autocert.Cac
 	}, serverTLSACMEProfileCacheNamespace(profile))
 }
 
-func latestManualSiteNotAfter(statuses []handler.SiteRuntimeStatus) time.Time {
+func latestManualBindingNotAfter(statuses []handler.TLSBindingRuntimeStatus) time.Time {
 	var best time.Time
 	for _, status := range statuses {
-		if !status.Enabled || status.TLSMode != "manual" || strings.TrimSpace(status.TLSCertNotAfter) == "" {
+		if !status.Enabled || status.Mode != "manual" || strings.TrimSpace(status.CertNotAfter) == "" {
 			continue
 		}
-		parsed, err := time.Parse(time.RFC3339Nano, status.TLSCertNotAfter)
+		parsed, err := time.Parse(time.RFC3339Nano, status.CertNotAfter)
 		if err != nil {
 			continue
 		}

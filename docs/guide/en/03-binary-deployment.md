@@ -391,8 +391,7 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
 
 Runtime artifacts that live as files / objects rather than in the DB
 are managed under `persistent_storage`. The current main use is the
-**site-managed ACME account key, challenge token, and certificate
-cache**.
+**TLS binding ACME account key, challenge token, and certificate cache**.
 
 The default backend is local:
 
@@ -419,10 +418,9 @@ The default backend is local:
 - Azure Blob Storage / Google Cloud Storage are fail-closed until a
   provider adapter ships — there is no implicit fallback to local.
 
-Site-managed ACME selects `tls.mode=acme` per-site on the `Sites`
-screen. `production` / `staging` chooses Let's Encrypt's production
-or staging CA, and the account email is optional. Because HTTP-01 is
-used, set `server.tls.redirect_http=true` and
+ACME selects `mode=acme` on the `TLS` screen. `production` / `staging`
+chooses Let's Encrypt's production or staging CA, and the account email is
+optional. Because HTTP-01 is used, set `server.tls.redirect_http=true` and
 `server.tls.http_redirect_addr=:80`, or arrange equivalent port-80
 forwarding.
 

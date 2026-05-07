@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -25,6 +26,8 @@ import (
 
 const letsEncryptStagingDirectoryURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
 const acmeHTTPChallengePathPrefix = "/.well-known/acme-challenge/"
+
+var errServerTLSNoCertificateSource = errors.New("server tls enabled but no legacy or TLS binding certificate source is configured")
 
 type managedServerTLSRuntime struct {
 	minVersion uint16
@@ -111,6 +114,14 @@ func buildManagedServerTLSConfig() (*tls.Config, *http.Server, error) {
 }
 
 func buildManagedServerTLSRuntimeConfig() (*tls.Config, *managedServerTLSRuntime, error) {
+	return buildManagedServerTLSRuntimeConfigWithOptions(false)
+}
+
+func buildManagedServerTLSRuntimeConfigAllowEmpty() (*tls.Config, *managedServerTLSRuntime, error) {
+	return buildManagedServerTLSRuntimeConfigWithOptions(true)
+}
+
+func buildManagedServerTLSRuntimeConfigWithOptions(allowEmptySource bool) (*tls.Config, *managedServerTLSRuntime, error) {
 	handler.ResetServerTLSRuntimeStatus()
 	if !config.ServerTLSEnabled {
 		return nil, nil, nil
@@ -124,8 +135,11 @@ func buildManagedServerTLSRuntimeConfig() (*tls.Config, *managedServerTLSRuntime
 	_, _, bindings, statuses, _ := handler.TLSBindingConfigSnapshot()
 	runtime := &managedServerTLSRuntime{minVersion: minVersion}
 	if err := runtime.Reload(bindings, statuses); err != nil {
-		handler.RecordServerTLSError(err)
-		return nil, nil, err
+		if !allowEmptySource || !errors.Is(err, errServerTLSNoCertificateSource) {
+			handler.RecordServerTLSError(err)
+			return nil, nil, err
+		}
+		log.Printf("[TLS][WARN] starting HTTPS listener without a certificate source; configure TLS Bindings before serving HTTPS traffic")
 	}
 	handler.SetServerTLSReloadHook(runtime.Reload)
 
@@ -203,9 +217,8 @@ func (rt *managedServerTLSRuntime) Reload(bindings handler.TLSBindingConfigFile,
 		}
 	}
 	if !hasManual && !hasACME {
-		err := fmt.Errorf("server tls enabled but no legacy or TLS binding certificate source is configured")
-		handler.RecordServerTLSError(err)
-		return err
+		handler.RecordServerTLSError(errServerTLSNoCertificateSource)
+		return errServerTLSNoCertificateSource
 	}
 
 	rt.mu.Lock()

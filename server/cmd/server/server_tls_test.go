@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -303,6 +304,37 @@ func TestServerTLSACMEProfileCacheDirSeparatesEnvironmentAndAccount(t *testing.T
 	}
 	if strings.Contains(prodDir, "ops@example.com") {
 		t.Fatalf("cache dir should not include raw email: %q", prodDir)
+	}
+}
+
+func TestBuildManagedServerTLSRuntimeConfigAllowEmptyStartsHook(t *testing.T) {
+	restore := setServerTLSGlobalsForTest(t)
+	defer restore()
+
+	config.ServerTLSEnabled = true
+	config.ServerTLSMinVersion = "tls1.2"
+	config.ServerTLSCertFile = ""
+	config.ServerTLSKeyFile = ""
+	tlsPath := filepath.Join(t.TempDir(), "tls-bindings.json")
+	if err := os.WriteFile(tlsPath, []byte("{\"bindings\":[]}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(tls-bindings): %v", err)
+	}
+	if err := handler.InitTLSBindingRuntime(tlsPath, 2); err != nil {
+		t.Fatalf("InitTLSBindingRuntime: %v", err)
+	}
+
+	tlsConfig, runtime, err := buildManagedServerTLSRuntimeConfigAllowEmpty()
+	if err != nil {
+		t.Fatalf("buildManagedServerTLSRuntimeConfigAllowEmpty: %v", err)
+	}
+	if tlsConfig == nil || runtime == nil {
+		t.Fatal("expected TLS config and runtime without an initial certificate source")
+	}
+	if _, err := tlsConfig.GetCertificate(&tls.ClientHelloInfo{ServerName: "example.com"}); err == nil {
+		t.Fatal("GetCertificate should fail until a certificate source is configured")
+	}
+	if err := handler.ReloadServerTLSRuntimeForTLSBindings(handler.TLSBindingConfigFile{}, nil); !errors.Is(err, errServerTLSNoCertificateSource) {
+		t.Fatalf("reload hook error = %v, want no certificate source", err)
 	}
 }
 

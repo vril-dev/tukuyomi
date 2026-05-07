@@ -432,7 +432,7 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 		var tlsConfig *tls.Config
 		var tlsRuntime *managedServerTLSRuntime
 		if publicListenersNeedTLS(config.ServerPublicListeners) {
-			tlsConfig, tlsRuntime, err = buildManagedServerTLSRuntimeConfig()
+			tlsConfig, tlsRuntime, err = buildManagedServerTLSRuntimeConfigAllowEmpty()
 			if err != nil {
 				log.Printf("[SERVER][WARN] HTTPS public listeners disabled until server TLS is configured: %v", err)
 				tlsConfig = nil

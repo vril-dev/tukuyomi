@@ -1027,7 +1027,7 @@ func bootstrapCenterProtectedGatewayRouting(store *wafEventStore, centerURL stri
 	if err := bootstrapCenterProtectedGatewayProxyRoutes(store, centerURL, routeCfg); err != nil {
 		return err
 	}
-	return bootstrapCenterProtectedGatewayWAFBypass(store, centerProtectedBypassPaths(routeCfg))
+	return nil
 }
 
 func bootstrapCenterProtectedGatewayProxyRoutes(store *wafEventStore, centerURL string, routeCfg centerProtectedGatewayRouteConfig) error {
@@ -1189,102 +1189,6 @@ func normalizeCenterProtectedGatewayBasePath(raw, fallback string) (string, erro
 		return "", fmt.Errorf("base path must not contain wildcard")
 	}
 	return clean, nil
-}
-
-func centerProtectedBypassPaths(routeCfg centerProtectedGatewayRouteConfig) []string {
-	seen := map[string]struct{}{}
-	paths := make([]string, 0, 3)
-	for _, raw := range []string{routeCfg.GatewayAPIBasePath, routeCfg.CenterAPIBasePath, routeCfg.CenterUIBasePath} {
-		path := strings.TrimRight(strings.TrimSpace(raw), "/")
-		if path == "" {
-			continue
-		}
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		paths = append(paths, path)
-	}
-	return paths
-}
-
-func bootstrapCenterProtectedGatewayWAFBypass(store *wafEventStore, protectedPaths []string) error {
-	spec := mustPolicyJSONSpec(bypassConfigBlobKey)
-	raw, rec, found, err := store.loadActivePolicyJSONConfig(spec)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return nil
-	}
-	file, err := bypassconf.Parse(string(raw))
-	if err != nil {
-		return err
-	}
-	file, changed := removeCenterProtectedBypassEntries(file, protectedPaths)
-	if !changed {
-		return nil
-	}
-	normalized, err := bypassconf.MarshalJSON(file)
-	if err != nil {
-		return err
-	}
-	expectedETag := ""
-	if found {
-		expectedETag = rec.ETag
-	}
-	_, err = store.writePolicyJSONConfigVersion(expectedETag, spec, normalized, configVersionSourceApply, centerProtectedBootstrapActor, "center-protected WAF bypass bootstrap", 0)
-	return err
-}
-
-func removeCenterProtectedBypassEntries(file bypassconf.File, protectedPaths []string) (bypassconf.File, bool) {
-	changed := false
-	protectedPathSet := centerProtectedBypassPathSet(protectedPaths)
-	file.Default.Entries, changed = filterCenterProtectedBypassEntries(file.Default.Entries, protectedPathSet)
-	for host, scope := range file.Hosts {
-		var scopeChanged bool
-		scope.Entries, scopeChanged = filterCenterProtectedBypassEntries(scope.Entries, protectedPathSet)
-		if scopeChanged {
-			file.Hosts[host] = scope
-			changed = true
-		}
-	}
-	return file, changed
-}
-
-func centerProtectedBypassPathSet(protectedPaths []string) map[string]struct{} {
-	if len(protectedPaths) == 0 {
-		protectedPaths = []string{centerProtectedDefaultGatewayAPIPath, centerProtectedDefaultCenterUIPath}
-	}
-	set := make(map[string]struct{}, len(protectedPaths))
-	for _, raw := range protectedPaths {
-		path := strings.TrimRight(strings.TrimSpace(raw), "/")
-		if path != "" {
-			set[path] = struct{}{}
-		}
-	}
-	return set
-}
-
-func filterCenterProtectedBypassEntries(entries []bypassconf.Entry, protectedPathSet map[string]struct{}) ([]bypassconf.Entry, bool) {
-	out := entries[:0]
-	changed := false
-	for _, entry := range entries {
-		if isCenterProtectedBypassEntry(entry, protectedPathSet) {
-			changed = true
-			continue
-		}
-		out = append(out, entry)
-	}
-	return out, changed
-}
-
-func isCenterProtectedBypassEntry(entry bypassconf.Entry, protectedPathSet map[string]struct{}) bool {
-	if strings.TrimSpace(entry.ExtraRule) != "" {
-		return false
-	}
-	_, ok := protectedPathSet[strings.TrimRight(strings.TrimSpace(entry.Path), "/")]
-	return ok
 }
 
 func edgeCanMarkBootstrapApproved(status string) bool {

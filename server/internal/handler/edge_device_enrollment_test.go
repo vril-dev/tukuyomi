@@ -335,9 +335,6 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 		t.Fatalf("write proxy seed: %v", err)
 	}
 	seedBypass, err := bypassconf.MarshalJSON(bypassconf.File{Default: bypassconf.Scope{Entries: []bypassconf.Entry{
-		{Path: "/center-api/"},
-		{Path: "/center-manage-api/"},
-		{Path: "/center-ui/"},
 		{Path: "/healthz"},
 	}}})
 	if err != nil {
@@ -408,7 +405,7 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	if proxyCfg.Routes[0].Action.PathRewrite == nil || proxyCfg.Routes[0].Action.PathRewrite.Prefix != "/center-manage-api" {
 		t.Fatalf("center api route rewrite mismatch: %+v", proxyCfg.Routes[0].Action)
 	}
-	bypassRaw, _, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(bypassConfigBlobKey))
+	bypassRaw, bypassRec, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(bypassConfigBlobKey))
 	if err != nil {
 		t.Fatalf("load bypass config: %v", err)
 	}
@@ -449,6 +446,17 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	}
 	if _, err := store.writeProxyConfigVersion(proxyRec.ETag, proxyCfg, configVersionSourceApply, "operator", "operator proxy access lock", 0); err != nil {
 		t.Fatalf("persist operator proxy config: %v", err)
+	}
+	operatorBypass, err := bypassconf.MarshalJSON(bypassconf.File{Default: bypassconf.Scope{Entries: []bypassconf.Entry{
+		{Path: "/center-api"},
+		{Path: "/center-ui"},
+		{Path: "/healthz"},
+	}}})
+	if err != nil {
+		t.Fatalf("marshal operator bypass config: %v", err)
+	}
+	if _, err := store.writePolicyJSONConfigVersion(bypassRec.ETag, mustPolicyJSONSpec(bypassConfigBlobKey), operatorBypass, configVersionSourceApply, "operator", "operator bypass lock", 0); err != nil {
+		t.Fatalf("persist operator bypass config: %v", err)
 	}
 
 	second, err := BootstrapCenterProtectedGateway(context.Background(), CenterProtectedGatewayBootstrapOptions{
@@ -496,6 +504,18 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	if proxyAfterCfg.Routes[1].Access == nil ||
 		strings.Join(proxyAfterCfg.Routes[1].Access.AllowCIDRs, ",") != "127.0.0.1/32,::1/128,219.104.164.92/32" {
 		t.Fatalf("center-ui access reset: %+v", proxyAfterCfg.Routes[1].Access)
+	}
+	bypassAfterRaw, _, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(bypassConfigBlobKey))
+	if err != nil {
+		t.Fatalf("load bypass config after second bootstrap: %v", err)
+	}
+	if !found {
+		t.Fatal("bypass config missing after second bootstrap")
+	}
+	for _, want := range []string{`"path": "/center-api"`, `"path": "/center-ui"`, `"path": "/healthz"`} {
+		if !strings.Contains(string(bypassAfterRaw), want) {
+			t.Fatalf("operator bypass entry %s reset: %s", want, string(bypassAfterRaw))
+		}
 	}
 	if second.PublicKeyFingerprintSHA256 != first.PublicKeyFingerprintSHA256 {
 		t.Fatalf("fingerprint rotated: %q != %q", second.PublicKeyFingerprintSHA256, first.PublicKeyFingerprintSHA256)

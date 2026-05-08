@@ -54,6 +54,16 @@ func TestParseZIPKeepsMeaningfulTopLevelFiles(t *testing.T) {
 	}
 }
 
+func TestParseZIPRejectsLongPath(t *testing.T) {
+	raw := testZip(t, map[string]string{
+		strings.Repeat("a", MaxPathBytes+1): "too long",
+	})
+
+	if _, err := ParseZIP(raw); err == nil {
+		t.Fatal("ParseZIP accepted a path longer than MaxPathBytes")
+	}
+}
+
 func TestParseZIPPreservePathsKeepsSingleRootPrefix(t *testing.T) {
 	raw := testZip(t, map[string]string{
 		"public/index.php": "<?php echo 'ok';",

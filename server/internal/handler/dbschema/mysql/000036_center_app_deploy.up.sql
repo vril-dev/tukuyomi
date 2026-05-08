@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS center_app_deploy_packages (
 
 CREATE TABLE IF NOT EXISTS center_app_deploy_package_files (
   package_revision CHAR(64) NOT NULL,
-  path VARCHAR(1024) NOT NULL,
+  path VARCHAR(512) NOT NULL,
   root_id VARCHAR(64) NOT NULL DEFAULT '',
   sha256 CHAR(64) NOT NULL,
   size_bytes BIGINT NOT NULL,

@@ -19,6 +19,7 @@ const (
 	MaxCompressedBytes   = 128 * 1024 * 1024
 	MaxUncompressedBytes = 512 * 1024 * 1024
 	MaxFileBytes         = 64 * 1024 * 1024
+	MaxPathBytes         = 512
 	MaxFiles             = 20000
 	MaxScriptBytes       = 64 * 1024
 	MaxScriptOutputBytes = 32 * 1024
@@ -142,6 +143,9 @@ func readZIPEntries(zr *zip.Reader) ([]File, error) {
 		name, ok := CleanArchivePath(zf.Name)
 		if !ok {
 			return nil, fmt.Errorf("app deploy package contains unsafe path")
+		}
+		if len(name) > MaxPathBytes {
+			return nil, fmt.Errorf("app deploy package path %q exceeds %d bytes", name, MaxPathBytes)
 		}
 		if _, exists := seen[name]; exists {
 			return nil, fmt.Errorf("app deploy package contains duplicate path %q", name)

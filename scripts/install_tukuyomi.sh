@@ -899,6 +899,7 @@ install_files() {
     "${RUNTIME_DIR}/data/releases" \
     "${RUNTIME_DIR}/data/run" \
     "${RUNTIME_DIR}/data/tmp" \
+    "${RUNTIME_DIR}/build" \
     "${RUNTIME_DIR}/seeds/conf" \
     "${RUNTIME_DIR}/scripts" \
     "${env_dir}"
@@ -908,8 +909,20 @@ install_files() {
   if install_role_includes_gateway; then
     [[ -f "${ROOT_DIR}/seeds/conf/config-bundle.json" ]] || die "missing runtime seed bundle: seeds/conf/config-bundle.json"
   fi
+  if install_role_includes_center; then
+    [[ -x "${ROOT_DIR}/scripts/php_fpm_runtime_build.sh" ]] || die "missing PHP-FPM runtime builder script: scripts/php_fpm_runtime_build.sh"
+    [[ -x "${ROOT_DIR}/scripts/psgi_runtime_build.sh" ]] || die "missing PSGI runtime builder script: scripts/psgi_runtime_build.sh"
+    [[ -f "${ROOT_DIR}/build/Dockerfile.php-fpm-runtime" ]] || die "missing PHP-FPM runtime builder Dockerfile: build/Dockerfile.php-fpm-runtime"
+    [[ -f "${ROOT_DIR}/build/Dockerfile.psgi-runtime" ]] || die "missing PSGI runtime builder Dockerfile: build/Dockerfile.psgi-runtime"
+  fi
 
   run_priv install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${RUNTIME_DIR}/bin/tukuyomi"
+  if install_role_includes_center; then
+    run_priv install -m 755 "${ROOT_DIR}/scripts/php_fpm_runtime_build.sh" "${RUNTIME_DIR}/scripts/php_fpm_runtime_build.sh"
+    run_priv install -m 755 "${ROOT_DIR}/scripts/psgi_runtime_build.sh" "${RUNTIME_DIR}/scripts/psgi_runtime_build.sh"
+    run_priv install -m 644 "${ROOT_DIR}/build/Dockerfile.php-fpm-runtime" "${RUNTIME_DIR}/build/Dockerfile.php-fpm-runtime"
+    run_priv install -m 644 "${ROOT_DIR}/build/Dockerfile.psgi-runtime" "${RUNTIME_DIR}/build/Dockerfile.psgi-runtime"
+  fi
   if install_role_includes_gateway; then
     run_priv install -m 755 "${ROOT_DIR}/scripts/update_country_db.sh" "${RUNTIME_DIR}/scripts/update_country_db.sh"
     run_priv cp -R "${ROOT_DIR}/seeds/conf/." "${RUNTIME_DIR}/seeds/conf/"

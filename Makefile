@@ -366,6 +366,10 @@ install-smoke: build
 	INSTALL_CENTER_GATEWAY_API_BASE_PATH=/center-api \
 	./scripts/install_tukuyomi.sh; \
 	test -x "$$protected_tmp/opt/tukuyomi/bin/tukuyomi"; \
+	test -x "$$protected_tmp/opt/tukuyomi/scripts/php_fpm_runtime_build.sh"; \
+	test -x "$$protected_tmp/opt/tukuyomi/scripts/psgi_runtime_build.sh"; \
+	test -f "$$protected_tmp/opt/tukuyomi/build/Dockerfile.php-fpm-runtime"; \
+	test -f "$$protected_tmp/opt/tukuyomi/build/Dockerfile.psgi-runtime"; \
 	test -f "$$protected_tmp/opt/tukuyomi/conf/config.json"; \
 	test -f "$$protected_tmp/opt/tukuyomi/conf/config.center.json"; \
 	test -f "$$protected_tmp/etc/tukuyomi/tukuyomi.env"; \

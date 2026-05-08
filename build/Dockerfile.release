@@ -99,7 +99,7 @@ RUN set -eux; \
     fi; \
     archive_root="${APP_NAME}_${VERSION}_${os}_${arch}"; \
     bundle="/work/${archive_root}"; \
-    mkdir -p "${bundle}/bin" "${bundle}/conf" "${bundle}/db" "${bundle}/audit" "${bundle}/cache/response" "${bundle}/scripts" "${bundle}/seeds/conf" "${bundle}/seeds/waf/rules" "${bundle}/data/tmp" "${bundle}/data/scheduled-tasks" "${bundle}/data/php-fpm/binaries" "${bundle}/data/php-fpm/runtime" "${bundle}/data/psgi/binaries" "${bundle}/data/psgi/runtime" "${bundle}/data/vhosts/samples" "/out"; \
+    mkdir -p "${bundle}/bin" "${bundle}/build" "${bundle}/conf" "${bundle}/db" "${bundle}/audit" "${bundle}/cache/response" "${bundle}/scripts" "${bundle}/seeds/conf" "${bundle}/seeds/waf/rules" "${bundle}/data/tmp" "${bundle}/data/scheduled-tasks" "${bundle}/data/php-fpm/binaries" "${bundle}/data/php-fpm/runtime" "${bundle}/data/psgi/binaries" "${bundle}/data/psgi/runtime" "${bundle}/data/vhosts/samples" "/out"; \
     cp "/tmp/out/${APP_NAME}" "${bundle}/${APP_NAME}"; \
     cp "/tmp/out/geoipupdate" "${bundle}/bin/geoipupdate"; \
     cp /src/README.md "${bundle}/README.md"; \
@@ -118,9 +118,13 @@ RUN set -eux; \
     cp /src/scripts/install_crs.sh "${bundle}/scripts/install_crs.sh"; \
     cp /src/scripts/stage_waf_rule_assets.sh "${bundle}/scripts/stage_waf_rule_assets.sh"; \
     cp /src/scripts/update_country_db.sh "${bundle}/scripts/update_country_db.sh"; \
+    cp /src/scripts/php_fpm_runtime_build.sh "${bundle}/scripts/php_fpm_runtime_build.sh"; \
+    cp /src/scripts/psgi_runtime_build.sh "${bundle}/scripts/psgi_runtime_build.sh"; \
+    cp /src/build/Dockerfile.php-fpm-runtime "${bundle}/build/Dockerfile.php-fpm-runtime"; \
+    cp /src/build/Dockerfile.psgi-runtime "${bundle}/build/Dockerfile.psgi-runtime"; \
     cp -R /src/seeds/conf/. "${bundle}/seeds/conf/"; \
     cp -R /src/seeds/waf/rules/. "${bundle}/seeds/waf/rules/"; \
-    chmod +x "${bundle}/${APP_NAME}" "${bundle}/bin/geoipupdate" "${bundle}/scripts/install_crs.sh" "${bundle}/scripts/stage_waf_rule_assets.sh" "${bundle}/scripts/update_country_db.sh"; \
+    chmod +x "${bundle}/${APP_NAME}" "${bundle}/bin/geoipupdate" "${bundle}/scripts/install_crs.sh" "${bundle}/scripts/stage_waf_rule_assets.sh" "${bundle}/scripts/update_country_db.sh" "${bundle}/scripts/php_fpm_runtime_build.sh" "${bundle}/scripts/psgi_runtime_build.sh"; \
     tar -C /work -czf "/out/${archive_root}.tar.gz" "${archive_root}"; \
     cd /out; \
     sha256sum "${archive_root}.tar.gz" > "${archive_root}.tar.gz.sha256"

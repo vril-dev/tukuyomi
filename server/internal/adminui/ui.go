@@ -43,6 +43,7 @@ func RegisterRoutes(r *gin.Engine, opts Options) {
 
 	r.GET(base, func(c *gin.Context) {
 		if !allowAccess(c, opts) {
+			SetNoStoreHeaders(c)
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 			return
 		}
@@ -53,6 +54,7 @@ func RegisterRoutes(r *gin.Engine, opts Options) {
 	})
 	r.HEAD(base, func(c *gin.Context) {
 		if !allowAccess(c, opts) {
+			SetNoStoreHeaders(c)
 			c.AbortWithStatus(http.StatusForbidden)
 			return
 		}
@@ -63,6 +65,7 @@ func RegisterRoutes(r *gin.Engine, opts Options) {
 	})
 	r.GET(base+"/*filepath", func(c *gin.Context) {
 		if !allowAccess(c, opts) {
+			SetNoStoreHeaders(c)
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 			return
 		}
@@ -73,6 +76,7 @@ func RegisterRoutes(r *gin.Engine, opts Options) {
 	})
 	r.HEAD(base+"/*filepath", func(c *gin.Context) {
 		if !allowAccess(c, opts) {
+			SetNoStoreHeaders(c)
 			c.AbortWithStatus(http.StatusForbidden)
 			return
 		}

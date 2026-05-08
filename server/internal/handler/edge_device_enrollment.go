@@ -1010,6 +1010,9 @@ func bootstrapCenterProtectedGatewayAppConfig(statusRefreshIntervalSec int, cent
 	if gatewayAdminExternalMode != "" && cfg.Admin.ExternalMode != gatewayAdminExternalMode {
 		cfg.Admin.ExternalMode = gatewayAdminExternalMode
 		changed = true
+	} else if gatewayAdminExternalMode == "" && strings.TrimSpace(cfg.Admin.ExternalMode) == "" {
+		cfg.Admin.ExternalMode = "full_external"
+		changed = true
 	}
 	if !changed {
 		return false, nil
@@ -1066,8 +1069,9 @@ func bootstrapCenterProtectedGatewayProxyRoutes(store *wafEventStore, centerURL 
 				continue
 			}
 			routeFound = true
-			if mustJSON(cfg.Routes[i]) != mustJSON(nextRoute) {
-				cfg.Routes[i] = nextRoute
+			mergedRoute := mergeCenterProtectedGatewayRoute(cfg.Routes[i], nextRoute)
+			if mustJSON(cfg.Routes[i]) != mustJSON(mergedRoute) {
+				cfg.Routes[i] = mergedRoute
 				changed = true
 			}
 			break
@@ -1086,6 +1090,25 @@ func bootstrapCenterProtectedGatewayProxyRoutes(store *wafEventStore, centerURL 
 	}
 	_, err = store.writeProxyConfigVersion(rec.ETag, cfg, configVersionSourceApply, centerProtectedBootstrapActor, "center-protected proxy route bootstrap", 0)
 	return err
+}
+
+func mergeCenterProtectedGatewayRoute(current ProxyRoute, next ProxyRoute) ProxyRoute {
+	merged := next
+	merged.Enabled = current.Enabled
+	merged.Priority = current.Priority
+	merged.Match.Hosts = append([]string(nil), current.Match.Hosts...)
+	merged.Access = cloneCenterProtectedGatewayRouteAccess(current.Access)
+	return merged
+}
+
+func cloneCenterProtectedGatewayRouteAccess(access *ProxyRouteAccess) *ProxyRouteAccess {
+	if access == nil {
+		return nil
+	}
+	return &ProxyRouteAccess{
+		AllowCIDRs: append([]string(nil), access.AllowCIDRs...),
+		DenyCIDRs:  append([]string(nil), access.DenyCIDRs...),
+	}
 }
 
 func centerProtectedGatewayRoutes(routeCfg centerProtectedGatewayRouteConfig) []ProxyRoute {

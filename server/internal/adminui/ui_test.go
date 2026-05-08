@@ -75,3 +75,30 @@ func TestRegisterRoutesMarksHTMLFallbackNoStore(t *testing.T) {
 		t.Fatalf("x-content-type-options=%q want nosniff", got)
 	}
 }
+
+func TestRegisterRoutesMarksAccessDeniedNoStore(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	uiFS := fstest.MapFS{
+		"index.html": {Data: []byte("<html>real</html>")},
+	}
+	r := gin.New()
+	RegisterRoutes(r, Options{
+		FS:          uiFS,
+		BasePath:    "/tukuyomi-ui",
+		CheckAccess: func(*http.Request) bool { return false },
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/tukuyomi-ui/login", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("cache-control=%q want no-store", got)
+	}
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("x-content-type-options=%q want nosniff", got)
+	}
+}

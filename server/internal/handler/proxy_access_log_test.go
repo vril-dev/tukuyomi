@@ -250,6 +250,19 @@ func TestProxyHandlerBlocksRouteAccessCIDRMissBeforeUpstream(t *testing.T) {
 	if res.StatusCode != http.StatusForbidden {
 		t.Fatalf("status=%d want=%d", res.StatusCode, http.StatusForbidden)
 	}
+	if contentType := res.Header.Get("Content-Type"); !strings.Contains(contentType, "application/json") {
+		t.Fatalf("content-type=%q want application/json", contentType)
+	}
+	if cacheControl := res.Header.Get("Cache-Control"); cacheControl != "no-store" {
+		t.Fatalf("cache-control=%q want no-store", cacheControl)
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if !strings.Contains(string(body), "route source forbidden") {
+		t.Fatalf("body=%q want route source forbidden", string(body))
+	}
 	if upstreamHit {
 		t.Fatal("upstream was called despite route access block")
 	}

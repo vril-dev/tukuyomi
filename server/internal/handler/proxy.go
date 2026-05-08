@@ -713,7 +713,11 @@ func serveProxyRequest(c *proxyServeContext) {
 		}
 		appendProxyRouteLogFields(evt, c.Request)
 		emitJSONLogAndAppendEvent(evt)
-		c.AbortWithStatus(http.StatusForbidden)
+		c.Header("Cache-Control", "no-store")
+		c.Header("Pragma", "no-cache")
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.JSON(http.StatusForbidden, gin.H{"error": "route source forbidden"})
+		c.Abort()
 		return
 	}
 

@@ -6678,8 +6678,8 @@ func centerRemoteSSHGatewayStreamURL(centerBaseURL string) (string, error) {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return "", fmt.Errorf("center URL scheme must be http or https")
 	}
-	if u.Scheme != "https" && !config.AllowInsecureDefaults {
-		return "", fmt.Errorf("remote ssh center URL must use https unless admin.allow_insecure_defaults is enabled for local testing")
+	if u.Scheme == "http" && !remoteSSHCenterURLAllowsHTTP(u) {
+		return "", fmt.Errorf("remote ssh center URL must use https unless it is literal loopback HTTP or admin.allow_insecure_defaults is enabled for local testing")
 	}
 	u.Path = "/v1/remote-ssh/gateway-stream"
 	u.RawPath = ""
@@ -6697,12 +6697,23 @@ func centerRemoteSSHSigningKeyURL(centerBaseURL string) (string, error) {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return "", fmt.Errorf("center URL scheme must be http or https")
 	}
-	if u.Scheme != "https" && !config.AllowInsecureDefaults {
-		return "", fmt.Errorf("remote ssh center URL must use https unless admin.allow_insecure_defaults is enabled for local testing")
+	if u.Scheme == "http" && !remoteSSHCenterURLAllowsHTTP(u) {
+		return "", fmt.Errorf("remote ssh center URL must use https unless it is literal loopback HTTP or admin.allow_insecure_defaults is enabled for local testing")
 	}
 	u.Path = "/v1/remote-ssh/signing-key"
 	u.RawPath = ""
 	return u.String(), nil
+}
+
+func remoteSSHCenterURLAllowsHTTP(u *url.URL) bool {
+	if config.AllowInsecureDefaults {
+		return true
+	}
+	if u == nil {
+		return false
+	}
+	ip := net.ParseIP(strings.TrimSpace(u.Hostname()))
+	return ip != nil && ip.IsLoopback()
 }
 
 func remoteSSHPlaceholders(driver string, count int, start int) string {

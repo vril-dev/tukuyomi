@@ -89,6 +89,12 @@ Center signing public key from:
 /center-api/remote-ssh/signing-key
 ```
 
+When the Center and Gateway run on the same host through
+`INSTALL_ROLE=center-protected`, the stored Center URL may be a literal
+loopback HTTP URL such as `http://127.0.0.1:9092`. Remote SSH accepts that
+loopback URL for the internal Gateway-to-Center path. Remote or LAN Center
+URLs should still use HTTPS.
+
 ## 17.4 Center UI workflow
 
 Open `Device Approvals`, choose the Gateway, and select `Manage`. The selected

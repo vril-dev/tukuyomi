@@ -646,7 +646,7 @@ func TestPrepareProxyRulesRawDoesNotBindConfiguredUpstreamToVhost(t *testing.T) 
 				Mode:               "php-fpm",
 				Hostname:           "127.0.0.1",
 				ListenPort:         9401,
-				DocumentRoot:       "data/vhosts/samples/php-site/public",
+				DocumentRoot:       "data/runtime-sites/php-site/public",
 				RuntimeID:          "php83",
 				GeneratedTarget:    "vhost-1",
 				LinkedUpstreamName: "app",

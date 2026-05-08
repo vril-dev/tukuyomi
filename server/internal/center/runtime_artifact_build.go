@@ -668,15 +668,11 @@ func runtimeArtifactFilesFromDirectory(runtimeDir string) ([]runtimeartifactbund
 			}
 			return fmt.Errorf("runtime build contains unsupported file %q", path)
 		}
-		body, err := os.ReadFile(resolvedPath)
-		if err != nil {
-			return fmt.Errorf("read runtime build file %q: %w", archivePath, err)
-		}
 		out = append(out, runtimeartifactbundle.File{
 			ArchivePath: archivePath,
 			FileKind:    runtimeArtifactFileKind(archivePath),
 			Mode:        int64(info.Mode() & 0o777),
-			Body:        body,
+			SourcePath:  resolvedPath,
 		})
 		return nil
 	})

@@ -22,6 +22,11 @@ export type ProxyRoutePathRewrite = {
   prefix: string;
 };
 
+export type ProxyRouteAccess = {
+  allowCIDRs: string[];
+  denyCIDRs: string[];
+};
+
 export type ProxyRouteAction = {
   upstream: string;
   backendPool: string;
@@ -42,6 +47,7 @@ export type ProxyRoute = {
   priority: number;
   hosts: string[];
   path: ProxyRoutePathMatch | null;
+  access: ProxyRouteAccess;
   action: ProxyRouteAction;
 };
 
@@ -150,6 +156,13 @@ export function createEmptyRouteAction(): ProxyRouteAction {
   };
 }
 
+export function createEmptyRouteAccess(): ProxyRouteAccess {
+  return {
+    allowCIDRs: [],
+    denyCIDRs: [],
+  };
+}
+
 export function createEmptyRoute(seed = 1): ProxyRoute {
   return {
     name: `route-${seed}`,
@@ -157,6 +170,7 @@ export function createEmptyRoute(seed = 1): ProxyRoute {
     priority: seed * 10,
     hosts: [],
     path: null,
+    access: createEmptyRouteAccess(),
     action: createEmptyRouteAction(),
   };
 }
@@ -168,6 +182,7 @@ export function createEmptyDefaultRoute(): ProxyRoute {
     priority: 0,
     hosts: [],
     path: null,
+    access: createEmptyRouteAccess(),
     action: createEmptyRouteAction(),
   };
 }
@@ -474,7 +489,18 @@ function readRoute(value: unknown, fallbackName: string): ProxyRoute | null {
     priority: normalizeInt(value.priority, 0),
     hosts: readStringList(match?.hosts),
     path: readPathMatch(path),
+    access: readRouteAccess(value.access),
     action: readRouteAction(action),
+  };
+}
+
+function readRouteAccess(value: unknown): ProxyRouteAccess {
+  if (!isRecord(value)) {
+    return createEmptyRouteAccess();
+  }
+  return {
+    allowCIDRs: readStringList(value.allow_cidrs),
+    denyCIDRs: readStringList(value.deny_cidrs),
   };
 }
 
@@ -716,6 +742,10 @@ function writeRoute(route: ProxyRoute): JSONRecord | null {
   if (match) {
     out.match = match;
   }
+  const access = writeRouteAccess(route.access);
+  if (access) {
+    out.access = access;
+  }
   return out;
 }
 
@@ -730,6 +760,26 @@ function writeDefaultRoute(route: ProxyRoute): JSONRecord | null {
   };
   if (!route.enabled) {
     out.enabled = false;
+  }
+  const access = writeRouteAccess(route.access);
+  if (access) {
+    out.access = access;
+  }
+  return out;
+}
+
+function writeRouteAccess(access: ProxyRouteAccess): JSONRecord | null {
+  const allowCIDRs = access.allowCIDRs.map((item) => item.trim()).filter(Boolean);
+  const denyCIDRs = access.denyCIDRs.map((item) => item.trim()).filter(Boolean);
+  if (allowCIDRs.length === 0 && denyCIDRs.length === 0) {
+    return null;
+  }
+  const out: JSONRecord = {};
+  if (allowCIDRs.length > 0) {
+    out.allow_cidrs = allowCIDRs;
+  }
+  if (denyCIDRs.length > 0) {
+    out.deny_cidrs = denyCIDRs;
   }
   return out;
 }

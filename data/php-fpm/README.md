@@ -5,12 +5,12 @@
 - `inventory.json`
   - local runtime inventory metadata; built runtimes are discovered from `binaries/`
 - `vhosts.json`
-  - persisted vhost definitions that later generate runtime targets
+  - persisted Runtime App definitions that later generate runtime targets
 - `binaries/`
   - built `php-fpm` runtime bundles grouped by `runtime_id`
 - `runtime/`
   - generated `php-fpm.conf`, pool files, pid files, and sockets
 
-Generic vhost sample docroots live under `data/vhosts/samples/`.
+Runtime App source trees live under `data/runtime-sites/<app-id>/`.
 
-The sample assets below intentionally use repository-relative paths only.
+Runtime paths intentionally use repository-relative paths only.

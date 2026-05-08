@@ -292,6 +292,11 @@ Routing model:
 - `action.canary_upstream` and `action.canary_weight_percent` provide route-level canary.
 - `action.host_rewrite`, `action.path_rewrite.prefix`, and `action.query_rewrite` rewrite outbound traffic.
 - `action.request_headers` and `action.response_headers` allow bounded header manipulation.
+- `access.allow_cidrs` and `access.deny_cidrs` restrict a matched route by
+  Gateway listener source IP. Deny entries are checked first; a non-empty
+  allow list requires a match. To allow only specific sources, set
+  `access.allow_cidrs` and leave `access.deny_cidrs` empty. `*` is not
+  supported. This does not trust `X-Forwarded-For`.
 - `response_header_sanitize` is the final proxy-side response-header safety gate.
 - The structured editor shows operator workflow in this order:
   1. `Upstreams`

@@ -261,10 +261,10 @@ stage_compose_workspace() {
   else
     mkdir -p "${workspace}/data/php-fpm"
   fi
-  if [[ -d "${ROOT_DIR}/data/vhosts" ]]; then
-    rsync -a "${ROOT_DIR}/data/vhosts/" "${workspace}/data/vhosts/"
+  if [[ -d "${ROOT_DIR}/data/runtime-sites" ]]; then
+    rsync -a "${ROOT_DIR}/data/runtime-sites/" "${workspace}/data/runtime-sites/"
   else
-    mkdir -p "${workspace}/data/vhosts"
+    mkdir -p "${workspace}/data/runtime-sites"
   fi
   rsync -a "${ROOT_DIR}/scripts/" "${workspace}/scripts/"
   reset_scheduled_task_runtime_dir "${workspace}/data/scheduled-tasks"

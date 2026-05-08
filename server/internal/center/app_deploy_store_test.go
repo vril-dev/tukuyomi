@@ -18,7 +18,7 @@ func TestNormalizeAppDeployRootsAllowsSourceRoot(t *testing.T) {
 	roots, raw, err := normalizeAppDeployRoots([]AppDeployRootRecord{{
 		RootID:         "source_root",
 		RuntimeField:   "document_root",
-		SourcePath:     "data/vhosts/app",
+		SourcePath:     "data/runtime-sites/app",
 		PackagePrefix:  ".",
 		TargetSubpath:  ".",
 		RuntimeSubpath: "public",
@@ -31,8 +31,8 @@ func TestNormalizeAppDeployRootsAllowsSourceRoot(t *testing.T) {
 		t.Fatalf("len(roots)=%d want 1", len(roots))
 	}
 	root := roots[0]
-	if root.SourcePath != "data/vhosts/app" {
-		t.Fatalf("SourcePath=%q want data/vhosts/app", root.SourcePath)
+	if root.SourcePath != "data/runtime-sites/app" {
+		t.Fatalf("SourcePath=%q want data/runtime-sites/app", root.SourcePath)
 	}
 	if root.PackagePrefix != "" || root.TargetSubpath != "" {
 		t.Fatalf("package/target=%q/%q want empty", root.PackagePrefix, root.TargetSubpath)
@@ -40,13 +40,13 @@ func TestNormalizeAppDeployRootsAllowsSourceRoot(t *testing.T) {
 	if root.RuntimeSubpath != "public" {
 		t.Fatalf("RuntimeSubpath=%q want public", root.RuntimeSubpath)
 	}
-	if !strings.Contains(raw, `"source_path":"data/vhosts/app"`) || !strings.Contains(raw, `"runtime_subpath":"public"`) {
+	if !strings.Contains(raw, `"source_path":"data/runtime-sites/app"`) || !strings.Contains(raw, `"runtime_subpath":"public"`) {
 		t.Fatalf("normalized roots JSON omitted source/runtime subpath: %s", raw)
 	}
 }
 
 func TestNormalizeAppDeployRootsRejectsUnsafeSourcePath(t *testing.T) {
-	for _, sourcePath := range []string{"/srv/app", "etc", "data"} {
+	for _, sourcePath := range []string{"/srv/app", "etc", "data", "data/vhosts/app"} {
 		_, _, err := normalizeAppDeployRoots([]AppDeployRootRecord{{
 			RootID:        "source_root",
 			RuntimeField:  "document_root",
@@ -61,11 +61,27 @@ func TestNormalizeAppDeployRootsRejectsUnsafeSourcePath(t *testing.T) {
 	}
 }
 
+func TestValidateAppDeployRootsForAppRequiresAppDirectory(t *testing.T) {
+	validRoots := []AppDeployRootRecord{
+		{SourcePath: "data/runtime-sites/app-1"},
+		{SourcePath: "data/runtime-sites/app-1/public"},
+		{SourcePath: ""},
+	}
+	if err := validateAppDeployRootsForApp("app-1", validRoots); err != nil {
+		t.Fatalf("validateAppDeployRootsForApp(valid): %v", err)
+	}
+	for _, sourcePath := range []string{"data/runtime-sites/app-10", "data/runtime-sites/samples/app-1", "data/runtime-sites/app"} {
+		if err := validateAppDeployRootsForApp("app-1", []AppDeployRootRecord{{SourcePath: sourcePath}}); !errors.Is(err, ErrAppDeployInvalid) {
+			t.Fatalf("source_path=%q err=%v want ErrAppDeployInvalid", sourcePath, err)
+		}
+	}
+}
+
 func TestAppDeployFilesForParsedPackageAllowsRootPackagePrefix(t *testing.T) {
 	roots, _, err := normalizeAppDeployRoots([]AppDeployRootRecord{{
 		RootID:         "source_root",
 		RuntimeField:   "document_root",
-		SourcePath:     "data/vhosts/app",
+		SourcePath:     "data/runtime-sites/app",
 		PackagePrefix:  "",
 		TargetSubpath:  "",
 		RuntimeSubpath: "public",
@@ -99,7 +115,7 @@ func TestStoreAppDeployGatewayBaselineWithSavedProfile(t *testing.T) {
 	roots := []AppDeployRootRecord{{
 		RootID:         "document_root",
 		RuntimeField:   "document_root",
-		SourcePath:     "data/vhosts/samples/php-site/_before-laravel-public/20260422-220957",
+		SourcePath:     "data/runtime-sites/app-1/_before-laravel-public/20260422-220957",
 		PackagePrefix:  "public",
 		TargetSubpath:  "public",
 		RuntimeSubpath: "public",
@@ -164,7 +180,7 @@ func TestStoreAppDeployPackageUsesFileBackedPayload(t *testing.T) {
 	roots := []AppDeployRootRecord{{
 		RootID:         "document_root",
 		RuntimeField:   "document_root",
-		SourcePath:     "data/vhosts/samples/php-site/public",
+		SourcePath:     "data/runtime-sites/app-1/public",
 		PackagePrefix:  "public",
 		TargetSubpath:  "public",
 		RuntimeSubpath: "public",
@@ -229,7 +245,7 @@ func TestDownloadAppDeployPackageMigratesLegacyBlob(t *testing.T) {
 	roots := []AppDeployRootRecord{{
 		RootID:         "document_root",
 		RuntimeField:   "document_root",
-		SourcePath:     "data/vhosts/samples/php-site/public",
+		SourcePath:     "data/runtime-sites/app-1/public",
 		PackagePrefix:  "public",
 		TargetSubpath:  "public",
 		RuntimeSubpath: "public",
@@ -333,7 +349,7 @@ func TestEnsureAppDeployCandidateMatchesProfileIgnoresSourceRootShape(t *testing
 	profileRoots := []AppDeployRootRecord{{
 		RootID:         "source_root",
 		RuntimeField:   "document_root",
-		SourcePath:     "data/vhosts/samples/php-site",
+		SourcePath:     "data/runtime-sites/app-1",
 		PackagePrefix:  "",
 		TargetSubpath:  "",
 		RuntimeSubpath: "public",
@@ -378,7 +394,7 @@ func TestAppDeployAdoptIgnoresStaleTerminalStatus(t *testing.T) {
 	roots := []AppDeployRootRecord{{
 		RootID:         "document_root",
 		RuntimeField:   "document_root",
-		SourcePath:     "data/vhosts/samples/php-site/public",
+		SourcePath:     "data/runtime-sites/app-1/public",
 		PackagePrefix:  "public",
 		TargetSubpath:  "public",
 		RuntimeSubpath: "public",

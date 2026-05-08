@@ -28,8 +28,9 @@ policy, TTL, and audit trail.
   `tukuyomi remote-ssh`.
 - The CLI waits for the Gateway SSH host public key through Center and writes a
   temporary pinned `known_hosts` file before printing the SSH command.
-- Center and CLI require HTTPS for Remote SSH by default. HTTP is available
-  only for explicit local testing flags.
+- Center and CLI require HTTPS for Remote SSH by default. HTTP is accepted
+  only for literal loopback Center URLs, used by same-host center-protected
+  installs, or for explicit local testing flags.
 - Gateway refuses to run a shell as root unless
   `remote_ssh.gateway.embedded_server.run_as_user` is set.
 - Gateway starts shells with a minimal environment instead of inheriting the
@@ -102,8 +103,13 @@ Center CA certificate in this PEM bundle and distribute it to each Gateway.
 `center_tls_server_name` is optional, but useful when Gateway reaches Center by
 IP while the certificate is issued to a DNS name.
 
-When bootstrapping a Center-protected Gateway, the same trust settings can be
-written into the Gateway config:
+When bootstrapping a Center-protected Gateway on the same host, the installer
+normally uses a loopback Center URL such as `http://127.0.0.1:9092`. Remote SSH
+accepts that loopback HTTP URL only for this internal Gateway-to-Center path.
+For a remote Center URL, keep HTTPS and configure the CA/server-name settings
+when needed.
+
+The same trust settings can be written into the Gateway config:
 
 ```sh
 tukuyomi bootstrap-center-protected-gateway \

@@ -105,6 +105,15 @@ Per-route additions:
   `action.query_rewrite`: outbound rewriting
 - `action.request_headers` / `action.response_headers`: bounded header
   control
+- `access.allow_cidrs` / `access.deny_cidrs`: route-level source IP
+  allow/deny lists. Deny entries are evaluated first; if the allow list is
+  non-empty, the Gateway listener source IP must match it. This uses the
+  socket source address, or the PROXY protocol source if the listener accepts
+  PROXY protocol.
+  To allow only specific sources, set `access.allow_cidrs` and leave
+  `access.deny_cidrs` empty. Do not use `*`; putting an all-range CIDR such as
+  `0.0.0.0/0` in the deny list blocks even sources that are also in the allow
+  list, because deny is evaluated first.
 
 Finally, **`response_header_sanitize`** kicks in as the final
 response-header safety gate. It is structural and cannot be bypassed.
@@ -146,11 +155,15 @@ order tukuyomi follows for a single request:
    - The `proxy_route` log is emitted at this point.
    - `selected_upstream` / `selected_upstream_url` are **not yet
      decided**, so they are not in the log here.
-3. **Country block / request-security plugins / rate limit / WAF**
+3. **Route source access**
+   - If the selected route has `access.allow_cidrs` or
+     `access.deny_cidrs`, the Gateway evaluates the listener source IP before
+     WAF or upstream traffic.
+4. **Country block / request-security plugins / rate limit / WAF**
    - The request is inspected in this order.
-4. **Final target selection**
+5. **Final target selection**
    - Pick exactly one target from the backend pool.
-5. **Proxy transport, or direct static / php-fpm serving**
+6. **Proxy transport, or direct static / php-fpm serving**
    - Either proxy to the chosen target, or serve directly from static /
      PHP-FPM.
 

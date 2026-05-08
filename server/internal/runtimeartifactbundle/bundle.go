@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"regexp"
 	"sort"
@@ -77,6 +78,7 @@ type File struct {
 	FileKind    string
 	Mode        int64
 	Body        []byte
+	SourcePath  string
 	LinkTarget  string
 }
 
@@ -169,12 +171,15 @@ func BuildBundle(input BuildInput) (Build, error) {
 		if file.LinkTarget != "" {
 			continue
 		}
-		sum := sha256.Sum256(file.Body)
+		sha256Hex, sizeBytes, err := runtimeArtifactBuildFileDigest(file)
+		if err != nil {
+			return Build{}, err
+		}
 		entry := FileManifest{
 			ArchivePath: file.ArchivePath,
 			FileKind:    file.FileKind,
-			SHA256:      hex.EncodeToString(sum[:]),
-			SizeBytes:   int64(len(file.Body)),
+			SHA256:      sha256Hex,
+			SizeBytes:   sizeBytes,
 			Mode:        file.Mode,
 		}
 		regularByPath[file.ArchivePath] = entry
@@ -206,13 +211,18 @@ func BuildBundle(input BuildInput) (Build, error) {
 	}
 	manifest.ArtifactRevision = revision
 
-	var uncompressedSize int64
-	var tarBuf bytes.Buffer
-	tw := tar.NewWriter(&tarBuf)
 	manifestRaw, err := json.Marshal(manifest)
 	if err != nil {
 		return Build{}, fmt.Errorf("marshal runtime artifact manifest: %w", err)
 	}
+	var uncompressedSize int64
+	var compressed bytes.Buffer
+	gw, err := gzip.NewWriterLevel(&compressed, gzip.BestCompression)
+	if err != nil {
+		return Build{}, err
+	}
+	gw.ModTime = time.Unix(0, 0).UTC()
+	tw := tar.NewWriter(gw)
 	if err := writeTarFile(tw, "manifest.json", manifestRaw, 0o644); err != nil {
 		return Build{}, err
 	}
@@ -221,14 +231,16 @@ func BuildBundle(input BuildInput) (Build, error) {
 		if file.LinkTarget != "" {
 			continue
 		}
-		if err := writeTarFile(tw, file.ArchivePath, file.Body, file.Mode); err != nil {
-			return Build{}, err
-		}
-		uncompressedSize += int64(len(file.Body))
-		if uncompressedSize > MaxUncompressedBytes {
+		entry := regularByPath[file.ArchivePath]
+		if uncompressedSize+entry.SizeBytes > MaxUncompressedBytes {
 			_ = tw.Close()
+			_ = gw.Close()
 			return Build{}, fmt.Errorf("runtime artifact exceeds %d uncompressed bytes", MaxUncompressedBytes)
 		}
+		if err := writeTarBuildFile(tw, file, entry.SizeBytes, entry.SHA256); err != nil {
+			return Build{}, err
+		}
+		uncompressedSize += entry.SizeBytes
 	}
 	for _, file := range files {
 		if file.LinkTarget == "" {
@@ -241,16 +253,6 @@ func BuildBundle(input BuildInput) (Build, error) {
 	if err := tw.Close(); err != nil {
 		return Build{}, fmt.Errorf("close runtime artifact tar: %w", err)
 	}
-
-	var compressed bytes.Buffer
-	gw, err := gzip.NewWriterLevel(&compressed, gzip.BestCompression)
-	if err != nil {
-		return Build{}, err
-	}
-	gw.ModTime = time.Unix(0, 0).UTC()
-	if _, err := gw.Write(tarBuf.Bytes()); err != nil {
-		return Build{}, fmt.Errorf("compress runtime artifact: %w", err)
-	}
 	if err := gw.Close(); err != nil {
 		return Build{}, fmt.Errorf("close runtime artifact gzip: %w", err)
 	}
@@ -261,7 +263,7 @@ func BuildBundle(input BuildInput) (Build, error) {
 	return Build{
 		Revision:         revision,
 		ArtifactHash:     hex.EncodeToString(artifactHash[:]),
-		Compressed:       append([]byte(nil), compressed.Bytes()...),
+		Compressed:       compressed.Bytes(),
 		CompressedSize:   int64(compressed.Len()),
 		UncompressedSize: uncompressedSize,
 		FileCount:        len(files),
@@ -485,6 +487,7 @@ func normalizeFiles(files []File) ([]File, error) {
 			return nil, fmt.Errorf("runtime artifact contains unexpected archive path %q", archivePath)
 		}
 		file.ArchivePath = archivePath
+		file.SourcePath = strings.TrimSpace(file.SourcePath)
 		if strings.TrimSpace(file.LinkTarget) != "" {
 			linkTarget, err := cleanArchivePath(file.LinkTarget)
 			if err != nil {
@@ -495,12 +498,16 @@ func normalizeFiles(files []File) ([]File, error) {
 			}
 			file.LinkTarget = linkTarget
 			file.Body = nil
+			file.SourcePath = ""
 		}
 		file.FileKind = strings.TrimSpace(file.FileKind)
 		if !fileKindPattern.MatchString(file.FileKind) {
 			return nil, fmt.Errorf("invalid runtime artifact file kind")
 		}
-		if len(file.Body) == 0 && file.LinkTarget == "" && !strings.HasPrefix(archivePath, "rootfs/") {
+		if file.SourcePath != "" && len(file.Body) > 0 {
+			return nil, fmt.Errorf("runtime artifact file %q has ambiguous content source", file.ArchivePath)
+		}
+		if len(file.Body) == 0 && file.SourcePath == "" && file.LinkTarget == "" && !strings.HasPrefix(archivePath, "rootfs/") {
 			return nil, fmt.Errorf("runtime artifact file %q is empty", file.ArchivePath)
 		}
 		if file.Mode == 0 {
@@ -886,6 +893,37 @@ func hashEntry(r io.Reader, expectedSize int64, mode int64, keepBody bool) (actu
 	}, nil
 }
 
+func runtimeArtifactBuildFileDigest(file File) (string, int64, error) {
+	if file.SourcePath == "" {
+		sum := sha256.Sum256(file.Body)
+		return hex.EncodeToString(sum[:]), int64(len(file.Body)), nil
+	}
+	f, err := os.Open(file.SourcePath)
+	if err != nil {
+		return "", 0, fmt.Errorf("open runtime artifact source %q: %w", file.ArchivePath, err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return "", 0, fmt.Errorf("stat runtime artifact source %q: %w", file.ArchivePath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", 0, fmt.Errorf("runtime artifact source %q is not regular", file.ArchivePath)
+	}
+	if info.Size() < 0 || info.Size() > MaxUncompressedBytes {
+		return "", 0, fmt.Errorf("invalid runtime artifact source size for %q: %d", file.ArchivePath, info.Size())
+	}
+	h := sha256.New()
+	written, err := io.Copy(h, io.LimitReader(f, MaxUncompressedBytes+1))
+	if err != nil {
+		return "", 0, fmt.Errorf("hash runtime artifact source %q: %w", file.ArchivePath, err)
+	}
+	if written != info.Size() {
+		return "", 0, fmt.Errorf("runtime artifact source %q size changed while reading", file.ArchivePath)
+	}
+	return hex.EncodeToString(h.Sum(nil)), written, nil
+}
+
 func readLimitedEntry(r io.Reader, max int64) ([]byte, error) {
 	var buf bytes.Buffer
 	n, err := io.Copy(&buf, io.LimitReader(r, max+1))
@@ -913,6 +951,55 @@ func writeTarFile(tw *tar.Writer, name string, body []byte, mode int64) error {
 	}
 	if _, err := tw.Write(body); err != nil {
 		return fmt.Errorf("write runtime artifact body %q: %w", name, err)
+	}
+	return nil
+}
+
+func writeTarBuildFile(tw *tar.Writer, file File, size int64, expectedSHA256 string) error {
+	if file.SourcePath == "" {
+		if int64(len(file.Body)) != size {
+			return fmt.Errorf("runtime artifact source %q size changed before writing", file.ArchivePath)
+		}
+		sum := sha256.Sum256(file.Body)
+		if hex.EncodeToString(sum[:]) != expectedSHA256 {
+			return fmt.Errorf("runtime artifact source %q changed before writing", file.ArchivePath)
+		}
+		return writeTarFile(tw, file.ArchivePath, file.Body, file.Mode)
+	}
+	f, err := os.Open(file.SourcePath)
+	if err != nil {
+		return fmt.Errorf("open runtime artifact source %q: %w", file.ArchivePath, err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat runtime artifact source %q: %w", file.ArchivePath, err)
+	}
+	if !info.Mode().IsRegular() || info.Size() != size {
+		return fmt.Errorf("runtime artifact source %q changed before writing", file.ArchivePath)
+	}
+	if file.Mode == 0 {
+		file.Mode = 0o644
+	}
+	hdr := &tar.Header{
+		Name:    file.ArchivePath,
+		Mode:    file.Mode & 0o777,
+		Size:    size,
+		ModTime: time.Unix(0, 0).UTC(),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return fmt.Errorf("write runtime artifact header %q: %w", file.ArchivePath, err)
+	}
+	h := sha256.New()
+	written, err := io.Copy(tw, io.TeeReader(io.LimitReader(f, size+1), h))
+	if err != nil {
+		return fmt.Errorf("write runtime artifact body %q: %w", file.ArchivePath, err)
+	}
+	if written != size {
+		return fmt.Errorf("runtime artifact source %q changed while writing", file.ArchivePath)
+	}
+	if hex.EncodeToString(h.Sum(nil)) != expectedSHA256 {
+		return fmt.Errorf("runtime artifact source %q changed while writing", file.ArchivePath)
 	}
 	return nil
 }

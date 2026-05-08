@@ -42,6 +42,9 @@ func registerCenterUI(r *gin.Engine, apiBase, gatewayAPIBase, uiBase string, exp
 		if resolvedPath == "index.html" {
 			raw = centerHTML(raw, centerHTMLAPIBase(c.Request, apiBase, gatewayAPIBase), uiBase, experimentalAppDeployEnabled)
 		}
+		if adminui.IsHTMLFallbackAsset(resolvedPath, placeholder) {
+			adminui.SetNoStoreHeaders(c)
+		}
 		c.Data(http.StatusOK, centerContentType(raw, resolvedPath, placeholder), raw)
 	}
 	r.GET(uiBase, func(c *gin.Context) {

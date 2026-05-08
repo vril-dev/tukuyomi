@@ -17,7 +17,7 @@ mkdir -p "$DIST" "$TMP"
 
 TITLE="tukuyomi Operation Guide (English Edition)"
 SUBTITLE="Deploying and operating an application-edge control plane built around Coraza + CRS WAF"
-VERSION="based on v1.3.0"
+VERSION="based on v1.4.1"
 TODAY="$(date +%Y-%m-%d)"
 COVER_EYEBROW="Operation Guide"
 COVER_BRAND="tukuyomi"

@@ -688,6 +688,38 @@ func serveProxyRequest(c *proxyServeContext) {
 		appendProxyRouteLogFields(evt, c.Request)
 		emitJSONLogAndAppendEvent(evt)
 	}
+	routeAccessIP := proxyRouteAccessSourceIP(c.Request)
+	if allowed, reason, matchedCIDR := proxyRouteAccessAllowed(routeClassification.Access, routeAccessIP); !allowed {
+		if auditTrail != nil {
+			auditTrail.setTerminal("proxy_route_access", "proxy_route_access_block", "blocked", http.StatusForbidden)
+		}
+		evt := map[string]any{
+			"ts":              time.Now().UTC().Format(time.RFC3339Nano),
+			"service":         "coraza",
+			"level":           "WARN",
+			"event":           "proxy_route_access_block",
+			"req_id":          reqID,
+			"trace_id":        observability.TraceIDFromContext(c.Request.Context()),
+			"ip":              clientIP,
+			"country":         country,
+			"country_source":  countrySource,
+			"path":            c.Request.URL.Path,
+			"status":          http.StatusForbidden,
+			"reason":          reason,
+			"route_access_ip": routeAccessIP,
+		}
+		if matchedCIDR != "" {
+			evt["matched_cidr"] = matchedCIDR
+		}
+		appendProxyRouteLogFields(evt, c.Request)
+		emitJSONLogAndAppendEvent(evt)
+		c.Header("Cache-Control", "no-store")
+		c.Header("Pragma", "no-cache")
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.JSON(http.StatusForbidden, gin.H{"error": "route source forbidden"})
+		c.Abort()
+		return
+	}
 
 	if IsCountryBlocked(c.Request.Host, c.Request.TLS != nil, country) {
 		if auditTrail != nil {

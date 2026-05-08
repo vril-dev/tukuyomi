@@ -1477,6 +1477,33 @@ function RouteEditorCard({
         </div>
       ) : null}
 
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Allow CIDRs" hint="One IP or CIDR per line. Empty means any source is allowed unless Deny CIDRs match.">
+          <MultilineTextArea
+            className={textAreaClass}
+            value={route.access.allowCIDRs}
+            onValueChange={(next) => onChange({ ...route, access: { ...route.access, allowCIDRs: next } })}
+            serialize={stringListToMultiline}
+            parse={multilineToStringList}
+            equals={stringListEqual}
+            spellCheck={false}
+            placeholder={"219.104.164.92/32\n2001:db8::/32"}
+          />
+        </Field>
+        <Field label="Deny CIDRs" hint="One IP or CIDR per line. Deny CIDRs are checked before Allow CIDRs; leave empty when Allow CIDRs should be the only permit list.">
+          <MultilineTextArea
+            className={textAreaClass}
+            value={route.access.denyCIDRs}
+            onValueChange={(next) => onChange({ ...route, access: { ...route.access, denyCIDRs: next } })}
+            serialize={stringListToMultiline}
+            parse={multilineToStringList}
+            equals={stringListEqual}
+            spellCheck={false}
+            placeholder={"203.0.113.0/24\n198.51.100.10"}
+          />
+        </Field>
+      </div>
+
       <div className={routeTargetGridClass}>
         <Field label="Backend pool" hint="Standard balancing path. Select a named backend pool to scope target selection to that pool only.">
           <select

@@ -55,13 +55,15 @@ data/app-deployments/<app-id>/current
 
 PHP-FPM では、通常 package 内の `public/` を `current/public` へ配置します。PSGI では、`app/` と `static/` を同じ `current` release 配下の別パスへ割り当てる運用ができます。Gateway は、対象 Runtime App が期待する Center 管理パスを向いていない場合、deploy と rollback をブロックします。これにより、Center が任意のディレクトリを置き換えることを防ぎます。
 
-baseline adoption（初回採用）または最初の Center 管理 deploy が成功すると、Gateway は対象 Runtime Apps の参照先を書き換えます。PHP-FPM では、`document_root` が元の `data/vhosts/...` 配下から、通常は次のパスへ変わります。
+baseline adoption（初回採用）または最初の Center 管理 deploy が成功すると、Gateway は対象 Runtime Apps の参照先を書き換えます。PHP-FPM では、`document_root` が元の `data/runtime-sites/<app-id>/...` 配下から、通常は次のパスへ変わります。
 
 ```text
 data/app-deployments/<app-id>/current/public
 ```
 
-PSGI では、`app_root` や `document_root` が対応する `current/<runtime-subpath>` へ変わります。切り替え後の元 `data/vhosts/...` ディレクトリは、初回採用時のソースであり、以後の反映先ではありません。Center 管理を続ける場合は、Center へ新しい package をアップロードして配備します。ローカル管理へ戻す場合は、Runtime Apps の参照先を意図的にローカルパスへ戻してから運用してください。
+PSGI では、`app_root` や `document_root` が対応する `current/<runtime-subpath>` へ変わります。切り替え後の元 `data/runtime-sites/<app-id>/...` ディレクトリは、初回採用時のソースであり、以後の反映先ではありません。Center 管理を続ける場合は、Center へ新しい package をアップロードして配備します。ローカル管理へ戻す場合は、Runtime Apps の参照先を意図的にローカルパスへ戻してから運用してください。
+
+baseline adoption が読み取る採用元は、Gateway ローカルの相対パス `data/runtime-sites/` 配下だけです。Center 管理へ採用する前に、対象アプリのソースツリーを `data/runtime-sites/<app-id>/` 配下へ移動またはコピーしてください。
 
 baseline adoption は明示的な操作です。Gateway が現在のソースを Center が認識する最初の package としてアップロードするには、Center 側で adoption request を作成する必要があります。rollback は手動です。古い saved package を選び、差分を確認してから rollback request を確定します。自動 rollback は行いません。
 

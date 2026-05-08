@@ -11,6 +11,13 @@ cp "${SEED_DIR}/tukuyomi.conf" "${STAGE_ROOT}/tukuyomi.conf"
 
 DEST_DIR="${STAGE_ROOT}/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh" "${CRS_VERSION}"
 
+cat >> "${STAGE_ROOT}/rules/crs/crs-setup.conf" <<'EOF'
+
+# tukuyomi uses REST-style UI and control-plane APIs. Keep CRS method
+# enforcement enabled, but include the verbs used by those APIs.
+SecAction "id:1090100,phase:1,pass,t:none,nolog,setvar:'tx.allowed_methods=GET HEAD POST OPTIONS PUT PATCH DELETE'"
+EOF
+
 if [[ -n "${WAF_RULE_SEED_CRS_SETUP_OVERRIDE:-}" ]]; then
   {
     printf '\n'

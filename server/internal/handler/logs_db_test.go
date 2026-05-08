@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -359,6 +360,77 @@ func TestLogsReadUsesSQLiteStoreFreeTextSearch(t *testing.T) {
 	}
 	if got := anyToString(literalSearch.Lines[0]["req_id"]); got != "req-percent-literal" {
 		t.Fatalf("literal search req_id=%q want=req-percent-literal", got)
+	}
+}
+
+func TestLogsReadUsesSQLiteStoreTimeRangePagination(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	base := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	entries := []map[string]any{
+		{
+			"ts":      base.Add(-2 * time.Hour).Format(time.RFC3339Nano),
+			"event":   "waf_block",
+			"req_id":  "req-old",
+			"path":    "/old",
+			"country": "JP",
+			"status":  403,
+		},
+		{
+			"ts":      base.Add(-30 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "waf_block",
+			"req_id":  "req-mid",
+			"path":    "/mid",
+			"country": "JP",
+			"status":  403,
+		},
+		{
+			"ts":      base.Add(-5 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "waf_block",
+			"req_id":  "req-new",
+			"path":    "/new",
+			"country": "US",
+			"status":  403,
+		},
+	}
+
+	tmp := t.TempDir()
+	logPath := filepath.Join(tmp, "waf-events.ndjson")
+	writeNDJSONFile(t, logPath, entries)
+
+	restoreLogPath := setWAFLogPathForTest(t, logPath)
+	defer restoreLogPath()
+
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStore(true, dbPath, 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	from := url.QueryEscape(base.Add(-1 * time.Hour).Format(time.RFC3339Nano))
+	to := url.QueryEscape(base.Format(time.RFC3339Nano))
+	first := callLogsRead(t, "/tukuyomi-api/logs/read?src=waf&tail=1&from="+from+"&to="+to)
+	if len(first.Lines) != 1 {
+		t.Fatalf("first lines=%d want=1", len(first.Lines))
+	}
+	if got := anyToString(first.Lines[0]["req_id"]); got != "req-new" {
+		t.Fatalf("first[0].req_id=%q want=req-new", got)
+	}
+	if !first.HasPrev {
+		t.Fatal("first HasPrev=false want true")
+	}
+	if first.PageStart == nil {
+		t.Fatal("first page_start is nil")
+	}
+
+	second := callLogsRead(t, "/tukuyomi-api/logs/read?src=waf&tail=1&dir=prev&from="+from+"&to="+to+"&cursor="+itoa64(*first.PageStart))
+	if len(second.Lines) != 1 {
+		t.Fatalf("second lines=%d want=1", len(second.Lines))
+	}
+	if got := anyToString(second.Lines[0]["req_id"]); got != "req-mid" {
+		t.Fatalf("second[0].req_id=%q want=req-mid", got)
 	}
 }
 

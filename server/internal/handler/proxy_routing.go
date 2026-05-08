@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/textproto"
 	"net/url"
 	"regexp"
@@ -49,12 +50,13 @@ var proxyRouteRestrictedResponseHeaders = map[string]struct{}{
 }
 
 type ProxyRoute struct {
-	Name      string           `json:"name,omitempty"`
-	Enabled   *bool            `json:"enabled,omitempty"`
-	Priority  int              `json:"priority"`
-	Match     ProxyRouteMatch  `json:"match,omitempty"`
-	Action    ProxyRouteAction `json:"action"`
-	Generated bool             `json:"-"`
+	Name      string            `json:"name,omitempty"`
+	Enabled   *bool             `json:"enabled,omitempty"`
+	Priority  int               `json:"priority"`
+	Match     ProxyRouteMatch   `json:"match,omitempty"`
+	Access    *ProxyRouteAccess `json:"access,omitempty"`
+	Action    ProxyRouteAction  `json:"action"`
+	Generated bool              `json:"-"`
 }
 
 type ProxyRouteMatch struct {
@@ -66,6 +68,14 @@ type ProxyRoutePathMatch struct {
 	Type     string `json:"type"`
 	Value    string `json:"value"`
 	compiled *regexp.Regexp
+}
+
+type ProxyRouteAccess struct {
+	AllowCIDRs []string `json:"allow_cidrs,omitempty"`
+	DenyCIDRs  []string `json:"deny_cidrs,omitempty"`
+
+	allowPrefixes []netip.Prefix
+	denyPrefixes  []netip.Prefix
 }
 
 type ProxyRouteAction struct {
@@ -113,9 +123,10 @@ type ProxyRouteQueryOperations struct {
 }
 
 type ProxyDefaultRoute struct {
-	Name    string           `json:"name,omitempty"`
-	Enabled *bool            `json:"enabled,omitempty"`
-	Action  ProxyRouteAction `json:"action"`
+	Name    string            `json:"name,omitempty"`
+	Enabled *bool             `json:"enabled,omitempty"`
+	Access  *ProxyRouteAccess `json:"access,omitempty"`
+	Action  ProxyRouteAction  `json:"action"`
 }
 
 type proxyRouteResolutionSource string
@@ -138,6 +149,7 @@ type proxyRouteDecision struct {
 	RewrittenPath        string
 	RewrittenRawPath     string
 	RewrittenQuery       string
+	Access               *ProxyRouteAccess
 	SelectedUpstream     string
 	SelectedUpstreamURL  string
 	SelectedHTTP2Mode    string
@@ -164,6 +176,7 @@ type proxyRouteClassification struct {
 	RewrittenRawPath  string
 	RewrittenQuery    string
 	RewrittenHost     string
+	Access            *ProxyRouteAccess
 	TargetCandidates  []proxyRouteTargetCandidate
 	TargetSelection   proxyRouteTargetSelectionOptions
 	RetryPolicy       proxyRetryPolicy
@@ -215,6 +228,7 @@ func normalizeProxyRoutes(in []ProxyRoute) []ProxyRoute {
 		}
 		next.Match.Hosts = normalizeProxyRouteHosts(next.Match.Hosts)
 		next.Match.Path = normalizeProxyRoutePathMatch(next.Match.Path)
+		next.Access = normalizeProxyRouteAccess(next.Access)
 		next.Action = normalizeProxyRouteAction(next.Action)
 		out = append(out, next)
 	}
@@ -237,8 +251,27 @@ func normalizeProxyDefaultRoute(in *ProxyDefaultRoute) *ProxyDefaultRoute {
 	if out.Name == "" {
 		out.Name = "default"
 	}
+	out.Access = normalizeProxyRouteAccess(out.Access)
 	out.Action = normalizeProxyRouteAction(out.Action)
 	return &out
+}
+
+func normalizeProxyRouteAccess(in *ProxyRouteAccess) *ProxyRouteAccess {
+	if in == nil {
+		return nil
+	}
+	allow := normalizeCIDRStrings(in.AllowCIDRs)
+	deny := normalizeCIDRStrings(in.DenyCIDRs)
+	if len(allow) == 0 && len(deny) == 0 {
+		return nil
+	}
+	out := &ProxyRouteAccess{
+		AllowCIDRs: allow,
+		DenyCIDRs:  deny,
+	}
+	out.allowPrefixes, _ = parseIPPrefixList(allow)
+	out.denyPrefixes, _ = parseIPPrefixList(deny)
+	return out
 }
 
 func normalizeProxyRouteAction(in ProxyRouteAction) ProxyRouteAction {
@@ -524,6 +557,9 @@ func validateProxyRoutes(cfg ProxyRulesConfig) error {
 		if err := validateProxyRouteMatch(route.Match, fmt.Sprintf("routes[%d].match", i)); err != nil {
 			return err
 		}
+		if err := validateProxyRouteAccess(route.Access, fmt.Sprintf("routes[%d].access", i)); err != nil {
+			return err
+		}
 		if err := validateProxyRouteAction(route.Action, cfg, namedUpstreams, nameCounts, backendPools, backendPoolCounts, fmt.Sprintf("routes[%d].action", i)); err != nil {
 			return err
 		}
@@ -535,12 +571,95 @@ func validateProxyRoutes(cfg ProxyRulesConfig) error {
 		}
 	}
 	if cfg.DefaultRoute != nil && proxyRouteEnabled(cfg.DefaultRoute.Enabled) {
+		if err := validateProxyRouteAccess(cfg.DefaultRoute.Access, "default_route.access"); err != nil {
+			return err
+		}
 		if err := validateProxyRouteAction(cfg.DefaultRoute.Action, cfg, namedUpstreams, nameCounts, backendPools, backendPoolCounts, "default_route.action"); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func validateProxyRouteAccess(access *ProxyRouteAccess, field string) error {
+	if access == nil {
+		return nil
+	}
+	if _, err := compileProxyRouteAccessCIDRs(access.AllowCIDRs, field+".allow_cidrs"); err != nil {
+		return err
+	}
+	if _, err := compileProxyRouteAccessCIDRs(access.DenyCIDRs, field+".deny_cidrs"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func compileProxyRouteAccessCIDRs(entries []string, field string) ([]netip.Prefix, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	out := make([]netip.Prefix, 0, len(entries))
+	for i, entry := range entries {
+		prefix, err := parseIPPrefix(entry)
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d]: invalid IP/CIDR %q: %w", field, i, entry, err)
+		}
+		out = append(out, prefix)
+	}
+	return dedupeIPPrefixes(out), nil
+}
+
+func proxyRouteAccessAllowed(access *ProxyRouteAccess, clientIP string) (bool, string, string) {
+	if access == nil || (len(access.AllowCIDRs) == 0 && len(access.DenyCIDRs) == 0) {
+		return true, "", ""
+	}
+	addr, err := netip.ParseAddr(strings.TrimSpace(clientIP))
+	if err != nil {
+		return false, "invalid_source", ""
+	}
+	addr = addr.Unmap()
+	denyPrefixes := access.denyPrefixes
+	if len(denyPrefixes) == 0 && len(access.DenyCIDRs) > 0 {
+		var compileErr error
+		denyPrefixes, compileErr = compileProxyRouteAccessCIDRs(access.DenyCIDRs, "access.deny_cidrs")
+		if compileErr != nil {
+			return false, "invalid_config", ""
+		}
+	}
+	for _, prefix := range denyPrefixes {
+		if prefix.Contains(addr) {
+			return false, "deny_match", prefix.String()
+		}
+	}
+	allowPrefixes := access.allowPrefixes
+	if len(allowPrefixes) == 0 && len(access.AllowCIDRs) > 0 {
+		var compileErr error
+		allowPrefixes, compileErr = compileProxyRouteAccessCIDRs(access.AllowCIDRs, "access.allow_cidrs")
+		if compileErr != nil {
+			return false, "invalid_config", ""
+		}
+	}
+	if len(allowPrefixes) == 0 {
+		return true, "", ""
+	}
+	for _, prefix := range allowPrefixes {
+		if prefix.Contains(addr) {
+			return true, "", prefix.String()
+		}
+	}
+	return false, "allow_miss", ""
+}
+
+func proxyRouteAccessSourceIP(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	source := strings.TrimSpace(req.RemoteAddr)
+	if host, _, err := net.SplitHostPort(source); err == nil {
+		source = host
+	}
+	return source
 }
 
 func validateProxyBackendPool(pool ProxyBackendPool, namedUpstreams map[string]ProxyUpstream, upstreamNameCounts map[string]int, poolNameCounts map[string]int, field string) error {
@@ -1083,6 +1202,7 @@ func combineProxyRouteDecision(classification proxyRouteClassification, selectio
 		RewrittenPath:        classification.RewrittenPath,
 		RewrittenRawPath:     classification.RewrittenRawPath,
 		RewrittenQuery:       classification.RewrittenQuery,
+		Access:               classification.Access,
 		SelectedUpstream:     selection.SelectedUpstream,
 		SelectedUpstreamURL:  selection.SelectedUpstreamURL,
 		SelectedHTTP2Mode:    selection.SelectedHTTP2Mode,
@@ -1130,6 +1250,9 @@ func splitProxyRouteDecision(decision proxyRouteDecision) (proxyRouteClassificat
 	}
 	if classification.RewrittenQuery == "" {
 		classification.RewrittenQuery = decision.RewrittenQuery
+	}
+	if classification.Access == nil {
+		classification.Access = decision.Access
 	}
 	if len(classification.TargetCandidates) == 0 && len(decision.OrderedTargets) > 0 {
 		classification.TargetCandidates = append([]proxyRouteTargetCandidate(nil), decision.OrderedTargets...)
@@ -1304,7 +1427,7 @@ func resolveProxyRouteClassificationWithHealth(req *http.Request, cfg ProxyRules
 		if !proxyRouteMatchesRoute(route, originalHost, originalPath) {
 			continue
 		}
-		classification, err := buildProxyRouteClassification(req, originalHost, originalPath, originalRawPath, route.Name, proxyRouteResolutionRoute, route.Match.Path, route.Action, cfg, health)
+		classification, err := buildProxyRouteClassification(req, originalHost, originalPath, originalRawPath, route.Name, proxyRouteResolutionRoute, route.Match.Path, route.Access, route.Action, cfg, health)
 		if err != nil {
 			return proxyRouteClassification{}, err
 		}
@@ -1313,7 +1436,7 @@ func resolveProxyRouteClassificationWithHealth(req *http.Request, cfg ProxyRules
 	}
 
 	if cfg.DefaultRoute != nil && proxyRouteEnabled(cfg.DefaultRoute.Enabled) {
-		classification, err := buildProxyRouteClassification(req, originalHost, originalPath, originalRawPath, cfg.DefaultRoute.Name, proxyRouteResolutionDefault, nil, cfg.DefaultRoute.Action, cfg, health)
+		classification, err := buildProxyRouteClassification(req, originalHost, originalPath, originalRawPath, cfg.DefaultRoute.Name, proxyRouteResolutionDefault, nil, cfg.DefaultRoute.Access, cfg.DefaultRoute.Action, cfg, health)
 		if err != nil {
 			return proxyRouteClassification{}, err
 		}
@@ -1321,7 +1444,7 @@ func resolveProxyRouteClassificationWithHealth(req *http.Request, cfg ProxyRules
 		return classification, nil
 	}
 
-	classification, err := buildProxyRouteClassification(req, originalHost, originalPath, originalRawPath, "upstream", proxyRouteResolutionUpstream, nil, ProxyRouteAction{}, cfg, health)
+	classification, err := buildProxyRouteClassification(req, originalHost, originalPath, originalRawPath, "upstream", proxyRouteResolutionUpstream, nil, nil, ProxyRouteAction{}, cfg, health)
 	if err != nil {
 		return proxyRouteClassification{}, err
 	}
@@ -1329,7 +1452,7 @@ func resolveProxyRouteClassificationWithHealth(req *http.Request, cfg ProxyRules
 	return classification, nil
 }
 
-func buildProxyRouteClassification(req *http.Request, originalHost string, originalPath string, originalRawPath string, routeName string, source proxyRouteResolutionSource, match *ProxyRoutePathMatch, action ProxyRouteAction, cfg ProxyRulesConfig, health *upstreamHealthMonitor) (proxyRouteClassification, error) {
+func buildProxyRouteClassification(req *http.Request, originalHost string, originalPath string, originalRawPath string, routeName string, source proxyRouteResolutionSource, match *ProxyRoutePathMatch, access *ProxyRouteAccess, action ProxyRouteAction, cfg ProxyRulesConfig, health *upstreamHealthMonitor) (proxyRouteClassification, error) {
 	targetCandidates, targetSelection, err := buildProxyRouteTargetCandidatesWithHealth(cfg, action, health)
 	if err != nil {
 		return proxyRouteClassification{}, err
@@ -1368,6 +1491,7 @@ func buildProxyRouteClassification(req *http.Request, originalHost string, origi
 		RewrittenRawPath:  rewrittenRawPath,
 		RewrittenQuery:    rewrittenQuery,
 		RewrittenHost:     plannedProxyRouteForwardedHost(originalHost, action.HostRewrite, source),
+		Access:            access,
 		TargetCandidates:  targetCandidates,
 		TargetSelection:   targetSelection,
 		RetryPolicy:       proxyBuildRetryPolicy(cfg),

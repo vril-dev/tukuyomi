@@ -48,6 +48,37 @@ func TestBuildPublicHandlerSingleListenerKeepsAdminRoutes(t *testing.T) {
 	}
 }
 
+func TestBuildPublicHandlerSingleListenerDeniesUntrustedAdminSurface(t *testing.T) {
+	restore := saveListenerConfigForTest()
+	defer restore()
+
+	config.AdminExternalMode = "deny_external"
+	config.AdminTrustedCIDRs = []string{"127.0.0.1/32", "::1/128", "219.104.164.92/32"}
+	config.AdminTrustForwardedFor = false
+	if err := handler.InitAdminGuards(); err != nil {
+		t.Fatalf("InitAdminGuards: %v", err)
+	}
+
+	publicHandler, err := buildPublicHandler(nil, nil, false)
+	if err != nil {
+		t.Fatalf("buildPublicHandler(single) error = %v", err)
+	}
+
+	for _, path := range []string{
+		config.UIBasePath + "/login",
+		config.APIBasePath + "/auth/session",
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.RemoteAddr = "122.100.25.195:45678"
+		publicHandler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("path=%q status=%d want=%d body=%s", path, rec.Code, http.StatusForbidden, rec.Body.String())
+		}
+	}
+}
+
 func TestBuildPublicHandlerSingleListenerClearsResponseCacheStore(t *testing.T) {
 	restore := saveListenerConfigForTest()
 	defer restore()
@@ -223,16 +254,27 @@ func saveListenerConfigForTest() func() {
 	prevUIBasePath := config.UIBasePath
 	prevAPIAuthDisable := config.APIAuthDisable
 	prevAPICORSOrigins := append([]string(nil), config.APICORSOrigins...)
+	prevAdminExternalMode := config.AdminExternalMode
+	prevAdminTrustedCIDRs := append([]string(nil), config.AdminTrustedCIDRs...)
+	prevAdminTrustForwardedFor := config.AdminTrustForwardedFor
 
 	config.APIBasePath = "/tukuyomi-api"
 	config.UIBasePath = "/tukuyomi-ui"
 	config.APIAuthDisable = false
 	config.APICORSOrigins = nil
+	config.AdminExternalMode = "full_external"
+	config.AdminTrustedCIDRs = nil
+	config.AdminTrustForwardedFor = false
+	_ = handler.InitAdminGuards()
 
 	return func() {
 		config.APIBasePath = prevAPIBasePath
 		config.UIBasePath = prevUIBasePath
 		config.APIAuthDisable = prevAPIAuthDisable
 		config.APICORSOrigins = prevAPICORSOrigins
+		config.AdminExternalMode = prevAdminExternalMode
+		config.AdminTrustedCIDRs = prevAdminTrustedCIDRs
+		config.AdminTrustForwardedFor = prevAdminTrustForwardedFor
+		_ = handler.InitAdminGuards()
 	}
 }

@@ -420,32 +420,30 @@ The default backend is local:
 
 ACME selects `mode=acme` on the `TLS` screen. `production` / `staging`
 chooses Let's Encrypt's production or staging CA, and the account email is
-optional. Because HTTP-01 is used, set `server.tls.redirect_http=true` and
-`server.tls.http_redirect_addr=:80`, or arrange equivalent port-80
-forwarding. For direct VPS / bare-metal deployments, prefer explicit
-`server.public_listeners` rows while you are moving to `:443`; this lets the
-known-working setup port remain available until HTTPS is confirmed.
+optional. Because HTTP-01 is used, the DNS name must resolve to this host and
+external TCP/80 and TCP/443 must reach it.
 
-Safe listener rollout example:
+For direct VPS / bare-metal rollouts from a setup port to `:80` / `:443`, use
+this browser-driven sequence:
 
-```json
-{
-  "server": {
-    "listen_addr": ":9090",
-    "public_listeners": [
-      { "name": "setup", "listen_addr": ":9090", "protocol": "http", "http_behavior": "serve", "enabled": true },
-      { "name": "https", "listen_addr": ":443", "protocol": "https", "http_behavior": "serve", "enabled": true },
-      { "name": "http", "listen_addr": ":80", "protocol": "http", "http_behavior": "redirect", "redirect_to": "https", "enabled": true }
-    ],
-    "tls": {
-      "enabled": true
-    }
-  }
-}
-```
+1. In `Settings` -> `Listener & Network`, configure `Public listener rows` with
+   an HTTP listener on `:80` and an HTTPS listener on `:443`. During setup,
+   keeping the `:80` row at `HTTP behavior=serve` leaves a plain HTTP path back
+   to the management UI before TLS is ready.
+2. Enable `Enable built-in TLS on the public listener`, then click
+   `Save config only`.
+3. Restart the Gateway with `systemctl restart tukuyomi`.
+4. On the `TLS` page, add a TLS binding with `TLS mode=acme` and
+   `Hosts=<DNS name>`. Start with `staging` to verify the HTTP-01 challenge and
+   HTTPS reachability.
+5. After `https://<DNS name>/tukuyomi-ui/` works, change `ACME environment` to
+   `production` and click `Apply`.
 
-After `https://<host>/tukuyomi-ui/` is confirmed, remove the temporary
-`setup` listener row if you no longer want the high-port entrypoint.
+Accessing `https://<IP address>/...` warns because the certificate is issued for
+the DNS name. Always verify with the DNS name configured in the TLS binding
+`Hosts` field. A browser that previously saw the staging certificate may keep a
+warning state; after switching to `production`, confirm again in a new tab or
+private window.
 
 Proxy engine selection is a restart-required DB `app_config` setting:
 
@@ -511,15 +509,16 @@ Operator contract:
 - Setting `admin.listen_addr` removes the admin UI / API / auth from
   the public listener.
 - If `server.public_listeners` is set, those rows replace the single
-  public listener. Use them for staged moves such as `:9090` + `:443`
-  + `:80` redirect.
+  public listener. Use them for staged moves such as keeping `:9090`
+  online while adding HTTP on `:80` and HTTPS on `:443`.
 - `admin.external_mode` and `admin.trusted_cidrs` continue to apply on
   the admin listener.
 - Built-in TLS / HTTP redirect / HTTP/3 are public-listener-only in
   this slice.
-- With explicit `server.public_listeners`, express the port-80 redirect
-  as an HTTP listener row with `http_behavior=redirect`. Do not combine
-  it with legacy `server.tls.redirect_http`.
+- With explicit `server.public_listeners`, keep `:80` as an HTTP row for ACME.
+  If you later want HTTP-to-HTTPS redirect, express it with
+  `http_behavior=redirect`. Do not combine it with legacy
+  `server.tls.redirect_http`.
 - `admin.listen_addr` cannot collide with `server.listen_addr` or
   `server.tls.http_redirect_addr`.
 

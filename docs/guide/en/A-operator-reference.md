@@ -122,14 +122,14 @@ Key points:
 - `server.tls.enabled=false` is the default.
 - `server.http3.enabled=true` requires built-in TLS.
 - HTTP/3 uses the same numeric port as `server.listen_addr` over **UDP**.
-- `server.tls.redirect_http=true` adds a plain HTTP listener.
+- In the legacy single-listener shape, `server.tls.redirect_http=true` adds a
+  plain HTTP listener.
 - ACME auto TLS is selected from TLS bindings. The ACME account key,
   challenge tokens, and certificate cache live under the `acme/`
   namespace of `persistent_storage`.
 - Sites are routing objects and require `default_upstream`. TLS bindings are
   Host/SNI certificate objects independent of Sites and Proxy Rules.
-- For ACME HTTP-01, port 80 must reach
-  `server.tls.http_redirect_addr`.
+- For ACME HTTP-01, port 80 must reach a Gateway HTTP listener.
 - Let's Encrypt `staging` / `production` is selected per TLS binding.
 - `paths.site_config_file` defaults to `conf/sites.json`. In the
   DB-backed runtime this is a seed / export path for an empty DB.

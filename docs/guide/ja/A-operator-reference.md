@@ -113,15 +113,14 @@ container 起動で通常必要になる env:
 - `server.tls.enabled=false` が既定
 - `server.http3.enabled=true` には built-in TLS が必須
 - HTTP/3 は `server.listen_addr` と同じ numeric port を **UDP** で使う
-- `server.tls.redirect_http=true` で plain HTTP listener を追加
+- legacy の単一 listener 構成では、`server.tls.redirect_http=true` で plain HTTP listener を追加
 - ACME 自動 TLS は TLS binding で選択します。ACME account key /
   challenge token / 証明書 cache は `persistent_storage` の `acme/`
   namespace に保存されます
 - Sites はルーティング用の設定で、`default_upstream` が必須です。TLS binding
   は Host/SNI 名に対する証明書設定であり、Sites や Proxy Rules から独立して
   紐づきます
-- ACME HTTP-01 のため、port 80 を `server.tls.http_redirect_addr` に
-  到達させる
+- ACME HTTP-01 のため、port 80 を Gateway の HTTP listener に到達させる
 - Let's Encrypt の `staging` / `production` は TLS binding ごとに選びます
 - `paths.site_config_file` の既定は `conf/sites.json`。DB-backed runtime
   では空 DB の seed / export path

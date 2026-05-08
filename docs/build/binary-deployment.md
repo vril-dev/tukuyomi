@@ -316,32 +316,30 @@ The default backend is local:
 
 Configure ACME on the `TLS` page by adding a TLS binding with `mode=acme`.
 `production` / `staging` selects the Let's Encrypt production or staging CA,
-and account email is optional. ACME HTTP-01 needs
-`server.tls.redirect_http=true` with `server.tls.http_redirect_addr=:80`, or
-equivalent port 80 forwarding. For new direct-host deployments, prefer
-explicit `server.public_listeners` rows so the existing setup listener can stay
-available while `:443` is introduced.
+and account email is optional. ACME HTTP-01 requires the DNS name to resolve to
+this host and external TCP/80 and TCP/443 reachability.
 
-Example safe listener rollout:
+For direct VPS or bare-metal rollouts from a setup port to `:80` / `:443`, use
+this sequence:
 
-```json
-{
-  "server": {
-    "listen_addr": ":9090",
-    "public_listeners": [
-      { "name": "setup", "listen_addr": ":9090", "protocol": "http", "http_behavior": "serve", "enabled": true },
-      { "name": "https", "listen_addr": ":443", "protocol": "https", "http_behavior": "serve", "enabled": true },
-      { "name": "http", "listen_addr": ":80", "protocol": "http", "http_behavior": "redirect", "redirect_to": "https", "enabled": true }
-    ],
-    "tls": {
-      "enabled": true
-    }
-  }
-}
-```
+1. In `Settings` -> `Listener & Network`, configure `Public listener rows` with
+   an HTTP listener on `:80` and an HTTPS listener on `:443`. During setup,
+   keeping the `:80` row at `HTTP behavior=serve` leaves a plain HTTP access
+   path available while TLS is being tested.
+2. Enable `Enable built-in TLS on the public listener`, then click
+   `Save config only`.
+3. Restart the Gateway with `systemctl restart tukuyomi`.
+4. On the `TLS` page, add a TLS binding with `TLS mode=acme` and
+   `Hosts=<DNS name>`. Start with `staging` to verify the HTTP-01 challenge and
+   HTTPS reachability.
+5. After `https://<DNS name>/tukuyomi-ui/` works, change `ACME environment` to
+   `production` and apply the TLS binding again.
 
-This keeps `:9090` usable while `:443` and `:80` are validated. After external
-HTTPS access is confirmed, remove the setup row if it is no longer needed.
+Accessing `https://<IP address>/...` still warns because the certificate is for
+the DNS name. Always verify with the DNS name listed in the TLS binding
+`Hosts` field. A browser that previously saw the staging certificate may keep a
+warning state; after switching to `production`, confirm again in a new tab or
+private window.
 
 Proxy engine selection is a restart-required DB `app_config` setting:
 

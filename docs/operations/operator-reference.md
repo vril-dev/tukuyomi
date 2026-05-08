@@ -108,13 +108,13 @@ Notes:
 - `server.tls.enabled=false` is the default.
 - `server.http3.enabled=true` requires built-in TLS termination.
 - HTTP/3 uses the same numeric port as `server.listen_addr`, but over UDP.
-- `server.tls.redirect_http=true` starts a second plain HTTP listener that redirects to HTTPS.
+- In the legacy single-listener shape, `server.tls.redirect_http=true` starts a second plain HTTP listener that redirects to HTTPS.
 - ACME auto TLS is selected from the TLS screen with binding `mode=acme`; ACME account keys, challenge tokens, and certificate cache are stored below the `acme/` namespace in `persistent_storage`.
 - Sites are routing objects. `default_upstream` is required because a Site creates a generated host fallback route and upstream.
 - TLS bindings are independent Host/SNI certificate objects. They can protect hosts routed by Sites, Proxy Rules, Runtime Apps, or any other route source.
 - TLS-managed ACME supports DNS hostnames only. IP address certificates are intentionally outside this flow; use a DNS name or a manually managed certificate if an IP endpoint is unavoidable.
-- ACME HTTP-01 requires port 80 to reach `server.tls.http_redirect_addr`. Select Let's Encrypt `staging` or `production` from the TLS screen.
-- For direct-host rollout, use explicit `server.public_listeners` rows when adding `:443` so the existing setup port can stay online during validation. When this mode is set, express port-80 HTTPS redirect as an HTTP listener row with `http_behavior=redirect`; do not combine it with legacy `server.tls.redirect_http`.
+- ACME HTTP-01 requires port 80 to reach a Gateway HTTP listener. Select Let's Encrypt `staging` or `production` from the TLS screen.
+- For direct-host rollout, use explicit `server.public_listeners` rows when adding `:443` so the existing setup port can stay online during validation. After HTTPS is verified, express port-80 HTTPS redirect as an HTTP listener row with `http_behavior=redirect`; do not combine it with legacy `server.tls.redirect_http`.
 - `paths.site_config_file` defaults to `conf/sites.json`; in DB-backed runtime this is the empty-DB seed/export path, not the live source of truth.
 - `paths.tls_binding_config_file` defaults to `conf/tls-bindings.json`; in DB-backed runtime this is also a seed/export path.
 

@@ -522,7 +522,7 @@ curl -sS \
 - `original_host`、`original_path`、`original_query`
 - `rewritten_host`、`rewritten_path`、`rewritten_query`
 - `selected_route`
-- `proxy_route` はルート分類後、WAF ／最終ターゲット選定の前に出力されるため、`selected_upstream` ／ `selected_upstream_url` は出力しません
+- `proxy_route` はルート分類後、WAF と最終ターゲット選定の前に出力されるため、`selected_upstream` ／ `selected_upstream_url` は出力しません
 - `proxy_access` および選定後のトランスポートログは、最終ターゲットが確定した後でのみ `selected_upstream` ／ `selected_upstream_url` を出力します
 
 リクエストフロー:
@@ -632,7 +632,7 @@ curl -sS \
 ### オブザーバビリティ
 
 - `/metrics` は TLS、アップストリーム HA、レート制限、セマンティック、リクエストセキュリティのカウンタを公開します
-- WAF ／アクセスイベントは DB を正として保持されます。セキュリティ監査は別系統のファイル／エビデンスストリームとして残り、ファイルローテーション設定はファイルベースの監査／レガシーログストリームに適用されます
+- WAF ／アクセスイベントは DB を正(SoT)として保持します。セキュリティ監査は別系統のファイル／エビデンスストリームとして残り、ファイルローテーション設定はファイルベースの監査／レガシーログストリームに適用されます
 - 任意の OTLP トレーシングは `observability.tracing` で設定します
 
 ### 通知

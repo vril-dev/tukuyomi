@@ -32,7 +32,7 @@ INSTALL_CENTER_UPSTREAM_URL_VALUE="${INSTALL_CENTER_UPSTREAM_URL:-http://127.0.0
 INSTALL_CENTER_CLIENT_ALLOW_CIDRS_VALUE="${INSTALL_CENTER_CLIENT_ALLOW_CIDRS:-}"
 INSTALL_CENTER_MANAGE_API_ALLOW_CIDRS_VALUE="${INSTALL_CENTER_MANAGE_API_ALLOW_CIDRS:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}"
 INSTALL_CENTER_API_ALLOW_CIDRS_VALUE="${INSTALL_CENTER_API_ALLOW_CIDRS:-}"
-INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE="${INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE:-full_external}"
+INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE="${INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE:-}"
 INSTALL_DEV_BOOTSTRAP_PASSWORD="dev-only-change-this-password-please"
 
 INSTALL_CONFIG_REL=""
@@ -125,7 +125,10 @@ normalize_center_protected_gateway_admin_external_mode() {
   fi
   local mode
   mode="$(printf '%s' "${INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
-  [[ -n "${mode}" ]] || mode="full_external"
+  if [[ -z "${mode}" ]]; then
+    INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE=""
+    return
+  fi
   case "${mode}" in
     deny_external|api_only_external|full_external)
       INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE="${mode}"
@@ -949,7 +952,7 @@ install_files() {
     run_priv install -d -m 755 "${systemd_dir}"
     if install_role_includes_gateway; then
       render_systemd_unit "${ROOT_DIR}/docs/build/tukuyomi.service.example" "${systemd_dir}/tukuyomi.service" "${INSTALL_ENV_BASENAME}"
-      if install_role_is_gateway; then
+      if is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
         render_systemd_unit "${ROOT_DIR}/docs/build/tukuyomi-scheduled-tasks.service.example" "${systemd_dir}/tukuyomi-scheduled-tasks.service" "${INSTALL_ENV_BASENAME}"
         run_priv install -m 644 "${ROOT_DIR}/docs/build/tukuyomi-scheduled-tasks.timer.example" "${systemd_dir}/tukuyomi-scheduled-tasks.timer"
       fi
@@ -1024,14 +1027,14 @@ activate_systemd() {
     activate_service "tukuyomi.service"
   fi
 
-  if install_role_is_gateway && is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
+  if install_role_includes_gateway && is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
     if is_enabled "${INSTALL_ENABLE_BOOT}"; then
       run_priv systemctl enable tukuyomi-scheduled-tasks.timer
     fi
     if is_enabled "${INSTALL_START}"; then
       run_priv systemctl start tukuyomi-scheduled-tasks.timer
     fi
-  elif is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
+  elif ! install_role_includes_gateway && is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
     log "${INSTALL_ROLE} role does not install scheduled-task timer"
   fi
 }

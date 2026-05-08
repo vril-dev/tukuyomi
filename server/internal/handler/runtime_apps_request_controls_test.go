@@ -264,7 +264,7 @@ func TestBuildPHPRuntimePoolConfigIncludesINIOverrides(t *testing.T) {
 		Name:         "app",
 		Mode:         "php-fpm",
 		ListenPort:   9081,
-		DocumentRoot: "data/vhosts/samples/php-app/public",
+		DocumentRoot: "data/runtime-sites/php-app/public",
 		PHPValues: map[string]string{
 			"memory_limit": "512M",
 		},
@@ -289,7 +289,7 @@ func TestValidateVhostConfigRejectsPlaintextBasicAuthHash(t *testing.T) {
       "mode": "static",
       "hostname": "127.0.0.1",
       "listen_port": 9401,
-      "document_root": "data/vhosts/samples/static-site/public",
+      "document_root": "data/runtime-sites/static-site/public",
       "generated_target": "docs-static",
       "linked_upstream_name": "docs",
       "basic_auth": {

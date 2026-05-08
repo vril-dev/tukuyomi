@@ -209,8 +209,8 @@ const JA_STRINGS: Record<string, string> = {
   "Current app deploy status": "現在のアプリ配信状態",
   "No app deployment status reported.": "アプリ配信状態はまだ報告されていません。",
   "Upload app package": "アプリパッケージをアップロード",
-  "Upload a ZIP archive. The Gateway deploys it only for a Runtime App bound to data/app-deployments/<app-id>/current.":
-    "ZIP アーカイブをアップロードします。Gateway は data/app-deployments/<app-id>/current に紐付いた Runtime App にだけ展開します。",
+  "Upload a ZIP archive. Packages deploy to Center-managed Runtime Apps; baseline adoption reads Gateway source only from data/runtime-sites/<app-id>/.":
+    "ZIP アーカイブをアップロードします。パッケージは Center 管理の Runtime Apps へ配備されます。初回採用時に Gateway から読み取れるのは data/runtime-sites/<app-id>/ 配下だけです。",
   "App ID": "アプリID",
   "Runtime family": "ランタイムファミリー",
   "Restart behavior": "再起動方式",

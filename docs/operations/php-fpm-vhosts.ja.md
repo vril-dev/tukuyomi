@@ -32,7 +32,7 @@ PHP-FPM の運用データは `data/php-fpm/` 配下に集約されます。
 - `runtime/<runtime_id>/`
   - 生成された `php-fpm.conf`、pool ファイル、pid/log ファイル、待ち受け用の成果物
 
-汎用サンプルのドキュメントルートは `data/vhosts/samples/` 配下に配置します。
+Runtime App のソースツリーは `data/runtime-sites/<app-id>/` 配下に配置します。
 
 既定パスは、有効な DB 設定 `app_config` の既定値で決まります。
 

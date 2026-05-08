@@ -145,7 +145,7 @@ user, writing to `/opt/tukuyomi`, installing systemd units).
 | config | `conf/config.json` | `conf/config.center.json` | both |
 | WAF/CRS import | yes | no | yes, for the Gateway front |
 | First-run gateway DB seed | yes | no | yes, with Center routes |
-| Scheduled-task timer | yes | no | no |
+| Scheduled-task timer | yes | no | yes, for the Gateway front |
 | DB migration | yes | yes | both DBs |
 | Initial owner bootstrap | yes | yes | both DBs |
 
@@ -176,6 +176,11 @@ If the Center process should keep a private API path, set
 `INSTALL_CENTER_GATEWAY_API_BASE_PATH` on the public Gateway path. The Gateway
 route then matches the public path and rewrites upstream requests to the Center
 path.
+
+For a center-protected host, restrict operator-facing Center paths at the
+Gateway route level. For example, add `access.allow_cidrs` to the `/center-ui`
+or center management route, while leaving the Gateway/device-facing
+`/center-api` route unrestricted so remote Gateways can continue polling.
 
 When Center is exposed without a tukuyomi Gateway in front, configure the
 source IP allowlists deliberately. Center UI client access and the

@@ -1010,6 +1010,9 @@ func bootstrapCenterProtectedGatewayAppConfig(statusRefreshIntervalSec int, cent
 	if gatewayAdminExternalMode != "" && cfg.Admin.ExternalMode != gatewayAdminExternalMode {
 		cfg.Admin.ExternalMode = gatewayAdminExternalMode
 		changed = true
+	} else if gatewayAdminExternalMode == "" && strings.TrimSpace(cfg.Admin.ExternalMode) == "" {
+		cfg.Admin.ExternalMode = "full_external"
+		changed = true
 	}
 	if !changed {
 		return false, nil
@@ -1024,7 +1027,7 @@ func bootstrapCenterProtectedGatewayRouting(store *wafEventStore, centerURL stri
 	if err := bootstrapCenterProtectedGatewayProxyRoutes(store, centerURL, routeCfg); err != nil {
 		return err
 	}
-	return bootstrapCenterProtectedGatewayWAFBypass(store, centerProtectedBypassPaths(routeCfg))
+	return nil
 }
 
 func bootstrapCenterProtectedGatewayProxyRoutes(store *wafEventStore, centerURL string, routeCfg centerProtectedGatewayRouteConfig) error {
@@ -1066,8 +1069,9 @@ func bootstrapCenterProtectedGatewayProxyRoutes(store *wafEventStore, centerURL 
 				continue
 			}
 			routeFound = true
-			if mustJSON(cfg.Routes[i]) != mustJSON(nextRoute) {
-				cfg.Routes[i] = nextRoute
+			mergedRoute := mergeCenterProtectedGatewayRoute(cfg.Routes[i], nextRoute)
+			if mustJSON(cfg.Routes[i]) != mustJSON(mergedRoute) {
+				cfg.Routes[i] = mergedRoute
 				changed = true
 			}
 			break
@@ -1086,6 +1090,25 @@ func bootstrapCenterProtectedGatewayProxyRoutes(store *wafEventStore, centerURL 
 	}
 	_, err = store.writeProxyConfigVersion(rec.ETag, cfg, configVersionSourceApply, centerProtectedBootstrapActor, "center-protected proxy route bootstrap", 0)
 	return err
+}
+
+func mergeCenterProtectedGatewayRoute(current ProxyRoute, next ProxyRoute) ProxyRoute {
+	merged := next
+	merged.Enabled = current.Enabled
+	merged.Priority = current.Priority
+	merged.Match.Hosts = append([]string(nil), current.Match.Hosts...)
+	merged.Access = cloneCenterProtectedGatewayRouteAccess(current.Access)
+	return merged
+}
+
+func cloneCenterProtectedGatewayRouteAccess(access *ProxyRouteAccess) *ProxyRouteAccess {
+	if access == nil {
+		return nil
+	}
+	return &ProxyRouteAccess{
+		AllowCIDRs: append([]string(nil), access.AllowCIDRs...),
+		DenyCIDRs:  append([]string(nil), access.DenyCIDRs...),
+	}
 }
 
 func centerProtectedGatewayRoutes(routeCfg centerProtectedGatewayRouteConfig) []ProxyRoute {
@@ -1166,102 +1189,6 @@ func normalizeCenterProtectedGatewayBasePath(raw, fallback string) (string, erro
 		return "", fmt.Errorf("base path must not contain wildcard")
 	}
 	return clean, nil
-}
-
-func centerProtectedBypassPaths(routeCfg centerProtectedGatewayRouteConfig) []string {
-	seen := map[string]struct{}{}
-	paths := make([]string, 0, 3)
-	for _, raw := range []string{routeCfg.GatewayAPIBasePath, routeCfg.CenterAPIBasePath, routeCfg.CenterUIBasePath} {
-		path := strings.TrimRight(strings.TrimSpace(raw), "/")
-		if path == "" {
-			continue
-		}
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		paths = append(paths, path)
-	}
-	return paths
-}
-
-func bootstrapCenterProtectedGatewayWAFBypass(store *wafEventStore, protectedPaths []string) error {
-	spec := mustPolicyJSONSpec(bypassConfigBlobKey)
-	raw, rec, found, err := store.loadActivePolicyJSONConfig(spec)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return nil
-	}
-	file, err := bypassconf.Parse(string(raw))
-	if err != nil {
-		return err
-	}
-	file, changed := removeCenterProtectedBypassEntries(file, protectedPaths)
-	if !changed {
-		return nil
-	}
-	normalized, err := bypassconf.MarshalJSON(file)
-	if err != nil {
-		return err
-	}
-	expectedETag := ""
-	if found {
-		expectedETag = rec.ETag
-	}
-	_, err = store.writePolicyJSONConfigVersion(expectedETag, spec, normalized, configVersionSourceApply, centerProtectedBootstrapActor, "center-protected WAF bypass bootstrap", 0)
-	return err
-}
-
-func removeCenterProtectedBypassEntries(file bypassconf.File, protectedPaths []string) (bypassconf.File, bool) {
-	changed := false
-	protectedPathSet := centerProtectedBypassPathSet(protectedPaths)
-	file.Default.Entries, changed = filterCenterProtectedBypassEntries(file.Default.Entries, protectedPathSet)
-	for host, scope := range file.Hosts {
-		var scopeChanged bool
-		scope.Entries, scopeChanged = filterCenterProtectedBypassEntries(scope.Entries, protectedPathSet)
-		if scopeChanged {
-			file.Hosts[host] = scope
-			changed = true
-		}
-	}
-	return file, changed
-}
-
-func centerProtectedBypassPathSet(protectedPaths []string) map[string]struct{} {
-	if len(protectedPaths) == 0 {
-		protectedPaths = []string{centerProtectedDefaultGatewayAPIPath, centerProtectedDefaultCenterUIPath}
-	}
-	set := make(map[string]struct{}, len(protectedPaths))
-	for _, raw := range protectedPaths {
-		path := strings.TrimRight(strings.TrimSpace(raw), "/")
-		if path != "" {
-			set[path] = struct{}{}
-		}
-	}
-	return set
-}
-
-func filterCenterProtectedBypassEntries(entries []bypassconf.Entry, protectedPathSet map[string]struct{}) ([]bypassconf.Entry, bool) {
-	out := entries[:0]
-	changed := false
-	for _, entry := range entries {
-		if isCenterProtectedBypassEntry(entry, protectedPathSet) {
-			changed = true
-			continue
-		}
-		out = append(out, entry)
-	}
-	return out, changed
-}
-
-func isCenterProtectedBypassEntry(entry bypassconf.Entry, protectedPathSet map[string]struct{}) bool {
-	if strings.TrimSpace(entry.ExtraRule) != "" {
-		return false
-	}
-	_, ok := protectedPathSet[strings.TrimRight(strings.TrimSpace(entry.Path), "/")]
-	return ok
 }
 
 func edgeCanMarkBootstrapApproved(status string) bool {
@@ -1525,6 +1452,9 @@ func addGatewayConfigSnapshotDomains(builder *edgeconfigsnapshot.Builder, ruleAr
 	siteRaw, siteETag, _, _, _ := SiteConfigSnapshot()
 	builder.AddRawDomain(siteConfigDomain, siteETag, []byte(siteRaw))
 
+	tlsBindingRaw, tlsBindingETag, _, _, _ := TLSBindingConfigSnapshot()
+	builder.AddRawDomain(tlsBindingConfigDomain, tlsBindingETag, []byte(tlsBindingRaw))
+
 	vhostRaw, vhostETag, _, _ := VhostConfigSnapshot()
 	builder.AddRawDomain(vhostConfigDomain, vhostETag, []byte(vhostRaw))
 
@@ -1607,6 +1537,29 @@ func addGatewayConfigSnapshotDomains(builder *edgeconfigsnapshot.Builder, ruleAr
 		builder.AddValueDomain(wafRuleAssetsConfigDomain, rec.ETag, map[string]any{
 			"bundle_revision": strings.TrimSpace(ruleArtifactRevision),
 			"assets":          out,
+		})
+	}
+	if cfg, rec, found, err := store.loadActiveRequestCountryGeoIPConfig(); err != nil {
+		builder.AddDomainError(requestCountryGeoIPConfigDomain, err)
+	} else if found {
+		builder.AddValueDomain(requestCountryGeoIPConfigDomain, rec.ETag, map[string]any{
+			"present":    cfg.Present,
+			"size_bytes": cfg.SizeBytes,
+			"summary": map[string]any{
+				"edition_ids":               append([]string(nil), cfg.Summary.EditionIDs...),
+				"supported_country_edition": cfg.Summary.SupportedCountryEdition,
+				"has_account_id":            cfg.Summary.HasAccountID,
+				"has_license_key":           cfg.Summary.HasLicenseKey,
+			},
+		})
+	}
+	if asset, rec, found, err := store.loadActiveRequestCountryMMDBAsset(); err != nil {
+		builder.AddDomainError(requestCountryMMDBConfigDomain, err)
+	} else if found {
+		builder.AddValueDomain(requestCountryMMDBConfigDomain, rec.ETag, map[string]any{
+			"present":      asset.Present,
+			"size_bytes":   asset.SizeBytes,
+			"content_hash": asset.ContentHash,
 		})
 	}
 }
@@ -2091,13 +2044,13 @@ func currentEdgeAppDeployCandidates() []edgeAppDeployCandidate {
 		var roots []edgeAppDeployRoot
 		switch family {
 		case "php-fpm":
-			roots = append(roots, edgePHPFPMAppDeployRoots(vhost)...)
+			roots = append(roots, edgePHPFPMAppDeployRoots(appID, vhost)...)
 		case "psgi":
 			if strings.TrimSpace(vhost.AppRoot) != "" {
 				roots = append(roots, edgeAppDeployRoot{
 					RootID:        "app_root",
 					RuntimeField:  "app_root",
-					SourcePath:    edgeAppDeploySafeSourcePath(vhost.AppRoot),
+					SourcePath:    edgeAppDeploySafeSourcePathForApp(vhost.AppRoot, appID),
 					PackagePrefix: "app",
 					TargetSubpath: "app",
 					Required:      true,
@@ -2107,7 +2060,7 @@ func currentEdgeAppDeployCandidates() []edgeAppDeployCandidate {
 				roots = append(roots, edgeAppDeployRoot{
 					RootID:        "document_root",
 					RuntimeField:  "document_root",
-					SourcePath:    edgeAppDeploySafeSourcePath(vhost.DocumentRoot),
+					SourcePath:    edgeAppDeploySafeSourcePathForApp(vhost.DocumentRoot, appID),
 					PackagePrefix: "static",
 					TargetSubpath: "static",
 					Required:      true,
@@ -2170,14 +2123,14 @@ func edgeRuntimeAvailableForAppDeploy(family string, runtimeID string) (bool, st
 	}
 }
 
-func edgePHPFPMAppDeployRoots(vhost VhostConfig) []edgeAppDeployRoot {
+func edgePHPFPMAppDeployRoots(appID string, vhost VhostConfig) []edgeAppDeployRoot {
 	docRoot := strings.TrimSpace(vhost.DocumentRoot)
 	if docRoot == "" {
 		return nil
 	}
 	cleaned := path.Clean(strings.ReplaceAll(docRoot, "\\", "/"))
 	if strings.EqualFold(path.Base(cleaned), "public") {
-		sourcePath := edgeAppDeploySafeSourcePath(path.Dir(cleaned))
+		sourcePath := edgeAppDeploySafeSourcePathForApp(path.Dir(cleaned), appID)
 		if sourcePath != "." && sourcePath != "" {
 			return []edgeAppDeployRoot{{
 				RootID:         "source_root",
@@ -2193,7 +2146,7 @@ func edgePHPFPMAppDeployRoots(vhost VhostConfig) []edgeAppDeployRoot {
 	return []edgeAppDeployRoot{{
 		RootID:         "document_root",
 		RuntimeField:   "document_root",
-		SourcePath:     edgeAppDeploySafeSourcePath(docRoot),
+		SourcePath:     edgeAppDeploySafeSourcePathForApp(docRoot, appID),
 		PackagePrefix:  "public",
 		TargetSubpath:  "public",
 		RuntimeSubpath: "public",
@@ -2204,6 +2157,14 @@ func edgePHPFPMAppDeployRoots(vhost VhostConfig) []edgeAppDeployRoot {
 func edgeAppDeploySafeSourcePath(value string) string {
 	cleaned, ok := cleanEdgeAppDeployLocalPath(value)
 	if !ok {
+		return ""
+	}
+	return cleaned
+}
+
+func edgeAppDeploySafeSourcePathForApp(value string, appID string) string {
+	cleaned := edgeAppDeploySafeSourcePath(value)
+	if cleaned == "" || !edgeAppDeploySourcePathAllowedForApp(cleaned, appID) {
 		return ""
 	}
 	return cleaned
@@ -3178,7 +3139,17 @@ func cleanEdgeAppDeployLocalPath(value string) (string, bool) {
 
 func edgeAppDeploySourcePathAllowed(value string) bool {
 	value = strings.Trim(value, "/")
-	return strings.HasPrefix(value, "data/vhosts/") && len(value) > len("data/vhosts/")
+	return strings.HasPrefix(value, "data/runtime-sites/") && len(value) > len("data/runtime-sites/")
+}
+
+func edgeAppDeploySourcePathAllowedForApp(value string, appID string) bool {
+	value = strings.Trim(value, "/")
+	appID = normalizeEdgeAppDeployID(appID)
+	if appID == "" {
+		return false
+	}
+	root := "data/runtime-sites/" + appID
+	return value == root || strings.HasPrefix(value, root+"/")
 }
 
 func cleanEdgeAppDeployRelativePath(value string) (string, bool) {
@@ -3269,13 +3240,16 @@ func edgeAppDeployBindingRoots(appID string, vhost VhostConfig, assignment edgeA
 		}
 		sourcePath := strings.TrimSpace(root.SourcePath)
 		if sourcePath == "" && assignment.Operation == "adopt" {
-			sourcePath = edgeAppDeploySafeSourcePath(runtimePath)
+			sourcePath = edgeAppDeploySafeSourcePathForApp(runtimePath, appID)
 		}
 		if sourcePath == "" && assignment.Operation == "adopt" {
-			return "", nil, fmt.Errorf("app deploy adoption source_path must be under data/vhosts")
+			return "", nil, fmt.Errorf("app deploy adoption source_path must be under data/runtime-sites/%s", appID)
 		}
 		var sourceAbs string
 		if sourcePath != "" {
+			if !edgeAppDeploySourcePathAllowedForApp(sourcePath, appID) {
+				return "", nil, fmt.Errorf("app deploy adoption source_path must be under data/runtime-sites/%s", appID)
+			}
 			sourceAbs, err = filepath.Abs(filepath.Clean(sourcePath))
 			if err != nil {
 				return "", nil, err
@@ -6608,8 +6582,8 @@ func centerRemoteSSHGatewayStreamURL(centerBaseURL string) (string, error) {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return "", fmt.Errorf("center URL scheme must be http or https")
 	}
-	if u.Scheme != "https" && !config.AllowInsecureDefaults {
-		return "", fmt.Errorf("remote ssh center URL must use https unless admin.allow_insecure_defaults is enabled for local testing")
+	if u.Scheme == "http" && !remoteSSHCenterURLAllowsHTTP(u) {
+		return "", fmt.Errorf("remote ssh center URL must use https unless it is literal loopback HTTP or admin.allow_insecure_defaults is enabled for local testing")
 	}
 	u.Path = "/v1/remote-ssh/gateway-stream"
 	u.RawPath = ""
@@ -6627,12 +6601,23 @@ func centerRemoteSSHSigningKeyURL(centerBaseURL string) (string, error) {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return "", fmt.Errorf("center URL scheme must be http or https")
 	}
-	if u.Scheme != "https" && !config.AllowInsecureDefaults {
-		return "", fmt.Errorf("remote ssh center URL must use https unless admin.allow_insecure_defaults is enabled for local testing")
+	if u.Scheme == "http" && !remoteSSHCenterURLAllowsHTTP(u) {
+		return "", fmt.Errorf("remote ssh center URL must use https unless it is literal loopback HTTP or admin.allow_insecure_defaults is enabled for local testing")
 	}
 	u.Path = "/v1/remote-ssh/signing-key"
 	u.RawPath = ""
 	return u.String(), nil
+}
+
+func remoteSSHCenterURLAllowsHTTP(u *url.URL) bool {
+	if config.AllowInsecureDefaults {
+		return true
+	}
+	if u == nil {
+		return false
+	}
+	ip := net.ParseIP(strings.TrimSpace(u.Hostname()))
+	return ip != nil && ip.IsLoopback()
 }
 
 func remoteSSHPlaceholders(driver string, count int, start int) string {

@@ -22,18 +22,31 @@ SMOKE_CONFIG="${ROOT_DIR}/data/conf/config.${SMOKE_SUFFIX}.json"
 SMOKE_PROXY="${ROOT_DIR}/data/conf/proxy.${SMOKE_SUFFIX}.json"
 SMOKE_INVENTORY="${ROOT_DIR}/data/php-fpm/inventory.${SMOKE_SUFFIX}.json"
 SMOKE_VHOSTS="${ROOT_DIR}/data/php-fpm/vhosts.${SMOKE_SUFFIX}.json"
+SMOKE_SITE_ROOT="data/runtime-sites/${SMOKE_SUFFIX}"
+SMOKE_SITE_DIR="${ROOT_DIR}/${SMOKE_SITE_ROOT}/public"
 
 php_runtime_resp="$(mktemp)"
 php_body="$(mktemp)"
 
 cleanup() {
   rm -f "${php_runtime_resp}" "${php_body}" "${SMOKE_CONFIG}" "${SMOKE_PROXY}" "${SMOKE_INVENTORY}" "${SMOKE_VHOSTS}"
+  rm -rf "${ROOT_DIR}/${SMOKE_SITE_ROOT}"
   docker compose down --remove-orphans >/dev/null 2>&1 || true
   proxy_api_cleanup
 }
 trap cleanup EXIT
 
 VER="${VER}" "${SCRIPT_DIR}/php_fpm_runtime_build.sh" >/dev/null
+
+mkdir -p "${SMOKE_SITE_DIR}"
+cat >"${SMOKE_SITE_DIR}/index.php" <<'PHP'
+<?php echo "php-fpm smoke\n";
+PHP
+cat >"${SMOKE_SITE_DIR}/up.php" <<'PHP'
+<?php
+header('Content-Type: application/json');
+echo json_encode(['status' => 'ok', 'service' => 'php-sample']);
+PHP
 
 cat >"${SMOKE_INVENTORY}" <<'EOF'
 {}
@@ -47,7 +60,7 @@ cat >"${SMOKE_VHOSTS}" <<EOF
       "mode": "php-fpm",
       "hostname": "php.smoke.test",
       "listen_port": 9183,
-      "document_root": "data/vhosts/samples/php-site/public",
+      "document_root": "${SMOKE_SITE_ROOT}/public",
       "runtime_id": "${runtime_id}",
       "generated_target": "smoke-php",
       "try_files": [

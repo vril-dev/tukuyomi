@@ -43,7 +43,7 @@ services:
       - ./data/conf:/app/conf
       - ./data/scheduled-tasks:/app/data/scheduled-tasks
       - ./data/php-fpm:/app/data/php-fpm
-      - ./data/vhosts:/app/data/vhosts
+      - ./data/runtime-sites:/app/data/runtime-sites
       - ./scripts:/app/scripts:ro
       - ./build:/app/build:ro
     ports:
@@ -81,7 +81,7 @@ services:
       - ./data/conf:/app/conf
       - ./data/scheduled-tasks:/app/data/scheduled-tasks
       - ./data/php-fpm:/app/data/php-fpm
-      - ./data/vhosts:/app/data/vhosts
+      - ./data/runtime-sites:/app/data/runtime-sites
     command:
       - /bin/sh
       - -lc

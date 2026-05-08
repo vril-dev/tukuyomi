@@ -84,7 +84,7 @@ COPY presets/minimal/config.json ./presets/minimal/config.json
 COPY data/scheduled-tasks/README.md ./data/scheduled-tasks/README.md
 COPY data/php-fpm/ ./data/php-fpm/
 COPY data/psgi/ ./data/psgi/
-COPY data/vhosts/ ./data/vhosts/
+COPY data/runtime-sites/ ./data/runtime-sites/
 COPY scripts/install_crs.sh ./scripts/install_crs.sh
 COPY scripts/stage_waf_rule_assets.sh ./scripts/stage_waf_rule_assets.sh
 COPY scripts/update_country_db.sh ./scripts/update_country_db.sh
@@ -99,7 +99,7 @@ RUN set -eux; \
     fi; \
     archive_root="${APP_NAME}_${VERSION}_${os}_${arch}"; \
     bundle="/work/${archive_root}"; \
-    mkdir -p "${bundle}/bin" "${bundle}/build" "${bundle}/conf" "${bundle}/db" "${bundle}/audit" "${bundle}/cache/response" "${bundle}/scripts" "${bundle}/seeds/conf" "${bundle}/seeds/waf/rules" "${bundle}/data/tmp" "${bundle}/data/scheduled-tasks" "${bundle}/data/php-fpm/binaries" "${bundle}/data/php-fpm/runtime" "${bundle}/data/psgi/binaries" "${bundle}/data/psgi/runtime" "${bundle}/data/vhosts/samples" "/out"; \
+    mkdir -p "${bundle}/bin" "${bundle}/build" "${bundle}/conf" "${bundle}/db" "${bundle}/audit" "${bundle}/cache/response" "${bundle}/scripts" "${bundle}/seeds/conf" "${bundle}/seeds/waf/rules" "${bundle}/data/tmp" "${bundle}/data/scheduled-tasks" "${bundle}/data/php-fpm/binaries" "${bundle}/data/php-fpm/runtime" "${bundle}/data/psgi/binaries" "${bundle}/data/psgi/runtime" "${bundle}/data/runtime-sites" "/out"; \
     cp "/tmp/out/${APP_NAME}" "${bundle}/${APP_NAME}"; \
     cp "/tmp/out/geoipupdate" "${bundle}/bin/geoipupdate"; \
     cp /src/README.md "${bundle}/README.md"; \
@@ -113,7 +113,7 @@ RUN set -eux; \
     cp /src/data/scheduled-tasks/README.md "${bundle}/data/scheduled-tasks/README.md"; \
     cp -R /src/data/php-fpm/. "${bundle}/data/php-fpm/"; \
     cp -R /src/data/psgi/. "${bundle}/data/psgi/"; \
-    cp -R /src/data/vhosts/. "${bundle}/data/vhosts/"; \
+    cp -R /src/data/runtime-sites/. "${bundle}/data/runtime-sites/"; \
     : > "${bundle}/conf/crs-disabled.conf"; \
     cp /src/scripts/install_crs.sh "${bundle}/scripts/install_crs.sh"; \
     cp /src/scripts/stage_waf_rule_assets.sh "${bundle}/scripts/stage_waf_rule_assets.sh"; \

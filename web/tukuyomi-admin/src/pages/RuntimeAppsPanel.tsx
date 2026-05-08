@@ -856,7 +856,7 @@ export default function RuntimeAppsPanel() {
                         value={app.documentRoot}
                         onChange={(e) => updateRuntimeApp(index, { ...app, documentRoot: e.target.value })}
                         className="w-full rounded border border-neutral-200 px-3 py-2 bg-white"
-                        placeholder={app.mode === "psgi" ? "./data/mt/mt-static" : "./data/vhosts/<app>/public"}
+                        placeholder={app.mode === "psgi" ? "./data/runtime-sites/<app-id>/static" : "./data/runtime-sites/<app-id>/public"}
                       />
                     </label>
                     {app.mode === "psgi" ? (
@@ -867,7 +867,7 @@ export default function RuntimeAppsPanel() {
                             value={app.appRoot}
                             onChange={(e) => updateRuntimeApp(index, { ...app, appRoot: e.target.value })}
                             className="w-full rounded border border-neutral-200 px-3 py-2 bg-white"
-                            placeholder="./data/mt/MT-9.0.7"
+                            placeholder="./data/runtime-sites/<app-id>/app"
                           />
                         </label>
                         <label className="space-y-1 text-xs">

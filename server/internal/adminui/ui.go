@@ -35,11 +35,15 @@ func RegisterRoutes(r *gin.Engine, opts Options) {
 			c.Status(http.StatusNotFound)
 			return
 		}
+		if IsHTMLFallbackAsset(resolvedPath, placeholder) {
+			SetNoStoreHeaders(c)
+		}
 		c.Data(http.StatusOK, contentType(raw, resolvedPath, placeholder), raw)
 	}
 
 	r.GET(base, func(c *gin.Context) {
 		if !allowAccess(c, opts) {
+			SetNoStoreHeaders(c)
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 			return
 		}
@@ -50,6 +54,7 @@ func RegisterRoutes(r *gin.Engine, opts Options) {
 	})
 	r.HEAD(base, func(c *gin.Context) {
 		if !allowAccess(c, opts) {
+			SetNoStoreHeaders(c)
 			c.AbortWithStatus(http.StatusForbidden)
 			return
 		}
@@ -60,6 +65,7 @@ func RegisterRoutes(r *gin.Engine, opts Options) {
 	})
 	r.GET(base+"/*filepath", func(c *gin.Context) {
 		if !allowAccess(c, opts) {
+			SetNoStoreHeaders(c)
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 			return
 		}
@@ -70,6 +76,7 @@ func RegisterRoutes(r *gin.Engine, opts Options) {
 	})
 	r.HEAD(base+"/*filepath", func(c *gin.Context) {
 		if !allowAccess(c, opts) {
+			SetNoStoreHeaders(c)
 			c.AbortWithStatus(http.StatusForbidden)
 			return
 		}
@@ -78,6 +85,16 @@ func RegisterRoutes(r *gin.Engine, opts Options) {
 		}
 		serveFile(c, strings.TrimPrefix(c.Param("filepath"), "/"))
 	})
+}
+
+func IsHTMLFallbackAsset(resolvedPath string, placeholder bool) bool {
+	return placeholder || resolvedPath == "index.html"
+}
+
+func SetNoStoreHeaders(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	c.Header("Pragma", "no-cache")
+	c.Header("X-Content-Type-Options", "nosniff")
 }
 
 func ReadAsset(uiFS fs.FS, relPath string) ([]byte, string, bool, error) {

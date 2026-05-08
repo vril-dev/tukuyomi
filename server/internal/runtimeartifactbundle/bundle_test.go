@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +89,96 @@ func TestBuildParsePSGIRuntimeArtifact(t *testing.T) {
 				t.Fatalf("file_count=%d want 7", parsed.FileCount)
 			}
 		})
+	}
+}
+
+func TestBuildParseRuntimeArtifactReadsSourcePaths(t *testing.T) {
+	tmp := t.TempDir()
+	sourceFile := func(name string, body []byte) string {
+		t.Helper()
+		path := filepath.Join(tmp, name)
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			t.Fatalf("write source file %s: %v", name, err)
+		}
+		return path
+	}
+	files := []File{
+		{
+			ArchivePath: "runtime.json",
+			FileKind:    "metadata",
+			Mode:        0o644,
+			SourcePath:  sourceFile("runtime.json", []byte(`{"runtime_id":"perl540","display_name":"Perl 5.40","detected_version":"v5.40.4","perl_path":"data/psgi/binaries/perl540/perl","starman_path":"data/psgi/binaries/perl540/starman","source":"center"}`)),
+		},
+		{
+			ArchivePath: "modules.json",
+			FileKind:    "metadata",
+			Mode:        0o644,
+			SourcePath:  sourceFile("modules.json", []byte(`["plack","starman"]`)),
+		},
+		{
+			ArchivePath: "perl",
+			FileKind:    "binary",
+			Mode:        0o755,
+			SourcePath:  sourceFile("perl", []byte("#!/bin/sh\n")),
+		},
+		{
+			ArchivePath: "starman",
+			FileKind:    "binary",
+			Mode:        0o755,
+			SourcePath:  sourceFile("starman", []byte("#!/bin/sh\n")),
+		},
+		{
+			ArchivePath: "rootfs/usr/bin/perl",
+			FileKind:    "rootfs",
+			Mode:        0o755,
+			SourcePath:  sourceFile("rootfs-perl", []byte("perl-binary")),
+		},
+		{
+			ArchivePath: "rootfs/usr/bin/starman",
+			FileKind:    "rootfs",
+			Mode:        0o755,
+			SourcePath:  sourceFile("rootfs-starman", []byte("starman-binary")),
+		},
+		{
+			ArchivePath: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+			FileKind:    "rootfs",
+			Mode:        0o755,
+			SourcePath:  sourceFile("loader", []byte("loader")),
+		},
+	}
+	build, err := BuildBundle(BuildInput{
+		RuntimeFamily:   RuntimeFamilyPSGI,
+		RuntimeID:       "perl540",
+		DisplayName:     "Perl 5.40",
+		DetectedVersion: "v5.40.4",
+		Target: TargetKey{
+			OS:            "linux",
+			Arch:          "amd64",
+			KernelVersion: "6.8.0-test",
+			DistroID:      "ubuntu",
+			DistroIDLike:  "debian",
+			DistroVersion: "24.04",
+		},
+		BuilderVersion: "test-builder",
+		BuilderProfile: "ubuntu-24.04-amd64",
+		GeneratedAt:    time.Unix(1000, 0).UTC(),
+		Files:          files,
+	})
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	parsed, err := Parse(build.Compressed)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if parsed.Manifest.RuntimeFamily != RuntimeFamilyPSGI || parsed.Manifest.RuntimeID != "perl540" {
+		t.Fatalf("unexpected runtime identity: %+v", parsed.Manifest)
+	}
+	if parsed.FileCount != len(files) {
+		t.Fatalf("file_count=%d want %d", parsed.FileCount, len(files))
+	}
+	if build.UncompressedSize == 0 || build.UncompressedSize != parsed.UncompressedSize {
+		t.Fatalf("unexpected uncompressed size build=%d parsed=%d", build.UncompressedSize, parsed.UncompressedSize)
 	}
 }
 

@@ -278,6 +278,7 @@ make compose-down
 - `action.canary_upstream` と `action.canary_weight_percent` で、ルートレベルのカナリアを設定できます
 - `action.host_rewrite`、`action.path_rewrite.prefix`、`action.query_rewrite` で outbound のリライトを設定します
 - `action.request_headers`、`action.response_headers` で上限付きのヘッダー制御を行います
+- `access.allow_cidrs` と `access.deny_cidrs` で、マッチしたルートを Gateway listener が見ている送信元 IP によって制限できます。拒否 CIDR を先に評価し、許可 CIDR が 1 件でもある場合は一致を必須にします。特定の送信元だけを許可する場合は `access.allow_cidrs` だけを設定し、`access.deny_cidrs` は空にします。`*` は使えません。`X-Forwarded-For` は信頼しません
 - `response_header_sanitize` は最終的なレスポンスヘッダーの安全性ゲートです
 - 構造化エディタは、運用フローを次の順序で表示します
   1. `Upstreams`
@@ -522,7 +523,7 @@ curl -sS \
 - `original_host`、`original_path`、`original_query`
 - `rewritten_host`、`rewritten_path`、`rewritten_query`
 - `selected_route`
-- `proxy_route` はルート分類後、WAF ／最終ターゲット選定の前に出力されるため、`selected_upstream` ／ `selected_upstream_url` は出力しません
+- `proxy_route` はルート分類後、WAF と最終ターゲット選定の前に出力されるため、`selected_upstream` ／ `selected_upstream_url` は出力しません
 - `proxy_access` および選定後のトランスポートログは、最終ターゲットが確定した後でのみ `selected_upstream` ／ `selected_upstream_url` を出力します
 
 リクエストフロー:
@@ -632,7 +633,7 @@ curl -sS \
 ### オブザーバビリティ
 
 - `/metrics` は TLS、アップストリーム HA、レート制限、セマンティック、リクエストセキュリティのカウンタを公開します
-- WAF ／アクセスイベントは DB を正として保持されます。セキュリティ監査は別系統のファイル／エビデンスストリームとして残り、ファイルローテーション設定はファイルベースの監査／レガシーログストリームに適用されます
+- WAF ／アクセスイベントは DB を正(SoT)として保持します。セキュリティ監査は別系統のファイル／エビデンスストリームとして残り、ファイルローテーション設定はファイルベースの監査／レガシーログストリームに適用されます
 - 任意の OTLP トレーシングは `observability.tracing` で設定します
 
 ### 通知

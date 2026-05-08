@@ -128,7 +128,7 @@ func TestNormalizedRuntimeConfigStoresVersionedTypedRows(t *testing.T) {
 		Mode:            "static",
 		Hostname:        "127.0.0.1",
 		ListenPort:      9401,
-		DocumentRoot:    "data/vhosts/app/public",
+		DocumentRoot:    "data/runtime-sites/app/public",
 		GeneratedTarget: "static-app",
 		TryFiles:        []string{"$uri", "/index.html"},
 		RewriteRules:    []VhostRewriteRule{{Pattern: "^/old$", Replacement: "/new", Flag: "last"}},

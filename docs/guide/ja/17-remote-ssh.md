@@ -84,6 +84,11 @@ Center-protected install / preview では、初期設定処理が同じ信頼設
 /center-api/remote-ssh/signing-key
 ```
 
+`INSTALL_ROLE=center-protected` で Center と Gateway を同一ホスト上で動かす場合、
+保存される Center URL が `http://127.0.0.1:9092` のような loopback IP 直指定の HTTP URL
+になることがあります。Remote SSH は、この内部 Gateway-to-Center 経路に限って loopback
+HTTP を許可します。リモートまたは LAN 上の Center URL には HTTPS を使ってください。
+
 ## 17.4　Center UI での操作
 
 `Device Approvals` を開き、対象 Gateway を選んで `Manage` を押します。

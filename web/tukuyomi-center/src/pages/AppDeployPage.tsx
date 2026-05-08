@@ -773,7 +773,7 @@ export default function AppDeployPage() {
       <section className="device-detail-section">
         <h3>{tx("Upload app package")}</h3>
         <p className="section-subtitle">
-          {tx("Upload a ZIP archive. The Gateway deploys it only for a Runtime App bound to data/app-deployments/<app-id>/current.")}
+          {tx("Upload a ZIP archive. Packages deploy to Center-managed Runtime Apps; baseline adoption reads Gateway source only from data/runtime-sites/<app-id>/.")}
         </p>
         <div className="form-grid app-deploy-upload-grid">
           <label>

@@ -104,18 +104,22 @@ arbitrary path.
 After baseline adoption or the first successful Center-managed deploy, Gateway
 rewrites the matching Runtime Apps binding to the managed path. For PHP-FPM,
 that usually means `document_root` changes from the original source under
-`data/vhosts/...` to:
+`data/runtime-sites/<app-id>/...` to:
 
 ```text
 data/app-deployments/<app-id>/current/public
 ```
 
 For PSGI, `app_root` and/or `document_root` are rewritten to the corresponding
-`current/<runtime-subpath>` entries. The original `data/vhosts/...` directory is
-the baseline source only; editing it later does not update the Center-managed
-Runtime App. Make subsequent changes by uploading a new Center package, or
-intentionally move the Runtime App binding back to a local path before returning
-to local-only management.
+`current/<runtime-subpath>` entries. The original `data/runtime-sites/<app-id>/...`
+directory is the baseline source only; editing it later does not update the
+Center-managed Runtime App. Make subsequent changes by uploading a new Center
+package, or intentionally move the Runtime App binding back to a local path
+before returning to local-only management.
+
+Baseline adoption only reads Gateway-local relative paths under
+`data/runtime-sites/`. Move or copy the source tree there before adopting an
+app into Center management.
 
 Baseline adoption is explicit. Center must create an adoption request before a
 Gateway uploads current source as the first Center-known package. Manual

@@ -39,6 +39,25 @@ func TestPostEdgeDeviceEnrollmentCreatesIdentityAndSendsSignedRequest(t *testing
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer InitLogsStatsStore(false, "", 0)
+	store := getLogsStatsStore()
+	if _, _, err := store.writeRequestCountryGeoIPConfigVersion("", requestCountryGeoIPConfigVersion{
+		Present: true,
+		Raw:     []byte("AccountID 123\nLicenseKey secret-license\nEditionIDs GeoLite2-Country\n"),
+		Summary: requestCountryGeoIPConfigSummary{
+			EditionIDs:              []string{"GeoLite2-Country"},
+			SupportedCountryEdition: "GeoLite2-Country",
+			HasAccountID:            true,
+			HasLicenseKey:           true,
+		},
+	}, configVersionSourceImport, "", "test GeoIP config import", 0); err != nil {
+		t.Fatalf("writeRequestCountryGeoIPConfigVersion: %v", err)
+	}
+	if _, _, err := store.writeRequestCountryMMDBAssetVersion("", requestCountryMMDBAssetVersion{
+		Present: true,
+		Raw:     []byte("test-mmdb-bytes"),
+	}, configVersionSourceImport, "", "test MMDB asset import", 0); err != nil {
+		t.Fatalf("writeRequestCountryMMDBAssetVersion: %v", err)
+	}
 	restoreConfig := saveConfigFilePathForTest(t, writeSettingsConfigFixture(t))
 	defer restoreConfig()
 	oldAllowInsecureDefaults := config.AllowInsecureDefaults
@@ -100,6 +119,23 @@ func TestPostEdgeDeviceEnrollmentCreatesIdentityAndSendsSignedRequest(t *testing
 				t.Fatalf("decode config snapshot: %v", err)
 			}
 			verifySignedEdgeConfigSnapshotForTest(t, req, capturedPublicKey, capturedFingerprint)
+			assertEdgeConfigSnapshotHasDomains(t, req.Snapshot, []string{
+				appConfigDomain,
+				proxyConfigDomain,
+				siteConfigDomain,
+				tlsBindingConfigDomain,
+				vhostConfigDomain,
+				phpRuntimeInventoryConfigDomain,
+				psgiRuntimeInventoryConfigDomain,
+				scheduledTaskConfigDomain,
+				responseCacheConfigBlobKey,
+				upstreamRuntimeConfigDomain,
+				requestCountryGeoIPConfigDomain,
+				requestCountryMMDBConfigDomain,
+			})
+			if strings.Contains(string(req.Snapshot), "secret-license") || strings.Contains(string(req.Snapshot), "test-mmdb-bytes") {
+				t.Fatalf("config snapshot leaked GeoIP secret or MMDB payload: %s", string(req.Snapshot))
+			}
 			_, _ = w.Write([]byte(`{"status":"stored","config_revision":` + quoteJSON(req.ConfigRevision) + `,"received_at_unix":1700000001}`))
 		case "/v1/remote-ssh/signing-key":
 			signingKeyCalls++
@@ -299,9 +335,6 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 		t.Fatalf("write proxy seed: %v", err)
 	}
 	seedBypass, err := bypassconf.MarshalJSON(bypassconf.File{Default: bypassconf.Scope{Entries: []bypassconf.Entry{
-		{Path: "/center-api/"},
-		{Path: "/center-manage-api/"},
-		{Path: "/center-ui/"},
 		{Path: "/healthz"},
 	}}})
 	if err != nil {
@@ -353,7 +386,7 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	if cfg.Admin.ExternalMode != "full_external" {
 		t.Fatalf("admin external mode=%q want full_external", cfg.Admin.ExternalMode)
 	}
-	proxyCfg, _, found, err := store.loadActiveProxyConfig()
+	proxyCfg, proxyRec, found, err := store.loadActiveProxyConfig()
 	if err != nil {
 		t.Fatalf("load proxy config: %v", err)
 	}
@@ -372,7 +405,7 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	if proxyCfg.Routes[0].Action.PathRewrite == nil || proxyCfg.Routes[0].Action.PathRewrite.Prefix != "/center-manage-api" {
 		t.Fatalf("center api route rewrite mismatch: %+v", proxyCfg.Routes[0].Action)
 	}
-	bypassRaw, _, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(bypassConfigBlobKey))
+	bypassRaw, bypassRec, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(bypassConfigBlobKey))
 	if err != nil {
 		t.Fatalf("load bypass config: %v", err)
 	}
@@ -392,6 +425,40 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 		t.Fatalf("unrelated bypass entry was not preserved: %s", string(bypassRaw))
 	}
 
+	_, appETag, operatorCfg, err := loadAppConfigStorage(false)
+	if err != nil {
+		t.Fatalf("load operator app config: %v", err)
+	}
+	operatorCfg.Admin.ExternalMode = "deny_external"
+	operatorCfg.Admin.TrustedCIDRs = []string{"127.0.0.1/32", "::1/128", "219.104.164.92/32"}
+	if _, err := persistSettingsAppConfig(operatorCfg, appETag); err != nil {
+		t.Fatalf("persist operator app config: %v", err)
+	}
+
+	proxyCfg.Routes[0].Match.Hosts = []string{"tukuyomi.vril-dev.com"}
+	proxyCfg.Routes[0].Access = &ProxyRouteAccess{
+		AllowCIDRs: []string{"127.0.0.1/32", "::1/128", "219.104.164.92/32"},
+		DenyCIDRs:  []string{"203.0.113.0/24"},
+	}
+	proxyCfg.Routes[1].Match.Hosts = []string{"tukuyomi.vril-dev.com"}
+	proxyCfg.Routes[1].Access = &ProxyRouteAccess{
+		AllowCIDRs: []string{"127.0.0.1/32", "::1/128", "219.104.164.92/32"},
+	}
+	if _, err := store.writeProxyConfigVersion(proxyRec.ETag, proxyCfg, configVersionSourceApply, "operator", "operator proxy access lock", 0); err != nil {
+		t.Fatalf("persist operator proxy config: %v", err)
+	}
+	operatorBypass, err := bypassconf.MarshalJSON(bypassconf.File{Default: bypassconf.Scope{Entries: []bypassconf.Entry{
+		{Path: "/center-api"},
+		{Path: "/center-ui"},
+		{Path: "/healthz"},
+	}}})
+	if err != nil {
+		t.Fatalf("marshal operator bypass config: %v", err)
+	}
+	if _, err := store.writePolicyJSONConfigVersion(bypassRec.ETag, mustPolicyJSONSpec(bypassConfigBlobKey), operatorBypass, configVersionSourceApply, "operator", "operator bypass lock", 0); err != nil {
+		t.Fatalf("persist operator bypass config: %v", err)
+	}
+
 	second, err := BootstrapCenterProtectedGateway(context.Background(), CenterProtectedGatewayBootstrapOptions{
 		CenterURL:          "http://127.0.0.1:9092",
 		GatewayAPIBasePath: "/center-api",
@@ -405,6 +472,50 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	}
 	if second.AppConfigUpdated {
 		t.Fatal("second bootstrap should be idempotent for app_config")
+	}
+	_, _, afterCfg, err := loadAppConfigStorage(false)
+	if err != nil {
+		t.Fatalf("load app config after second bootstrap: %v", err)
+	}
+	if afterCfg.Admin.ExternalMode != "deny_external" {
+		t.Fatalf("admin external mode reset to %q", afterCfg.Admin.ExternalMode)
+	}
+	if strings.Join(afterCfg.Admin.TrustedCIDRs, ",") != "127.0.0.1/32,::1/128,219.104.164.92/32" {
+		t.Fatalf("admin trusted cidrs reset: %+v", afterCfg.Admin.TrustedCIDRs)
+	}
+	proxyAfterCfg, _, found, err := store.loadActiveProxyConfig()
+	if err != nil {
+		t.Fatalf("load proxy config after second bootstrap: %v", err)
+	}
+	if !found {
+		t.Fatal("proxy config missing after second bootstrap")
+	}
+	if got := strings.Join(proxyAfterCfg.Routes[0].Match.Hosts, ","); got != "tukuyomi.vril-dev.com" {
+		t.Fatalf("center-api hosts reset: %q", got)
+	}
+	if proxyAfterCfg.Routes[0].Access == nil ||
+		strings.Join(proxyAfterCfg.Routes[0].Access.AllowCIDRs, ",") != "127.0.0.1/32,::1/128,219.104.164.92/32" ||
+		strings.Join(proxyAfterCfg.Routes[0].Access.DenyCIDRs, ",") != "203.0.113.0/24" {
+		t.Fatalf("center-api access reset: %+v", proxyAfterCfg.Routes[0].Access)
+	}
+	if got := strings.Join(proxyAfterCfg.Routes[1].Match.Hosts, ","); got != "tukuyomi.vril-dev.com" {
+		t.Fatalf("center-ui hosts reset: %q", got)
+	}
+	if proxyAfterCfg.Routes[1].Access == nil ||
+		strings.Join(proxyAfterCfg.Routes[1].Access.AllowCIDRs, ",") != "127.0.0.1/32,::1/128,219.104.164.92/32" {
+		t.Fatalf("center-ui access reset: %+v", proxyAfterCfg.Routes[1].Access)
+	}
+	bypassAfterRaw, _, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(bypassConfigBlobKey))
+	if err != nil {
+		t.Fatalf("load bypass config after second bootstrap: %v", err)
+	}
+	if !found {
+		t.Fatal("bypass config missing after second bootstrap")
+	}
+	for _, want := range []string{`"path": "/center-api"`, `"path": "/center-ui"`, `"path": "/healthz"`} {
+		if !strings.Contains(string(bypassAfterRaw), want) {
+			t.Fatalf("operator bypass entry %s reset: %s", want, string(bypassAfterRaw))
+		}
 	}
 	if second.PublicKeyFingerprintSHA256 != first.PublicKeyFingerprintSHA256 {
 		t.Fatalf("fingerprint rotated: %q != %q", second.PublicKeyFingerprintSHA256, first.PublicKeyFingerprintSHA256)
@@ -579,7 +690,7 @@ func TestApplyEdgeRuntimeRemovalBlocksReferencedPHPRuntime(t *testing.T) {
 	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
 		t.Fatalf("write inventory: %v", err)
 	}
-	vhosts := `{"vhosts":[{"name":"app","mode":"php-fpm","hostname":"127.0.0.1","listen_port":19083,"document_root":"data/vhosts/app/public","runtime_id":"php83","generated_target":"app-php"}]}`
+	vhosts := `{"vhosts":[{"name":"app","mode":"php-fpm","hostname":"127.0.0.1","listen_port":19083,"document_root":"data/runtime-sites/app/public","runtime_id":"php83","generated_target":"app-php"}]}`
 	if err := os.WriteFile(vhostPath, []byte(vhosts), 0o600); err != nil {
 		t.Fatalf("write vhosts: %v", err)
 	}
@@ -1859,6 +1970,21 @@ func verifySignedEdgeConfigSnapshotForTest(t *testing.T, req edgeDeviceConfigSna
 	}
 }
 
+func assertEdgeConfigSnapshotHasDomains(t *testing.T, raw json.RawMessage, domains []string) {
+	t.Helper()
+	var payload struct {
+		Domains map[string]json.RawMessage `json:"domains"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("decode config snapshot domains: %v", err)
+	}
+	for _, domain := range domains {
+		if _, ok := payload.Domains[domain]; !ok {
+			t.Fatalf("config snapshot missing domain %q: %s", domain, string(raw))
+		}
+	}
+}
+
 func verifySignedEdgeRuleArtifactBundleForTest(t *testing.T, req edgeRuleArtifactBundleWireRequest, pub ed25519.PublicKey, fingerprint string) edgeartifactbundle.Parsed {
 	t.Helper()
 	if len(pub) != ed25519.PublicKeySize {
@@ -2173,8 +2299,8 @@ func writeTestPSGIRuntimeArtifact(t *testing.T, inventoryPath string, runtimeID 
 }
 
 func TestEdgePHPFPMAppDeployRootsUseSourceParentForPublicDocumentRoot(t *testing.T) {
-	roots := edgePHPFPMAppDeployRoots(VhostConfig{
-		DocumentRoot: "data/vhosts/samples/php-site/public",
+	roots := edgePHPFPMAppDeployRoots("app-1", VhostConfig{
+		DocumentRoot: "data/runtime-sites/app-1/public",
 	})
 	if len(roots) != 1 {
 		t.Fatalf("len(roots)=%d want 1", len(roots))
@@ -2186,8 +2312,8 @@ func TestEdgePHPFPMAppDeployRootsUseSourceParentForPublicDocumentRoot(t *testing
 	if root.RuntimeField != "document_root" {
 		t.Fatalf("RuntimeField=%q want document_root", root.RuntimeField)
 	}
-	if root.SourcePath != "data/vhosts/samples/php-site" {
-		t.Fatalf("SourcePath=%q want data/vhosts/samples/php-site", root.SourcePath)
+	if root.SourcePath != "data/runtime-sites/app-1" {
+		t.Fatalf("SourcePath=%q want data/runtime-sites/app-1", root.SourcePath)
 	}
 	if root.PackagePrefix != "" || root.TargetSubpath != "" {
 		t.Fatalf("package/target=%q/%q want root/root", root.PackagePrefix, root.TargetSubpath)
@@ -2201,8 +2327,8 @@ func TestEdgePHPFPMAppDeployRootsUseSourceParentForPublicDocumentRoot(t *testing
 }
 
 func TestEdgePHPFPMAppDeployRootsFallbackForNonPublicDocumentRoot(t *testing.T) {
-	roots := edgePHPFPMAppDeployRoots(VhostConfig{
-		DocumentRoot: "data/vhosts/plain-site",
+	roots := edgePHPFPMAppDeployRoots("plain-site", VhostConfig{
+		DocumentRoot: "data/runtime-sites/plain-site",
 	})
 	if len(roots) != 1 {
 		t.Fatalf("len(roots)=%d want 1", len(roots))
@@ -2211,11 +2337,24 @@ func TestEdgePHPFPMAppDeployRootsFallbackForNonPublicDocumentRoot(t *testing.T) 
 	if root.RootID != "document_root" {
 		t.Fatalf("RootID=%q want document_root", root.RootID)
 	}
-	if root.SourcePath != "data/vhosts/plain-site" {
-		t.Fatalf("SourcePath=%q want data/vhosts/plain-site", root.SourcePath)
+	if root.SourcePath != "data/runtime-sites/plain-site" {
+		t.Fatalf("SourcePath=%q want data/runtime-sites/plain-site", root.SourcePath)
 	}
 	if root.PackagePrefix != "public" || root.TargetSubpath != "public" || root.RuntimeSubpath != "public" {
 		t.Fatalf("package/target/runtime=%q/%q/%q want public/public/public", root.PackagePrefix, root.TargetSubpath, root.RuntimeSubpath)
+	}
+}
+
+func TestEdgeAppDeploySourcePathAllowedForAppRequiresAppDirectory(t *testing.T) {
+	for _, sourcePath := range []string{"data/runtime-sites/app-1", "data/runtime-sites/app-1/public"} {
+		if !edgeAppDeploySourcePathAllowedForApp(sourcePath, "app-1") {
+			t.Fatalf("source_path=%q rejected for app-1", sourcePath)
+		}
+	}
+	for _, sourcePath := range []string{"data/runtime-sites/app-10", "data/runtime-sites/samples/app-1", "data/runtime-sites/app"} {
+		if edgeAppDeploySourcePathAllowedForApp(sourcePath, "app-1") {
+			t.Fatalf("source_path=%q accepted for app-1", sourcePath)
+		}
 	}
 }
 
@@ -2265,7 +2404,7 @@ func TestNormalizeEdgeAppDeployRootAllowsSourceRootAndRejectsUnsafeSourcePath(t 
 	root, ok := normalizeEdgeAppDeployRoot(edgeAppDeployRoot{
 		RootID:         "source_root",
 		RuntimeField:   "document_root",
-		SourcePath:     "data/vhosts/app",
+		SourcePath:     "data/runtime-sites/app",
 		PackagePrefix:  ".",
 		TargetSubpath:  ".",
 		RuntimeSubpath: "public",
@@ -2274,8 +2413,8 @@ func TestNormalizeEdgeAppDeployRootAllowsSourceRootAndRejectsUnsafeSourcePath(t 
 	if !ok {
 		t.Fatalf("normalizeEdgeAppDeployRoot rejected valid source root")
 	}
-	if root.SourcePath != "data/vhosts/app" {
-		t.Fatalf("SourcePath=%q want data/vhosts/app", root.SourcePath)
+	if root.SourcePath != "data/runtime-sites/app" {
+		t.Fatalf("SourcePath=%q want data/runtime-sites/app", root.SourcePath)
 	}
 	if root.PackagePrefix != "" || root.TargetSubpath != "" {
 		t.Fatalf("package/target=%q/%q want empty", root.PackagePrefix, root.TargetSubpath)
@@ -2283,7 +2422,7 @@ func TestNormalizeEdgeAppDeployRootAllowsSourceRootAndRejectsUnsafeSourcePath(t 
 	if root.RuntimeSubpath != "public" {
 		t.Fatalf("RuntimeSubpath=%q want public", root.RuntimeSubpath)
 	}
-	for _, sourcePath := range []string{"/srv/app", "etc", "data"} {
+	for _, sourcePath := range []string{"/srv/app", "etc", "data", "data/vhosts/app"} {
 		if _, ok := normalizeEdgeAppDeployRoot(edgeAppDeployRoot{
 			RootID:        "source_root",
 			RuntimeField:  "document_root",
@@ -2328,20 +2467,20 @@ func TestEdgeAppDeployBindingRootsRejectsUnsafeAdoptionSourceFallback(t *testing
 			Required:       true,
 		}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "source_path must be under data/vhosts") {
+	if err == nil || !strings.Contains(err.Error(), "source_path must be under data/runtime-sites") {
 		t.Fatalf("err=%v want source_path boundary error", err)
 	}
 }
 
 func TestEdgeAppDeployBindingRootsAllowsInitialManagedTransition(t *testing.T) {
 	managedRoot, roots, err := edgeAppDeployBindingRoots("app-1", VhostConfig{
-		DocumentRoot: "data/vhosts/app/public",
+		DocumentRoot: "data/runtime-sites/app-1/public",
 	}, edgeAppDeployDeviceAssignment{
 		Operation: "deploy",
 		Roots: []edgeAppDeployRoot{{
 			RootID:         "source_root",
 			RuntimeField:   "document_root",
-			SourcePath:     "data/vhosts/app/public",
+			SourcePath:     "data/runtime-sites/app-1/public",
 			PackagePrefix:  "public",
 			TargetSubpath:  "public",
 			RuntimeSubpath: "public",
@@ -2370,13 +2509,13 @@ func TestEdgeAppDeployBindingRootsAllowsInitialManagedTransition(t *testing.T) {
 
 func TestEdgeAppDeployBindingRootsRejectsUnexpectedUnmanagedDeployPath(t *testing.T) {
 	_, _, err := edgeAppDeployBindingRoots("app-1", VhostConfig{
-		DocumentRoot: "data/vhosts/other/public",
+		DocumentRoot: "data/runtime-sites/other/public",
 	}, edgeAppDeployDeviceAssignment{
 		Operation: "deploy",
 		Roots: []edgeAppDeployRoot{{
 			RootID:         "source_root",
 			RuntimeField:   "document_root",
-			SourcePath:     "data/vhosts/app/public",
+			SourcePath:     "data/runtime-sites/app-1/public",
 			PackagePrefix:  "public",
 			TargetSubpath:  "public",
 			RuntimeSubpath: "public",

@@ -422,12 +422,12 @@ func TestPSGIRuntimeLogErrorSummaryPrefersLoadError(t *testing.T) {
 }
 
 func TestPSGIRuntimeStatusErrorUsesRelativePaths(t *testing.T) {
-	psgiPath := filepath.ToSlash(absoluteRuntimePath("data/vhosts/samples/perl-site/MT-9.0.7/mt.psgi"))
+	psgiPath := filepath.ToSlash(absoluteRuntimePath("data/runtime-sites/perl-site/MT-9.0.7/mt.psgi"))
 	got := trimStatusError("Error while loading " + psgiPath + ": Bad CGIPath config")
 	if strings.Contains(got, filepath.ToSlash(absoluteRuntimePath("data"))) {
 		t.Fatalf("summary=%q still contains absolute data path", got)
 	}
-	if !strings.Contains(got, "data/vhosts/samples/perl-site/MT-9.0.7/mt.psgi") {
+	if !strings.Contains(got, "data/runtime-sites/perl-site/MT-9.0.7/mt.psgi") {
 		t.Fatalf("summary=%q missing relative psgi path", got)
 	}
 	if !strings.Contains(got, "Bad CGIPath config") {
@@ -451,7 +451,7 @@ func TestPSGIExplicitStartupWaitReturnsFastFailure(t *testing.T) {
 
 func TestPSGIHandleExitTreatsUnreadyExitAsStartFailure(t *testing.T) {
 	tmp := t.TempDir()
-	if err := os.WriteFile(filepath.Join(tmp, "starman-supervisor.log"), []byte("Error while loading /app/data/vhosts/app/app.psgi: DB unavailable\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, "starman-supervisor.log"), []byte("Error while loading /app/data/runtime-sites/app/app.psgi: DB unavailable\n"), 0o644); err != nil {
 		t.Fatalf("write log: %v", err)
 	}
 	mat := PSGIRuntimeMaterializedStatus{

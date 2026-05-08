@@ -116,7 +116,7 @@ func TestPrepareProxyRulesRawWithSitesRespectsRoutePrecedence(t *testing.T) {
 	}
 }
 
-func TestValidateSiteConfigRawAcceptsManualWildcardCertificate(t *testing.T) {
+func TestValidateTLSBindingConfigRawAcceptsManualWildcardCertificate(t *testing.T) {
 	restore := setSiteTLSGlobalsForTest(t)
 	defer restore()
 
@@ -124,56 +124,52 @@ func TestValidateSiteConfigRawAcceptsManualWildcardCertificate(t *testing.T) {
 	certFile, keyFile := writeSiteTestTLSFiles(t, []string{"*.example.com"})
 
 	raw := `{
-  "sites": [
+  "bindings": [
     {
       "name": "wildcard",
       "hosts": ["*.example.com"],
-      "default_upstream": "http://wildcard.internal:8080",
-      "tls": {
-        "mode": "manual",
-        "cert_file": ` + jsonStringForSiteTest(certFile) + `,
-        "key_file": ` + jsonStringForSiteTest(keyFile) + `
-      }
+      "mode": "manual",
+      "cert_file": ` + jsonStringForSiteTest(certFile) + `,
+      "key_file": ` + jsonStringForSiteTest(keyFile) + `
     }
   ]
 }`
 
-	cfg, statuses, err := ValidateSiteConfigRaw(raw)
+	cfg, statuses, err := ValidateTLSBindingConfigRaw(raw)
 	if err != nil {
-		t.Fatalf("ValidateSiteConfigRaw: %v", err)
+		t.Fatalf("ValidateTLSBindingConfigRaw: %v", err)
 	}
-	if len(cfg.Sites) != 1 || len(statuses) != 1 {
-		t.Fatalf("unexpected counts cfg=%d statuses=%d", len(cfg.Sites), len(statuses))
+	if len(cfg.Bindings) != 1 || len(statuses) != 1 {
+		t.Fatalf("unexpected counts cfg=%d statuses=%d", len(cfg.Bindings), len(statuses))
 	}
-	if statuses[0].TLSStatus != "covered" {
-		t.Fatalf("tls_status=%q want=%q", statuses[0].TLSStatus, "covered")
+	if statuses[0].Status != "covered" {
+		t.Fatalf("status=%q want=%q", statuses[0].Status, "covered")
 	}
-	if statuses[0].TLSMode != "manual" {
-		t.Fatalf("tls_mode=%q want=%q", statuses[0].TLSMode, "manual")
+	if statuses[0].Mode != "manual" {
+		t.Fatalf("mode=%q want=%q", statuses[0].Mode, "manual")
 	}
-	if statuses[0].TLSCertNotAfter == "" {
-		t.Fatal("tls_cert_not_after should not be empty")
+	if statuses[0].CertNotAfter == "" {
+		t.Fatal("cert_not_after should not be empty")
 	}
 }
 
-func TestValidateSiteConfigRawRejectsACMEWildcardHost(t *testing.T) {
+func TestValidateTLSBindingConfigRawRejectsACMEWildcardHost(t *testing.T) {
 	restore := setSiteTLSGlobalsForTest(t)
 	defer restore()
 
 	config.ServerTLSEnabled = true
 
 	raw := `{
-  "sites": [
+  "bindings": [
     {
       "name": "wildcard-acme",
       "hosts": ["*.example.com"],
-      "default_upstream": "http://wildcard.internal:8080",
-      "tls": {"mode": "acme"}
+      "mode": "acme"
     }
   ]
 }`
 
-	_, _, err := ValidateSiteConfigRaw(raw)
+	_, _, err := ValidateTLSBindingConfigRaw(raw)
 	if err == nil {
 		t.Fatal("expected acme wildcard validation error")
 	}
@@ -182,65 +178,201 @@ func TestValidateSiteConfigRawRejectsACMEWildcardHost(t *testing.T) {
 	}
 }
 
-func TestValidateSiteConfigRawRejectsInvalidACMEEmail(t *testing.T) {
+func TestValidateTLSBindingConfigRawRejectsACMEIPAddressHost(t *testing.T) {
 	restore := setSiteTLSGlobalsForTest(t)
 	defer restore()
 
 	config.ServerTLSEnabled = true
 
 	raw := `{
-  "sites": [
+  "bindings": [
     {
-      "name": "blog",
-      "hosts": ["blog.example.com"],
-      "default_upstream": "http://blog.internal:8080",
-      "tls": {"mode": "acme", "acme": {"email": "not an email"}}
+      "name": "ip-acme",
+      "hosts": ["192.0.2.10"],
+      "mode": "acme"
     }
   ]
 }`
 
-	_, _, err := ValidateSiteConfigRaw(raw)
+	_, _, err := ValidateTLSBindingConfigRaw(raw)
 	if err == nil {
-		t.Fatal("expected acme email validation error")
+		t.Fatal("expected acme IP address validation error")
 	}
-	if !strings.Contains(err.Error(), "tls.acme.email") {
+	if !strings.Contains(err.Error(), "does not support IP address host") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestEffectiveServerTLSACMEProfilesIncludeEnabledSites(t *testing.T) {
+func TestValidateTLSBindingConfigRawRejectsACMEWithoutPort80HTTPListener(t *testing.T) {
+	restore := setSiteTLSGlobalsForTest(t)
+	defer restore()
+
+	config.ServerTLSEnabled = true
+	config.ServerPublicListenersConfigured = true
+	config.ServerPublicListeners = []config.ServerPublicListener{
+		{Name: "setup", ListenAddr: ":9090", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "https", ListenAddr: ":443", Protocol: config.PublicListenerProtocolHTTPS, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+	}
+
+	raw := `{
+  "bindings": [
+    {
+      "name": "center",
+      "hosts": ["center.example.com"],
+      "mode": "acme"
+    }
+  ]
+}`
+
+	_, _, err := ValidateTLSBindingConfigRaw(raw)
+	if err == nil {
+		t.Fatal("expected acme port 80 validation error")
+	}
+	if !strings.Contains(err.Error(), "requires an enabled HTTP public listener on port 80") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateTLSBindingConfigRawAllowsACMEWithoutSite(t *testing.T) {
+	restore := setSiteTLSGlobalsForTest(t)
+	defer restore()
+
+	config.ServerTLSEnabled = true
+	config.ServerPublicListenersConfigured = true
+	config.ServerPublicListeners = []config.ServerPublicListener{
+		{Name: "setup", ListenAddr: ":9090", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "https", ListenAddr: ":443", Protocol: config.PublicListenerProtocolHTTPS, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "http", ListenAddr: ":80", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorRedirect, RedirectTo: "https", Enabled: true},
+	}
+
+	raw := `{
+  "bindings": [
+    {
+      "name": "center",
+      "hosts": ["center.example.com"],
+      "mode": "acme"
+    }
+  ]
+}`
+
+	cfg, statuses, err := ValidateTLSBindingConfigRaw(raw)
+	if err != nil {
+		t.Fatalf("ValidateTLSBindingConfigRaw: %v", err)
+	}
+	if len(cfg.Bindings) != 1 || len(statuses) != 1 {
+		t.Fatalf("unexpected counts cfg=%d statuses=%d", len(cfg.Bindings), len(statuses))
+	}
+	if statuses[0].Mode != "acme" || statuses[0].Status != "covered" {
+		t.Fatalf("unexpected status: %+v", statuses[0])
+	}
+}
+
+func TestValidateTLSBindingConfigRawRejectsInvalidACMEEmail(t *testing.T) {
 	restore := setSiteTLSGlobalsForTest(t)
 	defer restore()
 
 	config.ServerTLSEnabled = true
 
-	tmp := t.TempDir()
-	sitesPath := filepath.Join(tmp, "sites.json")
+	raw := `{
+  "bindings": [
+    {
+      "name": "blog",
+      "hosts": ["blog.example.com"],
+      "mode": "acme",
+      "acme": {"email": "not an email"}
+    }
+  ]
+}`
+
+	_, _, err := ValidateTLSBindingConfigRaw(raw)
+	if err == nil {
+		t.Fatal("expected acme email validation error")
+	}
+	if !strings.Contains(err.Error(), "acme.email") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateSiteConfigRawRejectsMissingDefaultUpstream(t *testing.T) {
 	raw := `{
   "sites": [
     {
-	      "name": "blog",
-	      "hosts": ["blog.example.com"],
-	      "default_upstream": "http://blog.internal:8080",
-	      "tls": {"mode": "acme", "acme": {"environment": "staging", "email": "ops@example.com"}}
-	    },
-	    {
-      "name": "disabled",
-      "enabled": false,
-      "hosts": ["disabled.example.com"],
-      "default_upstream": "http://disabled.internal:8080",
+      "name": "center",
+      "hosts": ["center.example.com"]
+    }
+  ]
+}`
+	_, _, err := ValidateSiteConfigRaw(raw)
+	if err == nil {
+		t.Fatal("expected missing default upstream validation error")
+	}
+	if !strings.Contains(err.Error(), "default_upstream is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSiteConfigNormalizedJSONOmitsLegacyTLS(t *testing.T) {
+	raw := `{
+  "sites": [
+    {
+      "name": "proxy-route-host",
+      "hosts": ["www.example.com"],
+      "default_upstream": "http://backend.internal:8080",
       "tls": {"mode": "acme"}
     }
   ]
 }`
-	if err := os.WriteFile(sitesPath, []byte(raw), 0o600); err != nil {
-		t.Fatalf("WriteFile(sites): %v", err)
+	cfg, _, err := ValidateSiteConfigRaw(raw)
+	if err != nil {
+		t.Fatalf("ValidateSiteConfigRaw: %v", err)
 	}
-	if err := InitSiteRuntime(sitesPath, 2); err != nil {
-		t.Fatalf("InitSiteRuntime: %v", err)
+	normalized := mustJSON(cfg)
+	if strings.Contains(normalized, `"tls"`) {
+		t.Fatalf("site config JSON must stay routing-only, got: %s", normalized)
+	}
+	if !strings.Contains(normalized, `"default_upstream"`) {
+		t.Fatalf("site config JSON should retain routing data, got: %s", normalized)
+	}
+}
+
+func TestEffectiveServerTLSACMEProfilesIncludeEnabledTLSBindings(t *testing.T) {
+	restore := setSiteTLSGlobalsForTest(t)
+	defer restore()
+
+	config.ServerTLSEnabled = true
+	config.ServerPublicListenersConfigured = true
+	config.ServerPublicListeners = []config.ServerPublicListener{
+		{Name: "setup", ListenAddr: ":9090", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "https", ListenAddr: ":443", Protocol: config.PublicListenerProtocolHTTPS, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "http", ListenAddr: ":80", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorRedirect, RedirectTo: "https", Enabled: true},
 	}
 
-	profiles := EffectiveServerTLSACMEProfilesForSites(currentSiteConfig())
+	tmp := t.TempDir()
+	tlsPath := filepath.Join(tmp, "tls-bindings.json")
+	raw := `{
+  "bindings": [
+    {
+      "name": "blog",
+      "hosts": ["blog.example.com"],
+      "mode": "acme",
+      "acme": {"environment": "staging", "email": "ops@example.com"}
+    },
+    {
+      "name": "disabled",
+      "enabled": false,
+      "hosts": ["disabled.example.com"],
+      "mode": "acme"
+    }
+  ]
+}`
+	if err := os.WriteFile(tlsPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile(tls-bindings): %v", err)
+	}
+	if err := InitTLSBindingRuntime(tlsPath, 2); err != nil {
+		t.Fatalf("InitTLSBindingRuntime: %v", err)
+	}
+
+	profiles := EffectiveServerTLSACMEProfilesForTLSBindings(currentTLSBindingConfig())
 	if len(profiles) != 1 {
 		t.Fatalf("profiles=%#v want one", profiles)
 	}
@@ -298,24 +430,23 @@ func TestInitSiteRuntimeLoadsDBBlobWithoutRestoringFile(t *testing.T) {
 	}
 }
 
-func TestValidateSiteConfigRawLegacyRequiresListenerCertificate(t *testing.T) {
+func TestValidateTLSBindingConfigRawLegacyRequiresListenerCertificate(t *testing.T) {
 	restore := setSiteTLSGlobalsForTest(t)
 	defer restore()
 
 	config.ServerTLSEnabled = true
 
 	raw := `{
-  "sites": [
+  "bindings": [
     {
       "name": "blog",
       "hosts": ["blog.example.com"],
-      "default_upstream": "http://blog.internal:8080",
-      "tls": {"mode": "legacy"}
+      "mode": "legacy"
     }
   ]
 }`
 
-	_, _, err := ValidateSiteConfigRaw(raw)
+	_, _, err := ValidateTLSBindingConfigRaw(raw)
 	if err == nil {
 		t.Fatal("expected legacy listener certificate validation error")
 	}
@@ -324,39 +455,45 @@ func TestValidateSiteConfigRawLegacyRequiresListenerCertificate(t *testing.T) {
 	}
 }
 
-func TestApplySiteConfigRawReloadsServerTLSRuntime(t *testing.T) {
+func TestApplyTLSBindingConfigRawReloadsServerTLSRuntime(t *testing.T) {
 	restore := setSiteTLSGlobalsForTest(t)
 	defer restore()
 
 	config.ServerTLSEnabled = true
+	config.ServerPublicListenersConfigured = true
+	config.ServerPublicListeners = []config.ServerPublicListener{
+		{Name: "setup", ListenAddr: ":9090", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "https", ListenAddr: ":443", Protocol: config.PublicListenerProtocolHTTPS, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "http", ListenAddr: ":80", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorRedirect, RedirectTo: "https", Enabled: true},
+	}
 
-	etag, _, _ := initSiteAndProxyRuntimeForTest(t, defaultSiteConfigRaw)
+	etag, _ := initTLSBindingRuntimeForTest(t, defaultTLSBindingConfigRaw)
 	var (
 		called     bool
 		gotDomains []string
-		gotStatus  []SiteRuntimeStatus
+		gotStatus  []TLSBindingRuntimeStatus
 	)
-	SetServerTLSReloadHook(func(sites SiteConfigFile, statuses []SiteRuntimeStatus) error {
+	SetServerTLSReloadHook(func(bindings TLSBindingConfigFile, statuses []TLSBindingRuntimeStatus) error {
 		called = true
-		gotDomains = EffectiveServerTLSACMEDomainsForSites(sites)
-		gotStatus = cloneSiteRuntimeStatuses(statuses)
+		gotDomains = EffectiveServerTLSACMEDomainsForTLSBindings(bindings)
+		gotStatus = cloneTLSBindingRuntimeStatuses(statuses)
 		return nil
 	})
 
 	raw := `{
-  "sites": [
+  "bindings": [
     {
-	      "name": "blog",
-	      "hosts": ["blog.example.com"],
-	      "default_upstream": "http://blog.internal:8080",
-	      "tls": {"mode": "acme", "acme": {"environment": "staging"}}
-	    }
+      "name": "blog",
+      "hosts": ["blog.example.com"],
+      "mode": "acme",
+      "acme": {"environment": "staging"}
+    }
   ]
 }`
 
-	newETag, cfg, statuses, err := ApplySiteConfigRaw(etag, raw)
+	newETag, cfg, statuses, err := ApplyTLSBindingConfigRaw(etag, raw)
 	if err != nil {
-		t.Fatalf("ApplySiteConfigRaw: %v", err)
+		t.Fatalf("ApplyTLSBindingConfigRaw: %v", err)
 	}
 	if newETag == etag {
 		t.Fatal("etag should change after apply")
@@ -367,72 +504,77 @@ func TestApplySiteConfigRawReloadsServerTLSRuntime(t *testing.T) {
 	if !slices.Contains(gotDomains, "blog.example.com") {
 		t.Fatalf("gotDomains=%v missing blog.example.com", gotDomains)
 	}
-	if len(gotStatus) != 1 || gotStatus[0].TLSMode != "acme" {
+	if len(gotStatus) != 1 || gotStatus[0].Mode != "acme" {
 		t.Fatalf("gotStatus=%#v", gotStatus)
 	}
-	if gotStatus[0].TLSACMEEnv != siteTLSACMEEnvironmentStaging {
-		t.Fatalf("gotStatus[0].TLSACMEEnv=%q", gotStatus[0].TLSACMEEnv)
+	if gotStatus[0].ACMEEnvironment != siteTLSACMEEnvironmentStaging {
+		t.Fatalf("gotStatus[0].ACMEEnvironment=%q", gotStatus[0].ACMEEnvironment)
 	}
-	if len(cfg.Sites) != 1 || len(statuses) != 1 {
-		t.Fatalf("unexpected cfg/status counts: %d/%d", len(cfg.Sites), len(statuses))
+	if len(cfg.Bindings) != 1 || len(statuses) != 1 {
+		t.Fatalf("unexpected cfg/status counts: %d/%d", len(cfg.Bindings), len(statuses))
 	}
-	dbCfg, _, found, err := getLogsStatsStore().loadActiveSiteConfig()
+	dbCfg, _, found, err := getLogsStatsStore().loadActiveTLSBindingConfig()
 	if err != nil || !found {
-		t.Fatalf("load active site config found=%v err=%v", found, err)
+		t.Fatalf("load active tls bindings config found=%v err=%v", found, err)
 	}
-	if len(dbCfg.Sites) != 1 || !slices.Contains(dbCfg.Sites[0].Hosts, "blog.example.com") {
-		t.Fatalf("site DB was not updated: %#v", dbCfg.Sites)
+	if len(dbCfg.Bindings) != 1 || !slices.Contains(dbCfg.Bindings[0].Hosts, "blog.example.com") {
+		t.Fatalf("tls bindings DB was not updated: %#v", dbCfg.Bindings)
 	}
 }
 
-func TestApplySiteConfigRawRollsBackWhenTLSReloadFails(t *testing.T) {
+func TestApplyTLSBindingConfigRawRollsBackWhenTLSReloadFails(t *testing.T) {
 	restore := setSiteTLSGlobalsForTest(t)
 	defer restore()
 
 	config.ServerTLSEnabled = true
+	config.ServerPublicListenersConfigured = true
+	config.ServerPublicListeners = []config.ServerPublicListener{
+		{Name: "setup", ListenAddr: ":9090", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "https", ListenAddr: ":443", Protocol: config.PublicListenerProtocolHTTPS, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "http", ListenAddr: ":80", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorRedirect, RedirectTo: "https", Enabled: true},
+	}
 
-	etag, _, _ := initSiteAndProxyRuntimeForTest(t, defaultSiteConfigRaw)
-	SetServerTLSReloadHook(func(sites SiteConfigFile, statuses []SiteRuntimeStatus) error {
-		if len(sites.Sites) > 0 {
+	etag, _ := initTLSBindingRuntimeForTest(t, defaultTLSBindingConfigRaw)
+	SetServerTLSReloadHook(func(bindings TLSBindingConfigFile, statuses []TLSBindingRuntimeStatus) error {
+		if len(bindings.Bindings) > 0 {
 			return errors.New("tls reload failed")
 		}
 		return nil
 	})
 
 	raw := `{
-  "sites": [
+  "bindings": [
     {
       "name": "blog",
       "hosts": ["blog.example.com"],
-      "default_upstream": "http://blog.internal:8080",
-      "tls": {"mode": "acme"}
+      "mode": "acme"
     }
   ]
 }`
 
-	if _, _, _, err := ApplySiteConfigRaw(etag, raw); err == nil {
+	if _, _, _, err := ApplyTLSBindingConfigRaw(etag, raw); err == nil {
 		t.Fatal("expected tls reload error")
 	}
 
-	currentRaw, currentETag, cfg, statuses, rollbackDepth := SiteConfigSnapshot()
+	currentRaw, currentETag, cfg, statuses, rollbackDepth := TLSBindingConfigSnapshot()
 	if currentETag == "" {
 		t.Fatal("etag should not be empty after failed apply rollback")
 	}
 	if strings.Contains(currentRaw, `"blog.example.com"`) {
-		t.Fatalf("raw should not contain failed site update: %q", currentRaw)
+		t.Fatalf("raw should not contain failed tls binding update: %q", currentRaw)
 	}
-	if len(cfg.Sites) != 0 || len(statuses) != 0 {
+	if len(cfg.Bindings) != 0 || len(statuses) != 0 {
 		t.Fatalf("unexpected cfg/status after rollback: %#v %#v", cfg, statuses)
 	}
 	if rollbackDepth != 0 {
 		t.Fatalf("rollbackDepth=%d want=0", rollbackDepth)
 	}
-	dbCfg, _, found, err := getLogsStatsStore().loadActiveSiteConfig()
+	dbCfg, _, found, err := getLogsStatsStore().loadActiveTLSBindingConfig()
 	if err != nil || !found {
-		t.Fatalf("load active site config found=%v err=%v", found, err)
+		t.Fatalf("load active tls binding config found=%v err=%v", found, err)
 	}
-	if len(dbCfg.Sites) != 0 {
-		t.Fatalf("site DB should be restored, got: %#v", dbCfg.Sites)
+	if len(dbCfg.Bindings) != 0 {
+		t.Fatalf("tls binding DB should be restored, got: %#v", dbCfg.Bindings)
 	}
 }
 
@@ -453,7 +595,10 @@ func setSiteTLSGlobalsForTest(t *testing.T) func() {
 	prevKeyFile := config.ServerTLSKeyFile
 	prevACMEEnabled := config.ServerTLSACMEEnabled
 	prevACMEDomains := append([]string(nil), config.ServerTLSACMEDomains...)
+	prevPublicListenersConfigured := config.ServerPublicListenersConfigured
+	prevPublicListeners := append([]config.ServerPublicListener(nil), config.ServerPublicListeners...)
 	prevSiteConfigFile := config.SiteConfigFile
+	prevTLSBindingConfigFile := config.TLSBindingConfigFile
 	prevProxyConfigFile := config.ProxyConfigFile
 	serverTLSRuntimeMu.RLock()
 	prevReload := serverTLSReload
@@ -461,6 +606,9 @@ func setSiteTLSGlobalsForTest(t *testing.T) func() {
 	siteRuntimeMu.RLock()
 	prevSiteRt := siteRt
 	siteRuntimeMu.RUnlock()
+	tlsBindingRuntimeMu.RLock()
+	prevTLSBindingRt := tlsBindingRt
+	tlsBindingRuntimeMu.RUnlock()
 	proxyRuntimeMu.RLock()
 	prevProxyRt := proxyRt
 	proxyRuntimeMu.RUnlock()
@@ -471,7 +619,10 @@ func setSiteTLSGlobalsForTest(t *testing.T) func() {
 		config.ServerTLSKeyFile = prevKeyFile
 		config.ServerTLSACMEEnabled = prevACMEEnabled
 		config.ServerTLSACMEDomains = prevACMEDomains
+		config.ServerPublicListenersConfigured = prevPublicListenersConfigured
+		config.ServerPublicListeners = prevPublicListeners
 		config.SiteConfigFile = prevSiteConfigFile
+		config.TLSBindingConfigFile = prevTLSBindingConfigFile
 		config.ProxyConfigFile = prevProxyConfigFile
 		serverTLSRuntimeMu.Lock()
 		serverTLSReload = prevReload
@@ -479,10 +630,37 @@ func setSiteTLSGlobalsForTest(t *testing.T) func() {
 		siteRuntimeMu.Lock()
 		siteRt = prevSiteRt
 		siteRuntimeMu.Unlock()
+		tlsBindingRuntimeMu.Lock()
+		tlsBindingRt = prevTLSBindingRt
+		tlsBindingRuntimeMu.Unlock()
 		proxyRuntimeMu.Lock()
 		proxyRt = prevProxyRt
 		proxyRuntimeMu.Unlock()
 	}
+}
+
+func initTLSBindingRuntimeForTest(t *testing.T, raw string) (string, string) {
+	t.Helper()
+
+	tmp := t.TempDir()
+	tlsPath := filepath.Join(tmp, "tls-bindings.json")
+	if err := os.WriteFile(tlsPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile(tls-bindings): %v", err)
+	}
+	config.TLSBindingConfigFile = tlsPath
+	initConfigDBStoreForTest(t)
+	prepared, err := prepareTLSBindingConfigRaw(raw)
+	if err != nil {
+		t.Fatalf("prepareTLSBindingConfigRaw: %v", err)
+	}
+	if _, err := getLogsStatsStore().writeTLSBindingConfigVersion("", prepared.cfg, configVersionSourceImport, "", "test tls bindings import", 0); err != nil {
+		t.Fatalf("writeTLSBindingConfigVersion: %v", err)
+	}
+	if err := InitTLSBindingRuntime(tlsPath, 2); err != nil {
+		t.Fatalf("InitTLSBindingRuntime: %v", err)
+	}
+	_, etag, _, _, _ := TLSBindingConfigSnapshot()
+	return etag, tlsPath
 }
 
 func initSiteAndProxyRuntimeForTest(t *testing.T, siteRaw string) (string, string, string) {

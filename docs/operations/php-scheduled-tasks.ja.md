@@ -7,7 +7,7 @@
 ## 管理範囲
 
 - `/scheduled-tasks`
-  - 保存されるタスク定義の管理元
+  - 保存されるタスク定義の参照元
   - cron 形式のスケジュール、コマンドライン、環境変数、タイムアウト、最終実行状態の管理
 - 外部スケジューラー
   - `tukuyomi run-scheduled-tasks` を起動
@@ -16,7 +16,7 @@
 
 ## データ配置
 
-保存されるタスク定義の正本は、正規化された `scheduled_tasks` DB ドメインです。`conf/scheduled-tasks.json` は空 DB 向けの初期データ / エクスポートファイルであり、初期化後の実行時に参照される正本ではありません。
+保存されるタスク定義は、正規化された `scheduled_tasks` DB ドメインを参照元とします。`conf/scheduled-tasks.json` は空 DB 向けの初期データ / エクスポートファイルであり、初期化後の実行時には参照しません。
 
 最終実行状態のスナップショットは、`scheduled_task_runtime_state` DB テーブルに保存されます。
 

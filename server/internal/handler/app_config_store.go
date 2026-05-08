@@ -2,6 +2,7 @@ package handler
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -86,12 +87,22 @@ func flattenAppConfigValue(v reflect.Value, prefix string, scalars *[]appConfigS
 			}
 		}
 	case reflect.Slice:
-		if v.Type().Elem().Kind() != reflect.String {
-			return fmt.Errorf("unsupported app config list %s", prefix)
-		}
 		values := make([]string, 0, v.Len())
-		for i := 0; i < v.Len(); i++ {
-			values = append(values, v.Index(i).String())
+		switch v.Type().Elem().Kind() {
+		case reflect.String:
+			for i := 0; i < v.Len(); i++ {
+				values = append(values, v.Index(i).String())
+			}
+		case reflect.Struct:
+			for i := 0; i < v.Len(); i++ {
+				raw, err := json.Marshal(v.Index(i).Interface())
+				if err != nil {
+					return fmt.Errorf("%s[%d] marshal: %w", prefix, i, err)
+				}
+				values = append(values, string(raw))
+			}
+		default:
+			return fmt.Errorf("unsupported app config list %s", prefix)
 		}
 		*lists = append(*lists, appConfigListValue{Path: prefix, Values: values})
 	case reflect.String:
@@ -342,12 +353,20 @@ func applyAppConfigValueRows(v reflect.Value, prefix string, scalars map[string]
 			if !found {
 				continue
 			}
-			if fv.Type().Elem().Kind() != reflect.String {
-				return fmt.Errorf("unsupported app config list %s", path)
-			}
 			next := reflect.MakeSlice(fv.Type(), len(values), len(values))
-			for j, value := range values {
-				next.Index(j).SetString(value)
+			switch fv.Type().Elem().Kind() {
+			case reflect.String:
+				for j, value := range values {
+					next.Index(j).SetString(value)
+				}
+			case reflect.Struct:
+				for j, value := range values {
+					if err := json.Unmarshal([]byte(value), next.Index(j).Addr().Interface()); err != nil {
+						return fmt.Errorf("%s[%d] unmarshal: %w", path, j, err)
+					}
+				}
+			default:
+				return fmt.Errorf("unsupported app config list %s", path)
 			}
 			fv.Set(next)
 		default:

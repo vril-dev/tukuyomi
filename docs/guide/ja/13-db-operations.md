@@ -71,7 +71,10 @@ make db-import
 bundle root 以外から import command を実行する場合は、
 `WAF_DB_IMPORT_SEED_BUNDLE_FILE` に config bundle のパスを指定してください。
 
-Gateway Status の `Download config` は、この seed／restore 用 bundle format を出力します。この export は、署名付きステータスポーリングで Center へ送る config snapshot とは意図的に分けています。Center snapshot は fleet status payload であり、import seed ではありません。
+Gateway Status の `Download config` は、この seed／restore 用 bundle format
+を出力します。この export は、署名付きステータスポーリングで Center へ送る
+config snapshot とは意図的に分けています。Center snapshot は fleet status
+payload であり、import seed ではありません。
 
 ## 13.2　Driver Selection
 
@@ -181,7 +184,7 @@ import 後の本番起動で **必要な file** は、
 これは **config authority の話** です。runtime byte artifact は別扱いです。
 たとえば、
 
-- site-managed ACME を local backend で使う場合の
+- TLS binding ACME を local backend で使う場合の
   `persistent_storage.local.base_dir`（既定 `data/persistent`）
 - internal response cache を有効化した場合の `cache_store.store_dir`
 - security / FP tuner / proxy rules audit

@@ -21,6 +21,7 @@ export type CenterSessionState = {
 type AuthContextValue = {
   session: CenterSessionState;
   loading: boolean;
+  sessionError: string;
   login: (identifier: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -43,20 +44,28 @@ function normalizeSession(next: CenterSessionState): CenterSessionState {
   };
 }
 
+function sessionErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "admin session check failed";
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<CenterSessionState>(defaultSession);
   const [loading, setLoading] = useState(true);
+  const [sessionError, setSessionError] = useState("");
 
   const refresh = useCallback(async () => {
+    setLoading(true);
     try {
       const next = await apiGetJson<CenterSessionState>("/auth/session");
       setSession(normalizeSession(next));
+      setSessionError("");
     } catch (error) {
-      if (!(error instanceof APIUnauthorizedError)) {
+      if (error instanceof APIUnauthorizedError) {
         setSession(defaultSession);
-        return;
+        setSessionError("");
+      } else {
+        setSessionError(sessionErrorMessage(error));
       }
-      setSession(defaultSession);
     } finally {
       setLoading(false);
     }
@@ -69,6 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onAuthRequired = () => {
       setSession(defaultSession);
+      setSessionError("");
       setLoading(false);
     };
 
@@ -78,6 +88,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    if (!sessionError) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void refresh();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [sessionError, refresh]);
+
   const login = useCallback(async (identifier: string, password: string) => {
     setLoading(true);
     try {
@@ -86,6 +106,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         password,
       });
       setSession(normalizeSession(next));
+      setSessionError("");
     } finally {
       setLoading(false);
     }
@@ -106,8 +127,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ session, loading, login, logout, refresh }),
-    [session, loading, login, logout, refresh],
+    () => ({ session, loading, sessionError, login, logout, refresh }),
+    [session, loading, sessionError, login, logout, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -723,6 +723,13 @@ pre {
   font-size: 12px;
 }
 
+.center-screen-panel {
+  flex-direction: column;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+}
+
 .login-screen {
   display: flex;
   align-items: center;
@@ -1459,7 +1466,6 @@ button.danger {
 }
 
 .rules-bundle-modal-facts {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 12px;
 }
 
@@ -1488,6 +1494,82 @@ button.danger {
 .waf-bundle-table td.actions-cell {
   width: 230px;
   min-width: 230px;
+}
+
+.app-deploy-upload-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.app-deploy-wide {
+  grid-column: span 2;
+}
+
+.app-deploy-script {
+  grid-column: span 3;
+}
+
+.app-deploy-roots textarea,
+.app-deploy-script textarea {
+  min-height: 192px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.app-deploy-status-table table,
+.app-deploy-request-table table,
+.app-deploy-history-table table {
+  min-width: 1040px;
+}
+
+.app-deploy-package-table table {
+  min-width: 1480px;
+}
+
+.app-deploy-file-table table {
+  min-width: 960px;
+}
+
+.app-deploy-col-actions {
+  width: 140px;
+}
+
+.app-deploy-col-actions-wide,
+.app-deploy-package-table td.actions-cell {
+  width: 270px;
+  min-width: 270px;
+}
+
+.app-deploy-col-app {
+  width: 130px;
+}
+
+.app-deploy-col-revision {
+  width: 150px;
+}
+
+.app-deploy-col-state {
+  width: 130px;
+}
+
+.app-deploy-col-runtime {
+  width: 160px;
+}
+
+.app-deploy-col-time {
+  width: 170px;
+}
+
+.app-deploy-col-hash {
+  width: 305px;
+}
+
+.app-deploy-col-size {
+  width: 90px;
+}
+
+.app-deploy-col-message {
+  width: 280px;
 }
 
 .rules-file-col-actions,
@@ -1580,6 +1662,28 @@ button.danger {
   margin-top: 12px;
 }
 
+.runtime-build-active-table {
+  margin-top: 10px;
+}
+
+.runtime-build-history-section details {
+  display: block;
+}
+
+.runtime-build-history-section summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  cursor: pointer;
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.runtime-build-history-section summary::marker {
+  color: #64748b;
+}
+
 .runtime-build-job {
   display: flex;
   flex-wrap: wrap;
@@ -1598,6 +1702,10 @@ button.danger {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+}
+
+.summary-grid.rules-bundle-modal-facts {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .summary-grid > div {
@@ -1731,9 +1839,8 @@ button.danger {
   min-width: 1180px;
 }
 
-.runtime-assignment-table table,
-.runtime-artifact-table table {
-  min-width: 1080px;
+.runtime-assignment-table table {
+  min-width: 1160px;
 }
 
 .runtime-summary-table th:nth-child(1) {
@@ -1758,28 +1865,24 @@ button.danger {
   width: 12%;
 }
 
-.runtime-assignment-table th:nth-child(1),
-.runtime-artifact-table th:nth-child(1) {
+.runtime-assignment-table th:nth-child(1) {
   width: 14%;
 }
 
 .runtime-assignment-table th:nth-child(2),
 .runtime-assignment-table th:nth-child(3),
-.runtime-assignment-table th:nth-child(6),
-.runtime-artifact-table th:nth-child(2),
-.runtime-artifact-table th:nth-child(3),
-.runtime-artifact-table th:nth-child(8) {
+.runtime-assignment-table th:nth-child(4) {
   width: 10%;
 }
 
-.runtime-assignment-table th:nth-child(4),
 .runtime-assignment-table th:nth-child(5),
-.runtime-assignment-table th:nth-child(7),
-.runtime-artifact-table th:nth-child(4),
-.runtime-artifact-table th:nth-child(5),
-.runtime-artifact-table th:nth-child(6),
-.runtime-artifact-table th:nth-child(7) {
+.runtime-assignment-table th:nth-child(6),
+.runtime-assignment-table th:nth-child(8) {
   width: 14%;
+}
+
+.runtime-assignment-table th:nth-child(7) {
+  width: 12%;
 }
 
 .config-snapshot-table th:nth-child(1) {
@@ -2002,6 +2105,11 @@ button.danger {
 @media (max-width: 980px) {
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .app-deploy-wide,
+  .app-deploy-script {
+    grid-column: auto;
   }
 
   .user-page .grid {

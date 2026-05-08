@@ -920,6 +920,7 @@ const JA_STRINGS: Record<string, string> = {
   "Scheduled Task Config Storage": "Scheduled Task 設定保存先",
   "Upstream Runtime Storage": "Upstream Runtime 保存先",
   "Site Seed File": "Site 初期投入ファイル",
+  "TLS Binding Seed File": "TLS binding 初期投入ファイル",
   "Scheduled Task Seed File": "Scheduled Task 初期投入ファイル",
   "Upstream Runtime Seed File": "Upstream Runtime 初期投入ファイル",
   "Working Directory": "作業ディレクトリ",
@@ -930,21 +931,41 @@ const JA_STRINGS: Record<string, string> = {
   Reset: "リセット",
   "Validation passed.": "検証に成功しました。",
   "Saved. Site config applied.": "保存しました。site 設定を適用しました。",
+  "Saved. TLS config applied.": "保存しました。TLS 設定を適用しました。",
   "Rollback applied.": "ロールバックを適用しました。",
   "Loading sites...": "site を読み込んでいます...",
-  "Manage hostname ownership, default upstreams, and TLS binding as first-class protected sites.":
-    "ホスト名の所有、default upstream、TLS 紐付けを保護対象 site として管理します。",
+  "Loading TLS bindings...": "TLS binding を読み込んでいます...",
+  "Manage hostname ownership and fallback upstream routing.":
+    "ホスト名の所有とフォールバックルートを管理します。",
+  "Manage TLS bindings, ACME certificates, and SNI hostnames.":
+    "TLS binding、ACME 証明書、SNI ホスト名を管理します。",
   "Rollback depth": "ロールバック世代",
   "Working...": "処理中...",
   "Add Site": "サイト追加",
+  "Add TLS Binding": "TLS binding 追加",
   "No sites configured. Existing proxy routing keeps working unchanged until you add a site.":
     "site は未設定です。site を追加するまでは既存の proxy routing がそのまま動きます。",
+  "No TLS bindings configured. Add a binding before enabling per-host certificates.":
+    "TLS binding は未設定です。ホスト単位の証明書を有効にする前に binding を追加してください。",
   "Generated route": "生成ルート",
   "Site name": "site 名",
   "Default upstream": "default upstream",
   "TLS mode": "TLS モード",
   "ACME environment": "ACME environment",
   "ACME account email": "ACME account email",
+  "ACME here supports DNS hostnames only. IP address certificates are not managed by Sites.":
+    "ここでの ACME は DNS ホスト名のみ対応します。IP アドレス証明書は Sites では管理しません。",
+  "ACME here supports DNS hostnames only. IP address certificates are not managed by TLS bindings.":
+    "ここでの ACME は DNS ホスト名のみ対応します。IP アドレス証明書は TLS binding では管理しません。",
+  "Let's Encrypt HTTP-01 validation uses the public DNS hostname on port 80. Keep an enabled plain HTTP listener on :80 while ACME is in use.":
+    "Let's Encrypt の HTTP-01 検証は、公開 DNS 名の 80 番ポートに届く HTTP リクエストで行われます。ACME を使う間は、`:80` の平文 HTTP リスナーを有効にしておいてください。",
+  "Required. Sites create generated host fallback routes. Use TLS for certificate-only hostname coverage.":
+    "必須です。Sites はホスト単位のフォールバックルートを生成します。証明書だけを紐づける場合は TLS を使用してください。",
+  "SNI hostnames and certificate mode": "SNI ホスト名と証明書モード",
+  "TLS bindings are selected by Host/SNI and do not require a Site record.":
+    "TLS binding は Host/SNI 名で選択されます。Site レコードは不要です。",
+  "TLS Status": "TLS ステータス",
+  "No TLS status yet. Use Validate or Load.": "TLS ステータスはまだありません。Validate または Load を実行してください。",
   "Define runtime-backed application listeners here. Proxy Rules routes traffic to the generated upstream target.":
     "runtime backed application listener をここで定義します。traffic は Proxy Rules から generated upstream target へ routing します。",
   "Runtime Apps": "Runtime Apps",

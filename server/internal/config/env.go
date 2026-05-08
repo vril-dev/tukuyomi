@@ -16,6 +16,7 @@ var (
 	ConfigFile                             string
 	ProxyConfigFile                        string
 	SiteConfigFile                         string
+	TLSBindingConfigFile                   string
 	PHPRuntimeInventoryFile                string
 	PSGIRuntimeInventoryFile               string
 	VhostConfigFile                        string
@@ -60,6 +61,8 @@ var (
 	SecurityAuditHMACKey                   string
 	SecurityAuditHMACKeyID                 string
 	ListenAddr                             string
+	ServerPublicListenersConfigured        bool
+	ServerPublicListeners                  []ServerPublicListener
 	ServerReadTimeout                      time.Duration
 	ServerReadHeaderTimeout                time.Duration
 	ServerWriteTimeout                     time.Duration
@@ -199,6 +202,10 @@ func applyAppConfig(cfg appConfigFile) {
 	if SiteConfigFile == "" {
 		SiteConfigFile = "conf/sites.json"
 	}
+	TLSBindingConfigFile = strings.TrimSpace(cfg.Paths.TLSBindingConfigFile)
+	if TLSBindingConfigFile == "" {
+		TLSBindingConfigFile = "conf/tls-bindings.json"
+	}
 	PHPRuntimeInventoryFile = strings.TrimSpace(cfg.Paths.PHPRuntimeInventoryFile)
 	if PHPRuntimeInventoryFile == "" {
 		PHPRuntimeInventoryFile = "data/php-fpm/inventory.json"
@@ -323,6 +330,11 @@ func applyAppConfig(cfg appConfigFile) {
 		SecurityAuditBlobDir = override
 	}
 	ListenAddr = parseListenAddr(cfg.Server.ListenAddr)
+	ServerPublicListenersConfigured = len(cfg.Server.PublicListeners) > 0
+	ServerPublicListeners = effectiveServerPublicListeners(cfg)
+	if ServerPublicListenersConfigured {
+		ListenAddr = primaryPublicListenAddr(ServerPublicListeners, ListenAddr)
+	}
 	ServerReadTimeout = time.Duration(parseServerTimeoutSec(strconv.Itoa(cfg.Server.ReadTimeoutSec), 30, false)) * time.Second
 	ServerReadHeaderTimeout = time.Duration(parseServerTimeoutSec(strconv.Itoa(cfg.Server.ReadHeaderTimeoutSec), 5, false)) * time.Second
 	ServerWriteTimeout = time.Duration(parseServerTimeoutSec(strconv.Itoa(cfg.Server.WriteTimeoutSec), 0, true)) * time.Second

@@ -604,6 +604,19 @@ func supervisorListenerSpecs() ([]supervisorListenerSpec, error) {
 	if config.ServerHTTP3Enabled {
 		return nil, fmt.Errorf("supervisor mode does not support HTTP/3 until UDP listener handoff is implemented")
 	}
+	if config.ServerPublicListenersConfigured {
+		specs := make([]supervisorListenerSpec, 0, len(config.ServerPublicListeners)+1)
+		for _, listener := range config.ServerPublicListeners {
+			if !listener.Enabled {
+				continue
+			}
+			specs = append(specs, supervisorListenerSpec{role: publicListenerRole(listener), addr: listener.ListenAddr})
+		}
+		if strings.TrimSpace(config.AdminListenAddr) != "" {
+			specs = append(specs, supervisorListenerSpec{role: "admin", addr: config.AdminListenAddr})
+		}
+		return specs, nil
+	}
 	specs := []supervisorListenerSpec{{role: "public", addr: config.ListenAddr}}
 	if strings.TrimSpace(config.AdminListenAddr) != "" {
 		specs = append(specs, supervisorListenerSpec{role: "admin", addr: config.AdminListenAddr})

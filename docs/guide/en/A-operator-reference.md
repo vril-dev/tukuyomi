@@ -7,7 +7,7 @@ it as the place to look up a configuration key directly when reading
 the main text.
 
 Each section keeps the structure of the upstream
-`docs/reference/operator-reference.md` while polishing the prose for a
+`docs/operations/operator-reference.md` while polishing the prose for a
 book-length read.
 
 ## A.1 Runtime configuration
@@ -122,16 +122,19 @@ Key points:
 - `server.tls.enabled=false` is the default.
 - `server.http3.enabled=true` requires built-in TLS.
 - HTTP/3 uses the same numeric port as `server.listen_addr` over **UDP**.
-- `server.tls.redirect_http=true` adds a plain HTTP listener.
-- ACME auto TLS is per-site via `tls.mode=acme`. The ACME account
-  key, challenge tokens, and certificate cache live under the `acme/`
+- In the legacy single-listener shape, `server.tls.redirect_http=true` adds a
+  plain HTTP listener.
+- ACME auto TLS is selected from TLS bindings. The ACME account key,
+  challenge tokens, and certificate cache live under the `acme/`
   namespace of `persistent_storage`.
-- For ACME HTTP-01, port 80 must reach
-  `server.tls.http_redirect_addr`.
-- Let's Encrypt `staging` / `production` is selected per site under
-  the ACME environment.
+- Sites are routing objects and require `default_upstream`. TLS bindings are
+  Host/SNI certificate objects independent of Sites and Proxy Rules.
+- For ACME HTTP-01, port 80 must reach a Gateway HTTP listener.
+- Let's Encrypt `staging` / `production` is selected per TLS binding.
 - `paths.site_config_file` defaults to `conf/sites.json`. In the
   DB-backed runtime this is a seed / export path for an empty DB.
+- `paths.tls_binding_config_file` defaults to `conf/tls-bindings.json`.
+  In the DB-backed runtime this is also a seed / export path.
 
 ### A.1.6 Persistent file storage
 
@@ -239,7 +242,8 @@ main screens:
 | `/cache` | Cache rules and the internal cache store |
 | `/proxy-rules` | Direct upstream / backend pool / route editing for what Runtime Apps does not own; validate / probe / dry-run / apply / rollback |
 | `/backends` | List of direct upstream backend objects. Direct named upstreams support runtime enable / drain / disable / weight override; Runtime App generated targets live under Runtime Apps |
-| `/sites` | Site ownership and TLS binding |
+| `/sites` | Site ownership and generated fallback routing with a required default upstream |
+| `/tls` | Host/SNI TLS bindings, ACME mode, and certificate files independent of routing |
 | `/options` | Runtime inventory / optional artifacts / GeoIP / Country DB management |
 | `/runtime-apps` | Runtime listener / docroot / runtime / generated backend management for static / `php-fpm` / `psgi` apps |
 | `/scheduled-tasks` | Cron-style command tasks and last-run status |

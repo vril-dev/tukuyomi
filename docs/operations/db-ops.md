@@ -153,7 +153,7 @@ The only file required by production startup after import is:
   values
 
 That statement is about configuration authority. Runtime byte artifacts are
-separate. When site-managed ACME uses the local backend, preserve
+separate. When TLS binding ACME uses the local backend, preserve
 `persistent_storage.local.base_dir` (default `data/persistent`). When enabled,
 `cache_store.store_dir`, security / FP tuner / proxy-rules audit files,
 scheduled-task logs, and PHP-FPM runtime logs/sockets are runtime artifacts, not

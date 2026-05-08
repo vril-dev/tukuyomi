@@ -37,23 +37,33 @@ type settingsListenerAdminProxyProtocolConfig struct {
 	TrustedCIDRs []string `json:"trusted_cidrs"`
 }
 
+type settingsListenerAdminPublicListenerConfig struct {
+	Name         string `json:"name"`
+	ListenAddr   string `json:"listen_addr"`
+	Protocol     string `json:"protocol"`
+	HTTPBehavior string `json:"http_behavior,omitempty"`
+	RedirectTo   string `json:"redirect_to,omitempty"`
+	Enabled      bool   `json:"enabled"`
+}
+
 type settingsListenerAdminServerConfig struct {
-	ListenAddr                  string                                   `json:"listen_addr"`
-	ReadTimeoutSec              int                                      `json:"read_timeout_sec"`
-	ReadHeaderTimeoutSec        int                                      `json:"read_header_timeout_sec"`
-	WriteTimeoutSec             int                                      `json:"write_timeout_sec"`
-	IdleTimeoutSec              int                                      `json:"idle_timeout_sec"`
-	GracefulShutdownTimeoutSec  int                                      `json:"graceful_shutdown_timeout_sec"`
-	MaxHeaderBytes              int                                      `json:"max_header_bytes"`
-	MaxConcurrentRequests       int                                      `json:"max_concurrent_requests"`
-	MaxQueuedRequests           int                                      `json:"max_queued_requests"`
-	QueuedRequestTimeoutMS      int                                      `json:"queued_request_timeout_ms"`
-	MaxConcurrentProxyRequests  int                                      `json:"max_concurrent_proxy_requests"`
-	MaxQueuedProxyRequests      int                                      `json:"max_queued_proxy_requests"`
-	QueuedProxyRequestTimeoutMS int                                      `json:"queued_proxy_request_timeout_ms"`
-	ProxyProtocol               settingsListenerAdminProxyProtocolConfig `json:"proxy_protocol"`
-	TLS                         settingsListenerAdminServerTLSConfig     `json:"tls"`
-	HTTP3                       settingsListenerAdminServerHTTP3Config   `json:"http3"`
+	ListenAddr                  string                                      `json:"listen_addr"`
+	PublicListeners             []settingsListenerAdminPublicListenerConfig `json:"public_listeners,omitempty"`
+	ReadTimeoutSec              int                                         `json:"read_timeout_sec"`
+	ReadHeaderTimeoutSec        int                                         `json:"read_header_timeout_sec"`
+	WriteTimeoutSec             int                                         `json:"write_timeout_sec"`
+	IdleTimeoutSec              int                                         `json:"idle_timeout_sec"`
+	GracefulShutdownTimeoutSec  int                                         `json:"graceful_shutdown_timeout_sec"`
+	MaxHeaderBytes              int                                         `json:"max_header_bytes"`
+	MaxConcurrentRequests       int                                         `json:"max_concurrent_requests"`
+	MaxQueuedRequests           int                                         `json:"max_queued_requests"`
+	QueuedRequestTimeoutMS      int                                         `json:"queued_request_timeout_ms"`
+	MaxConcurrentProxyRequests  int                                         `json:"max_concurrent_proxy_requests"`
+	MaxQueuedProxyRequests      int                                         `json:"max_queued_proxy_requests"`
+	QueuedProxyRequestTimeoutMS int                                         `json:"queued_proxy_request_timeout_ms"`
+	ProxyProtocol               settingsListenerAdminProxyProtocolConfig    `json:"proxy_protocol"`
+	TLS                         settingsListenerAdminServerTLSConfig        `json:"tls"`
+	HTTP3                       settingsListenerAdminServerHTTP3Config      `json:"http3"`
 }
 
 type settingsListenerAdminRuntimeConfig struct {
@@ -115,6 +125,7 @@ type settingsListenerAdminPersistentStorageGCSConfig struct {
 type settingsListenerAdminPathsConfig struct {
 	ProxyConfigFile          string `json:"proxy_config_file"`
 	SiteConfigFile           string `json:"site_config_file"`
+	TLSBindingConfigFile     string `json:"tls_binding_config_file"`
 	PHPRuntimeInventoryFile  string `json:"php_runtime_inventory_file"`
 	PSGIRuntimeInventoryFile string `json:"psgi_runtime_inventory_file"`
 	VhostConfigFile          string `json:"vhost_config_file"`
@@ -270,75 +281,77 @@ type settingsListenerAdminSecretStatus struct {
 }
 
 type settingsListenerAdminRuntimeStatus struct {
-	RequestCountryConfiguredMode       string                 `json:"request_country_configured_mode"`
-	RequestCountryEffectiveMode        string                 `json:"request_country_effective_mode"`
-	RequestCountryManagedPath          string                 `json:"request_country_managed_path"`
-	RequestCountryLoaded               bool                   `json:"request_country_loaded"`
-	RequestCountryDBSizeBytes          int64                  `json:"request_country_db_size_bytes"`
-	RequestCountryDBModTime            string                 `json:"request_country_db_mod_time"`
-	RequestCountryLastError            string                 `json:"request_country_last_error"`
-	ListenAddr                         string                 `json:"listen_addr"`
-	APIBasePath                        string                 `json:"api_base_path"`
-	UIBasePath                         string                 `json:"ui_base_path"`
-	AdminListenAddr                    string                 `json:"admin_listen_addr"`
-	ServerTLSEnabled                   bool                   `json:"server_tls_enabled"`
-	ServerTLSSource                    string                 `json:"server_tls_source"`
-	ServerTLSMinVersion                string                 `json:"server_tls_min_version"`
-	ServerTLSRedirectHTTP              bool                   `json:"server_tls_redirect_http"`
-	ServerTLSHTTPRedirectAddr          string                 `json:"server_tls_http_redirect_addr"`
-	ServerHTTP3Enabled                 bool                   `json:"server_http3_enabled"`
-	ServerHTTP3Advertised              bool                   `json:"server_http3_advertised"`
-	ServerHTTP3AltSvc                  string                 `json:"server_http3_alt_svc"`
-	ServerProxyProtocolEnabled         bool                   `json:"server_proxy_protocol_enabled"`
-	ServerProxyProtocolTrustedCIDRs    []string               `json:"server_proxy_protocol_trusted_cidrs"`
-	AdminExternalMode                  string                 `json:"admin_external_mode"`
-	AdminTrustedCIDRs                  []string               `json:"admin_trusted_cidrs"`
-	AdminTrustForwardedFor             bool                   `json:"admin_trust_forwarded_for"`
-	AdminProxyProtocolEnabled          bool                   `json:"admin_proxy_protocol_enabled"`
-	AdminProxyProtocolTrustedCIDRs     []string               `json:"admin_proxy_protocol_trusted_cidrs"`
-	AdminReadOnly                      bool                   `json:"admin_read_only"`
-	AdminRateLimitEnabled              bool                   `json:"admin_rate_limit_enabled"`
-	AdminRateLimitRPS                  int                    `json:"admin_rate_limit_rps"`
-	AdminRateLimitBurst                int                    `json:"admin_rate_limit_burst"`
-	AdminRateLimitStatusCode           int                    `json:"admin_rate_limit_status_code"`
-	AdminRateLimitRetryAfterSec        int                    `json:"admin_rate_limit_retry_after_seconds"`
-	RuntimeGOMAXPROCS                  int                    `json:"runtime_gomaxprocs"`
-	RuntimeMemoryLimitMB               int                    `json:"runtime_memory_limit_mb"`
-	ServerGracefulShutdownTimeoutSec   int                    `json:"server_graceful_shutdown_timeout_sec"`
-	ServerMaxConcurrentReqs            int                    `json:"server_max_concurrent_requests"`
-	ServerMaxQueuedReqs                int                    `json:"server_max_queued_requests"`
-	ServerQueuedTimeoutMS              int                    `json:"server_queued_request_timeout_ms"`
-	ServerMaxConcurrentProxy           int                    `json:"server_max_concurrent_proxy_requests"`
-	ServerMaxQueuedProxy               int                    `json:"server_max_queued_proxy_requests"`
-	ServerQueuedProxyTimeoutMS         int                    `json:"server_queued_proxy_request_timeout_ms"`
-	ProxyEngineMode                    string                 `json:"proxy_engine_mode"`
-	WAFEngineMode                      string                 `json:"waf_engine_mode"`
-	WAFEngineModes                     []wafengine.Capability `json:"waf_engine_modes"`
-	EdgeEnabled                        bool                   `json:"edge_enabled"`
-	EdgeDeviceAuthEnabled              bool                   `json:"edge_device_auth_enabled"`
-	EdgeDeviceStatusRefreshIntervalSec int                    `json:"edge_device_status_refresh_interval_sec"`
-	RemoteSSHCenterEnabled             bool                   `json:"remote_ssh_center_enabled"`
-	RemoteSSHGatewayEnabled            bool                   `json:"remote_ssh_gateway_enabled"`
-	RemoteSSHGatewayEmbeddedEnabled    bool                   `json:"remote_ssh_gateway_embedded_enabled"`
-	StorageDBDriver                    string                 `json:"storage_db_driver"`
-	StorageDBPath                      string                 `json:"storage_db_path"`
-	StorageDBRetentionDays             int                    `json:"storage_db_retention_days"`
-	StorageDBSyncIntervalSec           int                    `json:"storage_db_sync_interval_sec"`
-	StorageFileRotateBytes             int64                  `json:"storage_file_rotate_bytes"`
-	StorageFileMaxBytes                int64                  `json:"storage_file_max_bytes"`
-	StorageFileRetentionDays           int                    `json:"storage_file_retention_days"`
-	PersistentStorageBackend           string                 `json:"persistent_storage_backend"`
-	PersistentStorageLocalBaseDir      string                 `json:"persistent_storage_local_base_dir"`
-	PersistentStorageS3Bucket          string                 `json:"persistent_storage_s3_bucket"`
-	PersistentStorageS3Region          string                 `json:"persistent_storage_s3_region"`
-	PersistentStorageS3Endpoint        string                 `json:"persistent_storage_s3_endpoint"`
-	PersistentStorageS3Prefix          string                 `json:"persistent_storage_s3_prefix"`
-	PersistentStorageS3ForcePathStyle  bool                   `json:"persistent_storage_s3_force_path_style"`
-	TracingEnabled                     bool                   `json:"tracing_enabled"`
-	TracingServiceName                 string                 `json:"tracing_service_name"`
-	TracingOTLPEndpoint                string                 `json:"tracing_otlp_endpoint"`
-	TracingInsecure                    bool                   `json:"tracing_insecure"`
-	TracingSampleRatio                 float64                `json:"tracing_sample_ratio"`
+	RequestCountryConfiguredMode       string                                      `json:"request_country_configured_mode"`
+	RequestCountryEffectiveMode        string                                      `json:"request_country_effective_mode"`
+	RequestCountryManagedPath          string                                      `json:"request_country_managed_path"`
+	RequestCountryLoaded               bool                                        `json:"request_country_loaded"`
+	RequestCountryDBSizeBytes          int64                                       `json:"request_country_db_size_bytes"`
+	RequestCountryDBModTime            string                                      `json:"request_country_db_mod_time"`
+	RequestCountryLastError            string                                      `json:"request_country_last_error"`
+	ListenAddr                         string                                      `json:"listen_addr"`
+	APIBasePath                        string                                      `json:"api_base_path"`
+	UIBasePath                         string                                      `json:"ui_base_path"`
+	AdminListenAddr                    string                                      `json:"admin_listen_addr"`
+	ServerTLSEnabled                   bool                                        `json:"server_tls_enabled"`
+	ServerTLSSource                    string                                      `json:"server_tls_source"`
+	ServerTLSMinVersion                string                                      `json:"server_tls_min_version"`
+	ServerTLSRedirectHTTP              bool                                        `json:"server_tls_redirect_http"`
+	ServerTLSHTTPRedirectAddr          string                                      `json:"server_tls_http_redirect_addr"`
+	ServerPublicListenersConfigured    bool                                        `json:"server_public_listeners_configured"`
+	ServerPublicListeners              []settingsListenerAdminPublicListenerConfig `json:"server_public_listeners"`
+	ServerHTTP3Enabled                 bool                                        `json:"server_http3_enabled"`
+	ServerHTTP3Advertised              bool                                        `json:"server_http3_advertised"`
+	ServerHTTP3AltSvc                  string                                      `json:"server_http3_alt_svc"`
+	ServerProxyProtocolEnabled         bool                                        `json:"server_proxy_protocol_enabled"`
+	ServerProxyProtocolTrustedCIDRs    []string                                    `json:"server_proxy_protocol_trusted_cidrs"`
+	AdminExternalMode                  string                                      `json:"admin_external_mode"`
+	AdminTrustedCIDRs                  []string                                    `json:"admin_trusted_cidrs"`
+	AdminTrustForwardedFor             bool                                        `json:"admin_trust_forwarded_for"`
+	AdminProxyProtocolEnabled          bool                                        `json:"admin_proxy_protocol_enabled"`
+	AdminProxyProtocolTrustedCIDRs     []string                                    `json:"admin_proxy_protocol_trusted_cidrs"`
+	AdminReadOnly                      bool                                        `json:"admin_read_only"`
+	AdminRateLimitEnabled              bool                                        `json:"admin_rate_limit_enabled"`
+	AdminRateLimitRPS                  int                                         `json:"admin_rate_limit_rps"`
+	AdminRateLimitBurst                int                                         `json:"admin_rate_limit_burst"`
+	AdminRateLimitStatusCode           int                                         `json:"admin_rate_limit_status_code"`
+	AdminRateLimitRetryAfterSec        int                                         `json:"admin_rate_limit_retry_after_seconds"`
+	RuntimeGOMAXPROCS                  int                                         `json:"runtime_gomaxprocs"`
+	RuntimeMemoryLimitMB               int                                         `json:"runtime_memory_limit_mb"`
+	ServerGracefulShutdownTimeoutSec   int                                         `json:"server_graceful_shutdown_timeout_sec"`
+	ServerMaxConcurrentReqs            int                                         `json:"server_max_concurrent_requests"`
+	ServerMaxQueuedReqs                int                                         `json:"server_max_queued_requests"`
+	ServerQueuedTimeoutMS              int                                         `json:"server_queued_request_timeout_ms"`
+	ServerMaxConcurrentProxy           int                                         `json:"server_max_concurrent_proxy_requests"`
+	ServerMaxQueuedProxy               int                                         `json:"server_max_queued_proxy_requests"`
+	ServerQueuedProxyTimeoutMS         int                                         `json:"server_queued_proxy_request_timeout_ms"`
+	ProxyEngineMode                    string                                      `json:"proxy_engine_mode"`
+	WAFEngineMode                      string                                      `json:"waf_engine_mode"`
+	WAFEngineModes                     []wafengine.Capability                      `json:"waf_engine_modes"`
+	EdgeEnabled                        bool                                        `json:"edge_enabled"`
+	EdgeDeviceAuthEnabled              bool                                        `json:"edge_device_auth_enabled"`
+	EdgeDeviceStatusRefreshIntervalSec int                                         `json:"edge_device_status_refresh_interval_sec"`
+	RemoteSSHCenterEnabled             bool                                        `json:"remote_ssh_center_enabled"`
+	RemoteSSHGatewayEnabled            bool                                        `json:"remote_ssh_gateway_enabled"`
+	RemoteSSHGatewayEmbeddedEnabled    bool                                        `json:"remote_ssh_gateway_embedded_enabled"`
+	StorageDBDriver                    string                                      `json:"storage_db_driver"`
+	StorageDBPath                      string                                      `json:"storage_db_path"`
+	StorageDBRetentionDays             int                                         `json:"storage_db_retention_days"`
+	StorageDBSyncIntervalSec           int                                         `json:"storage_db_sync_interval_sec"`
+	StorageFileRotateBytes             int64                                       `json:"storage_file_rotate_bytes"`
+	StorageFileMaxBytes                int64                                       `json:"storage_file_max_bytes"`
+	StorageFileRetentionDays           int                                         `json:"storage_file_retention_days"`
+	PersistentStorageBackend           string                                      `json:"persistent_storage_backend"`
+	PersistentStorageLocalBaseDir      string                                      `json:"persistent_storage_local_base_dir"`
+	PersistentStorageS3Bucket          string                                      `json:"persistent_storage_s3_bucket"`
+	PersistentStorageS3Region          string                                      `json:"persistent_storage_s3_region"`
+	PersistentStorageS3Endpoint        string                                      `json:"persistent_storage_s3_endpoint"`
+	PersistentStorageS3Prefix          string                                      `json:"persistent_storage_s3_prefix"`
+	PersistentStorageS3ForcePathStyle  bool                                        `json:"persistent_storage_s3_force_path_style"`
+	TracingEnabled                     bool                                        `json:"tracing_enabled"`
+	TracingServiceName                 string                                      `json:"tracing_service_name"`
+	TracingOTLPEndpoint                string                                      `json:"tracing_otlp_endpoint"`
+	TracingInsecure                    bool                                        `json:"tracing_insecure"`
+	TracingSampleRatio                 float64                                     `json:"tracing_sample_ratio"`
 }
 
 type settingsListenerAdminPutBody struct {
@@ -504,10 +517,56 @@ func persistSettingsAppConfig(next config.AppConfigFile, expectedETag string) (s
 	return rec.ETag, nil
 }
 
+func buildSettingsPublicListeners(listeners []config.AppServerPublicListenerConfig) []settingsListenerAdminPublicListenerConfig {
+	out := make([]settingsListenerAdminPublicListenerConfig, 0, len(listeners))
+	for _, listener := range listeners {
+		out = append(out, settingsListenerAdminPublicListenerConfig{
+			Name:         listener.Name,
+			ListenAddr:   listener.ListenAddr,
+			Protocol:     listener.Protocol,
+			HTTPBehavior: listener.HTTPBehavior,
+			RedirectTo:   listener.RedirectTo,
+			Enabled:      listener.Enabled,
+		})
+	}
+	return out
+}
+
+func applySettingsPublicListeners(listeners []settingsListenerAdminPublicListenerConfig) []config.AppServerPublicListenerConfig {
+	out := make([]config.AppServerPublicListenerConfig, 0, len(listeners))
+	for _, listener := range listeners {
+		out = append(out, config.AppServerPublicListenerConfig{
+			Name:         listener.Name,
+			ListenAddr:   listener.ListenAddr,
+			Protocol:     listener.Protocol,
+			HTTPBehavior: listener.HTTPBehavior,
+			RedirectTo:   listener.RedirectTo,
+			Enabled:      listener.Enabled,
+		})
+	}
+	return out
+}
+
+func buildRuntimePublicListeners(listeners []config.ServerPublicListener) []settingsListenerAdminPublicListenerConfig {
+	out := make([]settingsListenerAdminPublicListenerConfig, 0, len(listeners))
+	for _, listener := range listeners {
+		out = append(out, settingsListenerAdminPublicListenerConfig{
+			Name:         listener.Name,
+			ListenAddr:   listener.ListenAddr,
+			Protocol:     listener.Protocol,
+			HTTPBehavior: listener.HTTPBehavior,
+			RedirectTo:   listener.RedirectTo,
+			Enabled:      listener.Enabled,
+		})
+	}
+	return out
+}
+
 func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListenerAdminConfig {
 	return settingsListenerAdminConfig{
 		Server: settingsListenerAdminServerConfig{
 			ListenAddr:                  cfg.Server.ListenAddr,
+			PublicListeners:             buildSettingsPublicListeners(cfg.Server.PublicListeners),
 			ReadTimeoutSec:              cfg.Server.ReadTimeoutSec,
 			ReadHeaderTimeoutSec:        cfg.Server.ReadHeaderTimeoutSec,
 			WriteTimeoutSec:             cfg.Server.WriteTimeoutSec,
@@ -606,6 +665,7 @@ func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListener
 		Paths: settingsListenerAdminPathsConfig{
 			ProxyConfigFile:          cfg.Paths.ProxyConfigFile,
 			SiteConfigFile:           cfg.Paths.SiteConfigFile,
+			TLSBindingConfigFile:     cfg.Paths.TLSBindingConfigFile,
 			PHPRuntimeInventoryFile:  cfg.Paths.PHPRuntimeInventoryFile,
 			PSGIRuntimeInventoryFile: cfg.Paths.PSGIRuntimeInventoryFile,
 			VhostConfigFile:          cfg.Paths.VhostConfigFile,
@@ -694,6 +754,7 @@ func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListener
 
 func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsListenerAdminConfig) {
 	cfg.Server.ListenAddr = next.Server.ListenAddr
+	cfg.Server.PublicListeners = applySettingsPublicListeners(next.Server.PublicListeners)
 	cfg.Server.ReadTimeoutSec = next.Server.ReadTimeoutSec
 	cfg.Server.ReadHeaderTimeoutSec = next.Server.ReadHeaderTimeoutSec
 	cfg.Server.WriteTimeoutSec = next.Server.WriteTimeoutSec
@@ -761,6 +822,7 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 
 	cfg.Paths.ProxyConfigFile = next.Paths.ProxyConfigFile
 	cfg.Paths.SiteConfigFile = next.Paths.SiteConfigFile
+	cfg.Paths.TLSBindingConfigFile = next.Paths.TLSBindingConfigFile
 	cfg.Paths.PHPRuntimeInventoryFile = next.Paths.PHPRuntimeInventoryFile
 	if strings.TrimSpace(next.Paths.PSGIRuntimeInventoryFile) != "" {
 		cfg.Paths.PSGIRuntimeInventoryFile = next.Paths.PSGIRuntimeInventoryFile
@@ -849,6 +911,8 @@ func buildSettingsListenerAdminRuntimeStatus() settingsListenerAdminRuntimeStatu
 		ServerTLSMinVersion:                config.ServerTLSMinVersion,
 		ServerTLSRedirectHTTP:              config.ServerTLSRedirectHTTP,
 		ServerTLSHTTPRedirectAddr:          config.ServerTLSHTTPRedirectAddr,
+		ServerPublicListenersConfigured:    config.ServerPublicListenersConfigured,
+		ServerPublicListeners:              buildRuntimePublicListeners(config.ServerPublicListeners),
 		ServerHTTP3Enabled:                 config.ServerHTTP3Enabled,
 		ServerHTTP3Advertised:              serverHTTP3Status.Advertised,
 		ServerHTTP3AltSvc:                  serverHTTP3Status.AltSvc,

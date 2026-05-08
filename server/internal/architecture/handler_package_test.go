@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	handlerGoFileCeiling     = 139
-	handlerProdGoFileCeiling = 64
+	handlerGoFileCeiling     = 140
+	handlerProdGoFileCeiling = 65
 )
 
 func TestHandlerPackageDoesNotGrow(t *testing.T) {

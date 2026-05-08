@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"log"
 	"net/http"
 	"os"
@@ -48,6 +49,8 @@ func runMain(args []string) {
 		runDBImportPreviewCommand()
 	case serverCommandDBImportWAFRuleAssets:
 		runDBImportWAFRuleAssetsCommand()
+	case serverCommandAdminBootstrap:
+		runAdminBootstrapCommand()
 	case serverCommandPreviewPrintTopology:
 		runPreviewPrintTopologyCommand()
 	case serverCommandRunScheduledTasks:
@@ -154,6 +157,9 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 	defer runtimeAppsShutdown()
 	if err := handler.InitSiteRuntime(config.SiteConfigFile, config.ProxyRollbackMax); err != nil {
 		fatalf("[FATAL] failed to initialize site runtime: %v", err)
+	}
+	if err := handler.InitTLSBindingRuntime(config.TLSBindingConfigFile, config.ProxyRollbackMax); err != nil {
+		fatalf("[FATAL] failed to initialize tls binding runtime: %v", err)
 	}
 	if err := handler.InitProxyRuntime(config.ProxyConfigFile, config.ProxyRollbackMax); err != nil {
 		fatalf("[FATAL] failed to initialize proxy runtime: %v", err)
@@ -422,6 +428,34 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 		}, adminSrv.Shutdown, adminSrv.Close)
 	}
 
+	if config.ServerPublicListenersConfigured {
+		var tlsConfig *tls.Config
+		var tlsRuntime *managedServerTLSRuntime
+		if publicListenersNeedTLS(config.ServerPublicListeners) {
+			tlsConfig, tlsRuntime, err = buildManagedServerTLSRuntimeConfigAllowEmpty()
+			if err != nil {
+				log.Printf("[SERVER][WARN] HTTPS public listeners disabled until server TLS is configured: %v", err)
+				tlsConfig = nil
+				tlsRuntime = nil
+			}
+		}
+		if err := runConfiguredPublicListeners(lifecycle, activation, publicHandler, publicSrv, publicListenerRuntime, tlsConfig, tlsRuntime); err != nil {
+			fatalf("[FATAL] start configured public listeners: %v", err)
+		}
+		log.Printf("[SERVER] configured public listeners=%d tls=%t", len(config.ServerPublicListeners), tlsConfig != nil)
+		if config.ServerProxyProtocolEnabled {
+			log.Printf("[SERVER] public proxy protocol enabled trusted_cidrs=%s", strings.Join(config.ServerProxyProtocolTrustedCIDRs, ","))
+		}
+		activation.CloseUnused()
+		if err := notifyWorkerReady(workerReady); err != nil {
+			fatalf("[WORKER][FATAL] readiness notify failed: %v", err)
+		}
+		if err := lifecycle.WaitWithSignals(sigCh); err != nil {
+			fatalf("[FATAL] server lifecycle stopped: %v", err)
+		}
+		return
+	}
+
 	publicListener, publicInherited, err := buildManagedTCPListenerForRole("public", config.ListenAddr, publicListenerRuntime, activation)
 	if err != nil {
 		fatalf("[FATAL] create public listener: %v", err)
@@ -561,6 +595,20 @@ func runDBImportWAFRuleAssetsCommand() {
 		log.Fatalf("[DB][IMPORT][WAF_RULE_ASSETS][FATAL] %v", err)
 	}
 	log.Printf("[DB][IMPORT][WAF_RULE_ASSETS] completed")
+}
+
+func runAdminBootstrapCommand() {
+	config.LoadEnv()
+	initRuntimeDBStoreOrFatal("[ADMIN][BOOTSTRAP][DB]")
+	created, err := handler.EnsureAdminBootstrapOwnerFromEnv()
+	if err != nil {
+		log.Fatalf("[ADMIN][BOOTSTRAP][FATAL] %v", err)
+	}
+	if created {
+		log.Printf("[ADMIN][BOOTSTRAP] created initial owner from environment")
+		return
+	}
+	log.Printf("[ADMIN][BOOTSTRAP] skipped; admin user already exists or bootstrap env is empty")
 }
 
 func runScheduledTasksCommand() {

@@ -80,6 +80,53 @@ only enables removal from the latest reported usage state, and Gateway checks
 Runtime App references plus running processes again immediately before deleting
 local runtime files.
 
+`Runtime App Deploy` is an experimental selected-device page for small
+application package delivery to `php-fpm` and `psgi` Runtime Apps. Center stores
+deployment profiles, immutable ZIP packages, package file manifests, diff
+previews, and deployment history. Gateway receives one pending app deployment
+request during polling, downloads the signed package, stages a full replacement
+release, switches the app-level `current` symlink, then reloads or restarts the
+runtime when requested.
+
+Each profile can contain multiple logical roots. The Gateway still switches only
+one app-level symlink:
+
+```text
+data/app-deployments/<app-id>/current
+```
+
+For example, PHP-FPM commonly maps package `public/` to `current/public`. PSGI
+can map package `app/` and `static/` to separate runtime fields under the same
+`current` release. Gateway blocks deploy and rollback if the Runtime App no
+longer points at the expected managed paths, so Center cannot replace an
+arbitrary path.
+
+After baseline adoption or the first successful Center-managed deploy, Gateway
+rewrites the matching Runtime Apps binding to the managed path. For PHP-FPM,
+that usually means `document_root` changes from the original source under
+`data/vhosts/...` to:
+
+```text
+data/app-deployments/<app-id>/current/public
+```
+
+For PSGI, `app_root` and/or `document_root` are rewritten to the corresponding
+`current/<runtime-subpath>` entries. The original `data/vhosts/...` directory is
+the baseline source only; editing it later does not update the Center-managed
+Runtime App. Make subsequent changes by uploading a new Center package, or
+intentionally move the Runtime App binding back to a local path before returning
+to local-only management.
+
+Baseline adoption is explicit. Center must create an adoption request before a
+Gateway uploads current source as the first Center-known package. Manual
+rollback is done by choosing an older saved package, reviewing the diff, and
+confirming the rollback request; there is no automatic rollback.
+
+Center exposes this page only when
+`TUKUYOMI_CENTER_EXPERIMENTAL_APP_DEPLOY_ENABLED` is enabled. The flag keeps the
+experimental app-delivery surface separate from the core enrollment and runtime
+artifact flow.
+
 ## Preview URLs
 
 For fleet preview, keep both preview databases if you need to preserve Gateway

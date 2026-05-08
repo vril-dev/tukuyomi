@@ -312,13 +312,14 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	}
 
 	first, err := BootstrapCenterProtectedGateway(context.Background(), CenterProtectedGatewayBootstrapOptions{
-		CenterURL:             "http://127.0.0.1:9092",
-		GatewayAPIBasePath:    "/center-api",
-		CenterAPIBasePath:     "/center-manage-api",
-		CenterUIBasePath:      "/center-ui",
-		DeviceID:              "gateway-a",
-		CenterTLSCABundleFile: "conf/center-ca.pem",
-		CenterTLSServerName:   "center.example.local",
+		CenterURL:                "http://127.0.0.1:9092",
+		GatewayAPIBasePath:       "/center-api",
+		CenterAPIBasePath:        "/center-manage-api",
+		CenterUIBasePath:         "/center-ui",
+		DeviceID:                 "gateway-a",
+		CenterTLSCABundleFile:    "conf/center-ca.pem",
+		CenterTLSServerName:      "center.example.local",
+		GatewayAdminExternalMode: "full_external",
 	})
 	if err != nil {
 		t.Fatalf("BootstrapCenterProtectedGateway prepare: %v", err)
@@ -348,6 +349,9 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	}
 	if cfg.RemoteSSH.Gateway.CenterTLSCABundleFile != "conf/center-ca.pem" || cfg.RemoteSSH.Gateway.CenterTLSServerName != "center.example.local" {
 		t.Fatalf("center tls trust settings were not bootstrapped: %+v", cfg.RemoteSSH.Gateway)
+	}
+	if cfg.Admin.ExternalMode != "full_external" {
+		t.Fatalf("admin external mode=%q want full_external", cfg.Admin.ExternalMode)
 	}
 	proxyCfg, _, found, err := store.loadActiveProxyConfig()
 	if err != nil {
@@ -414,6 +418,19 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	}
 	if status.EnrollmentStatus != edgeEnrollmentStatusApproved || status.CenterURL != "http://127.0.0.1:9092" {
 		t.Fatalf("unexpected current status: %+v", status)
+	}
+}
+
+func TestBootstrapCenterProtectedGatewayRejectsInvalidAdminExternalMode(t *testing.T) {
+	_, err := BootstrapCenterProtectedGateway(context.Background(), CenterProtectedGatewayBootstrapOptions{
+		CenterURL:                "http://127.0.0.1:9092",
+		GatewayAdminExternalMode: "public",
+	})
+	if err == nil {
+		t.Fatal("expected invalid admin external mode error")
+	}
+	if !strings.Contains(err.Error(), "gateway admin external mode") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -2153,6 +2170,285 @@ func writeTestPSGIRuntimeArtifact(t *testing.T, inventoryPath string, runtimeID 
 	if err := os.WriteFile(filepath.Join(runtimeDir, "runtime.json"), append(manifestRaw, '\n'), 0o600); err != nil {
 		t.Fatalf("write runtime.json: %v", err)
 	}
+}
+
+func TestEdgePHPFPMAppDeployRootsUseSourceParentForPublicDocumentRoot(t *testing.T) {
+	roots := edgePHPFPMAppDeployRoots(VhostConfig{
+		DocumentRoot: "data/vhosts/samples/php-site/public",
+	})
+	if len(roots) != 1 {
+		t.Fatalf("len(roots)=%d want 1", len(roots))
+	}
+	root := roots[0]
+	if root.RootID != "source_root" {
+		t.Fatalf("RootID=%q want source_root", root.RootID)
+	}
+	if root.RuntimeField != "document_root" {
+		t.Fatalf("RuntimeField=%q want document_root", root.RuntimeField)
+	}
+	if root.SourcePath != "data/vhosts/samples/php-site" {
+		t.Fatalf("SourcePath=%q want data/vhosts/samples/php-site", root.SourcePath)
+	}
+	if root.PackagePrefix != "" || root.TargetSubpath != "" {
+		t.Fatalf("package/target=%q/%q want root/root", root.PackagePrefix, root.TargetSubpath)
+	}
+	if root.RuntimeSubpath != "public" {
+		t.Fatalf("RuntimeSubpath=%q want public", root.RuntimeSubpath)
+	}
+	if !root.Required {
+		t.Fatalf("Required=false want true")
+	}
+}
+
+func TestEdgePHPFPMAppDeployRootsFallbackForNonPublicDocumentRoot(t *testing.T) {
+	roots := edgePHPFPMAppDeployRoots(VhostConfig{
+		DocumentRoot: "data/vhosts/plain-site",
+	})
+	if len(roots) != 1 {
+		t.Fatalf("len(roots)=%d want 1", len(roots))
+	}
+	root := roots[0]
+	if root.RootID != "document_root" {
+		t.Fatalf("RootID=%q want document_root", root.RootID)
+	}
+	if root.SourcePath != "data/vhosts/plain-site" {
+		t.Fatalf("SourcePath=%q want data/vhosts/plain-site", root.SourcePath)
+	}
+	if root.PackagePrefix != "public" || root.TargetSubpath != "public" || root.RuntimeSubpath != "public" {
+		t.Fatalf("package/target/runtime=%q/%q/%q want public/public/public", root.PackagePrefix, root.TargetSubpath, root.RuntimeSubpath)
+	}
+}
+
+func TestEdgeRuntimeAvailableForAppDeployRequiresInstalledRuntime(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	tmp := t.TempDir()
+	phpInventoryPath := filepath.Join(tmp, "php-inventory.json")
+	psgiInventoryPath := filepath.Join(tmp, "psgi-inventory.json")
+	if err := os.WriteFile(phpInventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write php inventory: %v", err)
+	}
+	if err := os.WriteFile(psgiInventoryPath, []byte(defaultPSGIRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write psgi inventory: %v", err)
+	}
+	if err := InitPHPRuntimeInventoryRuntime(phpInventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+	if err := InitPSGIRuntimeInventoryRuntime(psgiInventoryPath, 2); err != nil {
+		t.Fatalf("InitPSGIRuntimeInventoryRuntime: %v", err)
+	}
+	if ok, message := edgeRuntimeAvailableForAppDeploy("php-fpm", "php85"); ok || !strings.Contains(message, "not installed") {
+		t.Fatalf("php availability ok=%v message=%q want not installed", ok, message)
+	}
+	if ok, message := edgeRuntimeAvailableForAppDeploy("psgi", "perl538"); ok || !strings.Contains(message, "not installed") {
+		t.Fatalf("psgi availability ok=%v message=%q want not installed", ok, message)
+	}
+
+	writeTestPHPRuntimeArtifact(t, phpInventoryPath, "php85", testPHPRuntimeArtifactOptions{})
+	writeTestPSGIRuntimeArtifact(t, psgiInventoryPath, "perl538")
+	if err := InitPHPRuntimeInventoryRuntime(phpInventoryPath, 2); err != nil {
+		t.Fatalf("reinit php inventory: %v", err)
+	}
+	if err := InitPSGIRuntimeInventoryRuntime(psgiInventoryPath, 2); err != nil {
+		t.Fatalf("reinit psgi inventory: %v", err)
+	}
+	if ok, message := edgeRuntimeAvailableForAppDeploy("php-fpm", "php85"); !ok {
+		t.Fatalf("php availability ok=false message=%q", message)
+	}
+	if ok, message := edgeRuntimeAvailableForAppDeploy("psgi", "perl538"); !ok {
+		t.Fatalf("psgi availability ok=false message=%q", message)
+	}
+}
+
+func TestNormalizeEdgeAppDeployRootAllowsSourceRootAndRejectsUnsafeSourcePath(t *testing.T) {
+	root, ok := normalizeEdgeAppDeployRoot(edgeAppDeployRoot{
+		RootID:         "source_root",
+		RuntimeField:   "document_root",
+		SourcePath:     "data/vhosts/app",
+		PackagePrefix:  ".",
+		TargetSubpath:  ".",
+		RuntimeSubpath: "public",
+		Required:       true,
+	})
+	if !ok {
+		t.Fatalf("normalizeEdgeAppDeployRoot rejected valid source root")
+	}
+	if root.SourcePath != "data/vhosts/app" {
+		t.Fatalf("SourcePath=%q want data/vhosts/app", root.SourcePath)
+	}
+	if root.PackagePrefix != "" || root.TargetSubpath != "" {
+		t.Fatalf("package/target=%q/%q want empty", root.PackagePrefix, root.TargetSubpath)
+	}
+	if root.RuntimeSubpath != "public" {
+		t.Fatalf("RuntimeSubpath=%q want public", root.RuntimeSubpath)
+	}
+	for _, sourcePath := range []string{"/srv/app", "etc", "data"} {
+		if _, ok := normalizeEdgeAppDeployRoot(edgeAppDeployRoot{
+			RootID:        "source_root",
+			RuntimeField:  "document_root",
+			SourcePath:    sourcePath,
+			PackagePrefix: ".",
+			TargetSubpath: ".",
+		}); ok {
+			t.Fatalf("normalizeEdgeAppDeployRoot accepted unsafe source path %q", sourcePath)
+		}
+	}
+}
+
+func TestEdgeAppDeployRootForArchivePathAllowsRootPackagePrefix(t *testing.T) {
+	root, rel, ok := edgeAppDeployRootForArchivePath([]edgeAppDeployBoundRoot{{
+		Root: edgeAppDeployRoot{
+			RootID:        "source_root",
+			PackagePrefix: "",
+		},
+	}}, "public/index.php")
+	if !ok {
+		t.Fatalf("edgeAppDeployRootForArchivePath rejected root package prefix")
+	}
+	if root.Root.RootID != "source_root" {
+		t.Fatalf("RootID=%q want source_root", root.Root.RootID)
+	}
+	if rel != "public/index.php" {
+		t.Fatalf("rel=%q want public/index.php", rel)
+	}
+}
+
+func TestEdgeAppDeployBindingRootsRejectsUnsafeAdoptionSourceFallback(t *testing.T) {
+	_, _, err := edgeAppDeployBindingRoots("app-1", VhostConfig{
+		DocumentRoot: "/etc",
+	}, edgeAppDeployDeviceAssignment{
+		Operation: "adopt",
+		Roots: []edgeAppDeployRoot{{
+			RootID:         "source_root",
+			RuntimeField:   "document_root",
+			PackagePrefix:  "",
+			TargetSubpath:  "",
+			RuntimeSubpath: "public",
+			Required:       true,
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "source_path must be under data/vhosts") {
+		t.Fatalf("err=%v want source_path boundary error", err)
+	}
+}
+
+func TestEdgeAppDeployBindingRootsAllowsInitialManagedTransition(t *testing.T) {
+	managedRoot, roots, err := edgeAppDeployBindingRoots("app-1", VhostConfig{
+		DocumentRoot: "data/vhosts/app/public",
+	}, edgeAppDeployDeviceAssignment{
+		Operation: "deploy",
+		Roots: []edgeAppDeployRoot{{
+			RootID:         "source_root",
+			RuntimeField:   "document_root",
+			SourcePath:     "data/vhosts/app/public",
+			PackagePrefix:  "public",
+			TargetSubpath:  "public",
+			RuntimeSubpath: "public",
+			Required:       true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("edgeAppDeployBindingRoots: %v", err)
+	}
+	if !strings.HasSuffix(filepath.ToSlash(managedRoot), "data/app-deployments/app-1") {
+		t.Fatalf("managedRoot=%q", managedRoot)
+	}
+	if len(roots) != 1 {
+		t.Fatalf("roots=%d want 1", len(roots))
+	}
+	if got, want := filepath.ToSlash(roots[0].RuntimePath), filepath.ToSlash(roots[0].SourcePath); got != want {
+		t.Fatalf("RuntimePath=%q SourcePath=%q want initial transition from source path", got, want)
+	}
+	if got := edgeAppDeployManagedRuntimePath("app-1", roots[0].Root); got != "data/app-deployments/app-1/current/public" {
+		t.Fatalf("managed runtime path=%q", got)
+	}
+	if !strings.HasSuffix(filepath.ToSlash(roots[0].ExpectedPath), "data/app-deployments/app-1/current/public") {
+		t.Fatalf("ExpectedPath=%q", roots[0].ExpectedPath)
+	}
+}
+
+func TestEdgeAppDeployBindingRootsRejectsUnexpectedUnmanagedDeployPath(t *testing.T) {
+	_, _, err := edgeAppDeployBindingRoots("app-1", VhostConfig{
+		DocumentRoot: "data/vhosts/other/public",
+	}, edgeAppDeployDeviceAssignment{
+		Operation: "deploy",
+		Roots: []edgeAppDeployRoot{{
+			RootID:         "source_root",
+			RuntimeField:   "document_root",
+			SourcePath:     "data/vhosts/app/public",
+			PackagePrefix:  "public",
+			TargetSubpath:  "public",
+			RuntimeSubpath: "public",
+			Required:       true,
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "must point to data/app-deployments/app-1/current/public") {
+		t.Fatalf("err=%v want managed path error", err)
+	}
+}
+
+func TestExtractEdgeRuntimeArtifactCreatesHardlinks(t *testing.T) {
+	build := buildTestRuntimeArtifactWithHardlink(t)
+	parsed, err := runtimeartifactbundle.Parse(build.Compressed)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	stageDir := t.TempDir()
+	if err := extractEdgeRuntimeArtifactToStage(build.Compressed, parsed, stageDir); err != nil {
+		t.Fatalf("extractEdgeRuntimeArtifactToStage: %v", err)
+	}
+	sourceInfo, err := os.Stat(filepath.Join(stageDir, "rootfs", "usr", "lib", "x86_64-linux-gnu", "ld-linux-x86-64.so.2"))
+	if err != nil {
+		t.Fatalf("stat source: %v", err)
+	}
+	linkInfo, err := os.Stat(filepath.Join(stageDir, "rootfs", "lib", "ld-linux-x86-64.so.2"))
+	if err != nil {
+		t.Fatalf("stat hardlink: %v", err)
+	}
+	if !os.SameFile(sourceInfo, linkInfo) {
+		t.Fatalf("runtime hardlink was not preserved as same file")
+	}
+}
+
+func buildTestRuntimeArtifactWithHardlink(t *testing.T) runtimeartifactbundle.Build {
+	t.Helper()
+	build, err := runtimeartifactbundle.BuildBundle(runtimeartifactbundle.BuildInput{
+		RuntimeFamily:   runtimeartifactbundle.RuntimeFamilyPSGI,
+		RuntimeID:       "perl540",
+		DisplayName:     "Perl 5.40",
+		DetectedVersion: "v5.40.0",
+		Target: runtimeartifactbundle.TargetKey{
+			OS:            "linux",
+			Arch:          "amd64",
+			KernelVersion: "6.8.0-test",
+			DistroID:      "ubuntu",
+			DistroIDLike:  "debian",
+			DistroVersion: "24.04",
+		},
+		BuilderVersion: "test-builder",
+		BuilderProfile: "ubuntu-24.04-amd64",
+		GeneratedAt:    time.Unix(1000, 0).UTC(),
+		Files: []runtimeartifactbundle.File{
+			{
+				ArchivePath: "runtime.json",
+				FileKind:    "metadata",
+				Mode:        0o644,
+				Body:        []byte(`{"runtime_id":"perl540","display_name":"Perl 5.40","detected_version":"v5.40.0","perl_path":"data/psgi/binaries/perl540/perl","starman_path":"data/psgi/binaries/perl540/starman","source":"bundled"}`),
+			},
+			{ArchivePath: "modules.json", FileKind: "metadata", Mode: 0o644, Body: []byte(`["plack","starman"]`)},
+			{ArchivePath: "perl", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "starman", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "rootfs/usr/local/bin/perl", FileKind: "rootfs", Mode: 0o755, Body: []byte("perl-binary")},
+			{ArchivePath: "rootfs/usr/local/bin/starman", FileKind: "rootfs", Mode: 0o755, Body: []byte("starman-binary")},
+			{ArchivePath: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2", FileKind: "rootfs", Mode: 0o755, Body: []byte("loader")},
+			{ArchivePath: "rootfs/lib/ld-linux-x86-64.so.2", FileKind: "rootfs", LinkTarget: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	return build
 }
 
 func quoteJSON(value string) string {

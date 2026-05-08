@@ -212,8 +212,6 @@ issue tracker にだけ残ります。
 
 ## 7.8　ここまでの整理
 
-
-
 - 誤検知への対処は、**証跡 → 影響範囲 → 狭い緩和 → CRS 再点検 → 検証 →
   変更管理** の 6 ステップで進める。
 - 緩和の優先順は、**`extra_rule` による per-path snippet → `ctl:ruleRemoveById`

@@ -15,9 +15,19 @@ import { useI18n } from "@/lib/i18n";
 import { formatRevision } from "@/lib/revision";
 import { computeSettingsRuntimeDrift } from "@/lib/settingsConfig";
 
+type PublicListenerConfig = {
+  name: string;
+  listen_addr: string;
+  protocol: "http" | "https";
+  http_behavior?: "serve" | "redirect";
+  redirect_to?: string;
+  enabled: boolean;
+};
+
 type ListenerAdminConfig = {
   server: {
     listen_addr: string;
+    public_listeners?: PublicListenerConfig[];
     read_timeout_sec: number;
     read_header_timeout_sec: number;
     write_timeout_sec: number;
@@ -115,6 +125,7 @@ type ListenerAdminConfig = {
   paths: {
     proxy_config_file: string;
     site_config_file: string;
+    tls_binding_config_file: string;
     php_runtime_inventory_file: string;
     psgi_runtime_inventory_file: string;
     vhost_config_file: string;
@@ -196,6 +207,8 @@ type ListenerAdminRuntime = {
   server_tls_min_version?: string;
   server_tls_redirect_http?: boolean;
   server_tls_http_redirect_addr?: string;
+  server_public_listeners_configured?: boolean;
+  server_public_listeners?: PublicListenerConfig[];
   server_http3_enabled?: boolean;
   server_http3_advertised?: boolean;
   server_http3_alt_svc?: string;
@@ -280,6 +293,7 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
   return {
     server: {
       listen_addr: ":9090",
+      public_listeners: [],
       read_timeout_sec: 30,
       read_header_timeout_sec: 5,
       write_timeout_sec: 0,
@@ -377,6 +391,7 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
     paths: {
       proxy_config_file: "conf/proxy.json",
       site_config_file: "conf/sites.json",
+      tls_binding_config_file: "conf/tls-bindings.json",
       php_runtime_inventory_file: "data/php-fpm/inventory.json",
       psgi_runtime_inventory_file: "data/psgi/inventory.json",
       vhost_config_file: "data/php-fpm/vhosts.json",
@@ -446,17 +461,31 @@ function cloneListenerAdminConfig(
   return JSON.parse(JSON.stringify(value)) as ListenerAdminConfig;
 }
 
+function normalizePublicListenerConfig(listener: Partial<PublicListenerConfig>): PublicListenerConfig {
+  return {
+    name: String(listener.name ?? ""),
+    listen_addr: String(listener.listen_addr ?? ""),
+    protocol: listener.protocol === "https" ? "https" : "http",
+    http_behavior: listener.http_behavior === "redirect" ? "redirect" : "serve",
+    redirect_to: String(listener.redirect_to ?? ""),
+    enabled: listener.enabled !== false,
+  };
+}
+
 function normalizeListenerAdminConfig(
   value: Partial<ListenerAdminConfig> | null | undefined,
 ): ListenerAdminConfig {
   const base = createEmptyListenerAdminConfig();
   if (!value) return base;
-  return {
+  const next = {
     ...base,
     ...value,
     server: {
       ...base.server,
       ...value.server,
+      public_listeners: Array.isArray(value.server?.public_listeners)
+        ? value.server.public_listeners.map((listener) => normalizePublicListenerConfig(listener))
+        : [],
       proxy_protocol: {
         ...base.server.proxy_protocol,
         ...value.server?.proxy_protocol,
@@ -581,6 +610,24 @@ function normalizeListenerAdminConfig(
       },
     },
   };
+  if (next.server.public_listeners.length === 0) {
+    next.server.public_listeners = [
+      {
+        name: "setup",
+        listen_addr: next.server.listen_addr || ":9090",
+        protocol: "http",
+        http_behavior: "serve",
+        redirect_to: "",
+        enabled: true,
+      },
+    ];
+  }
+  next.server.listen_addr =
+    next.server.public_listeners.find((listener) => listener.enabled !== false)?.listen_addr ||
+    next.server.public_listeners[0]?.listen_addr ||
+    next.server.listen_addr;
+  next.server.tls.redirect_http = false;
+  return next;
 }
 
 function stringListToMultiline(values: string[] | null | undefined) {
@@ -776,14 +823,15 @@ export default function SettingsPanel() {
     setConfigError("");
     setConfigNotice("");
     try {
+      const submittedConfig = normalizeListenerAdminConfig(listenerAdminConfig);
       const data = await apiPostJson<ListenerAdminResponse>(
         "/settings/listener-admin/validate",
         {
-          config: listenerAdminConfig,
+          config: submittedConfig,
         },
       );
       const next = cloneListenerAdminConfig(
-        normalizeListenerAdminConfig(data.config ?? listenerAdminConfig),
+        normalizeListenerAdminConfig(data.config ?? submittedConfig),
       );
       setListenerAdminConfig(next);
       setSecretStatus(data.secrets ?? createEmptySecretStatus());
@@ -805,13 +853,14 @@ export default function SettingsPanel() {
     setConfigError("");
     setConfigNotice("");
     try {
+      const submittedConfig = normalizeListenerAdminConfig(listenerAdminConfig);
       const data = await apiPutJson<ListenerAdminResponse>(
         "/settings/listener-admin",
-        { config: listenerAdminConfig },
+        { config: submittedConfig },
         { headers: { "If-Match": etag } },
       );
       const next = cloneListenerAdminConfig(
-        normalizeListenerAdminConfig(data.config ?? listenerAdminConfig),
+        normalizeListenerAdminConfig(data.config ?? submittedConfig),
       );
       setListenerAdminConfig(next);
       setServerConfig(cloneListenerAdminConfig(next));
@@ -832,6 +881,86 @@ export default function SettingsPanel() {
     }
   }
 
+  function addPublicListener() {
+    setListenerAdminConfig((current) => {
+      const safeExisting = normalizeListenerAdminConfig(current).server.public_listeners ?? [];
+      const hasHTTPS = safeExisting.some((listener) => listener.protocol === "https");
+      const hasHTTPName = safeExisting.some((listener) => listener.name === "http");
+      const nextListener = {
+        name: hasHTTPS ? (hasHTTPName ? `http-${safeExisting.length + 1}` : "http") : "https",
+        listen_addr: hasHTTPS ? ":80" : ":443",
+        protocol: hasHTTPS ? "http" : "https",
+        http_behavior: hasHTTPS ? "redirect" : "serve",
+        redirect_to: hasHTTPS ? safeExisting.find((listener) => listener.protocol === "https")?.name ?? "" : "",
+        enabled: true,
+      } satisfies PublicListenerConfig;
+      return {
+        ...current,
+        server: {
+          ...current.server,
+          tls: {
+            ...current.server.tls,
+            enabled: nextListener.protocol === "https" ? true : current.server.tls.enabled,
+            redirect_http: false,
+          },
+          listen_addr: safeExisting[0]?.listen_addr || current.server.listen_addr,
+          public_listeners: [...safeExisting, nextListener],
+        },
+      };
+    });
+  }
+
+  function removePublicListener(index: number) {
+    if (index === 0) return;
+    setListenerAdminConfig((current) => ({
+      ...current,
+      server: {
+        ...current.server,
+        public_listeners: (current.server.public_listeners ?? []).filter((_, itemIndex) => itemIndex !== index),
+      },
+    }));
+  }
+
+  function updateVisiblePublicListener(index: number, patch: Partial<PublicListenerConfig>) {
+    setListenerAdminConfig((current) => {
+      const normalized = normalizeListenerAdminConfig(current);
+      const listeners = (normalized.server.public_listeners ?? []).map((listener, itemIndex) => {
+        if (itemIndex !== index) return listener;
+        const next = { ...listener, ...patch };
+        if (itemIndex === 0) {
+          next.name = listener.name || "setup";
+          next.protocol = "http";
+          next.http_behavior = "serve";
+          next.enabled = true;
+          next.redirect_to = "";
+        }
+        return next;
+      });
+      if (!listeners.some((listener) => listener.enabled !== false)) {
+        listeners[0] = { ...listeners[0], enabled: true };
+      }
+      return {
+        ...normalized,
+        server: {
+          ...normalized.server,
+          listen_addr: listeners[0]?.listen_addr || normalized.server.listen_addr,
+          tls: {
+            ...normalized.server.tls,
+            enabled: listeners.some((listener) => listener.enabled !== false && listener.protocol === "https")
+              ? true
+              : normalized.server.tls.enabled,
+            redirect_http: false,
+          },
+          public_listeners: listeners,
+        },
+      };
+    });
+  }
+
+  function removeVisiblePublicListener(index: number) {
+    removePublicListener(index);
+  }
+
   function renderPathField(key: ListenerAdminPathKey, label: string) {
     return (
       <Field key={key} label={tx(label)}>
@@ -848,6 +977,9 @@ export default function SettingsPanel() {
       </Field>
     );
   }
+
+  const configuredPublicListeners = listenerAdminConfig.server.public_listeners ?? [];
+  const publicListenerRows = configuredPublicListeners;
 
   return (
     <div className="w-full p-4 space-y-4">
@@ -960,22 +1092,87 @@ export default function SettingsPanel() {
                   </p>
                 </div>
 
-                <Field label={tx("Public Listen Address")}>
-                  <input
-                    value={listenerAdminConfig.server.listen_addr}
-                    onChange={(e) =>
-                      setListenerAdminConfig((current) => ({
-                        ...current,
-                        server: {
-                          ...current.server,
-                          listen_addr: e.target.value,
-                        },
-                      }))
-                    }
-                    className="w-full rounded border border-neutral-200 bg-white"
-                    placeholder=":9090"
-                  />
-                </Field>
+                <div className="space-y-2">
+                  <div className="flex justify-start">
+                    <button type="button" onClick={addPublicListener} disabled={readOnly}>
+                      {tx("Add listener")}
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                      {publicListenerRows.map((listener, index) => (
+                        <div key={`${listener.name}-${index}`} className="grid gap-2 rounded border border-neutral-200 bg-white p-2 xl:grid-cols-[1fr_1.2fr_.8fr_1fr_1fr_auto]">
+                          <Field label={tx("Name")}>
+                            <input
+                              value={listener.name}
+                              onChange={(e) => updateVisiblePublicListener(index, { name: e.target.value })}
+                              className="w-full rounded border border-neutral-200 bg-white"
+                              placeholder="https"
+                              disabled={index === 0}
+                            />
+                          </Field>
+                          <Field label={tx("Listen Address")}>
+                            <input
+                              value={listener.listen_addr}
+                              onChange={(e) => updateVisiblePublicListener(index, { listen_addr: e.target.value })}
+                              className="w-full rounded border border-neutral-200 bg-white"
+                              placeholder=":443"
+                            />
+                          </Field>
+                          <Field label={tx("Protocol")}>
+                            <select
+                              value={listener.protocol}
+                              onChange={(e) => {
+                                const protocol = e.target.value === "https" ? "https" : "http";
+                                updateVisiblePublicListener(index, {
+                                  protocol,
+                                  http_behavior: protocol === "https" ? "serve" : listener.http_behavior ?? "serve",
+                                });
+                              }}
+                              className="w-full rounded border border-neutral-200 bg-white"
+                              disabled={index === 0}
+                            >
+                              <option value="http">http</option>
+                              <option value="https">https</option>
+                            </select>
+                          </Field>
+                          <Field label={tx("HTTP behavior")}>
+                            <select
+                              value={listener.http_behavior ?? "serve"}
+                              onChange={(e) => updateVisiblePublicListener(index, { http_behavior: e.target.value === "redirect" ? "redirect" : "serve" })}
+                              className="w-full rounded border border-neutral-200 bg-white"
+                              disabled={listener.protocol === "https" || index === 0}
+                            >
+                              <option value="serve">{tx("serve")}</option>
+                              <option value="redirect">{tx("redirect")}</option>
+                            </select>
+                          </Field>
+                          <Field label={tx("Redirect to")}>
+                            <input
+                              value={listener.redirect_to ?? ""}
+                              onChange={(e) => updateVisiblePublicListener(index, { redirect_to: e.target.value })}
+                              className="w-full rounded border border-neutral-200 bg-white"
+                              placeholder="https"
+                              disabled={listener.protocol !== "http" || listener.http_behavior !== "redirect" || index === 0}
+                            />
+                          </Field>
+                          <div className="flex items-end gap-2">
+                            <label className="flex min-h-[34px] items-center gap-2 text-xs text-neutral-700">
+                              <input
+                                type="checkbox"
+                                checked={listener.enabled !== false}
+                                onChange={(e) => updateVisiblePublicListener(index, { enabled: e.target.checked })}
+                                disabled={index === 0}
+                              />
+                              {tx("Enabled")}
+                            </label>
+                            <button type="button" className="border-red-200 bg-red-50 text-red-700" onClick={() => removeVisiblePublicListener(index)} disabled={readOnly || index === 0}>
+                              {tx("Remove")}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
 
                 <label className="flex items-center gap-2 text-xs text-neutral-700">
                   <input
@@ -1210,6 +1407,7 @@ export default function SettingsPanel() {
                   <input
                     type="checkbox"
                     checked={listenerAdminConfig.server.tls.redirect_http}
+                    disabled={(listenerAdminConfig.server.public_listeners ?? []).length > 0}
                     onChange={(e) =>
                       setListenerAdminConfig((current) => ({
                         ...current,
@@ -1225,6 +1423,11 @@ export default function SettingsPanel() {
                   />
                   {tx("Redirect plain HTTP to HTTPS")}
                 </label>
+                {(listenerAdminConfig.server.public_listeners ?? []).length > 0 ? (
+                  <p className="text-xs text-neutral-500">
+                    {tx("Public listener rows are active. Use an HTTP listener row with redirect behavior instead.")}
+                  </p>
+                ) : null}
 
                 <label className="flex items-center gap-2 text-xs text-neutral-700">
                   <input
@@ -2327,6 +2530,10 @@ export default function SettingsPanel() {
                           {renderPathField(
                             "site_config_file",
                             "Site Seed File",
+                          )}
+                          {renderPathField(
+                            "tls_binding_config_file",
+                            "TLS Binding Seed File",
                           )}
                           {renderPathField(
                             "php_runtime_inventory_file",

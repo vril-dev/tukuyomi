@@ -2,6 +2,7 @@ package handler
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -39,6 +40,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/ssh"
 
+	"tukuyomi/internal/appdeploybundle"
 	"tukuyomi/internal/buildinfo"
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/centertls"
@@ -57,6 +59,7 @@ const (
 	edgeRuntimeArtifactTimeout  = 10 * time.Minute
 	edgeProxyRuleBundleMaxBytes = edgeconfigsnapshot.MaxBytes
 	edgeWAFRuleArtifactMaxBytes = edgeartifactbundle.MaxCompressedBytes
+	edgeAppDeployPackageTimeout = 10 * time.Minute
 )
 
 const (
@@ -110,6 +113,10 @@ var (
 	edgeWAFRuleAssignmentActive     bool
 	edgeWAFRuleApplyStatusMu        sync.RWMutex
 	edgeWAFRuleApplyStatusCurrent   *edgeWAFRuleApplyStatus
+	edgeAppDeployAssignmentMu       sync.Mutex
+	edgeAppDeployAssignmentActive   = map[string]struct{}{}
+	edgeAppDeployApplyStatusMu      sync.RWMutex
+	edgeAppDeployApplyStatuses      = map[string]edgeAppDeployApplyStatus{}
 )
 
 type edgeDeviceIdentityRecord struct {
@@ -181,6 +188,7 @@ type CenterProtectedGatewayBootstrapOptions struct {
 	CenterTLSCABundleFile    string
 	CenterTLSServerName      string
 	StatusRefreshIntervalSec int
+	GatewayAdminExternalMode string
 	MarkApproved             bool
 }
 
@@ -228,8 +236,10 @@ type edgeDeviceStatusWireRequest struct {
 	DistroVersion              string                     `json:"distro_version,omitempty"`
 	RuntimeDeploymentSupported bool                       `json:"runtime_deployment_supported,omitempty"`
 	RuntimeInventory           []edgeDeviceRuntimeSummary `json:"runtime_inventory,omitempty"`
+	AppDeployCandidates        []edgeAppDeployCandidate   `json:"app_deploy_candidates,omitempty"`
 	ProxyRuleApplyStatus       *edgeProxyRuleApplyStatus  `json:"proxy_rule_apply_status,omitempty"`
 	WAFRuleApplyStatus         *edgeWAFRuleApplyStatus    `json:"waf_rule_apply_status,omitempty"`
+	AppDeployApplyStatus       []edgeAppDeployApplyStatus `json:"app_deploy_apply_status,omitempty"`
 	BodyHash                   string                     `json:"body_hash"`
 	SignatureB64               string                     `json:"signature_b64"`
 }
@@ -328,6 +338,46 @@ type edgeWAFRuleArtifactDownloadWireRequest struct {
 	SignatureB64               string `json:"signature_b64"`
 }
 
+type edgeAppDeployPackageDownloadWireRequest struct {
+	DeviceID                   string `json:"device_id"`
+	KeyID                      string `json:"key_id"`
+	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string `json:"timestamp"`
+	Nonce                      string `json:"nonce"`
+	AppID                      string `json:"app_id"`
+	PackageRevision            string `json:"package_revision"`
+	PackageHash                string `json:"package_hash"`
+	BodyHash                   string `json:"body_hash"`
+	SignatureB64               string `json:"signature_b64"`
+}
+
+type edgeAppDeployBaselineUploadWireRequest struct {
+	DeviceID                   string              `json:"device_id"`
+	KeyID                      string              `json:"key_id"`
+	PublicKeyFingerprintSHA256 string              `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string              `json:"timestamp"`
+	Nonce                      string              `json:"nonce"`
+	AppID                      string              `json:"app_id"`
+	RuntimeFamily              string              `json:"runtime_family"`
+	RuntimeID                  string              `json:"runtime_id,omitempty"`
+	ProfileRevision            string              `json:"profile_revision"`
+	Roots                      []edgeAppDeployRoot `json:"roots"`
+	PackageHash                string              `json:"package_hash"`
+	CompressedSize             int64               `json:"compressed_size"`
+	UncompressedSize           int64               `json:"uncompressed_size"`
+	FileCount                  int                 `json:"file_count"`
+	BodyHash                   string              `json:"body_hash"`
+	SignatureB64               string              `json:"signature_b64"`
+	PackageB64                 string              `json:"package_b64"`
+}
+
+type edgeAppDeployBaselineUploadResponse struct {
+	Package struct {
+		PackageRevision string `json:"package_revision"`
+		PackageHash     string `json:"package_hash"`
+	} `json:"package"`
+}
+
 type edgeDeviceCenterStatusResponse struct {
 	Status                       string                         `json:"status"`
 	DeviceID                     string                         `json:"device_id"`
@@ -339,6 +389,7 @@ type edgeDeviceCenterStatusResponse struct {
 	RuntimeAssignments           []edgeRuntimeDeviceAssignment  `json:"runtime_assignments,omitempty"`
 	ProxyRuleAssignment          *edgeProxyRuleDeviceAssignment `json:"proxy_rule_assignment,omitempty"`
 	WAFRuleAssignment            *edgeWAFRuleDeviceAssignment   `json:"waf_rule_assignment,omitempty"`
+	AppDeployAssignment          *edgeAppDeployDeviceAssignment `json:"app_deploy_assignment,omitempty"`
 	RemoteSSHSession             *edgeRemoteSSHDeviceSession    `json:"remote_ssh_session,omitempty"`
 }
 
@@ -399,6 +450,55 @@ type edgeWAFRuleApplyStatus struct {
 	LocalBundleRevision   string `json:"local_bundle_revision,omitempty"`
 	ApplyState            string `json:"apply_state,omitempty"`
 	ApplyError            string `json:"apply_error,omitempty"`
+}
+
+type edgeAppDeployRoot struct {
+	RootID         string `json:"root_id"`
+	RuntimeField   string `json:"runtime_field"`
+	SourcePath     string `json:"source_path,omitempty"`
+	PackagePrefix  string `json:"package_prefix"`
+	TargetSubpath  string `json:"target_subpath"`
+	RuntimeSubpath string `json:"runtime_subpath,omitempty"`
+	Required       bool   `json:"required"`
+}
+
+type edgeAppDeployCandidate struct {
+	AppID         string              `json:"app_id"`
+	RuntimeFamily string              `json:"runtime_family"`
+	RuntimeID     string              `json:"runtime_id,omitempty"`
+	Roots         []edgeAppDeployRoot `json:"roots,omitempty"`
+	Managed       bool                `json:"managed,omitempty"`
+}
+
+type edgeAppDeployDeviceAssignment struct {
+	RequestID           int64               `json:"request_id"`
+	AppID               string              `json:"app_id"`
+	Operation           string              `json:"operation"`
+	PackageRevision     string              `json:"package_revision,omitempty"`
+	PackageHash         string              `json:"package_hash,omitempty"`
+	BasePackageRevision string              `json:"base_package_revision,omitempty"`
+	ProfileRevision     string              `json:"profile_revision"`
+	Roots               []edgeAppDeployRoot `json:"roots"`
+	RuntimeFamily       string              `json:"runtime_family,omitempty"`
+	RuntimeID           string              `json:"runtime_id,omitempty"`
+	CompressedSize      int64               `json:"compressed_size,omitempty"`
+	UncompressedSize    int64               `json:"uncompressed_size,omitempty"`
+	FileCount           int                 `json:"file_count,omitempty"`
+	RestartBehavior     string              `json:"restart_behavior"`
+	ScriptTimeoutSec    int64               `json:"script_timeout_sec"`
+	PreSwitchScript     string              `json:"pre_switch_script,omitempty"`
+	PostSwitchScript    string              `json:"post_switch_script,omitempty"`
+	AssignedAtUnix      int64               `json:"assigned_at_unix"`
+}
+
+type edgeAppDeployApplyStatus struct {
+	AppID                  string `json:"app_id"`
+	DesiredPackageRevision string `json:"desired_package_revision,omitempty"`
+	LocalPackageRevision   string `json:"local_package_revision,omitempty"`
+	LocalPackageHash       string `json:"local_package_hash,omitempty"`
+	ApplyState             string `json:"apply_state,omitempty"`
+	ApplyError             string `json:"apply_error,omitempty"`
+	OutputTail             string `json:"output_tail,omitempty"`
 }
 
 type edgeDeviceConfigSnapshotResponse struct {
@@ -740,6 +840,8 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 		pruneCompletedEdgeWAFRuleApplyStatus(payload.WAFRuleAssignment)
 		applyEdgeRuntimeAssignments(ctx, identity, payload.RuntimeAssignments)
 		pruneCompletedEdgeRuntimeApplyStatuses(payload.RuntimeAssignments)
+		applyEdgeAppDeployAssignment(ctx, identity, payload.AppDeployAssignment)
+		pruneCompletedEdgeAppDeployApplyStatuses(payload.AppDeployAssignment)
 		applyEdgeRemoteSSHSession(ctx, identity, payload.RemoteSSHSession)
 		if pushEdgeRuleArtifactBundle(ctx, &identity, payload.RuleArtifactUploadRequired) {
 			pushEdgeConfigSnapshot(ctx, &identity, payload.ConfigSnapshotUploadRequired)
@@ -808,12 +910,16 @@ func BootstrapCenterProtectedGateway(ctx context.Context, opts CenterProtectedGa
 	if opts.StatusRefreshIntervalSec < 0 || opts.StatusRefreshIntervalSec > config.MaxEdgeDeviceStatusRefreshSec {
 		return CenterProtectedGatewayBootstrapResult{}, fmt.Errorf("status refresh interval must be between 0 and %d", config.MaxEdgeDeviceStatusRefreshSec)
 	}
+	gatewayAdminExternalMode, err := normalizeCenterProtectedGatewayAdminExternalMode(opts.GatewayAdminExternalMode)
+	if err != nil {
+		return CenterProtectedGatewayBootstrapResult{}, err
+	}
 	store := getLogsStatsStore()
 	if store == nil {
 		return CenterProtectedGatewayBootstrapResult{}, fmt.Errorf("db store is not initialized")
 	}
 
-	appUpdated, err := bootstrapCenterProtectedGatewayAppConfig(opts.StatusRefreshIntervalSec, opts.CenterTLSCABundleFile, opts.CenterTLSServerName)
+	appUpdated, err := bootstrapCenterProtectedGatewayAppConfig(opts.StatusRefreshIntervalSec, opts.CenterTLSCABundleFile, opts.CenterTLSServerName, gatewayAdminExternalMode)
 	if err != nil {
 		return CenterProtectedGatewayBootstrapResult{}, err
 	}
@@ -860,7 +966,17 @@ func BootstrapCenterProtectedGateway(ctx context.Context, opts CenterProtectedGa
 	}, nil
 }
 
-func bootstrapCenterProtectedGatewayAppConfig(statusRefreshIntervalSec int, centerTLSCABundleFile string, centerTLSServerName string) (bool, error) {
+func normalizeCenterProtectedGatewayAdminExternalMode(raw string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	switch mode {
+	case "", "deny_external", "api_only_external", "full_external":
+		return mode, nil
+	default:
+		return "", fmt.Errorf("gateway admin external mode must be one of: deny_external, api_only_external, full_external")
+	}
+}
+
+func bootstrapCenterProtectedGatewayAppConfig(statusRefreshIntervalSec int, centerTLSCABundleFile string, centerTLSServerName string, gatewayAdminExternalMode string) (bool, error) {
 	_, etag, cfg, err := loadAppConfigStorage(true)
 	if err != nil {
 		return false, err
@@ -889,6 +1005,10 @@ func bootstrapCenterProtectedGatewayAppConfig(statusRefreshIntervalSec int, cent
 	}
 	if centerTLSServerName != "" && cfg.RemoteSSH.Gateway.CenterTLSServerName != centerTLSServerName {
 		cfg.RemoteSSH.Gateway.CenterTLSServerName = centerTLSServerName
+		changed = true
+	}
+	if gatewayAdminExternalMode != "" && cfg.Admin.ExternalMode != gatewayAdminExternalMode {
+		cfg.Admin.ExternalMode = gatewayAdminExternalMode
 		changed = true
 	}
 	if !changed {
@@ -1303,6 +1423,38 @@ func centerWAFRuleArtifactDownloadURL(centerBaseURL string) (string, error) {
 		return "", fmt.Errorf("center URL scheme must be http or https")
 	}
 	u.Path = "/v1/waf-rule-artifact-download"
+	u.RawPath = ""
+	return u.String(), nil
+}
+
+func centerAppDeployPackageDownloadURL(centerBaseURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("center URL is not configured")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("center URL is invalid")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("center URL scheme must be http or https")
+	}
+	u.Path = "/v1/app-deploy-package-download"
+	u.RawPath = ""
+	return u.String(), nil
+}
+
+func centerAppDeployBaselineUploadURL(centerBaseURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("center URL is not configured")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("center URL is invalid")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("center URL scheme must be http or https")
+	}
+	u.Path = "/v1/app-deploy-baseline-upload"
 	u.RawPath = ""
 	return u.String(), nil
 }
@@ -1741,8 +1893,10 @@ func signedEdgeDeviceStatusRequest(identity edgeDeviceIdentityRecord) (edgeDevic
 	req.DistroVersion = platform.DistroVersion
 	req.RuntimeDeploymentSupported = true
 	req.RuntimeInventory = currentEdgeRuntimeInventorySummary()
+	req.AppDeployCandidates = currentEdgeAppDeployCandidates()
 	req.ProxyRuleApplyStatus = edgeProxyRuleApplyStatusSnapshot()
 	req.WAFRuleApplyStatus = edgeWAFRuleApplyStatusSnapshot()
+	req.AppDeployApplyStatus = edgeAppDeployApplyStatusSnapshot()
 	req.BodyHash = edgeDeviceStatusBodyHash(req)
 	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)))
 	req.SignatureB64 = base64.StdEncoding.EncodeToString(signature)
@@ -1921,6 +2075,175 @@ func runningEdgePSGIProcessIDs(runtimeID string) []string {
 	return out
 }
 
+func currentEdgeAppDeployCandidates() []edgeAppDeployCandidate {
+	vhosts := currentVhostConfig().Vhosts
+	out := make([]edgeAppDeployCandidate, 0, len(vhosts))
+	for _, vhost := range vhosts {
+		appID := edgeAppDeployAppIDForVhost(vhost)
+		if appID == "" {
+			continue
+		}
+		family := normalizeVhostMode(vhost.Mode)
+		runtimeID := clampEdgeMetadataText(vhost.RuntimeID, 64)
+		if ok, _ := edgeRuntimeAvailableForAppDeploy(family, runtimeID); !ok {
+			continue
+		}
+		var roots []edgeAppDeployRoot
+		switch family {
+		case "php-fpm":
+			roots = append(roots, edgePHPFPMAppDeployRoots(vhost)...)
+		case "psgi":
+			if strings.TrimSpace(vhost.AppRoot) != "" {
+				roots = append(roots, edgeAppDeployRoot{
+					RootID:        "app_root",
+					RuntimeField:  "app_root",
+					SourcePath:    edgeAppDeploySafeSourcePath(vhost.AppRoot),
+					PackagePrefix: "app",
+					TargetSubpath: "app",
+					Required:      true,
+				})
+			}
+			if strings.TrimSpace(vhost.DocumentRoot) != "" {
+				roots = append(roots, edgeAppDeployRoot{
+					RootID:        "document_root",
+					RuntimeField:  "document_root",
+					SourcePath:    edgeAppDeploySafeSourcePath(vhost.DocumentRoot),
+					PackagePrefix: "static",
+					TargetSubpath: "static",
+					Required:      true,
+				})
+			}
+		default:
+			continue
+		}
+		if len(roots) == 0 {
+			continue
+		}
+		out = append(out, edgeAppDeployCandidate{
+			AppID:         appID,
+			RuntimeFamily: family,
+			RuntimeID:     runtimeID,
+			Roots:         roots,
+			Managed:       edgeVhostAppDeployManaged(appID, vhost, roots),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].AppID < out[j].AppID
+	})
+	if len(out) > 64 {
+		out = out[:64]
+	}
+	return out
+}
+
+func edgeRuntimeAvailableForAppDeploy(family string, runtimeID string) (bool, string) {
+	family = strings.ToLower(strings.TrimSpace(family))
+	runtimeID = clampEdgeMetadataText(runtimeID, 64)
+	if runtimeID == "" {
+		return false, "Runtime Apps binding runtime_id is empty"
+	}
+	switch family {
+	case "php-fpm":
+		for _, runtime := range currentPHPRuntimeInventoryConfig().Runtimes {
+			if strings.TrimSpace(runtime.RuntimeID) != runtimeID {
+				continue
+			}
+			if !runtime.Available {
+				return false, "php-fpm runtime " + runtimeID + " is unavailable" + runtimeAvailabilitySuffix(runtime.AvailabilityMessage)
+			}
+			return true, ""
+		}
+		return false, "php-fpm runtime " + runtimeID + " is not installed"
+	case "psgi":
+		for _, runtime := range currentPSGIRuntimeInventoryConfig().Runtimes {
+			if strings.TrimSpace(runtime.RuntimeID) != runtimeID {
+				continue
+			}
+			if !runtime.Available {
+				return false, "psgi runtime " + runtimeID + " is unavailable" + runtimeAvailabilitySuffix(runtime.AvailabilityMessage)
+			}
+			return true, ""
+		}
+		return false, "psgi runtime " + runtimeID + " is not installed"
+	default:
+		return false, "Runtime Apps binding family is unsupported"
+	}
+}
+
+func edgePHPFPMAppDeployRoots(vhost VhostConfig) []edgeAppDeployRoot {
+	docRoot := strings.TrimSpace(vhost.DocumentRoot)
+	if docRoot == "" {
+		return nil
+	}
+	cleaned := path.Clean(strings.ReplaceAll(docRoot, "\\", "/"))
+	if strings.EqualFold(path.Base(cleaned), "public") {
+		sourcePath := edgeAppDeploySafeSourcePath(path.Dir(cleaned))
+		if sourcePath != "." && sourcePath != "" {
+			return []edgeAppDeployRoot{{
+				RootID:         "source_root",
+				RuntimeField:   "document_root",
+				SourcePath:     sourcePath,
+				PackagePrefix:  "",
+				TargetSubpath:  "",
+				RuntimeSubpath: "public",
+				Required:       true,
+			}}
+		}
+	}
+	return []edgeAppDeployRoot{{
+		RootID:         "document_root",
+		RuntimeField:   "document_root",
+		SourcePath:     edgeAppDeploySafeSourcePath(docRoot),
+		PackagePrefix:  "public",
+		TargetSubpath:  "public",
+		RuntimeSubpath: "public",
+		Required:       true,
+	}}
+}
+
+func edgeAppDeploySafeSourcePath(value string) string {
+	cleaned, ok := cleanEdgeAppDeployLocalPath(value)
+	if !ok {
+		return ""
+	}
+	return cleaned
+}
+
+func edgeAppDeployAppIDForVhost(vhost VhostConfig) string {
+	for _, candidate := range []string{vhost.GeneratedTarget, vhost.Name, vhost.LinkedUpstreamName} {
+		if id := normalizeEdgeAppDeployID(candidate); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+func edgeVhostAppDeployManaged(appID string, vhost VhostConfig, roots []edgeAppDeployRoot) bool {
+	if appID == "" || len(roots) == 0 {
+		return false
+	}
+	managedRoot, err := filepath.Abs(filepath.Join("data", "app-deployments", appID))
+	if err != nil {
+		return false
+	}
+	currentAbs := filepath.Join(managedRoot, "current")
+	for _, root := range roots {
+		runtimePath := edgeRuntimePathForDeployRoot(vhost, root.RuntimeField)
+		if runtimePath == "" {
+			return false
+		}
+		targetAbs, err := filepath.Abs(filepath.Clean(runtimePath))
+		if err != nil {
+			return false
+		}
+		expected := filepath.Join(currentAbs, filepath.FromSlash(edgeAppDeployRuntimeSubpath(root)))
+		if filepath.Clean(targetAbs) != filepath.Clean(expected) {
+			return false
+		}
+	}
+	return true
+}
+
 func sortEdgeRuntimeSummaries(items []edgeDeviceRuntimeSummary) {
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].RuntimeFamily != items[j].RuntimeFamily {
@@ -2028,6 +2351,44 @@ func setEdgeWAFRuleApplyStatus(status edgeWAFRuleApplyStatus) {
 	edgeWAFRuleApplyStatusMu.Unlock()
 }
 
+func edgeAppDeployApplyStatusSnapshot() []edgeAppDeployApplyStatus {
+	persisted := currentEdgeAppDeployStateStatuses()
+	edgeAppDeployApplyStatusMu.RLock()
+	defer edgeAppDeployApplyStatusMu.RUnlock()
+	out := make([]edgeAppDeployApplyStatus, 0, len(edgeAppDeployApplyStatuses)+len(persisted))
+	seen := make(map[string]struct{}, len(edgeAppDeployApplyStatuses))
+	for _, status := range edgeAppDeployApplyStatuses {
+		out = append(out, status)
+		seen[status.AppID] = struct{}{}
+	}
+	for _, status := range persisted {
+		if _, ok := seen[status.AppID]; ok {
+			continue
+		}
+		out = append(out, status)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].AppID < out[j].AppID
+	})
+	return out
+}
+
+func setEdgeAppDeployApplyStatus(status edgeAppDeployApplyStatus) {
+	status.AppID = normalizeEdgeAppDeployID(status.AppID)
+	status.DesiredPackageRevision = normalizeEdgeHex64(status.DesiredPackageRevision)
+	status.LocalPackageRevision = normalizeEdgeHex64(status.LocalPackageRevision)
+	status.LocalPackageHash = normalizeEdgeHex64(status.LocalPackageHash)
+	status.ApplyState = clampEdgeMetadataText(status.ApplyState, 32)
+	status.ApplyError = clampEdgeDeployText(status.ApplyError, 2048)
+	status.OutputTail = clampEdgeDeployText(status.OutputTail, appdeploybundle.MaxScriptOutputBytes)
+	if status.AppID == "" || status.ApplyState == "" {
+		return
+	}
+	edgeAppDeployApplyStatusMu.Lock()
+	edgeAppDeployApplyStatuses[status.AppID] = status
+	edgeAppDeployApplyStatusMu.Unlock()
+}
+
 func pruneCompletedEdgeProxyRuleApplyStatus(assignment *edgeProxyRuleDeviceAssignment) {
 	if assignment != nil {
 		return
@@ -2056,6 +2417,20 @@ func pruneCompletedEdgeWAFRuleApplyStatus(assignment *edgeWAFRuleDeviceAssignmen
 	case "applied", "failed", "blocked":
 		edgeWAFRuleApplyStatusCurrent = nil
 	}
+}
+
+func pruneCompletedEdgeAppDeployApplyStatuses(assignment *edgeAppDeployDeviceAssignment) {
+	if assignment != nil {
+		return
+	}
+	edgeAppDeployApplyStatusMu.Lock()
+	for key, status := range edgeAppDeployApplyStatuses {
+		switch status.ApplyState {
+		case "applied", "failed", "failed_after_switch", "blocked":
+			delete(edgeAppDeployApplyStatuses, key)
+		}
+	}
+	edgeAppDeployApplyStatusMu.Unlock()
 }
 
 func pruneCompletedEdgeRuntimeApplyStatuses(assignments []edgeRuntimeDeviceAssignment) {
@@ -2127,6 +2502,27 @@ func endEdgeRuntimeAssignmentOp(runtimeFamily, runtimeID string) {
 	edgeRuntimeAssignmentMu.Lock()
 	delete(edgeRuntimeAssignmentActive, key)
 	edgeRuntimeAssignmentMu.Unlock()
+}
+
+func beginEdgeAppDeployAssignmentOp(appID string) bool {
+	appID = normalizeEdgeAppDeployID(appID)
+	if appID == "" {
+		return false
+	}
+	edgeAppDeployAssignmentMu.Lock()
+	defer edgeAppDeployAssignmentMu.Unlock()
+	if _, ok := edgeAppDeployAssignmentActive[appID]; ok {
+		return false
+	}
+	edgeAppDeployAssignmentActive[appID] = struct{}{}
+	return true
+}
+
+func endEdgeAppDeployAssignmentOp(appID string) {
+	appID = normalizeEdgeAppDeployID(appID)
+	edgeAppDeployAssignmentMu.Lock()
+	delete(edgeAppDeployAssignmentActive, appID)
+	edgeAppDeployAssignmentMu.Unlock()
 }
 
 func applyEdgeProxyRuleAssignment(ctx context.Context, identity edgeDeviceIdentityRecord, assignment *edgeProxyRuleDeviceAssignment) {
@@ -2445,6 +2841,1079 @@ func reloadWAFRuleAssetsAfterCenterApply(assets []wafRuleAssetVersion) error {
 		}
 	}
 	return nil
+}
+
+type edgeAppDeployBinding struct {
+	AppID         string
+	RuntimeFamily string
+	RuntimeID     string
+	ProcessID     string
+	ManagedRoot   string
+	Roots         []edgeAppDeployBoundRoot
+}
+
+type edgeAppDeployBoundRoot struct {
+	Root         edgeAppDeployRoot
+	RuntimePath  string
+	SourcePath   string
+	ExpectedPath string
+}
+
+type edgeAppDeployStateFile struct {
+	SchemaVersion   int    `json:"schema_version"`
+	AppID           string `json:"app_id"`
+	PackageRevision string `json:"package_revision"`
+	PackageHash     string `json:"package_hash"`
+	AppliedAtUnix   int64  `json:"applied_at_unix"`
+}
+
+type edgeDownloadedAppDeployPackage struct {
+	PackageRevision string
+	PackageHash     string
+	Compressed      []byte
+	Parsed          appdeploybundle.Parsed
+}
+
+func applyEdgeAppDeployAssignment(ctx context.Context, identity edgeDeviceIdentityRecord, assignment *edgeAppDeployDeviceAssignment) {
+	if assignment == nil {
+		return
+	}
+	normalized, ok := normalizeEdgeAppDeployAssignment(*assignment)
+	if !ok {
+		return
+	}
+	if !beginEdgeAppDeployAssignmentOp(normalized.AppID) {
+		return
+	}
+	defer endEdgeAppDeployAssignmentOp(normalized.AppID)
+
+	desiredRevision := normalized.PackageRevision
+	if normalized.Operation == "adopt" {
+		desiredRevision = normalized.ProfileRevision
+	}
+	status := edgeAppDeployApplyStatus{
+		AppID:                  normalized.AppID,
+		DesiredPackageRevision: desiredRevision,
+		ApplyState:             "applying",
+	}
+	setEdgeAppDeployApplyStatus(status)
+
+	binding, err := edgeAppDeployBindingForAssignment(normalized)
+	if err != nil {
+		status.ApplyState = "blocked"
+		status.ApplyError = err.Error()
+		setEdgeAppDeployApplyStatus(status)
+		return
+	}
+
+	if normalized.Operation == "adopt" {
+		downloaded, output, err := uploadEdgeAppDeployBaseline(ctx, identity, normalized, binding)
+		status.OutputTail = output
+		if err != nil {
+			status.ApplyState = "failed"
+			status.ApplyError = err.Error()
+			setEdgeAppDeployApplyStatus(status)
+			return
+		}
+		releaseDir, installOutput, err := installEdgeAppDeployPackage(ctx, binding, normalized, downloaded)
+		status.OutputTail = edgeMergeOutputTail(output, installOutput)
+		if err != nil {
+			status.ApplyState = "failed"
+			status.ApplyError = err.Error()
+			setEdgeAppDeployApplyStatus(status)
+			return
+		}
+		if err := switchEdgeAppDeployCurrent(binding.ManagedRoot, downloaded.PackageRevision); err != nil {
+			status.ApplyState = "failed"
+			status.ApplyError = err.Error()
+			setEdgeAppDeployApplyStatus(status)
+			return
+		}
+		if err := updateEdgeAppDeployRuntimeBinding(binding); err != nil {
+			status.ApplyState = "failed_after_switch"
+			status.ApplyError = err.Error()
+			status.LocalPackageRevision = downloaded.PackageRevision
+			status.LocalPackageHash = downloaded.PackageHash
+			setEdgeAppDeployApplyStatus(status)
+			return
+		}
+		postOutput, err := runEdgeAppDeployScript(ctx, normalized.PostSwitchScript, releaseDir, normalized.ScriptTimeoutSec, binding, downloaded.PackageRevision, downloaded.Parsed)
+		status.OutputTail = edgeMergeOutputTail(status.OutputTail, postOutput)
+		if err != nil {
+			status.ApplyState = "failed_after_switch"
+			status.ApplyError = err.Error()
+			status.LocalPackageRevision = downloaded.PackageRevision
+			status.LocalPackageHash = downloaded.PackageHash
+			setEdgeAppDeployApplyStatus(status)
+			return
+		}
+		if err := restartEdgeAppDeployRuntime(binding, normalized.RestartBehavior); err != nil {
+			status.ApplyState = "failed_after_switch"
+			status.ApplyError = err.Error()
+			status.LocalPackageRevision = downloaded.PackageRevision
+			status.LocalPackageHash = downloaded.PackageHash
+			setEdgeAppDeployApplyStatus(status)
+			return
+		}
+		if err := writeEdgeAppDeployState(binding.ManagedRoot, edgeAppDeployStateFile{
+			SchemaVersion:   1,
+			AppID:           binding.AppID,
+			PackageRevision: downloaded.PackageRevision,
+			PackageHash:     downloaded.PackageHash,
+			AppliedAtUnix:   time.Now().UTC().Unix(),
+		}); err != nil {
+			status.ApplyState = "failed_after_switch"
+			status.ApplyError = err.Error()
+			status.LocalPackageRevision = downloaded.PackageRevision
+			status.LocalPackageHash = downloaded.PackageHash
+			setEdgeAppDeployApplyStatus(status)
+			return
+		}
+		status.ApplyState = "applied"
+		status.ApplyError = ""
+		status.LocalPackageRevision = downloaded.PackageRevision
+		status.LocalPackageHash = downloaded.PackageHash
+		setEdgeAppDeployApplyStatus(status)
+		return
+	}
+
+	downloaded, err := downloadEdgeAppDeployPackage(ctx, identity, normalized, binding)
+	if err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeAppDeployApplyStatus(status)
+		return
+	}
+	status.LocalPackageRevision = currentEdgeAppDeployRevision(binding.ManagedRoot)
+	setEdgeAppDeployApplyStatus(status)
+
+	releaseDir, output, err := installEdgeAppDeployPackage(ctx, binding, normalized, downloaded)
+	status.OutputTail = output
+	if err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeAppDeployApplyStatus(status)
+		return
+	}
+	if err := switchEdgeAppDeployCurrent(binding.ManagedRoot, downloaded.PackageRevision); err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		status.OutputTail = output
+		setEdgeAppDeployApplyStatus(status)
+		return
+	}
+	if err := updateEdgeAppDeployRuntimeBinding(binding); err != nil {
+		status.ApplyState = "failed_after_switch"
+		status.ApplyError = err.Error()
+		status.LocalPackageRevision = downloaded.PackageRevision
+		status.LocalPackageHash = downloaded.PackageHash
+		setEdgeAppDeployApplyStatus(status)
+		return
+	}
+	postOutput, err := runEdgeAppDeployScript(ctx, normalized.PostSwitchScript, releaseDir, normalized.ScriptTimeoutSec, binding, downloaded.PackageRevision, downloaded.Parsed)
+	status.OutputTail = edgeMergeOutputTail(output, postOutput)
+	if err != nil {
+		status.ApplyState = "failed_after_switch"
+		status.ApplyError = err.Error()
+		status.LocalPackageRevision = downloaded.PackageRevision
+		status.LocalPackageHash = downloaded.PackageHash
+		setEdgeAppDeployApplyStatus(status)
+		return
+	}
+	if err := restartEdgeAppDeployRuntime(binding, normalized.RestartBehavior); err != nil {
+		status.ApplyState = "failed_after_switch"
+		status.ApplyError = err.Error()
+		status.LocalPackageRevision = downloaded.PackageRevision
+		status.LocalPackageHash = downloaded.PackageHash
+		setEdgeAppDeployApplyStatus(status)
+		return
+	}
+	if err := writeEdgeAppDeployState(binding.ManagedRoot, edgeAppDeployStateFile{
+		SchemaVersion:   1,
+		AppID:           binding.AppID,
+		PackageRevision: downloaded.PackageRevision,
+		PackageHash:     downloaded.PackageHash,
+		AppliedAtUnix:   time.Now().UTC().Unix(),
+	}); err != nil {
+		status.ApplyState = "failed_after_switch"
+		status.ApplyError = err.Error()
+		status.LocalPackageRevision = downloaded.PackageRevision
+		status.LocalPackageHash = downloaded.PackageHash
+		setEdgeAppDeployApplyStatus(status)
+		return
+	}
+	status.ApplyState = "applied"
+	status.ApplyError = ""
+	status.LocalPackageRevision = downloaded.PackageRevision
+	status.LocalPackageHash = downloaded.PackageHash
+	setEdgeAppDeployApplyStatus(status)
+}
+
+func normalizeEdgeAppDeployAssignment(in edgeAppDeployDeviceAssignment) (edgeAppDeployDeviceAssignment, bool) {
+	out := edgeAppDeployDeviceAssignment{
+		RequestID:           in.RequestID,
+		AppID:               normalizeEdgeAppDeployID(in.AppID),
+		Operation:           strings.ToLower(strings.TrimSpace(in.Operation)),
+		PackageRevision:     normalizeEdgeHex64(in.PackageRevision),
+		PackageHash:         normalizeEdgeHex64(in.PackageHash),
+		BasePackageRevision: normalizeEdgeHex64(in.BasePackageRevision),
+		ProfileRevision:     normalizeEdgeHex64(in.ProfileRevision),
+		RuntimeFamily:       strings.ToLower(strings.TrimSpace(in.RuntimeFamily)),
+		RuntimeID:           clampEdgeMetadataText(in.RuntimeID, 64),
+		CompressedSize:      in.CompressedSize,
+		UncompressedSize:    in.UncompressedSize,
+		FileCount:           in.FileCount,
+		RestartBehavior:     strings.ToLower(strings.TrimSpace(in.RestartBehavior)),
+		ScriptTimeoutSec:    in.ScriptTimeoutSec,
+		PreSwitchScript:     clampEdgeText(strings.TrimRight(in.PreSwitchScript, "\r\n\t "), appdeploybundle.MaxScriptBytes),
+		PostSwitchScript:    clampEdgeText(strings.TrimRight(in.PostSwitchScript, "\r\n\t "), appdeploybundle.MaxScriptBytes),
+		AssignedAtUnix:      in.AssignedAtUnix,
+	}
+	for _, root := range in.Roots {
+		normalizedRoot, ok := normalizeEdgeAppDeployRoot(root)
+		if !ok {
+			return edgeAppDeployDeviceAssignment{}, false
+		}
+		out.Roots = append(out.Roots, normalizedRoot)
+	}
+	if out.Operation == "" {
+		out.Operation = "deploy"
+	}
+	if out.RestartBehavior == "" {
+		out.RestartBehavior = "restart-runtime"
+	}
+	if out.ScriptTimeoutSec <= 0 {
+		out.ScriptTimeoutSec = 60
+	}
+	if out.ScriptTimeoutSec > 900 {
+		out.ScriptTimeoutSec = 900
+	}
+	switch out.Operation {
+	case "deploy", "rollback", "adopt":
+	default:
+		return edgeAppDeployDeviceAssignment{}, false
+	}
+	switch out.RestartBehavior {
+	case "none", "reload-runtime", "restart-runtime":
+	default:
+		return edgeAppDeployDeviceAssignment{}, false
+	}
+	if out.AppID == "" || len(out.Roots) == 0 {
+		return edgeAppDeployDeviceAssignment{}, false
+	}
+	if out.Operation != "adopt" {
+		if out.PackageRevision == "" || out.PackageHash == "" {
+			return edgeAppDeployDeviceAssignment{}, false
+		}
+		if out.CompressedSize <= 0 || out.CompressedSize > appdeploybundle.MaxCompressedBytes ||
+			out.UncompressedSize <= 0 || out.UncompressedSize > appdeploybundle.MaxUncompressedBytes ||
+			out.FileCount <= 0 || out.FileCount > appdeploybundle.MaxFiles {
+			return edgeAppDeployDeviceAssignment{}, false
+		}
+	} else if out.ProfileRevision == "" {
+		return edgeAppDeployDeviceAssignment{}, false
+	}
+	return out, true
+}
+
+func normalizeEdgeAppDeployRoot(in edgeAppDeployRoot) (edgeAppDeployRoot, bool) {
+	rootID := normalizeEdgeAppDeployID(in.RootID)
+	field := strings.ToLower(strings.TrimSpace(in.RuntimeField))
+	sourcePath, ok := cleanEdgeAppDeployLocalPath(in.SourcePath)
+	if !ok {
+		return edgeAppDeployRoot{}, false
+	}
+	prefix, ok := cleanEdgeAppDeployRelativePath(in.PackagePrefix)
+	if !ok {
+		return edgeAppDeployRoot{}, false
+	}
+	target, ok := cleanEdgeAppDeployRelativePath(in.TargetSubpath)
+	if !ok {
+		return edgeAppDeployRoot{}, false
+	}
+	runtimeSubpath, ok := cleanEdgeAppDeployRelativePath(in.RuntimeSubpath)
+	if !ok {
+		return edgeAppDeployRoot{}, false
+	}
+	if runtimeSubpath == "" {
+		runtimeSubpath = target
+	}
+	switch field {
+	case "document_root", "app_root":
+	default:
+		return edgeAppDeployRoot{}, false
+	}
+	if rootID == "" {
+		return edgeAppDeployRoot{}, false
+	}
+	return edgeAppDeployRoot{
+		RootID:         rootID,
+		RuntimeField:   field,
+		SourcePath:     sourcePath,
+		PackagePrefix:  prefix,
+		TargetSubpath:  target,
+		RuntimeSubpath: runtimeSubpath,
+		Required:       in.Required,
+	}, true
+}
+
+func cleanEdgeAppDeployLocalPath(value string) (string, bool) {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	if value == "" {
+		return "", true
+	}
+	if strings.HasPrefix(value, "/") || strings.Contains(value, "\x00") {
+		return "", false
+	}
+	cleaned := path.Clean(value)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", false
+	}
+	cleaned = strings.Trim(cleaned, "/")
+	if !edgeAppDeploySourcePathAllowed(cleaned) {
+		return "", false
+	}
+	return cleaned, true
+}
+
+func edgeAppDeploySourcePathAllowed(value string) bool {
+	value = strings.Trim(value, "/")
+	return strings.HasPrefix(value, "data/vhosts/") && len(value) > len("data/vhosts/")
+}
+
+func cleanEdgeAppDeployRelativePath(value string) (string, bool) {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	if value == "" {
+		return "", true
+	}
+	if strings.HasPrefix(value, "/") || strings.Contains(value, "\x00") {
+		return "", false
+	}
+	cleaned := path.Clean(value)
+	if cleaned == "." {
+		return "", true
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", false
+	}
+	return strings.Trim(cleaned, "/"), true
+}
+
+func edgeAppDeployBindingForAssignment(assignment edgeAppDeployDeviceAssignment) (edgeAppDeployBinding, error) {
+	appID := normalizeEdgeAppDeployID(assignment.AppID)
+	if appID == "" {
+		return edgeAppDeployBinding{}, fmt.Errorf("app deploy assignment has invalid app id")
+	}
+	for _, vhost := range currentVhostConfig().Vhosts {
+		if !edgeVhostMatchesAppID(vhost, appID) {
+			continue
+		}
+		family := normalizeVhostMode(vhost.Mode)
+		if assignment.RuntimeFamily != "" && assignment.RuntimeFamily != family {
+			return edgeAppDeployBinding{}, fmt.Errorf("Runtime Apps binding family does not match assignment")
+		}
+		runtimeID := strings.TrimSpace(vhost.RuntimeID)
+		if assignment.RuntimeID != "" && runtimeID != "" && assignment.RuntimeID != runtimeID {
+			return edgeAppDeployBinding{}, fmt.Errorf("Runtime Apps binding runtime_id does not match assignment")
+		}
+		if ok, message := edgeRuntimeAvailableForAppDeploy(family, runtimeID); !ok {
+			return edgeAppDeployBinding{}, fmt.Errorf("Runtime Apps binding runtime is unavailable: %s", message)
+		}
+		root, boundRoots, err := edgeAppDeployBindingRoots(appID, vhost, assignment)
+		if err != nil {
+			return edgeAppDeployBinding{}, err
+		}
+		processID := strings.TrimSpace(vhost.GeneratedTarget)
+		if processID == "" {
+			processID = strings.TrimSpace(vhost.Name)
+		}
+		return edgeAppDeployBinding{
+			AppID:         appID,
+			RuntimeFamily: family,
+			RuntimeID:     runtimeID,
+			ProcessID:     processID,
+			ManagedRoot:   root,
+			Roots:         boundRoots,
+		}, nil
+	}
+	return edgeAppDeployBinding{}, fmt.Errorf("Runtime Apps binding for app_id %q was not found", appID)
+}
+
+func edgeVhostMatchesAppID(vhost VhostConfig, appID string) bool {
+	appID = normalizeEdgeAppDeployID(appID)
+	if appID == "" {
+		return false
+	}
+	return strings.TrimSpace(vhost.Name) == appID || strings.TrimSpace(vhost.GeneratedTarget) == appID || strings.TrimSpace(vhost.LinkedUpstreamName) == appID
+}
+
+func edgeAppDeployBindingRoots(appID string, vhost VhostConfig, assignment edgeAppDeployDeviceAssignment) (string, []edgeAppDeployBoundRoot, error) {
+	managedRoot, err := filepath.Abs(filepath.Join("data", "app-deployments", appID))
+	if err != nil {
+		return "", nil, err
+	}
+	bound := make([]edgeAppDeployBoundRoot, 0, len(assignment.Roots))
+	seen := map[string]struct{}{}
+	for _, root := range assignment.Roots {
+		if _, exists := seen[root.RootID]; exists {
+			return "", nil, fmt.Errorf("app deploy assignment contains duplicate root")
+		}
+		seen[root.RootID] = struct{}{}
+		runtimePath := edgeRuntimePathForDeployRoot(vhost, root.RuntimeField)
+		if runtimePath == "" {
+			return "", nil, fmt.Errorf("Runtime Apps binding has no %s deploy target path", root.RuntimeField)
+		}
+		targetAbs, err := filepath.Abs(filepath.Clean(runtimePath))
+		if err != nil {
+			return "", nil, err
+		}
+		sourcePath := strings.TrimSpace(root.SourcePath)
+		if sourcePath == "" && assignment.Operation == "adopt" {
+			sourcePath = edgeAppDeploySafeSourcePath(runtimePath)
+		}
+		if sourcePath == "" && assignment.Operation == "adopt" {
+			return "", nil, fmt.Errorf("app deploy adoption source_path must be under data/vhosts")
+		}
+		var sourceAbs string
+		if sourcePath != "" {
+			sourceAbs, err = filepath.Abs(filepath.Clean(sourcePath))
+			if err != nil {
+				return "", nil, err
+			}
+		}
+		expectedRuntimePath := edgeAppDeployManagedRuntimePath(appID, root)
+		expectedAbs, err := filepath.Abs(filepath.Clean(expectedRuntimePath))
+		if err != nil {
+			return "", nil, err
+		}
+		if assignment.Operation != "adopt" && filepath.Clean(targetAbs) != filepath.Clean(expectedAbs) {
+			if sourceAbs == "" || filepath.Clean(targetAbs) != filepath.Clean(sourceAbs) {
+				return "", nil, fmt.Errorf("Runtime Apps %s must point to %s", root.RuntimeField, expectedRuntimePath)
+			}
+		}
+		bound = append(bound, edgeAppDeployBoundRoot{
+			Root:         root,
+			RuntimePath:  targetAbs,
+			SourcePath:   sourceAbs,
+			ExpectedPath: expectedAbs,
+		})
+	}
+	return managedRoot, bound, nil
+}
+
+func edgeAppDeployManagedRuntimePath(appID string, root edgeAppDeployRoot) string {
+	parts := []string{"data", "app-deployments", appID, "current"}
+	if subpath := edgeAppDeployRuntimeSubpath(root); subpath != "" {
+		parts = append(parts, filepath.FromSlash(subpath))
+	}
+	return filepath.ToSlash(filepath.Join(parts...))
+}
+
+func edgeAppDeployRuntimeSubpath(root edgeAppDeployRoot) string {
+	if strings.TrimSpace(root.RuntimeSubpath) != "" {
+		return root.RuntimeSubpath
+	}
+	return root.TargetSubpath
+}
+
+func edgeRuntimePathForDeployRoot(vhost VhostConfig, runtimeField string) string {
+	switch strings.ToLower(strings.TrimSpace(runtimeField)) {
+	case "document_root":
+		return strings.TrimSpace(vhost.DocumentRoot)
+	case "app_root":
+		return strings.TrimSpace(vhost.AppRoot)
+	default:
+		return ""
+	}
+}
+
+func updateEdgeAppDeployRuntimeBinding(binding edgeAppDeployBinding) error {
+	_, etag, cfg, _ := VhostConfigSnapshot()
+	if len(cfg.Vhosts) == 0 {
+		return fmt.Errorf("Runtime Apps config has no bindings")
+	}
+	updated := false
+	for i := range cfg.Vhosts {
+		if !edgeVhostMatchesAppID(cfg.Vhosts[i], binding.AppID) {
+			continue
+		}
+		for _, root := range binding.Roots {
+			nextPath := edgeAppDeployManagedRuntimePath(binding.AppID, root.Root)
+			switch strings.ToLower(strings.TrimSpace(root.Root.RuntimeField)) {
+			case "document_root":
+				if cfg.Vhosts[i].DocumentRoot != nextPath {
+					cfg.Vhosts[i].DocumentRoot = nextPath
+					updated = true
+				}
+			case "app_root":
+				if cfg.Vhosts[i].AppRoot != nextPath {
+					cfg.Vhosts[i].AppRoot = nextPath
+					updated = true
+				}
+			default:
+				return fmt.Errorf("Runtime Apps binding has unsupported deploy field")
+			}
+		}
+		if !updated {
+			return nil
+		}
+		_, _, err := ApplyVhostConfigRaw(etag, mustJSON(cfg))
+		return err
+	}
+	return fmt.Errorf("Runtime Apps binding for app_id %q was not found", binding.AppID)
+}
+
+func downloadEdgeAppDeployPackage(ctx context.Context, identity edgeDeviceIdentityRecord, assignment edgeAppDeployDeviceAssignment, binding edgeAppDeployBinding) (edgeDownloadedAppDeployPackage, error) {
+	downloadURL, err := centerAppDeployPackageDownloadURL(identity.CenterURL)
+	if err != nil {
+		return edgeDownloadedAppDeployPackage{}, err
+	}
+	wireReq, err := signedEdgeAppDeployPackageDownloadRequest(identity, assignment)
+	if err != nil {
+		return edgeDownloadedAppDeployPackage{}, err
+	}
+	httpStatus, body, err := sendEdgeAppDeployPackageDownload(ctx, downloadURL, wireReq, assignment.CompressedSize)
+	if err != nil {
+		return edgeDownloadedAppDeployPackage{}, err
+	}
+	if httpStatus < 200 || httpStatus >= 300 {
+		return edgeDownloadedAppDeployPackage{}, fmt.Errorf("%s", centerHTTPErrorMessage("center app deploy package download failed", httpStatus, body))
+	}
+	if int64(len(body)) != assignment.CompressedSize {
+		return edgeDownloadedAppDeployPackage{}, fmt.Errorf("app deploy package compressed size mismatch")
+	}
+	sum := sha256.Sum256(body)
+	if hex.EncodeToString(sum[:]) != assignment.PackageHash {
+		return edgeDownloadedAppDeployPackage{}, fmt.Errorf("app deploy package hash mismatch")
+	}
+	parsed, err := parseEdgeAppDeployPackageForRoots(body, binding.Roots)
+	if err != nil {
+		return edgeDownloadedAppDeployPackage{}, err
+	}
+	if parsed.PackageHash != assignment.PackageHash ||
+		parsed.CompressedSize != assignment.CompressedSize || parsed.UncompressedSize != assignment.UncompressedSize ||
+		parsed.FileCount != assignment.FileCount {
+		return edgeDownloadedAppDeployPackage{}, fmt.Errorf("app deploy package metadata mismatch")
+	}
+	return edgeDownloadedAppDeployPackage{
+		PackageRevision: assignment.PackageRevision,
+		PackageHash:     assignment.PackageHash,
+		Compressed:      append([]byte(nil), body...),
+		Parsed:          parsed,
+	}, nil
+}
+
+func uploadEdgeAppDeployBaseline(ctx context.Context, identity edgeDeviceIdentityRecord, assignment edgeAppDeployDeviceAssignment, binding edgeAppDeployBinding) (edgeDownloadedAppDeployPackage, string, error) {
+	uploadURL, err := centerAppDeployBaselineUploadURL(identity.CenterURL)
+	if err != nil {
+		return edgeDownloadedAppDeployPackage{}, "", err
+	}
+	body, parsed, err := buildEdgeAppDeployBaselineArchive(binding)
+	if err != nil {
+		return edgeDownloadedAppDeployPackage{}, "", err
+	}
+	wireReq, err := signedEdgeAppDeployBaselineUploadRequest(identity, assignment, parsed, body)
+	if err != nil {
+		return edgeDownloadedAppDeployPackage{}, "", err
+	}
+	httpStatus, respBody, err := sendEdgeAppDeployBaselineUpload(ctx, uploadURL, wireReq)
+	if err != nil {
+		return edgeDownloadedAppDeployPackage{}, "", err
+	}
+	if httpStatus < 200 || httpStatus >= 300 {
+		return edgeDownloadedAppDeployPackage{}, "", fmt.Errorf("%s", centerHTTPErrorMessage("center app deploy baseline upload failed", httpStatus, respBody))
+	}
+	var decoded edgeAppDeployBaselineUploadResponse
+	if err := json.Unmarshal(respBody, &decoded); err != nil {
+		return edgeDownloadedAppDeployPackage{}, "", fmt.Errorf("decode center app deploy baseline response: %w", err)
+	}
+	revision := normalizeEdgeHex64(decoded.Package.PackageRevision)
+	hash := normalizeEdgeHex64(decoded.Package.PackageHash)
+	if revision == "" || hash == "" || hash != parsed.PackageHash {
+		return edgeDownloadedAppDeployPackage{}, "", fmt.Errorf("center app deploy baseline response is invalid")
+	}
+	return edgeDownloadedAppDeployPackage{
+		PackageRevision: revision,
+		PackageHash:     hash,
+		Compressed:      append([]byte(nil), body...),
+		Parsed:          parsed,
+	}, "", nil
+}
+
+func buildEdgeAppDeployBaselineArchive(binding edgeAppDeployBinding) ([]byte, appdeploybundle.Parsed, error) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	var fileCount int
+	var uncompressed int64
+	seen := map[string]struct{}{}
+	for _, root := range binding.Roots {
+		sourceAbs, err := filepath.Abs(filepath.Clean(root.SourcePath))
+		if err != nil {
+			zw.Close()
+			return nil, appdeploybundle.Parsed{}, err
+		}
+		st, err := os.Stat(sourceAbs)
+		if err != nil {
+			zw.Close()
+			return nil, appdeploybundle.Parsed{}, err
+		}
+		if !st.IsDir() {
+			zw.Close()
+			return nil, appdeploybundle.Parsed{}, fmt.Errorf("app deploy adoption root is not a directory")
+		}
+		err = filepath.WalkDir(sourceAbs, func(current string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			name := entry.Name()
+			if entry.IsDir() {
+				if name == ".git" || name == ".hg" || name == ".svn" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			if info.Mode()&os.ModeType != 0 || !info.Mode().IsRegular() {
+				return fmt.Errorf("app deploy adoption rejects non-regular file")
+			}
+			if info.Size() > appdeploybundle.MaxFileBytes {
+				return fmt.Errorf("app deploy adoption file exceeds limit")
+			}
+			fileCount++
+			if fileCount > appdeploybundle.MaxFiles {
+				return fmt.Errorf("app deploy adoption exceeds file limit")
+			}
+			uncompressed += info.Size()
+			if uncompressed > appdeploybundle.MaxUncompressedBytes {
+				return fmt.Errorf("app deploy adoption exceeds uncompressed limit")
+			}
+			rel, err := filepath.Rel(sourceAbs, current)
+			if err != nil {
+				return err
+			}
+			archivePath := path.Join(root.Root.PackagePrefix, filepath.ToSlash(rel))
+			if _, ok := appdeploybundle.CleanArchivePath(archivePath); !ok {
+				return fmt.Errorf("app deploy adoption produced unsafe path")
+			}
+			if _, exists := seen[archivePath]; exists {
+				return fmt.Errorf("app deploy adoption produced duplicate path")
+			}
+			seen[archivePath] = struct{}{}
+			header, err := zip.FileInfoHeader(info)
+			if err != nil {
+				return err
+			}
+			header.Name = archivePath
+			header.Method = zip.Deflate
+			w, err := zw.CreateHeader(header)
+			if err != nil {
+				return err
+			}
+			in, err := os.Open(current)
+			if err != nil {
+				return err
+			}
+			written, copyErr := io.Copy(w, io.LimitReader(in, appdeploybundle.MaxFileBytes+1))
+			closeErr := in.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			if written != info.Size() {
+				return fmt.Errorf("app deploy adoption file size changed during archive")
+			}
+			return nil
+		})
+		if err != nil {
+			zw.Close()
+			return nil, appdeploybundle.Parsed{}, err
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return nil, appdeploybundle.Parsed{}, err
+	}
+	if fileCount == 0 {
+		return nil, appdeploybundle.Parsed{}, fmt.Errorf("app deploy adoption package is empty")
+	}
+	if buf.Len() > appdeploybundle.MaxCompressedBytes {
+		return nil, appdeploybundle.Parsed{}, fmt.Errorf("app deploy adoption compressed package exceeds limit")
+	}
+	parsed, err := parseEdgeAppDeployPackageForRoots(buf.Bytes(), binding.Roots)
+	if err != nil {
+		return nil, appdeploybundle.Parsed{}, err
+	}
+	return buf.Bytes(), parsed, nil
+}
+
+func parseEdgeAppDeployPackageForRoots(raw []byte, roots []edgeAppDeployBoundRoot) (appdeploybundle.Parsed, error) {
+	preserved, preserveErr := appdeploybundle.ParseZIPPreservePaths(raw)
+	if preserveErr == nil && edgeParsedAppDeployPackageMatchesRoots(preserved, roots) {
+		return preserved, nil
+	}
+	stripped, stripErr := appdeploybundle.ParseZIP(raw)
+	if stripErr != nil {
+		if preserveErr != nil {
+			return appdeploybundle.Parsed{}, preserveErr
+		}
+		return appdeploybundle.Parsed{}, stripErr
+	}
+	if !edgeParsedAppDeployPackageMatchesRoots(stripped, roots) {
+		return appdeploybundle.Parsed{}, fmt.Errorf("app deploy package does not match deployment roots")
+	}
+	return stripped, nil
+}
+
+func edgeParsedAppDeployPackageMatchesRoots(parsed appdeploybundle.Parsed, roots []edgeAppDeployBoundRoot) bool {
+	if len(parsed.Files) == 0 || len(roots) == 0 {
+		return false
+	}
+	countByRoot := map[string]int{}
+	for _, file := range parsed.Files {
+		root, _, ok := edgeAppDeployRootForArchivePath(roots, file.Path)
+		if !ok {
+			return false
+		}
+		countByRoot[root.Root.RootID]++
+	}
+	for _, root := range roots {
+		if root.Root.Required && countByRoot[root.Root.RootID] == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func installEdgeAppDeployPackage(ctx context.Context, binding edgeAppDeployBinding, assignment edgeAppDeployDeviceAssignment, downloaded edgeDownloadedAppDeployPackage) (string, string, error) {
+	rootAbs, err := filepath.Abs(filepath.Clean(binding.ManagedRoot))
+	if err != nil {
+		return "", "", err
+	}
+	releasesAbs := filepath.Join(rootAbs, "releases")
+	if err := os.MkdirAll(releasesAbs, 0o755); err != nil {
+		return "", "", err
+	}
+	releaseAbs := filepath.Join(releasesAbs, downloaded.PackageRevision)
+	if !edgePathWithin(releasesAbs, releaseAbs) {
+		return "", "", fmt.Errorf("app deploy release path escapes managed directory")
+	}
+	if st, err := os.Stat(releaseAbs); err == nil {
+		if !st.IsDir() {
+			return "", "", fmt.Errorf("app deploy release path is not a directory")
+		}
+		return releaseAbs, "", nil
+	} else if !os.IsNotExist(err) {
+		return "", "", err
+	}
+	stageAbs, err := os.MkdirTemp(releasesAbs, "."+downloaded.PackageRevision[:12]+".stage-*")
+	if err != nil {
+		return "", "", err
+	}
+	stageMoved := false
+	defer func() {
+		if !stageMoved {
+			_ = os.RemoveAll(stageAbs)
+		}
+	}()
+	if err := extractEdgeAppDeployPackageToStage(downloaded.Parsed, stageAbs, binding.Roots); err != nil {
+		return "", "", err
+	}
+	scriptBinding := binding
+	scriptBinding.ManagedRoot = rootAbs
+	output, err := runEdgeAppDeployScript(ctx, assignment.PreSwitchScript, stageAbs, assignment.ScriptTimeoutSec, scriptBinding, downloaded.PackageRevision, downloaded.Parsed)
+	if err != nil {
+		return "", output, err
+	}
+	if err := os.Rename(stageAbs, releaseAbs); err != nil {
+		return "", output, err
+	}
+	stageMoved = true
+	return releaseAbs, output, nil
+}
+
+func extractEdgeAppDeployPackageToStage(parsed appdeploybundle.Parsed, stageDir string, roots []edgeAppDeployBoundRoot) error {
+	stageAbs, err := filepath.Abs(filepath.Clean(stageDir))
+	if err != nil {
+		return err
+	}
+	if len(parsed.Files) == 0 {
+		return fmt.Errorf("app deploy package is empty")
+	}
+	rootByPrefix := make([]edgeAppDeployBoundRoot, 0, len(roots))
+	for _, root := range roots {
+		rootByPrefix = append(rootByPrefix, root)
+	}
+	for _, file := range parsed.Files {
+		root, rel, ok := edgeAppDeployRootForArchivePath(rootByPrefix, file.Path)
+		if !ok {
+			return fmt.Errorf("app deploy package file %q is outside deployment roots", file.Path)
+		}
+		target := filepath.Join(stageAbs, filepath.FromSlash(root.Root.TargetSubpath), filepath.FromSlash(rel))
+		if !edgePathWithin(stageAbs, target) {
+			return fmt.Errorf("app deploy package path escapes install directory")
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		mode := os.FileMode(file.Mode) & 0o777
+		if mode == 0 {
+			mode = 0o644
+		}
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+		if err != nil {
+			return err
+		}
+		written, writeErr := out.Write(file.Body)
+		closeErr := out.Close()
+		if writeErr != nil {
+			_ = os.Remove(target)
+			return writeErr
+		}
+		if closeErr != nil {
+			_ = os.Remove(target)
+			return closeErr
+		}
+		if written != len(file.Body) {
+			_ = os.Remove(target)
+			return fmt.Errorf("app deploy package file size mismatch")
+		}
+	}
+	return nil
+}
+
+func edgeAppDeployRootForArchivePath(roots []edgeAppDeployBoundRoot, filePath string) (edgeAppDeployBoundRoot, string, bool) {
+	filePath = strings.Trim(filePath, "/")
+	for _, root := range roots {
+		prefix := strings.Trim(root.Root.PackagePrefix, "/")
+		if prefix == "" {
+			return root, filePath, true
+		}
+		if strings.HasPrefix(filePath, prefix+"/") {
+			return root, strings.TrimPrefix(filePath, prefix+"/"), true
+		}
+	}
+	return edgeAppDeployBoundRoot{}, "", false
+}
+
+func switchEdgeAppDeployCurrent(root string, revision string) error {
+	rootAbs, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return err
+	}
+	revision = normalizeEdgeHex64(revision)
+	if revision == "" {
+		return fmt.Errorf("app deploy revision is invalid")
+	}
+	releaseAbs := filepath.Join(rootAbs, "releases", revision)
+	if st, err := os.Stat(releaseAbs); err != nil || !st.IsDir() {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("app deploy release path is not a directory")
+	}
+	currentAbs := filepath.Join(rootAbs, "current")
+	if st, err := os.Lstat(currentAbs); err == nil {
+		if st.Mode()&os.ModeSymlink == 0 {
+			return fmt.Errorf("app deploy current path is not a managed symlink")
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	tmpAbs := filepath.Join(rootAbs, ".current-"+strconv.FormatInt(time.Now().UTC().UnixNano(), 36))
+	_ = os.Remove(tmpAbs)
+	if err := os.Symlink(filepath.Join("releases", revision), tmpAbs); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpAbs, currentAbs); err != nil {
+		_ = os.Remove(tmpAbs)
+		return err
+	}
+	return nil
+}
+
+func writeEdgeAppDeployState(root string, state edgeAppDeployStateFile) error {
+	rootAbs, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(rootAbs, "deploy-state.json"), append(raw, '\n'), 0o644)
+}
+
+func currentEdgeAppDeployRevision(root string) string {
+	raw, err := os.ReadFile(filepath.Join(root, "deploy-state.json"))
+	if err != nil {
+		return ""
+	}
+	var state edgeAppDeployStateFile
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return ""
+	}
+	return normalizeEdgeHex64(state.PackageRevision)
+}
+
+func currentEdgeAppDeployStateStatuses() []edgeAppDeployApplyStatus {
+	baseAbs, err := filepath.Abs(filepath.Join("data", "app-deployments"))
+	if err != nil {
+		return nil
+	}
+	entries, err := os.ReadDir(baseAbs)
+	if err != nil {
+		return nil
+	}
+	out := []edgeAppDeployApplyStatus{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		appID := normalizeEdgeAppDeployID(entry.Name())
+		if appID == "" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(baseAbs, appID, "deploy-state.json"))
+		if err != nil {
+			continue
+		}
+		var state edgeAppDeployStateFile
+		if err := json.Unmarshal(raw, &state); err != nil {
+			continue
+		}
+		revision := normalizeEdgeHex64(state.PackageRevision)
+		hash := normalizeEdgeHex64(state.PackageHash)
+		if revision == "" || hash == "" {
+			continue
+		}
+		out = append(out, edgeAppDeployApplyStatus{
+			AppID:                appID,
+			LocalPackageRevision: revision,
+			LocalPackageHash:     hash,
+			ApplyState:           "applied",
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].AppID < out[j].AppID
+	})
+	return out
+}
+
+func restartEdgeAppDeployRuntime(binding edgeAppDeployBinding, behavior string) error {
+	switch strings.TrimSpace(behavior) {
+	case "", "none":
+		return nil
+	case "reload-runtime":
+		switch binding.RuntimeFamily {
+		case "php-fpm":
+			if binding.RuntimeID == "" {
+				return fmt.Errorf("php-fpm runtime_id is empty")
+			}
+			return ReloadPHPRuntimeProcess(binding.RuntimeID)
+		case "psgi":
+			if binding.ProcessID == "" {
+				return fmt.Errorf("psgi process id is empty")
+			}
+			return ReloadPSGIProcess(binding.ProcessID)
+		default:
+			return nil
+		}
+	case "restart-runtime":
+		switch binding.RuntimeFamily {
+		case "php-fpm":
+			if binding.RuntimeID == "" {
+				return fmt.Errorf("php-fpm runtime_id is empty")
+			}
+			if err := StopPHPRuntimeProcess(binding.RuntimeID); err != nil {
+				return err
+			}
+			return StartPHPRuntimeProcess(binding.RuntimeID)
+		case "psgi":
+			if binding.ProcessID == "" {
+				return fmt.Errorf("psgi process id is empty")
+			}
+			if err := StopPSGIProcess(binding.ProcessID); err != nil {
+				return err
+			}
+			return StartPSGIProcess(binding.ProcessID)
+		default:
+			return nil
+		}
+	default:
+		return fmt.Errorf("unsupported app deploy restart behavior")
+	}
+}
+
+func runEdgeAppDeployScript(ctx context.Context, script string, cwd string, timeoutSec int64, binding edgeAppDeployBinding, packageRevision string, parsed appdeploybundle.Parsed) (string, error) {
+	script = strings.TrimSpace(script)
+	if script == "" {
+		return "", nil
+	}
+	if timeoutSec <= 0 {
+		timeoutSec = 60
+	}
+	if timeoutSec > 900 {
+		timeoutSec = 900
+	}
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		return "", fmt.Errorf("app deploy script shell is unavailable")
+	}
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, "/bin/sh", "-eu", "-c", script)
+	cmd.Dir = cwd
+	cmd.Env = []string{
+		"PATH=/usr/local/bin:/usr/bin:/bin",
+		"TUKUYOMI_APP_ID=" + binding.AppID,
+		"TUKUYOMI_PACKAGE_REVISION=" + packageRevision,
+		"TUKUYOMI_PACKAGE_HASH=" + parsed.PackageHash,
+		"TUKUYOMI_RELEASE_DIR=" + cwd,
+		"TUKUYOMI_MANAGED_ROOT=" + binding.ManagedRoot,
+	}
+	tail := &edgeTailWriter{limit: appdeploybundle.MaxScriptOutputBytes}
+	cmd.Stdout = tail
+	cmd.Stderr = tail
+	err := cmd.Run()
+	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		return tail.String(), fmt.Errorf("app deploy script timed out")
+	}
+	if err != nil {
+		return tail.String(), fmt.Errorf("app deploy script failed: %w", err)
+	}
+	return tail.String(), nil
+}
+
+type edgeTailWriter struct {
+	buf   []byte
+	limit int
+}
+
+func (w *edgeTailWriter) Write(p []byte) (int, error) {
+	if w.limit <= 0 {
+		return len(p), nil
+	}
+	w.buf = append(w.buf, p...)
+	if len(w.buf) > w.limit {
+		copy(w.buf, w.buf[len(w.buf)-w.limit:])
+		w.buf = w.buf[:w.limit]
+	}
+	return len(p), nil
+}
+
+func (w *edgeTailWriter) String() string {
+	if w == nil || len(w.buf) == 0 {
+		return ""
+	}
+	return clampEdgeDeployText(string(w.buf), w.limit)
+}
+
+func edgeMergeOutputTail(parts ...string) string {
+	out := strings.TrimSpace(strings.Join(parts, "\n"))
+	return clampEdgeDeployText(out, appdeploybundle.MaxScriptOutputBytes)
 }
 
 func normalizeEdgeRuntimeAssignmentIdentity(runtimeFamily, runtimeID string) (string, string, error) {
@@ -2837,6 +4306,11 @@ func extractEdgeRuntimeArtifactToStage(compressed []byte, parsed runtimeartifact
 	defer gr.Close()
 	tr := tar.NewReader(gr)
 	written := map[string]struct{}{}
+	type pendingRuntimeHardlink struct {
+		name   string
+		target string
+	}
+	var hardlinks []pendingRuntimeHardlink
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -2848,7 +4322,7 @@ func extractEdgeRuntimeArtifactToStage(compressed []byte, parsed runtimeartifact
 		if hdr == nil || hdr.Typeflag == tar.TypeDir {
 			continue
 		}
-		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA && hdr.Typeflag != tar.TypeLink {
 			return fmt.Errorf("runtime artifact contains non-regular entry %q", hdr.Name)
 		}
 		name, err := cleanEdgeRuntimeArchivePath(hdr.Name)
@@ -2866,6 +4340,20 @@ func extractEdgeRuntimeArtifactToStage(compressed []byte, parsed runtimeartifact
 			return fmt.Errorf("runtime artifact contains duplicate archive path %q", name)
 		}
 		written[name] = struct{}{}
+		if hdr.Typeflag == tar.TypeLink {
+			linkTarget, err := cleanEdgeRuntimeArchivePath(hdr.Linkname)
+			if err != nil {
+				return err
+			}
+			if manifestFile.LinkTarget == "" || manifestFile.LinkTarget != linkTarget {
+				return fmt.Errorf("runtime artifact hardlink target mismatch for %q", name)
+			}
+			hardlinks = append(hardlinks, pendingRuntimeHardlink{name: name, target: linkTarget})
+			continue
+		}
+		if manifestFile.LinkTarget != "" {
+			return fmt.Errorf("runtime artifact expected hardlink for %q", name)
+		}
 		target := filepath.Join(stageAbs, filepath.FromSlash(name))
 		if !edgePathWithin(stageAbs, target) {
 			return fmt.Errorf("runtime artifact path escapes install directory")
@@ -2875,6 +4363,22 @@ func extractEdgeRuntimeArtifactToStage(compressed []byte, parsed runtimeartifact
 		}
 		if err := writeEdgeRuntimeArtifactFile(target, tr, manifestFile.SizeBytes, manifestFile.Mode); err != nil {
 			return err
+		}
+	}
+	for _, link := range hardlinks {
+		target := filepath.Join(stageAbs, filepath.FromSlash(link.name))
+		source := filepath.Join(stageAbs, filepath.FromSlash(link.target))
+		if !edgePathWithin(stageAbs, target) || !edgePathWithin(stageAbs, source) {
+			return fmt.Errorf("runtime artifact path escapes install directory")
+		}
+		if _, exists := written[link.target]; !exists {
+			return fmt.Errorf("runtime artifact hardlink target %q was not installed", link.target)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		if err := os.Link(source, target); err != nil {
+			return fmt.Errorf("create runtime artifact hardlink %q: %w", link.name, err)
 		}
 	}
 	for _, file := range parsed.Manifest.Files {
@@ -3453,6 +4957,71 @@ func signedEdgeWAFRuleArtifactDownloadRequest(identity edgeDeviceIdentityRecord,
 	return req, nil
 }
 
+func signedEdgeAppDeployPackageDownloadRequest(identity edgeDeviceIdentityRecord, assignment edgeAppDeployDeviceAssignment) (edgeAppDeployPackageDownloadWireRequest, error) {
+	privateKey, _, err := parseEdgeDevicePrivateKey(identity.PrivateKeyPEM)
+	if err != nil {
+		return edgeAppDeployPackageDownloadWireRequest{}, err
+	}
+	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	nonce, err := randomEdgeIdentifier("nonce")
+	if err != nil {
+		return edgeAppDeployPackageDownloadWireRequest{}, err
+	}
+	req := edgeAppDeployPackageDownloadWireRequest{
+		DeviceID:                   identity.DeviceID,
+		KeyID:                      identity.KeyID,
+		PublicKeyFingerprintSHA256: identity.PublicKeyFingerprintSHA256,
+		Timestamp:                  timestamp,
+		Nonce:                      nonce,
+		AppID:                      normalizeEdgeAppDeployID(assignment.AppID),
+		PackageRevision:            normalizeEdgeHex64(assignment.PackageRevision),
+		PackageHash:                normalizeEdgeHex64(assignment.PackageHash),
+	}
+	if req.AppID == "" || req.PackageRevision == "" || req.PackageHash == "" {
+		return edgeAppDeployPackageDownloadWireRequest{}, fmt.Errorf("app deploy assignment is missing package identity")
+	}
+	req.BodyHash = edgeAppDeployPackageDownloadBodyHash(req)
+	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)))
+	req.SignatureB64 = base64.StdEncoding.EncodeToString(signature)
+	return req, nil
+}
+
+func signedEdgeAppDeployBaselineUploadRequest(identity edgeDeviceIdentityRecord, assignment edgeAppDeployDeviceAssignment, parsed appdeploybundle.Parsed, body []byte) (edgeAppDeployBaselineUploadWireRequest, error) {
+	privateKey, _, err := parseEdgeDevicePrivateKey(identity.PrivateKeyPEM)
+	if err != nil {
+		return edgeAppDeployBaselineUploadWireRequest{}, err
+	}
+	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	nonce, err := randomEdgeIdentifier("nonce")
+	if err != nil {
+		return edgeAppDeployBaselineUploadWireRequest{}, err
+	}
+	req := edgeAppDeployBaselineUploadWireRequest{
+		DeviceID:                   identity.DeviceID,
+		KeyID:                      identity.KeyID,
+		PublicKeyFingerprintSHA256: identity.PublicKeyFingerprintSHA256,
+		Timestamp:                  timestamp,
+		Nonce:                      nonce,
+		AppID:                      normalizeEdgeAppDeployID(assignment.AppID),
+		RuntimeFamily:              strings.ToLower(strings.TrimSpace(assignment.RuntimeFamily)),
+		RuntimeID:                  clampEdgeMetadataText(assignment.RuntimeID, 64),
+		ProfileRevision:            normalizeEdgeHex64(assignment.ProfileRevision),
+		Roots:                      append([]edgeAppDeployRoot(nil), assignment.Roots...),
+		PackageHash:                parsed.PackageHash,
+		CompressedSize:             parsed.CompressedSize,
+		UncompressedSize:           parsed.UncompressedSize,
+		FileCount:                  parsed.FileCount,
+		PackageB64:                 base64.StdEncoding.EncodeToString(body),
+	}
+	if req.AppID == "" || req.RuntimeFamily == "" || req.ProfileRevision == "" || req.PackageHash == "" {
+		return edgeAppDeployBaselineUploadWireRequest{}, fmt.Errorf("app deploy adoption assignment is incomplete")
+	}
+	req.BodyHash = edgeAppDeployBaselineUploadBodyHash(req)
+	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)))
+	req.SignatureB64 = base64.StdEncoding.EncodeToString(signature)
+	return req, nil
+}
+
 func parseEdgeDevicePrivateKey(raw string) (ed25519.PrivateKey, []byte, error) {
 	block, rest := pem.Decode([]byte(raw))
 	if block == nil || block.Type != "PRIVATE KEY" || len(strings.TrimSpace(string(rest))) != 0 {
@@ -3850,6 +5419,71 @@ func sendEdgeWAFRuleArtifactDownload(ctx context.Context, downloadURL string, wi
 	return res.StatusCode, resBody, nil
 }
 
+func sendEdgeAppDeployPackageDownload(ctx context.Context, downloadURL string, wireReq edgeAppDeployPackageDownloadWireRequest, maxBytes int64) (int, []byte, error) {
+	body, err := json.Marshal(wireReq)
+	if err != nil {
+		return 0, nil, err
+	}
+	if maxBytes <= 0 || maxBytes > appdeploybundle.MaxCompressedBytes {
+		maxBytes = appdeploybundle.MaxCompressedBytes
+	}
+	ctx, cancel := context.WithTimeout(ctx, edgeAppDeployPackageTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, downloadURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client, err := edgeCenterHTTPClient()
+	if err != nil {
+		return 0, nil, err
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer res.Body.Close()
+	resBody, readErr := io.ReadAll(io.LimitReader(res.Body, maxBytes+1))
+	if readErr != nil {
+		return res.StatusCode, nil, readErr
+	}
+	if int64(len(resBody)) > maxBytes {
+		return res.StatusCode, nil, fmt.Errorf("app deploy package download exceeds %d bytes", maxBytes)
+	}
+	return res.StatusCode, resBody, nil
+}
+
+func sendEdgeAppDeployBaselineUpload(ctx context.Context, uploadURL string, wireReq edgeAppDeployBaselineUploadWireRequest) (int, []byte, error) {
+	body, err := json.Marshal(wireReq)
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(body) > appdeploybundle.MaxCompressedBytes*2+64*1024 {
+		return 0, nil, fmt.Errorf("app deploy baseline upload payload exceeds limit")
+	}
+	ctx, cancel := context.WithTimeout(ctx, edgeAppDeployPackageTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client, err := edgeCenterHTTPClient()
+	if err != nil {
+		return 0, nil, err
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer res.Body.Close()
+	resBody, readErr := io.ReadAll(io.LimitReader(res.Body, 1024*1024))
+	if readErr != nil {
+		return res.StatusCode, nil, readErr
+	}
+	return res.StatusCode, resBody, nil
+}
+
 func pushEdgeRuleArtifactBundleIfChanged(ctx context.Context, identity *edgeDeviceIdentityRecord) bool {
 	return pushEdgeRuleArtifactBundle(ctx, identity, false)
 }
@@ -4074,11 +5708,17 @@ func edgeDeviceStatusBodyHash(req edgeDeviceStatusWireRequest) string {
 		req.DistroVersion + "\n" +
 		strconv.FormatBool(req.RuntimeDeploymentSupported) + "\n" +
 		edgeRuntimeInventoryCanonical(req.RuntimeInventory)
+	if len(req.AppDeployCandidates) > 0 {
+		body += "\n" + edgeAppDeployCandidatesCanonical(req.AppDeployCandidates)
+	}
 	if req.ProxyRuleApplyStatus != nil {
 		body += "\n" + edgeProxyRuleApplyStatusCanonical(*req.ProxyRuleApplyStatus)
 	}
 	if req.WAFRuleApplyStatus != nil {
 		body += "\n" + edgeWAFRuleApplyStatusCanonical(*req.WAFRuleApplyStatus)
+	}
+	if len(req.AppDeployApplyStatus) > 0 {
+		body += "\n" + edgeAppDeployApplyStatusesCanonical(req.AppDeployApplyStatus)
 	}
 	sum := sha256.Sum256([]byte(body))
 	return hex.EncodeToString(sum[:])
@@ -4141,6 +5781,89 @@ func edgeWAFRuleApplyStatusCanonical(status edgeWAFRuleApplyStatus) string {
 		status.LocalBundleRevision + "\n" +
 		status.ApplyState + "\n" +
 		status.ApplyError
+}
+
+func edgeAppDeployApplyStatusesCanonical(items []edgeAppDeployApplyStatus) string {
+	if len(items) == 0 {
+		return "0"
+	}
+	sorted := append([]edgeAppDeployApplyStatus(nil), items...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].AppID < sorted[j].AppID
+	})
+	var b strings.Builder
+	b.WriteString(strconv.Itoa(len(sorted)))
+	for _, item := range sorted {
+		b.WriteByte('\n')
+		b.WriteString(item.AppID)
+		b.WriteByte('\t')
+		b.WriteString(item.DesiredPackageRevision)
+		b.WriteByte('\t')
+		b.WriteString(item.LocalPackageRevision)
+		b.WriteByte('\t')
+		b.WriteString(item.LocalPackageHash)
+		b.WriteByte('\t')
+		b.WriteString(item.ApplyState)
+		b.WriteByte('\t')
+		b.WriteString(item.ApplyError)
+		b.WriteByte('\t')
+		b.WriteString(item.OutputTail)
+	}
+	return b.String()
+}
+
+func edgeAppDeployCandidatesCanonical(items []edgeAppDeployCandidate) string {
+	if len(items) == 0 {
+		return "0"
+	}
+	sorted := append([]edgeAppDeployCandidate(nil), items...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].AppID < sorted[j].AppID
+	})
+	var b strings.Builder
+	b.WriteString(strconv.Itoa(len(sorted)))
+	for _, item := range sorted {
+		b.WriteByte('\n')
+		b.WriteString(item.AppID)
+		b.WriteByte('\t')
+		b.WriteString(item.RuntimeFamily)
+		b.WriteByte('\t')
+		b.WriteString(item.RuntimeID)
+		b.WriteByte('\t')
+		b.WriteString(strconv.FormatBool(item.Managed))
+		b.WriteByte('\t')
+		b.WriteString(edgeAppDeployRootsCanonical(item.Roots))
+	}
+	return b.String()
+}
+
+func edgeAppDeployRootsCanonical(items []edgeAppDeployRoot) string {
+	if len(items) == 0 {
+		return "0"
+	}
+	sorted := append([]edgeAppDeployRoot(nil), items...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].RootID < sorted[j].RootID
+	})
+	var b strings.Builder
+	b.WriteString(strconv.Itoa(len(sorted)))
+	for _, item := range sorted {
+		b.WriteByte('\n')
+		b.WriteString(item.RootID)
+		b.WriteByte('\t')
+		b.WriteString(item.RuntimeField)
+		b.WriteByte('\t')
+		b.WriteString(item.SourcePath)
+		b.WriteByte('\t')
+		b.WriteString(item.PackagePrefix)
+		b.WriteByte('\t')
+		b.WriteString(item.TargetSubpath)
+		b.WriteByte('\t')
+		b.WriteString(edgeAppDeployRuntimeSubpath(item))
+		b.WriteByte('\t')
+		b.WriteString(strconv.FormatBool(item.Required))
+	}
+	return b.String()
 }
 
 func edgeDeviceConfigSnapshotBodyHash(req edgeDeviceConfigSnapshotWireRequest) string {
@@ -4208,6 +5931,40 @@ func edgeWAFRuleArtifactDownloadBodyHash(req edgeWAFRuleArtifactDownloadWireRequ
 			req.Timestamp + "\n" +
 			req.Nonce + "\n" +
 			req.BundleRevision,
+	))
+	return hex.EncodeToString(sum[:])
+}
+
+func edgeAppDeployPackageDownloadBodyHash(req edgeAppDeployPackageDownloadWireRequest) string {
+	sum := sha256.Sum256([]byte(
+		req.DeviceID + "\n" +
+			req.KeyID + "\n" +
+			req.PublicKeyFingerprintSHA256 + "\n" +
+			req.Timestamp + "\n" +
+			req.Nonce + "\n" +
+			req.AppID + "\n" +
+			req.PackageRevision + "\n" +
+			req.PackageHash,
+	))
+	return hex.EncodeToString(sum[:])
+}
+
+func edgeAppDeployBaselineUploadBodyHash(req edgeAppDeployBaselineUploadWireRequest) string {
+	sum := sha256.Sum256([]byte(
+		req.DeviceID + "\n" +
+			req.KeyID + "\n" +
+			req.PublicKeyFingerprintSHA256 + "\n" +
+			req.Timestamp + "\n" +
+			req.Nonce + "\n" +
+			req.AppID + "\n" +
+			req.RuntimeFamily + "\n" +
+			req.RuntimeID + "\n" +
+			req.ProfileRevision + "\n" +
+			edgeAppDeployRootsCanonical(req.Roots) + "\n" +
+			req.PackageHash + "\n" +
+			strconv.FormatInt(req.CompressedSize, 10) + "\n" +
+			strconv.FormatInt(req.UncompressedSize, 10) + "\n" +
+			strconv.Itoa(req.FileCount),
 	))
 	return hex.EncodeToString(sum[:])
 }
@@ -4298,6 +6055,28 @@ func clampEdgeMetadataText(raw string, limit int) string {
 	return raw
 }
 
+func clampEdgeDeployText(raw string, limit int) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || limit <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range raw {
+		if b.Len() >= limit {
+			break
+		}
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			b.WriteRune(r)
+		case r >= 0x20 && r <= 0x7e:
+			b.WriteRune(r)
+		default:
+			b.WriteByte('?')
+		}
+	}
+	return b.String()
+}
+
 func normalizeEdgeHex64(raw string) string {
 	raw = strings.ToLower(strings.TrimSpace(raw))
 	if len(raw) != 64 {
@@ -4305,6 +6084,22 @@ func normalizeEdgeHex64(raw string) string {
 	}
 	for _, r := range raw {
 		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return ""
+		}
+	}
+	return raw
+}
+
+func normalizeEdgeAppDeployID(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || len(raw) > 64 {
+		return ""
+	}
+	for _, r := range raw {
+		if (r < 'a' || r > 'z') &&
+			(r < 'A' || r > 'Z') &&
+			(r < '0' || r > '9') &&
+			r != '.' && r != '_' && r != ':' && r != '-' {
 			return ""
 		}
 	}

@@ -172,7 +172,7 @@ func TestRemoteSSHRelayHubTerminatesWaitingPair(t *testing.T) {
 func TestRemoteSSHOperatorStreamRequiresAdminAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	registerDeviceEnrollmentRoutes(r)
+	registerDeviceEnrollmentRoutes(r, RuntimeConfig{})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/remote-ssh/operator-stream", nil)
 	req.Header.Set("Connection", "Upgrade")

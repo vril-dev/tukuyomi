@@ -248,8 +248,8 @@ Typical production pattern:
   the container to apply listener / runtime / storage policy /
   observability changes.
 
-Site-managed ACME picks `tls.mode=acme` per-site on the `Sites` screen.
-The ACME cache lives under the `acme/` namespace of `persistent_storage`.
+ACME picks `mode=acme` on the `TLS` screen. The ACME cache lives under the
+`acme/` namespace of `persistent_storage`.
 For single-instance with the local backend, mount
 `/app/data/persistent`; for replicated / node-replacement scenarios use
 the **S3 backend or a shared mount**. Azure Blob / GCS backends are

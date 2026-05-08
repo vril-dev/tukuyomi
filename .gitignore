@@ -73,6 +73,9 @@ data/tmp/*
 data/scheduled-tasks/*
 !data/scheduled-tasks/
 !data/scheduled-tasks/README.md
+data/app-deployments/*
+!data/app-deployments/
+!data/app-deployments/.gitignore
 data/geoip/*
 !data/geoip/
 !data/geoip/README.md

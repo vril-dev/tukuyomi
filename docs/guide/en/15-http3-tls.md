@@ -1,10 +1,10 @@
 # Chapter 15. HTTP/3 and TLS
 
 Chapter 14 framed the current listener-topology decision. This chapter
-covers **what TLS and HTTP/3 do on top of that single listener**:
+covers **what TLS and HTTP/3 do on the public listener path**:
 
 1. Enabling built-in TLS termination and the available options.
-2. Site-managed ACME (Let's Encrypt automatic certificate refresh).
+2. TLS binding ACME (Let's Encrypt automatic certificate refresh).
 3. Built-in HTTP/3 and `Alt-Svc` behavior.
 4. What the HTTP/3 public-entry smoke checks.
 
@@ -42,18 +42,24 @@ Key points:
 - `server.http3.enabled=true` requires built-in TLS.
 - HTTP/3 uses **the same numeric port as `server.listen_addr` over
   UDP**.
-- `server.tls.redirect_http=true` adds a plain HTTP listener on
-  `http_redirect_addr`.
-- ACME auto TLS is selected per-site with `tls.mode=acme`. The ACME
-  account key, challenge tokens, and certificate cache live under
-  the **`acme/` namespace of `persistent_storage`**.
-- Because ACME HTTP-01 is used, **port 80 must reach
-  `server.tls.http_redirect_addr`**.
-- Let's Encrypt `staging` / `production` is selected per-site under
-  the ACME environment.
+- In the legacy single-listener shape, `server.tls.redirect_http=true` adds a
+  plain HTTP listener on `http_redirect_addr`.
+- `server.public_listeners` can be used for staged moves such as keeping
+  `:9090` online while adding an HTTP row on `:80` and an HTTPS row on `:443`.
+  If you want HTTP to redirect after HTTPS is verified, express that as an HTTP
+  listener row with `http_behavior=redirect`.
+- ACME auto TLS is selected from TLS bindings. The ACME account key,
+  challenge tokens, and certificate cache live under the **`acme/`
+  namespace of `persistent_storage`**.
+- Sites are routing objects and require `default_upstream`. TLS bindings
+  are Host/SNI certificate objects independent of Sites and Proxy Rules.
+- Because ACME HTTP-01 is used, **port 80 must reach a Gateway HTTP listener**.
+- Let's Encrypt `staging` / `production` is selected per TLS binding.
 - `paths.site_config_file` defaults to `conf/sites.json`. In the
   DB-backed runtime this is **a seed / export path for an empty DB**,
   not the live source of truth (Chapter 13).
+- `paths.tls_binding_config_file` defaults to `conf/tls-bindings.json`.
+  In the DB-backed runtime this is also a seed / export path.
 
 ## 15.2 Inbound timeout boundary
 
@@ -80,19 +86,32 @@ boundary**:
 - The TLS public listener **advertises HTTP/1.1** on this native
   server path. HTTP/3 is handled on a **dedicated HTTP/3 listener**
   even when enabled.
+- Explicit `server.public_listeners` currently focuses on HTTP/1.1 /
+  HTTPS rollout. Do not enable `server.http3.enabled` together with
+  `server.public_listeners`.
 
-## 15.3 Site-managed ACME
+## 15.3 TLS Binding ACME
 
-Site-managed ACME picks **`tls.mode=acme`** per-site on the `Sites`
-screen. `production` and `staging` choose Let's Encrypt's production
-or staging CA, and the account email is optional.
-
-![Sites screen](../../images/ui-samples/16-sites.png)
+TLS binding ACME picks **`mode=acme`** on the `TLS` screen.
+`production` and `staging` choose Let's Encrypt's production or staging CA,
+and the account email is optional.
 
 When you use ACME:
 
-- Because HTTP-01 challenge is used, **port 80 must reach
-  `server.tls.http_redirect_addr`**.
+- Because HTTP-01 challenge is used, **the DNS name must point at this Gateway
+  and port 80 must be externally reachable**. When `server.public_listeners` is
+  used, enable an HTTP listener row on `:80`. The ACME challenge path is handled
+  before normal proxying or redirect behavior.
+- Add the HTTPS listener as a `protocol=https` public listener row on `:443` in
+  `Settings` -> `Listener & Network`. Enable `Enable built-in TLS on the public
+  listener`, save, and restart the Gateway.
+- The TLS binding `Hosts` value must be the DNS name used in the browser.
+  `https://<IP address>/...` warns because the certificate is issued for the DNS
+  name.
+- Verify challenge handling and HTTPS reachability with `staging` before
+  switching to the production CA. A browser that saw the staging certificate may
+  keep a warning state; after switching to `production`, re-check in a new tab or
+  private window.
 - The certificate cache, ACME account key, and challenge tokens are
   stored under the **`acme/` namespace of `persistent_storage`**.
 - For single-node VPS / on-prem, **back up
@@ -212,8 +231,8 @@ fronting LB; for direct exposure it pays to run this once.
 - Enable built-in TLS with `server.tls.enabled=true`. TLS is required
   for `http3.enabled=true`. HTTP/3 uses **the same numeric port over
   UDP**.
-- ACME auto TLS is per-site via `tls.mode=acme`, **port 80 forwarding
-  is required** for HTTP-01, certificate cache lives under the
+- ACME auto TLS is configured on TLS bindings, **port 80 reachability is
+  required** for HTTP-01, certificate cache lives under the
   `acme/` namespace of `persistent_storage`.
 - Inbound timeouts are bounded by **five settings**:
   `read_header_timeout_sec` / `read_timeout_sec` /

@@ -93,9 +93,9 @@ make gateway-preview-up
 - Gateway UI: `http://localhost:9090/tukuyomi-ui`
 - Gateway API: `http://localhost:9090/tukuyomi-api`
 
-最初に `tukuyomi-ui` を開くと、設定済みの管理者でログインを求められます。
-`minimal` preset が用意した初期 credential を入力すると、ステータス画面（第1章で
-掲示したスクリーンショットの画面）が表示されます。
+最初に `tukuyomi-ui` を開くと、設定済みの管理者アカウントでログインを
+求められます。`minimal` preset が用意した初期 credential を入力すると、
+ステータス画面（第1章で示したスクリーンショットの画面）が表示されます。
 
 ## 2.5　Preview の状態を保持したいとき
 
@@ -135,7 +135,7 @@ Gateway UI には、運用上よく使う画面がひととおり揃っていま
    - direct named upstream を、drain / disable / weight override する運用画面
      です（第5章）。
 7. **Sites**
-   - site ownership と TLS binding を編集する画面です（第15章）。
+   - site routing と TLS binding を編集する画面です（第15章）。
 8. **Cache Rules / Country Block / Rate Limit / Bot Defense / Semantic Security
    / IP Reputation / Notifications**
    - 各種リクエスト境界の制御を扱う画面です。第7〜9章で順次扱います。

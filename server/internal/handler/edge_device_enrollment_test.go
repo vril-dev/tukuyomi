@@ -39,6 +39,25 @@ func TestPostEdgeDeviceEnrollmentCreatesIdentityAndSendsSignedRequest(t *testing
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer InitLogsStatsStore(false, "", 0)
+	store := getLogsStatsStore()
+	if _, _, err := store.writeRequestCountryGeoIPConfigVersion("", requestCountryGeoIPConfigVersion{
+		Present: true,
+		Raw:     []byte("AccountID 123\nLicenseKey secret-license\nEditionIDs GeoLite2-Country\n"),
+		Summary: requestCountryGeoIPConfigSummary{
+			EditionIDs:              []string{"GeoLite2-Country"},
+			SupportedCountryEdition: "GeoLite2-Country",
+			HasAccountID:            true,
+			HasLicenseKey:           true,
+		},
+	}, configVersionSourceImport, "", "test GeoIP config import", 0); err != nil {
+		t.Fatalf("writeRequestCountryGeoIPConfigVersion: %v", err)
+	}
+	if _, _, err := store.writeRequestCountryMMDBAssetVersion("", requestCountryMMDBAssetVersion{
+		Present: true,
+		Raw:     []byte("test-mmdb-bytes"),
+	}, configVersionSourceImport, "", "test MMDB asset import", 0); err != nil {
+		t.Fatalf("writeRequestCountryMMDBAssetVersion: %v", err)
+	}
 	restoreConfig := saveConfigFilePathForTest(t, writeSettingsConfigFixture(t))
 	defer restoreConfig()
 	oldAllowInsecureDefaults := config.AllowInsecureDefaults
@@ -100,6 +119,23 @@ func TestPostEdgeDeviceEnrollmentCreatesIdentityAndSendsSignedRequest(t *testing
 				t.Fatalf("decode config snapshot: %v", err)
 			}
 			verifySignedEdgeConfigSnapshotForTest(t, req, capturedPublicKey, capturedFingerprint)
+			assertEdgeConfigSnapshotHasDomains(t, req.Snapshot, []string{
+				appConfigDomain,
+				proxyConfigDomain,
+				siteConfigDomain,
+				tlsBindingConfigDomain,
+				vhostConfigDomain,
+				phpRuntimeInventoryConfigDomain,
+				psgiRuntimeInventoryConfigDomain,
+				scheduledTaskConfigDomain,
+				responseCacheConfigBlobKey,
+				upstreamRuntimeConfigDomain,
+				requestCountryGeoIPConfigDomain,
+				requestCountryMMDBConfigDomain,
+			})
+			if strings.Contains(string(req.Snapshot), "secret-license") || strings.Contains(string(req.Snapshot), "test-mmdb-bytes") {
+				t.Fatalf("config snapshot leaked GeoIP secret or MMDB payload: %s", string(req.Snapshot))
+			}
 			_, _ = w.Write([]byte(`{"status":"stored","config_revision":` + quoteJSON(req.ConfigRevision) + `,"received_at_unix":1700000001}`))
 		case "/v1/remote-ssh/signing-key":
 			signingKeyCalls++
@@ -1911,6 +1947,21 @@ func verifySignedEdgeConfigSnapshotForTest(t *testing.T, req edgeDeviceConfigSna
 	}
 	if !ed25519.Verify(pub, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)), signature) {
 		t.Fatalf("config snapshot signature verification failed")
+	}
+}
+
+func assertEdgeConfigSnapshotHasDomains(t *testing.T, raw json.RawMessage, domains []string) {
+	t.Helper()
+	var payload struct {
+		Domains map[string]json.RawMessage `json:"domains"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("decode config snapshot domains: %v", err)
+	}
+	for _, domain := range domains {
+		if _, ok := payload.Domains[domain]; !ok {
+			t.Fatalf("config snapshot missing domain %q: %s", domain, string(raw))
+		}
 	}
 }
 

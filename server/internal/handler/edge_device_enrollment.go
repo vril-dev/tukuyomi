@@ -1548,6 +1548,9 @@ func addGatewayConfigSnapshotDomains(builder *edgeconfigsnapshot.Builder, ruleAr
 	siteRaw, siteETag, _, _, _ := SiteConfigSnapshot()
 	builder.AddRawDomain(siteConfigDomain, siteETag, []byte(siteRaw))
 
+	tlsBindingRaw, tlsBindingETag, _, _, _ := TLSBindingConfigSnapshot()
+	builder.AddRawDomain(tlsBindingConfigDomain, tlsBindingETag, []byte(tlsBindingRaw))
+
 	vhostRaw, vhostETag, _, _ := VhostConfigSnapshot()
 	builder.AddRawDomain(vhostConfigDomain, vhostETag, []byte(vhostRaw))
 
@@ -1630,6 +1633,29 @@ func addGatewayConfigSnapshotDomains(builder *edgeconfigsnapshot.Builder, ruleAr
 		builder.AddValueDomain(wafRuleAssetsConfigDomain, rec.ETag, map[string]any{
 			"bundle_revision": strings.TrimSpace(ruleArtifactRevision),
 			"assets":          out,
+		})
+	}
+	if cfg, rec, found, err := store.loadActiveRequestCountryGeoIPConfig(); err != nil {
+		builder.AddDomainError(requestCountryGeoIPConfigDomain, err)
+	} else if found {
+		builder.AddValueDomain(requestCountryGeoIPConfigDomain, rec.ETag, map[string]any{
+			"present":    cfg.Present,
+			"size_bytes": cfg.SizeBytes,
+			"summary": map[string]any{
+				"edition_ids":               append([]string(nil), cfg.Summary.EditionIDs...),
+				"supported_country_edition": cfg.Summary.SupportedCountryEdition,
+				"has_account_id":            cfg.Summary.HasAccountID,
+				"has_license_key":           cfg.Summary.HasLicenseKey,
+			},
+		})
+	}
+	if asset, rec, found, err := store.loadActiveRequestCountryMMDBAsset(); err != nil {
+		builder.AddDomainError(requestCountryMMDBConfigDomain, err)
+	} else if found {
+		builder.AddValueDomain(requestCountryMMDBConfigDomain, rec.ETag, map[string]any{
+			"present":      asset.Present,
+			"size_bytes":   asset.SizeBytes,
+			"content_hash": asset.ContentHash,
 		})
 	}
 }

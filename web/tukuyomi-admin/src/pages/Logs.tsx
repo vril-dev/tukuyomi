@@ -50,7 +50,6 @@ async function readLogs(params: {
   tail: number;
   cursor?: number;
   dir?: "prev" | "next";
-  country?: string;
   reqID?: string;
   search?: string;
   signal?: AbortSignal;
@@ -67,10 +66,6 @@ async function readLogs(params: {
     q.set("dir", params.dir);
   }
 
-  if (params.country) {
-    q.set("country", params.country);
-  }
-
   if (params.reqID) {
     q.set("req_id", params.reqID);
   }
@@ -84,12 +79,9 @@ async function readLogs(params: {
   });
 }
 
-function buildDownloadPath(country?: string, search?: string) {
+function buildDownloadPath(search?: string) {
   const q = new URLSearchParams();
   q.set("src", "waf");
-  if (country) {
-    q.set("country", country);
-  }
   if (search) {
     q.set("q", search);
   }
@@ -99,15 +91,6 @@ function buildDownloadPath(country?: string, search?: string) {
 
 function classNames(...xs: (string | false | null | undefined)[]) {
   return xs.filter(Boolean).join(" ");
-}
-
-function normalizeCountryFilterValue(v: string) {
-  const s = v.trim().toUpperCase();
-  if (!s || s === "ALL") {
-    return "";
-  }
-
-  return s;
 }
 
 function displayCountry(v: unknown) {
@@ -201,13 +184,10 @@ function decisionBadgeClass(decision: RequestDecision) {
 export default function Logs() {
   const { locale, tx } = useI18n();
   const [tail, setTail] = useState<number>(30);
-  const [countryFilter, setCountryFilter] = useState<string>("ALL");
-  const [reqIDFilter, setReqIDFilter] = useState<string>("");
   const [searchInput, setSearchInput] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [pageStart, setPageStart] = useState<number | undefined>(undefined);
   const [pageEnd, setPageEnd] = useState<number | undefined>(undefined);
-  const [dir, setDir] = useState<"prev" | "next" | undefined>(undefined);
   const [data, setData] = useState<ReadResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -239,40 +219,24 @@ export default function Logs() {
       setLoading(true);
       setLoadError("");
       try {
-        const useReqID = reqIDFilter.trim();
-        const useDir = useReqID ? undefined : opts?.dir ?? dir;
+        const useDir = opts?.dir;
 
         let useCursor: number | undefined;
-        if (useReqID || opts?.reset || useDir === undefined) {
+        if (opts?.reset || useDir === undefined) {
           useCursor = undefined;
         } else if (opts?.cursor != null) {
           useCursor = opts.cursor;
-        } else if (useDir === "prev") {
-          useCursor = pageStart;
-        } else if (useDir === "next") {
-          useCursor = pageEnd;
         }
 
         const r = await readLogs({
           tail,
           cursor: useCursor,
           dir: useDir,
-          country: normalizeCountryFilterValue(countryFilter),
-          reqID: useReqID || undefined,
-          search: useReqID ? undefined : searchQuery.trim() || undefined,
+          search: searchQuery.trim() || undefined,
           signal: ac.signal,
         });
 
         setData(r);
-
-        if (useReqID) {
-          setPageStart(0);
-          setPageEnd(r.lines.length);
-          setDir(undefined);
-          setCanPrev(false);
-          setCanNext(false);
-          return;
-        }
 
         const n = r?.lines?.length ?? 0;
         let nextStart = 0;
@@ -296,7 +260,6 @@ export default function Logs() {
         }
         setPageStart(nextStart);
         setPageEnd(nextEnd);
-        setDir(useDir);
 
         if (typeof r.has_prev === "boolean" || typeof r.has_next === "boolean") {
           setCanNext(!!r.has_prev);
@@ -322,7 +285,7 @@ export default function Logs() {
         setLoading(false);
       }
     },
-    [countryFilter, dir, pageEnd, pageStart, reqIDFilter, searchQuery, tail, tx]
+    [searchQuery, tail, tx]
   );
 
   const openRequestDetail = useCallback(
@@ -391,8 +354,7 @@ export default function Logs() {
   }, []);
 
   async function downloadAll() {
-    const country = normalizeCountryFilterValue(countryFilter);
-    const path = buildDownloadPath(country, searchQuery.trim() || undefined);
+    const path = buildDownloadPath(searchQuery.trim() || undefined);
     const { blob, filename } = await apiGetBinary(path);
     const a = document.createElement("a");
     const url = URL.createObjectURL(blob);
@@ -407,8 +369,6 @@ export default function Logs() {
   }
 
   const detailSummary = detailReqID ? summarizeRequestEvents(detailReqID, detailLines) : null;
-  const normalizedCountry = normalizeCountryFilterValue(countryFilter) || "ALL";
-  const reqIDActive = reqIDFilter.trim();
   const searchActive = searchQuery.trim();
   const displayLines = useMemo(() => sortLogLinesNewestFirst(data?.lines ?? []), [data?.lines]);
 
@@ -426,18 +386,16 @@ export default function Logs() {
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
-                setDir(undefined);
                 setSearchQuery(searchInput.trim());
               }
             }}
-            placeholder={tx("path, rule_id, host, message")}
+            placeholder={tx("status, event, country, req_id, path, host")}
           />
         </label>
 
         <button
           disabled={loading}
           onClick={() => {
-            setDir(undefined);
             setSearchQuery(searchInput.trim());
           }}
           className="rounded border px-3 py-1 text-xs"
@@ -452,39 +410,9 @@ export default function Logs() {
             onClick={() => {
               setSearchInput("");
               setSearchQuery("");
-              setDir(undefined);
             }}
           >
             {tx("Clear search")}
-          </button>
-        )}
-
-        <label className="ml-2 text-xs">
-          {tx("Country")}:
-          <input
-            className="ml-1 w-40 rounded border px-2 py-1"
-            value={countryFilter}
-            onChange={(e) => setCountryFilter(e.target.value.toUpperCase())}
-            placeholder="ALL / JP / US"
-          />
-        </label>
-
-        <label className="ml-2 text-xs">
-          {tx("req_id")}:
-          <input
-            className="ml-1 w-48 rounded border px-2 py-1 font-mono"
-            value={reqIDFilter}
-            onChange={(e) => setReqIDFilter(e.target.value)}
-            placeholder={tx("req-...")}
-          />
-        </label>
-
-        {reqIDActive && (
-          <button
-            className="rounded border px-3 py-1 text-xs"
-            onClick={() => setReqIDFilter("")}
-          >
-            {tx("Clear req_id")}
           </button>
         )}
 
@@ -521,7 +449,6 @@ export default function Logs() {
         <button
           disabled={loading}
           onClick={() => {
-            setDir(undefined);
             load({ reset: true });
           }}
           className="rounded border px-3 py-1 text-xs"
@@ -533,27 +460,22 @@ export default function Logs() {
 
       <div className="flex items-center gap-2">
         <button
-          disabled={loading || !canPrev || !!reqIDActive}
-          onClick={() => load({ dir: "next" })}
+          disabled={loading || !canPrev || pageEnd == null}
+          onClick={() => load({ dir: "next", cursor: pageEnd })}
           className="rounded border px-3 py-1 text-xs"
           title={tx("Previous page")}
         >
           {tx("◀ prev")}
         </button>
         <button
-          disabled={loading || !canNext || !!reqIDActive}
-          onClick={() => load({ dir: "prev" })}
+          disabled={loading || !canNext || pageStart == null}
+          onClick={() => load({ dir: "prev", cursor: pageStart })}
           className="rounded border px-3 py-1 text-xs"
           title={tx("Next page")}
         >
           {tx("next ▶")}
         </button>
         {loading && <span className="text-xs text-gray-500">{tx("loading…")}</span>}
-        {reqIDActive && (
-          <span className="text-xs text-gray-500">
-            {tx("request filter active")}: <code>{reqIDActive}</code>
-          </span>
-        )}
         {searchActive && (
           <span className="text-xs text-gray-500">
             {tx("search active")}: <code>{searchActive}</code>
@@ -647,7 +569,7 @@ export default function Logs() {
         <div className="text-xs text-gray-500">
           has_more: {String(data.has_more)} / next_cursor:{" "}
           {data.next_cursor != null ? data.next_cursor : "-"} / page: [{pageStart ?? "-"},{" "}
-          {pageEnd ?? "-"}) / country: {normalizedCountry} / search: {searchActive || "-"}
+          {pageEnd ?? "-"}) / search: {searchActive || "-"}
         </div>
       )}
 

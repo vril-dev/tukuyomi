@@ -949,7 +949,7 @@ install_files() {
     run_priv install -d -m 755 "${systemd_dir}"
     if install_role_includes_gateway; then
       render_systemd_unit "${ROOT_DIR}/docs/build/tukuyomi.service.example" "${systemd_dir}/tukuyomi.service" "${INSTALL_ENV_BASENAME}"
-      if install_role_is_gateway; then
+      if is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
         render_systemd_unit "${ROOT_DIR}/docs/build/tukuyomi-scheduled-tasks.service.example" "${systemd_dir}/tukuyomi-scheduled-tasks.service" "${INSTALL_ENV_BASENAME}"
         run_priv install -m 644 "${ROOT_DIR}/docs/build/tukuyomi-scheduled-tasks.timer.example" "${systemd_dir}/tukuyomi-scheduled-tasks.timer"
       fi
@@ -1024,14 +1024,14 @@ activate_systemd() {
     activate_service "tukuyomi.service"
   fi
 
-  if install_role_is_gateway && is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
+  if install_role_includes_gateway && is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
     if is_enabled "${INSTALL_ENABLE_BOOT}"; then
       run_priv systemctl enable tukuyomi-scheduled-tasks.timer
     fi
     if is_enabled "${INSTALL_START}"; then
       run_priv systemctl start tukuyomi-scheduled-tasks.timer
     fi
-  elif is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
+  elif ! install_role_includes_gateway && is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}"; then
     log "${INSTALL_ROLE} role does not install scheduled-task timer"
   fi
 }

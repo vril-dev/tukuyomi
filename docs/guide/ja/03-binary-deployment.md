@@ -139,7 +139,7 @@ systemd ユニット配置）だけです。
 | config | `conf/config.json` | `conf/config.center.json` | 両方 |
 | WAF/CRS import | 実行する | 実行しない | Gateway front 用に実行する |
 | 初回 gateway DB seed | 実行する | 実行しない | Center route 入りで実行する |
-| scheduled-task timer | 実行する | 実行しない | 実行しない |
+| scheduled-task timer | 実行する | 実行しない | Gateway front 用に実行する |
 | DB migration | 実行する | 実行する | 両方の DB に実行する |
 | 初期 owner bootstrap | 実行する | 実行する | 両方の DB に実行する |
 

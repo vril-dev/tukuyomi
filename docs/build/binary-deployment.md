@@ -128,7 +128,8 @@ Behavior:
   `admin.external_mode` back to `api_only_external` or `deny_external`. To keep
   the stricter first-boot posture, install with
   `INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE=api_only_external`.
-  It does not install the scheduled-task timer.
+  Because this role includes a local Gateway, it also installs the Gateway
+  scheduled-task timer by default.
 - `INSTALL_CENTER_API_BASE_PATH` controls the Center process API path, and
   `INSTALL_CENTER_GATEWAY_API_BASE_PATH` controls the public Gateway route path.
   When they differ, the generated Gateway route rewrites the public path to the

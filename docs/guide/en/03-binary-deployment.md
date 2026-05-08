@@ -145,7 +145,7 @@ user, writing to `/opt/tukuyomi`, installing systemd units).
 | config | `conf/config.json` | `conf/config.center.json` | both |
 | WAF/CRS import | yes | no | yes, for the Gateway front |
 | First-run gateway DB seed | yes | no | yes, with Center routes |
-| Scheduled-task timer | yes | no | no |
+| Scheduled-task timer | yes | no | yes, for the Gateway front |
 | DB migration | yes | yes | both DBs |
 | Initial owner bootstrap | yes | yes | both DBs |
 

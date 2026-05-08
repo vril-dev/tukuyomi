@@ -1,11 +1,13 @@
 export type CenterSettings = {
   apiBasePath: string;
   uiBasePath: string;
+  experimentalAppDeployEnabled: boolean;
 };
 
 const DEFAULT_SETTINGS: CenterSettings = {
   apiBasePath: "/center-api",
   uiBasePath: "/center-ui",
+  experimentalAppDeployEnabled: true,
 };
 
 function normalizeBasePath(value: unknown, fallback: string) {
@@ -32,6 +34,10 @@ function readSettings(): CenterSettings {
     return {
       apiBasePath: normalizeBasePath(parsed.apiBasePath, DEFAULT_SETTINGS.apiBasePath),
       uiBasePath: normalizeBasePath(parsed.uiBasePath, DEFAULT_SETTINGS.uiBasePath),
+      experimentalAppDeployEnabled:
+        typeof parsed.experimentalAppDeployEnabled === "boolean"
+          ? parsed.experimentalAppDeployEnabled
+          : DEFAULT_SETTINGS.experimentalAppDeployEnabled,
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -46,4 +52,8 @@ export function getAPIBasePath() {
 
 export function getUIBasePath() {
   return centerSettings.uiBasePath;
+}
+
+export function isExperimentalAppDeployEnabled() {
+  return centerSettings.experimentalAppDeployEnabled;
 }

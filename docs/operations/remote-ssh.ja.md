@@ -95,7 +95,7 @@ tukuyomi bootstrap-center-protected-gateway \
 
 ## Center UI での操作
 
-![Center の Remote SSH 画面](images/ui-samples/28-center-remote-ssh.png)
+![Center の Remote SSH 画面](../images/ui-samples/28-center-remote-ssh.png)
 
 1. `Device Approvals` を開きます。
 2. 登録済み Gateway を選び、`Manage` を開きます。

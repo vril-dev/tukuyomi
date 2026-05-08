@@ -618,6 +618,40 @@ func runtimeArtifactFilesFromDirectory(runtimeDir string) ([]runtimeartifactbund
 			return err
 		}
 		archivePath := filepath.ToSlash(rel)
+		if entry.Type()&os.ModeSymlink != 0 {
+			info, resolvedPath, err := runtimeArtifactBuildFileInfo(root, rootfsDir, path, entry)
+			if err != nil {
+				if strings.HasPrefix(archivePath, "rootfs/") {
+					return nil
+				}
+				return err
+			}
+			if info == nil || info.IsDir() {
+				return nil
+			}
+			if !info.Mode().IsRegular() {
+				if strings.HasPrefix(archivePath, "rootfs/") {
+					return nil
+				}
+				return fmt.Errorf("runtime build contains unsupported file %q", path)
+			}
+			targetRel, err := filepath.Rel(root, resolvedPath)
+			if err != nil {
+				return err
+			}
+			targetArchivePath := filepath.ToSlash(targetRel)
+			if strings.HasPrefix(archivePath, "rootfs/") {
+				if strings.HasPrefix(targetArchivePath, "rootfs/") && archivePath != targetArchivePath {
+					out = append(out, runtimeartifactbundle.File{
+						ArchivePath: archivePath,
+						FileKind:    runtimeArtifactFileKind(archivePath),
+						Mode:        int64(info.Mode() & 0o777),
+						LinkTarget:  targetArchivePath,
+					})
+				}
+				return nil
+			}
+		}
 		info, resolvedPath, err := runtimeArtifactBuildFileInfo(root, rootfsDir, path, entry)
 		if err != nil {
 			if strings.HasPrefix(archivePath, "rootfs/") {
@@ -674,7 +708,11 @@ func resolveRuntimeBuildSymlink(root, rootfsDir, linkPath string) (string, error
 			return "", err
 		}
 		if info.Mode()&os.ModeSymlink == 0 {
-			cleaned, err := filepath.Abs(filepath.Clean(current))
+			cleaned, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return "", err
+			}
+			cleaned, err = filepath.Abs(filepath.Clean(cleaned))
 			if err != nil {
 				return "", err
 			}

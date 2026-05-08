@@ -90,6 +90,64 @@ func TestBuildParsePSGIRuntimeArtifact(t *testing.T) {
 	}
 }
 
+func TestBuildParseRuntimeArtifactPreservesHardlinkMetadata(t *testing.T) {
+	build, err := BuildBundle(BuildInput{
+		RuntimeFamily:   RuntimeFamilyPSGI,
+		RuntimeID:       "perl540",
+		DisplayName:     "Perl 5.40",
+		DetectedVersion: "v5.40.0",
+		Target: TargetKey{
+			OS:            "linux",
+			Arch:          "amd64",
+			KernelVersion: "6.8.0-test",
+			DistroID:      "ubuntu",
+			DistroIDLike:  "debian",
+			DistroVersion: "24.04",
+		},
+		BuilderVersion: "test-builder",
+		BuilderProfile: "ubuntu-24.04-amd64",
+		GeneratedAt:    time.Unix(1000, 0).UTC(),
+		Files: []File{
+			{
+				ArchivePath: "runtime.json",
+				FileKind:    "metadata",
+				Mode:        0o644,
+				Body:        []byte(`{"runtime_id":"perl540","display_name":"Perl 5.40","detected_version":"v5.40.0","perl_path":"data/psgi/binaries/perl540/perl","starman_path":"data/psgi/binaries/perl540/starman","source":"bundled"}`),
+			},
+			{ArchivePath: "modules.json", FileKind: "metadata", Mode: 0o644, Body: []byte(`["plack","starman"]`)},
+			{ArchivePath: "perl", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "starman", FileKind: "binary", Mode: 0o755, Body: []byte("#!/bin/sh\n")},
+			{ArchivePath: "rootfs/usr/local/bin/perl", FileKind: "rootfs", Mode: 0o755, Body: []byte("perl-binary")},
+			{ArchivePath: "rootfs/usr/local/bin/starman", FileKind: "rootfs", Mode: 0o755, Body: []byte("starman-binary")},
+			{ArchivePath: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2", FileKind: "rootfs", Mode: 0o755, Body: []byte("loader")},
+			{ArchivePath: "rootfs/lib/ld-linux-x86-64.so.2", FileKind: "rootfs", LinkTarget: "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildBundle: %v", err)
+	}
+	parsed, err := Parse(build.Compressed)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	var hardlink FileManifest
+	for _, file := range parsed.Manifest.Files {
+		if file.ArchivePath == "rootfs/lib/ld-linux-x86-64.so.2" {
+			hardlink = file
+			break
+		}
+	}
+	if hardlink.LinkTarget != "rootfs/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" {
+		t.Fatalf("LinkTarget=%q", hardlink.LinkTarget)
+	}
+	if hardlink.SizeBytes != int64(len("loader")) || hardlink.SHA256 == "" || hardlink.Mode != 0o755 {
+		t.Fatalf("unexpected hardlink metadata: %+v", hardlink)
+	}
+	if parsed.UncompressedSize >= build.UncompressedSize+int64(len("loader")) {
+		t.Fatalf("hardlink body was counted as duplicate: parsed=%d build=%d", parsed.UncompressedSize, build.UncompressedSize)
+	}
+}
+
 func TestBuildRejectsIncompleteRuntimeRootFS(t *testing.T) {
 	_, err := BuildBundle(BuildInput{
 		RuntimeFamily:   RuntimeFamilyPHPFPM,

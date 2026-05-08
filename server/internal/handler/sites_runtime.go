@@ -7,9 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/mail"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -33,7 +33,7 @@ type serverTLSRuntimeStatus = serverruntime.TLSStatus
 
 var (
 	serverTLSRuntimeMu sync.RWMutex
-	serverTLSReload    func(SiteConfigFile, []SiteRuntimeStatus) error
+	serverTLSReload    func(TLSBindingConfigFile, []TLSBindingRuntimeStatus) error
 )
 
 type siteConfigPutBody struct {
@@ -140,13 +140,13 @@ func ResetServerTLSRuntimeStatus() {
 	serverruntime.ResetTLSStatus()
 }
 
-func SetServerTLSReloadHook(fn func(SiteConfigFile, []SiteRuntimeStatus) error) {
+func SetServerTLSReloadHook(fn func(TLSBindingConfigFile, []TLSBindingRuntimeStatus) error) {
 	serverTLSRuntimeMu.Lock()
 	serverTLSReload = fn
 	serverTLSRuntimeMu.Unlock()
 }
 
-func ReloadServerTLSRuntimeForSites(sites SiteConfigFile, statuses []SiteRuntimeStatus) error {
+func ReloadServerTLSRuntimeForTLSBindings(bindings TLSBindingConfigFile, statuses []TLSBindingRuntimeStatus) error {
 	if !config.ServerTLSEnabled {
 		return nil
 	}
@@ -156,7 +156,7 @@ func ReloadServerTLSRuntimeForSites(sites SiteConfigFile, statuses []SiteRuntime
 	if fn == nil {
 		return nil
 	}
-	return fn(cloneSiteConfigFile(sites), cloneSiteRuntimeStatuses(statuses))
+	return fn(cloneTLSBindingConfigFile(bindings), cloneTLSBindingRuntimeStatuses(statuses))
 }
 
 func RecordServerTLSConfigured(source string, certNotAfter time.Time) {
@@ -187,6 +187,21 @@ type SiteConfig struct {
 	TLS             SiteTLSConfig `json:"tls"`
 }
 
+func (site SiteConfig) MarshalJSON() ([]byte, error) {
+	type siteConfigWire struct {
+		Name            string   `json:"name,omitempty"`
+		Enabled         *bool    `json:"enabled,omitempty"`
+		Hosts           []string `json:"hosts,omitempty"`
+		DefaultUpstream string   `json:"default_upstream"`
+	}
+	return json.Marshal(siteConfigWire{
+		Name:            site.Name,
+		Enabled:         site.Enabled,
+		Hosts:           site.Hosts,
+		DefaultUpstream: site.DefaultUpstream,
+	})
+}
+
 type SiteTLSConfig struct {
 	Mode     string            `json:"mode"`
 	CertFile string            `json:"cert_file,omitempty"`
@@ -204,8 +219,8 @@ type SiteRuntimeStatus struct {
 	Enabled         bool     `json:"enabled"`
 	Hosts           []string `json:"hosts,omitempty"`
 	DefaultUpstream string   `json:"default_upstream,omitempty"`
-	TLSMode         string   `json:"tls_mode"`
-	TLSStatus       string   `json:"tls_status"`
+	TLSMode         string   `json:"tls_mode,omitempty"`
+	TLSStatus       string   `json:"tls_status,omitempty"`
 	TLSWarning      string   `json:"tls_warning,omitempty"`
 	TLSCertNotAfter string   `json:"tls_cert_not_after,omitempty"`
 	TLSACMEEnv      string   `json:"tls_acme_environment,omitempty"`
@@ -449,20 +464,6 @@ func ApplySiteConfigRaw(ifMatch string, raw string) (string, SiteConfigFile, []S
 		}
 		return "", SiteConfigFile{}, nil, err
 	}
-	if err := ReloadServerTLSRuntimeForSites(prepared.cfg, prepared.statuses); err != nil {
-		rt.restoreLocked(prev)
-		if restoredETag, restoredVersionID, restoreErr := persistSiteConfigAuthoritative(rt.configPath, prepared.etag, sitePreparedConfig{raw: prevRaw, etag: prevETag, cfg: prev.cfg}, configVersionSourceRollback, prevVersionID); restoreErr == nil {
-			rt.etag = restoredETag
-			rt.versionID = restoredVersionID
-		}
-		if restoreErr := reloadProxyRuntimeWithSites(prev.cfg); restoreErr != nil {
-			log.Printf("[TLS][WARN] failed to restore proxy runtime after tls reload error: %v", restoreErr)
-		}
-		if restoreErr := ReloadServerTLSRuntimeForSites(prev.cfg, prev.statuses); restoreErr != nil {
-			log.Printf("[TLS][WARN] failed to restore tls runtime after reload error: %v", restoreErr)
-		}
-		return "", SiteConfigFile{}, nil, err
-	}
 
 	rt.pushRollbackLocked(proxyRollbackEntry{
 		Raw:       prevRaw,
@@ -527,21 +528,6 @@ func RollbackSiteConfig() (string, SiteConfigFile, []SiteRuntimeStatus, proxyRol
 		rt.pushRollbackLocked(entry)
 		return "", SiteConfigFile{}, nil, proxyRollbackEntry{}, err
 	}
-	if err := ReloadServerTLSRuntimeForSites(prepared.cfg, prepared.statuses); err != nil {
-		rt.restoreLocked(prev)
-		if restoredETag, restoredVersionID, restoreErr := persistSiteConfigAuthoritative(rt.configPath, prepared.etag, sitePreparedConfig{raw: prevRaw, etag: prevETag, cfg: prev.cfg}, configVersionSourceApply, prevVersionID); restoreErr == nil {
-			rt.etag = restoredETag
-			rt.versionID = restoredVersionID
-		}
-		if restoreErr := reloadProxyRuntimeWithSites(prev.cfg); restoreErr != nil {
-			log.Printf("[TLS][WARN] failed to restore proxy runtime after tls reload error: %v", restoreErr)
-		}
-		if restoreErr := ReloadServerTLSRuntimeForSites(prev.cfg, prev.statuses); restoreErr != nil {
-			log.Printf("[TLS][WARN] failed to restore tls runtime after reload error: %v", restoreErr)
-		}
-		rt.pushRollbackLocked(entry)
-		return "", SiteConfigFile{}, nil, proxyRollbackEntry{}, err
-	}
 
 	return rt.etag, rt.cfg, cloneSiteRuntimeStatuses(rt.statuses), entry, nil
 }
@@ -584,16 +570,6 @@ func SyncSiteStorage() error {
 		rt.restoreLocked(prev)
 		return err
 	}
-	if err := ReloadServerTLSRuntimeForSites(prepared.cfg, prepared.statuses); err != nil {
-		rt.restoreLocked(prev)
-		if restoreErr := reloadProxyRuntimeWithSites(prev.cfg); restoreErr != nil {
-			log.Printf("[TLS][WARN] failed to restore proxy runtime after site db sync error: %v", restoreErr)
-		}
-		if restoreErr := ReloadServerTLSRuntimeForSites(prev.cfg, prev.statuses); restoreErr != nil {
-			log.Printf("[TLS][WARN] failed to restore tls runtime after site db sync error: %v", restoreErr)
-		}
-		return err
-	}
 	return nil
 }
 
@@ -627,28 +603,6 @@ func SiteStatusSnapshot() []SiteRuntimeStatus {
 	return cloneSiteRuntimeStatuses(rt.statuses)
 }
 
-func SiteBindingForHost(host string) siteBindingMatch {
-	rt := siteRuntimeInstance()
-	if rt == nil {
-		return siteBindingMatch{}
-	}
-	reqHost := normalizeProxyRequestHost(host)
-	rt.mu.RLock()
-	defer rt.mu.RUnlock()
-	for _, binding := range rt.bindings {
-		if siteHostsMatch(binding.Hosts, reqHost) {
-			return siteBindingMatch{
-				Name:        binding.Name,
-				Mode:        binding.Mode,
-				ACMEProfile: binding.ACMEProfile,
-				Certificate: binding.Certificate,
-				NotAfter:    binding.NotAfter,
-			}
-		}
-	}
-	return siteBindingMatch{}
-}
-
 func siteGeneratedRoutes(cfg SiteConfigFile) []ProxyRoute {
 	if len(cfg.Sites) == 0 {
 		return nil
@@ -656,6 +610,9 @@ func siteGeneratedRoutes(cfg SiteConfigFile) []ProxyRoute {
 	routes := make([]ProxyRoute, 0, len(cfg.Sites))
 	for _, site := range cfg.Sites {
 		if !siteEnabled(site.Enabled) {
+			continue
+		}
+		if strings.TrimSpace(site.DefaultUpstream) == "" {
 			continue
 		}
 		routes = append(routes, ProxyRoute{
@@ -683,6 +640,9 @@ func siteGeneratedUpstreams(cfg SiteConfigFile) []ProxyUpstream {
 	out := make([]ProxyUpstream, 0, len(cfg.Sites))
 	for _, site := range cfg.Sites {
 		if !siteEnabled(site.Enabled) {
+			continue
+		}
+		if strings.TrimSpace(site.DefaultUpstream) == "" {
 			continue
 		}
 		out = append(out, ProxyUpstream{
@@ -737,7 +697,7 @@ func parseSiteConfigRaw(raw string) (SiteConfigFile, []SiteRuntimeStatus, []site
 func normalizeAndValidateSiteConfig(in SiteConfigFile) (SiteConfigFile, []SiteRuntimeStatus, []siteTLSBinding, error) {
 	cfg := normalizeSiteConfigFile(in)
 	statuses := make([]SiteRuntimeStatus, 0, len(cfg.Sites))
-	bindings := make([]siteTLSBinding, 0, len(cfg.Sites))
+	bindings := make([]siteTLSBinding, 0)
 	seenNames := map[string]struct{}{}
 	hostOwners := make([]siteHostOwnership, 0)
 
@@ -749,6 +709,9 @@ func normalizeAndValidateSiteConfig(in SiteConfigFile) (SiteConfigFile, []SiteRu
 		seenNames[site.Name] = struct{}{}
 		if len(site.Hosts) == 0 {
 			return SiteConfigFile{}, nil, nil, fmt.Errorf("sites[%d].hosts is required", i)
+		}
+		if strings.TrimSpace(site.DefaultUpstream) == "" {
+			return SiteConfigFile{}, nil, nil, fmt.Errorf("sites[%d].default_upstream is required; use TLS bindings for certificate-only host coverage", i)
 		}
 		if _, err := parseProxyUpstreamURL(fmt.Sprintf("sites[%d].default_upstream", i), site.DefaultUpstream); err != nil {
 			return SiteConfigFile{}, nil, nil, err
@@ -770,27 +733,9 @@ func normalizeAndValidateSiteConfig(in SiteConfigFile) (SiteConfigFile, []SiteRu
 			Enabled:         siteEnabled(site.Enabled),
 			Hosts:           append([]string(nil), site.Hosts...),
 			DefaultUpstream: site.DefaultUpstream,
-			TLSMode:         site.TLS.Mode,
-			TLSStatus:       "disabled",
 			GeneratedRoute:  "site:" + site.Name,
 		}
-		if !status.Enabled {
-			statuses = append(statuses, status)
-			continue
-		}
-
-		binding, warning, err := validateSiteTLSBinding(i, site, cfg)
-		if err != nil {
-			return SiteConfigFile{}, nil, nil, err
-		}
-		status.TLSStatus = "covered"
-		status.TLSWarning = warning
-		status.TLSCertNotAfter = binding.NotAfter
-		if site.TLS.Mode == "acme" {
-			status.TLSACMEEnv = site.TLS.ACME.Environment
-		}
 		statuses = append(statuses, status)
-		bindings = append(bindings, binding)
 	}
 	return cfg, statuses, bindings, nil
 }
@@ -908,6 +853,9 @@ func validateSiteTLSBinding(index int, site SiteConfig, cfg SiteConfigFile) (sit
 		if siteHasWildcardHost(site.Hosts) {
 			return siteTLSBinding{}, "", fmt.Errorf("sites[%d].tls.mode=acme supports exact hosts only", index)
 		}
+		if host := firstSiteIPAddressHost(site.Hosts); host != "" {
+			return siteTLSBinding{}, "", fmt.Errorf("sites[%d].tls.mode=acme does not support IP address host %q; use a DNS name or manual certificate", index, host)
+		}
 		if site.TLS.ACME.Environment != siteTLSACMEEnvironmentProduction && site.TLS.ACME.Environment != siteTLSACMEEnvironmentStaging {
 			return siteTLSBinding{}, "", fmt.Errorf("sites[%d].tls.acme.environment must be production or staging", index)
 		}
@@ -950,71 +898,6 @@ func validateLegacySiteCoverage(hosts []string, sites SiteConfigFile) (string, s
 		}
 	}
 	return notAfter, "", nil
-}
-
-func EffectiveServerTLSACMEDomains() []string {
-	return EffectiveServerTLSACMEDomainsForSites(currentSiteConfig())
-}
-
-func EffectiveServerTLSACMEDomainsForSites(sites SiteConfigFile) []string {
-	profiles := EffectiveServerTLSACMEProfilesForSites(sites)
-	var domains []string
-	seen := map[string]struct{}{}
-	for _, profile := range profiles {
-		for _, host := range profile.Domains {
-			if _, ok := seen[host]; ok {
-				continue
-			}
-			seen[host] = struct{}{}
-			domains = append(domains, host)
-		}
-	}
-	return domains
-}
-
-func EffectiveServerTLSACMEProfilesForSites(sites SiteConfigFile) []ServerTLSACMEProfile {
-	profiles := make([]ServerTLSACMEProfile, 0)
-	seenProfiles := map[string]int{}
-	seenDomains := map[string]struct{}{}
-	for _, site := range sites.Sites {
-		if !siteEnabled(site.Enabled) || site.TLS.Mode != "acme" {
-			continue
-		}
-		environment := normalizeSiteTLSACMEEnvironment(site.TLS.ACME.Environment)
-		email := strings.TrimSpace(site.TLS.ACME.Email)
-		key := siteTLSACMEProfileKey(environment, email)
-		profileIndex, ok := seenProfiles[key]
-		if !ok {
-			profileIndex = len(profiles)
-			seenProfiles[key] = profileIndex
-			profiles = append(profiles, ServerTLSACMEProfile{
-				Key:         key,
-				Environment: environment,
-				Email:       email,
-			})
-		}
-		for _, host := range site.Hosts {
-			host = normalizeProxyHostPattern(host)
-			if host == "" {
-				continue
-			}
-			if _, ok := seenDomains[host]; ok {
-				continue
-			}
-			seenDomains[host] = struct{}{}
-			profiles[profileIndex].Domains = append(profiles[profileIndex].Domains, host)
-		}
-	}
-	return profiles
-}
-
-func siteACMEUsesStaging(sites SiteConfigFile) bool {
-	for _, profile := range EffectiveServerTLSACMEProfilesForSites(sites) {
-		if profile.Environment == siteTLSACMEEnvironmentStaging {
-			return true
-		}
-	}
-	return false
 }
 
 func siteTLSACMEProfileKey(environment string, email string) string {
@@ -1117,6 +1000,19 @@ func siteHasWildcardHost(hosts []string) bool {
 		}
 	}
 	return false
+}
+
+func firstSiteIPAddressHost(hosts []string) string {
+	for _, raw := range hosts {
+		host := normalizeProxyHostPattern(raw)
+		if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+			host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+		}
+		if _, err := netip.ParseAddr(host); err == nil {
+			return raw
+		}
+	}
+	return ""
 }
 
 func siteHostsOverlap(a string, b string) bool {

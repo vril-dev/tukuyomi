@@ -257,6 +257,33 @@ func TestPrepareSupervisorListenerSetCreatesPublicListener(t *testing.T) {
 	}
 }
 
+func TestSupervisorListenerSpecsUsesConfiguredPublicListeners(t *testing.T) {
+	restore := saveSupervisorListenerConfig()
+	defer restore()
+	config.ListenAddr = "127.0.0.1:0"
+	config.AdminListenAddr = "127.0.0.1:0"
+	config.ServerTLSEnabled = true
+	config.ServerTLSRedirectHTTP = false
+	config.ServerHTTP3Enabled = false
+	config.ServerPublicListenersConfigured = true
+	config.ServerPublicListeners = []config.ServerPublicListener{
+		{Name: "setup", ListenAddr: "127.0.0.1:19090", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "https", ListenAddr: "127.0.0.1:19443", Protocol: config.PublicListenerProtocolHTTPS, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "disabled", ListenAddr: "127.0.0.1:19091", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: false},
+	}
+
+	specs, err := supervisorListenerSpecs()
+	if err != nil {
+		t.Fatalf("supervisorListenerSpecs: %v", err)
+	}
+	if len(specs) != 3 {
+		t.Fatalf("specs=%#v want setup, https, admin", specs)
+	}
+	if specs[0].role != "public-setup" || specs[1].role != "public-https" || specs[2].role != "admin" {
+		t.Fatalf("specs=%#v", specs)
+	}
+}
+
 func TestSupervisorRuntimeReplaceActivatesCandidateThenDrainsPrevious(t *testing.T) {
 	activeWorker := newFakeSupervisorWorker(101)
 	candidateWorker := newFakeSupervisorWorker(202)
@@ -833,6 +860,8 @@ func testSupervisorListenerFiles(t *testing.T, roles ...string) []supervisorList
 func saveSupervisorListenerConfig() func() {
 	listenAddr := config.ListenAddr
 	adminListenAddr := config.AdminListenAddr
+	serverPublicListenersConfigured := config.ServerPublicListenersConfigured
+	serverPublicListeners := append([]config.ServerPublicListener(nil), config.ServerPublicListeners...)
 	serverTLSEnabled := config.ServerTLSEnabled
 	serverTLSRedirectHTTP := config.ServerTLSRedirectHTTP
 	serverTLSHTTPRedirectAddr := config.ServerTLSHTTPRedirectAddr
@@ -840,6 +869,8 @@ func saveSupervisorListenerConfig() func() {
 	return func() {
 		config.ListenAddr = listenAddr
 		config.AdminListenAddr = adminListenAddr
+		config.ServerPublicListenersConfigured = serverPublicListenersConfigured
+		config.ServerPublicListeners = serverPublicListeners
 		config.ServerTLSEnabled = serverTLSEnabled
 		config.ServerTLSRedirectHTTP = serverTLSRedirectHTTP
 		config.ServerTLSHTTPRedirectAddr = serverTLSHTTPRedirectAddr

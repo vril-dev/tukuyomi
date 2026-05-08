@@ -210,7 +210,7 @@ make gateway-preview-down
 ```
 
 preview は **通常系とは別の preview 専用 DB-backed scheduled-task config**
-を使うため、preview UI からの変更は通常の runtime config を汚しません。
+を使うため、preview UI からの変更は通常の runtime config に影響しません。
 
 既定では `gateway-preview-up` のたびに preview 専用 SQLite DB を作り直し、
 以前の preview task や DB row は引き継ぎません。

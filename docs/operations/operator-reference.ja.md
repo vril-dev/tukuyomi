@@ -4,7 +4,7 @@
 
 ## 実行時設定
 
-`.env` は Docker ／実行時の差分のみに使用します。`data/conf/config.json` は DB 接続のブートストラップ用であり、DB を開いた後のアプリ／プロキシ／ランタイム／ポリシー挙動は、正規化済みの DB テーブルから読み込みます。
+`.env` は Docker ／実行時の差分のみに使用します。`data/conf/config.json` は DB 接続のブートストラップ用であり、DB を開いた後のアプリケーション／プロキシ／ランタイム／ポリシーの挙動は、正規化済みの DB テーブルから読み込みます。
 
 ### Docker ／ローカル MySQL（任意）
 
@@ -99,10 +99,15 @@
 - `server.tls.enabled=false` が既定です
 - `server.http3.enabled=true` には組み込み TLS が必要です
 - HTTP/3 は `server.listen_addr` と同じ番号のポートを UDP で使用します
-- `server.tls.redirect_http=true` を指定すると、平文 HTTP リスナーが追加されます
-- ACME 自動 TLS は、サイトごとの `tls.mode=acme` で選択します。ACME のアカウント鍵、チャレンジトークン、証明書キャッシュは `persistent_storage` の `acme/` 名前空間に保存されます
-- ACME HTTP-01 を使用するため、ポート 80 を `server.tls.http_redirect_addr` へ到達させてください。Let's Encrypt の `staging` ／ `production` は、サイトごとの ACME 環境設定で選択します
+- legacy の単一 listener 構成では、`server.tls.redirect_http=true` を指定すると平文 HTTP リスナーが追加されます
+- ACME 自動 TLS は、TLS 画面の binding `mode=acme` で選択します。ACME のアカウント鍵、チャレンジトークン、証明書キャッシュは `persistent_storage` の `acme/` 名前空間に保存されます
+- Sites はルーティング用の設定です。Site はホスト単位のフォールバックルートとアップストリームを生成するため、`default_upstream` は必須です
+- TLS binding は Host/SNI 名に対する証明書設定です。Sites、Proxy Rules、Runtime Apps など、どのルートで転送しているホストにも紐づけられます
+- TLS 管理の ACME は DNS ホスト名のみ対応します。IP アドレス証明書はこの経路では扱いません。IP endpoint が避けられない場合は、DNS 名を用意するか、手動管理の証明書を使用してください
+- ACME HTTP-01 を使用するため、ポート 80 を Gateway の HTTP リスナーへ到達させてください。Let's Encrypt の `staging` ／ `production` は TLS 画面で選択します
+- 直接公開するホストで `:443` を追加する場合は、`server.public_listeners` 行を使うと、既存の初期設定用ポートを残したまま到達性を確認できます。HTTPS 確認後に port 80 から HTTPS へ redirect したい場合は、`http_behavior=redirect` の HTTP listener 行で表現し、legacy の `server.tls.redirect_http` とは併用しません
 - `paths.site_config_file` の既定は `conf/sites.json` です。DB を正とするランタイムでは、これは空 DB 向けのシード／エクスポートパスであり、稼働中の正となるソースではありません
+- `paths.tls_binding_config_file` の既定は `conf/tls-bindings.json` です。DB を正とするランタイムでは、これもシード／エクスポートパスです
 
 ### 永続ファイルストレージ
 
@@ -197,7 +202,8 @@ sudo sysctl --system
 | `/cache` | キャッシュルールと内部キャッシュストア |
 | `/proxy-rules` | Runtime Apps が所有しない直接アップストリーム／バックエンドプール／ルートの編集と、validate ／ probe ／ dry-run ／ apply ／ rollback |
 | `/backends` | 直接指定のアップストリームバックエンドオブジェクト一覧。直接指定された名前付きアップストリームはランタイムでの有効化／ドレイン／無効化／重みオーバーライドに対応し、Runtime App が生成したターゲットは Runtime Apps 側で扱います |
-| `/sites` | サイトオーナーシップと TLS バインディング |
+| `/sites` | ホスト名の所有と、必須の default upstream から生成するフォールバックルート |
+| `/tls` | ルーティングから独立した Host/SNI TLS binding、ACME 証明書モード、証明書ファイル |
 | `/options` | ランタイムインベントリ、オプションのアーティファクト、GeoIP ／国別 DB 管理 |
 | `/runtime-apps` | static ／ `php-fpm` ／ `psgi` アプリケーションのランタイムリスナー、docroot、ランタイム、生成バックエンド管理 |
 | `/scheduled-tasks` | cron 形式のコマンドタスクと前回実行ステータス |
@@ -236,7 +242,7 @@ make compose-down
 
 - バイナリ配備: [../build/binary-deployment.ja.md](../build/binary-deployment.ja.md)
 - コンテナ配備: [../build/container-deployment.ja.md](../build/container-deployment.ja.md)
-- リクエスト時セキュリティプラグイン: [../request_security_plugins.ja.md](../request_security_plugins.ja.md)
+- リクエスト時セキュリティプラグイン: [request_security_plugins.ja.md](request_security_plugins.ja.md)
 - 回帰テストマトリクス: [../operations/regression-matrix.ja.md](../operations/regression-matrix.ja.md)
 - ベンチマークベースライン: [../operations/benchmark-baseline.ja.md](../operations/benchmark-baseline.ja.md)
 - アップストリーム HTTP/2: [../operations/upstream-http2.ja.md](../operations/upstream-http2.ja.md)
@@ -577,7 +583,7 @@ curl -sS \
 }
 ```
 
-マネージドな `extra_rule` の本体は DB `override_rules` に保存し、`Rules` > Advanced > `Bypass snippets` で編集します。`conf/rules` ディレクトリへのフォールバックはありません。起動時のベース WAF ルールセットには混入させず、バイパスエントリから論理的な `extra_rule` 名で参照されたときのみロードします。
+マネージドな `extra_rule` の本体は DB `override_rules` に保存し、`Rules` > Advanced > `Bypass snippets` で編集します。`conf/rules` ディレクトリへのフォールバックはありません。起動時のベース WAF ルールセットには含めず、バイパスエントリから論理的な `extra_rule` 名で参照されたときのみロードします。
 ホストスコープの優先順序は、完全一致の `host:port`、次にホスト名のみ、最後に `default` です。ホスト固有のスコープは default をマージせず置き換えます。
 
 ### 国別ブロック
@@ -646,7 +652,7 @@ curl -sS \
 
 - 不審な UA に対するチャレンジ
 - 振る舞い検知
-- ブラウザ／デバイステレメトリのクッキー
+- ブラウザー／デバイステレメトリのクッキー
 - 初回リクエストのヘッダーシグナル
 - 直接 HTTPS 向けの TLS フィンガープリントのヒューリスティック
 - 連続違反時の隔離

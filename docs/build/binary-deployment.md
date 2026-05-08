@@ -13,6 +13,29 @@ Typical environments:
 
 Build on a workstation or build host:
 
+Prerequisites:
+
+- `make`
+- Go toolchain 1.26.2 or newer
+- Node.js 24 LTS + npm 11+ for Gateway / Center UI builds, or Docker
+
+When local Node.js 24 LTS + npm 11+ is unavailable, the default
+`tools/npm-node24.sh` wrapper uses Docker image `node:24-alpine`. In that case,
+the installing user must be able to access the Docker API. Installing Docker is
+not enough by itself; on a typical Linux host the user must be added to the
+`docker` group and then log in again.
+
+On a minimal Ubuntu VPS, prepare the host for example with:
+
+```bash
+sudo apt update
+sudo apt install -y make curl ca-certificates git docker.io
+sudo usermod -aG docker "$USER"
+```
+
+After logging in again, confirm that `docker ps` works. If the distribution Go
+package is too old, install Go 1.26.2 or newer from the official Go tarball.
+
 ```bash
 make setup
 make build
@@ -70,6 +93,15 @@ make install TARGET=linux-systemd \
   INSTALL_DB_SEED=auto
 ```
 
+Set the first-login owner explicitly when you do not want the installer to
+generate one:
+
+```bash
+TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME=admin \
+TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD='replace-with-a-long-random-password' \
+make install TARGET=linux-systemd INSTALL_ROLE=center-protected
+```
+
 Behavior:
 
 - `PREFIX` defaults to `/opt/tukuyomi`
@@ -89,7 +121,14 @@ Behavior:
   `tukuyomi-center.service`; Center listens on loopback, while the Gateway seed
   routes `/center-ui` and `/center-api` to `http://127.0.0.1:9092`. It also
   enables Gateway IoT / Edge device authentication and locally bootstraps the
-  matching Center approval. It does not install the scheduled-task timer.
+  matching Center approval. For first-host setup, this role also opens the
+  embedded Gateway admin UI with `admin.external_mode=full_external` so the
+  operator can finish TLS / Let's Encrypt, listener port, and Gateway front
+  settings. After setup, close it from Gateway Settings by changing
+  `admin.external_mode` back to `api_only_external` or `deny_external`. To keep
+  the stricter first-boot posture, install with
+  `INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE=api_only_external`.
+  It does not install the scheduled-task timer.
 - `INSTALL_CENTER_API_BASE_PATH` controls the Center process API path, and
   `INSTALL_CENTER_GATEWAY_API_BASE_PATH` controls the public Gateway route path.
   When they differ, the generated Gateway route rewrites the public path to the
@@ -117,6 +156,11 @@ Behavior:
 - role config files are root-owned `0640` with read access granted only through
   the service group
 - env files stay root-owned `0640` because they are expected to carry secrets
+- after DB migration, host install runs the admin bootstrap for each installed
+  role DB. If no bootstrap password is provided, or if the development
+  placeholder password is still present, the installer generates a random
+  first-login password and prints it once at the end of the install log.
+  Existing admin users are never reset.
 - `INSTALL_DB_SEED=auto` runs `db-import` only when the SQLite DB is not present yet
 - the first DB seed creates a default upstream named `primary`; update it to
   the real backend endpoint before exposing the proxy to traffic
@@ -249,7 +293,7 @@ Notes:
 
 Runtime artifacts that must remain durable as files/objects, rather than DB
 rows, are managed by `persistent_storage`. The current primary user is
-site-managed ACME: account keys, challenge tokens, and certificate cache.
+TLS binding ACME: account keys, challenge tokens, and certificate cache.
 
 The default backend is local:
 
@@ -270,11 +314,32 @@ The default backend is local:
 - pass `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` through env or platform secret injection
 - Azure Blob Storage and Google Cloud Storage fail closed until their provider adapters are implemented; they do not silently fall back to local
 
-Configure site-managed ACME per site on the `Sites` page by selecting
-`tls.mode=acme`. `production` / `staging` selects the Let's Encrypt production
-or staging CA, and account email is optional. ACME HTTP-01 needs
-`server.tls.redirect_http=true` with `server.tls.http_redirect_addr=:80`, or
-equivalent port 80 forwarding.
+Configure ACME on the `TLS` page by adding a TLS binding with `mode=acme`.
+`production` / `staging` selects the Let's Encrypt production or staging CA,
+and account email is optional. ACME HTTP-01 requires the DNS name to resolve to
+this host and external TCP/80 and TCP/443 reachability.
+
+For direct VPS or bare-metal rollouts from a setup port to `:80` / `:443`, use
+this sequence:
+
+1. In `Settings` -> `Listener & Network`, configure `Public listener rows` with
+   an HTTP listener on `:80` and an HTTPS listener on `:443`. During setup,
+   keeping the `:80` row at `HTTP behavior=serve` leaves a plain HTTP access
+   path available while TLS is being tested.
+2. Enable `Enable built-in TLS on the public listener`, then click
+   `Save config only`.
+3. Restart the Gateway with `systemctl restart tukuyomi`.
+4. On the `TLS` page, add a TLS binding with `TLS mode=acme` and
+   `Hosts=<DNS name>`. Start with `staging` to verify the HTTP-01 challenge and
+   HTTPS reachability.
+5. After `https://<DNS name>/tukuyomi-ui/` works, change `ACME environment` to
+   `production` and apply the TLS binding again.
+
+Accessing `https://<IP address>/...` still warns because the certificate is for
+the DNS name. Always verify with the DNS name listed in the TLS binding
+`Hosts` field. A browser that previously saw the staging certificate may keep a
+warning state; after switching to `production`, confirm again in a new tab or
+private window.
 
 Proxy engine selection is a restart-required DB `app_config` setting:
 
@@ -415,9 +480,12 @@ Keep overload controls in DB `app_config` under `server`:
 
 - keep `admin.session_secret` in managed app config, not in the browser
 - use `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` / `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` only for first-owner bootstrap when the admin user table is empty
+- `POST /auth/login` returning HTTP 401 means the submitted credentials did not
+  match an existing admin user. Plain HTTP is not the cause of that status; use
+  HTTPS or a TLS-terminating front proxy before real production exposure.
 - browser operators sign in with username/password and receive same-origin DB-backed session cookies
 - CLI / automation should use per-user personal access tokens, not shared admin API keys
-- default `tukuyomi` posture is `admin.external_mode=api_only_external`; move to `deny_external` if remote admin API access is unnecessary
+- default `tukuyomi` posture is `admin.external_mode=api_only_external`; move to `deny_external` if remote admin API access is unnecessary. `INSTALL_ROLE=center-protected` is the exception: it starts with `full_external` so operators can complete first-host TLS and listener setup, then should be tightened again from Gateway Settings.
 - if you intentionally set `admin.external_mode=full_external` on a non-loopback listener, add front-side allowlists/auth because startup will only warn, not block
 - widening `admin.trusted_cidrs` to public or catch-all networks also re-exposes the embedded admin UI/API to those sources and only triggers a warning
 - if `security_audit.key_source=env`, keep the encryption and HMAC keys in the env file instead of `config.json`
@@ -441,6 +509,8 @@ The gateway sample unit keeps `User=tukuyomi` and adds
 `AmbientCapabilities=CAP_NET_BIND_SERVICE`, so `:80` / `:443` binds work without
 running the service as root full-time. The Center unit starts `tukuyomi center`
 and does not require low-port bind capabilities by default.
+If you use explicit `server.public_listeners`, every enabled low-port listener
+has the same low-port requirement.
 For graceful binary replacement, prefer systemd socket activation. The socket
 units hold the public/admin/redirect/HTTP3 listeners while the service process
 shuts down and restarts.

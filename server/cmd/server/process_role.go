@@ -23,6 +23,7 @@ const (
 	serverCommandDBImport                  serverCommandKind = "db-import"
 	serverCommandDBImportPreview           serverCommandKind = "db-import-preview"
 	serverCommandDBImportWAFRuleAssets     serverCommandKind = "db-import-waf-rule-assets"
+	serverCommandAdminBootstrap            serverCommandKind = "admin-bootstrap"
 	serverCommandPreviewPrintTopology      serverCommandKind = "preview-print-topology"
 	serverCommandRunScheduledTasks         serverCommandKind = "run-scheduled-tasks"
 	serverCommandUpdateCountryDB           serverCommandKind = "update-country-db"
@@ -90,6 +91,8 @@ func parseServerCommandWithEnv(args []string, env []string) (serverCommand, erro
 		return serverCommand{kind: serverCommandDBImportPreview}, nil
 	case "db-import-waf-rule-assets":
 		return serverCommand{kind: serverCommandDBImportWAFRuleAssets}, nil
+	case "admin-bootstrap":
+		return serverCommand{kind: serverCommandAdminBootstrap}, nil
 	case "preview-print-topology":
 		return serverCommand{kind: serverCommandPreviewPrintTopology}, nil
 	case "run-scheduled-tasks":

@@ -140,7 +140,7 @@ easier to follow.
    - The operations panel for direct named upstreams: drain / disable /
      weight override (Chapter 5).
 7. **Sites**
-   - Site ownership and TLS binding (Chapter 15).
+   - Site routing and TLS bindings (Chapter 15).
 8. **Cache Rules / Country Block / Rate Limit / Bot Defense / Semantic
    Security / IP Reputation / Notifications**
    - Per-policy request-boundary controls. Covered across Chapters 7 to 9.

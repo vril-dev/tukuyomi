@@ -143,6 +143,53 @@ Center UI disables unsafe requests from the latest inventory, and the
 Gateway checks Runtime App references and running processes again
 before deleting local runtime files.
 
+`Runtime App Deploy` is an **experimental** Center device page for
+small application package delivery to `php-fpm` and `psgi` Runtime
+Apps. Operators define deployment roots, upload a ZIP package to
+Center, review the package-to-package diff, and then create a one-shot
+deploy or rollback request. Optional pre-switch and post-switch shell
+scripts run on the Gateway during that request.
+
+This page is intentionally Center-owned: package history, deployment
+profiles, diff previews, and manual rollback choices live in Center,
+while the Gateway only executes the validated request. Baseline
+adoption is explicit; Center does not silently upload Gateway source
+just because a device enrolled or reported a Runtime App.
+
+Gateway uses one app-level deployment root:
+
+```text
+data/app-deployments/<app-id>/
+  releases/<package-revision>/
+  current -> releases/<package-revision>
+  deploy-state.json
+```
+
+Multiple logical roots can live under that one `current` symlink. For
+example, a PHP-FPM package may map `public/` to
+`current/public`, while a PSGI package may map `app/` and `static/` to
+`current/app` and `current/static`. Gateway blocks deploy and rollback
+if the matching Runtime App no longer points at the expected managed
+paths, so Center cannot replace an arbitrary document root or app root.
+Rollback is manual: choose an older saved package, review the diff, and
+confirm the rollback request.
+
+Once baseline adoption or the first Center-managed deploy succeeds, the
+Gateway rewrites the matching Runtime Apps binding to the managed path.
+For PHP-FPM, `document_root` typically moves from the original source
+under `data/vhosts/...` to
+`data/app-deployments/<app-id>/current/public`. For PSGI, `app_root`
+and/or `document_root` move to the matching `current/<runtime-subpath>`
+entries. After that switch, the old `data/vhosts/...` directory is only
+the source that was adopted. Operators should upload a new package from
+Center for future changes, or deliberately point Runtime Apps back at a
+local path before leaving Center-managed deployment.
+
+The feature is guarded by
+`TUKUYOMI_CENTER_EXPERIMENTAL_APP_DEPLOY_ENABLED` on the Center side so
+it can be removed from the operator surface without changing the core
+Gateway / Center enrollment path.
+
 ## 16.4 Preview URLs
 
 To preserve Gateway settings and Center token / approval state across

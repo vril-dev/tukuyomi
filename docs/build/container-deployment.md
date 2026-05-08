@@ -225,8 +225,8 @@ Typical production pattern:
   - security-audit key env overrides when `security_audit.key_source=env`
 - the embedded `Settings` page edits DB `app_config`; recreate/restart the container to apply listener/runtime/storage policy/observability updates
 
-Site-managed ACME is configured per site on the `Sites` page with
-`tls.mode=acme`. ACME cache data lives in the `acme/` namespace of
+ACME is configured on the `TLS` page with a TLS binding using `mode=acme`.
+ACME cache data lives in the `acme/` namespace of
 `persistent_storage`. For a single-instance local backend, mount
 `/app/data/persistent`; for replicated or node-replacement deployments, use the
 S3 backend or an operator-managed shared mount. Azure Blob Storage and Google

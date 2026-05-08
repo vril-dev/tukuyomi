@@ -329,3 +329,50 @@ func TestListenAddrsCollide(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateAppServerPublicListenersConfig(t *testing.T) {
+	t.Run("accepts http setup and https production listeners", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.Server.TLS.Enabled = true
+		cfg.Server.PublicListeners = []appServerPublicListenerConfig{
+			{Name: "setup", ListenAddr: ":9090", Protocol: "http", HTTPBehavior: "serve", Enabled: true},
+			{Name: "https", ListenAddr: ":443", Protocol: "https", HTTPBehavior: "serve", Enabled: true},
+			{Name: "http", ListenAddr: ":80", Protocol: "http", HTTPBehavior: "redirect", RedirectTo: "https", Enabled: true},
+		}
+
+		if err := validateAppConfigFile(cfg); err != nil {
+			t.Fatalf("validateAppConfigFile() error = %v", err)
+		}
+	})
+
+	t.Run("rejects duplicate listener address", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.Server.PublicListeners = []appServerPublicListenerConfig{
+			{Name: "public", ListenAddr: ":9090", Protocol: "http", HTTPBehavior: "serve", Enabled: true},
+			{Name: "copy", ListenAddr: "127.0.0.1:9090", Protocol: "http", HTTPBehavior: "serve", Enabled: true},
+		}
+
+		err := validateAppConfigFile(cfg)
+		if err == nil {
+			t.Fatal("expected duplicate address error")
+		}
+		if got := err.Error(); !strings.Contains(got, "listen_addr collides") {
+			t.Fatalf("error=%q want listener collision", got)
+		}
+	})
+
+	t.Run("rejects https listener without server tls", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.Server.PublicListeners = []appServerPublicListenerConfig{
+			{Name: "https", ListenAddr: ":443", Protocol: "https", HTTPBehavior: "serve", Enabled: true},
+		}
+
+		err := validateAppConfigFile(cfg)
+		if err == nil {
+			t.Fatal("expected tls enabled error")
+		}
+		if got := err.Error(); got != "server.tls.enabled must be true when an https public listener is enabled" {
+			t.Fatalf("error=%q want tls enabled error", got)
+		}
+	})
+}

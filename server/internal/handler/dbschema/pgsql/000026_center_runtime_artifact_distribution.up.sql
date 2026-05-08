@@ -15,7 +15,6 @@ CREATE TABLE IF NOT EXISTS center_runtime_artifacts (
     uncompressed_size_bytes BIGINT NOT NULL,
     file_count BIGINT NOT NULL,
     manifest_json TEXT NOT NULL,
-    artifact_blob BYTEA,
     storage_state TEXT NOT NULL,
     builder_version TEXT NOT NULL DEFAULT '',
     builder_profile TEXT NOT NULL DEFAULT '',

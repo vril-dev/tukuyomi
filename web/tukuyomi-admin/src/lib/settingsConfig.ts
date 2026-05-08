@@ -1,6 +1,7 @@
 type DriftConfig = {
   server: {
     listen_addr: string;
+    public_listeners?: unknown[];
     graceful_shutdown_timeout_sec: number;
     proxy_protocol: { enabled: boolean; trusted_cidrs: string[] };
     tls: { enabled: boolean };
@@ -54,6 +55,8 @@ type DriftConfig = {
 
 type DriftRuntime = {
   listen_addr?: string;
+  server_public_listeners_configured?: boolean;
+  server_public_listeners?: unknown[];
   api_base_path?: string;
   ui_base_path?: string;
   admin_listen_addr?: string;
@@ -91,6 +94,7 @@ export function computeSettingsRuntimeDrift(
   if (!runtime) return [];
   const drift: string[] = [];
   if ((runtime.listen_addr ?? "") !== config.server.listen_addr) drift.push(label("Listen Address"));
+  if (JSON.stringify(runtime.server_public_listeners ?? []) !== JSON.stringify(config.server.public_listeners ?? [])) drift.push(label("Public Listeners"));
   if ((runtime.server_graceful_shutdown_timeout_sec ?? 30) !== config.server.graceful_shutdown_timeout_sec) drift.push(label("Graceful Shutdown Timeout"));
   if ((runtime.server_proxy_protocol_enabled ?? false) !== config.server.proxy_protocol.enabled) drift.push(label("Public PROXY Protocol"));
   if (JSON.stringify(runtime.server_proxy_protocol_trusted_cidrs ?? []) !== JSON.stringify(config.server.proxy_protocol.trusted_cidrs)) drift.push(label("Public PROXY Protocol Trusted CIDRs"));

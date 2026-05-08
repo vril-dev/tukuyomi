@@ -22,6 +22,7 @@ const FPTunerPanel = lazy(() => import('./pages/FPTunerPanel'));
 const ProxyRulesPanel = lazy(() => import('./pages/ProxyRulesPanel'));
 const BackendsPanel = lazy(() => import('./pages/BackendsPanel'));
 const SitesPanel = lazy(() => import('./pages/SitesPanel'));
+const TLSPanel = lazy(() => import('./pages/TLSPanel'));
 const SettingsPanel = lazy(() => import('./pages/SettingsPanel'));
 const UserPanel = lazy(() => import('./pages/UserPanel'));
 const OptionsPanel = lazy(() => import('./pages/OptionsPanel'));
@@ -106,6 +107,7 @@ function App() {
             <Route path="proxy-rules" element={<PageElement><ProxyRulesPanel /></PageElement>} />
             <Route path="backends" element={<PageElement><BackendsPanel /></PageElement>} />
             <Route path="sites" element={<PageElement><SitesPanel /></PageElement>} />
+            <Route path="tls" element={<PageElement><TLSPanel /></PageElement>} />
             <Route path="runtime-apps" element={<PageElement><RuntimeAppsPanel /></PageElement>} />
             <Route path="scheduled-tasks" element={<PageElement><ScheduledTasksPanel /></PageElement>} />
             <Route path="user" element={<PageElement><UserPanel /></PageElement>} />

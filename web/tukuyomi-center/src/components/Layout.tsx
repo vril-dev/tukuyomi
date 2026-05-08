@@ -1,6 +1,6 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 
-import { getAPIBasePath } from "@/lib/runtime";
+import { getAPIBasePath, isExperimentalAppDeployEnabled } from "@/lib/runtime";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 
@@ -40,7 +40,7 @@ function isActive(pathname: string, to: string) {
 
 type SelectedDeviceRoute = {
   deviceID: string;
-  page: "status" | "runtime" | "proxy-rules" | "waf-rules" | "remote-ssh";
+  page: "status" | "runtime" | "proxy-rules" | "waf-rules" | "remote-ssh" | "app-deploy";
 };
 
 function selectedDeviceRouteFromPath(pathname: string): SelectedDeviceRoute | null {
@@ -54,7 +54,11 @@ function selectedDeviceRouteFromPath(pathname: string): SelectedDeviceRoute | nu
   } catch {
   }
   const page =
-    match[2] === "runtime" || match[2] === "proxy-rules" || match[2] === "waf-rules" || match[2] === "remote-ssh"
+    match[2] === "runtime" ||
+    match[2] === "proxy-rules" ||
+    match[2] === "waf-rules" ||
+    match[2] === "remote-ssh" ||
+    match[2] === "app-deploy"
       ? match[2]
       : "status";
   return {
@@ -83,14 +87,22 @@ function deviceRemoteSSHPath(deviceID: string) {
   return `/device-approvals/devices/${encodeURIComponent(deviceID)}/remote-ssh`;
 }
 
+function deviceAppDeployPath(deviceID: string) {
+  return `/device-approvals/devices/${encodeURIComponent(deviceID)}/app-deploy`;
+}
+
 function deviceMenuItems(deviceID: string): NavItem[] {
-  return [
+  const items = [
     { to: deviceStatusPath(deviceID), label: "Device Status", hint: "Selected Gateway status and config snapshots." },
     { to: deviceProxyRulesPath(deviceID), label: "Proxy Rules", hint: "" },
     { to: deviceWAFRulesPath(deviceID), label: "WAF Rules", hint: "" },
     { to: deviceRemoteSSHPath(deviceID), label: "Remote SSH", hint: "" },
     { to: deviceRuntimePath(deviceID), label: "Runtime", hint: "" },
   ];
+  if (isExperimentalAppDeployEnabled()) {
+    items.push({ to: deviceAppDeployPath(deviceID), label: "Runtime App Deploy", hint: "" });
+  }
+  return items;
 }
 
 function isDeviceMenuItemActive(pathname: string, item: NavItem, deviceID: string) {

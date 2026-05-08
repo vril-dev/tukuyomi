@@ -1,6 +1,8 @@
 package waf
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -189,6 +191,30 @@ SecRule ARGS "@rx (?i)<script>" "id:100001,phase:2,deny,status:403,log,msg:'bloc
 	}
 	if it := tx.Interruption(); it != nil {
 		t.Fatalf("unexpected interruption: status=%d rule=%d", it.Status, it.RuleID)
+	}
+}
+
+func TestCorazaEngineAddsHTTPFramingHeaders(t *testing.T) {
+	dir := t.TempDir()
+	rulePath := filepath.Join(dir, "test.conf")
+	mustWrite(t, rulePath, `
+SecRuleEngine On
+SecRule &REQUEST_HEADERS:Content-Length "@eq 0" "id:100002,phase:1,deny,status:403,log,msg:'missing content length'"
+`)
+
+	w, err := buildWAF([]string{rulePath})
+	if err != nil {
+		t.Fatalf("buildWAF() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "http://example.local/center-api/devices/test/runtime-builds", strings.NewReader(`{"runtime_family":"php-fpm","runtime_id":"php83"}`))
+	req.Host = "example.local"
+	decision, err := corazaEngine{w: w}.InspectRequest(req)
+	if err != nil {
+		t.Fatalf("InspectRequest() error = %v", err)
+	}
+	if decision.Interruption != nil {
+		t.Fatalf("unexpected interruption: status=%d rule=%d", decision.Interruption.Status, decision.Interruption.RuleID)
 	}
 }
 

@@ -52,7 +52,7 @@ can read it from cover to cover.
 - **Chapter 5. Routing, Upstreams, and Backend Pools** — The three-layer model,
   route-scoped pool examples, sticky sessions, dynamic DNS backend discovery,
   the `Backends` panel, and runtime operations on direct named upstreams.
-  (sources: README.md, docs/reference/operator-reference.md)
+  (sources: README.md, docs/operations/operator-reference.md)
 - **Chapter 6. Upstream HTTP/2 and h2c** — `force_http2` / `h2c_upstream`
   semantics, mixed topologies, TLS controls, and how direct route targets
   behave. (source: docs/operations/upstream-http2.md)
@@ -68,7 +68,7 @@ can read it from cover to cover.
 - **Chapter 9. Request-time security plugins** — The boundary between metadata
   resolvers and request-security plugins, the `SecurityEvent` contract,
   ordering, bounded shared feedback, registration, a minimal example, and
-  design rules. (source: docs/request_security_plugins.md)
+  design rules. (source: docs/operations/request_security_plugins.md)
 
 ### Part V — Runtime Apps and scheduled tasks
 
@@ -105,7 +105,7 @@ can read it from cover to cover.
   (source: docs/operations/device-auth-enrollment.md)
 - **Chapter 17. Remote SSH** — Center-managed maintenance access without an
   inbound Gateway SSH port, Web Terminal, CLI handoff, session policy,
-  termination, scrollback, troubleshooting. (source: docs/remote-ssh.md)
+  termination, scrollback, troubleshooting. (source: docs/operations/remote-ssh.md)
 
 ### Part VII — Performance and regression
 
@@ -125,7 +125,7 @@ can read it from cover to cover.
   and DB `app_config_*`, inbound timeout boundary, overload backpressure,
   persistent file storage, host-network hardening, the admin dashboard, the
   Make target index, the admin API.
-  (sources: docs/reference/operator-reference.md, docs/api/admin-openapi.yaml)
+  (sources: docs/operations/operator-reference.md, docs/api/admin-openapi.yaml)
 - **Appendix B. Release notes (v1.3.0 / v1.2.0 / v1.1.0)** — Remote SSH
   Web Terminal and session controls (v1.3.0); Center, IoT / Edge enrollment,
   `INSTALL_ROLE`, device approval lifecycle (v1.2.0); DB-backed runtime

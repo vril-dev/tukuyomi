@@ -75,6 +75,9 @@ func repairEmbeddedDBSchemaCompatibility(db *sql.DB, driver string) error {
 	if err := repairRemoteSSHSessionHostPublicKeyColumn(db, driver); err != nil {
 		return err
 	}
+	if err := repairAppDeployPackageFilesRootIDColumn(db, driver); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -103,6 +106,43 @@ func repairRemoteSSHSessionHostPublicKeyColumn(db *sql.DB, driver string) error 
 	case logStatsDBDriverPostgres:
 		statements = []string{
 			`ALTER TABLE center_remote_ssh_sessions ADD COLUMN gateway_host_public_key TEXT NOT NULL DEFAULT ''`,
+		}
+	default:
+		return fmt.Errorf("unsupported db driver: %s", driver)
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			return fmt.Errorf("repair %s.%s column: %w", tableName, columnName, err)
+		}
+	}
+	return nil
+}
+
+func repairAppDeployPackageFilesRootIDColumn(db *sql.DB, driver string) error {
+	const tableName = "center_app_deploy_package_files"
+	const columnName = "root_id"
+	exists, err := dbColumnExists(db, driver, tableName, columnName)
+	if err != nil {
+		return fmt.Errorf("inspect %s.%s column: %w", tableName, columnName, err)
+	}
+	if exists {
+		return nil
+	}
+	var statements []string
+	switch driver {
+	case logStatsDBDriverSQLite:
+		statements = []string{
+			`ALTER TABLE center_app_deploy_package_files ADD COLUMN root_id TEXT NOT NULL DEFAULT ''`,
+		}
+	case logStatsDBDriverMySQL:
+		statements = []string{
+			`ALTER TABLE center_app_deploy_package_files ADD COLUMN root_id VARCHAR(64) NULL AFTER path`,
+			`UPDATE center_app_deploy_package_files SET root_id = '' WHERE root_id IS NULL`,
+			`ALTER TABLE center_app_deploy_package_files MODIFY COLUMN root_id VARCHAR(64) NOT NULL DEFAULT ''`,
+		}
+	case logStatsDBDriverPostgres:
+		statements = []string{
+			`ALTER TABLE center_app_deploy_package_files ADD COLUMN root_id TEXT NOT NULL DEFAULT ''`,
 		}
 	default:
 		return fmt.Errorf("unsupported db driver: %s", driver)

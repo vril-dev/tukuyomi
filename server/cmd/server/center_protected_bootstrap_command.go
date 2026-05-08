@@ -25,6 +25,7 @@ func runBootstrapCenterProtectedGatewayCommand(args []string) {
 	centerTLSCABundleFile := fs.String("center-ca-bundle", "", "optional PEM CA bundle for private Center TLS")
 	centerTLSServerName := fs.String("center-server-name", "", "optional TLS server name for Center certificate verification")
 	pollInterval := fs.Int("poll-interval-sec", 0, "optional Center status poll interval")
+	gatewayAdminExternalMode := fs.String("gateway-admin-external-mode", "", "optional Gateway admin.external_mode override")
 	markApproved := fs.Bool("mark-approved", false, "mark local Gateway enrollment status approved")
 	if err := fs.Parse(args); err != nil {
 		log.Fatalf("[CENTER_PROTECTED][GATEWAY][FATAL] %v", err)
@@ -48,6 +49,7 @@ func runBootstrapCenterProtectedGatewayCommand(args []string) {
 		CenterTLSCABundleFile:    *centerTLSCABundleFile,
 		CenterTLSServerName:      *centerTLSServerName,
 		StatusRefreshIntervalSec: *pollInterval,
+		GatewayAdminExternalMode: *gatewayAdminExternalMode,
 		MarkApproved:             *markApproved,
 	})
 	if err != nil {

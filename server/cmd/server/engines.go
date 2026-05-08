@@ -91,6 +91,7 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 			config.APIBasePath + "/bot-defense-decisions",
 			config.APIBasePath + "/semantic-rules",
 			config.APIBasePath + "/sites",
+			config.APIBasePath + "/tls-bindings",
 			config.APIBasePath + "/php-runtimes",
 			config.APIBasePath + "/psgi-runtimes",
 			config.APIBasePath + "/runtime-apps",
@@ -211,6 +212,10 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 	api.POST("/sites/validate", handler.ValidateSites)
 	api.PUT("/sites", adminMutate, handler.PutSites)
 	api.POST("/sites/rollback", adminMutate, handler.RollbackSites)
+	api.GET("/tls-bindings", handler.GetTLSBindings)
+	api.POST("/tls-bindings/validate", handler.ValidateTLSBindings)
+	api.PUT("/tls-bindings", adminMutate, handler.PutTLSBindings)
+	api.POST("/tls-bindings/rollback", adminMutate, handler.RollbackTLSBindings)
 	api.GET("/php-runtimes", handler.GetPHPRuntimes)
 	api.POST("/php-runtimes/validate", handler.ValidatePHPRuntimes)
 	api.PUT("/php-runtimes", adminMutate, handler.PutPHPRuntimes)

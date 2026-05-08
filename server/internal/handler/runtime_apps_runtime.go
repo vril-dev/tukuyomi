@@ -818,17 +818,25 @@ func validateVhostConfigFile(cfg VhostConfigFile, inventory PHPRuntimeInventoryF
 	return validateVhostConfigFileWithInventories(cfg, inventory, currentPSGIRuntimeInventoryConfig())
 }
 
+func runtimeAvailabilitySuffix(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ""
+	}
+	return ": " + message
+}
+
 func validateVhostConfigFileWithInventories(cfg VhostConfigFile, phpInventory PHPRuntimeInventoryFile, psgiInventory PSGIRuntimeInventoryFile) error {
 	seenNames := make(map[string]struct{}, len(cfg.Vhosts))
 	seenUpstreamAliases := make(map[string]struct{}, len(cfg.Vhosts)*2)
 	seenListenPairs := make(map[string]struct{}, len(cfg.Vhosts))
-	knownPHPRuntimes := make(map[string]struct{}, len(phpInventory.Runtimes))
+	knownPHPRuntimes := make(map[string]PHPRuntimeRecord, len(phpInventory.Runtimes))
 	for _, runtime := range phpInventory.Runtimes {
-		knownPHPRuntimes[runtime.RuntimeID] = struct{}{}
+		knownPHPRuntimes[runtime.RuntimeID] = runtime
 	}
-	knownPSGIRuntimes := make(map[string]struct{}, len(psgiInventory.Runtimes))
+	knownPSGIRuntimes := make(map[string]PSGIRuntimeRecord, len(psgiInventory.Runtimes))
 	for _, runtime := range psgiInventory.Runtimes {
-		knownPSGIRuntimes[runtime.RuntimeID] = struct{}{}
+		knownPSGIRuntimes[runtime.RuntimeID] = runtime
 	}
 	for i, vhost := range cfg.Vhosts {
 		field := fmt.Sprintf("vhosts[%d]", i)
@@ -857,6 +865,9 @@ func validateVhostConfigFileWithInventories(cfg VhostConfigFile, phpInventory PH
 		seenListenPairs[pairKey] = struct{}{}
 		if vhost.DocumentRoot == "" || vhost.DocumentRoot == "." {
 			return fmt.Errorf("%s.document_root is required", field)
+		}
+		if err := validateVhostRootPath(vhost.DocumentRoot); err != nil {
+			return fmt.Errorf("%s.document_root: %w", field, err)
 		}
 		if err := validateVhostTryFiles(vhost.TryFiles, field); err != nil {
 			return err
@@ -899,8 +910,12 @@ func validateVhostConfigFileWithInventories(cfg VhostConfigFile, phpInventory PH
 			if vhost.RuntimeID == "" {
 				return fmt.Errorf("%s.runtime_id is required when mode=php-fpm", field)
 			}
-			if _, ok := knownPHPRuntimes[vhost.RuntimeID]; !ok {
+			runtime, ok := knownPHPRuntimes[vhost.RuntimeID]
+			if !ok {
 				return fmt.Errorf("%s.runtime_id references unknown runtime %q", field, vhost.RuntimeID)
+			}
+			if !runtime.Available {
+				return fmt.Errorf("%s.runtime_id references unavailable runtime %q%s", field, vhost.RuntimeID, runtimeAvailabilitySuffix(runtime.AvailabilityMessage))
 			}
 			if err := validateVhostINIOverrides(vhost.PHPValues, field+".php_value"); err != nil {
 				return err
@@ -913,11 +928,18 @@ func validateVhostConfigFileWithInventories(cfg VhostConfigFile, phpInventory PH
 			if vhost.RuntimeID == "" {
 				return fmt.Errorf("%s.runtime_id is required when mode=psgi", field)
 			}
-			if _, ok := knownPSGIRuntimes[vhost.RuntimeID]; !ok {
+			runtime, ok := knownPSGIRuntimes[vhost.RuntimeID]
+			if !ok {
 				return fmt.Errorf("%s.runtime_id references unknown psgi runtime %q", field, vhost.RuntimeID)
+			}
+			if !runtime.Available {
+				return fmt.Errorf("%s.runtime_id references unavailable psgi runtime %q%s", field, vhost.RuntimeID, runtimeAvailabilitySuffix(runtime.AvailabilityMessage))
 			}
 			if vhost.AppRoot == "" || vhost.AppRoot == "." {
 				return fmt.Errorf("%s.app_root is required when mode=psgi", field)
+			}
+			if err := validateVhostRootPath(vhost.AppRoot); err != nil {
+				return fmt.Errorf("%s.app_root: %w", field, err)
 			}
 			if vhost.PSGIFile == "" {
 				return fmt.Errorf("%s.psgi_file is required when mode=psgi", field)
@@ -1352,6 +1374,39 @@ func normalizeRelativeLocalPath(value string) string {
 		return ""
 	}
 	return value
+}
+
+func validateVhostRootPath(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("is required")
+	}
+	if strings.Contains(value, "\x00") {
+		return fmt.Errorf("must not contain NUL bytes")
+	}
+	cleaned := filepath.Clean(value)
+	if cleaned == "." || cleaned == ".." {
+		return fmt.Errorf("must not be the current or parent directory")
+	}
+	for _, part := range strings.Split(filepath.ToSlash(cleaned), "/") {
+		if part == ".." {
+			return fmt.Errorf("must not contain '..' path segments")
+		}
+	}
+	if filepath.IsAbs(cleaned) && vhostRootPathIsSensitive(cleaned) {
+		return fmt.Errorf("must not point to a system directory")
+	}
+	return nil
+}
+
+func vhostRootPathIsSensitive(value string) bool {
+	cleaned := filepath.ToSlash(filepath.Clean(value))
+	for _, root := range []string{"/", "/bin", "/boot", "/dev", "/etc", "/proc", "/root", "/run", "/sbin", "/sys"} {
+		if cleaned == root || strings.HasPrefix(cleaned, root+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func validateVhostRelativePath(value string) error {

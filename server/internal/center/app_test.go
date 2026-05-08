@@ -963,6 +963,127 @@ func TestStoreRuntimeArtifactBundleIsIdempotentForSameRevision(t *testing.T) {
 	}
 }
 
+func TestRuntimeArtifactPayloadUsesFileStorageAndMigratesLegacyBlob(t *testing.T) {
+	restore := configureCenterAuthTest(t)
+	defer restore()
+
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 32); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer handler.InitLogsStatsStore(false, "", 0)
+
+	build, err := runtimeArtifactBundleForStoreTest(time.Unix(1000, 0).UTC())
+	if err != nil {
+		t.Fatalf("build artifact: %v", err)
+	}
+	stored, err := StoreRuntimeArtifactBundle(context.Background(), build.Compressed, "test")
+	if err != nil {
+		t.Fatalf("StoreRuntimeArtifactBundle: %v", err)
+	}
+	var blobColumnExists bool
+	if err := withCenterDB(context.Background(), func(db *sql.DB, driver string) error {
+		var err error
+		blobColumnExists, err = centerDBColumnExists(db, driver, "center_runtime_artifacts", "artifact_blob")
+		return err
+	}); err != nil {
+		t.Fatalf("inspect artifact blob column: %v", err)
+	}
+	if blobColumnExists {
+		t.Fatal("fresh runtime artifact schema unexpectedly has artifact_blob column")
+	}
+	fileBody, err := readCenterPayloadFile(centerPayloadRuntimeArtifacts, stored.ArtifactRevision, centerPayloadRuntimeArtifactExt, stored.CompressedSize, stored.ArtifactHash)
+	if err != nil {
+		t.Fatalf("read file-backed runtime artifact: %v", err)
+	}
+	if !bytes.Equal(fileBody, build.Compressed) {
+		t.Fatal("file-backed runtime artifact body mismatch")
+	}
+
+	deviceID := "runtime-file-backed-device"
+	fixture := signedEnrollmentFixtureForTest(t, deviceID, "key-1", "nonce-runtime-file-backed", time.Now().UTC())
+	publicKeyPEM, err := base64.StdEncoding.DecodeString(fixture.Request.PublicKeyPEMB64)
+	if err != nil {
+		t.Fatalf("decode public key: %v", err)
+	}
+	if _, err := BootstrapApprovedDevice(context.Background(), BootstrapApprovedDeviceInput{
+		DeviceID:                   fixture.Request.DeviceID,
+		KeyID:                      fixture.Request.KeyID,
+		PublicKeyPEM:               string(publicKeyPEM),
+		PublicKeyFingerprintSHA256: fixture.Fingerprint,
+		Actor:                      "test",
+	}); err != nil {
+		t.Fatalf("BootstrapApprovedDevice: %v", err)
+	}
+	if err := withCenterDB(context.Background(), func(db *sql.DB, driver string) error {
+		_, err := db.ExecContext(context.Background(), `
+UPDATE center_devices
+   SET os = `+placeholder(driver, 1)+`,
+       arch = `+placeholder(driver, 2)+`,
+       kernel_version = `+placeholder(driver, 3)+`,
+       distro_id = `+placeholder(driver, 4)+`,
+       distro_id_like = `+placeholder(driver, 5)+`,
+       distro_version = `+placeholder(driver, 6)+`,
+       runtime_deployment_supported = 1
+ WHERE device_id = `+placeholder(driver, 7),
+			"linux", "amd64", "6.8.0-test", "ubuntu", "debian", "24.04", deviceID)
+		return err
+	}); err != nil {
+		t.Fatalf("update device platform: %v", err)
+	}
+	if _, err := AssignRuntimeArtifactToDevice(context.Background(), RuntimeAssignmentUpdate{
+		DeviceID:         deviceID,
+		RuntimeFamily:    RuntimeFamilyPHPFPM,
+		RuntimeID:        "php83",
+		ArtifactRevision: stored.ArtifactRevision,
+		Reason:           "test",
+		AssignedBy:       "test",
+		AssignedAtUnix:   1002,
+	}); err != nil {
+		t.Fatalf("AssignRuntimeArtifactToDevice: %v", err)
+	}
+	_, downloaded, err := RuntimeArtifactDownloadForDevice(context.Background(), deviceID, RuntimeFamilyPHPFPM, "php83", stored.ArtifactRevision, stored.ArtifactHash)
+	if err != nil {
+		t.Fatalf("RuntimeArtifactDownloadForDevice: %v", err)
+	}
+	if !bytes.Equal(downloaded, build.Compressed) {
+		t.Fatal("downloaded runtime artifact body mismatch")
+	}
+
+	removeCenterPayloadFile(centerPayloadRuntimeArtifacts, stored.ArtifactRevision, centerPayloadRuntimeArtifactExt)
+	if err := withCenterDB(context.Background(), func(db *sql.DB, driver string) error {
+		if _, err := db.ExecContext(context.Background(), `ALTER TABLE center_runtime_artifacts ADD COLUMN artifact_blob BLOB`); err != nil {
+			return err
+		}
+		_, err := db.ExecContext(context.Background(), `
+UPDATE center_runtime_artifacts
+   SET artifact_blob = `+placeholder(driver, 1)+`
+ WHERE artifact_revision = `+placeholder(driver, 2), build.Compressed, stored.ArtifactRevision)
+		return err
+	}); err != nil {
+		t.Fatalf("restore legacy artifact blob: %v", err)
+	}
+	_, downloaded, err = RuntimeArtifactDownloadForDevice(context.Background(), deviceID, RuntimeFamilyPHPFPM, "php83", stored.ArtifactRevision, stored.ArtifactHash)
+	if err != nil {
+		t.Fatalf("legacy RuntimeArtifactDownloadForDevice: %v", err)
+	}
+	if !bytes.Equal(downloaded, build.Compressed) {
+		t.Fatal("legacy downloaded runtime artifact body mismatch")
+	}
+	if _, err := MigrateCenterPayloadBlobs(context.Background()); err != nil {
+		t.Fatalf("MigrateCenterPayloadBlobs: %v", err)
+	}
+	if err := withCenterDB(context.Background(), func(db *sql.DB, driver string) error {
+		var err error
+		blobColumnExists, err = centerDBColumnExists(db, driver, "center_runtime_artifacts", "artifact_blob")
+		return err
+	}); err != nil {
+		t.Fatalf("inspect migrated artifact blob column: %v", err)
+	}
+	if blobColumnExists {
+		t.Fatal("migrated runtime artifact schema still has artifact_blob column")
+	}
+}
+
 func TestCenterProxyRuleAssignmentQueue(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()
@@ -2779,6 +2900,7 @@ func configureCenterAuthTest(t *testing.T) func() {
 	t.Helper()
 	old := struct {
 		dbPath                 string
+		persistentLocalBaseDir string
 		adminSessionSecret     string
 		adminSessionTTL        time.Duration
 		apiAuthDisable         bool
@@ -2788,6 +2910,7 @@ func configureCenterAuthTest(t *testing.T) func() {
 		requestLogEnabled      bool
 	}{
 		dbPath:                 config.DBPath,
+		persistentLocalBaseDir: config.PersistentStorageLocalBaseDir,
 		adminSessionSecret:     config.AdminSessionSecret,
 		adminSessionTTL:        config.AdminSessionTTL,
 		apiAuthDisable:         config.APIAuthDisable,
@@ -2797,6 +2920,7 @@ func configureCenterAuthTest(t *testing.T) func() {
 		requestLogEnabled:      config.RequestLogEnabled,
 	}
 	config.DBPath = filepath.Join(t.TempDir(), "center-test.db")
+	config.PersistentStorageLocalBaseDir = filepath.Join(t.TempDir(), "persistent")
 	config.AdminSessionSecret = "center-test-session-secret-123456789"
 	config.AdminSessionTTL = time.Hour
 	config.APIAuthDisable = false
@@ -2806,6 +2930,7 @@ func configureCenterAuthTest(t *testing.T) func() {
 	config.RequestLogEnabled = false
 	return func() {
 		config.DBPath = old.dbPath
+		config.PersistentStorageLocalBaseDir = old.persistentLocalBaseDir
 		config.AdminSessionSecret = old.adminSessionSecret
 		config.AdminSessionTTL = old.adminSessionTTL
 		config.APIAuthDisable = old.apiAuthDisable

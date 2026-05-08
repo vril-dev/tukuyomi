@@ -67,7 +67,7 @@ build: "pandoc → HTML → Chrome headless で PDF 化"
 - **第9章　Request-Time Security Plugins** — metadata resolver と request-security
   plugin の境界、`SecurityEvent` 契約、ordering、bounded shared feedback、
   registration、minimal example、design rules。
-  （source: docs/request_security_plugins.ja.md）
+  （source: docs/operations/request_security_plugins.ja.md）
 
 ### 第V部　Runtime Apps と Scheduled Tasks
 
@@ -103,7 +103,7 @@ build: "pandoc → HTML → Chrome headless で PDF 化"
 - **第17章　Remote SSH** — Gateway のインバウンド SSH ポートを開けない
   Center 管理の保守接続、Web Terminal、CLI handoff、セッションポリシー、
   強制終了、スクロールバック、トラブルシューティング。
-  （source: docs/remote-ssh.ja.md）
+  （source: docs/operations/remote-ssh.ja.md）
 
 ### 第VII部　性能と回帰検証
 
@@ -122,7 +122,7 @@ build: "pandoc → HTML → Chrome headless で PDF 化"
   全 block、Inbound Timeout Boundary、Overload Backpressure、Persistent File
   Storage、Host Network Hardening、管理ダッシュボード、Make ターゲット一覧、
   管理 API。
-  （source: docs/reference/operator-reference.ja.md, docs/api/admin-openapi.yaml）
+  （source: docs/operations/operator-reference.ja.md, docs/api/admin-openapi.yaml）
 - **付録B　リリースノート（v1.3.0 / v1.2.0 / v1.1.0）** — Remote SSH
   Web Terminal とセッション制御（v1.3.0）、Center 追加、IoT / Edge
   enrollment、`INSTALL_ROLE`、device approval lifecycle（v1.2.0）、

@@ -150,6 +150,9 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 
 	next := createEmptySettingsTestConfig()
 	next.Server.ListenAddr = ":443"
+	next.Server.PublicListeners = []settingsListenerAdminPublicListenerConfig{
+		{Name: "setup", ListenAddr: ":9090", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+	}
 	next.Server.ReadTimeoutSec = 45
 	next.Server.GracefulShutdownTimeoutSec = 60
 	next.Server.MaxHeaderBytes = 2097152
@@ -227,6 +230,9 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	}
 	if saved.Server.ListenAddr != ":443" {
 		t.Fatalf("saved listen_addr=%q want=:443", saved.Server.ListenAddr)
+	}
+	if len(saved.Server.PublicListeners) != 1 || saved.Server.PublicListeners[0].Name != "setup" || saved.Server.PublicListeners[0].ListenAddr != ":9090" {
+		t.Fatalf("saved public_listeners=%#v", saved.Server.PublicListeners)
 	}
 	if saved.Server.ReadTimeoutSec != 45 {
 		t.Fatalf("saved read_timeout_sec=%d want=45", saved.Server.ReadTimeoutSec)

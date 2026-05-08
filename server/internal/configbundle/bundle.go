@@ -22,6 +22,7 @@ const (
 	DomainAdminUsers           = "admin_users"
 	DomainProxy                = "proxy"
 	DomainSites                = "sites"
+	DomainTLSBindings          = "tls_bindings"
 	DomainRuntimeApps          = "runtime_apps"
 	DomainPHPRuntimeInventory  = "php_runtime_inventory"
 	DomainPSGIRuntimeInventory = "psgi_runtime_inventory"
@@ -55,6 +56,7 @@ var legacySeedDomains = map[string]string{
 	"admin-users.json":            DomainAdminUsers,
 	"proxy.json":                  DomainProxy,
 	"sites.json":                  DomainSites,
+	"tls-bindings.json":           DomainTLSBindings,
 	"vhosts.json":                 DomainRuntimeApps,
 	"php-runtime-inventory.json":  DomainPHPRuntimeInventory,
 	"psgi-runtime-inventory.json": DomainPSGIRuntimeInventory,
@@ -76,6 +78,7 @@ var knownDomains = map[string]struct{}{
 	DomainAdminUsers:           {},
 	DomainProxy:                {},
 	DomainSites:                {},
+	DomainTLSBindings:          {},
 	DomainRuntimeApps:          {},
 	DomainPHPRuntimeInventory:  {},
 	DomainPSGIRuntimeInventory: {},

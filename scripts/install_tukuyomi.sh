@@ -32,6 +32,8 @@ INSTALL_CENTER_UPSTREAM_URL_VALUE="${INSTALL_CENTER_UPSTREAM_URL:-http://127.0.0
 INSTALL_CENTER_CLIENT_ALLOW_CIDRS_VALUE="${INSTALL_CENTER_CLIENT_ALLOW_CIDRS:-}"
 INSTALL_CENTER_MANAGE_API_ALLOW_CIDRS_VALUE="${INSTALL_CENTER_MANAGE_API_ALLOW_CIDRS:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}"
 INSTALL_CENTER_API_ALLOW_CIDRS_VALUE="${INSTALL_CENTER_API_ALLOW_CIDRS:-}"
+INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE="${INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE:-full_external}"
+INSTALL_DEV_BOOTSTRAP_PASSWORD="dev-only-change-this-password-please"
 
 INSTALL_CONFIG_REL=""
 INSTALL_ENV_BASENAME=""
@@ -39,6 +41,12 @@ INSTALL_DERIVED_PROCESS_MODEL=""
 INSTALL_CENTER_CONFIG_REL="conf/config.center.json"
 INSTALL_CENTER_ENV_BASENAME="tukuyomi-center.env"
 INSTALL_CENTER_SERVICE_BASENAME="tukuyomi-center.service"
+INSTALL_ADMIN_BOOTSTRAP_USERNAME_VALUE=""
+INSTALL_ADMIN_BOOTSTRAP_PASSWORD_VALUE=""
+INSTALL_ADMIN_BOOTSTRAP_EMAIL_VALUE=""
+INSTALL_ADMIN_BOOTSTRAP_PASSWORD_GENERATED="0"
+INSTALL_ADMIN_BOOTSTRAP_PASSWORD_REPORTED="0"
+INSTALL_ADMIN_BOOTSTRAP_ATTEMPTED="0"
 
 log() {
   echo "[install] $*"
@@ -54,6 +62,36 @@ is_enabled() {
     1|true|TRUE|yes|YES|on|ON) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+generate_admin_bootstrap_password() {
+  python3 - <<'PY'
+import secrets
+
+print(secrets.token_urlsafe(24))
+PY
+}
+
+resolve_admin_bootstrap_credentials() {
+  local username password email
+  username="${TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME:-${WAF_ADMIN_USERNAME:-admin}}"
+  password="${TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD:-${WAF_ADMIN_PASSWORD:-}}"
+  email="${TUKUYOMI_ADMIN_BOOTSTRAP_EMAIL:-}"
+
+  username="$(printf '%s' "${username}" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  [[ -n "${username}" ]] || username="admin"
+
+  if [[ -z "${password}" || "${password}" == "${INSTALL_DEV_BOOTSTRAP_PASSWORD}" ]]; then
+    password="$(generate_admin_bootstrap_password)"
+    INSTALL_ADMIN_BOOTSTRAP_PASSWORD_GENERATED="1"
+  fi
+  [[ "${password}" != *$'\n'* && "${password}" != *$'\r'* ]] || die "admin bootstrap password must not contain newlines"
+  [[ -n "${password}" ]] || die "admin bootstrap password is empty"
+  [[ "${#password}" -le 1024 ]] || die "admin bootstrap password is too long"
+
+  INSTALL_ADMIN_BOOTSTRAP_USERNAME_VALUE="${username}"
+  INSTALL_ADMIN_BOOTSTRAP_PASSWORD_VALUE="${password}"
+  INSTALL_ADMIN_BOOTSTRAP_EMAIL_VALUE="${email}"
 }
 
 use_service_account() {
@@ -78,6 +116,24 @@ install_role_includes_gateway() {
 
 install_role_includes_center() {
   [[ "${INSTALL_ROLE}" == "center" || "${INSTALL_ROLE}" == "center-protected" ]]
+}
+
+normalize_center_protected_gateway_admin_external_mode() {
+  if ! install_role_is_center_protected; then
+    INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE=""
+    return
+  fi
+  local mode
+  mode="$(printf '%s' "${INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  [[ -n "${mode}" ]] || mode="full_external"
+  case "${mode}" in
+    deny_external|api_only_external|full_external)
+      INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE="${mode}"
+      ;;
+    *)
+      die "INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE must be deny_external, api_only_external, or full_external"
+      ;;
+  esac
 }
 
 configure_install_role() {
@@ -107,6 +163,7 @@ configure_install_role() {
   else
     INSTALL_DERIVED_PROCESS_MODEL="single"
   fi
+  normalize_center_protected_gateway_admin_external_mode
 }
 
 use_login_user_home_install() {
@@ -574,6 +631,66 @@ run_runtime() {
   run_runtime_with_config "${INSTALL_CONFIG_REL}" "$@"
 }
 
+admin_user_count_for_config() {
+  local config_rel="$1"
+  local driver db_path db_file
+  driver="$(read_storage_field "${config_rel}" db_driver | tr '[:upper:]' '[:lower:]')"
+  [[ "${driver}" == "sqlite" ]] || return 2
+  db_path="$(read_storage_field "${config_rel}" db_path)"
+  [[ -n "${db_path}" ]] || return 2
+  if [[ "${db_path}" == /* ]]; then
+    db_file="${db_path}"
+  else
+    db_file="${RUNTIME_DIR}/${db_path}"
+  fi
+  [[ -f "${db_file}" ]] || return 2
+  python3 - "${db_file}" <<'PY'
+import sqlite3
+import sys
+
+conn = sqlite3.connect(sys.argv[1])
+try:
+    cur = conn.execute("SELECT COUNT(*) FROM admin_users")
+    print(cur.fetchone()[0])
+except sqlite3.Error:
+    sys.exit(2)
+finally:
+    conn.close()
+PY
+}
+
+report_admin_bootstrap_credentials() {
+  [[ "${INSTALL_ADMIN_BOOTSTRAP_PASSWORD_REPORTED}" == "0" ]] || return 0
+  INSTALL_ADMIN_BOOTSTRAP_PASSWORD_REPORTED="1"
+  if [[ "${INSTALL_ADMIN_BOOTSTRAP_PASSWORD_GENERATED}" == "1" ]]; then
+    log "generated initial admin bootstrap credentials for empty DBs"
+    log "initial admin username: ${INSTALL_ADMIN_BOOTSTRAP_USERNAME_VALUE}"
+    log "initial admin password: ${INSTALL_ADMIN_BOOTSTRAP_PASSWORD_VALUE}"
+    log "save this password now, then change it from the User screen after first login"
+    return
+  fi
+  log "using provided initial admin bootstrap username: ${INSTALL_ADMIN_BOOTSTRAP_USERNAME_VALUE}"
+}
+
+bootstrap_admin_owner_for_config() {
+  local config_rel="$1"
+  local label="$2"
+  local count=""
+  if count="$(admin_user_count_for_config "${config_rel}")"; then
+    if [[ "${count}" -gt 0 ]]; then
+      log "skip ${label} admin bootstrap; admin user already exists"
+      return
+    fi
+  fi
+  INSTALL_ADMIN_BOOTSTRAP_ATTEMPTED="1"
+  log "bootstrap initial admin owner for ${label}"
+  run_runtime_with_config "${config_rel}" \
+    "TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME=${INSTALL_ADMIN_BOOTSTRAP_USERNAME_VALUE}" \
+    "TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD=${INSTALL_ADMIN_BOOTSTRAP_PASSWORD_VALUE}" \
+    "TUKUYOMI_ADMIN_BOOTSTRAP_EMAIL=${INSTALL_ADMIN_BOOTSTRAP_EMAIL_VALUE}" \
+    admin-bootstrap
+}
+
 read_storage_field() {
   local config_rel="$1"
   local field="$2"
@@ -635,6 +752,7 @@ bootstrap_center_protected_enrollment() {
     --gateway-api-base-path "${INSTALL_CENTER_GATEWAY_API_BASE_PATH_VALUE}" \
     --center-api-base-path "${INSTALL_CENTER_API_BASE_PATH_VALUE}" \
     --center-ui-base-path "${INSTALL_CENTER_UI_BASE_PATH_VALUE}" \
+    --gateway-admin-external-mode "${INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE}" \
     --out "${identity_rel}"
   run_runtime_with_config "${INSTALL_CENTER_CONFIG_REL}" bootstrap-center-protected-center --in "${identity_rel}" --out "${approved_rel}"
   run_runtime bootstrap-center-protected-gateway \
@@ -642,6 +760,7 @@ bootstrap_center_protected_enrollment() {
     --gateway-api-base-path "${INSTALL_CENTER_GATEWAY_API_BASE_PATH_VALUE}" \
     --center-api-base-path "${INSTALL_CENTER_API_BASE_PATH_VALUE}" \
     --center-ui-base-path "${INSTALL_CENTER_UI_BASE_PATH_VALUE}" \
+    --gateway-admin-external-mode "${INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE_VALUE}" \
     --mark-approved \
     --out "${identity_rel}"
   run_priv rm -f "${RUNTIME_DIR}/${identity_rel}" || true
@@ -780,6 +899,7 @@ install_files() {
     "${RUNTIME_DIR}/data/releases" \
     "${RUNTIME_DIR}/data/run" \
     "${RUNTIME_DIR}/data/tmp" \
+    "${RUNTIME_DIR}/build" \
     "${RUNTIME_DIR}/seeds/conf" \
     "${RUNTIME_DIR}/scripts" \
     "${env_dir}"
@@ -789,8 +909,20 @@ install_files() {
   if install_role_includes_gateway; then
     [[ -f "${ROOT_DIR}/seeds/conf/config-bundle.json" ]] || die "missing runtime seed bundle: seeds/conf/config-bundle.json"
   fi
+  if install_role_includes_center; then
+    [[ -x "${ROOT_DIR}/scripts/php_fpm_runtime_build.sh" ]] || die "missing PHP-FPM runtime builder script: scripts/php_fpm_runtime_build.sh"
+    [[ -x "${ROOT_DIR}/scripts/psgi_runtime_build.sh" ]] || die "missing PSGI runtime builder script: scripts/psgi_runtime_build.sh"
+    [[ -f "${ROOT_DIR}/build/Dockerfile.php-fpm-runtime" ]] || die "missing PHP-FPM runtime builder Dockerfile: build/Dockerfile.php-fpm-runtime"
+    [[ -f "${ROOT_DIR}/build/Dockerfile.psgi-runtime" ]] || die "missing PSGI runtime builder Dockerfile: build/Dockerfile.psgi-runtime"
+  fi
 
   run_priv install -m 755 "${ROOT_DIR}/bin/tukuyomi" "${RUNTIME_DIR}/bin/tukuyomi"
+  if install_role_includes_center; then
+    run_priv install -m 755 "${ROOT_DIR}/scripts/php_fpm_runtime_build.sh" "${RUNTIME_DIR}/scripts/php_fpm_runtime_build.sh"
+    run_priv install -m 755 "${ROOT_DIR}/scripts/psgi_runtime_build.sh" "${RUNTIME_DIR}/scripts/psgi_runtime_build.sh"
+    run_priv install -m 644 "${ROOT_DIR}/build/Dockerfile.php-fpm-runtime" "${RUNTIME_DIR}/build/Dockerfile.php-fpm-runtime"
+    run_priv install -m 644 "${ROOT_DIR}/build/Dockerfile.psgi-runtime" "${RUNTIME_DIR}/build/Dockerfile.psgi-runtime"
+  fi
   if install_role_includes_gateway; then
     run_priv install -m 755 "${ROOT_DIR}/scripts/update_country_db.sh" "${RUNTIME_DIR}/scripts/update_country_db.sh"
     run_priv cp -R "${ROOT_DIR}/seeds/conf/." "${RUNTIME_DIR}/seeds/conf/"
@@ -831,6 +963,7 @@ install_files() {
 initialize_db() {
   if install_role_includes_center; then
     run_runtime_with_config "${INSTALL_CENTER_CONFIG_REL}" db-migrate
+    bootstrap_admin_owner_for_config "${INSTALL_CENTER_CONFIG_REL}" "Center"
     if install_role_is_center; then
       log "center role skips WAF/CRS asset import and gateway DB seed"
       return
@@ -843,6 +976,7 @@ initialize_db() {
   fi
 
   run_runtime db-migrate
+  bootstrap_admin_owner_for_config "${INSTALL_CONFIG_REL}" "Gateway"
 
   if is_enabled "${INSTALL_REFRESH_WAF_ASSETS}"; then
     local stage_root="${RUNTIME_DIR}/data/tmp/waf-rule-assets"
@@ -904,6 +1038,7 @@ activate_systemd() {
 
 ensure_linux_systemd_target
 configure_install_role
+resolve_admin_bootstrap_credentials
 resolve_install_account
 build_if_needed
 ensure_user_group
@@ -913,3 +1048,6 @@ initialize_db
 activate_systemd
 
 log "completed TARGET=${TARGET} INSTALL_ROLE=${INSTALL_ROLE} PROCESS_MODEL=${INSTALL_DERIVED_PROCESS_MODEL} PREFIX=${PREFIX} INSTALL_USER=${INSTALL_USER} INSTALL_CREATE_USER=${INSTALL_CREATE_USER}${DESTDIR:+ DESTDIR=${DESTDIR}}"
+if [[ "${INSTALL_ADMIN_BOOTSTRAP_ATTEMPTED}" == "1" ]]; then
+  report_admin_bootstrap_credentials
+fi

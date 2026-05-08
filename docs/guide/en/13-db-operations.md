@@ -192,7 +192,7 @@ That is just the **config authority** story. Runtime byte artifacts are
 handled separately:
 
 - `persistent_storage.local.base_dir` (default `data/persistent`) for
-  site-managed ACME with a local backend
+  TLS binding ACME with a local backend
 - `cache_store.store_dir` when the internal response cache is enabled
 - security / FP Tuner / proxy-rules audit
 - scheduled-task logs

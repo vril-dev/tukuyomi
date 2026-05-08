@@ -5,6 +5,7 @@ import Layout from "@/components/Layout";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { getUIBasePath } from "@/lib/runtime";
+import AppDeployPage from "@/pages/AppDeployPage";
 import DeviceApprovalsPage from "@/pages/DeviceApprovalsPage";
 import Login from "@/pages/Login";
 import ProxyRulesPage from "@/pages/ProxyRulesPage";
@@ -16,17 +17,33 @@ import UserPage from "@/pages/UserPage";
 import WAFRulesPage from "@/pages/WAFRulesPage";
 
 function ProtectedLayout() {
-  const { loading, session } = useAuth();
+  const { loading, session, sessionError, refresh } = useAuth();
   const { tx } = useI18n();
   const location = useLocation();
 
   if (loading) {
     return <div className="center-screen-message">{tx("Checking admin session...")}</div>;
   }
+  if (sessionError) {
+    return <SessionCheckError message={sessionError} onRetry={() => void refresh()} />;
+  }
   if (!session.authenticated) {
     return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}${location.hash}` }} />;
   }
   return <Layout />;
+}
+
+function SessionCheckError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const { tx } = useI18n();
+  return (
+    <div className="center-screen-message center-screen-panel">
+      <span>{tx("Admin session check failed.")}</span>
+      <span>{message}</span>
+      <button type="button" className="secondary-btn" onClick={onRetry}>
+        {tx("Retry")}
+      </button>
+    </div>
+  );
 }
 
 function LoginRoute({
@@ -95,6 +112,7 @@ function CenterRoutes() {
         <Route path="device-approvals/devices/:deviceID/proxy-rules" element={<ProxyRulesPage />} />
         <Route path="device-approvals/devices/:deviceID/waf-rules" element={<WAFRulesPage />} />
         <Route path="device-approvals/devices/:deviceID/remote-ssh" element={<RemoteSSHPage />} />
+        <Route path="device-approvals/devices/:deviceID/app-deploy" element={<AppDeployPage />} />
         <Route path="device-approvals/devices/:deviceID/rules" element={<LegacyRulesRedirect />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="runtimes" element={<Navigate to="/device-approvals" replace />} />

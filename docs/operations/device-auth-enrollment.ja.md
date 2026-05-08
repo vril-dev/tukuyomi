@@ -43,7 +43,27 @@ Center でデバイスを承認した後、Gateway は Center をポーリング
 
 Center runtime build は、Center host 側の builder support を前提にします。たとえば Docker を使う PHP-FPM ／ PSGI build flow です。Center deployment のために Gateway 側へ Docker は不要です。Gateway はポーリングで pending request を受け取り、artifact metadata と target を検証し、圧縮済み artifact をダウンロードして Gateway ローカルの runtime をインストールまたは削除します。
 
-runtime request は配送 queue です。Gateway が取得する前であれば取り消せます。dispatch 後は、Gateway 側の apply status と runtime inventory を正とします。runtime 削除は Center と Gateway の両側で安全確認を行います。Center は最新の usage state から削除可能な場合だけ操作を有効化し、Gateway も local runtime file を削除する直前に Runtime App 参照と実行中プロセスを再確認します。
+runtime request は配信キューです。Gateway が取得する前であれば取り消せます。dispatch 後は、Gateway 側の apply status と runtime inventory を正とします。runtime 削除は Center と Gateway の両側で安全確認を行います。Center は最新の usage state から削除可能な場合だけ操作を有効化し、Gateway も local runtime file を削除する直前に Runtime App 参照と実行中プロセスを再確認します。
+
+`Runtime App Deploy` は、`php-fpm` と `psgi` の Runtime Apps へ小さなアプリケーションパッケージを配信する試験的なデバイス画面です。Center は deployment profile、変更不可の ZIP package、file manifest、差分 preview、配備履歴を保存します。Gateway はポーリングで pending app deploy request を 1 件ずつ取得し、署名付き package をダウンロードして洗い替え用の release として展開します。その後、アプリ単位の `current` symlink を切り替え、指定に応じて runtime を reload / restart します。
+
+各 profile は複数の論理ルートを持てますが、Gateway が切り替える symlink はアプリ単位で 1 つです。
+
+```text
+data/app-deployments/<app-id>/current
+```
+
+PHP-FPM では、通常 package 内の `public/` を `current/public` へ配置します。PSGI では、`app/` と `static/` を同じ `current` release 配下の別パスへ割り当てる運用ができます。Gateway は、対象 Runtime App が期待する Center 管理パスを向いていない場合、deploy と rollback をブロックします。これにより、Center が任意のディレクトリを置き換えることを防ぎます。
+
+baseline adoption（初回採用）または最初の Center 管理 deploy が成功すると、Gateway は対象 Runtime Apps の参照先を書き換えます。PHP-FPM では、`document_root` が元の `data/vhosts/...` 配下から、通常は次のパスへ変わります。
+
+```text
+data/app-deployments/<app-id>/current/public
+```
+
+PSGI では、`app_root` や `document_root` が対応する `current/<runtime-subpath>` へ変わります。切り替え後の元 `data/vhosts/...` ディレクトリは、初回採用時のソースであり、以後の反映先ではありません。Center 管理を続ける場合は、Center へ新しい package をアップロードして配備します。ローカル管理へ戻す場合は、Runtime Apps の参照先を意図的にローカルパスへ戻してから運用してください。
+
+baseline adoption は明示的な操作です。Gateway が現在のソースを Center が認識する最初の package としてアップロードするには、Center 側で adoption request を作成する必要があります。rollback は手動です。古い saved package を選び、差分を確認してから rollback request を確定します。自動 rollback は行いません。
 
 ## プレビュー URL
 

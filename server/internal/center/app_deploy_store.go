@@ -928,6 +928,9 @@ func normalizeAppDeployPackageImport(in AppDeployPackageImport) (AppDeployPackag
 	if err != nil {
 		return AppDeployPackageImport{}, appdeploybundle.Parsed{}, nil, "", "", err
 	}
+	if err := validateAppDeployRootsForApp(in.AppID, roots); err != nil {
+		return AppDeployPackageImport{}, appdeploybundle.Parsed{}, nil, "", "", err
+	}
 	in.Roots = roots
 	parsed, files, err := parseAppDeployPackageArchiveWithFiles(in.Archive, roots)
 	if err != nil {
@@ -981,6 +984,9 @@ func normalizeAppDeployRequestUpdate(in AppDeployRequestUpdate) (AppDeployReques
 		if err != nil {
 			return AppDeployRequestUpdate{}, err
 		}
+		if err := validateAppDeployRootsForApp(in.AppID, roots); err != nil {
+			return AppDeployRequestUpdate{}, err
+		}
 		in.Roots = roots
 	default:
 		return AppDeployRequestUpdate{}, ErrAppDeployInvalid
@@ -1017,6 +1023,9 @@ func normalizeAppDeployCandidate(in AppDeployCandidateRecord, detectedAtUnix int
 	}
 	roots, _, err := normalizeAppDeployRoots(in.Roots)
 	if err != nil {
+		return AppDeployCandidateRecord{}, err
+	}
+	if err := validateAppDeployRootsForApp(in.AppID, roots); err != nil {
 		return AppDeployCandidateRecord{}, err
 	}
 	in.Roots = roots
@@ -1217,7 +1226,34 @@ func cleanAppDeployLocalPath(value string) (string, bool) {
 
 func appDeploySourcePathAllowed(value string) bool {
 	value = strings.Trim(value, "/")
-	return strings.HasPrefix(value, "data/vhosts/") && len(value) > len("data/vhosts/")
+	return strings.HasPrefix(value, "data/runtime-sites/") && len(value) > len("data/runtime-sites/")
+}
+
+func validateAppDeployRootsForApp(appID string, roots []AppDeployRootRecord) error {
+	appID = normalizeAppDeployID(appID)
+	if appID == "" {
+		return ErrAppDeployInvalid
+	}
+	for _, root := range roots {
+		sourcePath := strings.Trim(strings.TrimSpace(root.SourcePath), "/")
+		if sourcePath == "" {
+			continue
+		}
+		if !appDeploySourcePathAllowedForApp(sourcePath, appID) {
+			return ErrAppDeployInvalid
+		}
+	}
+	return nil
+}
+
+func appDeploySourcePathAllowedForApp(value string, appID string) bool {
+	value = strings.Trim(value, "/")
+	appID = normalizeAppDeployID(appID)
+	if appID == "" {
+		return false
+	}
+	root := "data/runtime-sites/" + appID
+	return value == root || strings.HasPrefix(value, root+"/")
 }
 
 func appDeployFilesForParsedPackage(parsed appdeploybundle.Parsed, roots []AppDeployRootRecord) ([]AppDeployPackageFileRecord, error) {

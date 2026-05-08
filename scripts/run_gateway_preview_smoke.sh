@@ -186,10 +186,10 @@ stage_workspace() {
   else
     install -d -m 755 "${WORKSPACE}/data/php-fpm"
   fi
-  if [[ -d "${ROOT_DIR}/data/vhosts" ]]; then
-    rsync -a "${ROOT_DIR}/data/vhosts/" "${WORKSPACE}/data/vhosts/"
+  if [[ -d "${ROOT_DIR}/data/runtime-sites" ]]; then
+    rsync -a "${ROOT_DIR}/data/runtime-sites/" "${WORKSPACE}/data/runtime-sites/"
   else
-    install -d -m 755 "${WORKSPACE}/data/vhosts"
+    install -d -m 755 "${WORKSPACE}/data/runtime-sites"
   fi
   install -d -m 755 "${WORKSPACE}/data/scheduled-tasks"
 }

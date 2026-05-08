@@ -2091,13 +2091,13 @@ func currentEdgeAppDeployCandidates() []edgeAppDeployCandidate {
 		var roots []edgeAppDeployRoot
 		switch family {
 		case "php-fpm":
-			roots = append(roots, edgePHPFPMAppDeployRoots(vhost)...)
+			roots = append(roots, edgePHPFPMAppDeployRoots(appID, vhost)...)
 		case "psgi":
 			if strings.TrimSpace(vhost.AppRoot) != "" {
 				roots = append(roots, edgeAppDeployRoot{
 					RootID:        "app_root",
 					RuntimeField:  "app_root",
-					SourcePath:    edgeAppDeploySafeSourcePath(vhost.AppRoot),
+					SourcePath:    edgeAppDeploySafeSourcePathForApp(vhost.AppRoot, appID),
 					PackagePrefix: "app",
 					TargetSubpath: "app",
 					Required:      true,
@@ -2107,7 +2107,7 @@ func currentEdgeAppDeployCandidates() []edgeAppDeployCandidate {
 				roots = append(roots, edgeAppDeployRoot{
 					RootID:        "document_root",
 					RuntimeField:  "document_root",
-					SourcePath:    edgeAppDeploySafeSourcePath(vhost.DocumentRoot),
+					SourcePath:    edgeAppDeploySafeSourcePathForApp(vhost.DocumentRoot, appID),
 					PackagePrefix: "static",
 					TargetSubpath: "static",
 					Required:      true,
@@ -2170,14 +2170,14 @@ func edgeRuntimeAvailableForAppDeploy(family string, runtimeID string) (bool, st
 	}
 }
 
-func edgePHPFPMAppDeployRoots(vhost VhostConfig) []edgeAppDeployRoot {
+func edgePHPFPMAppDeployRoots(appID string, vhost VhostConfig) []edgeAppDeployRoot {
 	docRoot := strings.TrimSpace(vhost.DocumentRoot)
 	if docRoot == "" {
 		return nil
 	}
 	cleaned := path.Clean(strings.ReplaceAll(docRoot, "\\", "/"))
 	if strings.EqualFold(path.Base(cleaned), "public") {
-		sourcePath := edgeAppDeploySafeSourcePath(path.Dir(cleaned))
+		sourcePath := edgeAppDeploySafeSourcePathForApp(path.Dir(cleaned), appID)
 		if sourcePath != "." && sourcePath != "" {
 			return []edgeAppDeployRoot{{
 				RootID:         "source_root",
@@ -2193,7 +2193,7 @@ func edgePHPFPMAppDeployRoots(vhost VhostConfig) []edgeAppDeployRoot {
 	return []edgeAppDeployRoot{{
 		RootID:         "document_root",
 		RuntimeField:   "document_root",
-		SourcePath:     edgeAppDeploySafeSourcePath(docRoot),
+		SourcePath:     edgeAppDeploySafeSourcePathForApp(docRoot, appID),
 		PackagePrefix:  "public",
 		TargetSubpath:  "public",
 		RuntimeSubpath: "public",
@@ -2204,6 +2204,14 @@ func edgePHPFPMAppDeployRoots(vhost VhostConfig) []edgeAppDeployRoot {
 func edgeAppDeploySafeSourcePath(value string) string {
 	cleaned, ok := cleanEdgeAppDeployLocalPath(value)
 	if !ok {
+		return ""
+	}
+	return cleaned
+}
+
+func edgeAppDeploySafeSourcePathForApp(value string, appID string) string {
+	cleaned := edgeAppDeploySafeSourcePath(value)
+	if cleaned == "" || !edgeAppDeploySourcePathAllowedForApp(cleaned, appID) {
 		return ""
 	}
 	return cleaned
@@ -3178,7 +3186,17 @@ func cleanEdgeAppDeployLocalPath(value string) (string, bool) {
 
 func edgeAppDeploySourcePathAllowed(value string) bool {
 	value = strings.Trim(value, "/")
-	return strings.HasPrefix(value, "data/vhosts/") && len(value) > len("data/vhosts/")
+	return strings.HasPrefix(value, "data/runtime-sites/") && len(value) > len("data/runtime-sites/")
+}
+
+func edgeAppDeploySourcePathAllowedForApp(value string, appID string) bool {
+	value = strings.Trim(value, "/")
+	appID = normalizeEdgeAppDeployID(appID)
+	if appID == "" {
+		return false
+	}
+	root := "data/runtime-sites/" + appID
+	return value == root || strings.HasPrefix(value, root+"/")
 }
 
 func cleanEdgeAppDeployRelativePath(value string) (string, bool) {
@@ -3269,13 +3287,16 @@ func edgeAppDeployBindingRoots(appID string, vhost VhostConfig, assignment edgeA
 		}
 		sourcePath := strings.TrimSpace(root.SourcePath)
 		if sourcePath == "" && assignment.Operation == "adopt" {
-			sourcePath = edgeAppDeploySafeSourcePath(runtimePath)
+			sourcePath = edgeAppDeploySafeSourcePathForApp(runtimePath, appID)
 		}
 		if sourcePath == "" && assignment.Operation == "adopt" {
-			return "", nil, fmt.Errorf("app deploy adoption source_path must be under data/vhosts")
+			return "", nil, fmt.Errorf("app deploy adoption source_path must be under data/runtime-sites/%s", appID)
 		}
 		var sourceAbs string
 		if sourcePath != "" {
+			if !edgeAppDeploySourcePathAllowedForApp(sourcePath, appID) {
+				return "", nil, fmt.Errorf("app deploy adoption source_path must be under data/runtime-sites/%s", appID)
+			}
 			sourceAbs, err = filepath.Abs(filepath.Clean(sourcePath))
 			if err != nil {
 				return "", nil, err

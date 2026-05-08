@@ -59,7 +59,7 @@ PHP-FPM operations data is collected under `data/php-fpm/`:
 - `runtime/<runtime_id>/`
   - Generated `php-fpm.conf`, pool files, pid / log, listen artifacts.
 
-A generic sample docroot lives at `data/vhosts/samples/`.
+Runtime App source trees live under `data/runtime-sites/<app-id>/`.
 
 The default paths come from the effective DB `app_config`:
 

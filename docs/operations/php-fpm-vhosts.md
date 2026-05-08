@@ -32,7 +32,7 @@ PHP-FPM operator-managed data lives under `data/php-fpm/`.
 - `runtime/<runtime_id>/`
   - generated `php-fpm.conf`, pool files, pid/log files, and listen artifacts
 
-Generic sample docroots live under `data/vhosts/samples/`.
+Runtime App source trees live under `data/runtime-sites/<app-id>/`.
 
 The default path wiring is controlled by effective DB `app_config` defaults:
 

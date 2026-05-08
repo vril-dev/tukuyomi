@@ -33,7 +33,7 @@ mkdir -p \
   "${ROOT_DIR}/data/cache/response" \
   "${ROOT_DIR}/data/php-fpm" \
   "${ROOT_DIR}/data/tmp" \
-  "${ROOT_DIR}/data/vhosts/static-site/public"
+  "${ROOT_DIR}/data/runtime-sites/static-site/public"
 
 compose down --remove-orphans >/dev/null 2>&1 || true
 rm -f "${ROOT_DIR}/data/db/tukuyomi.db" "${ROOT_DIR}/data/db/tukuyomi.db-wal" "${ROOT_DIR}/data/db/tukuyomi.db-shm"

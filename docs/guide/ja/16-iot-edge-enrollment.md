@@ -138,7 +138,9 @@ data/app-deployments/<app-id>/
 
 複数の論理ルートは、この 1 つの `current` symlink 配下に配置されます。たとえば PHP-FPM package では `public/` を `current/public` に、PSGI package では `app/` と `static/` を `current/app` と `current/static` に割り当てられます。Gateway は、対象 Runtime App が期待する Center 管理パスを向いていない場合、deploy と rollback をブロックします。これにより、Center が任意の `document_root` や `app_root` を置き換えることを防ぎます。
 
-baseline adoption または最初の Center 管理 deploy が成功すると、Gateway は対象 Runtime Apps の参照先を書き換えます。PHP-FPM では、`document_root` が元の `data/vhosts/...` 配下から、通常は `data/app-deployments/<app-id>/current/public` へ変わります。PSGI では、`app_root` や `document_root` が対応する `current/<runtime-subpath>` へ変わります。切り替え後の元 `data/vhosts/...` ディレクトリは、初回採用時のソースであり、以後の反映先ではありません。以後の変更は Center へ新しい package をアップロードして配備します。ローカル管理へ戻す場合は、Runtime Apps の参照先を意図的にローカルパスへ戻してください。
+baseline adoption または最初の Center 管理 deploy が成功すると、Gateway は対象 Runtime Apps の参照先を書き換えます。PHP-FPM では、`document_root` が元の `data/runtime-sites/<app-id>/...` 配下から、通常は `data/app-deployments/<app-id>/current/public` へ変わります。PSGI では、`app_root` や `document_root` が対応する `current/<runtime-subpath>` へ変わります。切り替え後の元 `data/runtime-sites/<app-id>/...` ディレクトリは、初回採用時のソースであり、以後の反映先ではありません。以後の変更は Center へ新しい package をアップロードして配備します。ローカル管理へ戻す場合は、Runtime Apps の参照先を意図的にローカルパスへ戻してください。
+
+baseline adoption が読み取る採用元は、Gateway ローカルの相対パス `data/runtime-sites/` 配下だけです。Center 管理へ採用する前に、対象アプリのソースツリーを `data/runtime-sites/<app-id>/` 配下へ配置してください。
 
 この機能は Center 側の `TUKUYOMI_CENTER_EXPERIMENTAL_APP_DEPLOY_ENABLED` で保護されています。中核となる Gateway / Center 登録経路を変えずに、運用画面から試験機能だけを外せるようにするためです。
 

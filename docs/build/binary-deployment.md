@@ -134,6 +134,9 @@ Behavior:
   `INSTALL_CENTER_GATEWAY_API_BASE_PATH` controls the public Gateway route path.
   When they differ, the generated Gateway route rewrites the public path to the
   Center path before forwarding upstream.
+- In `center-protected`, restrict operator-facing Center routes such as
+  `/center-ui` with Proxy Rules `access.allow_cidrs`. Keep the Gateway/device
+  API route open when remote Gateways must poll through that path.
 - Center has three source IP allowlists for direct exposure:
   `TUKUYOMI_CENTER_CLIENT_ALLOW_CIDRS` for Center UI clients,
   `TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS` for the management API, and

@@ -340,7 +340,7 @@ func (s *wafEventStore) insertProxyBackendPoolsTx(tx *sql.Tx, versionID int64, p
 
 func (s *wafEventStore) insertProxyRoutesTx(tx *sql.Tx, versionID int64, routeKind string, routes []ProxyRoute) error {
 	for i, route := range routes {
-		if err := s.insertProxyRouteTx(tx, versionID, routeKind, i, route.Name, route.Enabled, route.Priority, route.Generated, route.Match, route.Action); err != nil {
+		if err := s.insertProxyRouteTx(tx, versionID, routeKind, i, route.Name, route.Enabled, route.Priority, route.Generated, route.Match, route.Access, route.Action); err != nil {
 			return err
 		}
 	}
@@ -348,10 +348,10 @@ func (s *wafEventStore) insertProxyRoutesTx(tx *sql.Tx, versionID int64, routeKi
 }
 
 func (s *wafEventStore) insertProxyDefaultRouteTx(tx *sql.Tx, versionID int64, route ProxyDefaultRoute) error {
-	return s.insertProxyRouteTx(tx, versionID, proxyRouteKindDefault, 0, route.Name, route.Enabled, 0, false, ProxyRouteMatch{}, route.Action)
+	return s.insertProxyRouteTx(tx, versionID, proxyRouteKindDefault, 0, route.Name, route.Enabled, 0, false, ProxyRouteMatch{}, route.Access, route.Action)
 }
 
-func (s *wafEventStore) insertProxyRouteTx(tx *sql.Tx, versionID int64, routeKind string, position int, name string, enabled *bool, priority int, generated bool, match ProxyRouteMatch, action ProxyRouteAction) error {
+func (s *wafEventStore) insertProxyRouteTx(tx *sql.Tx, versionID int64, routeKind string, position int, name string, enabled *bool, priority int, generated bool, match ProxyRouteMatch, access *ProxyRouteAccess, action ProxyRouteAction) error {
 	enabledSet, enabledValue := boolPtrToDB(enabled)
 	pathType := ""
 	pathValue := ""
@@ -407,7 +407,29 @@ func (s *wafEventStore) insertProxyRouteTx(tx *sql.Tx, versionID int64, routeKin
 	if err := s.insertProxyRouteHeaderOpsTx(tx, versionID, routeKind, position, "response", action.ResponseHeaders); err != nil {
 		return err
 	}
-	return s.insertProxyRouteQueryOpsTx(tx, versionID, routeKind, position, action.QueryRewrite)
+	if err := s.insertProxyRouteQueryOpsTx(tx, versionID, routeKind, position, action.QueryRewrite); err != nil {
+		return err
+	}
+	return s.insertProxyRouteAccessTx(tx, versionID, routeKind, position, access)
+}
+
+func (s *wafEventStore) insertProxyRouteAccessTx(tx *sql.Tx, versionID int64, routeKind string, routePosition int, access *ProxyRouteAccess) error {
+	if access == nil {
+		return nil
+	}
+	if err := s.insertProxyRouteAccessListTx(tx, versionID, routeKind, routePosition, "allow", access.AllowCIDRs); err != nil {
+		return err
+	}
+	return s.insertProxyRouteAccessListTx(tx, versionID, routeKind, routePosition, "deny", access.DenyCIDRs)
+}
+
+func (s *wafEventStore) insertProxyRouteAccessListTx(tx *sql.Tx, versionID int64, routeKind string, routePosition int, listKind string, cidrs []string) error {
+	for i, cidr := range cidrs {
+		if _, err := s.txExec(tx, `INSERT INTO proxy_route_access_cidrs (version_id, route_kind, route_position, list_kind, position, cidr) VALUES (?, ?, ?, ?, ?, ?)`, versionID, routeKind, routePosition, listKind, i, cidr); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *wafEventStore) insertProxyRouteHeaderOpsTx(tx *sql.Tx, versionID int64, routeKind string, routePosition int, direction string, ops *ProxyRouteHeaderOperations) error {
@@ -973,6 +995,7 @@ func (s *wafEventStore) loadProxyDefaultRoute(versionID int64) (*ProxyDefaultRou
 	return &ProxyDefaultRoute{
 		Name:    route.Name,
 		Enabled: route.Enabled,
+		Access:  route.Access,
 		Action:  route.Action,
 	}, nil
 }
@@ -1044,6 +1067,11 @@ func (s *wafEventStore) attachProxyRouteRelations(versionID int64, routeKind str
 		return ProxyRoute{}, err
 	}
 	route.Action.QueryRewrite = queryOps
+	access, err := s.loadProxyRouteAccess(versionID, routeKind, position)
+	if err != nil {
+		return ProxyRoute{}, err
+	}
+	route.Access = access
 	return route, nil
 }
 
@@ -1062,6 +1090,43 @@ func (s *wafEventStore) loadProxyRouteHosts(versionID int64, routeKind string, r
 		out = append(out, host)
 	}
 	return out, rows.Err()
+}
+
+func (s *wafEventStore) loadProxyRouteAccess(versionID int64, routeKind string, routePosition int) (*ProxyRouteAccess, error) {
+	rows, err := s.query(
+		`SELECT list_kind, cidr
+		   FROM proxy_route_access_cidrs
+		  WHERE version_id = ? AND route_kind = ? AND route_position = ?
+		  ORDER BY list_kind, position`,
+		versionID,
+		routeKind,
+		routePosition,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var access ProxyRouteAccess
+	for rows.Next() {
+		var listKind, cidr string
+		if err := rows.Scan(&listKind, &cidr); err != nil {
+			return nil, err
+		}
+		switch listKind {
+		case "allow":
+			access.AllowCIDRs = append(access.AllowCIDRs, cidr)
+		case "deny":
+			access.DenyCIDRs = append(access.DenyCIDRs, cidr)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(access.AllowCIDRs) == 0 && len(access.DenyCIDRs) == 0 {
+		return nil, nil
+	}
+	return normalizeProxyRouteAccess(&access), nil
 }
 
 func (s *wafEventStore) loadProxyRouteHeaderOps(versionID int64, routeKind string, routePosition int, direction string) (*ProxyRouteHeaderOperations, error) {

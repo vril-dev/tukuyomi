@@ -170,6 +170,11 @@ Center process 側の API path を非公開名にしたい場合は
 Gateway route は公開 path で match し、upstream へ渡すときに Center 側 path へ
 rewrite します。
 
+center-protected host では、operator が触る Center path は Gateway の route 単位で
+制限します。たとえば `/center-ui` や Center 管理用 route に
+`access.allow_cidrs` を設定し、remote Gateway がポーリングする `/center-api`
+route は制限しない、という分け方にします。
+
 tukuyomi Gateway を前段に置かず Center を直接公開する場合は、送信元 IP allowlist
 を明示的に設定してください。Center UI client と Gateway/device API は既定では
 任意の送信元を許可します。管理 API は既定で loopback と private/local CIDR を

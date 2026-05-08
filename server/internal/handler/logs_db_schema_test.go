@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const latestSchemaMigrationVersionForTest = 37
+const latestSchemaMigrationVersionForTest = 38
 
 func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
@@ -35,6 +35,7 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		"proxy_settings",
 		"proxy_upstreams",
 		"proxy_routes",
+		"proxy_route_access_cidrs",
 		"sites",
 		"vhosts",
 		"scheduled_tasks",

@@ -406,6 +406,12 @@ const JA_STRINGS: Record<string, string> = {
   exact: "exact",
   prefix: "prefix",
   regex: "regex",
+  "Allow CIDRs": "許可 CIDR",
+  "Deny CIDRs": "拒否 CIDR",
+  "One IP or CIDR per line. Empty means any source is allowed unless Deny CIDRs match.":
+    "1 行に 1 つの IP または CIDR を入力します。空の場合は、拒否 CIDR に一致しない限り任意の送信元を許可します。",
+  "One IP or CIDR per line. Deny CIDRs are checked before Allow CIDRs; leave empty when Allow CIDRs should be the only permit list.":
+    "1 行に 1 つの IP または CIDR を入力します。拒否 CIDR は許可 CIDR より先に評価されます。許可 CIDR だけで絞る場合は空にします。",
   "Action upstream": "action upstream",
   "Use a direct upstream name or a generated Runtime App target name. Runtime App targets point to the configured listen host and port.":
     "direct upstream 名または generated Runtime App target 名を指定します。Runtime App target は設定済み listen host と port を指します。",

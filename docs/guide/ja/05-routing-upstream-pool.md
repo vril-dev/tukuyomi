@@ -103,6 +103,15 @@ route の binding は次のいずれかです。
 - `action.host_rewrite` / `action.path_rewrite.prefix` / `action.query_rewrite`:
   outbound rewrite
 - `action.request_headers` / `action.response_headers`: bounded な header 制御
+- `access.allow_cidrs` / `access.deny_cidrs`: route 単位の送信元 IP 許可／
+  拒否リスト。拒否 CIDR が先に評価され、許可 CIDR が 1 件でもある場合は
+  Gateway listener が見ている送信元 IP がそこに一致する必要があります。
+  これは socket の送信元アドレスを使います。PROXY protocol を有効化している
+  listener では、listener が受け付けた PROXY protocol の送信元を使います。
+  特定の送信元だけを許可したい場合は `access.allow_cidrs` だけを設定し、
+  `access.deny_cidrs` は空のままにします。`*` は使わず、全範囲を表す CIDR
+  (`0.0.0.0/0` など) を deny 側に入れると、allow 側より優先されるため
+  許可したい送信元も拒否されます。
 
 最後に、**`response_header_sanitize`** が最終的な response-header safety gate
 として効きます。これは bypass できない構造的な安全機構です。
@@ -143,11 +152,15 @@ tukuyomi 内部で辿る順序を押さえておきます。
    - この時点で `proxy_route` log が emit される
    - `selected_upstream` / `selected_upstream_url` は **まだ確定していない**
      ので log には出さない
-3. **country block / request-security plugins / rate limit / WAF**
+3. **route source access**
+   - 選択された route に `access.allow_cidrs` または `access.deny_cidrs` が
+     ある場合、Gateway は WAF や upstream 通信の前に、listener が見ている
+     送信元 IP を評価する
+4. **country block / request-security plugins / rate limit / WAF**
    - 順に request を検査する
-4. **final target selection**
+5. **final target selection**
    - backend pool の中から 1 つの target を選ぶ
-5. **proxy transport または direct static / php-fpm serving**
+6. **proxy transport または direct static / php-fpm serving**
    - 選ばれた target に対して proxy するか、static / PHP-FPM へ直接 serving
      する
 

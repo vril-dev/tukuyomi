@@ -278,6 +278,7 @@ make compose-down
 - `action.canary_upstream` と `action.canary_weight_percent` で、ルートレベルのカナリアを設定できます
 - `action.host_rewrite`、`action.path_rewrite.prefix`、`action.query_rewrite` で outbound のリライトを設定します
 - `action.request_headers`、`action.response_headers` で上限付きのヘッダー制御を行います
+- `access.allow_cidrs` と `access.deny_cidrs` で、マッチしたルートを Gateway listener が見ている送信元 IP によって制限できます。拒否 CIDR を先に評価し、許可 CIDR が 1 件でもある場合は一致を必須にします。特定の送信元だけを許可する場合は `access.allow_cidrs` だけを設定し、`access.deny_cidrs` は空にします。`*` は使えません。`X-Forwarded-For` は信頼しません
 - `response_header_sanitize` は最終的なレスポンスヘッダーの安全性ゲートです
 - 構造化エディタは、運用フローを次の順序で表示します
   1. `Upstreams`

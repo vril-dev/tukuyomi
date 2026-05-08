@@ -177,6 +177,11 @@ If the Center process should keep a private API path, set
 route then matches the public path and rewrites upstream requests to the Center
 path.
 
+For a center-protected host, restrict operator-facing Center paths at the
+Gateway route level. For example, add `access.allow_cidrs` to the `/center-ui`
+or center management route, while leaving the Gateway/device-facing
+`/center-api` route unrestricted so remote Gateways can continue polling.
+
 When Center is exposed without a tukuyomi Gateway in front, configure the
 source IP allowlists deliberately. Center UI client access and the
 Gateway/device API allow any source by default; the management API defaults to

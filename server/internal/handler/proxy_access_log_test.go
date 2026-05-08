@@ -198,6 +198,63 @@ func TestEmitProxyAccessLogOffSkipsAccessEvent(t *testing.T) {
 	}
 }
 
+func TestProxyHandlerBlocksRouteAccessCIDRMissBeforeUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initConfigDBStoreForTest(t)
+
+	upstreamHit := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHit = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
+	raw := `{
+  "upstreams": [
+    { "name": "center", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
+  ],
+  "routes": [
+    {
+      "name": "center-ui",
+      "priority": 10,
+      "match": { "path": { "type": "prefix", "value": "/center-ui" } },
+      "access": { "allow_cidrs": ["203.0.113.10/32"] },
+      "action": { "upstream": "center" }
+    }
+  ]
+}`
+	if err := os.WriteFile(proxyCfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write proxy config: %v", err)
+	}
+	importProxyRuntimeDBForTest(t, raw)
+	if err := InitProxyRuntime(proxyCfgPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+
+	r := gin.New()
+	r.NoRoute(ProxyHandler)
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/center-ui/", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Forwarded-For", "203.0.113.10")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("status=%d want=%d", res.StatusCode, http.StatusForbidden)
+	}
+	if upstreamHit {
+		t.Fatal("upstream was called despite route access block")
+	}
+}
+
 func TestProxyHandlerDisabledEmitUpstreamNameHeaderStripsSpoofedHeader(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	initConfigDBStoreForTest(t)

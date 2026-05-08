@@ -56,7 +56,6 @@ const baseNavGroups: NavGroup[] = [
     items: [
       { to: "/status", label: "Status", hint: "runtime health" },
       { to: "/logs", label: "Logs", hint: "events and traces" },
-      { to: "/notifications", label: "Notifications", hint: "state-based alert delivery" },
     ],
   },
   {
@@ -113,6 +112,12 @@ const settingsNavItem: NavItem = {
   to: "/settings",
   label: "Settings",
   hint: "startup config, operator identity, verify manifest",
+};
+
+const notificationsNavItem: NavItem = {
+  to: "/notifications",
+  label: "Notifications",
+  hint: "state-based alert delivery",
 };
 
 const userNavItem: NavItem = {
@@ -235,7 +240,7 @@ export default function Layout() {
       }),
     [hasBuiltRuntime, wafEngineMode, wafEngineModes],
   );
-  const utilityNavItems = [userNavItem, settingsNavItem];
+  const utilityNavItems = [notificationsNavItem, userNavItem, settingsNavItem];
   const navItems = [...navGroups.flatMap(groupItems), ...utilityNavItems];
   const current = navItems.find((item) => isActive(pathname, item.to));
   const currentUtility = utilityNavItems.find((item) => isActive(pathname, item.to));

@@ -446,19 +446,6 @@ export default function Logs() {
           />
         </label>
 
-        <button
-          disabled={loading}
-          onClick={() => {
-            setSearchQuery(searchInput.trim());
-            setFromQuery(fromInput.trim());
-            setToQuery(toInput.trim());
-          }}
-          className="rounded border px-3 py-1 text-xs"
-          title={tx("Search logs")}
-        >
-          {tx("Search")}
-        </button>
-
         <label className="ml-2 text-xs">
           {tx("Start time")}:
           <input
@@ -479,21 +466,18 @@ export default function Logs() {
           />
         </label>
 
-        {filterActive && (
-          <button
-            className="rounded border px-3 py-1 text-xs"
-            onClick={() => {
-              setSearchInput("");
-              setSearchQuery("");
-              setFromInput("");
-              setToInput("");
-              setFromQuery("");
-              setToQuery("");
-            }}
-          >
-            {tx("Clear filters")}
-          </button>
-        )}
+        <button
+          disabled={loading}
+          onClick={() => {
+            setSearchQuery(searchInput.trim());
+            setFromQuery(fromInput.trim());
+            setToQuery(toInput.trim());
+          }}
+          className="rounded border px-3 py-1 text-xs"
+          title={tx("Search logs")}
+        >
+          {tx("Search")}
+        </button>
 
         <label className="ml-2 text-xs">
           {tx("Rows")}:
@@ -509,6 +493,22 @@ export default function Logs() {
             ))}
           </select>
         </label>
+
+        {filterActive && (
+          <button
+            className="rounded border px-3 py-1 text-xs"
+            onClick={() => {
+              setSearchInput("");
+              setSearchQuery("");
+              setFromInput("");
+              setToInput("");
+              setFromQuery("");
+              setToQuery("");
+            }}
+          >
+            {tx("Clear filters")}
+          </button>
+        )}
 
         <button
           className="ml-auto text-xs underline"

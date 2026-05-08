@@ -239,6 +239,11 @@ func LogsRead(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	from, to, err := parseLogQueryTimeRange(c, false)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if reqIDFilter != "" && searchQuery != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "q cannot be combined with req_id"})
 		return
@@ -249,7 +254,7 @@ func LogsRead(c *gin.Context) {
 			lines []logLine
 		)
 		if src == "waf" {
-			lines, err = store.ReadWAFRequestLogs(path, reqIDFilter, countryFilter)
+			lines, err = store.ReadWAFRequestLogs(path, reqIDFilter, countryFilter, from, to)
 		} else {
 			lines, err = readByRequestID(path, reqIDFilter, countryFilter)
 		}
@@ -284,7 +289,7 @@ func LogsRead(c *gin.Context) {
 		hasPrev, hasNext bool
 	)
 	if src == "waf" {
-		lines, nextCur, hasPrev, hasNext, err = store.ReadWAFLogs(path, tail, cursor, dir, countryFilter, searchQuery)
+		lines, nextCur, hasPrev, hasNext, err = store.ReadWAFLogs(path, tail, cursor, dir, countryFilter, searchQuery, from, to)
 	} else {
 		if searchQuery != "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "q is supported only for waf logs"})
@@ -341,32 +346,10 @@ func LogsDownload(c *gin.Context) {
 		}
 	}
 
-	fromStr := c.Query("from")
-	toStr := c.Query("to")
-	var (
-		from time.Time
-		to   time.Time
-		err  error
-	)
-
-	if fromStr != "" {
-		from, err = time.Parse(time.RFC3339, fromStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from"})
-			return
-		}
-	}
-
-	if toStr != "" {
-		to, err = time.Parse(time.RFC3339, toStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to"})
-			return
-		}
-	}
-
-	if toStr == "" {
-		to = time.Now().Add(1 * time.Second)
+	from, to, err := parseLogQueryTimeRange(c, true)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 	countryFilter := requestmeta.NormalizeCountryFilter(c.Query("country"))
 	searchQuery, err := normalizeLogSearchQuery(c.Query("q"))
@@ -418,6 +401,46 @@ func LogsDownload(c *gin.Context) {
 			break
 		}
 	}
+}
+
+func parseLogQueryTimeRange(c *gin.Context, defaultOpenEndToNow bool) (time.Time, time.Time, error) {
+	fromStr := strings.TrimSpace(c.Query("from"))
+	toStr := strings.TrimSpace(c.Query("to"))
+	var (
+		from time.Time
+		to   time.Time
+		err  error
+	)
+	if fromStr != "" {
+		from, err = parseLogQueryTime(fromStr)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid from")
+		}
+	}
+	if toStr != "" {
+		to, err = parseLogQueryTime(toStr)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid to")
+		}
+	}
+	if toStr == "" && defaultOpenEndToNow {
+		to = time.Now().UTC().Add(time.Second)
+	}
+	if !from.IsZero() && !to.IsZero() && !from.Before(to) {
+		return time.Time{}, time.Time{}, fmt.Errorf("from must be before to")
+	}
+	return from, to, nil
+}
+
+func parseLogQueryTime(raw string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t.UTC(), nil
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return t.UTC(), nil
 }
 
 func normalizeLogSearchQuery(raw string) (string, error) {

@@ -7,6 +7,7 @@ export type LogLine = {
   event?: string;
   method?: string;
   country?: string;
+  ip?: string;
   [k: string]: unknown;
 };
 

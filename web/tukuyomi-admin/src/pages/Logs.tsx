@@ -52,6 +52,8 @@ async function readLogs(params: {
   dir?: "prev" | "next";
   reqID?: string;
   search?: string;
+  from?: string;
+  to?: string;
   signal?: AbortSignal;
 }): Promise<ReadResponse> {
   const q = new URLSearchParams();
@@ -74,16 +76,30 @@ async function readLogs(params: {
     q.set("q", params.search);
   }
 
+  if (params.from) {
+    q.set("from", params.from);
+  }
+
+  if (params.to) {
+    q.set("to", params.to);
+  }
+
   return apiGetJson<ReadResponse>(`/logs/read?${q.toString()}`, {
     signal: params.signal,
   });
 }
 
-function buildDownloadPath(search?: string) {
+function buildDownloadPath(search?: string, from?: string, to?: string) {
   const q = new URLSearchParams();
   q.set("src", "waf");
   if (search) {
     q.set("q", search);
+  }
+  if (from) {
+    q.set("from", from);
+  }
+  if (to) {
+    q.set("to", to);
   }
 
   return `/logs/download?${q.toString()}`;
@@ -111,6 +127,17 @@ function displayHost(line: LogLine) {
   return fallbackHost || "-";
 }
 
+function displayClientIP(line: LogLine) {
+  for (const key of ["ip", "client_ip", "remote_addr"]) {
+    const value = line[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return "-";
+}
+
 function colorClass(line: LogLine) {
   if (line.event === "waf_block") {
     return "bg-red-50 text-red-700";
@@ -129,6 +156,18 @@ function colorClass(line: LogLine) {
 
 function formatTimestamp(ts: string | undefined, locale: "en" | "ja" = "en") {
   return ts ? new Date(ts).toLocaleString(locale === "ja" ? "ja-JP" : "en-US") : "-";
+}
+
+function datetimeLocalToRFC3339(value: string) {
+  const raw = value.trim();
+  if (!raw) {
+    return "";
+  }
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return date.toISOString();
 }
 
 function formatDecisionLabel(decision: RequestDecision) {
@@ -186,6 +225,10 @@ export default function Logs() {
   const [tail, setTail] = useState<number>(30);
   const [searchInput, setSearchInput] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [fromInput, setFromInput] = useState<string>("");
+  const [toInput, setToInput] = useState<string>("");
+  const [fromQuery, setFromQuery] = useState<string>("");
+  const [toQuery, setToQuery] = useState<string>("");
   const [pageStart, setPageStart] = useState<number | undefined>(undefined);
   const [pageEnd, setPageEnd] = useState<number | undefined>(undefined);
   const [data, setData] = useState<ReadResponse | null>(null);
@@ -233,6 +276,8 @@ export default function Logs() {
           cursor: useCursor,
           dir: useDir,
           search: searchQuery.trim() || undefined,
+          from: datetimeLocalToRFC3339(fromQuery) || undefined,
+          to: datetimeLocalToRFC3339(toQuery) || undefined,
           signal: ac.signal,
         });
 
@@ -285,7 +330,7 @@ export default function Logs() {
         setLoading(false);
       }
     },
-    [searchQuery, tail, tx]
+    [fromQuery, searchQuery, tail, toQuery, tx]
   );
 
   const openRequestDetail = useCallback(
@@ -354,7 +399,11 @@ export default function Logs() {
   }, []);
 
   async function downloadAll() {
-    const path = buildDownloadPath(searchQuery.trim() || undefined);
+    const path = buildDownloadPath(
+      searchQuery.trim() || undefined,
+      datetimeLocalToRFC3339(fromQuery) || undefined,
+      datetimeLocalToRFC3339(toQuery) || undefined
+    );
     const { blob, filename } = await apiGetBinary(path);
     const a = document.createElement("a");
     const url = URL.createObjectURL(blob);
@@ -370,6 +419,8 @@ export default function Logs() {
 
   const detailSummary = detailReqID ? summarizeRequestEvents(detailReqID, detailLines) : null;
   const searchActive = searchQuery.trim();
+  const rangeActive = !!fromQuery.trim() || !!toQuery.trim();
+  const filterActive = !!searchActive || rangeActive;
   const displayLines = useMemo(() => sortLogLinesNewestFirst(data?.lines ?? []), [data?.lines]);
 
   return (
@@ -387,9 +438,11 @@ export default function Logs() {
               if (e.key === "Enter") {
                 e.preventDefault();
                 setSearchQuery(searchInput.trim());
+                setFromQuery(fromInput.trim());
+                setToQuery(toInput.trim());
               }
             }}
-            placeholder={tx("status, event, country, req_id, path, host")}
+            placeholder={tx("status, event, country, ip, req_id, path, host")}
           />
         </label>
 
@@ -397,6 +450,8 @@ export default function Logs() {
           disabled={loading}
           onClick={() => {
             setSearchQuery(searchInput.trim());
+            setFromQuery(fromInput.trim());
+            setToQuery(toInput.trim());
           }}
           className="rounded border px-3 py-1 text-xs"
           title={tx("Search logs")}
@@ -404,15 +459,39 @@ export default function Logs() {
           {tx("Search")}
         </button>
 
-        {searchActive && (
+        <label className="ml-2 text-xs">
+          {tx("Start time")}:
+          <input
+            type="datetime-local"
+            className="ml-1 rounded border px-2 py-1"
+            value={fromInput}
+            onChange={(e) => setFromInput(e.target.value)}
+          />
+        </label>
+
+        <label className="ml-2 text-xs">
+          {tx("End time")}:
+          <input
+            type="datetime-local"
+            className="ml-1 rounded border px-2 py-1"
+            value={toInput}
+            onChange={(e) => setToInput(e.target.value)}
+          />
+        </label>
+
+        {filterActive && (
           <button
             className="rounded border px-3 py-1 text-xs"
             onClick={() => {
               setSearchInput("");
               setSearchQuery("");
+              setFromInput("");
+              setToInput("");
+              setFromQuery("");
+              setToQuery("");
             }}
           >
-            {tx("Clear search")}
+            {tx("Clear filters")}
           </button>
         )}
 
@@ -476,9 +555,16 @@ export default function Logs() {
           {tx("next ▶")}
         </button>
         {loading && <span className="text-xs text-gray-500">{tx("loading…")}</span>}
-        {searchActive && (
+        {filterActive && (
           <span className="text-xs text-gray-500">
-            {tx("search active")}: <code>{searchActive}</code>
+            {tx("filter active")}:{" "}
+            {searchActive && <code>{searchActive}</code>}
+            {rangeActive && (
+              <code>
+                {searchActive ? " / " : ""}
+                {fromQuery || "-"} - {toQuery || "-"}
+              </code>
+            )}
           </span>
         )}
       </div>
@@ -491,7 +577,7 @@ export default function Logs() {
 
       <div className="app-table-shell">
         <div className="app-table-x-scroll">
-        <table className="app-table min-w-[1120px] w-full text-xs">
+        <table className="app-table min-w-[1220px] w-full text-xs">
           <thead className="app-table-head">
             <tr>
               <th className="px-2 py-1 text-left">{tx("ts")}</th>
@@ -500,6 +586,7 @@ export default function Logs() {
               <th className="px-2 py-1 text-left">{tx("rule_id")}</th>
               <th className="px-2 py-1 text-left">{tx("method")}</th>
               <th className="px-2 py-1 text-left">{tx("country")}</th>
+              <th className="px-2 py-1 text-left">{tx("IP")}</th>
               <th className="px-2 py-1 text-left">{tx("host")}</th>
               <th className="px-2 py-1 text-left">{tx("path")}</th>
               <th className="px-2 py-1 text-left">{tx("req_id")}</th>
@@ -525,22 +612,11 @@ export default function Logs() {
                   <td className="px-2 py-1">{String(line.rule_id ?? "-")}</td>
                   <td className="px-2 py-1">{line.method ?? "-"}</td>
                   <td className="px-2 py-1">{displayCountry(line.country)}</td>
+                  <td className="whitespace-nowrap px-2 py-1 font-mono">{displayClientIP(line)}</td>
                   <td className="px-2 py-1">{displayHost(line)}</td>
                   <td className="px-2 py-1">{line.path ?? "-"}</td>
                   <td className="px-2 py-1">
-                    {reqID ? (
-                      <button
-                        className="font-mono underline"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void openRequestDetail(reqID);
-                        }}
-                      >
-                        {reqID}
-                      </button>
-                    ) : (
-                      "-"
-                    )}
+                    {reqID ? <span className="font-mono">{reqID}</span> : "-"}
                   </td>
                   <td className="px-2 py-1" onClick={(e) => e.stopPropagation()}>
                     <details>
@@ -555,7 +631,7 @@ export default function Logs() {
             })}
             {!data?.lines?.length && (
               <tr>
-                <td colSpan={10} className="px-2 py-6 text-center text-gray-500">
+                <td colSpan={11} className="px-2 py-6 text-center text-gray-500">
                   {tx("No data.")}
                 </td>
               </tr>
@@ -569,7 +645,8 @@ export default function Logs() {
         <div className="text-xs text-gray-500">
           has_more: {String(data.has_more)} / next_cursor:{" "}
           {data.next_cursor != null ? data.next_cursor : "-"} / page: [{pageStart ?? "-"},{" "}
-          {pageEnd ?? "-"}) / search: {searchActive || "-"}
+          {pageEnd ?? "-"}) / search: {searchActive || "-"} / range: {fromQuery || "-"} -{" "}
+          {toQuery || "-"}
         </div>
       )}
 

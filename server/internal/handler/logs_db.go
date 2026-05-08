@@ -619,7 +619,7 @@ func (s *wafEventStore) StatusSnapshot(logPath string) (wafEventStoreStatus, err
 	}, nil
 }
 
-func (s *wafEventStore) ReadWAFLogs(logPath string, tail int, cursor *int64, dir string, countryFilter string, searchQuery string) ([]logLine, *int64, bool, bool, error) {
+func (s *wafEventStore) ReadWAFLogs(logPath string, tail int, cursor *int64, dir string, countryFilter string, searchQuery string, from time.Time, to time.Time) ([]logLine, *int64, bool, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -628,7 +628,7 @@ func (s *wafEventStore) ReadWAFLogs(logPath string, tail int, cursor *int64, dir
 	}
 
 	countQuery := `SELECT COUNT(*) FROM waf_events`
-	whereClause, countArgs := s.buildWAFLogFilterWhere(countryFilter, searchQuery)
+	whereClause, countArgs := s.buildWAFLogFilterWhere(countryFilter, searchQuery, from, to)
 	countQuery += whereClause
 
 	totalLines, err := s.queryCount(countQuery, countArgs...)
@@ -669,7 +669,7 @@ func (s *wafEventStore) ReadWAFLogs(logPath string, tail int, cursor *int64, dir
 	}
 
 	selectQuery := `SELECT raw_json FROM waf_events`
-	whereClause, selectArgs := s.buildWAFLogFilterWhere(countryFilter, searchQuery)
+	whereClause, selectArgs := s.buildWAFLogFilterWhere(countryFilter, searchQuery, from, to)
 	selectQuery += whereClause
 	selectQuery += ` ORDER BY id ASC LIMIT ? OFFSET ?`
 	selectArgs = append(selectArgs, end-start, start)
@@ -708,9 +708,17 @@ func (s *wafEventStore) ReadWAFLogs(logPath string, tail int, cursor *int64, dir
 	return out, &nextCur, hasPrev, hasNext, nil
 }
 
-func (s *wafEventStore) buildWAFLogFilterWhere(countryFilter string, searchQuery string) (string, []any) {
-	clauses := make([]string, 0, 1+maxLogSearchTerms)
-	args := make([]any, 0, 1+maxLogSearchTerms)
+func (s *wafEventStore) buildWAFLogFilterWhere(countryFilter string, searchQuery string, from time.Time, to time.Time) (string, []any) {
+	clauses := make([]string, 0, 3+maxLogSearchTerms)
+	args := make([]any, 0, 3+maxLogSearchTerms)
+	if !from.IsZero() {
+		clauses = append(clauses, `ts_unix >= ?`)
+		args = append(args, from.UTC().Unix())
+	}
+	if !to.IsZero() {
+		clauses = append(clauses, `ts_unix < ?`)
+		args = append(args, to.UTC().Unix())
+	}
 	if countryFilter != "" {
 		clauses = append(clauses, `country = ?`)
 		args = append(args, countryFilter)
@@ -740,7 +748,7 @@ func sqlLikeContainsLiteral(term string) string {
 	return b.String()
 }
 
-func (s *wafEventStore) ReadWAFRequestLogs(logPath string, reqIDFilter string, countryFilter string) ([]logLine, error) {
+func (s *wafEventStore) ReadWAFRequestLogs(logPath string, reqIDFilter string, countryFilter string, from time.Time, to time.Time) ([]logLine, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -749,8 +757,16 @@ func (s *wafEventStore) ReadWAFRequestLogs(logPath string, reqIDFilter string, c
 	}
 
 	query := `SELECT raw_json FROM waf_events WHERE req_id = ?`
-	args := make([]any, 0, 2)
+	args := make([]any, 0, 4)
 	args = append(args, reqIDFilter)
+	if !from.IsZero() {
+		query += ` AND ts_unix >= ?`
+		args = append(args, from.UTC().Unix())
+	}
+	if !to.IsZero() {
+		query += ` AND ts_unix < ?`
+		args = append(args, to.UTC().Unix())
+	}
 	if countryFilter != "" {
 		query += ` AND country = ?`
 		args = append(args, countryFilter)

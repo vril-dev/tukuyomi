@@ -19,7 +19,7 @@ CENTER_PREVIEW_CONFIG_VALUE="${CENTER_PREVIEW_CONFIG:-conf/config.center-preview
 CENTER_PREVIEW_DB_REL_VALUE="${CENTER_PREVIEW_DB_PATH:-db/tukuyomi-center-preview.db}"
 GATEWAY_PREVIEW_CENTER_UPSTREAM_URL_VALUE="${GATEWAY_PREVIEW_CENTER_UPSTREAM_URL:-http://${CENTER_PREVIEW_NETWORK_ALIAS_VALUE}:${CENTER_PREVIEW_CONTAINER_PORT_VALUE}}"
 CENTER_PROTECTED_GATEWAY_API_BASE_PATH_VALUE="${CENTER_PROTECTED_GATEWAY_API_BASE_PATH:-${CENTER_PREVIEW_GATEWAY_API_BASE_PATH:-/center-api}}"
-CENTER_PROTECTED_CENTER_API_BASE_PATH_VALUE="${CENTER_PROTECTED_CENTER_API_BASE_PATH:-${CENTER_PREVIEW_API_BASE_PATH:-/center-api}}"
+CENTER_PROTECTED_CENTER_API_BASE_PATH_VALUE="${CENTER_PROTECTED_CENTER_API_BASE_PATH:-${CENTER_PREVIEW_API_BASE_PATH:-/center-manage-api}}"
 CENTER_PROTECTED_CENTER_UI_BASE_PATH_VALUE="${CENTER_PROTECTED_CENTER_UI_BASE_PATH:-${CENTER_PREVIEW_UI_BASE_PATH:-/center-ui}}"
 
 preview_config_host_path() {
@@ -318,7 +318,7 @@ def normalize_base_path(label, raw, fallback):
     return value
 
 gateway_api_base = normalize_base_path("gateway API base path", sys.argv[4], "/center-api")
-center_api_base = normalize_base_path("center API base path", sys.argv[5], "/center-api")
+center_api_base = normalize_base_path("center API base path", sys.argv[5], "/center-manage-api")
 center_ui_base = normalize_base_path("center UI base path", sys.argv[6], "/center-ui")
 if gateway_api_base == center_ui_base or center_api_base == center_ui_base:
     raise SystemExit("center API paths and UI base path must differ")
@@ -341,15 +341,18 @@ proxy["upstreams"] = [
     }
 ]
 proxy["backend_pools"] = []
-api_action = {"upstream": "center"}
-if gateway_api_base != center_api_base:
-    api_action["path_rewrite"] = {"prefix": center_api_base}
 proxy["routes"] = [
     {
         "name": "center-api",
-        "priority": 10,
+        "priority": 5,
         "match": {"path": {"type": "prefix", "value": gateway_api_base}},
-        "action": api_action,
+        "action": {"upstream": "center", "path_rewrite": {"prefix": "/"}},
+    },
+    {
+        "name": "center-manage-api",
+        "priority": 10,
+        "match": {"path": {"type": "prefix", "value": center_api_base}},
+        "action": {"upstream": "center"},
     },
     {
         "name": "center-ui",

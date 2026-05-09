@@ -57,7 +57,7 @@ const DEFAULT_SESSION_TTL_MINUTES = 8 * 60;
 const MIN_SESSION_TTL_MINUTES = 5;
 const MAX_SESSION_TTL_MINUTES = 7 * 24 * 60;
 const DEFAULT_CENTER_LISTEN_ADDR = "127.0.0.1:9092";
-const DEFAULT_CENTER_API_BASE_PATH = "/center-api";
+const DEFAULT_CENTER_API_BASE_PATH = "/center-manage-api";
 const DEFAULT_CENTER_GATEWAY_API_BASE_PATH = "/center-api";
 const DEFAULT_CENTER_UI_BASE_PATH = "/center-ui";
 const DEFAULT_MANAGE_API_ALLOW_CIDRS = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"];
@@ -266,11 +266,12 @@ export default function SettingsPage() {
       !apiBasePath.startsWith("/") ||
       !gatewayApiBasePath.startsWith("/") ||
       !uiBasePath.startsWith("/") ||
+      apiBasePath === gatewayApiBasePath ||
       apiBasePath === uiBasePath ||
       gatewayApiBasePath === uiBasePath
     ) {
       setMessageTone("error");
-      setMessage(tx("API paths and UI base path must be different absolute paths."));
+      setMessage(tx("Manage API, Gateway API, and UI base paths must be different absolute paths."));
       return;
     }
     if (form.tlsMode === "manual" && (!tlsCertFile || !tlsKeyFile)) {
@@ -460,7 +461,7 @@ export default function SettingsPage() {
               <span className="field-hint">{tx("Applied after Center restart.")}</span>
             </label>
             <label>
-              <span>{tx("API base path")}</span>
+              <span>{tx("Manage API base path")}</span>
               <input
                 value={form.apiBasePath}
                 onChange={(event) => setForm((current) => ({ ...current, apiBasePath: event.target.value }))}
@@ -469,13 +470,13 @@ export default function SettingsPage() {
               <span className="field-hint">{tx("Applied after Center restart.")}</span>
             </label>
             <label>
-              <span>{tx("Gateway API base path")}</span>
+              <span>{tx("Gateway/device API base path")}</span>
               <input
                 value={form.gatewayApiBasePath}
                 onChange={(event) => setForm((current) => ({ ...current, gatewayApiBasePath: event.target.value }))}
                 disabled={loading || saving || readOnly}
               />
-              <span className="field-hint">{tx("Public API path used when Center UI is accessed through Gateway.")}</span>
+              <span className="field-hint">{tx("Public API path used by remote Gateways.")}</span>
             </label>
             <label>
               <span>{tx("UI base path")}</span>

@@ -155,8 +155,10 @@ Gateways; it does not own edge data-plane assets.
 
 The `center-protected` role is the packaged same-host shape for exposing
 Center safely. Center keeps its loopback listener, and the Gateway front
-starts with path-scoped routes for `/center-ui` and `/center-api` to
-`http://127.0.0.1:9092`. During install, the role also enables Gateway
+starts with path-scoped routes for `/center-ui`, the operator-facing
+`/center-manage-api`, and the Gateway/device-facing `/center-api` path to
+`http://127.0.0.1:9092`. Remote Gateways poll below `/center-api/v1`.
+During install, the role also enables Gateway
 IoT / Edge device authentication and bootstraps the matching Center approval
 locally. The Gateway private key stays in the Gateway DB; Center receives only
 the public key identity. If an existing DB contains conflicting device trust,
@@ -171,16 +173,14 @@ back to `api_only_external` or `deny_external`. If the first boot must stay
 closed, install with
 `INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE=api_only_external`.
 
-If the Center process should keep a private API path, set
-`INSTALL_CENTER_API_BASE_PATH` to that internal path and keep
-`INSTALL_CENTER_GATEWAY_API_BASE_PATH` on the public Gateway path. The Gateway
-route then matches the public path and rewrites upstream requests to the Center
-path.
+`INSTALL_CENTER_API_BASE_PATH` controls the Center UI management API path and
+defaults to `/center-manage-api`. `INSTALL_CENTER_GATEWAY_API_BASE_PATH`
+controls the public Gateway/device API path and defaults to `/center-api`.
 
 For a center-protected host, restrict operator-facing Center paths at the
 Gateway route level. For example, add `access.allow_cidrs` to the `/center-ui`
-or center management route, while leaving the Gateway/device-facing
-`/center-api` route unrestricted so remote Gateways can continue polling.
+and `/center-manage-api` management routes, while leaving the Gateway/device-facing
+`/center-api/v1` route unrestricted so remote Gateways can continue polling.
 
 When Center is exposed without a tukuyomi Gateway in front, configure the
 source IP allowlists deliberately. Center UI client access and the

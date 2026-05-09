@@ -396,14 +396,20 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	if len(proxyCfg.Upstreams) != 1 || proxyCfg.Upstreams[0].Name != "center" || proxyCfg.Upstreams[0].URL != "http://127.0.0.1:9092" {
 		t.Fatalf("center upstream was not bootstrapped: %+v", proxyCfg.Upstreams)
 	}
-	if len(proxyCfg.Routes) != 2 || proxyCfg.Routes[0].Name != "center-api" || proxyCfg.Routes[1].Name != "center-ui" {
+	if len(proxyCfg.Routes) != 3 || proxyCfg.Routes[0].Name != "center-api" || proxyCfg.Routes[1].Name != "center-manage-api" || proxyCfg.Routes[2].Name != "center-ui" {
 		t.Fatalf("center routes were not bootstrapped: %+v", proxyCfg.Routes)
 	}
 	if proxyCfg.Routes[0].Match.Path == nil || proxyCfg.Routes[0].Match.Path.Value != "/center-api" {
-		t.Fatalf("center api route match mismatch: %+v", proxyCfg.Routes[0])
+		t.Fatalf("center device api route match mismatch: %+v", proxyCfg.Routes[0])
 	}
-	if proxyCfg.Routes[0].Action.PathRewrite == nil || proxyCfg.Routes[0].Action.PathRewrite.Prefix != "/center-manage-api" {
-		t.Fatalf("center api route rewrite mismatch: %+v", proxyCfg.Routes[0].Action)
+	if proxyCfg.Routes[0].Action.PathRewrite == nil || proxyCfg.Routes[0].Action.PathRewrite.Prefix != "/" {
+		t.Fatalf("center device api route rewrite mismatch: %+v", proxyCfg.Routes[0].Action)
+	}
+	if proxyCfg.Routes[1].Match.Path == nil || proxyCfg.Routes[1].Match.Path.Value != "/center-manage-api" {
+		t.Fatalf("center api route match mismatch: %+v", proxyCfg.Routes[1])
+	}
+	if proxyCfg.Routes[1].Action.PathRewrite != nil {
+		t.Fatalf("center api route rewrite mismatch: %+v", proxyCfg.Routes[1].Action)
 	}
 	bypassRaw, bypassRec, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(bypassConfigBlobKey))
 	if err != nil {
@@ -435,13 +441,13 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 		t.Fatalf("persist operator app config: %v", err)
 	}
 
-	proxyCfg.Routes[0].Match.Hosts = []string{"tukuyomi.vril-dev.com"}
-	proxyCfg.Routes[0].Access = &ProxyRouteAccess{
+	proxyCfg.Routes[1].Match.Hosts = []string{"tukuyomi.vril-dev.com"}
+	proxyCfg.Routes[1].Access = &ProxyRouteAccess{
 		AllowCIDRs: []string{"127.0.0.1/32", "::1/128", "219.104.164.92/32"},
 		DenyCIDRs:  []string{"203.0.113.0/24"},
 	}
-	proxyCfg.Routes[1].Match.Hosts = []string{"tukuyomi.vril-dev.com"}
-	proxyCfg.Routes[1].Access = &ProxyRouteAccess{
+	proxyCfg.Routes[2].Match.Hosts = []string{"tukuyomi.vril-dev.com"}
+	proxyCfg.Routes[2].Access = &ProxyRouteAccess{
 		AllowCIDRs: []string{"127.0.0.1/32", "::1/128", "219.104.164.92/32"},
 	}
 	if _, err := store.writeProxyConfigVersion(proxyRec.ETag, proxyCfg, configVersionSourceApply, "operator", "operator proxy access lock", 0); err != nil {
@@ -449,6 +455,7 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	}
 	operatorBypass, err := bypassconf.MarshalJSON(bypassconf.File{Default: bypassconf.Scope{Entries: []bypassconf.Entry{
 		{Path: "/center-api"},
+		{Path: "/center-manage-api"},
 		{Path: "/center-ui"},
 		{Path: "/healthz"},
 	}}})
@@ -491,19 +498,25 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 		t.Fatal("proxy config missing after second bootstrap")
 	}
 	if got := strings.Join(proxyAfterCfg.Routes[0].Match.Hosts, ","); got != "tukuyomi.vril-dev.com" {
-		t.Fatalf("center-api hosts reset: %q", got)
+		t.Fatalf("center-api hosts were not inherited: %q", got)
 	}
-	if proxyAfterCfg.Routes[0].Access == nil ||
-		strings.Join(proxyAfterCfg.Routes[0].Access.AllowCIDRs, ",") != "127.0.0.1/32,::1/128,219.104.164.92/32" ||
-		strings.Join(proxyAfterCfg.Routes[0].Access.DenyCIDRs, ",") != "203.0.113.0/24" {
-		t.Fatalf("center-api access reset: %+v", proxyAfterCfg.Routes[0].Access)
+	if proxyAfterCfg.Routes[0].Access != nil {
+		t.Fatalf("center-api should not inherit manage API source restrictions: %+v", proxyAfterCfg.Routes[0].Access)
 	}
 	if got := strings.Join(proxyAfterCfg.Routes[1].Match.Hosts, ","); got != "tukuyomi.vril-dev.com" {
-		t.Fatalf("center-ui hosts reset: %q", got)
+		t.Fatalf("center-manage-api hosts reset: %q", got)
 	}
 	if proxyAfterCfg.Routes[1].Access == nil ||
-		strings.Join(proxyAfterCfg.Routes[1].Access.AllowCIDRs, ",") != "127.0.0.1/32,::1/128,219.104.164.92/32" {
-		t.Fatalf("center-ui access reset: %+v", proxyAfterCfg.Routes[1].Access)
+		strings.Join(proxyAfterCfg.Routes[1].Access.AllowCIDRs, ",") != "127.0.0.1/32,::1/128,219.104.164.92/32" ||
+		strings.Join(proxyAfterCfg.Routes[1].Access.DenyCIDRs, ",") != "203.0.113.0/24" {
+		t.Fatalf("center-manage-api access reset: %+v", proxyAfterCfg.Routes[1].Access)
+	}
+	if got := strings.Join(proxyAfterCfg.Routes[2].Match.Hosts, ","); got != "tukuyomi.vril-dev.com" {
+		t.Fatalf("center-ui hosts reset: %q", got)
+	}
+	if proxyAfterCfg.Routes[2].Access == nil ||
+		strings.Join(proxyAfterCfg.Routes[2].Access.AllowCIDRs, ",") != "127.0.0.1/32,::1/128,219.104.164.92/32" {
+		t.Fatalf("center-ui access reset: %+v", proxyAfterCfg.Routes[2].Access)
 	}
 	bypassAfterRaw, _, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(bypassConfigBlobKey))
 	if err != nil {
@@ -512,7 +525,7 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	if !found {
 		t.Fatal("bypass config missing after second bootstrap")
 	}
-	for _, want := range []string{`"path": "/center-api"`, `"path": "/center-ui"`, `"path": "/healthz"`} {
+	for _, want := range []string{`"path": "/center-api"`, `"path": "/center-manage-api"`, `"path": "/center-ui"`, `"path": "/healthz"`} {
 		if !strings.Contains(string(bypassAfterRaw), want) {
 			t.Fatalf("operator bypass entry %s reset: %s", want, string(bypassAfterRaw))
 		}
@@ -1837,8 +1850,8 @@ func TestPostEdgeDeviceEnrollmentRejectsInvalidBoundaryInput(t *testing.T) {
 			want: http.StatusBadRequest,
 		},
 		{
-			name: "unexpected center path",
-			body: `{"center_url":"http://127.0.0.1/center-api","enrollment_token":"token"}`,
+			name: "center path dot segment",
+			body: `{"center_url":"http://127.0.0.1/center-api/../admin","enrollment_token":"token"}`,
 			want: http.StatusBadRequest,
 		},
 		{
@@ -1854,6 +1867,81 @@ func TestPostEdgeDeviceEnrollmentRejectsInvalidBoundaryInput(t *testing.T) {
 				t.Fatalf("code=%d want %d body=%s", rec.Code, tc.want, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestCenterDeviceAPIURLUsesConfiguredGatewayBasePath(t *testing.T) {
+	base, enrollURL, err := normalizeCenterEnrollmentURL("https://center.example.com/center-api")
+	if err != nil {
+		t.Fatalf("normalizeCenterEnrollmentURL: %v", err)
+	}
+	if base != "https://center.example.com/center-api" {
+		t.Fatalf("base=%q", base)
+	}
+	if enrollURL != "https://center.example.com/center-api/v1/enroll" {
+		t.Fatalf("enrollURL=%q", enrollURL)
+	}
+	statusURL, err := centerDeviceStatusURL(base)
+	if err != nil {
+		t.Fatalf("centerDeviceStatusURL: %v", err)
+	}
+	if statusURL != "https://center.example.com/center-api/v1/device-status" {
+		t.Fatalf("statusURL=%q", statusURL)
+	}
+	signingKeyURL, err := centerRemoteSSHSigningKeyURL(base)
+	if err != nil {
+		t.Fatalf("centerRemoteSSHSigningKeyURL: %v", err)
+	}
+	if signingKeyURL != "https://center.example.com/center-api/v1/remote-ssh/signing-key" {
+		t.Fatalf("signingKeyURL=%q", signingKeyURL)
+	}
+}
+
+func TestCenterDeviceAPIURLNormalizesCopiedEndpointURL(t *testing.T) {
+	base, enrollURL, err := normalizeCenterEnrollmentURL("https://center.example.com/center-api/v1/enroll")
+	if err != nil {
+		t.Fatalf("normalizeCenterEnrollmentURL: %v", err)
+	}
+	if base != "https://center.example.com/center-api" {
+		t.Fatalf("base=%q", base)
+	}
+	if enrollURL != "https://center.example.com/center-api/v1/enroll" {
+		t.Fatalf("enrollURL=%q", enrollURL)
+	}
+}
+
+func TestCenterDeviceAPIURLCandidatesFallbackToProtectedDefault(t *testing.T) {
+	candidates, err := centerDeviceStatusURLCandidates("https://center.example.com")
+	if err != nil {
+		t.Fatalf("centerDeviceStatusURLCandidates: %v", err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("len(candidates)=%d", len(candidates))
+	}
+	if candidates[0].EndpointURL != "https://center.example.com/v1/device-status" {
+		t.Fatalf("primary=%q", candidates[0].EndpointURL)
+	}
+	if candidates[1].BaseURL != "https://center.example.com/center-api" ||
+		candidates[1].EndpointURL != "https://center.example.com/center-api/v1/device-status" {
+		t.Fatalf("fallback=%+v", candidates[1])
+	}
+}
+
+func TestCenterProtectedGatewayDeviceAPIRouteRewritesToCenterDeviceAPI(t *testing.T) {
+	routes := centerProtectedGatewayRoutes(centerProtectedGatewayRouteConfig{
+		GatewayAPIBasePath: centerProtectedDefaultGatewayAPIPath,
+		CenterAPIBasePath:  centerProtectedDefaultCenterAPIPath,
+		CenterUIBasePath:   centerProtectedDefaultCenterUIPath,
+	})
+	if len(routes) == 0 || routes[0].Name != "center-api" {
+		t.Fatalf("device api route missing: %+v", routes)
+	}
+	got, err := rewriteProxyRoutePath("/center-api/v1/device-status", routes[0].Match.Path, routes[0].Action.PathRewrite.Prefix)
+	if err != nil {
+		t.Fatalf("rewriteProxyRoutePath: %v", err)
+	}
+	if got != "/v1/device-status" {
+		t.Fatalf("rewritten path=%q", got)
 	}
 }
 

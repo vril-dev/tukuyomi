@@ -25,7 +25,7 @@ INSTALL_DB_SEED="${INSTALL_DB_SEED:-auto}"
 INSTALL_DRY_RUN="${INSTALL_DRY_RUN:-0}"
 CRS_VERSION="${CRS_VERSION:-v4.23.0}"
 INSTALL_CENTER_LISTEN_ADDR_VALUE="${INSTALL_CENTER_LISTEN_ADDR:-127.0.0.1:9092}"
-INSTALL_CENTER_API_BASE_PATH_VALUE="${INSTALL_CENTER_API_BASE_PATH:-/center-api}"
+INSTALL_CENTER_API_BASE_PATH_VALUE="${INSTALL_CENTER_API_BASE_PATH:-/center-manage-api}"
 INSTALL_CENTER_GATEWAY_API_BASE_PATH_VALUE="${INSTALL_CENTER_GATEWAY_API_BASE_PATH:-/center-api}"
 INSTALL_CENTER_UI_BASE_PATH_VALUE="${INSTALL_CENTER_UI_BASE_PATH:-/center-ui}"
 INSTALL_CENTER_UPSTREAM_URL_VALUE="${INSTALL_CENTER_UPSTREAM_URL:-http://127.0.0.1:9092}"
@@ -805,7 +805,7 @@ def normalize_base_path(label, raw, fallback):
     return value
 
 gateway_api_base = normalize_base_path("gateway API base path", sys.argv[4], "/center-api")
-center_api_base = normalize_base_path("center API base path", sys.argv[5], "/center-api")
+center_api_base = normalize_base_path("center API base path", sys.argv[5], "/center-manage-api")
 center_ui_base = normalize_base_path("center UI base path", sys.argv[6], "/center-ui")
 if gateway_api_base == center_ui_base or center_api_base == center_ui_base:
     raise SystemExit("center API paths and UI base path must differ")
@@ -828,15 +828,18 @@ proxy["upstreams"] = [
     }
 ]
 proxy["backend_pools"] = []
-api_action = {"upstream": "center"}
-if gateway_api_base != center_api_base:
-    api_action["path_rewrite"] = {"prefix": center_api_base}
 proxy["routes"] = [
     {
         "name": "center-api",
-        "priority": 10,
+        "priority": 5,
         "match": {"path": {"type": "prefix", "value": gateway_api_base}},
-        "action": api_action,
+        "action": {"upstream": "center", "path_rewrite": {"prefix": "/"}},
+    },
+    {
+        "name": "center-manage-api",
+        "priority": 10,
+        "match": {"path": {"type": "prefix", "value": center_api_base}},
+        "action": {"upstream": "center"},
     },
     {
         "name": "center-ui",

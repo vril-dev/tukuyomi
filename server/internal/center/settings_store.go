@@ -202,7 +202,18 @@ func decodeCenterSettings(raw []byte) (CenterSettingsConfig, error) {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return CenterSettingsConfig{}, fmt.Errorf("%w: decode config", ErrCenterSettingsInvalid)
 	}
+	cfg = migrateLegacyCenterSettingsAPIPaths(cfg)
 	return normalizeCenterSettingsConfig(cfg)
+}
+
+func migrateLegacyCenterSettingsAPIPaths(cfg CenterSettingsConfig) CenterSettingsConfig {
+	apiBasePath := strings.TrimSpace(cfg.APIBasePath)
+	gatewayAPIBasePath := strings.TrimSpace(cfg.GatewayAPIBasePath)
+	if apiBasePath == DefaultGatewayAPIBasePath && (gatewayAPIBasePath == "" || gatewayAPIBasePath == DefaultGatewayAPIBasePath) {
+		cfg.APIBasePath = DefaultAPIBasePath
+		cfg.GatewayAPIBasePath = DefaultGatewayAPIBasePath
+	}
+	return cfg
 }
 
 func normalizeCenterSettingsConfig(cfg CenterSettingsConfig) (CenterSettingsConfig, error) {
@@ -276,6 +287,9 @@ func normalizeCenterSettingsConfig(cfg CenterSettingsConfig) (CenterSettingsConf
 			return CenterSettingsConfig{}, fmt.Errorf("%w: ui_base_path %v", ErrCenterSettingsInvalid, err)
 		}
 		cfg.UIBasePath = uiBase
+	}
+	if cfg.APIBasePath != "" && cfg.GatewayAPIBasePath != "" && cfg.APIBasePath == cfg.GatewayAPIBasePath {
+		return CenterSettingsConfig{}, fmt.Errorf("%w: api_base_path and gateway_api_base_path must differ", ErrCenterSettingsInvalid)
 	}
 	if cfg.APIBasePath != "" && cfg.UIBasePath != "" && cfg.APIBasePath == cfg.UIBasePath {
 		return CenterSettingsConfig{}, fmt.Errorf("%w: api_base_path and ui_base_path must differ", ErrCenterSettingsInvalid)

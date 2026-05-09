@@ -76,7 +76,7 @@ func parseRemoteSSHCommandConfig(args []string, env []string) (remoteSSHCommandC
 	fs.SetOutput(io.Discard)
 	cfg := remoteSSHCommandConfig{}
 	fs.StringVar(&cfg.CenterURL, "center", envValue(env, "TUKUYOMI_REMOTE_SSH_CENTER_URL"), "Center base URL")
-	fs.StringVar(&cfg.APIBase, "api-base", "/center-api", "Center admin API base path")
+	fs.StringVar(&cfg.APIBase, "api-base", "/center-manage-api", "Center admin API base path")
 	fs.StringVar(&cfg.DeviceID, "device", "", "device id")
 	fs.StringVar(&cfg.LocalAddr, "local", "127.0.0.1:0", "local listen address")
 	fs.Int64Var(&cfg.TTLSec, "ttl", 900, "session TTL seconds")

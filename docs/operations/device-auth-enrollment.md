@@ -151,15 +151,17 @@ make fleet-preview-up
 ```
 
 In this mode, Center still runs as a separate preview process, but Gateway seeds
-`/center-ui` and `/center-api` routes to the Center preview over the shared
-Docker preview network. Open Center through Gateway at
+`/center-ui`, the operator-facing `/center-manage-api`, and the
+Gateway/device-facing `/center-api` path to the Center preview over the shared
+Docker preview network. Remote Gateways poll below `/center-api/v1`. Open
+Center through Gateway at
 `http://localhost:9090/center-ui`. Protected preview also enables Gateway
 IoT / Edge mode and bootstraps the matching Center approval against the preview
 Center DB.
 
-For split API paths, set `CENTER_PREVIEW_API_BASE_PATH` to the Center process
-path and `CENTER_PREVIEW_GATEWAY_API_BASE_PATH` to the Gateway-facing path. The
-Gateway preview route rewrites the public path to the Center path upstream.
+`CENTER_PREVIEW_API_BASE_PATH` controls the Center UI management API path, and
+`CENTER_PREVIEW_GATEWAY_API_BASE_PATH` controls the public Gateway/device API
+path.
 
 With `GATEWAY_PREVIEW_PERSIST=1`, those protected routes are seeded only when
 the Gateway preview DB is created. If an existing persistent Gateway preview DB

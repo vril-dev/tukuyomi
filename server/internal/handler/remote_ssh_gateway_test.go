@@ -189,14 +189,14 @@ func TestCenterRemoteSSHGatewayStreamURLRejectsHTTPByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("centerRemoteSSHGatewayStreamURL with loopback http: %v", err)
 	}
-	if got != "http://127.0.0.1:9092/v1/remote-ssh/gateway-stream" {
+	if got != "http://127.0.0.1:9092/base/v1/remote-ssh/gateway-stream" {
 		t.Fatalf("loopback url=%q", got)
 	}
 	signingKeyURL, err := centerRemoteSSHSigningKeyURL("http://[::1]:9092/base")
 	if err != nil {
 		t.Fatalf("centerRemoteSSHSigningKeyURL with IPv6 loopback http: %v", err)
 	}
-	if signingKeyURL != "http://[::1]:9092/v1/remote-ssh/signing-key" {
+	if signingKeyURL != "http://[::1]:9092/base/v1/remote-ssh/signing-key" {
 		t.Fatalf("loopback signing key url=%q", signingKeyURL)
 	}
 	config.AllowInsecureDefaults = true
@@ -204,7 +204,7 @@ func TestCenterRemoteSSHGatewayStreamURLRejectsHTTPByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("centerRemoteSSHGatewayStreamURL with insecure defaults: %v", err)
 	}
-	if got != "http://center.example.test/v1/remote-ssh/gateway-stream" {
+	if got != "http://center.example.test/base/v1/remote-ssh/gateway-stream" {
 		t.Fatalf("url=%q", got)
 	}
 }

@@ -119,7 +119,9 @@ Behavior:
   only and skips WAF/CRS import, gateway seed, and scheduled tasks
 - `INSTALL_ROLE=center-protected` installs both `tukuyomi.service` and
   `tukuyomi-center.service`; Center listens on loopback, while the Gateway seed
-  routes `/center-ui` and `/center-api` to `http://127.0.0.1:9092`. It also
+  routes `/center-ui`, the operator-facing `/center-manage-api`, and the
+  Gateway/device-facing `/center-api` path to `http://127.0.0.1:9092`. Remote
+  Gateways poll below `/center-api/v1`. It also
   enables Gateway IoT / Edge device authentication and locally bootstraps the
   matching Center approval. For first-host setup, this role also opens the
   embedded Gateway admin UI with `admin.external_mode=full_external` so the
@@ -130,13 +132,13 @@ Behavior:
   `INSTALL_CENTER_PROTECTED_GATEWAY_ADMIN_EXTERNAL_MODE=api_only_external`.
   Because this role includes a local Gateway, it also installs the Gateway
   scheduled-task timer by default.
-- `INSTALL_CENTER_API_BASE_PATH` controls the Center process API path, and
-  `INSTALL_CENTER_GATEWAY_API_BASE_PATH` controls the public Gateway route path.
-  When they differ, the generated Gateway route rewrites the public path to the
-  Center path before forwarding upstream.
+- `INSTALL_CENTER_API_BASE_PATH` controls the Center UI management API path.
+  It defaults to `/center-manage-api`. `INSTALL_CENTER_GATEWAY_API_BASE_PATH`
+  controls the public Gateway/device API path and defaults to `/center-api`.
 - In `center-protected`, restrict operator-facing Center routes such as
-  `/center-ui` with Proxy Rules `access.allow_cidrs`. Keep the Gateway/device
-  API route open when remote Gateways must poll through that path.
+  `/center-ui` and the `/center-manage-api` management route with Proxy Rules
+  `access.allow_cidrs`. Keep the Gateway/device API route `/center-api/v1`
+  open when remote Gateways must poll through that path.
 - Center has three source IP allowlists for direct exposure:
   `TUKUYOMI_CENTER_CLIENT_ALLOW_CIDRS` for Center UI clients,
   `TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS` for the management API, and

@@ -192,6 +192,31 @@ func TestCenterSourceIPAllowlists(t *testing.T) {
 	}
 }
 
+func TestCenterUIUsesManageAPIBaseWhenServedThroughGateway(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine, err := NewEngine(RuntimeConfig{
+		APIBasePath:        "/center-manage-api",
+		GatewayAPIBasePath: "/center-api",
+		UIBasePath:         "/center-ui",
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	rec := performRequest(engine, http.MethodGet, "/center-ui", "", map[string]string{
+		"X-Forwarded-Host": "tukuyomi.example.com",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("center ui code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"apiBasePath":"/center-manage-api"`) {
+		t.Fatalf("center ui did not inject management api base: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"apiBasePath":"/center-api"`) {
+		t.Fatalf("center ui incorrectly injected gateway api base: %s", rec.Body.String())
+	}
+}
+
 func TestCenterManageAPIDefaultsToLocalSources(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine, err := NewEngine(RuntimeConfig{
@@ -488,15 +513,15 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 
 	engine, err := NewEngine(RuntimeConfig{
 		ListenAddr:  "127.0.0.1:19092",
-		APIBasePath: "/center-api",
+		APIBasePath: "/center-manage-api",
 		UIBasePath:  "/center-ui",
 	})
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
 
-	cookies, csrfCookie := loginCenterForTest(t, engine)
-	signingKey := performRequestWithCookies(engine, http.MethodGet, "/center-api/remote-ssh/signing-key", "", nil, cookies)
+	cookies, csrfCookie := loginCenterAtForTest(t, engine, "/center-manage-api")
+	signingKey := performRequestWithCookies(engine, http.MethodGet, "/center-manage-api/remote-ssh/signing-key", "", nil, cookies)
 	if signingKey.Code != http.StatusOK {
 		t.Fatalf("signing key code=%d body=%s", signingKey.Code, signingKey.Body.String())
 	}
@@ -513,7 +538,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	missingRotateConfirm := performRequestWithCookies(
 		engine,
 		http.MethodPost,
-		"/center-api/remote-ssh/signing-key/rotate",
+		"/center-manage-api/remote-ssh/signing-key/rotate",
 		`{"confirm":false}`,
 		map[string]string{
 			"Content-Type":           "application/json",
@@ -527,7 +552,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	rotatedSigningKey := performRequestWithCookies(
 		engine,
 		http.MethodPost,
-		"/center-api/remote-ssh/signing-key/rotate",
+		"/center-manage-api/remote-ssh/signing-key/rotate",
 		`{"confirm":true}`,
 		map[string]string{
 			"Content-Type":           "application/json",
@@ -548,7 +573,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	if rotatedSigningKeyPayload.PublicKey == "" || rotatedSigningKeyPayload.PublicKey == signingKeyPayload.PublicKey || rotatedSigningKeyPayload.Algorithm != "ed25519" {
 		t.Fatalf("rotated signing key payload mismatch: before=%+v after=%+v", signingKeyPayload, rotatedSigningKeyPayload)
 	}
-	settings := performRequestWithCookies(engine, http.MethodGet, "/center-api/settings", "", nil, cookies)
+	settings := performRequestWithCookies(engine, http.MethodGet, "/center-manage-api/settings", "", nil, cookies)
 	if settings.Code != http.StatusOK {
 		t.Fatalf("settings code=%d body=%s", settings.Code, settings.Body.String())
 	}
@@ -556,7 +581,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	if err := json.Unmarshal(settings.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("unmarshal settings: %v", err)
 	}
-	if payload.Runtime.Mode != "center" || payload.Runtime.ListenAddr != "127.0.0.1:19092" || payload.Runtime.APIBasePath != "/center-api" || payload.Runtime.GatewayAPIBasePath != "/center-api" || payload.Runtime.UIBasePath != "/center-ui" {
+	if payload.Runtime.Mode != "center" || payload.Runtime.ListenAddr != "127.0.0.1:19092" || payload.Runtime.APIBasePath != "/center-manage-api" || payload.Runtime.GatewayAPIBasePath != "/center-api" || payload.Runtime.UIBasePath != "/center-ui" {
 		t.Fatalf("runtime settings mismatch: %+v", payload.Runtime)
 	}
 	if payload.Storage.DBDriver != "sqlite" || payload.Storage.DBRetentionDays != 45 || payload.Storage.FileRetentionDays != 14 {
@@ -570,7 +595,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 		payload.Config.AdminSessionTTLSeconds != 3600 {
 		t.Fatalf("config settings mismatch: %+v", payload.Config)
 	}
-	if payload.Config.ListenAddr != "127.0.0.1:19092" || payload.Config.APIBasePath != "/center-api" || payload.Config.GatewayAPIBasePath != "/center-api" || payload.Config.UIBasePath != "/center-ui" ||
+	if payload.Config.ListenAddr != "127.0.0.1:19092" || payload.Config.APIBasePath != "/center-manage-api" || payload.Config.GatewayAPIBasePath != "/center-api" || payload.Config.UIBasePath != "/center-ui" ||
 		payload.Config.TLSMode != centerSettingsTLSModeOff || payload.Config.TLSMinVersion != "tls1.2" || payload.RestartRequired {
 		t.Fatalf("listener settings mismatch: restart=%v config=%+v", payload.RestartRequired, payload.Config)
 	}
@@ -590,7 +615,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	update := performRequestWithCookies(
 		engine,
 		http.MethodPut,
-		"/center-api/settings",
+		"/center-manage-api/settings",
 		`{"config":{"enrollment_token_default_max_uses":3,"enrollment_token_default_ttl_seconds":86400,"admin_session_ttl_seconds":7200}}`,
 		map[string]string{
 			"If-Match":               payload.ETag,
@@ -626,7 +651,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	remoteSSHUpdate := performRequestWithCookies(
 		engine,
 		http.MethodPut,
-		"/center-api/settings",
+		"/center-manage-api/settings",
 		`{"config":{"enrollment_token_default_max_uses":3,"enrollment_token_default_ttl_seconds":86400,"admin_session_ttl_seconds":7200,"remote_ssh":{"center":{"enabled":true,"max_ttl_sec":600,"idle_timeout_sec":120,"max_sessions_total":4,"max_sessions_per_device":2}}}}`,
 		map[string]string{
 			"If-Match":               updated.ETag,
@@ -669,7 +694,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	listenerUpdate := performRequestWithCookies(
 		engine,
 		http.MethodPut,
-		"/center-api/settings",
+		"/center-manage-api/settings",
 		`{"config":{"enrollment_token_default_max_uses":3,"enrollment_token_default_ttl_seconds":86400,"admin_session_ttl_seconds":7200,"listen_addr":"127.0.0.1:19192","api_base_path":"/center-manage-api","gateway_api_base_path":"/center-api","ui_base_path":"/center-ui","tls_mode":"off","tls_min_version":"tls1.3","client_allow_cidrs":["198.51.100.0/24"],"manage_api_allow_cidrs":["127.0.0.1"],"center_api_allow_cidrs":["203.0.113.0/24"],"remote_ssh":{"center":{"enabled":true,"max_ttl_sec":600,"idle_timeout_sec":120,"max_sessions_total":4,"max_sessions_per_device":2}}}}`,
 		map[string]string{
 			"If-Match":               remoteSSHUpdated.ETag,
@@ -695,7 +720,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	badTLS := performRequestWithCookies(
 		engine,
 		http.MethodPut,
-		"/center-api/settings",
+		"/center-manage-api/settings",
 		`{"config":{"tls_mode":"manual"}}`,
 		map[string]string{
 			"If-Match":               listenerUpdated.ETag,
@@ -711,7 +736,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	badTLSVersion := performRequestWithCookies(
 		engine,
 		http.MethodPut,
-		"/center-api/settings",
+		"/center-manage-api/settings",
 		`{"config":{"tls_mode":"off","tls_min_version":"ssl3"}}`,
 		map[string]string{
 			"If-Match":               listenerUpdated.ETag,
@@ -727,7 +752,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	badCIDR := performRequestWithCookies(
 		engine,
 		http.MethodPut,
-		"/center-api/settings",
+		"/center-manage-api/settings",
 		`{"config":{"manage_api_allow_cidrs":["not-a-cidr"]}}`,
 		map[string]string{
 			"If-Match":               listenerUpdated.ETag,
@@ -743,7 +768,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	badSessionTTL := performRequestWithCookies(
 		engine,
 		http.MethodPut,
-		"/center-api/settings",
+		"/center-manage-api/settings",
 		`{"config":{"admin_session_ttl_seconds":299}}`,
 		map[string]string{
 			"If-Match":               listenerUpdated.ETag,
@@ -3215,10 +3240,20 @@ VALUES
 
 func loginCenterForTest(t *testing.T, engine http.Handler) ([]*http.Cookie, *http.Cookie) {
 	t.Helper()
-	return loginCenterWithCredentialsForTest(t, engine, "center-admin", "center-admin-password")
+	return loginCenterWithCredentialsAtForTest(t, engine, "/center-api", "center-admin", "center-admin-password")
+}
+
+func loginCenterAtForTest(t *testing.T, engine http.Handler, apiBasePath string) ([]*http.Cookie, *http.Cookie) {
+	t.Helper()
+	return loginCenterWithCredentialsAtForTest(t, engine, apiBasePath, "center-admin", "center-admin-password")
 }
 
 func loginCenterWithCredentialsForTest(t *testing.T, engine http.Handler, identifier string, password string) ([]*http.Cookie, *http.Cookie) {
+	t.Helper()
+	return loginCenterWithCredentialsAtForTest(t, engine, "/center-api", identifier, password)
+}
+
+func loginCenterWithCredentialsAtForTest(t *testing.T, engine http.Handler, apiBasePath string, identifier string, password string) ([]*http.Cookie, *http.Cookie) {
 	t.Helper()
 	loginPayload, err := json.Marshal(map[string]string{
 		"identifier": identifier,
@@ -3227,7 +3262,7 @@ func loginCenterWithCredentialsForTest(t *testing.T, engine http.Handler, identi
 	if err != nil {
 		t.Fatalf("marshal login payload: %v", err)
 	}
-	login := performRequest(engine, http.MethodPost, "/center-api/auth/login", string(loginPayload), map[string]string{
+	login := performRequest(engine, http.MethodPost, strings.TrimRight(apiBasePath, "/")+"/auth/login", string(loginPayload), map[string]string{
 		"Content-Type": "application/json",
 	})
 	if login.Code != http.StatusOK {

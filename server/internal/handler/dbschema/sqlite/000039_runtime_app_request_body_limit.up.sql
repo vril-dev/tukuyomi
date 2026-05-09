@@ -1,0 +1,1 @@
+ALTER TABLE vhosts ADD COLUMN max_request_body_bytes INTEGER NOT NULL DEFAULT 0;

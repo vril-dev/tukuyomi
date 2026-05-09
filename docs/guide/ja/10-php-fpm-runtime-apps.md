@@ -143,6 +143,7 @@ load 時に `/options` から消えます**。
 
 任意項目:
 
+- `max_request_body_bytes`
 - `try_files`
 - rewrite rules
 - access rules
@@ -165,6 +166,18 @@ Runtime App の動作は **nginx と同じく集中設定** です。document ro
 `.htaccess` のような file は、parse / import / watch / request 時再読込の
 対象にしません。古い config に残っている `override_file_name` は移行用と
 して **読み取るだけ** で、validate / apply 時に保存形から消えます。
+
+Runtime Apps は、ウェブサーバーとしての公開境界もここで強制します。
+
+- `.env`、`.git`、`.htaccess` など、ドットで始まる path segment は 404
+  を返す
+- `.well-known` は ACME などの標準公開リソース用に許可する
+- symlink は解決し、document root の外へ出るリクエストは 404 を返す
+- PHP-FPM / PSGI へ渡すリクエストボディは、ランタイムへ届く前に
+  `max_request_body_bytes` で上限をかける。未指定または `0` の場合は
+  64 MiB、設定できる上限は 2 GiB
+- `Proxy` リクエストヘッダーは Runtime App backend へ渡さないため、
+  PHP-FPM の `HTTP_PROXY` にもならない
 
 `.htaccess` 文化に慣れた人ほど最初に戸惑うところですが、tukuyomi の
 Runtime Apps は **同じ vhost 設定を validate / apply / rollback で扱う** と

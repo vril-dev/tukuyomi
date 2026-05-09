@@ -138,6 +138,8 @@ type VhostConfig struct {
 	Hostname     string `json:"hostname,omitempty"`
 	ListenPort   int    `json:"listen_port,omitempty"`
 	DocumentRoot string `json:"document_root,omitempty"`
+	// MaxRequestBodyBytes limits request bodies before PHP-FPM/PSGI receive them.
+	MaxRequestBodyBytes int64 `json:"max_request_body_bytes,omitempty"`
 	// Deprecated: accepted only to migrate old configs; ignored at runtime.
 	OverrideFileName   string             `json:"override_file_name,omitempty"`
 	TryFiles           []string           `json:"try_files,omitempty"`
@@ -180,6 +182,11 @@ type VhostBasicAuthUser struct {
 	Username     string `json:"username,omitempty"`
 	PasswordHash string `json:"password_hash,omitempty"`
 }
+
+const (
+	defaultVhostMaxRequestBodyBytes int64 = 64 * 1024 * 1024
+	maxVhostMaxRequestBodyBytes     int64 = 2 * 1024 * 1024 * 1024
+)
 
 type vhostPreparedConfig struct {
 	cfg       VhostConfigFile
@@ -724,6 +731,9 @@ func normalizeVhostConfigFile(in VhostConfigFile) VhostConfigFile {
 		vhost.Mode = normalizeVhostMode(vhost.Mode)
 		vhost.Hostname = normalizeRuntimeListenHost(vhost.Hostname)
 		vhost.DocumentRoot = strings.TrimSpace(filepath.Clean(strings.TrimSpace(vhost.DocumentRoot)))
+		if vhost.MaxRequestBodyBytes == 0 {
+			vhost.MaxRequestBodyBytes = defaultVhostMaxRequestBodyBytes
+		}
 		vhost.OverrideFileName = ""
 		vhost.TryFiles = normalizeVhostTryFiles(vhost.TryFiles)
 		vhost.RewriteRules = normalizeVhostRewriteRules(vhost.RewriteRules)
@@ -868,6 +878,12 @@ func validateVhostConfigFileWithInventories(cfg VhostConfigFile, phpInventory PH
 		}
 		if err := validateVhostRootPath(vhost.DocumentRoot); err != nil {
 			return fmt.Errorf("%s.document_root: %w", field, err)
+		}
+		if vhost.MaxRequestBodyBytes < 0 {
+			return fmt.Errorf("%s.max_request_body_bytes must not be negative", field)
+		}
+		if vhost.MaxRequestBodyBytes > maxVhostMaxRequestBodyBytes {
+			return fmt.Errorf("%s.max_request_body_bytes must be <= %d", field, maxVhostMaxRequestBodyBytes)
 		}
 		if err := validateVhostTryFiles(vhost.TryFiles, field); err != nil {
 			return err

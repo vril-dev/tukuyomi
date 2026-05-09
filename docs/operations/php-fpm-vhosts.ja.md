@@ -118,6 +118,7 @@ sudo make php-fpm-prune RUNTIME=php83
 - アクセスルール単位の Basic 認証
 - `php_value`
 - `php_admin_value`
+- `max_request_body_bytes`
 
 基本手順:
 
@@ -130,6 +131,18 @@ sudo make php-fpm-prune RUNTIME=php83
 7. 直前の保存状態へ戻す必要がある場合だけ `Rollback` を使う
 
 Runtime App の動作は、nginx と同じく集中管理型の設定で決まります。ドキュメントルート内の `.htaccess` のようなファイルは、解析、取り込み、監視、リクエスト時の再読み込みの対象にしません。古い設定に残っている `override_file_name` は移行用として読み取るだけで、`Validate` / `Apply` 時に保存形式から除去されます。
+
+Runtime App の直接配信では、PHP-FPM / PSGI へリクエストを渡す前に次の
+保護を適用します。
+
+- ドットで始まる path segment は 404 を返します。ただし `.well-known`
+  は許可します
+- symlink を解決し、実体がドキュメントルートの外へ出る場合は 404 を
+  返します
+- リクエストボディは `max_request_body_bytes` で上限をかけます。未指定
+  または `0` の場合は 64 MiB、設定できる上限は 2 GiB です
+- `Proxy` リクエストヘッダーは Runtime App backend へ渡さないため、
+  PHP-FPM の `HTTP_PROXY` にもなりません
 
 ## Upstreams と Runtime Apps の境界
 

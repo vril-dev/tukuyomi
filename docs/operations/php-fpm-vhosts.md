@@ -118,6 +118,7 @@ Optional controls:
 - access-rule-level basic auth
 - `php_value`
 - `php_admin_value`
+- `max_request_body_bytes`
 
 Typical flow:
 
@@ -133,6 +134,16 @@ Runtime App behavior is centralized and nginx-style. Files in the document root 
 as `.htaccess` are not parsed, imported, watched, or re-read at request time.
 Legacy `override_file_name` fields in old config files are accepted only for
 migration and are normalized away on validate/apply.
+
+Runtime App direct serving also applies the following hardening before PHP-FPM
+or PSGI receives a request:
+
+- dot-prefixed path segments are returned as 404, except `.well-known`
+- symlink escape outside the resolved document root is returned as 404
+- request bodies are capped by `max_request_body_bytes`; omitted or `0`
+  uses the 64 MiB default, and the configured upper bound is 2 GiB
+- the request header `Proxy` is stripped before Runtime App backend
+  delivery, so PHP-FPM never receives it as `HTTP_PROXY`
 
 ## Upstreams to Runtime Apps Boundary
 

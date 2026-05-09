@@ -150,6 +150,7 @@ Required:
 
 Optional:
 
+- `max_request_body_bytes`
 - `try_files`
 - Rewrite rules
 - Access rules
@@ -174,6 +175,19 @@ Files like `.htaccess` inside the document root are **not parsed,
 imported, watched, or reloaded on request**. The legacy
 `override_file_name` field is read only for migration purposes and
 disappears from the saved form on validate / apply.
+
+Runtime Apps also enforce a web-server style public-file boundary:
+
+- dot-prefixed path segments such as `.env`, `.git`, and `.htaccess`
+  return 404
+- `.well-known` remains public for ACME and other standard public
+  resources
+- symlinks are resolved and requests escaping the document root return 404
+- PHP-FPM and PSGI request bodies are capped by
+  `max_request_body_bytes` before the runtime receives them. Omitted or
+  `0` uses the 64 MiB default; the configured upper bound is 2 GiB
+- the request header `Proxy` is stripped before Runtime App backend
+  delivery, so PHP-FPM never receives it as `HTTP_PROXY`
 
 The split takes a moment to get used to if you are coming from
 `.htaccess` culture, but tukuyomi's Runtime Apps is built on the

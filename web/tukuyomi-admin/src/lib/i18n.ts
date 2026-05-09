@@ -991,6 +991,9 @@ const JA_STRINGS: Record<string, string> = {
     "Static mode はこの画面ではサポートしていません。この entry を削除するか、明示的な runtime binding を持つ PHP-FPM runtime app に置き換えてください。",
   "Listen Host": "待ち受け Host",
   "Listen Port": "待ち受け Port",
+  "Max request body bytes": "最大リクエストボディサイズ (bytes)",
+  "0 uses the 64 MiB default. Maximum: 2 GiB.":
+    "0 の場合はデフォルトの 64 MiB を使います。最大: 2 GiB。",
   "Runtime App Basic Auth Realm": "Runtime App Basic Auth Realm",
   "Server-side Runtime Apps revision was refreshed; the editor values were kept. Review the error and apply again.":
     "サーバ側の Runtime Apps revision を更新しました。編集中の値は保持しています。エラー内容を確認してから再度適用してください。",

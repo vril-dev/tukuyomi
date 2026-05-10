@@ -300,6 +300,63 @@ func TestPostEdgeDeviceEnrollmentCreatesIdentityAndSendsSignedRequest(t *testing
 	}
 }
 
+func TestPostEdgeDeviceEnrollmentFallsBackWhenRootReturnsNonCenter200(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)
+	defer restoreEdgeRuntime()
+
+	dbPath := filepath.Join(t.TempDir(), "edge-device-protected-fallback.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer InitLogsStatsStore(false, "", 0)
+
+	rootCalls := 0
+	protectedCalls := 0
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/enroll":
+			rootCalls++
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("<!doctype html><title>default app</title>"))
+		case "/center-api/v1/enroll":
+			protectedCalls++
+			if got := r.Header.Get("X-Enrollment-Token"); got != "tky_enroll_test" {
+				t.Fatalf("token=%q want tky_enroll_test", got)
+			}
+			var req edgeDeviceEnrollmentWireRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode enrollment: %v", err)
+			}
+			if req.DeviceID != "edge-device-1" || req.KeyID != "default" {
+				t.Fatalf("unexpected identity in enrollment: %+v", req)
+			}
+			verifySignedEdgeEnrollmentForTest(t, req)
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"status":"pending","device_id":"edge-device-1","key_id":"default"}`))
+		default:
+			t.Fatalf("path=%q", r.URL.Path)
+		}
+	}))
+	defer center.Close()
+
+	router := gin.New()
+	router.POST("/edge/device-auth/enroll", PostEdgeDeviceEnrollment)
+
+	body := `{"center_url":` + quoteJSON(center.URL) + `,"enrollment_token":"tky_enroll_test","device_id":"edge-device-1","key_id":"default"}`
+	rec := performEdgeDeviceRequest(router, http.MethodPost, "/edge/device-auth/enroll", body)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("enroll code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rootCalls != 1 || protectedCalls != 1 {
+		t.Fatalf("rootCalls=%d protectedCalls=%d want 1 each", rootCalls, protectedCalls)
+	}
+	if !strings.Contains(rec.Body.String(), `"enrollment_status":"pending"`) ||
+		!strings.Contains(rec.Body.String(), `"center_url":`+quoteJSON(center.URL+"/center-api")) {
+		t.Fatalf("unexpected enrollment response: %s", rec.Body.String())
+	}
+}
+
 func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "gateway.db")

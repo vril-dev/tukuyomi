@@ -733,11 +733,16 @@ func enrollEdgeDevice(ctx context.Context, req edgeDeviceEnrollmentRequest) (edg
 	var centerBaseURL string
 	var centerStatus int
 	var centerBody []byte
+	centerEnrollmentAccepted := false
 	for i, candidate := range enrollCandidates {
 		centerStatus, centerBody, err = sendEdgeDeviceEnrollment(ctx, candidate.EndpointURL, token, wireReq)
 		centerBaseURL = candidate.BaseURL
 		if err == nil && centerStatus >= 200 && centerStatus < 300 {
-			break
+			centerEnrollmentAccepted = validCenterEnrollmentResponse(centerBody)
+			if centerEnrollmentAccepted || i == len(enrollCandidates)-1 {
+				break
+			}
+			continue
 		}
 		if i == len(enrollCandidates)-1 || !shouldTryCenterDeviceAPIBaseFallback(centerStatus, centerBody, err) {
 			break
@@ -759,6 +764,15 @@ func enrollEdgeDevice(ctx context.Context, req edgeDeviceEnrollmentRequest) (edg
 		message := centerEnrollmentErrorMessage(centerStatus, centerBody)
 		identity.EnrollmentStatus = edgeEnrollmentStatusFailed
 		identity.LastEnrollmentError = clampEdgeText(message, 4096)
+		if updateErr := upsertEdgeDeviceIdentity(store, identity); updateErr != nil {
+			return edgeDeviceAuthStatusResponse{}, updateErr
+		}
+		return edgeDeviceAuthStatusResponse{}, edgeEnrollmentError{status: http.StatusBadGateway, message: message}
+	}
+	if !centerEnrollmentAccepted {
+		message := "center enrollment response is invalid JSON"
+		identity.EnrollmentStatus = edgeEnrollmentStatusFailed
+		identity.LastEnrollmentError = message
 		if updateErr := upsertEdgeDeviceIdentity(store, identity); updateErr != nil {
 			return edgeDeviceAuthStatusResponse{}, updateErr
 		}
@@ -5788,6 +5802,16 @@ func pushEdgeConfigSnapshot(ctx context.Context, identity *edgeDeviceIdentityRec
 
 func centerEnrollmentErrorMessage(status int, body []byte) string {
 	return centerHTTPErrorMessage("center enrollment failed", status, body)
+}
+
+func validCenterEnrollmentResponse(body []byte) bool {
+	var payload struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+	return strings.TrimSpace(payload.Status) != ""
 }
 
 func shouldTryCenterDeviceAPIBaseFallback(status int, body []byte, err error) bool {

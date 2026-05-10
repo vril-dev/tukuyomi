@@ -161,6 +161,9 @@ make fleet-preview-up
 Then open Center through Gateway at `http://localhost:9090/center-ui`.
 If a persistent Gateway preview DB already exists, protected routes are not
 reseeded; reset the Gateway preview DB or add the routes from `Proxy Rules`.
+Protected routing separates operator traffic from device traffic: `/center-ui`
+and `/center-manage-api` are operator-facing, while remote Gateways poll
+through `/center-api/v1`.
 Protected preview also bootstraps Gateway IoT / Edge mode and Center approval
 against the preview Center DB.
 

@@ -90,10 +90,10 @@ func TestServeProxyIgnoresHtaccessLikeNginx(t *testing.T) {
 	}
 	proxyRaw := mustJSON(normalizeProxyRulesConfig(ProxyRulesConfig{
 		Upstreams: []ProxyUpstream{
-			{Name: "docs", URL: "http://127.0.0.1:8080", Weight: 1, Enabled: true},
+			{Name: "docs", URL: "static://docs-static", Weight: 1, Enabled: true},
 		},
 		DefaultRoute: &ProxyDefaultRoute{
-			Action: ProxyRouteAction{Upstream: "docs-static"},
+			Action: ProxyRouteAction{Upstream: "docs"},
 		},
 	}))
 	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o600); err != nil {

@@ -86,7 +86,7 @@ trust settings into the Gateway config. For manual deployments, fetch the
 Center signing public key from:
 
 ```text
-/center-api/remote-ssh/signing-key
+/center-manage-api/remote-ssh/signing-key
 ```
 
 When the Center and Gateway run on the same host through

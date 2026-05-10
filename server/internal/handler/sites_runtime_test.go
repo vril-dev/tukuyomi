@@ -116,6 +116,41 @@ func TestPrepareProxyRulesRawWithSitesRespectsRoutePrecedence(t *testing.T) {
 	}
 }
 
+func TestPrepareProxyRulesRawRejectsExplicitRouteToSiteGeneratedTarget(t *testing.T) {
+	raw := `{
+  "routes": [
+    {
+      "name": "explicit-site-target",
+      "priority": 10,
+      "match": {
+        "hosts": ["blog.example.com"]
+      },
+      "action": {
+        "upstream": "site:blog"
+      }
+    }
+  ]
+}`
+	sites := SiteConfigFile{
+		Sites: []SiteConfig{
+			{
+				Name:            "blog",
+				Hosts:           []string{"blog.example.com"},
+				DefaultUpstream: "http://site.internal:8080",
+				TLS:             SiteTLSConfig{Mode: "legacy"},
+			},
+		},
+	}
+
+	_, err := prepareProxyRulesRawWithSites(raw, sites)
+	if err == nil {
+		t.Fatal("expected explicit route to generated Site target to be rejected")
+	}
+	if !strings.Contains(err.Error(), "routes[0].action.upstream must reference a configured direct upstream name") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateTLSBindingConfigRawAcceptsManualWildcardCertificate(t *testing.T) {
 	restore := setSiteTLSGlobalsForTest(t)
 	defer restore()

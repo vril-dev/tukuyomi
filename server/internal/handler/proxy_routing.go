@@ -132,9 +132,8 @@ type ProxyDefaultRoute struct {
 type proxyRouteResolutionSource string
 
 const (
-	proxyRouteResolutionUpstream proxyRouteResolutionSource = "upstream"
-	proxyRouteResolutionRoute    proxyRouteResolutionSource = "route"
-	proxyRouteResolutionDefault  proxyRouteResolutionSource = "default_route"
+	proxyRouteResolutionRoute   proxyRouteResolutionSource = "route"
+	proxyRouteResolutionDefault proxyRouteResolutionSource = "default_route"
 )
 
 type proxyRouteDecision struct {
@@ -560,7 +559,7 @@ func validateProxyRoutes(cfg ProxyRulesConfig) error {
 		if err := validateProxyRouteAccess(route.Access, fmt.Sprintf("routes[%d].access", i)); err != nil {
 			return err
 		}
-		if err := validateProxyRouteAction(route.Action, cfg, namedUpstreams, nameCounts, backendPools, backendPoolCounts, fmt.Sprintf("routes[%d].action", i)); err != nil {
+		if err := validateProxyRouteAction(route.Action, cfg, namedUpstreams, nameCounts, backendPools, backendPoolCounts, route.Generated, fmt.Sprintf("routes[%d].action", i)); err != nil {
 			return err
 		}
 		if route.Action.PathRewrite != nil && route.Match.Path == nil {
@@ -574,7 +573,7 @@ func validateProxyRoutes(cfg ProxyRulesConfig) error {
 		if err := validateProxyRouteAccess(cfg.DefaultRoute.Access, "default_route.access"); err != nil {
 			return err
 		}
-		if err := validateProxyRouteAction(cfg.DefaultRoute.Action, cfg, namedUpstreams, nameCounts, backendPools, backendPoolCounts, "default_route.action"); err != nil {
+		if err := validateProxyRouteAction(cfg.DefaultRoute.Action, cfg, namedUpstreams, nameCounts, backendPools, backendPoolCounts, false, "default_route.action"); err != nil {
 			return err
 		}
 	}
@@ -684,10 +683,10 @@ func validateProxyBackendPool(pool ProxyBackendPool, namedUpstreams map[string]P
 	for i, member := range pool.Members {
 		upstream, ok := namedUpstreams[member]
 		if !ok {
-			return fmt.Errorf("%s.members[%d] must reference a direct or generated Runtime App upstream name", field, i)
+			return fmt.Errorf("%s.members[%d] must reference a configured direct upstream name", field, i)
 		}
 		if !proxyUpstreamAllowedInBackendPool(upstream) {
-			return fmt.Errorf("%s.members[%d] must reference a direct or generated Runtime App upstream name", field, i)
+			return fmt.Errorf("%s.members[%d] must reference a configured direct upstream name", field, i)
 		}
 		if upstreamNameCounts[member] > 1 {
 			return fmt.Errorf("%s.members[%d] references duplicated upstream name %q", field, i, member)
@@ -700,14 +699,25 @@ func validateProxyBackendPool(pool ProxyBackendPool, namedUpstreams map[string]P
 }
 
 func proxyUpstreamAllowedInBackendPool(upstream ProxyUpstream) bool {
-	if proxyUpstreamIsDirect(upstream) {
-		return true
+	return proxyUpstreamIsConfiguredDirect(upstream)
+}
+
+func proxyUpstreamIsConfiguredDirect(upstream ProxyUpstream) bool {
+	return proxyUpstreamIsDirect(upstream) &&
+		!upstream.Generated &&
+		strings.TrimSpace(upstream.GeneratedKind) == "" &&
+		strings.TrimSpace(upstream.ManagedByVhost) == ""
+}
+
+func proxyUpstreamAllowedAsConfiguredRouteTarget(upstream ProxyUpstream, generatedRoute bool) bool {
+	if generatedRoute {
+		return proxyUpstreamIsDirect(upstream) || proxyUpstreamIsVhostManaged(upstream)
 	}
-	return proxyUpstreamIsVhostManaged(upstream) && upstream.GeneratedKind == proxyUpstreamGeneratedKindVhostTarget
+	return proxyUpstreamIsConfiguredDirect(upstream)
 }
 
 func proxyUpstreamAllowedAsRouteTarget(upstream ProxyUpstream) bool {
-	return proxyUpstreamAllowedInBackendPool(upstream)
+	return proxyUpstreamIsDirect(upstream)
 }
 
 func validateProxyBackendPoolStrategy(strategy string, field string) error {
@@ -833,11 +843,11 @@ func validateProxyRouteMatch(match ProxyRouteMatch, field string) error {
 	return nil
 }
 
-func validateProxyRouteAction(action ProxyRouteAction, cfg ProxyRulesConfig, namedUpstreams map[string]ProxyUpstream, nameCounts map[string]int, backendPools map[string]ProxyBackendPool, backendPoolCounts map[string]int, field string) error {
+func validateProxyRouteAction(action ProxyRouteAction, cfg ProxyRulesConfig, namedUpstreams map[string]ProxyUpstream, nameCounts map[string]int, backendPools map[string]ProxyBackendPool, backendPoolCounts map[string]int, generatedRoute bool, field string) error {
 	upstream := strings.TrimSpace(action.Upstream)
 	backendPool := strings.TrimSpace(action.BackendPool)
-	if backendPool == "" && upstream == "" && len(cfg.Upstreams) == 0 {
-		return fmt.Errorf("%s.upstream is required when no upstreams are configured", field)
+	if backendPool == "" && upstream == "" {
+		return fmt.Errorf("%s.upstream or %s.backend_pool is required", field, field)
 	}
 	if backendPool != "" {
 		if _, ok := backendPools[backendPool]; !ok {
@@ -868,10 +878,10 @@ func validateProxyRouteAction(action ProxyRouteAction, cfg ProxyRulesConfig, nam
 	if upstream != "" {
 		up, ok := namedUpstreams[upstream]
 		if !ok {
-			return fmt.Errorf("%s.upstream must reference a direct or generated Runtime App upstream name", field)
+			return fmt.Errorf("%s.upstream must reference a configured direct upstream name", field)
 		}
-		if !proxyUpstreamAllowedAsRouteTarget(up) {
-			return fmt.Errorf("%s.upstream must reference a direct or generated Runtime App upstream name", field)
+		if !proxyUpstreamAllowedAsConfiguredRouteTarget(up, generatedRoute) {
+			return fmt.Errorf("%s.upstream must reference a configured direct upstream name", field)
 		}
 		if nameCounts[upstream] > 1 {
 			return fmt.Errorf("%s.upstream references duplicated upstream name %q", field, upstream)
@@ -892,10 +902,10 @@ func validateProxyRouteAction(action ProxyRouteAction, cfg ProxyRulesConfig, nam
 		}
 		up, ok := namedUpstreams[canaryUpstream]
 		if !ok {
-			return fmt.Errorf("%s.canary_upstream must reference a direct or generated Runtime App upstream name", field)
+			return fmt.Errorf("%s.canary_upstream must reference a configured direct upstream name", field)
 		}
-		if !proxyUpstreamAllowedAsRouteTarget(up) {
-			return fmt.Errorf("%s.canary_upstream must reference a direct or generated Runtime App upstream name", field)
+		if !proxyUpstreamAllowedAsConfiguredRouteTarget(up, generatedRoute) {
+			return fmt.Errorf("%s.canary_upstream must reference a configured direct upstream name", field)
 		}
 		if nameCounts[canaryUpstream] > 1 {
 			return fmt.Errorf("%s.canary_upstream references duplicated upstream name %q", field, canaryUpstream)
@@ -1444,12 +1454,7 @@ func resolveProxyRouteClassificationWithHealth(req *http.Request, cfg ProxyRules
 		return classification, nil
 	}
 
-	classification, err := buildProxyRouteClassification(req, originalHost, originalPath, originalRawPath, "upstream", proxyRouteResolutionUpstream, nil, nil, ProxyRouteAction{}, cfg, health)
-	if err != nil {
-		return proxyRouteClassification{}, err
-	}
-	classification.LogSelection = len(cfg.Routes) > 0 || cfg.DefaultRoute != nil
-	return classification, nil
+	return proxyRouteClassification{}, fmt.Errorf("no proxy route matched; configure routes or default_route")
 }
 
 func buildProxyRouteClassification(req *http.Request, originalHost string, originalPath string, originalRawPath string, routeName string, source proxyRouteResolutionSource, match *ProxyRoutePathMatch, access *ProxyRouteAccess, action ProxyRouteAction, cfg ProxyRulesConfig, health *upstreamHealthMonitor) (proxyRouteClassification, error) {
@@ -1498,7 +1503,7 @@ func buildProxyRouteClassification(req *http.Request, originalHost string, origi
 		StickySession:     targetSelection.StickySession,
 		RequestHeaderOps:  valueOrZero(action.RequestHeaders),
 		ResponseHeaderOps: valueOrZero(action.ResponseHeaders),
-		LogSelection:      source != proxyRouteResolutionUpstream,
+		LogSelection:      true,
 	}, nil
 }
 
@@ -1539,20 +1544,12 @@ func plannedProxyRouteForwardedHost(originalHost string, hostRewrite string, sou
 	if next := strings.TrimSpace(hostRewrite); next != "" {
 		return next
 	}
-	if source == proxyRouteResolutionUpstream {
-		return ""
-	}
 	return strings.TrimSpace(originalHost)
 }
 
 func resolveProxyRouteForwardedHost(originalHost string, targetHost string, hostRewrite string, source proxyRouteResolutionSource) string {
 	if next := strings.TrimSpace(hostRewrite); next != "" {
 		return next
-	}
-	if source == proxyRouteResolutionUpstream {
-		if next := strings.TrimSpace(targetHost); next != "" {
-			return next
-		}
 	}
 	if next := strings.TrimSpace(originalHost); next != "" {
 		return next
@@ -1568,7 +1565,7 @@ func resolveProxyRouteTarget(cfg ProxyRulesConfig, ref string, health *upstreamH
 				continue
 			}
 			if !proxyUpstreamAllowedAsRouteTarget(upstream) {
-				return nil, "", "", "", fmt.Errorf("route target %q must reference a direct or generated Runtime App upstream name", ref)
+				return nil, "", "", "", fmt.Errorf("route target %q must reference a configured direct upstream name", ref)
 			}
 			if proxyUpstreamDiscoveryEnabled(upstream) {
 				if health == nil {
@@ -1588,32 +1585,10 @@ func resolveProxyRouteTarget(cfg ProxyRulesConfig, ref string, health *upstreamH
 			}
 			return target, upstream.Name, target.String(), "", nil
 		}
-		return nil, "", "", "", fmt.Errorf("route target %q must reference a direct or generated Runtime App upstream name", ref)
+		return nil, "", "", "", fmt.Errorf("route target %q must reference a configured direct upstream name", ref)
 	}
 
-	if health != nil {
-		if selection, ok := health.SelectTarget(); ok && selection.Target != nil {
-			name := strings.TrimSpace(selection.Name)
-			if name == "" {
-				name = strings.TrimSpace(selection.Key)
-			}
-			return selection.Target, name, selection.Target.String(), selection.Key, nil
-		}
-	}
-	target, err := proxyPrimaryTarget(cfg)
-	if err != nil {
-		return nil, "", "", "", err
-	}
-	return target, proxyDefaultUpstreamName(cfg), target.String(), "", nil
-}
-
-func proxyDefaultUpstreamName(cfg ProxyRulesConfig) string {
-	for _, upstream := range proxyConfiguredUpstreams(cfg) {
-		if upstream.Enabled {
-			return upstream.Name
-		}
-	}
-	return ""
+	return nil, "", "", "", fmt.Errorf("route target reference is required")
 }
 
 func sortedProxyRouteIndexes(routes []ProxyRoute) []int {

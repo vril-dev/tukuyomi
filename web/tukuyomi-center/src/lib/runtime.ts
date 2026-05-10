@@ -5,7 +5,7 @@ export type CenterSettings = {
 };
 
 const DEFAULT_SETTINGS: CenterSettings = {
-  apiBasePath: "/center-api",
+  apiBasePath: "/center-manage-api",
   uiBasePath: "/center-ui",
   experimentalAppDeployEnabled: true,
 };

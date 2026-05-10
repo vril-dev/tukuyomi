@@ -118,6 +118,7 @@ Optional controls:
 - access-rule-level basic auth
 - `php_value`
 - `php_admin_value`
+- `max_request_body_bytes`
 
 Typical flow:
 
@@ -133,6 +134,16 @@ Runtime App behavior is centralized and nginx-style. Files in the document root 
 as `.htaccess` are not parsed, imported, watched, or re-read at request time.
 Legacy `override_file_name` fields in old config files are accepted only for
 migration and are normalized away on validate/apply.
+
+Runtime App direct serving also applies the following hardening before PHP-FPM
+or PSGI receives a request:
+
+- dot-prefixed path segments are returned as 404, except `.well-known`
+- symlink escape outside the resolved document root is returned as 404
+- request bodies are capped by `max_request_body_bytes`; omitted or `0`
+  uses the 64 MiB default, and the configured upper bound is 2 GiB
+- the request header `Proxy` is stripped before Runtime App backend
+  delivery, so PHP-FPM never receives it as `HTTP_PROXY`
 
 ## Upstreams to Runtime Apps Boundary
 
@@ -155,27 +166,29 @@ After a runtime app is saved:
 
 - `/runtime-apps` persists the definition into `data/php-fpm/vhosts.json`
 - the runtime layer materializes pool/config data under `data/php-fpm/runtime/<runtime_id>/`
-- the effective proxy runtime gets a generated upstream named by `generated_target`
+- the effective proxy runtime gets an internal generated target named by `generated_target`
 - configured upstream URLs in `Proxy Rules > Upstreams` are left unchanged
-- operator routes or the default route in `Proxy Rules` select the generated upstream when traffic should reach the Runtime App-backed app
+- operator routes or the default route in `Proxy Rules` select an explicitly configured direct upstream when traffic should reach the Runtime App-backed app
 
 Route order is controlled by `Proxy Rules`:
 
 - explicit `routes[]`
 - generated site host fallback routes
 - `default_route`
-- `upstreams[]`
+
+`upstreams[]` entries are target definitions only; they do not expose traffic
+without a route/default route selecting them.
 
 Notes:
 
 - `hostname` plus `listen_port` is the PHP-FPM FastCGI listen target
 - do not treat `http://<hostname>:<listen_port>` as an HTTP upstream
 - the server owns `generated_target` as the generated backend alias and pool name; the admin UI does not expose it as operator input
-- normal operation routes to the generated upstream target from `Proxy Rules`
+- normal operation routes to a direct upstream that the operator defined explicitly
 
 Keep PHP runtime details in `/runtime-apps`. Keep public traffic selection in
-`Proxy Rules`; do not hand-write raw `fcgi://` URLs when the generated upstream
-target already represents the listener.
+`Proxy Rules`; generated Runtime App targets are not selected directly from
+routes.
 
 ## Process Lifecycle
 

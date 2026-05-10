@@ -194,7 +194,7 @@ func (s *wafEventStore) insertVhostConfigRowsTx(tx *sql.Tx, versionID int64, cfg
 		}
 		if _, err := s.txExec(
 			tx,
-			`INSERT INTO vhosts (version_id, position, name, mode, hostname, listen_port, document_root, runtime_id, generated_target, linked_upstream_name, app_root, psgi_file, workers, max_requests, include_extlib) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO vhosts (version_id, position, name, mode, hostname, listen_port, document_root, max_request_body_bytes, runtime_id, generated_target, linked_upstream_name, app_root, psgi_file, workers, max_requests, include_extlib) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			versionID,
 			i,
 			vhost.Name,
@@ -202,6 +202,7 @@ func (s *wafEventStore) insertVhostConfigRowsTx(tx *sql.Tx, versionID int64, cfg
 			vhost.Hostname,
 			vhost.ListenPort,
 			vhost.DocumentRoot,
+			vhost.MaxRequestBodyBytes,
 			vhost.RuntimeID,
 			vhost.GeneratedTarget,
 			vhost.LinkedUpstreamName,
@@ -283,7 +284,7 @@ func (s *wafEventStore) insertVhostStringMapTx(tx *sql.Tx, table string, version
 
 func (s *wafEventStore) loadVhostConfigVersion(versionID int64) (VhostConfigFile, error) {
 	rows, err := s.query(
-		`SELECT position, name, mode, hostname, listen_port, document_root, runtime_id, generated_target, linked_upstream_name, app_root, psgi_file, workers, max_requests, include_extlib
+		`SELECT position, name, mode, hostname, listen_port, document_root, max_request_body_bytes, runtime_id, generated_target, linked_upstream_name, app_root, psgi_file, workers, max_requests, include_extlib
 		   FROM vhosts
 		  WHERE version_id = ?
 		  ORDER BY position`,
@@ -301,7 +302,7 @@ func (s *wafEventStore) loadVhostConfigVersion(versionID int64) (VhostConfigFile
 		var position int
 		var vhost VhostConfig
 		var includeExtlib int
-		if err := rows.Scan(&position, &vhost.Name, &vhost.Mode, &vhost.Hostname, &vhost.ListenPort, &vhost.DocumentRoot, &vhost.RuntimeID, &vhost.GeneratedTarget, &vhost.LinkedUpstreamName, &vhost.AppRoot, &vhost.PSGIFile, &vhost.Workers, &vhost.MaxRequests, &includeExtlib); err != nil {
+		if err := rows.Scan(&position, &vhost.Name, &vhost.Mode, &vhost.Hostname, &vhost.ListenPort, &vhost.DocumentRoot, &vhost.MaxRequestBodyBytes, &vhost.RuntimeID, &vhost.GeneratedTarget, &vhost.LinkedUpstreamName, &vhost.AppRoot, &vhost.PSGIFile, &vhost.Workers, &vhost.MaxRequests, &includeExtlib); err != nil {
 			_ = rows.Close()
 			return VhostConfigFile{}, err
 		}

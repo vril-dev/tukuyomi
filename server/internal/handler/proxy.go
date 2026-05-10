@@ -8,6 +8,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -448,6 +450,10 @@ func maybeCompressProxyResponse(res *http.Response) error {
 	if isDirectStaticResponse(res) {
 		return nil
 	}
+	if shouldStreamProxyResponseBody(res.Request) {
+		proxyResponseCompressionRuntimeMetrics.RecordSkipped(proxycompression.SkipTransform)
+		return nil
+	}
 	proxycompression.AppendVaryHeader(res.Header, "Accept-Encoding")
 	if !proxycompression.HasEntityBody(res.Request.Method, res.StatusCode) {
 		proxyResponseCompressionRuntimeMetrics.RecordSkipped(proxycompression.SkipBodyless)
@@ -614,14 +620,6 @@ func serveProxyRequest(c *proxyServeContext) {
 	if c == nil || c.Writer == nil || c.Request == nil {
 		return
 	}
-	if gate := currentEdgeProxyGateState(); gate.Locked {
-		c.JSON(http.StatusServiceUnavailable, map[string]any{
-			"error":  "edge device is not approved by Center",
-			"reason": gate.Reason,
-		})
-		c.Abort()
-		return
-	}
 	reqID := ensureProxyRequestID(c)
 	clientIP := requestmeta.ClientIPFromHTTP(c.Request)
 	requestMetadataCtx := requestmeta.NewResolverContext(clientIP)
@@ -719,6 +717,28 @@ func serveProxyRequest(c *proxyServeContext) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "route source forbidden"})
 		c.Abort()
 		return
+	}
+	if gate := currentEdgeProxyGateState(); gate.Locked {
+		if !proxyRouteMayBypassEdgeDeviceApprovalGate(routeClassification) {
+			c.JSON(http.StatusServiceUnavailable, map[string]any{
+				"error":  "edge device is not approved by Center",
+				"reason": gate.Reason,
+			})
+			c.Abort()
+			return
+		}
+		if !ensureProxyRouteTransportSelection(c, routeClassification, reqID, clientIP, country) {
+			return
+		}
+		routeSelection, _ := proxyRouteTransportSelectionFromContext(c.Request.Context())
+		if !proxyRouteBypassesEdgeDeviceApprovalGate(routeClassification, routeSelection) {
+			c.JSON(http.StatusServiceUnavailable, map[string]any{
+				"error":  "edge device is not approved by Center",
+				"reason": gate.Reason,
+			})
+			c.Abort()
+			return
+		}
 	}
 
 	if IsCountryBlocked(c.Request.Host, c.Request.TLS != nil, country) {
@@ -846,7 +866,7 @@ func serveProxyRequest(c *proxyServeContext) {
 			c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
-		if !attachProxyRouteTransportSelection(c, routeClassification, reqID, clientIP, country) {
+		if !ensureProxyRouteTransportSelection(c, routeClassification, reqID, clientIP, country) {
 			return
 		}
 		proxyServed = true
@@ -917,11 +937,59 @@ func serveProxyRequest(c *proxyServeContext) {
 		c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	if !attachProxyRouteTransportSelection(c, routeClassification, reqID, clientIP, country) {
+	if !ensureProxyRouteTransportSelection(c, routeClassification, reqID, clientIP, country) {
 		return
 	}
 	proxyServed = true
 	ServeProxyWithCacheHTTP(c.Writer, c.Request)
+}
+
+func ensureProxyRouteTransportSelection(c *proxyServeContext, classification proxyRouteClassification, reqID, clientIP, country string) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	if _, ok := proxyRouteTransportSelectionFromContext(c.Request.Context()); ok {
+		return true
+	}
+	return attachProxyRouteTransportSelection(c, classification, reqID, clientIP, country)
+}
+
+func proxyRouteMayBypassEdgeDeviceApprovalGate(classification proxyRouteClassification) bool {
+	if classification.Source != proxyRouteResolutionRoute {
+		return false
+	}
+	switch strings.TrimSpace(classification.RouteName) {
+	case "center-api", "center-manage-api", "center-ui":
+		return true
+	default:
+		return false
+	}
+}
+
+func proxyRouteBypassesEdgeDeviceApprovalGate(classification proxyRouteClassification, selection proxyRouteTransportSelection) bool {
+	if !proxyRouteMayBypassEdgeDeviceApprovalGate(classification) {
+		return false
+	}
+	if strings.TrimSpace(selection.SelectedUpstream) != centerProtectedUpstreamName {
+		return false
+	}
+	return proxyRouteTargetIsLocalLoopback(selection.Target)
+}
+
+func proxyRouteTargetIsLocalLoopback(target *url.URL) bool {
+	if target == nil {
+		return false
+	}
+	scheme := strings.ToLower(strings.TrimSpace(target.Scheme))
+	if scheme != "http" && scheme != "https" {
+		return false
+	}
+	host := strings.TrimSpace(target.Hostname())
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	addr, err := netip.ParseAddr(host)
+	return err == nil && addr.IsLoopback()
 }
 
 func genReqID() string {

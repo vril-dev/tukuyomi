@@ -650,6 +650,8 @@ func siteGeneratedUpstreams(cfg SiteConfigFile) []ProxyUpstream {
 			URL:           site.DefaultUpstream,
 			Weight:        1,
 			Enabled:       true,
+			Generated:     true,
+			GeneratedKind: proxyUpstreamGeneratedKindSiteTarget,
 			ProviderClass: proxyUpstreamProviderClassDirect,
 		})
 	}

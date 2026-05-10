@@ -9,7 +9,6 @@ import (
 	"mime"
 	"net/http"
 	"path"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -20,7 +19,7 @@ import (
 //go:embed center_ui_dist
 var centerUIEmbedFS embed.FS
 
-func registerCenterUI(r *gin.Engine, apiBase, gatewayAPIBase, uiBase string, experimentalAppDeployEnabled bool) {
+func registerCenterUI(r *gin.Engine, apiBase, uiBase string, experimentalAppDeployEnabled bool) {
 	uiFS, err := fs.Sub(centerUIEmbedFS, "center_ui_dist")
 	if err != nil {
 		return
@@ -39,8 +38,8 @@ func registerCenterUI(r *gin.Engine, apiBase, gatewayAPIBase, uiBase string, exp
 			c.Status(http.StatusNotFound)
 			return
 		}
-		if resolvedPath == "index.html" {
-			raw = centerHTML(raw, centerHTMLAPIBase(c.Request, apiBase, gatewayAPIBase), uiBase, experimentalAppDeployEnabled)
+		if resolvedPath == "index.html" || placeholder {
+			raw = centerHTML(raw, apiBase, uiBase, experimentalAppDeployEnabled)
 		}
 		if adminui.IsHTMLFallbackAsset(resolvedPath, placeholder) {
 			adminui.SetNoStoreHeaders(c)
@@ -69,15 +68,6 @@ func centerHTML(raw []byte, apiBase, uiBase string, experimentalAppDeployEnabled
 	})
 	raw = bytes.Replace(raw, []byte("__CENTER_SETTINGS__"), settings, 1)
 	return bytes.Replace(raw, []byte("__CENTER_UI_BASE_HREF__"), []byte(uiBase+"/"), 1)
-}
-
-func centerHTMLAPIBase(r *http.Request, apiBase, gatewayAPIBase string) string {
-	if r != nil && strings.TrimSpace(r.Header.Get("X-Forwarded-Host")) != "" {
-		if gatewayAPIBase = strings.TrimSpace(gatewayAPIBase); gatewayAPIBase != "" {
-			return gatewayAPIBase
-		}
-	}
-	return apiBase
 }
 
 func centerContentType(raw []byte, resolvedPath string, placeholder bool) string {

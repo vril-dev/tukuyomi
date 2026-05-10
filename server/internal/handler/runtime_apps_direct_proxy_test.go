@@ -9,11 +9,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -58,6 +60,10 @@ func TestBuildDirectVhostResponseProxiesPSGI(t *testing.T) {
 			http.Error(w, fmt.Sprintf("path=%q query=%q", r.URL.Path, r.URL.RawQuery), http.StatusBadGateway)
 			return
 		}
+		if got := r.Header.Get("Proxy"); got != "" {
+			http.Error(w, fmt.Sprintf("Proxy header forwarded: %q", got), http.StatusBadGateway)
+			return
+		}
 		w.Header().Set("X-Upstream-Host", r.Host)
 		_, _ = w.Write([]byte("psgi ok"))
 	}))
@@ -83,6 +89,7 @@ func TestBuildDirectVhostResponseProxiesPSGI(t *testing.T) {
 		TryFiles:     []string{"$uri", "$uri/", "@psgi"},
 	}}}).Vhosts[0]
 	req := httptest.NewRequest(http.MethodGet, "http://mt.example.test/mt.cgi?q=1", nil)
+	req.Header.Set("Proxy", "http://attacker.invalid")
 	decision := proxyRouteDecision{
 		Target:         mustURL("psgi://127.0.0.1:" + portText),
 		RewrittenPath:  "/mt.cgi",
@@ -164,11 +171,11 @@ func TestServeProxyServesStaticVhostAssets(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "docs-static"
+      "upstream": "docs"
     }
   }
 }`
@@ -238,11 +245,11 @@ func TestServeProxyWithCacheCachesStaticVhostAssets(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "docs-static"
+      "upstream": "docs"
     }
   }
 }`
@@ -306,7 +313,7 @@ func TestServeProxyWithCacheCachesStaticVhostAssets(t *testing.T) {
 	}
 }
 
-func TestServeProxyServesStaticVhostAssetsViaGeneratedRoute(t *testing.T) {
+func TestServeProxyServesStaticVhostAssetsViaExplicitUpstream(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
 
@@ -343,12 +350,12 @@ func TestServeProxyServesStaticVhostAssetsViaGeneratedRoute(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "backend_pools": [
     {
       "name": "docs-pool",
-      "members": ["docs-static"]
+      "members": ["docs"]
     }
   ],
   "default_route": {
@@ -381,8 +388,8 @@ func TestServeProxyServesStaticVhostAssetsViaGeneratedRoute(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if decision.SelectedUpstream != "docs-static" {
-		t.Fatalf("selected_upstream=%q want=%q", decision.SelectedUpstream, "docs-static")
+	if decision.SelectedUpstream != "docs" {
+		t.Fatalf("selected_upstream=%q want=%q", decision.SelectedUpstream, "docs")
 	}
 	if !strings.Contains(rec.Body.String(), "console.log('linked');") {
 		t.Fatalf("unexpected body=%q", rec.Body.String())
@@ -427,11 +434,11 @@ func TestServeProxyStreamsLargeStaticVhostAssets(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "docs-static"
+      "upstream": "docs"
     }
   }
 }`
@@ -509,11 +516,11 @@ func TestServeProxyStaticVhostReturnsValidatorsAndNotModified(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "docs-static"
+      "upstream": "docs"
     }
   }
 }`
@@ -628,11 +635,11 @@ func TestServeProxyStaticVhostBlocksSymlinkEscape(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "docs-static"
+      "upstream": "docs"
     }
   }
 }`
@@ -708,11 +715,11 @@ func TestServeProxyStaticVhostBlocksHiddenPathsByDefault(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "docs-static"
+      "upstream": "docs"
     }
   }
 }`
@@ -729,7 +736,7 @@ func TestServeProxyStaticVhostBlocksHiddenPathsByDefault(t *testing.T) {
 		t.Fatalf("InitProxyRuntime: %v", err)
 	}
 
-	for _, requestPath := range []string{"/.env", "/.git/config"} {
+	for _, requestPath := range []string{"/.env", "/%2eenv", "/.%65nv", "/.git/config", "/%2egit/config", "/safe/%2e%2e/.env"} {
 		req := httptest.NewRequest(http.MethodGet, "http://docs.example.com"+requestPath, nil)
 		decision, err := resolveProxyRouteDecision(req, currentProxyConfig(), proxyRuntimeHealth())
 		if err != nil {
@@ -744,6 +751,54 @@ func TestServeProxyStaticVhostBlocksHiddenPathsByDefault(t *testing.T) {
 		if strings.Contains(rec.Body.String(), "APP_KEY=secret") || strings.Contains(rec.Body.String(), "[core]") {
 			t.Fatalf("path=%s leaked body=%q", requestPath, rec.Body.String())
 		}
+	}
+}
+
+func TestServeProxyPSGIDoesNotFallbackForHiddenPath(t *testing.T) {
+	tmp := t.TempDir()
+	docroot := filepath.Join(tmp, "static")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(docroot): %v", err)
+	}
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("psgi fallback reached"))
+	}))
+	defer server.Close()
+	target, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("Parse(server.URL): %v", err)
+	}
+	port, err := strconv.Atoi(target.Port())
+	if err != nil {
+		t.Fatalf("Atoi(port): %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/%2eenv", nil)
+	resp, err := buildDirectVhostResponse(req, proxyRouteDecision{
+		Target:        &url.URL{Scheme: "psgi", Host: target.Host},
+		RewrittenPath: req.URL.Path,
+	}, VhostConfig{
+		Name:                "psgi-app",
+		Mode:                "psgi",
+		Hostname:            target.Hostname(),
+		ListenPort:          port,
+		DocumentRoot:        docroot,
+		TryFiles:            []string{"$uri", "$uri/", "@psgi"},
+		MaxRequestBodyBytes: defaultVhostMaxRequestBodyBytes,
+	})
+	if err != nil {
+		t.Fatalf("buildDirectVhostResponse: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%q", resp.StatusCode, body)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("psgi fallback hits=%d want 0", got)
 	}
 }
 
@@ -785,11 +840,11 @@ func TestServeProxyStaticVhostAllowsWellKnownPaths(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "docs-static"
+      "upstream": "docs"
     }
   }
 }`
@@ -865,7 +920,11 @@ func TestConfiguredUpstreamDoesNotBecomeImplicitVhostTarget(t *testing.T) {
 	proxyRaw := `{
   "upstreams": [
     { "name": "docs", "url": "` + primary.URL + `", "weight": 1, "enabled": true }
-  ]
+  ],
+  "default_route": {
+    "name": "fallback",
+    "action": { "upstream": "docs" }
+  }
 }`
 	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o600); err != nil {
 		t.Fatalf("write proxy: %v", err)
@@ -952,11 +1011,11 @@ func TestServeProxyRunsFastCGITryFilesAndStaticAssets(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "app", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "app", "url": "fcgi://127.0.0.1:` + strconv.Itoa(port) + `", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "app-php"
+      "upstream": "app"
     }
   }
 }`
@@ -1007,6 +1066,123 @@ func TestServeProxyRunsFastCGITryFilesAndStaticAssets(t *testing.T) {
 	body := phpRec.Body.String()
 	if !strings.Contains(body, "script=/index.php") || !strings.Contains(body, "uri=/users?id=7") || !strings.Contains(body, "query=id=7") {
 		t.Fatalf("unexpected php body=%q", body)
+	}
+}
+
+func TestRuntimeAppPHPRequestBodyLimitReturns413(t *testing.T) {
+	tmp := t.TempDir()
+	docroot := filepath.Join(tmp, "php-app", "public")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(docroot): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docroot, "index.php"), []byte("<?php echo 'index';"), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.php): %v", err)
+	}
+	var hits atomic.Int64
+	listener, address := startTestFastCGIServerFunc(t, "tcp", "127.0.0.1:0", func(conn net.Conn) {
+		hits.Add(1)
+		_ = conn.Close()
+	})
+	defer listener.Close()
+	target := &url.URL{Scheme: "fcgi", Host: address}
+	req := httptest.NewRequest(http.MethodPost, "http://app.example.com/index.php", strings.NewReader("abcd"))
+	resp, err := buildDirectVhostResponse(req, proxyRouteDecision{
+		Target:        target,
+		RewrittenPath: req.URL.Path,
+	}, VhostConfig{
+		Name:                "php-app",
+		Mode:                "php-fpm",
+		DocumentRoot:        docroot,
+		MaxRequestBodyBytes: 3,
+	})
+	if err != nil {
+		t.Fatalf("buildDirectVhostResponse: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%q", resp.StatusCode, body)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("fastcgi hits=%d want 0", got)
+	}
+}
+
+func TestRuntimeAppPSGIRequestBodyLimitReturns413(t *testing.T) {
+	tmp := t.TempDir()
+	docroot := filepath.Join(tmp, "static")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(docroot): %v", err)
+	}
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	target, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("Parse(server.URL): %v", err)
+	}
+	port, err := strconv.Atoi(target.Port())
+	if err != nil {
+		t.Fatalf("Atoi(port): %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "http://app.example.com/submit", strings.NewReader("abcd"))
+	resp, err := buildDirectVhostResponse(req, proxyRouteDecision{
+		Target:        &url.URL{Scheme: "psgi", Host: target.Host},
+		RewrittenPath: req.URL.Path,
+	}, VhostConfig{
+		Name:                "psgi-app",
+		Mode:                "psgi",
+		Hostname:            target.Hostname(),
+		ListenPort:          port,
+		DocumentRoot:        docroot,
+		TryFiles:            []string{"$uri", "$uri/", "@psgi"},
+		MaxRequestBodyBytes: 3,
+	})
+	if err != nil {
+		t.Fatalf("buildDirectVhostResponse: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%q", resp.StatusCode, body)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("psgi hits=%d want 0", got)
+	}
+}
+
+func TestFastCGIRequestOmitsHTTPProxyHeader(t *testing.T) {
+	tmp := t.TempDir()
+	docroot := filepath.Join(tmp, "php-app", "public")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(docroot): %v", err)
+	}
+	script := filepath.Join(docroot, "index.php")
+	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/index.php", nil)
+	req.Header.Set("Proxy", "http://attacker.invalid")
+	req.Header.Set("X-Api-Key", "ok")
+	params, _, err := buildFastCGIRequest(req, VhostConfig{
+		Name:                "php-app",
+		Mode:                "php-fpm",
+		DocumentRoot:        docroot,
+		MaxRequestBodyBytes: defaultVhostMaxRequestBodyBytes,
+	}, vhostResolvedRequest{
+		Kind:           "php",
+		ScriptFilename: script,
+		ScriptName:     "/index.php",
+		RequestPath:    "/index.php",
+	})
+	if err != nil {
+		t.Fatalf("buildFastCGIRequest: %v", err)
+	}
+	if _, exists := params["HTTP_PROXY"]; exists {
+		t.Fatalf("HTTP_PROXY was forwarded: %#v", params["HTTP_PROXY"])
+	}
+	if got := params["HTTP_X_API_KEY"]; got != "ok" {
+		t.Fatalf("HTTP_X_API_KEY=%q want ok", got)
 	}
 }
 
@@ -1068,11 +1244,11 @@ func TestServeProxyReturnsGeneric500ForFastCGIStderrOnly(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "app", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "app", "url": "fcgi://127.0.0.1:` + strconv.Itoa(port) + `", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "app-php"
+      "upstream": "app"
     }
   }
 }`

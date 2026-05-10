@@ -173,7 +173,7 @@ func TestProxyRouteResolutionOrderAndDryRun(t *testing.T) {
     }
   }
 }`
-	upstreamFallbackRaw := `{
+	noDefaultRaw := `{
   "upstreams": [
     { "name": "primary", "url": "http://fallback.internal:8080", "weight": 1, "enabled": true }
   ],
@@ -229,18 +229,6 @@ func TestProxyRouteResolutionOrderAndDryRun(t *testing.T) {
 			wantUpstreamURL:   "http://default.internal:8080",
 			wantFinalURL:      "http://default.internal:8080/other",
 		},
-		{
-			name:              "upstream fallback is used when default route is absent",
-			cfg:               mustValidateProxyRulesRaw(t, upstreamFallbackRaw),
-			host:              "www.example.com",
-			path:              "/other",
-			wantSource:        "upstream",
-			wantRoute:         "upstream",
-			wantRewrittenPath: "/other",
-			wantUpstream:      "primary",
-			wantUpstreamURL:   "http://fallback.internal:8080",
-			wantFinalURL:      "http://fallback.internal:8080/other",
-		},
 	}
 
 	for _, tt := range tests {
@@ -289,47 +277,40 @@ func TestProxyRouteResolutionOrderAndDryRun(t *testing.T) {
 			}
 		})
 	}
+
+	cfg := mustValidateProxyRulesRaw(t, noDefaultRaw)
+	req, err := http.NewRequest(http.MethodGet, "http://proxy.local/other", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest: %v", err)
+	}
+	req.Host = "www.example.com"
+	if _, err := resolveProxyRouteDecision(req, cfg, nil); err == nil || !strings.Contains(err.Error(), "no proxy route matched") {
+		t.Fatalf("resolveProxyRouteDecision error=%v want no proxy route matched", err)
+	}
+	if _, err := proxyRouteDryRun(cfg, "www.example.com", "/other"); err == nil || !strings.Contains(err.Error(), "no proxy route matched") {
+		t.Fatalf("proxyRouteDryRun error=%v want no proxy route matched", err)
+	}
 }
 
-func TestProxyUpstreamFallbackUsesPrecomputedStaticCandidates(t *testing.T) {
+func TestProxyRouteActionRequiresExplicitTarget(t *testing.T) {
 	prepared, err := prepareProxyRulesRaw(`{
   "upstreams": [
     { "name": "primary", "url": "http://fallback.internal:8080", "weight": 1, "enabled": true }
+  ],
+  "routes": [
+    {
+      "name": "catch-all",
+      "priority": 10,
+      "match": { "path": { "type": "prefix", "value": "/" } },
+      "action": {}
+    }
   ]
 }`)
-	if err != nil {
-		t.Fatalf("prepareProxyRulesRaw: %v", err)
+	if err == nil {
+		t.Fatalf("prepareProxyRulesRaw succeeded unexpectedly: %#v", prepared)
 	}
-	cfg := prepared.effectiveCfg
-	if !cfg.defaultTargetCandidatesReady {
-		t.Fatal("static upstream fallback candidates should be precomputed")
-	}
-	precomputed, options, err := buildProxyRouteTargetCandidates(cfg, ProxyRouteAction{})
-	if err != nil {
-		t.Fatalf("build precomputed candidates: %v", err)
-	}
-	if len(precomputed) != 1 {
-		t.Fatalf("precomputed candidate count=%d want 1", len(precomputed))
-	}
-
-	dynamicCfg := cfg
-	dynamicCfg.defaultTargetCandidatesReady = false
-	dynamicCfg.defaultTargetCandidates = nil
-	dynamicCfg.defaultTargetSelection = proxyRouteTargetSelectionOptions{}
-	dynamic, dynamicOptions, err := buildProxyRouteTargetCandidates(dynamicCfg, ProxyRouteAction{})
-	if err != nil {
-		t.Fatalf("build dynamic candidates: %v", err)
-	}
-	if len(dynamic) != len(precomputed) {
-		t.Fatalf("dynamic candidate count=%d want %d", len(dynamic), len(precomputed))
-	}
-	if precomputed[0].Target.String() != dynamic[0].Target.String() ||
-		precomputed[0].Key != dynamic[0].Key ||
-		precomputed[0].TransportKey != dynamic[0].TransportKey {
-		t.Fatalf("precomputed candidate differs from dynamic: %#v vs %#v", precomputed[0], dynamic[0])
-	}
-	if options != dynamicOptions {
-		t.Fatalf("precomputed options differ from dynamic: %#v vs %#v", options, dynamicOptions)
+	if !strings.Contains(err.Error(), "routes[0].action.upstream or routes[0].action.backend_pool is required") {
+		t.Fatalf("prepareProxyRulesRaw error=%v", err)
 	}
 }
 
@@ -1059,15 +1040,19 @@ func TestProxyRouteHostRewrite(t *testing.T) {
 	}
 }
 
-func TestProxyRouteUpstreamFallbackUsesTargetHost(t *testing.T) {
+func TestProxyRouteKeepsOriginalHostWithoutRewrite(t *testing.T) {
 	cfg := mustValidateProxyRulesRaw(t, `{
   "upstreams": [
     { "name": "primary", "url": "http://primary.internal:8080", "weight": 1, "enabled": true }
-  ]
+  ],
+  "default_route": {
+    "name": "fallback",
+    "action": { "upstream": "primary" }
+  }
 }`)
 
 	decision := mustResolveProxyRouteDecision(t, cfg, "proxy.local:9090", "/")
-	if got := decision.RewrittenHost; got != "primary.internal:8080" {
+	if got := decision.RewrittenHost; got != "proxy.local:9090" {
 		t.Fatalf("rewritten_host=%s", got)
 	}
 
@@ -1075,7 +1060,7 @@ func TestProxyRouteUpstreamFallbackUsesTargetHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("proxyRouteDryRun: %v", err)
 	}
-	if got := dryRun.RewrittenHost; got != "primary.internal:8080" {
+	if got := dryRun.RewrittenHost; got != "proxy.local:9090" {
 		t.Fatalf("dry-run rewritten_host=%s", got)
 	}
 }
@@ -1214,7 +1199,14 @@ func TestProxyGlobalHashPolicyKeepsStickySelection(t *testing.T) {
   "upstreams": [
     { "name": "blue", "url": "http://blue.internal:8080", "weight": 1, "enabled": true },
     { "name": "green", "url": "http://green.internal:8080", "weight": 1, "enabled": true }
-  ]
+  ],
+  "backend_pools": [
+    { "name": "origin", "members": ["blue", "green"] }
+  ],
+  "default_route": {
+    "name": "fallback",
+    "action": { "backend_pool": "origin" }
+  }
 }`)
 
 	resolveForCookie := func(value string) proxyRouteDecision {
@@ -1282,7 +1274,7 @@ func TestValidateProxyRulesRawRejectsInvalidActionUpstream(t *testing.T) {
     }
   ]
 }`,
-			wantErr: "must reference a direct or generated Runtime App upstream name",
+			wantErr: "must reference a configured direct upstream name",
 		},
 		{
 			name: "unsupported upstream scheme",
@@ -1297,7 +1289,7 @@ func TestValidateProxyRulesRawRejectsInvalidActionUpstream(t *testing.T) {
     }
   ]
 }`,
-			wantErr: "must reference a direct or generated Runtime App upstream name",
+			wantErr: "must reference a configured direct upstream name",
 		},
 		{
 			name: "relative upstream URL",
@@ -1312,10 +1304,10 @@ func TestValidateProxyRulesRawRejectsInvalidActionUpstream(t *testing.T) {
     }
   ]
 }`,
-			wantErr: "must reference a direct or generated Runtime App upstream name",
+			wantErr: "must reference a configured direct upstream name",
 		},
 		{
-			name: "explicit upstream required when no upstreams are configured",
+			name: "explicit route target required",
 			raw: `{
   "routes": [
     {
@@ -1327,7 +1319,7 @@ func TestValidateProxyRulesRawRejectsInvalidActionUpstream(t *testing.T) {
     }
   ]
 }`,
-			wantErr: "routes[0].action.upstream is required when no upstreams are configured",
+			wantErr: "routes[0].action.upstream or routes[0].action.backend_pool is required",
 		},
 		{
 			name: "unknown backend pool",
@@ -1381,7 +1373,7 @@ func TestValidateProxyRulesRawRejectsInvalidActionUpstream(t *testing.T) {
     }
   ]
 }`,
-			wantErr: "must reference a direct or generated Runtime App upstream name",
+			wantErr: "must reference a configured direct upstream name",
 		},
 		{
 			name: "backend pool rejects disabled upstream member",
@@ -1526,7 +1518,7 @@ func TestValidateProxyRulesRawRejectsUnknownBackendName(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
-	if !strings.Contains(err.Error(), `must reference a direct or generated Runtime App upstream name`) {
+	if !strings.Contains(err.Error(), `must reference a configured direct upstream name`) {
 		t.Fatalf("error=%q", err.Error())
 	}
 }
@@ -1547,6 +1539,7 @@ func TestValidateProxyRulesRawRejectsRestrictedRouteHeaders(t *testing.T) {
     {
       "priority": 10,
       "action": {
+        "upstream": "primary",
         "request_headers": {
           "set": { "Host": "malicious.example" }
         }
@@ -1566,6 +1559,7 @@ func TestValidateProxyRulesRawRejectsRestrictedRouteHeaders(t *testing.T) {
     {
       "priority": 10,
       "action": {
+        "upstream": "primary",
         "request_headers": {
           "add": { "x-forwarded-for": "1.2.3.4" }
         }
@@ -1585,6 +1579,7 @@ func TestValidateProxyRulesRawRejectsRestrictedRouteHeaders(t *testing.T) {
     {
       "priority": 10,
       "action": {
+        "upstream": "primary",
         "request_headers": {
           "set": { "X-Tukuyomi-Upstream-Name": "spoofed" }
         }
@@ -1604,6 +1599,7 @@ func TestValidateProxyRulesRawRejectsRestrictedRouteHeaders(t *testing.T) {
     {
       "priority": 10,
       "action": {
+        "upstream": "primary",
         "request_headers": {
           "remove": ["cOnNection"]
         }
@@ -1623,6 +1619,7 @@ func TestValidateProxyRulesRawRejectsRestrictedRouteHeaders(t *testing.T) {
     {
       "priority": 10,
       "action": {
+        "upstream": "primary",
         "response_headers": {
           "set": { "Content-Length": "1" }
         }
@@ -1642,6 +1639,7 @@ func TestValidateProxyRulesRawRejectsRestrictedRouteHeaders(t *testing.T) {
     {
       "priority": 10,
       "action": {
+        "upstream": "primary",
         "response_headers": {
           "remove": ["Set-Cookie"]
         }
@@ -1666,7 +1664,7 @@ func TestValidateProxyRulesRawRejectsRestrictedRouteHeaders(t *testing.T) {
 	}
 }
 
-func TestProxyRouteFallbackToUpstreamsWithoutRoutes(t *testing.T) {
+func TestProxyRouteRejectsUpstreamsWithoutRoutes(t *testing.T) {
 	cfg := mustValidateProxyRulesRaw(t, `{
   "upstreams": [
     { "name": "primary", "url": "http://primary.internal:8080", "weight": 1, "enabled": true }
@@ -1674,29 +1672,16 @@ func TestProxyRouteFallbackToUpstreamsWithoutRoutes(t *testing.T) {
   "load_balancing_strategy": "round_robin"
 }`)
 
-	decision := mustResolveProxyRouteDecision(t, cfg, "api.example.com", "/healthz")
-	if got := string(decision.Source); got != "upstream" {
-		t.Fatalf("source=%s", got)
-	}
-	if decision.RouteName != "upstream" {
-		t.Fatalf("route_name=%s", decision.RouteName)
-	}
-	if decision.SelectedUpstream != "primary" {
-		t.Fatalf("selected_upstream=%s", decision.SelectedUpstream)
-	}
-	if got := finalProxyRouteURL(decision.Target, decision.RewrittenPath, decision.RewrittenRawPath, decision.RewrittenQuery); got != "http://primary.internal:8080/healthz" {
-		t.Fatalf("final_url=%s", got)
-	}
-
-	dryRun, err := proxyRouteDryRun(cfg, "api.example.com", "/healthz")
+	req, err := http.NewRequest(http.MethodGet, "http://proxy.local/healthz", nil)
 	if err != nil {
-		t.Fatalf("proxyRouteDryRun: %v", err)
+		t.Fatalf("http.NewRequest: %v", err)
 	}
-	if dryRun.Source != "upstream" {
-		t.Fatalf("dry-run source=%s", dryRun.Source)
+	req.Host = "api.example.com"
+	if _, err := resolveProxyRouteDecision(req, cfg, nil); err == nil || !strings.Contains(err.Error(), "no proxy route matched") {
+		t.Fatalf("resolveProxyRouteDecision error=%v want no proxy route matched", err)
 	}
-	if dryRun.FinalURL != "http://primary.internal:8080/healthz" {
-		t.Fatalf("dry-run final_url=%s", dryRun.FinalURL)
+	if _, err := proxyRouteDryRun(cfg, "api.example.com", "/healthz"); err == nil || !strings.Contains(err.Error(), "no proxy route matched") {
+		t.Fatalf("proxyRouteDryRun error=%v want no proxy route matched", err)
 	}
 }
 
@@ -1824,6 +1809,7 @@ func TestServeProxyAppliesRouteRewriteAndHeaders(t *testing.T) {
         "path": { "type": "prefix", "value": "/servicea/" }
       },
       "action": {
+        "upstream": "primary",
         "host_rewrite": "service-a.internal",
         "path_rewrite": { "prefix": "/service-a/" },
         "query_rewrite": {
@@ -1928,6 +1914,7 @@ func TestServeProxyResponseHeaderSanitizeWinsAfterRouteHeaders(t *testing.T) {
         "path": { "type": "prefix", "value": "/servicea/" }
       },
       "action": {
+        "upstream": "primary",
         "response_headers": {
           "set": {
             "Server": "route-reintroduced",

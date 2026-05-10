@@ -122,11 +122,11 @@ func TestServeProxyAppliesVhostRewriteAccessAndBasicAuth(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "docs-static"
+      "upstream": "docs"
     }
   }
 }`

@@ -78,6 +78,142 @@ func TestPrepareProxyRulesRawWithSitesAndVhostsAddsGeneratedPHPTargets(t *testin
 	}
 }
 
+func TestPrepareProxyRulesRawWithSitesAndVhostsRejectsRuntimeGeneratedRouteTarget(t *testing.T) {
+	restore := resetPHPProxyFoundationForTest(t)
+	defer restore()
+
+	raw := mustJSON(normalizeProxyRulesConfig(ProxyRulesConfig{
+		DefaultRoute: &ProxyDefaultRoute{
+			Action: ProxyRouteAction{Upstream: "app-php"},
+		},
+	}))
+
+	_, err := prepareProxyRulesRawWithSitesAndVhosts(raw, SiteConfigFile{}, VhostConfigFile{
+		Vhosts: []VhostConfig{
+			{
+				Name:            "app",
+				Mode:            "php-fpm",
+				Hostname:        "app.example.com",
+				ListenPort:      9081,
+				DocumentRoot:    "apps/app/public",
+				RuntimeID:       "php82",
+				GeneratedTarget: "app-php",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected generated Runtime App target to be rejected")
+	}
+	if !strings.Contains(err.Error(), "default_route.action.upstream must reference a configured direct upstream name") {
+		t.Fatalf("error=%q", err.Error())
+	}
+}
+
+func TestPrepareProxyRulesRawWithSitesAndVhostsRejectsRuntimeGeneratedBackendPoolMember(t *testing.T) {
+	restore := resetPHPProxyFoundationForTest(t)
+	defer restore()
+
+	raw := mustJSON(normalizeProxyRulesConfig(ProxyRulesConfig{
+		BackendPools: []ProxyBackendPool{
+			{Name: "apps", Members: []string{"app-php"}},
+		},
+		DefaultRoute: &ProxyDefaultRoute{
+			Action: ProxyRouteAction{BackendPool: "apps"},
+		},
+	}))
+
+	_, err := prepareProxyRulesRawWithSitesAndVhosts(raw, SiteConfigFile{}, VhostConfigFile{
+		Vhosts: []VhostConfig{
+			{
+				Name:            "app",
+				Mode:            "php-fpm",
+				Hostname:        "app.example.com",
+				ListenPort:      9081,
+				DocumentRoot:    "apps/app/public",
+				RuntimeID:       "php82",
+				GeneratedTarget: "app-php",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected generated Runtime App target backend-pool member to be rejected")
+	}
+	if !strings.Contains(err.Error(), "backend_pools[0].members[0] must reference a configured direct upstream name") {
+		t.Fatalf("error=%q", err.Error())
+	}
+}
+
+func TestSanitizeLegacyGeneratedProxyRouteTargets(t *testing.T) {
+	restore := resetPHPProxyFoundationForTest(t)
+	defer restore()
+
+	cfg := normalizeProxyRulesConfig(ProxyRulesConfig{
+		Upstreams: []ProxyUpstream{
+			{Name: "app", URL: "http://127.0.0.1:8080", Weight: 1, Enabled: true},
+		},
+		BackendPools: []ProxyBackendPool{
+			{Name: "mixed", Members: []string{"app", "app-php"}},
+			{Name: "generated-only", Members: []string{"app-php"}},
+		},
+		Routes: []ProxyRoute{
+			{
+				Name:     "legacy-generated-route",
+				Priority: 10,
+				Match:    ProxyRouteMatch{Path: &ProxyRoutePathMatch{Type: "prefix", Value: "/legacy"}},
+				Action:   ProxyRouteAction{Upstream: "app-php"},
+			},
+			{
+				Name:     "legacy-generated-pool",
+				Priority: 20,
+				Match:    ProxyRouteMatch{Path: &ProxyRoutePathMatch{Type: "prefix", Value: "/legacy-pool"}},
+				Action:   ProxyRouteAction{BackendPool: "generated-only"},
+			},
+			{
+				Name:     "direct-route",
+				Priority: 30,
+				Match:    ProxyRouteMatch{Path: &ProxyRoutePathMatch{Type: "prefix", Value: "/direct"}},
+				Action:   ProxyRouteAction{BackendPool: "mixed"},
+			},
+		},
+		DefaultRoute: &ProxyDefaultRoute{
+			Action: ProxyRouteAction{Upstream: "app-php"},
+		},
+	})
+	vhosts := VhostConfigFile{
+		Vhosts: []VhostConfig{
+			{
+				Name:            "app",
+				Mode:            "php-fpm",
+				Hostname:        "app.example.com",
+				ListenPort:      9081,
+				DocumentRoot:    "apps/app/public",
+				RuntimeID:       "php82",
+				GeneratedTarget: "app-php",
+			},
+		},
+	}
+
+	sanitized, changed := sanitizeLegacyGeneratedProxyRouteTargets(cfg, SiteConfigFile{}, vhosts)
+	if !changed {
+		t.Fatal("expected legacy generated target references to be sanitized")
+	}
+	if sanitized.DefaultRoute != nil {
+		t.Fatal("default route referencing generated target should be removed")
+	}
+	if len(sanitized.Routes) != 1 || sanitized.Routes[0].Name != "direct-route" {
+		t.Fatalf("routes=%+v, want only direct-route", sanitized.Routes)
+	}
+	if len(sanitized.BackendPools) != 1 || sanitized.BackendPools[0].Name != "mixed" {
+		t.Fatalf("backend pools=%+v, want only mixed", sanitized.BackendPools)
+	}
+	if got := sanitized.BackendPools[0].Members; len(got) != 1 || got[0] != "app" {
+		t.Fatalf("mixed members=%v want [app]", got)
+	}
+	if _, err := prepareProxyRulesRawWithSitesAndVhosts(mustJSON(sanitized), SiteConfigFile{}, vhosts); err != nil {
+		t.Fatalf("sanitized config should validate: %v", err)
+	}
+}
+
 func TestPrepareProxyRulesRawWithSitesAndVhostsAllowsVhostWithoutConfiguredLinkedUpstream(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()

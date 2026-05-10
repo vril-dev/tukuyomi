@@ -83,7 +83,10 @@ hash strategy では `hash_policy` と `hash_key` を組み合わせて使いま
 1. explicit `routes[]`
 2. DB `sites` domain 由来の generated host fallback route
 3. `default_route`
-4. `upstreams[]`
+
+`upstreams[]` は転送先のカタログです。route、generated site route、
+または `default_route` から明示的に選択しない限り、公開トラフィックは
+流れません。
 
 route の match は、host と path の両方で書けます。
 
@@ -93,8 +96,8 @@ route の match は、host と path の両方で書けます。
 route の binding は次のいずれかです。
 
 - `action.backend_pool`: balancing 標準の binding
-- `action.upstream`: direct upstream 名（`Upstreams` に書いた行）または
-  server-generated Runtime App upstream 名
+- `action.upstream`: direct upstream 名（`Upstreams` に書いた行）。
+  server-generated Runtime App target はここでは route target として使いません。
 
 加えて、route 単位で次の制御が書けます。
 
@@ -234,7 +237,7 @@ connection はそのまま流れ、新規だけが他 backend に振り分けら
 block された request には、これらの selected-backend 系 field は **出さない**
 仕様です。
 
-## 5.4　Forwarded ヘッダと観測用ヘッダ
+## 5.4　Forwarded ヘッダーと観測用ヘッダー
 
 通常の `http://` / `https://` upstream proxy では、tukuyomi が次の header を
 **自動的に付与** します。

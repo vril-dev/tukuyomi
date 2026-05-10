@@ -299,17 +299,16 @@ Routing model:
   2. The generated host fallback route derived from the DB `sites`
      domain.
   3. `default_route`.
-  4. `upstreams[]`.
 - Host match: exact and `*.example.com`.
 - Path match: `exact` / `prefix` / `regex`.
 - `upstreams[]`: catalog of direct backend nodes not owned by
   Runtime Apps. Each row uses either a static `url` or a
-  `discovery`.
+  `discovery`. It is not an implicit fallback route.
 - `backend_pools[]`: per-route balancing sets composed of named
   upstream members.
 - `action.backend_pool`: the standard balancing route binding.
-- `action.upstream`: a direct upstream name or a server-generated
-  Runtime App upstream name.
+- `action.upstream`: a direct upstream name from `upstreams[]`. Server-generated
+  Runtime App targets are not valid route targets here.
 - `action.canary_upstream` and `action.canary_weight_percent`:
   route-level canary.
 - `action.host_rewrite` / `action.path_rewrite.prefix` /

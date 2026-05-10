@@ -13,7 +13,7 @@ func TestParseRemoteSSHCommandConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseRemoteSSHCommandConfig: %v", err)
 	}
-	if cfg.CenterURL != "https://center.example.test" || cfg.APIBase != "/center-api" || cfg.DeviceID != "edge-1" ||
+	if cfg.CenterURL != "https://center.example.test" || cfg.APIBase != "/center-manage-api" || cfg.DeviceID != "edge-1" ||
 		cfg.LocalAddr != "127.0.0.1:2222" || cfg.TTLSec != 120 || cfg.Reason != "maintenance" || cfg.Token != "tky_pat_test" {
 		t.Fatalf("unexpected cfg: %+v", cfg)
 	}

@@ -268,6 +268,94 @@ func TestProxyHandlerBlocksRouteAccessCIDRMissBeforeUpstream(t *testing.T) {
 	}
 }
 
+func TestProxyHandlerBypassesEdgeGateForLocalCenterProtectedRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)
+	defer restoreEdgeRuntime()
+	store := initConfigDBStoreForTest(t)
+
+	identity, err := newEdgeDeviceIdentity("gateway-a", "default")
+	if err != nil {
+		t.Fatalf("newEdgeDeviceIdentity: %v", err)
+	}
+	identity.EnrollmentStatus = edgeEnrollmentStatusPending
+	identity.CenterURL = "http://127.0.0.1:9092"
+	if err := upsertEdgeDeviceIdentity(store, identity); err != nil {
+		t.Fatalf("upsertEdgeDeviceIdentity: %v", err)
+	}
+	if gate := currentEdgeProxyGateState(); !gate.Locked {
+		t.Fatalf("test requires locked edge gate, got %+v", gate)
+	}
+
+	centerHit := false
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		centerHit = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer center.Close()
+
+	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
+	raw := `{
+  "upstreams": [
+    { "name": "center", "url": ` + strconv.Quote(center.URL) + `, "weight": 1, "enabled": true }
+  ],
+  "routes": [
+    {
+      "name": "center-ui",
+      "priority": 10,
+      "match": { "path": { "type": "prefix", "value": "/center-ui" } },
+      "action": { "upstream": "center" }
+    },
+    {
+      "name": "app",
+      "priority": 20,
+      "match": { "path": { "type": "prefix", "value": "/app" } },
+      "action": { "upstream": "center" }
+    }
+  ]
+}`
+	if err := os.WriteFile(proxyCfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write proxy config: %v", err)
+	}
+	importProxyRuntimeDBForTest(t, raw)
+	if err := InitProxyRuntime(proxyCfgPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+
+	r := gin.New()
+	r.NoRoute(ProxyHandler)
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	centerRes, err := http.Get(srv.URL + "/center-ui/")
+	if err != nil {
+		t.Fatalf("center-ui request: %v", err)
+	}
+	_ = centerRes.Body.Close()
+	if centerRes.StatusCode != http.StatusNoContent {
+		t.Fatalf("center-ui status=%d want %d", centerRes.StatusCode, http.StatusNoContent)
+	}
+	if !centerHit {
+		t.Fatal("center route did not reach upstream")
+	}
+
+	appRes, err := http.Get(srv.URL + "/app/")
+	if err != nil {
+		t.Fatalf("app request: %v", err)
+	}
+	defer appRes.Body.Close()
+	if appRes.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("app status=%d want %d", appRes.StatusCode, http.StatusServiceUnavailable)
+	}
+	body, err := io.ReadAll(appRes.Body)
+	if err != nil {
+		t.Fatalf("read app body: %v", err)
+	}
+	if !strings.Contains(string(body), "device_not_approved") {
+		t.Fatalf("app body=%q want device_not_approved", string(body))
+	}
+}
+
 func TestProxyHandlerDisabledEmitUpstreamNameHeaderStripsSpoofedHeader(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	initConfigDBStoreForTest(t)

@@ -21,6 +21,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -1411,8 +1412,36 @@ func centerDeviceAPIEndpointCandidates(raw string, endpoint string) ([]centerEnd
 			}
 			candidates = append(candidates, centerEndpointCandidate{BaseURL: fallbackURL, EndpointURL: fallbackEndpoint})
 		}
+	} else if centerDeviceAPIBaseIsLocalLoopbackWithPath(parsed) {
+		fallback := *parsed
+		fallback.Path = ""
+		fallback.RawPath = ""
+		fallbackURL := fallback.String()
+		if fallbackURL != baseURL {
+			fallbackEndpoint, err := centerDeviceAPIURL(fallbackURL, endpoint)
+			if err != nil {
+				return nil, err
+			}
+			candidates = append(candidates, centerEndpointCandidate{BaseURL: fallbackURL, EndpointURL: fallbackEndpoint})
+		}
 	}
 	return candidates, nil
+}
+
+func centerDeviceAPIBaseIsLocalLoopbackWithPath(u *url.URL) bool {
+	if u == nil {
+		return false
+	}
+	pathValue := strings.TrimRight(strings.TrimSpace(u.Path), "/")
+	if pathValue == "" {
+		return false
+	}
+	host := strings.TrimSpace(u.Hostname())
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	addr, err := netip.ParseAddr(host)
+	return err == nil && addr.IsLoopback()
 }
 
 func normalizeCenterDeviceAPIBaseURL(raw string) (string, error) {

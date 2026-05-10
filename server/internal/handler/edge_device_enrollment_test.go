@@ -1927,6 +1927,35 @@ func TestCenterDeviceAPIURLCandidatesFallbackToProtectedDefault(t *testing.T) {
 	}
 }
 
+func TestCenterDeviceAPIURLCandidatesFallbackFromLocalProtectedGatewayPath(t *testing.T) {
+	candidates, err := centerDeviceStatusURLCandidates("http://127.0.0.1:9092/center-api")
+	if err != nil {
+		t.Fatalf("centerDeviceStatusURLCandidates: %v", err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("len(candidates)=%d", len(candidates))
+	}
+	if candidates[0].EndpointURL != "http://127.0.0.1:9092/center-api/v1/device-status" {
+		t.Fatalf("primary=%q", candidates[0].EndpointURL)
+	}
+	if candidates[1].BaseURL != "http://127.0.0.1:9092" ||
+		candidates[1].EndpointURL != "http://127.0.0.1:9092/v1/device-status" {
+		t.Fatalf("fallback=%+v", candidates[1])
+	}
+
+	customCandidates, err := centerDeviceStatusURLCandidates("http://localhost:9092/gateway-api")
+	if err != nil {
+		t.Fatalf("custom centerDeviceStatusURLCandidates: %v", err)
+	}
+	if len(customCandidates) != 2 {
+		t.Fatalf("len(customCandidates)=%d", len(customCandidates))
+	}
+	if customCandidates[1].BaseURL != "http://localhost:9092" ||
+		customCandidates[1].EndpointURL != "http://localhost:9092/v1/device-status" {
+		t.Fatalf("custom fallback=%+v", customCandidates[1])
+	}
+}
+
 func TestCenterProtectedGatewayDeviceAPIRouteRewritesToCenterDeviceAPI(t *testing.T) {
 	routes := centerProtectedGatewayRoutes(centerProtectedGatewayRouteConfig{
 		GatewayAPIBasePath: centerProtectedDefaultGatewayAPIPath,

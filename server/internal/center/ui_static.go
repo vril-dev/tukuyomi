@@ -38,7 +38,7 @@ func registerCenterUI(r *gin.Engine, apiBase, uiBase string, experimentalAppDepl
 			c.Status(http.StatusNotFound)
 			return
 		}
-		if resolvedPath == "index.html" {
+		if resolvedPath == "index.html" || placeholder {
 			raw = centerHTML(raw, apiBase, uiBase, experimentalAppDeployEnabled)
 		}
 		if adminui.IsHTMLFallbackAsset(resolvedPath, placeholder) {

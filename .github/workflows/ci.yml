@@ -145,7 +145,12 @@ jobs:
                 "weight": 1,
                 "enabled": true
               }
-            ]
+            ] |
+            .default_route = {
+              "name": "ci-default",
+              "enabled": true,
+              "action": { "upstream": "ci-unreachable" }
+            }
           ' seeds/conf/config-bundle.json > "${tmp_proxy}"
           mv "${tmp_proxy}" data/conf/proxy.json
 

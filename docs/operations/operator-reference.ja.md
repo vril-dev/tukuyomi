@@ -268,10 +268,9 @@ make compose-down
   1. 明示的な `routes[]`
   2. DB `sites` のドメイン由来で生成されたホストフォールバックルート
   3. `default_route`
-  4. `upstreams[]`
 - ホストマッチは完全一致と `*.example.com`
 - パスマッチは `exact`、`prefix`、`regex`
-- `upstreams[]` は Runtime Apps が所有しない、直接指定のバックエンドノードカタログです。各行は静的 `url` か `discovery` のどちらか一方を使用します
+- `upstreams[]` は Runtime Apps が所有しない、直接指定のバックエンドノードカタログです。各行は静的 `url` か `discovery` のどちらか一方を使用します。暗黙のフォールバックルートとしては使われません
 - `backend_pools[]` は名前付きアップストリームメンバーから、ルート単位のバランシングセットを構成します
 - `action.backend_pool` はバランシング向けの標準ルートバインディングです
 - `action.upstream` は、直接指定のアップストリーム名、またはサーバー側で生成された Runtime App アップストリーム名を参照できます

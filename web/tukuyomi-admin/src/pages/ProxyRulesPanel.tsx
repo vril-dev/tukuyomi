@@ -978,7 +978,7 @@ export default function ProxyRulesPanel() {
 
           <SectionCard
             title="Routing"
-            subtitle="Explicit routes run first, then Site routes, default_route, and finally upstreams. Use generated Runtime App targets from action.upstream for managed app traffic."
+            subtitle="Explicit routes run first, then Site routes, and default_route. Upstreams are target definitions only and never expose traffic by themselves."
             actions={
               routingTab === "routes" ? (
                 <ActionButton
@@ -1038,7 +1038,7 @@ export default function ProxyRulesPanel() {
             <div className="mt-4">
               {routingTab === "routes" ? (
                 <div className="space-y-4">
-                  {routingState.routes.length === 0 ? <EmptyState>{tx("No explicit route rules configured. Traffic can still use default_route or upstream fallback; managed Runtime Apps are selected by generated target name.")}</EmptyState> : null}
+                  {routingState.routes.length === 0 ? <EmptyState>{tx("No explicit route rules configured. Only Site routes or default_route can receive unmatched traffic.")}</EmptyState> : null}
                   {routingState.routes.map((route, index) => (
                     <RouteEditorCard
                       key={`route-${index}`}
@@ -1074,7 +1074,7 @@ export default function ProxyRulesPanel() {
                     allowMatch={false}
                   />
                 ) : (
-                  <EmptyState>{tx("Configure a default route when you want a distinct fallback before upstream selection.")}</EmptyState>
+                  <EmptyState>{tx("Configure a default route when unmatched traffic should be forwarded.")}</EmptyState>
                 )
               ) : null}
             </div>

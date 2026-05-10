@@ -238,7 +238,9 @@ What happens after a Runtime App is saved:
 - Explicit `routes[]`
 - The generated site host fallback route
 - `default_route`
-- `upstreams[]`
+
+`upstreams[]` entries are target definitions only; they do not expose traffic
+without a route/default route selecting them.
 
 Notes:
 

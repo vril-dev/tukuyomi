@@ -282,10 +282,9 @@ Routing model:
   1. explicit `routes[]`
   2. generated host fallback routes from the DB `sites` domain
   3. `default_route`
-  4. `upstreams[]`
 - Host matching supports exact host and `*.example.com` wildcard host.
 - Path matching supports `exact`, `prefix`, and `regex`.
-- `upstreams[]` is the direct backend node catalog for targets not owned by Runtime Apps. A row can use either a static `url` or `discovery`, never both.
+- `upstreams[]` is the direct backend node catalog for targets not owned by Runtime Apps. A row can use either a static `url` or `discovery`, never both. It is not an implicit fallback route.
 - `backend_pools[]` groups named upstream members into route-scoped balancing sets.
 - `action.backend_pool` is the standard route binding for balancing.
 - `action.upstream` can reference a direct upstream name or a server-generated Runtime App upstream name.

@@ -38,6 +38,7 @@ func TestProxyResponseCompressionGzip(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1048576,
   "response_compression": {
     "enabled": true,
@@ -106,6 +107,7 @@ func TestProxyResponseCompressionSkipsWithoutAcceptEncoding(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1048576,
   "response_compression": {
     "enabled": true,
@@ -159,6 +161,7 @@ func TestProxyStreamsCenterArtifactDownloadsOverBufferLimit(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 16,
   "response_compression": {
     "enabled": true,
@@ -217,6 +220,7 @@ func TestProxyResponseCompressionNegotiatesBrotli(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1048576,
   "response_compression": {
     "enabled": true,
@@ -272,6 +276,7 @@ func TestProxyResponseCompressionNegotiatesConfiguredOrder(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1048576,
   "response_compression": {
     "enabled": true,
@@ -342,6 +347,7 @@ func TestProxyResponseCompressionPassesThroughPrecompressedResponse(t *testing.T
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1048576,
   "response_compression": {
     "enabled": true,
@@ -398,6 +404,7 @@ func TestProxyResponseCompressionCacheVaryByAcceptEncoding(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1048576,
   "response_compression": {
     "enabled": true,
@@ -506,6 +513,7 @@ func TestProxyResponseCompressionStatusSnapshotTracksAlgorithms(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1048576,
   "response_compression": {
     "enabled": true,
@@ -556,6 +564,7 @@ func TestValidateProxyRulesRawRejectsCompressionWithoutBuffering(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 0,
   "response_compression": {
     "enabled": true,
@@ -573,6 +582,7 @@ func TestValidateProxyRulesRawRejectsUnsupportedCompressionAlgorithm(t *testing.
   "upstreams": [
     { "name": "primary", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1024,
   "response_compression": {
     "enabled": true,

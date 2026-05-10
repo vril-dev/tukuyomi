@@ -175,7 +175,9 @@ Route order is controlled by `Proxy Rules`:
 - explicit `routes[]`
 - generated site host fallback routes
 - `default_route`
-- `upstreams[]`
+
+`upstreams[]` entries are target definitions only; they do not expose traffic
+without a route/default route selecting them.
 
 Notes:
 

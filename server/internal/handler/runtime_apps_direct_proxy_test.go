@@ -920,7 +920,11 @@ func TestConfiguredUpstreamDoesNotBecomeImplicitVhostTarget(t *testing.T) {
 	proxyRaw := `{
   "upstreams": [
     { "name": "docs", "url": "` + primary.URL + `", "weight": 1, "enabled": true }
-  ]
+  ],
+  "default_route": {
+    "name": "fallback",
+    "action": { "upstream": "docs" }
+  }
 }`
 	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o600); err != nil {
 		t.Fatalf("write proxy: %v", err)

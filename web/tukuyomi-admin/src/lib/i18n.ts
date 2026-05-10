@@ -363,14 +363,12 @@ const JA_STRINGS: Record<string, string> = {
     "この名前は route の action.upstream から参照されます。",
   "Name is referenced from backend pools or route action.upstream.":
     "この名前は backend pool または route の action.upstream から参照されます。",
-  "Explicit routes run first, then Site routes, default_route, and finally upstreams. Use generated Runtime App targets from action.upstream for managed app traffic.":
-    "explicit route が先に評価され、その後 Site route、default_route、最後に upstreams が使われます。管理 app の通信は action.upstream から generated Runtime App target を指定します。",
-  "No explicit route rules configured. Traffic can still use default_route or upstream fallback; managed Runtime Apps are selected by generated target name.":
-    "explicit route は未設定です。トラフィックは default_route または upstream fallback を使えます。管理 Runtime Apps は generated target 名で選択します。",
-  "Used only when no route matches. If absent, upstreams are used.":
-    "どの route にも一致しない時だけ使われます。未設定なら upstreams が使われます。",
-  "Configure a default route when you want a distinct fallback before upstream selection.":
-    "upstream 選択の前に別の fallback を使いたい場合は default route を設定します。",
+  "Explicit routes run first, then Site routes, and default_route. Upstreams are target definitions only and never expose traffic by themselves.":
+    "explicit route、Site route、default_route の順で評価されます。upstream は転送先の定義であり、upstream だけではトラフィックを公開しません。",
+  "No explicit route rules configured. Only Site routes or default_route can receive unmatched traffic.":
+    "explicit route は未設定です。未一致のトラフィックを受けるのは Site route または default_route だけです。",
+  "Configure a default route when unmatched traffic should be forwarded.":
+    "未一致のトラフィックを受けるルートが必要な場合は default route を設定します。",
   "Dry Run": "Dry Run",
   "Confirm which route would win and which final upstream URL would be used without changing live traffic.":
     "実トラフィックを変えずに、どの route が選ばれ、最終的にどの upstream URL が使われるか確認します。",

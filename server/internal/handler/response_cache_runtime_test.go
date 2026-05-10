@@ -45,6 +45,10 @@ func TestServeProxyWithCacheHitAndClear(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": `+strconv.Quote(upstream.URL)+`, "weight": 1, "enabled": true }
   ],
+  "default_route": {
+    "name": "fallback",
+    "action": { "upstream": "primary" }
+  },
   "response_header_sanitize": {
     "mode": "auto",
     "custom_remove": ["X-Internal-Leak"]
@@ -265,7 +269,7 @@ func TestServeProxyWithCacheStoresHeadWithoutPoisoningGet(t *testing.T) {
 	defer upstream.Close()
 
 	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
-	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}]}`), 0o600); err != nil {
+	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}],"default_route":{"name":"fallback","action":{"upstream":"primary"}}}`), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
 	}
 	if err := InitProxyRuntime(proxyCfgPath, 8); err != nil {
@@ -359,7 +363,7 @@ func TestServeProxyWithCacheBypassesConditionalRequestWithoutMiss(t *testing.T) 
 	defer upstream.Close()
 
 	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
-	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}]}`), 0o600); err != nil {
+	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}],"default_route":{"name":"fallback","action":{"upstream":"primary"}}}`), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
 	}
 	if err := InitProxyRuntime(proxyCfgPath, 8); err != nil {
@@ -550,7 +554,7 @@ func TestServeProxyWithCache_HostScopeReplacesDefault(t *testing.T) {
 	defer upstream.Close()
 
 	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
-	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}]}`), 0o600); err != nil {
+	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}],"default_route":{"name":"fallback","action":{"upstream":"primary"}}}`), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
 	}
 	if err := InitProxyRuntime(proxyCfgPath, 8); err != nil {
@@ -649,7 +653,7 @@ func TestServeProxyWithMemoryFrontCache(t *testing.T) {
 	defer upstream.Close()
 
 	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
-	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}]}`), 0o600); err != nil {
+	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}],"default_route":{"name":"fallback","action":{"upstream":"primary"}}}`), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
 	}
 	if err := InitProxyRuntime(proxyCfgPath, 8); err != nil {
@@ -731,7 +735,7 @@ func TestServeProxyWithMemoryFrontFallsBackToDisk(t *testing.T) {
 	defer upstream.Close()
 
 	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
-	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}]}`), 0o600); err != nil {
+	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}],"default_route":{"name":"fallback","action":{"upstream":"primary"}}}`), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
 	}
 	if err := InitProxyRuntime(proxyCfgPath, 8); err != nil {

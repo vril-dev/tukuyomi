@@ -322,51 +322,7 @@ func buildProxyRouteTargetCandidatesWithHealth(cfg ProxyRulesConfig, action Prox
 		}
 		return candidates, options, nil
 	}
-	if cfg.defaultTargetCandidatesReady {
-		return cfg.defaultTargetCandidates, cfg.defaultTargetSelection, nil
-	}
-	defs := proxyConfiguredUpstreams(cfg)
-	out := make([]proxyRouteTargetCandidate, 0, len(defs))
-	for i, upstream := range defs {
-		candidates, err := proxyRouteTargetCandidatesFromUpstream(cfg, upstream, i, proxyPositiveWeight(upstream.Weight), upstream.HTTP2Mode, health)
-		if err != nil {
-			return nil, proxyRouteTargetSelectionOptions{}, err
-		}
-		out = append(out, candidates...)
-	}
-	return out, options, nil
-}
-
-func precomputeProxyStaticFallbackTargets(cfg *ProxyRulesConfig) error {
-	if cfg == nil {
-		return nil
-	}
-	cfg.defaultTargetCandidatesReady = false
-	cfg.defaultTargetCandidates = nil
-	cfg.defaultTargetSelection = proxyRouteTargetSelectionOptions{}
-	defs := proxyConfiguredUpstreams(*cfg)
-	for _, upstream := range defs {
-		if proxyUpstreamDiscoveryEnabled(upstream) {
-			return nil
-		}
-	}
-	options := proxyRouteTargetSelectionOptions{
-		HashPolicy:   cfg.HashPolicy,
-		HashKey:      cfg.HashKey,
-		UseLeastConn: cfg.LoadBalancingStrategy == "least_conn",
-	}
-	out := make([]proxyRouteTargetCandidate, 0, len(defs))
-	for i, upstream := range defs {
-		candidates, err := proxyRouteTargetCandidatesFromUpstream(*cfg, upstream, i, proxyPositiveWeight(upstream.Weight), upstream.HTTP2Mode, nil)
-		if err != nil {
-			return err
-		}
-		out = append(out, candidates...)
-	}
-	cfg.defaultTargetCandidatesReady = true
-	cfg.defaultTargetCandidates = out
-	cfg.defaultTargetSelection = options
-	return nil
+	return nil, proxyRouteTargetSelectionOptions{}, fmt.Errorf("route action must specify upstream or backend_pool")
 }
 
 func proxyBackendPoolByName(cfg ProxyRulesConfig, name string) (ProxyBackendPool, bool) {

@@ -62,7 +62,8 @@ func TestProxyDiscoveryDNSMaterializesAddressTargets(t *testing.T) {
         "max_targets": 32
       }
     }
-  ]
+  ],
+  "default_route": { "name": "fallback", "action": { "upstream": "app" } }
 }`, SiteConfigFile{}, VhostConfigFile{})
 	if err != nil {
 		t.Fatalf("parseProxyRulesRaw: %v", err)
@@ -111,7 +112,8 @@ func TestProxyDiscoverySRVMaterializesServiceTargets(t *testing.T) {
         "max_targets": 32
       }
     }
-  ]
+  ],
+  "default_route": { "name": "fallback", "action": { "upstream": "api" } }
 }`, SiteConfigFile{}, VhostConfigFile{})
 	if err != nil {
 		t.Fatalf("parseProxyRulesRaw: %v", err)
@@ -149,7 +151,8 @@ func TestProxyDiscoveryKeepsLastGoodTargetsOnFailure(t *testing.T) {
         "max_targets": 32
       }
     }
-  ]
+  ],
+  "default_route": { "name": "fallback", "action": { "upstream": "app" } }
 }`, SiteConfigFile{}, VhostConfigFile{})
 	if err != nil {
 		t.Fatalf("parseProxyRulesRaw: %v", err)
@@ -190,7 +193,8 @@ func TestProxyDiscoveryInitialFailureHasNoTargets(t *testing.T) {
         "max_targets": 32
       }
     }
-  ]
+  ],
+  "default_route": { "name": "fallback", "action": { "upstream": "app" } }
 }`, SiteConfigFile{}, VhostConfigFile{})
 	if err != nil {
 		t.Fatalf("parseProxyRulesRaw: %v", err)

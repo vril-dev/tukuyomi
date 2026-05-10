@@ -38,7 +38,14 @@ func TestDynamicProxyTransportRetriesAndOpensCircuit(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": %q, "weight": 1, "enabled": true },
     { "name": "fallback", "url": %q, "weight": 1, "enabled": true }
-  ]
+  ],
+  "backend_pools": [
+    { "name": "origin", "members": ["primary", "fallback"] }
+  ],
+  "default_route": {
+    "name": "fallback",
+    "action": { "backend_pool": "origin" }
+  }
 }`, primary.URL, fallback.URL))
 
 	tracker := newUpstreamHealthMonitorForTest(t, cfg)

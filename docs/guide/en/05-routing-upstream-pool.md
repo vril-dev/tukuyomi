@@ -84,7 +84,9 @@ The full route-selection order is:
 1. Explicit `routes[]`
 2. A generated host fallback route derived from the DB `sites` domain
 3. `default_route`
-4. `upstreams[]`
+
+`upstreams[]` is only a target catalog. It does not receive public traffic
+unless a route, generated site route, or `default_route` explicitly selects it.
 
 Route matches can be specified on host and path:
 

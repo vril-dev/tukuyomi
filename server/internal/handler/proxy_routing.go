@@ -132,9 +132,8 @@ type ProxyDefaultRoute struct {
 type proxyRouteResolutionSource string
 
 const (
-	proxyRouteResolutionUpstream proxyRouteResolutionSource = "upstream"
-	proxyRouteResolutionRoute    proxyRouteResolutionSource = "route"
-	proxyRouteResolutionDefault  proxyRouteResolutionSource = "default_route"
+	proxyRouteResolutionRoute   proxyRouteResolutionSource = "route"
+	proxyRouteResolutionDefault proxyRouteResolutionSource = "default_route"
 )
 
 type proxyRouteDecision struct {
@@ -836,8 +835,8 @@ func validateProxyRouteMatch(match ProxyRouteMatch, field string) error {
 func validateProxyRouteAction(action ProxyRouteAction, cfg ProxyRulesConfig, namedUpstreams map[string]ProxyUpstream, nameCounts map[string]int, backendPools map[string]ProxyBackendPool, backendPoolCounts map[string]int, field string) error {
 	upstream := strings.TrimSpace(action.Upstream)
 	backendPool := strings.TrimSpace(action.BackendPool)
-	if backendPool == "" && upstream == "" && len(cfg.Upstreams) == 0 {
-		return fmt.Errorf("%s.upstream is required when no upstreams are configured", field)
+	if backendPool == "" && upstream == "" {
+		return fmt.Errorf("%s.upstream or %s.backend_pool is required", field, field)
 	}
 	if backendPool != "" {
 		if _, ok := backendPools[backendPool]; !ok {
@@ -1444,12 +1443,7 @@ func resolveProxyRouteClassificationWithHealth(req *http.Request, cfg ProxyRules
 		return classification, nil
 	}
 
-	classification, err := buildProxyRouteClassification(req, originalHost, originalPath, originalRawPath, "upstream", proxyRouteResolutionUpstream, nil, nil, ProxyRouteAction{}, cfg, health)
-	if err != nil {
-		return proxyRouteClassification{}, err
-	}
-	classification.LogSelection = len(cfg.Routes) > 0 || cfg.DefaultRoute != nil
-	return classification, nil
+	return proxyRouteClassification{}, fmt.Errorf("no proxy route matched; configure routes or default_route")
 }
 
 func buildProxyRouteClassification(req *http.Request, originalHost string, originalPath string, originalRawPath string, routeName string, source proxyRouteResolutionSource, match *ProxyRoutePathMatch, access *ProxyRouteAccess, action ProxyRouteAction, cfg ProxyRulesConfig, health *upstreamHealthMonitor) (proxyRouteClassification, error) {
@@ -1498,7 +1492,7 @@ func buildProxyRouteClassification(req *http.Request, originalHost string, origi
 		StickySession:     targetSelection.StickySession,
 		RequestHeaderOps:  valueOrZero(action.RequestHeaders),
 		ResponseHeaderOps: valueOrZero(action.ResponseHeaders),
-		LogSelection:      source != proxyRouteResolutionUpstream,
+		LogSelection:      true,
 	}, nil
 }
 
@@ -1539,20 +1533,12 @@ func plannedProxyRouteForwardedHost(originalHost string, hostRewrite string, sou
 	if next := strings.TrimSpace(hostRewrite); next != "" {
 		return next
 	}
-	if source == proxyRouteResolutionUpstream {
-		return ""
-	}
 	return strings.TrimSpace(originalHost)
 }
 
 func resolveProxyRouteForwardedHost(originalHost string, targetHost string, hostRewrite string, source proxyRouteResolutionSource) string {
 	if next := strings.TrimSpace(hostRewrite); next != "" {
 		return next
-	}
-	if source == proxyRouteResolutionUpstream {
-		if next := strings.TrimSpace(targetHost); next != "" {
-			return next
-		}
 	}
 	if next := strings.TrimSpace(originalHost); next != "" {
 		return next
@@ -1591,29 +1577,7 @@ func resolveProxyRouteTarget(cfg ProxyRulesConfig, ref string, health *upstreamH
 		return nil, "", "", "", fmt.Errorf("route target %q must reference a direct or generated Runtime App upstream name", ref)
 	}
 
-	if health != nil {
-		if selection, ok := health.SelectTarget(); ok && selection.Target != nil {
-			name := strings.TrimSpace(selection.Name)
-			if name == "" {
-				name = strings.TrimSpace(selection.Key)
-			}
-			return selection.Target, name, selection.Target.String(), selection.Key, nil
-		}
-	}
-	target, err := proxyPrimaryTarget(cfg)
-	if err != nil {
-		return nil, "", "", "", err
-	}
-	return target, proxyDefaultUpstreamName(cfg), target.String(), "", nil
-}
-
-func proxyDefaultUpstreamName(cfg ProxyRulesConfig) string {
-	for _, upstream := range proxyConfiguredUpstreams(cfg) {
-		if upstream.Enabled {
-			return upstream.Name
-		}
-	}
-	return ""
+	return nil, "", "", "", fmt.Errorf("route target reference is required")
 }
 
 func sortedProxyRouteIndexes(routes []ProxyRoute) []int {

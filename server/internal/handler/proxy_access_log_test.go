@@ -63,6 +63,7 @@ func TestProxyHandlerEmitsAccessLogWithBodyByteCounts(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "emit_upstream_name_request_header": true,
   "buffer_request_body": true
 }`
@@ -552,6 +553,7 @@ func TestProxyHandlerEmitsErrorLogWithBodyByteCounts(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": "http://` + addr + `", "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "buffer_request_body": true
 }`
 	if err := os.WriteFile(proxyCfgPath, []byte(raw), 0o600); err != nil {
@@ -604,6 +606,7 @@ func TestStatusHandlerIncludesProxyUpstreamKeepAlive(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "upstream_keepalive_sec": 45
 }`
 	if err := os.WriteFile(proxyCfgPath, []byte(raw), 0o600); err != nil {

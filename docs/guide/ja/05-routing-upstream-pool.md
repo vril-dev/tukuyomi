@@ -83,7 +83,10 @@ hash strategy では `hash_policy` と `hash_key` を組み合わせて使いま
 1. explicit `routes[]`
 2. DB `sites` domain 由来の generated host fallback route
 3. `default_route`
-4. `upstreams[]`
+
+`upstreams[]` は転送先のカタログです。route、generated site route、
+または `default_route` から明示的に選択しない限り、公開トラフィックは
+流れません。
 
 route の match は、host と path の両方で書けます。
 

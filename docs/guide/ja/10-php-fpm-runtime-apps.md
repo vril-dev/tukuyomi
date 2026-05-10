@@ -225,7 +225,9 @@ route の優先順は `Proxy Rules` が管理します（第5章を参照）。
 - explicit `routes[]`
 - generated site host fallback route
 - `default_route`
-- `upstreams[]`
+
+`upstreams[]` は転送先の定義です。route または default route から選択しない
+限り、traffic は公開されません。
 
 補足:
 

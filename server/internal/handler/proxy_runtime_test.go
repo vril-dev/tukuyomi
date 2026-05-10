@@ -194,8 +194,8 @@ func TestInitProxyRuntimeAllowsEmptyConfigButRouteResolutionFails(t *testing.T) 
 
 	req := httptest.NewRequest(http.MethodGet, "http://proxy.local/", nil)
 	if _, err := resolveProxyRouteDecision(req, currentProxyConfig(), proxyRuntimeHealth()); err == nil {
-		t.Fatal("expected missing proxy target error")
-	} else if !strings.Contains(err.Error(), "no proxy targets available") {
+		t.Fatal("expected missing proxy route error")
+	} else if !strings.Contains(err.Error(), "no proxy route matched") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -261,9 +261,6 @@ type ProxyRulesConfig struct {
 
 	responseHeaderSanitizePolicy proxyResponseHeaderSanitizePolicy `json:"-"`
 	routeOrder                   []int                             `json:"-"`
-	defaultTargetCandidatesReady bool                              `json:"-"`
-	defaultTargetCandidates      []proxyRouteTargetCandidate       `json:"-"`
-	defaultTargetSelection       proxyRouteTargetSelectionOptions  `json:"-"`
 }
 
 type ProxyUpstreamTLSConfig struct {
@@ -1168,9 +1165,6 @@ func normalizeAndValidateProxyRules(in ProxyRulesConfig, sites SiteConfigFile, v
 		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	if _, err := proxyTransportProfileCatalog(effectiveCfg); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
-	}
-	if err := precomputeProxyStaticFallbackTargets(&effectiveCfg); err != nil {
 		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	errRes, err := proxyerror.New(proxyerror.Config{

@@ -2925,6 +2925,9 @@ func maybeBufferProxyResponseBody(res *http.Response) error {
 	if isDirectStaticResponse(res) {
 		return nil
 	}
+	if shouldStreamProxyResponseBody(res.Request) {
+		return nil
+	}
 	if res.ContentLength > cfg.MaxResponseBufferBytes && res.ContentLength > 0 {
 		return fmt.Errorf("upstream response exceeds max_response_buffer_bytes")
 	}
@@ -2943,6 +2946,40 @@ func maybeBufferProxyResponseBody(res *http.Response) error {
 		res.Header.Set("Content-Length", strconv.FormatInt(res.ContentLength, 10))
 	}
 	return nil
+}
+
+func shouldStreamProxyResponseBody(req *http.Request) bool {
+	if req == nil || req.URL == nil {
+		return false
+	}
+	switch req.Method {
+	case http.MethodGet, http.MethodPost:
+	default:
+		return false
+	}
+	path := strings.TrimSpace(req.URL.Path)
+	if path == "" {
+		return false
+	}
+	for _, endpoint := range []string{
+		"/v1/runtime-artifact-download",
+		"/v1/proxy-rules-bundle-download",
+		"/v1/waf-rule-artifact-download",
+		"/v1/app-deploy-package-download",
+	} {
+		if path == endpoint || strings.HasSuffix(path, endpoint) {
+			return true
+		}
+	}
+	for _, marker := range []string{
+		"/waf-rules/bundles/",
+		"/app-deployments/packages/",
+	} {
+		if strings.Contains(path, marker) && strings.HasSuffix(path, "/download") {
+			return true
+		}
+	}
+	return false
 }
 
 func probeProxyUpstream(in ProxyRulesConfig, upstreamName string, timeout time.Duration) (string, int64, error) {

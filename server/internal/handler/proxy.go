@@ -450,6 +450,10 @@ func maybeCompressProxyResponse(res *http.Response) error {
 	if isDirectStaticResponse(res) {
 		return nil
 	}
+	if shouldStreamProxyResponseBody(res.Request) {
+		proxyResponseCompressionRuntimeMetrics.RecordSkipped(proxycompression.SkipTransform)
+		return nil
+	}
 	proxycompression.AppendVaryHeader(res.Header, "Accept-Encoding")
 	if !proxycompression.HasEntityBody(res.Request.Method, res.StatusCode) {
 		proxyResponseCompressionRuntimeMetrics.RecordSkipped(proxycompression.SkipBodyless)

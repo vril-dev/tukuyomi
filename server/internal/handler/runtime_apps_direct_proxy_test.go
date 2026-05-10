@@ -171,11 +171,11 @@ func TestServeProxyServesStaticVhostAssets(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "docs-static"
+      "upstream": "docs"
     }
   }
 }`
@@ -245,11 +245,11 @@ func TestServeProxyWithCacheCachesStaticVhostAssets(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "docs-static"
+      "upstream": "docs"
     }
   }
 }`
@@ -313,7 +313,7 @@ func TestServeProxyWithCacheCachesStaticVhostAssets(t *testing.T) {
 	}
 }
 
-func TestServeProxyServesStaticVhostAssetsViaGeneratedRoute(t *testing.T) {
+func TestServeProxyServesStaticVhostAssetsViaExplicitUpstream(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
 
@@ -350,12 +350,12 @@ func TestServeProxyServesStaticVhostAssetsViaGeneratedRoute(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "backend_pools": [
     {
       "name": "docs-pool",
-      "members": ["docs-static"]
+      "members": ["docs"]
     }
   ],
   "default_route": {
@@ -388,8 +388,8 @@ func TestServeProxyServesStaticVhostAssetsViaGeneratedRoute(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if decision.SelectedUpstream != "docs-static" {
-		t.Fatalf("selected_upstream=%q want=%q", decision.SelectedUpstream, "docs-static")
+	if decision.SelectedUpstream != "docs" {
+		t.Fatalf("selected_upstream=%q want=%q", decision.SelectedUpstream, "docs")
 	}
 	if !strings.Contains(rec.Body.String(), "console.log('linked');") {
 		t.Fatalf("unexpected body=%q", rec.Body.String())
@@ -434,11 +434,11 @@ func TestServeProxyStreamsLargeStaticVhostAssets(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "docs-static"
+      "upstream": "docs"
     }
   }
 }`
@@ -516,11 +516,11 @@ func TestServeProxyStaticVhostReturnsValidatorsAndNotModified(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "docs-static"
+      "upstream": "docs"
     }
   }
 }`
@@ -635,11 +635,11 @@ func TestServeProxyStaticVhostBlocksSymlinkEscape(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "docs-static"
+      "upstream": "docs"
     }
   }
 }`
@@ -715,11 +715,11 @@ func TestServeProxyStaticVhostBlocksHiddenPathsByDefault(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "docs-static"
+      "upstream": "docs"
     }
   }
 }`
@@ -840,11 +840,11 @@ func TestServeProxyStaticVhostAllowsWellKnownPaths(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "docs", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "docs", "url": "static://docs-static", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "docs-static"
+      "upstream": "docs"
     }
   }
 }`
@@ -1011,11 +1011,11 @@ func TestServeProxyRunsFastCGITryFilesAndStaticAssets(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "app", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "app", "url": "fcgi://127.0.0.1:` + strconv.Itoa(port) + `", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "app-php"
+      "upstream": "app"
     }
   }
 }`
@@ -1244,11 +1244,11 @@ func TestServeProxyReturnsGeneric500ForFastCGIStderrOnly(t *testing.T) {
 	}
 	proxyRaw := `{
   "upstreams": [
-    { "name": "app", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
+    { "name": "app", "url": "fcgi://127.0.0.1:` + strconv.Itoa(port) + `", "weight": 1, "enabled": true }
   ],
   "default_route": {
     "action": {
-      "upstream": "app-php"
+      "upstream": "app"
     }
   }
 }`

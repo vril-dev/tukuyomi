@@ -717,7 +717,7 @@ export default function RuntimeAppsPanel() {
       <header className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Runtime Apps")}</h1>
-          <p className="text-xs text-neutral-500">{tx("Define runtime-backed application listeners here. Proxy Rules routes traffic to the generated upstream target.")}</p>
+          <p className="text-xs text-neutral-500">{tx("Define runtime-backed application listeners here. Publish traffic only through explicit Proxy Rules upstreams and routes.")}</p>
         </div>
         <div className="flex items-center gap-2 text-xs text-neutral-500">
           <span className="rounded bg-neutral-100 px-2 py-1" title={etag || undefined}>{formatRevision(etag)}</span>

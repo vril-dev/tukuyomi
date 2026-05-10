@@ -96,8 +96,8 @@ Route matches can be specified on host and path:
 Route binding is one of:
 
 - `action.backend_pool`: the standard balanced binding.
-- `action.upstream`: a direct upstream name (a row from `Upstreams`) or
-  a server-generated Runtime App upstream name.
+- `action.upstream`: a direct upstream name (a row from `Upstreams`).
+  Server-generated Runtime App targets are not valid route targets here.
 
 Per-route additions:
 

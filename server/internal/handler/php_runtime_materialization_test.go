@@ -78,6 +78,71 @@ func TestPrepareProxyRulesRawWithSitesAndVhostsAddsGeneratedPHPTargets(t *testin
 	}
 }
 
+func TestPrepareProxyRulesRawWithSitesAndVhostsRejectsRuntimeGeneratedRouteTarget(t *testing.T) {
+	restore := resetPHPProxyFoundationForTest(t)
+	defer restore()
+
+	raw := mustJSON(normalizeProxyRulesConfig(ProxyRulesConfig{
+		DefaultRoute: &ProxyDefaultRoute{
+			Action: ProxyRouteAction{Upstream: "app-php"},
+		},
+	}))
+
+	_, err := prepareProxyRulesRawWithSitesAndVhosts(raw, SiteConfigFile{}, VhostConfigFile{
+		Vhosts: []VhostConfig{
+			{
+				Name:            "app",
+				Mode:            "php-fpm",
+				Hostname:        "app.example.com",
+				ListenPort:      9081,
+				DocumentRoot:    "apps/app/public",
+				RuntimeID:       "php82",
+				GeneratedTarget: "app-php",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected generated Runtime App target to be rejected")
+	}
+	if !strings.Contains(err.Error(), "default_route.action.upstream must reference a configured direct upstream name") {
+		t.Fatalf("error=%q", err.Error())
+	}
+}
+
+func TestPrepareProxyRulesRawWithSitesAndVhostsRejectsRuntimeGeneratedBackendPoolMember(t *testing.T) {
+	restore := resetPHPProxyFoundationForTest(t)
+	defer restore()
+
+	raw := mustJSON(normalizeProxyRulesConfig(ProxyRulesConfig{
+		BackendPools: []ProxyBackendPool{
+			{Name: "apps", Members: []string{"app-php"}},
+		},
+		DefaultRoute: &ProxyDefaultRoute{
+			Action: ProxyRouteAction{BackendPool: "apps"},
+		},
+	}))
+
+	_, err := prepareProxyRulesRawWithSitesAndVhosts(raw, SiteConfigFile{}, VhostConfigFile{
+		Vhosts: []VhostConfig{
+			{
+				Name:            "app",
+				Mode:            "php-fpm",
+				Hostname:        "app.example.com",
+				ListenPort:      9081,
+				DocumentRoot:    "apps/app/public",
+				RuntimeID:       "php82",
+				GeneratedTarget: "app-php",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected generated Runtime App target backend-pool member to be rejected")
+	}
+	if !strings.Contains(err.Error(), "backend_pools[0].members[0] must reference a configured direct upstream name") {
+		t.Fatalf("error=%q", err.Error())
+	}
+}
+
 func TestPrepareProxyRulesRawWithSitesAndVhostsAllowsVhostWithoutConfiguredLinkedUpstream(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()

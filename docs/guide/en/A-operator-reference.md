@@ -307,8 +307,8 @@ Routing model:
 - `backend_pools[]`: per-route balancing sets composed of named
   upstream members.
 - `action.backend_pool`: the standard balancing route binding.
-- `action.upstream`: a direct upstream name or a server-generated
-  Runtime App upstream name.
+- `action.upstream`: a direct upstream name from `upstreams[]`. Server-generated
+  Runtime App targets are not valid route targets here.
 - `action.canary_upstream` and `action.canary_weight_percent`:
   route-level canary.
 - `action.host_rewrite` / `action.path_rewrite.prefix` /

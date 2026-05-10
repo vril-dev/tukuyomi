@@ -225,13 +225,14 @@ What happens after a Runtime App is saved:
    `data/php-fpm/vhosts.json`.
 2. The runtime layer generates pool / config under
    `data/php-fpm/runtime/<runtime_id>/`.
-3. A **generated upstream named `generated_target`** is added to the
+3. An internal **generated target named `generated_target`** is added to the
    effective proxy runtime.
 4. The configured upstream URL in `Proxy Rules > Upstreams` is **not
    modified**.
 5. To send traffic to the Runtime App-backed application, the operator
-   selects the generated upstream from a route or default route in
-   `Proxy Rules`.
+   routes to an explicitly configured direct upstream from `Proxy Rules >
+   Upstreams`. The generated Runtime App target itself is not a route
+   selector.
 
 `Proxy Rules` controls the route precedence (Chapter 5):
 
@@ -250,11 +251,12 @@ Notes:
   `http://<hostname>:<listen_port>`.
 - `generated_target` is the server-owned name for the generated backend
   alias / pool. **The admin UI does not show it as operator input.**
-- In normal operation, `Proxy Rules` routes to the generated upstream
-  target.
+- In normal operation, `Proxy Rules` routes to a direct upstream that the
+  operator defined explicitly.
 
-Because the generated upstream target represents the listener,
-**you do not need to hand-write a raw `fcgi://` URL** anywhere.
+Keeping generated targets out of route input prevents Runtime Apps from being
+published by accident. Publish them only by adding an explicit upstream and
+route.
 
 ## 10.7 Process lifecycle
 

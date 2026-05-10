@@ -1274,7 +1274,7 @@ func TestValidateProxyRulesRawRejectsInvalidActionUpstream(t *testing.T) {
     }
   ]
 }`,
-			wantErr: "must reference a direct or generated Runtime App upstream name",
+			wantErr: "must reference a configured direct upstream name",
 		},
 		{
 			name: "unsupported upstream scheme",
@@ -1289,7 +1289,7 @@ func TestValidateProxyRulesRawRejectsInvalidActionUpstream(t *testing.T) {
     }
   ]
 }`,
-			wantErr: "must reference a direct or generated Runtime App upstream name",
+			wantErr: "must reference a configured direct upstream name",
 		},
 		{
 			name: "relative upstream URL",
@@ -1304,7 +1304,7 @@ func TestValidateProxyRulesRawRejectsInvalidActionUpstream(t *testing.T) {
     }
   ]
 }`,
-			wantErr: "must reference a direct or generated Runtime App upstream name",
+			wantErr: "must reference a configured direct upstream name",
 		},
 		{
 			name: "explicit route target required",
@@ -1373,7 +1373,7 @@ func TestValidateProxyRulesRawRejectsInvalidActionUpstream(t *testing.T) {
     }
   ]
 }`,
-			wantErr: "must reference a direct or generated Runtime App upstream name",
+			wantErr: "must reference a configured direct upstream name",
 		},
 		{
 			name: "backend pool rejects disabled upstream member",
@@ -1518,7 +1518,7 @@ func TestValidateProxyRulesRawRejectsUnknownBackendName(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
-	if !strings.Contains(err.Error(), `must reference a direct or generated Runtime App upstream name`) {
+	if !strings.Contains(err.Error(), `must reference a configured direct upstream name`) {
 		t.Fatalf("error=%q", err.Error())
 	}
 }

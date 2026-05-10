@@ -303,6 +303,7 @@ type ProxyDiscoveryConfig struct {
 const (
 	proxyUpstreamGeneratedKindNone             = ""
 	proxyUpstreamGeneratedKindVhostTarget      = "vhost_target"
+	proxyUpstreamGeneratedKindSiteTarget       = "site_target"
 	proxyUpstreamGeneratedKindDiscoveredTarget = "discovered_target"
 
 	proxyUpstreamProviderClassDirect       = "direct"
@@ -1869,7 +1870,7 @@ func resolveProxyHTTP2ValidationTarget(cfg ProxyRulesConfig, ref string, field s
 			return nil, fmt.Errorf("%s references duplicated upstream name %q", field, ref)
 		}
 		if !proxyUpstreamAllowedAsRouteTarget(upstream) {
-			return nil, fmt.Errorf("%s must reference a direct or generated Runtime App upstream name", field)
+			return nil, fmt.Errorf("%s must reference a configured direct upstream name", field)
 		}
 		if proxyUpstreamDiscoveryEnabled(upstream) {
 			return &url.URL{Scheme: upstream.Discovery.Scheme}, nil

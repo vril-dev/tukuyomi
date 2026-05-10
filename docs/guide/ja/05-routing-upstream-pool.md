@@ -96,8 +96,8 @@ route の match は、host と path の両方で書けます。
 route の binding は次のいずれかです。
 
 - `action.backend_pool`: balancing 標準の binding
-- `action.upstream`: direct upstream 名（`Upstreams` に書いた行）または
-  server-generated Runtime App upstream 名
+- `action.upstream`: direct upstream 名（`Upstreams` に書いた行）。
+  server-generated Runtime App target はここでは route target として使いません。
 
 加えて、route 単位で次の制御が書けます。
 

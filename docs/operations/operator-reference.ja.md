@@ -273,7 +273,7 @@ make compose-down
 - `upstreams[]` は Runtime Apps が所有しない、直接指定のバックエンドノードカタログです。各行は静的 `url` か `discovery` のどちらか一方を使用します。暗黙のフォールバックルートとしては使われません
 - `backend_pools[]` は名前付きアップストリームメンバーから、ルート単位のバランシングセットを構成します
 - `action.backend_pool` はバランシング向けの標準ルートバインディングです
-- `action.upstream` は、直接指定のアップストリーム名、またはサーバー側で生成された Runtime App アップストリーム名を参照できます
+- `action.upstream` は `upstreams[]` に書いた直接指定のアップストリーム名を参照します。サーバー側で生成された Runtime App target はここでは使いません
 - `action.canary_upstream` と `action.canary_weight_percent` で、ルートレベルのカナリアを設定できます
 - `action.host_rewrite`、`action.path_rewrite.prefix`、`action.query_rewrite` で outbound のリライトを設定します
 - `action.request_headers`、`action.response_headers` で上限付きのヘッダー制御を行います

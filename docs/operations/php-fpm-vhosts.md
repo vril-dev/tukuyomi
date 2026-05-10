@@ -166,9 +166,9 @@ After a runtime app is saved:
 
 - `/runtime-apps` persists the definition into `data/php-fpm/vhosts.json`
 - the runtime layer materializes pool/config data under `data/php-fpm/runtime/<runtime_id>/`
-- the effective proxy runtime gets a generated upstream named by `generated_target`
+- the effective proxy runtime gets an internal generated target named by `generated_target`
 - configured upstream URLs in `Proxy Rules > Upstreams` are left unchanged
-- operator routes or the default route in `Proxy Rules` select the generated upstream when traffic should reach the Runtime App-backed app
+- operator routes or the default route in `Proxy Rules` select an explicitly configured direct upstream when traffic should reach the Runtime App-backed app
 
 Route order is controlled by `Proxy Rules`:
 
@@ -184,11 +184,11 @@ Notes:
 - `hostname` plus `listen_port` is the PHP-FPM FastCGI listen target
 - do not treat `http://<hostname>:<listen_port>` as an HTTP upstream
 - the server owns `generated_target` as the generated backend alias and pool name; the admin UI does not expose it as operator input
-- normal operation routes to the generated upstream target from `Proxy Rules`
+- normal operation routes to a direct upstream that the operator defined explicitly
 
 Keep PHP runtime details in `/runtime-apps`. Keep public traffic selection in
-`Proxy Rules`; do not hand-write raw `fcgi://` URLs when the generated upstream
-target already represents the listener.
+`Proxy Rules`; generated Runtime App targets are not selected directly from
+routes.
 
 ## Process Lifecycle
 

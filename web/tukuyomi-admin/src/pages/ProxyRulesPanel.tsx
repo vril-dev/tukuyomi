@@ -76,15 +76,6 @@ type GetResponse = {
   rollback_depth?: number;
 };
 
-type RuntimeAppsResponse = {
-  runtime_apps?: {
-    vhosts?: Array<{
-      name?: string;
-      generated_target?: string;
-    }>;
-  };
-};
-
 type RollbackPreviewResponse = {
   ok?: boolean;
   raw?: string;
@@ -97,24 +88,6 @@ type ProxyRulesAuditResponse = {
 
 type RoutePathType = "" | "exact" | "prefix" | "regex";
 const defaultProxyRulesAuditLimit = 20 as const;
-
-function extractGeneratedRuntimeAppTargets(data?: RuntimeAppsResponse) {
-  const entries = data?.runtime_apps?.vhosts;
-  if (!Array.isArray(entries)) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const app of entries) {
-    const name = (app.generated_target || app.name || "").trim();
-    if (!name || seen.has(name)) {
-      continue;
-    }
-    seen.add(name);
-    out.push(name);
-  }
-  return out;
-}
 
 export default function ProxyRulesPanel() {
   const { tx } = useI18n();
@@ -165,17 +138,13 @@ export default function ProxyRulesPanel() {
   const [dryRunMessages, setDryRunMessages] = useState<string[]>([]);
   const [diffPreview, setDiffPreview] = useState<ProxyRulesDiffPreview | null>(null);
   const [routingTab, setRoutingTab] = useState<"routes" | "default">("routes");
-  const [generatedRuntimeAppTargets, setGeneratedRuntimeAppTargets] = useState<string[]>([]);
   const auditInitialLoadDone = useRef(false);
 
   const dirty = useMemo(() => raw !== serverRaw, [raw, serverRaw]);
   const routeTargetOptions = useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const name of [
-      ...routingState.upstreams.map((upstream) => upstream.name),
-      ...generatedRuntimeAppTargets,
-    ]) {
+    for (const name of routingState.upstreams.map((upstream) => upstream.name)) {
       const normalized = name.trim();
       if (!normalized || seen.has(normalized)) {
         continue;
@@ -184,7 +153,7 @@ export default function ProxyRulesPanel() {
       out.push(normalized);
     }
     return out;
-  }, [generatedRuntimeAppTargets, routingState.upstreams]);
+  }, [routingState.upstreams]);
   const backendPoolOptions = useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -217,12 +186,6 @@ export default function ProxyRulesPanel() {
     setDryRunMessages([]);
     try {
       const data = await apiGetJson<GetResponse>("/proxy-rules");
-      try {
-        const runtimeAppsData = await apiGetJson<RuntimeAppsResponse>("/runtime-apps");
-        setGeneratedRuntimeAppTargets(extractGeneratedRuntimeAppTargets(runtimeAppsData));
-      } catch {
-        setGeneratedRuntimeAppTargets([]);
-      }
       const nextRaw = data.raw || "";
       setRaw(nextRaw);
       setServerRaw(nextRaw);
@@ -1150,7 +1113,7 @@ export default function ProxyRulesPanel() {
             <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
               <Field
                 label="Emit X-Tukuyomi-Upstream-Name"
-                hint="When enabled, named upstream requests carry X-Tukuyomi-Upstream-Name to the backend. Direct URLs and generated Runtime App targets do not receive it."
+                hint="When enabled, route-selected direct upstream requests carry X-Tukuyomi-Upstream-Name to the backend."
               >
                 <label className="flex h-10 items-center gap-2 text-xs">
                   <input
@@ -1526,7 +1489,7 @@ function RouteEditorCard({
             ))}
           </select>
         </Field>
-        <Field label="Action upstream" hint="Use a direct upstream name or a generated Runtime App target name. Runtime App targets point to the configured listen host and port.">
+        <Field label="Action upstream" hint="Use a direct upstream name from Upstreams. Runtime App targets are not valid route targets here.">
           <input
             className={inputClass}
             list={routeTargetOptions.length > 0 ? "proxy-route-target-options" : undefined}
@@ -1710,7 +1673,7 @@ function BackendPoolEditorCard({
       </div>
 
       <div className="max-w-[42rem]">
-        <Field label="Members" hint="One named upstream per line. Direct upstreams and generated Runtime App targets are valid members.">
+        <Field label="Members" hint="One direct upstream name per line. Runtime App targets are not valid backend-pool members.">
           <MultilineTextArea
             className={textAreaClass}
             value={pool.members}

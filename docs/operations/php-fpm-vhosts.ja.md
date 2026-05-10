@@ -163,9 +163,9 @@ Runtime App 保存後の処理は次のとおりです。
 
 - `/runtime-apps` が定義を `data/php-fpm/vhosts.json` へ保存
 - ランタイム層が `data/php-fpm/runtime/<runtime_id>/` に pool / config ファイルを生成
-- 有効なプロキシ実行環境に、`generated_target` 名の生成 upstream が追加される
+- 有効なプロキシ実行環境に、`generated_target` 名の内部 target が追加される
 - `Proxy Rules > Upstreams` の設定済み upstream URL は変更されない
-- Runtime App で公開するアプリケーションへトラフィックを流す場合、運用者が `Proxy Rules` のルートまたは default route から生成 upstream を選択する
+- Runtime App で公開するアプリケーションへトラフィックを流す場合、運用者が `Proxy Rules` に明示した direct upstream を route または default route から選択する
 
 ルートの優先順は `Proxy Rules` が管理します。
 
@@ -181,9 +181,9 @@ Runtime App 保存後の処理は次のとおりです。
 - `hostname` と `listen_port` は PHP-FPM の FastCGI 待ち受けターゲットです
 - `http://<hostname>:<listen_port>` のような HTTP upstream としては扱いません
 - `generated_target` はサーバー側が所有する生成バックエンドのエイリアス / pool 名です。管理 UI では運用者の入力項目として表示しません
-- 通常運用では、`Proxy Rules` から生成 upstream ターゲットへルーティングします
+- 通常運用では、運用者が明示した direct upstream へルーティングします
 
-PHP ランタイムの詳細は `/runtime-apps` で管理し、公開トラフィックの振り分けは `Proxy Rules` で管理します。生成 upstream ターゲットが待ち受け先を表すため、生の `fcgi://` URL を手書きする必要はありません。
+PHP ランタイムの詳細は `/runtime-apps` で管理し、公開トラフィックの振り分けは `Proxy Rules` で管理します。generated Runtime App target は route から直接選択しません。
 
 ## プロセスライフサイクル
 

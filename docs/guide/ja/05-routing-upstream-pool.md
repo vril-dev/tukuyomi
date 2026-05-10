@@ -237,7 +237,7 @@ connection はそのまま流れ、新規だけが他 backend に振り分けら
 block された request には、これらの selected-backend 系 field は **出さない**
 仕様です。
 
-## 5.4　Forwarded ヘッダと観測用ヘッダ
+## 5.4　Forwarded ヘッダーと観測用ヘッダー
 
 通常の `http://` / `https://` upstream proxy では、tukuyomi が次の header を
 **自動的に付与** します。

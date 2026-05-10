@@ -91,7 +91,8 @@ if [[ "${validate_code}" != "200" ]]; then
 fi
 
 probe_raw="$(jq --arg upstream "http://127.0.0.1:${WAF_LISTEN_PORT}" \
-  '.upstreams = [{"name":"probe","url":$upstream,"weight":1,"enabled":true}]' <<<"${raw}")"
+  '.upstreams = [{"name":"probe","url":$upstream,"weight":1,"enabled":true}]
+   | .default_route = {"name":"probe-default","enabled":true,"action":{"upstream":"probe"}}' <<<"${raw}")"
 probe_body="$(jq -n --arg raw "${probe_raw}" --argjson timeout_ms 1000 '{raw: $raw, timeout_ms: $timeout_ms}')"
 proxy_api_set_admin_auth_args
 probe_code="$(curl -sS -o /tmp/proxy_probe_resp.json -w "%{http_code}" \

@@ -21,6 +21,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -66,8 +67,9 @@ const (
 	centerProtectedBootstrapActor        = "system:center-protected-bootstrap"
 	centerProtectedUpstreamName          = "center"
 	centerProtectedDefaultGatewayAPIPath = "/center-api"
-	centerProtectedDefaultCenterAPIPath  = "/center-api"
+	centerProtectedDefaultCenterAPIPath  = "/center-manage-api"
 	centerProtectedDefaultCenterUIPath   = "/center-ui"
+	centerDeviceAPIPathPrefix            = "/v1"
 )
 
 const (
@@ -704,7 +706,7 @@ func enrollEdgeDevice(ctx context.Context, req edgeDeviceEnrollmentRequest) (edg
 	if store == nil {
 		return edgeDeviceAuthStatusResponse{}, edgeEnrollmentError{status: http.StatusServiceUnavailable, message: "runtime DB store is not initialized"}
 	}
-	centerBaseURL, enrollURL, err := normalizeCenterEnrollmentURL(req.CenterURL)
+	enrollCandidates, err := centerEnrollmentURLCandidates(req.CenterURL)
 	if err != nil {
 		return edgeDeviceAuthStatusResponse{}, edgeEnrollmentError{status: http.StatusBadRequest, message: err.Error()}
 	}
@@ -728,7 +730,24 @@ func enrollEdgeDevice(ctx context.Context, req edgeDeviceEnrollmentRequest) (edg
 	if err != nil {
 		return edgeDeviceAuthStatusResponse{}, err
 	}
-	centerStatus, centerBody, err := sendEdgeDeviceEnrollment(ctx, enrollURL, token, wireReq)
+	var centerBaseURL string
+	var centerStatus int
+	var centerBody []byte
+	centerEnrollmentAccepted := false
+	for i, candidate := range enrollCandidates {
+		centerStatus, centerBody, err = sendEdgeDeviceEnrollment(ctx, candidate.EndpointURL, token, wireReq)
+		centerBaseURL = candidate.BaseURL
+		if err == nil && centerStatus >= 200 && centerStatus < 300 {
+			centerEnrollmentAccepted = validCenterEnrollmentResponse(centerBody)
+			if centerEnrollmentAccepted || i == len(enrollCandidates)-1 {
+				break
+			}
+			continue
+		}
+		if i == len(enrollCandidates)-1 || !shouldTryCenterDeviceAPIBaseFallback(centerStatus, centerBody, err) {
+			break
+		}
+	}
 	now := time.Now().UTC().Unix()
 	identity.CenterURL = centerBaseURL
 	identity.LastEnrollmentAtUnix = now
@@ -745,6 +764,15 @@ func enrollEdgeDevice(ctx context.Context, req edgeDeviceEnrollmentRequest) (edg
 		message := centerEnrollmentErrorMessage(centerStatus, centerBody)
 		identity.EnrollmentStatus = edgeEnrollmentStatusFailed
 		identity.LastEnrollmentError = clampEdgeText(message, 4096)
+		if updateErr := upsertEdgeDeviceIdentity(store, identity); updateErr != nil {
+			return edgeDeviceAuthStatusResponse{}, updateErr
+		}
+		return edgeDeviceAuthStatusResponse{}, edgeEnrollmentError{status: http.StatusBadGateway, message: message}
+	}
+	if !centerEnrollmentAccepted {
+		message := "center enrollment response is invalid JSON"
+		identity.EnrollmentStatus = edgeEnrollmentStatusFailed
+		identity.LastEnrollmentError = message
 		if updateErr := upsertEdgeDeviceIdentity(store, identity); updateErr != nil {
 			return edgeDeviceAuthStatusResponse{}, updateErr
 		}
@@ -781,7 +809,7 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 	if strings.TrimSpace(identity.CenterURL) == "" {
 		return edgeDeviceAuthStatusResponse{}, edgeEnrollmentError{status: http.StatusConflict, message: "center URL is not configured"}
 	}
-	statusURL, err := centerDeviceStatusURL(identity.CenterURL)
+	statusCandidates, err := centerDeviceStatusURLCandidates(identity.CenterURL)
 	if err != nil {
 		return edgeDeviceAuthStatusResponse{}, edgeEnrollmentError{status: http.StatusBadRequest, message: err.Error()}
 	}
@@ -789,10 +817,25 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 	if err != nil {
 		return edgeDeviceAuthStatusResponse{}, err
 	}
-	centerHTTPStatus, centerBody, err := sendEdgeDeviceStatus(ctx, statusURL, wireReq)
+	var centerHTTPStatus int
+	var centerBody []byte
+	var centerBaseURL string
+	for i, candidate := range statusCandidates {
+		centerHTTPStatus, centerBody, err = sendEdgeDeviceStatus(ctx, candidate.EndpointURL, wireReq)
+		centerBaseURL = candidate.BaseURL
+		if err == nil && centerHTTPStatus >= 200 && centerHTTPStatus < 300 && json.Valid(centerBody) {
+			break
+		}
+		if i == len(statusCandidates)-1 || !shouldTryCenterDeviceAPIBaseFallback(centerHTTPStatus, centerBody, err) {
+			break
+		}
+	}
 	now := time.Now().UTC().Unix()
 	identity.UpdatedAtUnix = now
 	identity.CenterStatusCheckedAtUnix = now
+	if strings.TrimSpace(centerBaseURL) != "" {
+		identity.CenterURL = centerBaseURL
+	}
 	if err != nil {
 		identity.CenterStatusError = clampEdgeText(err.Error(), 4096)
 		if updateErr := upsertEdgeDeviceIdentity(store, identity); updateErr != nil {
@@ -1062,7 +1105,25 @@ func bootstrapCenterProtectedGatewayProxyRoutes(store *wafEventStore, centerURL 
 		changed = true
 	}
 
-	for _, nextRoute := range centerProtectedGatewayRoutes(routeCfg) {
+	legacyManageRoute, legacyManageRouteFound := centerProtectedLegacyManageRoute(cfg.Routes, routeCfg)
+	legacyManageHosts := append([]string(nil), legacyManageRoute.Match.Hosts...)
+	legacyManageAccess := cloneCenterProtectedGatewayRouteAccess(legacyManageRoute.Access)
+	centerRouteHosts := centerProtectedGatewayFirstNonEmptyHosts(
+		centerProtectedGatewayRouteHosts(cfg.Routes, "center-manage-api"),
+		centerProtectedGatewayRouteHosts(cfg.Routes, "center-ui"),
+		legacyManageHosts,
+	)
+	nextRoutes := centerProtectedGatewayRoutes(routeCfg)
+	filteredRoutes := cfg.Routes[:0]
+	for _, route := range cfg.Routes {
+		if route.Name == "center-device-api" {
+			changed = true
+			continue
+		}
+		filteredRoutes = append(filteredRoutes, route)
+	}
+	cfg.Routes = filteredRoutes
+	for _, nextRoute := range nextRoutes {
 		routeFound := false
 		for i := range cfg.Routes {
 			if cfg.Routes[i].Name != nextRoute.Name {
@@ -1070,6 +1131,20 @@ func bootstrapCenterProtectedGatewayProxyRoutes(store *wafEventStore, centerURL 
 			}
 			routeFound = true
 			mergedRoute := mergeCenterProtectedGatewayRoute(cfg.Routes[i], nextRoute)
+			if nextRoute.Name == "center-api" && centerProtectedRouteIsLegacyManageRoute(cfg.Routes[i], routeCfg) {
+				mergedRoute.Access = nil
+			}
+			if nextRoute.Name == "center-api" && len(mergedRoute.Match.Hosts) == 0 && len(centerRouteHosts) > 0 {
+				mergedRoute.Match.Hosts = append([]string(nil), centerRouteHosts...)
+			}
+			if nextRoute.Name == "center-manage-api" && legacyManageRouteFound {
+				if len(mergedRoute.Match.Hosts) == 0 && len(legacyManageHosts) > 0 {
+					mergedRoute.Match.Hosts = append([]string(nil), legacyManageHosts...)
+				}
+				if mergedRoute.Access == nil && legacyManageAccess != nil {
+					mergedRoute.Access = cloneCenterProtectedGatewayRouteAccess(legacyManageAccess)
+				}
+			}
 			if mustJSON(cfg.Routes[i]) != mustJSON(mergedRoute) {
 				cfg.Routes[i] = mergedRoute
 				changed = true
@@ -1077,6 +1152,17 @@ func bootstrapCenterProtectedGatewayProxyRoutes(store *wafEventStore, centerURL 
 			break
 		}
 		if !routeFound {
+			if nextRoute.Name == "center-api" && len(nextRoute.Match.Hosts) == 0 && len(centerRouteHosts) > 0 {
+				nextRoute.Match.Hosts = append([]string(nil), centerRouteHosts...)
+			}
+			if nextRoute.Name == "center-manage-api" && legacyManageRouteFound {
+				if len(nextRoute.Match.Hosts) == 0 && len(legacyManageHosts) > 0 {
+					nextRoute.Match.Hosts = append([]string(nil), legacyManageHosts...)
+				}
+				if nextRoute.Access == nil && legacyManageAccess != nil {
+					nextRoute.Access = cloneCenterProtectedGatewayRouteAccess(legacyManageAccess)
+				}
+			}
 			cfg.Routes = append(cfg.Routes, nextRoute)
 			changed = true
 		}
@@ -1090,6 +1176,54 @@ func bootstrapCenterProtectedGatewayProxyRoutes(store *wafEventStore, centerURL 
 	}
 	_, err = store.writeProxyConfigVersion(rec.ETag, cfg, configVersionSourceApply, centerProtectedBootstrapActor, "center-protected proxy route bootstrap", 0)
 	return err
+}
+
+func centerProtectedGatewayRouteHosts(routes []ProxyRoute, name string) []string {
+	for _, route := range routes {
+		if route.Name == name {
+			return append([]string(nil), route.Match.Hosts...)
+		}
+	}
+	return nil
+}
+
+func centerProtectedGatewayFirstNonEmptyHosts(groups ...[]string) []string {
+	for _, hosts := range groups {
+		if len(hosts) > 0 {
+			return append([]string(nil), hosts...)
+		}
+	}
+	return nil
+}
+
+func centerProtectedLegacyManageRoute(routes []ProxyRoute, routeCfg centerProtectedGatewayRouteConfig) (ProxyRoute, bool) {
+	for _, route := range routes {
+		if centerProtectedRouteIsLegacyManageRoute(route, routeCfg) {
+			return route, true
+		}
+	}
+	return ProxyRoute{}, false
+}
+
+func centerProtectedRouteIsLegacyManageRoute(route ProxyRoute, routeCfg centerProtectedGatewayRouteConfig) bool {
+	if route.Name != "center-api" || routeCfg.CenterAPIBasePath == routeCfg.GatewayAPIBasePath {
+		return false
+	}
+	if route.Match.Path == nil || strings.TrimRight(route.Match.Path.Value, "/") != strings.TrimRight(routeCfg.GatewayAPIBasePath, "/") {
+		return false
+	}
+	if route.Action.PathRewrite == nil {
+		return true
+	}
+	prefix := strings.TrimRight(route.Action.PathRewrite.Prefix, "/")
+	if prefix == "" {
+		prefix = "/"
+	}
+	centerAPIBase := strings.TrimRight(routeCfg.CenterAPIBasePath, "/")
+	if centerAPIBase == "" {
+		centerAPIBase = "/"
+	}
+	return prefix == centerAPIBase
 }
 
 func mergeCenterProtectedGatewayRoute(current ProxyRoute, next ProxyRoute) ProxyRoute {
@@ -1112,19 +1246,27 @@ func cloneCenterProtectedGatewayRouteAccess(access *ProxyRouteAccess) *ProxyRout
 }
 
 func centerProtectedGatewayRoutes(routeCfg centerProtectedGatewayRouteConfig) []ProxyRoute {
-	apiAction := ProxyRouteAction{Upstream: centerProtectedUpstreamName}
-	if routeCfg.GatewayAPIBasePath != routeCfg.CenterAPIBasePath {
-		apiAction.PathRewrite = &ProxyRoutePathRewrite{Prefix: routeCfg.CenterAPIBasePath}
-	}
 	return []ProxyRoute{
 		{
 			Name:     "center-api",
-			Priority: 10,
+			Priority: 5,
 			Match: ProxyRouteMatch{Path: &ProxyRoutePathMatch{
 				Type:  "prefix",
 				Value: routeCfg.GatewayAPIBasePath,
 			}},
-			Action: apiAction,
+			Action: ProxyRouteAction{
+				Upstream:    centerProtectedUpstreamName,
+				PathRewrite: &ProxyRoutePathRewrite{Prefix: "/"},
+			},
+		},
+		{
+			Name:     "center-manage-api",
+			Priority: 10,
+			Match: ProxyRouteMatch{Path: &ProxyRoutePathMatch{
+				Type:  "prefix",
+				Value: routeCfg.CenterAPIBasePath,
+			}},
+			Action: ProxyRouteAction{Upstream: centerProtectedUpstreamName},
 		},
 		{
 			Name:     "center-ui",
@@ -1153,6 +1295,9 @@ func normalizeCenterProtectedGatewayRouteConfig(opts CenterProtectedGatewayBoots
 	}
 	if gatewayAPIBase == centerUIBase {
 		return centerProtectedGatewayRouteConfig{}, fmt.Errorf("gateway api base path and center ui base path must differ")
+	}
+	if gatewayAPIBase == centerAPIBase {
+		return centerProtectedGatewayRouteConfig{}, fmt.Errorf("gateway api base path and center api base path must differ")
 	}
 	if centerAPIBase == centerUIBase {
 		return centerProtectedGatewayRouteConfig{}, fmt.Errorf("center api base path and center ui base path must differ")
@@ -1231,159 +1376,217 @@ func respondEdgeDeviceEnrollmentError(c *gin.Context, err error) {
 }
 
 func normalizeCenterEnrollmentURL(raw string) (string, string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || len(raw) > 2048 {
-		return "", "", fmt.Errorf("center URL is required")
+	candidates, err := centerEnrollmentURLCandidates(raw)
+	if err != nil {
+		return "", "", err
 	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "", "", fmt.Errorf("center URL must be absolute")
-	}
-	if u.User != nil {
-		return "", "", fmt.Errorf("center URL must not include credentials")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", "", fmt.Errorf("center URL scheme must be http or https")
-	}
-	if u.RawQuery != "" || u.Fragment != "" {
-		return "", "", fmt.Errorf("center URL must not include query or fragment")
-	}
-	path := strings.TrimRight(u.EscapedPath(), "/")
-	if path != "" && path != "/v1/enroll" {
-		return "", "", fmt.Errorf("center URL path must be empty or /v1/enroll")
-	}
-	base := &url.URL{Scheme: u.Scheme, Host: u.Host}
-	enroll := *base
-	enroll.Path = "/v1/enroll"
-	return base.String(), enroll.String(), nil
+	return candidates[0].BaseURL, candidates[0].EndpointURL, nil
 }
 
 func centerDeviceStatusURL(centerBaseURL string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("center URL is not configured")
+	return centerDeviceAPIURL(centerBaseURL, "/v1/device-status")
+}
+
+type centerEndpointCandidate struct {
+	BaseURL     string
+	EndpointURL string
+}
+
+func centerEnrollmentURLCandidates(raw string) ([]centerEndpointCandidate, error) {
+	return centerDeviceAPIEndpointCandidates(raw, "/v1/enroll")
+}
+
+func centerDeviceStatusURLCandidates(centerBaseURL string) ([]centerEndpointCandidate, error) {
+	return centerDeviceAPIEndpointCandidates(centerBaseURL, "/v1/device-status")
+}
+
+func centerDeviceAPIEndpointCandidates(raw string, endpoint string) ([]centerEndpointCandidate, error) {
+	baseURL, err := normalizeCenterDeviceAPIBaseURL(raw)
+	if err != nil {
+		return nil, err
 	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("center URL is invalid")
+	primary, err := centerDeviceAPIURL(baseURL, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	candidates := []centerEndpointCandidate{{BaseURL: baseURL, EndpointURL: primary}}
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(parsed.Path) == "" {
+		fallback := *parsed
+		fallback.Path = centerProtectedDefaultGatewayAPIPath
+		fallback.RawPath = ""
+		fallbackURL := fallback.String()
+		if fallbackURL != baseURL {
+			fallbackEndpoint, err := centerDeviceAPIURL(fallbackURL, endpoint)
+			if err != nil {
+				return nil, err
+			}
+			candidates = append(candidates, centerEndpointCandidate{BaseURL: fallbackURL, EndpointURL: fallbackEndpoint})
+		}
+	} else if centerDeviceAPIBaseIsLocalLoopbackWithPath(parsed) {
+		fallback := *parsed
+		fallback.Path = ""
+		fallback.RawPath = ""
+		fallbackURL := fallback.String()
+		if fallbackURL != baseURL {
+			fallbackEndpoint, err := centerDeviceAPIURL(fallbackURL, endpoint)
+			if err != nil {
+				return nil, err
+			}
+			candidates = append(candidates, centerEndpointCandidate{BaseURL: fallbackURL, EndpointURL: fallbackEndpoint})
+		}
+	}
+	return candidates, nil
+}
+
+func centerDeviceAPIBaseIsLocalLoopbackWithPath(u *url.URL) bool {
+	if u == nil {
+		return false
+	}
+	pathValue := strings.TrimRight(strings.TrimSpace(u.Path), "/")
+	if pathValue == "" {
+		return false
+	}
+	host := strings.TrimSpace(u.Hostname())
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	addr, err := netip.ParseAddr(host)
+	return err == nil && addr.IsLoopback()
+}
+
+func normalizeCenterDeviceAPIBaseURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || len(raw) > 2048 {
+		return "", fmt.Errorf("center URL is required")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("center URL must be absolute")
+	}
+	if u.User != nil {
+		return "", fmt.Errorf("center URL must not include credentials")
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return "", fmt.Errorf("center URL scheme must be http or https")
 	}
-	u.Path = "/v1/device-status"
+	if u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("center URL must not include query or fragment")
+	}
+	basePath, err := normalizeCenterDeviceAPIBasePath(u.Path)
+	if err != nil {
+		return "", err
+	}
+	u.Path = basePath
+	u.RawPath = ""
+	return u.String(), nil
+}
+
+func normalizeCenterDeviceAPIBasePath(rawPath string) (string, error) {
+	if strings.TrimSpace(rawPath) == "" || rawPath == "/" {
+		return "", nil
+	}
+	if !strings.HasPrefix(rawPath, "/") {
+		rawPath = "/" + rawPath
+	}
+	for _, segment := range strings.Split(rawPath, "/") {
+		if segment == "." || segment == ".." {
+			return "", fmt.Errorf("center URL path must not contain dot segments")
+		}
+	}
+	clean := path.Clean(rawPath)
+	if clean == "." || clean == "/" {
+		return "", nil
+	}
+	for _, endpoint := range []string{
+		"/v1/enroll",
+		"/v1/device-status",
+		"/v1/device-config-snapshot",
+		"/v1/rule-artifact-bundle",
+		"/v1/runtime-artifact-download",
+		"/v1/proxy-rules-bundle-download",
+		"/v1/waf-rule-artifact-download",
+		"/v1/app-deploy-package-download",
+		"/v1/app-deploy-baseline-upload",
+		"/v1/remote-ssh/signing-key",
+		"/v1/remote-ssh/gateway-stream",
+	} {
+		if clean == endpoint {
+			return "", nil
+		}
+		if strings.HasSuffix(clean, endpoint) {
+			base := strings.TrimSuffix(clean, endpoint)
+			if base == "" || base == "/" {
+				return "", nil
+			}
+			return base, nil
+		}
+	}
+	if clean == centerDeviceAPIPathPrefix {
+		return "", nil
+	}
+	if strings.HasSuffix(clean, centerDeviceAPIPathPrefix) {
+		base := strings.TrimSuffix(clean, centerDeviceAPIPathPrefix)
+		if base == "" || base == "/" {
+			return "", nil
+		}
+		return base, nil
+	}
+	return clean, nil
+}
+
+func centerDeviceAPIURL(centerBaseURL string, endpoint string) (string, error) {
+	baseURL, err := normalizeCenterDeviceAPIBaseURL(centerBaseURL)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("center URL is not configured")
+	}
+	endpoint = strings.TrimSpace(endpoint)
+	if !strings.HasPrefix(endpoint, centerDeviceAPIPathPrefix+"/") {
+		return "", fmt.Errorf("center API endpoint is invalid")
+	}
+	basePath := strings.TrimRight(u.Path, "/")
+	if basePath == "" {
+		u.Path = endpoint
+	} else {
+		u.Path = basePath + endpoint
+	}
 	u.RawPath = ""
 	return u.String(), nil
 }
 
 func centerDeviceConfigSnapshotURL(centerBaseURL string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("center URL is not configured")
-	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("center URL is invalid")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("center URL scheme must be http or https")
-	}
-	u.Path = "/v1/device-config-snapshot"
-	u.RawPath = ""
-	return u.String(), nil
+	return centerDeviceAPIURL(centerBaseURL, "/v1/device-config-snapshot")
 }
 
 func centerRuleArtifactBundleURL(centerBaseURL string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("center URL is not configured")
-	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("center URL is invalid")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("center URL scheme must be http or https")
-	}
-	u.Path = "/v1/rule-artifact-bundle"
-	u.RawPath = ""
-	return u.String(), nil
+	return centerDeviceAPIURL(centerBaseURL, "/v1/rule-artifact-bundle")
 }
 
 func centerRuntimeArtifactDownloadURL(centerBaseURL string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("center URL is not configured")
-	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("center URL is invalid")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("center URL scheme must be http or https")
-	}
-	u.Path = "/v1/runtime-artifact-download"
-	u.RawPath = ""
-	return u.String(), nil
+	return centerDeviceAPIURL(centerBaseURL, "/v1/runtime-artifact-download")
 }
 
 func centerProxyRulesBundleDownloadURL(centerBaseURL string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("center URL is not configured")
-	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("center URL is invalid")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("center URL scheme must be http or https")
-	}
-	u.Path = "/v1/proxy-rules-bundle-download"
-	u.RawPath = ""
-	return u.String(), nil
+	return centerDeviceAPIURL(centerBaseURL, "/v1/proxy-rules-bundle-download")
 }
 
 func centerWAFRuleArtifactDownloadURL(centerBaseURL string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("center URL is not configured")
-	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("center URL is invalid")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("center URL scheme must be http or https")
-	}
-	u.Path = "/v1/waf-rule-artifact-download"
-	u.RawPath = ""
-	return u.String(), nil
+	return centerDeviceAPIURL(centerBaseURL, "/v1/waf-rule-artifact-download")
 }
 
 func centerAppDeployPackageDownloadURL(centerBaseURL string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("center URL is not configured")
-	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("center URL is invalid")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("center URL scheme must be http or https")
-	}
-	u.Path = "/v1/app-deploy-package-download"
-	u.RawPath = ""
-	return u.String(), nil
+	return centerDeviceAPIURL(centerBaseURL, "/v1/app-deploy-package-download")
 }
 
 func centerAppDeployBaselineUploadURL(centerBaseURL string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("center URL is not configured")
-	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("center URL is invalid")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("center URL scheme must be http or https")
-	}
-	u.Path = "/v1/app-deploy-baseline-upload"
-	u.RawPath = ""
-	return u.String(), nil
+	return centerDeviceAPIURL(centerBaseURL, "/v1/app-deploy-baseline-upload")
 }
 
 type edgeConfigSnapshotRuleAsset struct {
@@ -5601,6 +5804,31 @@ func centerEnrollmentErrorMessage(status int, body []byte) string {
 	return centerHTTPErrorMessage("center enrollment failed", status, body)
 }
 
+func validCenterEnrollmentResponse(body []byte) bool {
+	var payload struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+	return strings.TrimSpace(payload.Status) != ""
+}
+
+func shouldTryCenterDeviceAPIBaseFallback(status int, body []byte, err error) bool {
+	if err != nil {
+		return true
+	}
+	switch status {
+	case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusTooManyRequests:
+		return true
+	}
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return false
+	}
+	return trimmed[0] != '{' && trimmed[0] != '['
+}
+
 func centerHTTPErrorMessage(operation string, status int, body []byte) string {
 	operation = strings.TrimSpace(operation)
 	if operation == "" {
@@ -6572,41 +6800,33 @@ func edgeRemoteSSHGatewayStreamBodyHash(sessionID string, hostKeyFingerprint str
 }
 
 func centerRemoteSSHGatewayStreamURL(centerBaseURL string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
+	baseURL, err := normalizeCenterDeviceAPIBaseURL(centerBaseURL)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(baseURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return "", fmt.Errorf("center URL is not configured")
-	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("center URL is invalid")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("center URL scheme must be http or https")
 	}
 	if u.Scheme == "http" && !remoteSSHCenterURLAllowsHTTP(u) {
 		return "", fmt.Errorf("remote ssh center URL must use https unless it is literal loopback HTTP or admin.allow_insecure_defaults is enabled for local testing")
 	}
-	u.Path = "/v1/remote-ssh/gateway-stream"
-	u.RawPath = ""
-	return u.String(), nil
+	return centerDeviceAPIURL(baseURL, "/v1/remote-ssh/gateway-stream")
 }
 
 func centerRemoteSSHSigningKeyURL(centerBaseURL string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(centerBaseURL))
+	baseURL, err := normalizeCenterDeviceAPIBaseURL(centerBaseURL)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(baseURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return "", fmt.Errorf("center URL is not configured")
-	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("center URL is invalid")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("center URL scheme must be http or https")
 	}
 	if u.Scheme == "http" && !remoteSSHCenterURLAllowsHTTP(u) {
 		return "", fmt.Errorf("remote ssh center URL must use https unless it is literal loopback HTTP or admin.allow_insecure_defaults is enabled for local testing")
 	}
-	u.Path = "/v1/remote-ssh/signing-key"
-	u.RawPath = ""
-	return u.String(), nil
+	return centerDeviceAPIURL(baseURL, "/v1/remote-ssh/signing-key")
 }
 
 func remoteSSHCenterURLAllowsHTTP(u *url.URL) bool {

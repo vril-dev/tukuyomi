@@ -143,6 +143,7 @@ load 時に `/options` から消えます**。
 
 任意項目:
 
+- `max_request_body_bytes`
 - `try_files`
 - rewrite rules
 - access rules
@@ -165,6 +166,18 @@ Runtime App の動作は **nginx と同じく集中設定** です。document ro
 `.htaccess` のような file は、parse / import / watch / request 時再読込の
 対象にしません。古い config に残っている `override_file_name` は移行用と
 して **読み取るだけ** で、validate / apply 時に保存形から消えます。
+
+Runtime Apps は、ウェブサーバーとしての公開境界もここで強制します。
+
+- `.env`、`.git`、`.htaccess` など、ドットで始まる path segment は 404
+  を返す
+- `.well-known` は ACME などの標準公開リソース用に許可する
+- symlink は解決し、document root の外へ出るリクエストは 404 を返す
+- PHP-FPM / PSGI へ渡すリクエストボディは、ランタイムへ届く前に
+  `max_request_body_bytes` で上限をかける。未指定または `0` の場合は
+  64 MiB、設定できる上限は 2 GiB
+- `Proxy` リクエストヘッダーは Runtime App backend へ渡さないため、
+  PHP-FPM の `HTTP_PROXY` にもならない
 
 `.htaccess` 文化に慣れた人ほど最初に戸惑うところですが、tukuyomi の
 Runtime Apps は **同じ vhost 設定を validate / apply / rollback で扱う** と
@@ -201,18 +214,19 @@ Runtime App 保存後の流れ:
 1. `/runtime-apps` が定義を `data/php-fpm/vhosts.json` に保存
 2. runtime layer が `data/php-fpm/runtime/<runtime_id>/` に pool / config を
    生成
-3. effective proxy runtime に **`generated_target` 名の generated upstream**
-   が追加される
+3. effective proxy runtime に **`generated_target` 名の内部 target** が追加される
 4. `Proxy Rules > Upstreams` の configured upstream URL は **変更されない**
 5. traffic を Runtime App-backed app へ流すときは、operator が `Proxy Rules`
-   の route または default route から generated upstream を選択する
+   に明示した direct upstream を route または default route から選択する
 
 route の優先順は `Proxy Rules` が管理します（第5章を参照）。
 
 - explicit `routes[]`
 - generated site host fallback route
 - `default_route`
-- `upstreams[]`
+
+`upstreams[]` は転送先の定義です。route または default route から選択しない
+限り、traffic は公開されません。
 
 補足:
 
@@ -221,12 +235,14 @@ route の優先順は `Proxy Rules` が管理します（第5章を参照）。
   ません。
 - `generated_target` は server-owned の generated backend alias / pool 名で、
   admin UI では **operator input として表示されません**。
-- 通常運用では `Proxy Rules` から generated upstream target に routing します。
+- 通常運用では、operator が `Proxy Rules > Upstreams` に明示した direct
+  upstream へ routing します。generated Runtime App target 自体は route
+  selector として使いません。
 
 PHP runtime の詳細は `/runtime-apps` に置き、公開 traffic の選択は
-`Proxy Rules` に置く ── という棲み分けにより、generated upstream target が
-listener を表現してくれるため、**raw の `fcgi://` URL を手書きする必要は
-ありません**。
+`Proxy Rules` に置きます。generated target を route input から外しておく
+ことで、Runtime Apps が意図せず公開される事故を避けます。公開する場合は、
+明示的に upstream と route を追加します。
 
 ## 10.7　Process Lifecycle
 

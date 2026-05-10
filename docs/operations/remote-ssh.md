@@ -65,7 +65,7 @@ First fetch the Center signing public key from an authenticated Center admin
 session:
 
 ```sh
-curl "$CENTER/center-api/remote-ssh/signing-key" \
+curl "$CENTER/center-manage-api/remote-ssh/signing-key" \
   -H "Authorization: Bearer $TUKUYOMI_ADMIN_TOKEN"
 ```
 
@@ -153,7 +153,7 @@ feature and is not enabled by this setting.
 Enable the per-device policy from the Center API:
 
 ```sh
-curl -X PUT "$CENTER/center-api/devices/$DEVICE/remote-ssh/policy" \
+curl -X PUT "$CENTER/center-manage-api/devices/$DEVICE/remote-ssh/policy" \
   -H "Authorization: Bearer $TUKUYOMI_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"enabled":true,"max_ttl_sec":900,"require_reason":true,"allowed_run_as_user":"tukuyomi"}'

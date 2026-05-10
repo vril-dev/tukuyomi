@@ -363,14 +363,12 @@ const JA_STRINGS: Record<string, string> = {
     "この名前は route の action.upstream から参照されます。",
   "Name is referenced from backend pools or route action.upstream.":
     "この名前は backend pool または route の action.upstream から参照されます。",
-  "Explicit routes run first, then Site routes, default_route, and finally upstreams. Use generated Runtime App targets from action.upstream for managed app traffic.":
-    "explicit route が先に評価され、その後 Site route、default_route、最後に upstreams が使われます。管理 app の通信は action.upstream から generated Runtime App target を指定します。",
-  "No explicit route rules configured. Traffic can still use default_route or upstream fallback; managed Runtime Apps are selected by generated target name.":
-    "explicit route は未設定です。トラフィックは default_route または upstream fallback を使えます。管理 Runtime Apps は generated target 名で選択します。",
-  "Used only when no route matches. If absent, upstreams are used.":
-    "どの route にも一致しない時だけ使われます。未設定なら upstreams が使われます。",
-  "Configure a default route when you want a distinct fallback before upstream selection.":
-    "upstream 選択の前に別の fallback を使いたい場合は default route を設定します。",
+  "Explicit routes run first, then Site routes, and default_route. Upstreams are target definitions only and never expose traffic by themselves.":
+    "explicit route、Site route、default_route の順で評価されます。upstream は転送先の定義であり、upstream だけではトラフィックを公開しません。",
+  "No explicit route rules configured. Only Site routes or default_route can receive unmatched traffic.":
+    "explicit route は未設定です。未一致のトラフィックを受けるのは Site route または default_route だけです。",
+  "Configure a default route when unmatched traffic should be forwarded.":
+    "未一致のトラフィックを受けるルートが必要な場合は default route を設定します。",
   "Dry Run": "Dry Run",
   "Confirm which route would win and which final upstream URL would be used without changing live traffic.":
     "実トラフィックを変えずに、どの route が選ばれ、最終的にどの upstream URL が使われるか確認します。",
@@ -413,8 +411,8 @@ const JA_STRINGS: Record<string, string> = {
   "One IP or CIDR per line. Deny CIDRs are checked before Allow CIDRs; leave empty when Allow CIDRs should be the only permit list.":
     "1 行に 1 つの IP または CIDR を入力します。拒否 CIDR は許可 CIDR より先に評価されます。許可 CIDR だけで絞る場合は空にします。",
   "Action upstream": "action upstream",
-  "Use a direct upstream name or a generated Runtime App target name. Runtime App targets point to the configured listen host and port.":
-    "direct upstream 名または generated Runtime App target 名を指定します。Runtime App target は設定済み listen host と port を指します。",
+  "Use a direct upstream name from Upstreams. Runtime App targets are not valid route targets here.":
+    "`Upstreams` の direct upstream 名を指定します。Runtime App target はここでは route target として使えません。",
   "Host rewrite": "Host 書き換え",
   "Optional outbound Host header override.":
     "任意の送信先 Host ヘッダ上書きです。",
@@ -438,8 +436,8 @@ const JA_STRINGS: Record<string, string> = {
   "Required only for header/cookie hash.":
     "header/cookie hash の時だけ必要です。",
   "Sticky session": "Sticky session",
-  "One named upstream per line. Direct upstreams and generated Runtime App targets are valid members.":
-    "1 行に 1 つの named upstream を指定します。direct upstream と generated Runtime App target が member として有効です。",
+  "One direct upstream name per line. Runtime App targets are not valid backend-pool members.":
+    "1 行に 1 つの direct upstream 名を指定します。Runtime App target は backend pool member として使えません。",
   "Issue a signed affinity cookie so clients return to the same selectable backend in this pool.":
     "署名付き affinity Cookie を発行し、この pool 内の同じ選択可能 backend へ client を戻します。",
   "Cookie name": "Cookie 名",
@@ -457,8 +455,8 @@ const JA_STRINGS: Record<string, string> = {
   "Optionally tell backend applications which named upstream handled the request. This is observability-only and applies only to Proxy Rules > Upstreams targets.":
     "必要な場合だけ、どの named upstream が request を処理したかを backend application へ伝えます。用途は observability 専用で、対象は Proxy Rules > Upstreams の named upstream だけです。",
   "Emit X-Tukuyomi-Upstream-Name": "Emit X-Tukuyomi-Upstream-Name",
-  "When enabled, named upstream requests carry X-Tukuyomi-Upstream-Name to the backend. Direct URLs and generated Runtime App targets do not receive it.":
-    "有効にすると、named upstream へ流れる request だけが backend へ X-Tukuyomi-Upstream-Name を送ります。direct URL と generated Runtime App target には付きません。",
+  "When enabled, route-selected direct upstream requests carry X-Tukuyomi-Upstream-Name to the backend.":
+    "有効にすると、route で選択された direct upstream request に X-Tukuyomi-Upstream-Name を付けて backend へ送ります。",
   "This header is internal observability data. It is stripped from inbound requests and re-added only when a named upstream is finally selected after WAF.":
     "この header は内部 observability 用です。inbound request からは一度除去し、WAF 後に named upstream が最終選択された時だけ付け直します。",
   "Inspect direct upstream backends used by routing. Runtime enable/drain/disable and weight overrides apply here; Runtime App targets stay on the Runtime Apps surface.":
@@ -976,8 +974,8 @@ const JA_STRINGS: Record<string, string> = {
     "TLS binding は Host/SNI 名で選択されます。Site レコードは不要です。",
   "TLS Status": "TLS ステータス",
   "No TLS status yet. Use Validate or Load.": "TLS ステータスはまだありません。Validate または Load を実行してください。",
-  "Define runtime-backed application listeners here. Proxy Rules routes traffic to the generated upstream target.":
-    "runtime backed application listener をここで定義します。traffic は Proxy Rules から generated upstream target へ routing します。",
+  "Define runtime-backed application listeners here. Publish traffic only through explicit Proxy Rules upstreams and routes.":
+    "runtime backed application listener をここで定義します。公開 traffic は Proxy Rules の明示的な upstream と route からだけ流します。",
   "Runtime Apps": "Runtime Apps",
   "Loading Runtime Apps...": "Runtime Apps を読み込んでいます...",
   "Saved. Runtime Apps config applied.": "保存しました。Runtime Apps 設定を適用しました。",
@@ -991,6 +989,9 @@ const JA_STRINGS: Record<string, string> = {
     "Static mode はこの画面ではサポートしていません。この entry を削除するか、明示的な runtime binding を持つ PHP-FPM runtime app に置き換えてください。",
   "Listen Host": "待ち受け Host",
   "Listen Port": "待ち受け Port",
+  "Max request body bytes": "最大リクエストボディサイズ (bytes)",
+  "0 uses the 64 MiB default. Maximum: 2 GiB.":
+    "0 の場合はデフォルトの 64 MiB を使います。最大: 2 GiB。",
   "Runtime App Basic Auth Realm": "Runtime App Basic Auth Realm",
   "Server-side Runtime Apps revision was refreshed; the editor values were kept. Review the error and apply again.":
     "サーバ側の Runtime Apps revision を更新しました。編集中の値は保持しています。エラー内容を確認してから再度適用してください。",

@@ -284,15 +284,15 @@ routing model:
   1. explicit `routes[]`
   2. DB `sites` domain 由来の generated host fallback route
   3. `default_route`
-  4. `upstreams[]`
 - host match: exact と `*.example.com`
 - path match: `exact` / `prefix` / `regex`
 - `upstreams[]`: Runtime Apps が所有しない direct backend node catalog。
-  各行は static `url` か `discovery` のどちらか
+  各行は static `url` か `discovery` のどちらか。暗黙のフォールバックルート
+  としては使われません。
 - `backend_pools[]`: named upstream member から route 単位の balancing set
 - `action.backend_pool`: balancing 標準の route binding
-- `action.upstream`: direct upstream 名 または server-generated Runtime App
-  upstream 名
+- `action.upstream`: `upstreams[]` に書いた direct upstream 名。
+  server-generated Runtime App target はここでは route target として使いません
 - `action.canary_upstream` と `action.canary_weight_percent`: route-level
   canary
 - `action.host_rewrite` / `action.path_rewrite.prefix` /

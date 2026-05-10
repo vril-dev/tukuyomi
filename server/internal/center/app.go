@@ -27,7 +27,7 @@ import (
 
 const (
 	DefaultListenAddr         = "127.0.0.1:9092"
-	DefaultAPIBasePath        = "/center-api"
+	DefaultAPIBasePath        = "/center-manage-api"
 	DefaultGatewayAPIBasePath = "/center-api"
 	DefaultUIBasePath         = "/center-ui"
 
@@ -233,7 +233,7 @@ func NewEngine(cfg RuntimeConfig) (*gin.Engine, error) {
 		CenterAPIAllowCIDRs:          append([]string(nil), cfg.CenterAPIAllowCIDRs...),
 		ExperimentalAppDeployEnabled: cfg.ExperimentalAppDeployEnabled,
 	})
-	registerCenterUI(r, apiBase, gatewayAPIBase, uiBase, cfg.ExperimentalAppDeployEnabled)
+	registerCenterUI(r, apiBase, uiBase, cfg.ExperimentalAppDeployEnabled)
 	return r, nil
 }
 

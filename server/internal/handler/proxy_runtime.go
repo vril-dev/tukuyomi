@@ -261,9 +261,6 @@ type ProxyRulesConfig struct {
 
 	responseHeaderSanitizePolicy proxyResponseHeaderSanitizePolicy `json:"-"`
 	routeOrder                   []int                             `json:"-"`
-	defaultTargetCandidatesReady bool                              `json:"-"`
-	defaultTargetCandidates      []proxyRouteTargetCandidate       `json:"-"`
-	defaultTargetSelection       proxyRouteTargetSelectionOptions  `json:"-"`
 }
 
 type ProxyUpstreamTLSConfig struct {
@@ -306,6 +303,7 @@ type ProxyDiscoveryConfig struct {
 const (
 	proxyUpstreamGeneratedKindNone             = ""
 	proxyUpstreamGeneratedKindVhostTarget      = "vhost_target"
+	proxyUpstreamGeneratedKindSiteTarget       = "site_target"
 	proxyUpstreamGeneratedKindDiscoveredTarget = "discovered_target"
 
 	proxyUpstreamProviderClassDirect       = "direct"
@@ -448,9 +446,18 @@ func loadProxyRulesStartupPrepared(path string) (proxyRulesPreparedUpdate, int64
 			return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("read normalized proxy config from db: %w", err)
 		}
 		if found {
-			prepared, err := prepareProxyRulesRaw(mustJSON(cfg))
+			startupSites := currentSiteConfig()
+			startupVhosts := currentVhostConfig()
+			sanitizedCfg, sanitized := sanitizeLegacyGeneratedProxyRouteTargets(cfg, startupSites, startupVhosts)
+			prepared, err := prepareProxyRulesRawWithSitesAndVhosts(mustJSON(sanitizedCfg), startupSites, startupVhosts)
 			if err != nil {
 				return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("invalid normalized proxy config: %w", err)
+			}
+			if sanitized {
+				rec, err = store.writeProxyConfigVersion(rec.ETag, prepared.cfg, configVersionSourceApply, "", "remove legacy generated proxy route targets", 0)
+				if err != nil {
+					return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("persist sanitized proxy config: %w", err)
+				}
 			}
 			prepared.etag = rec.ETag
 			return prepared, rec.VersionID, nil
@@ -484,6 +491,83 @@ func loadProxyRulesStartupPrepared(path string) (proxyRulesPreparedUpdate, int64
 		return proxyRulesPreparedUpdate{}, 0, fmt.Errorf("invalid proxy config (%s): %w", path, err)
 	}
 	return prepared, 0, nil
+}
+
+func sanitizeLegacyGeneratedProxyRouteTargets(cfg ProxyRulesConfig, sites SiteConfigFile, vhosts VhostConfigFile) (ProxyRulesConfig, bool) {
+	generatedNames := make(map[string]struct{})
+	for _, upstream := range generatedVhostUpstreams(vhosts) {
+		if name := strings.TrimSpace(upstream.Name); name != "" {
+			generatedNames[name] = struct{}{}
+		}
+	}
+	for _, upstream := range siteGeneratedUpstreams(sites) {
+		if name := strings.TrimSpace(upstream.Name); name != "" {
+			generatedNames[name] = struct{}{}
+		}
+	}
+	if len(generatedNames) == 0 {
+		return cfg, false
+	}
+
+	out := cfg
+	changed := false
+	removedPools := make(map[string]struct{})
+	if len(cfg.BackendPools) > 0 {
+		pools := make([]ProxyBackendPool, 0, len(cfg.BackendPools))
+		for _, pool := range cfg.BackendPools {
+			next := pool
+			if len(pool.Members) > 0 {
+				members := make([]string, 0, len(pool.Members))
+				for _, member := range pool.Members {
+					if _, generated := generatedNames[strings.TrimSpace(member)]; generated {
+						changed = true
+						continue
+					}
+					members = append(members, member)
+				}
+				next.Members = members
+			}
+			if len(next.Members) == 0 && len(pool.Members) > 0 {
+				removedPools[strings.TrimSpace(pool.Name)] = struct{}{}
+				changed = true
+				continue
+			}
+			pools = append(pools, next)
+		}
+		out.BackendPools = pools
+	}
+
+	if len(cfg.Routes) > 0 {
+		routes := make([]ProxyRoute, 0, len(cfg.Routes))
+		for _, route := range cfg.Routes {
+			if proxyRouteActionReferencesGeneratedTarget(route.Action, generatedNames, removedPools) {
+				changed = true
+				continue
+			}
+			routes = append(routes, route)
+		}
+		out.Routes = routes
+	}
+
+	if cfg.DefaultRoute != nil && proxyRouteActionReferencesGeneratedTarget(cfg.DefaultRoute.Action, generatedNames, removedPools) {
+		out.DefaultRoute = nil
+		changed = true
+	}
+
+	return out, changed
+}
+
+func proxyRouteActionReferencesGeneratedTarget(action ProxyRouteAction, generatedNames map[string]struct{}, removedPools map[string]struct{}) bool {
+	if _, generated := generatedNames[strings.TrimSpace(action.Upstream)]; generated {
+		return true
+	}
+	if _, generated := generatedNames[strings.TrimSpace(action.CanaryUpstream)]; generated {
+		return true
+	}
+	if _, removed := removedPools[strings.TrimSpace(action.BackendPool)]; removed {
+		return true
+	}
+	return false
 }
 
 func rewriteTukuyomiProxyRequest(in *http.Request, out *http.Request) *http.Request {
@@ -1168,9 +1252,6 @@ func normalizeAndValidateProxyRules(in ProxyRulesConfig, sites SiteConfigFile, v
 		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	if _, err := proxyTransportProfileCatalog(effectiveCfg); err != nil {
-		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
-	}
-	if err := precomputeProxyStaticFallbackTargets(&effectiveCfg); err != nil {
 		return ProxyRulesConfig{}, ProxyRulesConfig{}, nil, proxyerror.Response{}, err
 	}
 	errRes, err := proxyerror.New(proxyerror.Config{
@@ -1875,7 +1956,7 @@ func resolveProxyHTTP2ValidationTarget(cfg ProxyRulesConfig, ref string, field s
 			return nil, fmt.Errorf("%s references duplicated upstream name %q", field, ref)
 		}
 		if !proxyUpstreamAllowedAsRouteTarget(upstream) {
-			return nil, fmt.Errorf("%s must reference a direct or generated Runtime App upstream name", field)
+			return nil, fmt.Errorf("%s must reference a configured direct upstream name", field)
 		}
 		if proxyUpstreamDiscoveryEnabled(upstream) {
 			return &url.URL{Scheme: upstream.Discovery.Scheme}, nil
@@ -2925,6 +3006,9 @@ func maybeBufferProxyResponseBody(res *http.Response) error {
 	if isDirectStaticResponse(res) {
 		return nil
 	}
+	if shouldStreamProxyResponseBody(res.Request) {
+		return nil
+	}
 	if res.ContentLength > cfg.MaxResponseBufferBytes && res.ContentLength > 0 {
 		return fmt.Errorf("upstream response exceeds max_response_buffer_bytes")
 	}
@@ -2943,6 +3027,40 @@ func maybeBufferProxyResponseBody(res *http.Response) error {
 		res.Header.Set("Content-Length", strconv.FormatInt(res.ContentLength, 10))
 	}
 	return nil
+}
+
+func shouldStreamProxyResponseBody(req *http.Request) bool {
+	if req == nil || req.URL == nil {
+		return false
+	}
+	switch req.Method {
+	case http.MethodGet, http.MethodPost:
+	default:
+		return false
+	}
+	path := strings.TrimSpace(req.URL.Path)
+	if path == "" {
+		return false
+	}
+	for _, endpoint := range []string{
+		"/v1/runtime-artifact-download",
+		"/v1/proxy-rules-bundle-download",
+		"/v1/waf-rule-artifact-download",
+		"/v1/app-deploy-package-download",
+	} {
+		if path == endpoint || strings.HasSuffix(path, endpoint) {
+			return true
+		}
+	}
+	for _, marker := range []string{
+		"/waf-rules/bundles/",
+		"/app-deployments/packages/",
+	} {
+		if strings.Contains(path, marker) && strings.HasSuffix(path, "/download") {
+			return true
+		}
+	}
+	return false
 }
 
 func probeProxyUpstream(in ProxyRulesConfig, upstreamName string, timeout time.Duration) (string, int64, error) {

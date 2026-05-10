@@ -81,7 +81,7 @@ Center-protected install / preview では、初期設定処理が同じ信頼設
 手動で配備する場合は、Center の署名公開鍵を次のエンドポイントから取得します。
 
 ```text
-/center-api/remote-ssh/signing-key
+/center-manage-api/remote-ssh/signing-key
 ```
 
 `INSTALL_ROLE=center-protected` で Center と Gateway を同一ホスト上で動かす場合、

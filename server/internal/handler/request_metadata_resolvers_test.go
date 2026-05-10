@@ -194,7 +194,8 @@ func TestProxyHandlerCountryBlockUsesResolvedCountryFromMetadataResolver(t *test
 	raw := `{
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
-  ]
+  ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}}
 }`
 	if err := os.WriteFile(proxyCfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
@@ -264,7 +265,8 @@ func TestProxyHandlerRateLimitUsesResolvedCountryFromMMDBMetadata(t *testing.T) 
 	raw := `{
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
-  ]
+  ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}}
 }`
 	if err := os.WriteFile(proxyCfgPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)

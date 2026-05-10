@@ -38,6 +38,7 @@ type RuntimeAppEntry = {
   hostname: string;
   listen_port: number;
   document_root: string;
+  max_request_body_bytes?: number;
   linked_upstream_name?: string;
   runtime_id?: string;
   try_files?: string[];
@@ -159,6 +160,7 @@ type RuntimeAppFormState = {
   hostname: string;
   listenPort: string;
   documentRoot: string;
+  maxRequestBodyBytes: string;
   runtimeID: string;
   tryFilesText: string;
   rewriteRules: RuntimeAppRewriteRuleFormState[];
@@ -174,6 +176,9 @@ type RuntimeAppFormState = {
   includeExtlib: boolean;
   envText: string;
 };
+
+const DEFAULT_RUNTIME_APP_MAX_REQUEST_BODY_BYTES = "67108864";
+const MAX_RUNTIME_APP_MAX_REQUEST_BODY_BYTES = 2147483648;
 
 function createEmptyRewriteRule(): RuntimeAppRewriteRuleFormState {
   return {
@@ -204,6 +209,7 @@ function createEmptyRuntimeApp(index: number): RuntimeAppFormState {
     hostname: "127.0.0.1",
     listenPort: String(9400 + index),
     documentRoot: "",
+    maxRequestBodyBytes: DEFAULT_RUNTIME_APP_MAX_REQUEST_BODY_BYTES,
     runtimeID: "",
     tryFilesText: "",
     rewriteRules: [],
@@ -328,6 +334,7 @@ function parseRuntimeAppsResponse(data?: RuntimeAppsResponse): RuntimeAppFormSta
     hostname: app.hostname || "",
     listenPort: String(app.listen_port || 0),
     documentRoot: app.document_root || "",
+    maxRequestBodyBytes: String(app.max_request_body_bytes || DEFAULT_RUNTIME_APP_MAX_REQUEST_BODY_BYTES),
     runtimeID: app.runtime_id || "",
     tryFilesText: stringListToText(app.try_files),
     rewriteRules: Array.isArray(app.rewrite_rules)
@@ -378,6 +385,7 @@ function runtimeAppsToRaw(vhosts: RuntimeAppFormState[]) {
       hostname: app.hostname.trim(),
       listen_port: Number(app.listenPort) || 0,
       document_root: app.documentRoot.trim(),
+      max_request_body_bytes: Number(app.maxRequestBodyBytes) || 0,
       ...(app.mode === "php-fpm" ? { runtime_id: app.runtimeID.trim() } : {}),
       ...(app.mode === "psgi"
         ? {
@@ -461,6 +469,10 @@ function validateRuntimeAppsForUI(vhosts: RuntimeAppFormState[], hasBuiltPHPRunt
     }
     if (!app.documentRoot.trim()) {
       return `${label}: document root is required`;
+    }
+    const maxRequestBodyBytes = Number(app.maxRequestBodyBytes);
+    if (!Number.isInteger(maxRequestBodyBytes) || maxRequestBodyBytes < 0 || maxRequestBodyBytes > MAX_RUNTIME_APP_MAX_REQUEST_BODY_BYTES) {
+      return `${label}: max request body bytes must be between 0 and ${MAX_RUNTIME_APP_MAX_REQUEST_BODY_BYTES}`;
     }
     if (app.mode === "php-fpm") {
       if (!hasBuiltPHPRuntime) {
@@ -705,7 +717,7 @@ export default function RuntimeAppsPanel() {
       <header className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{tx("Runtime Apps")}</h1>
-          <p className="text-xs text-neutral-500">{tx("Define runtime-backed application listeners here. Proxy Rules routes traffic to the generated upstream target.")}</p>
+          <p className="text-xs text-neutral-500">{tx("Define runtime-backed application listeners here. Publish traffic only through explicit Proxy Rules upstreams and routes.")}</p>
         </div>
         <div className="flex items-center gap-2 text-xs text-neutral-500">
           <span className="rounded bg-neutral-100 px-2 py-1" title={etag || undefined}>{formatRevision(etag)}</span>
@@ -858,6 +870,19 @@ export default function RuntimeAppsPanel() {
                         className="w-full rounded border border-neutral-200 px-3 py-2 bg-white"
                         placeholder={app.mode === "psgi" ? "./data/runtime-sites/<app-id>/static" : "./data/runtime-sites/<app-id>/public"}
                       />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span className="block text-xs text-neutral-600">{tx("Max request body bytes")}</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max={MAX_RUNTIME_APP_MAX_REQUEST_BODY_BYTES}
+                        value={app.maxRequestBodyBytes}
+                        onChange={(e) => updateRuntimeApp(index, { ...app, maxRequestBodyBytes: e.target.value })}
+                        className="w-full rounded border border-neutral-200 px-3 py-2 bg-white"
+                        placeholder={DEFAULT_RUNTIME_APP_MAX_REQUEST_BODY_BYTES}
+                      />
+                      <span className="block text-[11px] text-neutral-500">{tx("0 uses the 64 MiB default. Maximum: 2 GiB.")}</span>
                     </label>
                     {app.mode === "psgi" ? (
                       <>

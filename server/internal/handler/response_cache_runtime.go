@@ -1449,14 +1449,7 @@ func allowCenterAdminCookiesForProxyRequest(r *http.Request) bool {
 	}
 	routeName := strings.TrimSpace(classification.RouteName)
 	switch routeName {
-	case "center-api":
-		if !proxyPathHasCleanPrefix(r.URL.Path, "/center-api") {
-			return false
-		}
-	case "center-ui":
-		if !proxyPathHasCleanPrefix(r.URL.Path, "/center-ui") {
-			return false
-		}
+	case "center-manage-api", "center-ui":
 	default:
 		return false
 	}
@@ -1467,6 +1460,9 @@ func allowCenterAdminCookiesForProxyRequest(r *http.Request) bool {
 	selectedTarget, ok := normalizeCenterAdminCookieTargetURL(selection.SelectedUpstreamURL)
 	if !ok {
 		return false
+	}
+	if proxyRouteTargetIsLocalLoopback(selection.Target) {
+		return true
 	}
 	status, err := currentEdgeDeviceAuthStatus()
 	if err != nil ||

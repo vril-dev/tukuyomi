@@ -163,16 +163,17 @@ CENTER_PREVIEW_PERSIST=1 \
 make fleet-preview-up
 ```
 
-このモードでは、Center は別プロセスのまま動き、Gateway が `/center-ui` と
-`/center-api` を共有 Docker preview ネットワーク上の Center へ転送する route を
-初期投入します。Center は Gateway 経由の `http://localhost:9090/center-ui` から
+このモードでは、Center は別プロセスのまま動き、Gateway が `/center-ui`、
+operator 向けの `/center-manage-api`、Gateway/device 向けの `/center-api` path を
+共有 Docker preview ネットワーク上の Center へ転送する route を初期投入します。
+remote Gateway は `/center-api/v1` 配下をポーリングします。
+Center は Gateway 経由の `http://localhost:9090/center-ui` から
 開きます。protected preview では Gateway の IoT / Edge mode も有効化し、preview
 Center DB に対する Center 承認も初期登録します。
 
-Center プロセス側の API パスを非公開名にする場合は、
-`CENTER_PREVIEW_GATEWAY_API_BASE_PATH` は Gateway で公開するパスのままにし、
-`CENTER_PREVIEW_API_BASE_PATH` に Center 側パスを指定します。Gateway は公開 route
-を Center 側パスへ書き換えてから転送します。
+`CENTER_PREVIEW_API_BASE_PATH` は Center UI が使う管理 API path、
+`CENTER_PREVIEW_GATEWAY_API_BASE_PATH` は Gateway/device 向けに公開する API path
+です。
 
 `GATEWAY_PREVIEW_PERSIST=1` の場合、この protected route は Gateway preview
 DB が作成されるタイミングでのみ初期投入されます。既存の永続 Gateway preview

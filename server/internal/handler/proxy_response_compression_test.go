@@ -38,6 +38,7 @@ func TestProxyResponseCompressionGzip(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1048576,
   "response_compression": {
     "enabled": true,
@@ -106,6 +107,7 @@ func TestProxyResponseCompressionSkipsWithoutAcceptEncoding(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1048576,
   "response_compression": {
     "enabled": true,
@@ -140,6 +142,69 @@ func TestProxyResponseCompressionSkipsWithoutAcceptEncoding(t *testing.T) {
 	}
 }
 
+func TestProxyStreamsCenterArtifactDownloadsOverBufferLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	payload := []byte(strings.Repeat("runtime artifact chunk ", 8))
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/center-api/v1/runtime-artifact-download" {
+			t.Fatalf("upstream path=%q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/gzip")
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+		_, _ = w.Write(payload)
+	}))
+	defer upstream.Close()
+
+	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
+	raw := `{
+  "upstreams": [
+    { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
+  ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
+  "max_response_buffer_bytes": 16,
+  "response_compression": {
+    "enabled": true,
+    "algorithms": ["gzip"],
+    "min_bytes": 1,
+    "mime_types": ["application/gzip"]
+  }
+}`
+	if err := os.WriteFile(proxyCfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write proxy config: %v", err)
+	}
+	if err := InitProxyRuntime(proxyCfgPath, 8); err != nil {
+		t.Fatalf("init proxy runtime: %v", err)
+	}
+
+	r := gin.New()
+	r.NoRoute(ProxyHandler)
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/center-api/v1/runtime-artifact-download", strings.NewReader(`{}`))
+	req.Header.Set("Accept-Encoding", "gzip")
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%q", res.StatusCode, string(body))
+	}
+	if got := res.Header.Get("Content-Encoding"); got != "" {
+		t.Fatalf("content-encoding=%q want empty", got)
+	}
+	if !bytes.Equal(body, payload) {
+		t.Fatalf("body mismatch len=%d want=%d", len(body), len(payload))
+	}
+}
+
 func TestProxyResponseCompressionNegotiatesBrotli(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -155,6 +220,7 @@ func TestProxyResponseCompressionNegotiatesBrotli(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1048576,
   "response_compression": {
     "enabled": true,
@@ -210,6 +276,7 @@ func TestProxyResponseCompressionNegotiatesConfiguredOrder(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1048576,
   "response_compression": {
     "enabled": true,
@@ -280,6 +347,7 @@ func TestProxyResponseCompressionPassesThroughPrecompressedResponse(t *testing.T
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1048576,
   "response_compression": {
     "enabled": true,
@@ -336,6 +404,7 @@ func TestProxyResponseCompressionCacheVaryByAcceptEncoding(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1048576,
   "response_compression": {
     "enabled": true,
@@ -444,6 +513,7 @@ func TestProxyResponseCompressionStatusSnapshotTracksAlgorithms(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1048576,
   "response_compression": {
     "enabled": true,
@@ -494,6 +564,7 @@ func TestValidateProxyRulesRawRejectsCompressionWithoutBuffering(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 0,
   "response_compression": {
     "enabled": true,
@@ -511,6 +582,7 @@ func TestValidateProxyRulesRawRejectsUnsupportedCompressionAlgorithm(t *testing.
   "upstreams": [
     { "name": "primary", "url": "http://127.0.0.1:8080", "weight": 1, "enabled": true }
   ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
   "max_response_buffer_bytes": 1024,
   "response_compression": {
     "enabled": true,

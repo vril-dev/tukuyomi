@@ -145,9 +145,9 @@ Imager` on the Movable Type side.
 - **Starman workers consume memory per Runtime App.** For Movable
   Type, set worker count **explicitly to a small number** until
   traffic justifies more.
-- As with PHP-FPM, `generated_target` is server-owned and is referenced
-  from `Proxy Rules` as a generated upstream. There is no need to
-  hand-write a raw protocol URL like `fcgi://`.
+- As with PHP-FPM, `generated_target` is server-owned and is not selected
+  directly from `Proxy Rules`. Publish a PSGI Runtime App only through an
+  explicitly configured upstream and route.
 
 ## 11.6 Recap
 

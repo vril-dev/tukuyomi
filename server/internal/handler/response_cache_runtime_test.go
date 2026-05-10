@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -44,6 +45,10 @@ func TestServeProxyWithCacheHitAndClear(t *testing.T) {
   "upstreams": [
     { "name": "primary", "url": `+strconv.Quote(upstream.URL)+`, "weight": 1, "enabled": true }
   ],
+  "default_route": {
+    "name": "fallback",
+    "action": { "upstream": "primary" }
+  },
   "response_header_sanitize": {
     "mode": "auto",
     "custom_remove": ["X-Internal-Leak"]
@@ -264,7 +269,7 @@ func TestServeProxyWithCacheStoresHeadWithoutPoisoningGet(t *testing.T) {
 	defer upstream.Close()
 
 	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
-	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}]}`), 0o600); err != nil {
+	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}],"default_route":{"name":"fallback","action":{"upstream":"primary"}}}`), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
 	}
 	if err := InitProxyRuntime(proxyCfgPath, 8); err != nil {
@@ -358,7 +363,7 @@ func TestServeProxyWithCacheBypassesConditionalRequestWithoutMiss(t *testing.T) 
 	defer upstream.Close()
 
 	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
-	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}]}`), 0o600); err != nil {
+	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}],"default_route":{"name":"fallback","action":{"upstream":"primary"}}}`), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
 	}
 	if err := InitProxyRuntime(proxyCfgPath, 8); err != nil {
@@ -462,14 +467,14 @@ func TestStripAdminAuthCookiesAllowsCenterCookiesForProtectedCenterRoute(t *test
 		t.Fatalf("upsertEdgeDeviceIdentity: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://gateway.test/center-api/status", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://gateway.test/center-manage-api/status", nil)
 	req.AddCookie(&http.Cookie{Name: adminauth.SessionCookieName, Value: "admin-session"})
 	req.AddCookie(&http.Cookie{Name: adminauth.CSRFCookieName, Value: "admin-csrf"})
 	req.AddCookie(&http.Cookie{Name: adminauth.CenterSessionCookieName, Value: "center-session"})
 	req.AddCookie(&http.Cookie{Name: adminauth.CenterCSRFCookieName, Value: "center-csrf"})
 	ctx := withProxyRouteClassification(req.Context(), proxyRouteClassification{
 		Source:    proxyRouteResolutionRoute,
-		RouteName: "center-api",
+		RouteName: "center-manage-api",
 	})
 	ctx = withProxyRouteTransportSelection(ctx, proxyRouteTransportSelection{
 		SelectedUpstream:    "center",
@@ -485,12 +490,12 @@ func TestStripAdminAuthCookiesAllowsCenterCookiesForProtectedCenterRoute(t *test
 		t.Fatal("forwarded center cookies must still bypass response cache")
 	}
 
-	mismatch := httptest.NewRequest(http.MethodGet, "http://gateway.test/center-api/status", nil)
+	mismatch := httptest.NewRequest(http.MethodGet, "http://gateway.test/center-manage-api/status", nil)
 	mismatch.AddCookie(&http.Cookie{Name: adminauth.CenterSessionCookieName, Value: "center-session"})
 	mismatch.AddCookie(&http.Cookie{Name: adminauth.CenterCSRFCookieName, Value: "center-csrf"})
 	mismatchCtx := withProxyRouteClassification(mismatch.Context(), proxyRouteClassification{
 		Source:    proxyRouteResolutionRoute,
-		RouteName: "center-api",
+		RouteName: "center-manage-api",
 	})
 	mismatchCtx = withProxyRouteTransportSelection(mismatchCtx, proxyRouteTransportSelection{
 		SelectedUpstream:    "center",
@@ -500,6 +505,40 @@ func TestStripAdminAuthCookiesAllowsCenterCookiesForProtectedCenterRoute(t *test
 	stripAdminAuthCookiesFromProxyRequest(mismatch)
 	if got := mismatch.Header.Get("Cookie"); got != "" {
 		t.Fatalf("mismatched center target cookie header after strip=%q want empty", got)
+	}
+
+	customPath := httptest.NewRequest(http.MethodGet, "http://gateway.test/manage-api/status", nil)
+	customPath.AddCookie(&http.Cookie{Name: adminauth.CenterSessionCookieName, Value: "center-session"})
+	customPathCtx := withProxyRouteClassification(customPath.Context(), proxyRouteClassification{
+		Source:    proxyRouteResolutionRoute,
+		RouteName: "center-manage-api",
+	})
+	customPathCtx = withProxyRouteTransportSelection(customPathCtx, proxyRouteTransportSelection{
+		SelectedUpstream:    "center",
+		SelectedUpstreamURL: "http://center.internal:9090/",
+		Target:              &url.URL{Scheme: "http", Host: "127.0.0.1:9092"},
+	})
+	customPath = customPath.WithContext(customPathCtx)
+	stripAdminAuthCookiesFromProxyRequest(customPath)
+	if got := customPath.Header.Get("Cookie"); !strings.Contains(got, adminauth.CenterSessionCookieName+"=center-session") {
+		t.Fatalf("custom manage path cookie header after strip=%q want center session", got)
+	}
+
+	deviceAPI := httptest.NewRequest(http.MethodGet, "http://gateway.test/center-api/v1/device-status", nil)
+	deviceAPI.AddCookie(&http.Cookie{Name: adminauth.CenterSessionCookieName, Value: "center-session"})
+	deviceAPI.AddCookie(&http.Cookie{Name: adminauth.CenterCSRFCookieName, Value: "center-csrf"})
+	deviceAPICtx := withProxyRouteClassification(deviceAPI.Context(), proxyRouteClassification{
+		Source:    proxyRouteResolutionRoute,
+		RouteName: "center-api",
+	})
+	deviceAPICtx = withProxyRouteTransportSelection(deviceAPICtx, proxyRouteTransportSelection{
+		SelectedUpstream:    "center",
+		SelectedUpstreamURL: "http://center.internal:9090/",
+	})
+	deviceAPI = deviceAPI.WithContext(deviceAPICtx)
+	stripAdminAuthCookiesFromProxyRequest(deviceAPI)
+	if got := deviceAPI.Header.Get("Cookie"); got != "" {
+		t.Fatalf("device API cookie header after strip=%q want empty", got)
 	}
 }
 
@@ -515,7 +554,7 @@ func TestServeProxyWithCache_HostScopeReplacesDefault(t *testing.T) {
 	defer upstream.Close()
 
 	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
-	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}]}`), 0o600); err != nil {
+	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}],"default_route":{"name":"fallback","action":{"upstream":"primary"}}}`), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
 	}
 	if err := InitProxyRuntime(proxyCfgPath, 8); err != nil {
@@ -614,7 +653,7 @@ func TestServeProxyWithMemoryFrontCache(t *testing.T) {
 	defer upstream.Close()
 
 	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
-	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}]}`), 0o600); err != nil {
+	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}],"default_route":{"name":"fallback","action":{"upstream":"primary"}}}`), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
 	}
 	if err := InitProxyRuntime(proxyCfgPath, 8); err != nil {
@@ -696,7 +735,7 @@ func TestServeProxyWithMemoryFrontFallsBackToDisk(t *testing.T) {
 	defer upstream.Close()
 
 	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
-	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}]}`), 0o600); err != nil {
+	if err := os.WriteFile(proxyCfgPath, []byte(`{"upstreams":[{"name":"primary","url":`+strconv.Quote(upstream.URL)+`,"weight":1,"enabled":true}],"default_route":{"name":"fallback","action":{"upstream":"primary"}}}`), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)
 	}
 	if err := InitProxyRuntime(proxyCfgPath, 8); err != nil {

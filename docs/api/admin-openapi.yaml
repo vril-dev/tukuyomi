@@ -1140,7 +1140,7 @@ paths:
     post:
       tags: [proxy-routing]
       summary: Resolve host and path to the selected route without sending traffic
-      description: The dry-run result includes the selected backend reference and resolved final URL. `action.backend_pool` selection is scoped to the current pool members, while `action.upstream` still resolves through the named upstream inventory or a direct absolute URL.
+      description: The dry-run result includes the selected backend reference and resolved final URL. `action.backend_pool` selection is scoped to the current pool members, while `action.upstream` resolves through configured upstream names only.
       security: *AdminWriteSecurity
       requestBody:
         required: true

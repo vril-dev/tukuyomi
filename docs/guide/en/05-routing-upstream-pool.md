@@ -84,7 +84,9 @@ The full route-selection order is:
 1. Explicit `routes[]`
 2. A generated host fallback route derived from the DB `sites` domain
 3. `default_route`
-4. `upstreams[]`
+
+`upstreams[]` is only a target catalog. It does not receive public traffic
+unless a route, generated site route, or `default_route` explicitly selects it.
 
 Route matches can be specified on host and path:
 
@@ -94,8 +96,8 @@ Route matches can be specified on host and path:
 Route binding is one of:
 
 - `action.backend_pool`: the standard balanced binding.
-- `action.upstream`: a direct upstream name (a row from `Upstreams`) or
-  a server-generated Runtime App upstream name.
+- `action.upstream`: a direct upstream name (a row from `Upstreams`).
+  Server-generated Runtime App targets are not valid route targets here.
 
 Per-route additions:
 

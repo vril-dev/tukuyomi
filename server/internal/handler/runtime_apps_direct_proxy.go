@@ -39,6 +39,7 @@ const directStaticResponseMarkerHeader = "X-Tukuyomi-Internal-Direct-Static"
 
 var errVhostPathEscapesDocumentRoot = errors.New("runtime app path escapes document root")
 var errVhostHiddenPathBlocked = errors.New("runtime app hidden path blocked")
+var errVhostRequestBodyTooLarge = errors.New("runtime app request body exceeds max_request_body_bytes")
 var psgiDirectTransport = &http.Transport{
 	Proxy:                 nil,
 	DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -458,6 +459,12 @@ func buildPSGIVhostResponse(r *http.Request, vhost VhostConfig, resolved vhostRe
 	if vhost.ListenPort < 1 || vhost.ListenPort > 65535 {
 		return nil, fmt.Errorf("Runtime App %q listen_port is invalid", vhost.Name)
 	}
+	if _, err := readRuntimeAppRequestBody(r, vhost); err != nil {
+		if errors.Is(err, errVhostRequestBodyTooLarge) {
+			return buildDirectStatusResponse(r, http.StatusRequestEntityTooLarge), nil
+		}
+		return nil, err
+	}
 	targetURL := &url.URL{
 		Scheme:   "http",
 		Host:     runtimeListenEndpoint(vhost.Hostname, vhost.ListenPort),
@@ -476,6 +483,7 @@ func buildPSGIVhostResponse(r *http.Request, vhost VhostConfig, resolved vhostRe
 	}
 	outReq.Host = r.Host
 	removeProxyHopByHopHeaders(outReq.Header)
+	outReq.Header.Del("Proxy")
 	setTukuyomiProxyXForwarded(outReq.Header, r)
 	if _, ok := outReq.Header["User-Agent"]; !ok {
 		outReq.Header.Set("User-Agent", "")
@@ -664,6 +672,9 @@ func buildFastCGIVhostResponse(r *http.Request, target *url.URL, vhost VhostConf
 	}
 	params, body, err := buildFastCGIRequest(r, vhost, resolved)
 	if err != nil {
+		if errors.Is(err, errVhostRequestBodyTooLarge) {
+			return buildDirectStatusResponse(r, http.StatusRequestEntityTooLarge), nil
+		}
 		return nil, err
 	}
 	stdout, stderr, err := executeFastCGIRequest(r.Context(), target, params, body)
@@ -685,14 +696,9 @@ func buildFastCGIVhostResponse(r *http.Request, target *url.URL, vhost VhostConf
 }
 
 func buildFastCGIRequest(r *http.Request, vhost VhostConfig, resolved vhostResolvedRequest) (map[string]string, []byte, error) {
-	body := []byte(nil)
-	if r != nil && r.Body != nil {
-		var err error
-		body, err = io.ReadAll(r.Body)
-		if err != nil {
-			return nil, nil, err
-		}
-		r.Body = io.NopCloser(bytes.NewReader(body))
+	body, err := readRuntimeAppRequestBody(r, vhost)
+	if err != nil {
+		return nil, nil, err
 	}
 	serverName, serverPort := fastCGIServerIdentity(r, vhost)
 	remoteAddr, remotePort := fastCGIRemoteIdentity(r)
@@ -736,14 +742,59 @@ func buildFastCGIRequest(r *http.Request, vhost VhostConfig, resolved vhostResol
 			params["CONTENT_TYPE"] = contentType
 		}
 		for name, values := range r.Header {
-			key := "HTTP_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
-			if key == "HTTP_CONTENT_TYPE" || key == "HTTP_CONTENT_LENGTH" {
+			key, ok := fastCGIHTTPHeaderParamName(name)
+			if !ok || key == "HTTP_CONTENT_TYPE" || key == "HTTP_CONTENT_LENGTH" {
 				continue
 			}
 			params[key] = strings.Join(values, ", ")
 		}
 	}
 	return params, body, nil
+}
+
+func effectiveVhostMaxRequestBodyBytes(vhost VhostConfig) int64 {
+	if vhost.MaxRequestBodyBytes > 0 {
+		return vhost.MaxRequestBodyBytes
+	}
+	return defaultVhostMaxRequestBodyBytes
+}
+
+func readRuntimeAppRequestBody(r *http.Request, vhost VhostConfig) ([]byte, error) {
+	if r == nil || r.Body == nil {
+		return nil, nil
+	}
+	limit := effectiveVhostMaxRequestBodyBytes(vhost)
+	if limit < 0 || limit > maxVhostMaxRequestBodyBytes {
+		return nil, fmt.Errorf("invalid max_request_body_bytes %d", limit)
+	}
+	if r.ContentLength > limit {
+		return nil, fmt.Errorf("%w: content_length=%d limit=%d", errVhostRequestBodyTooLarge, r.ContentLength, limit)
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("%w: limit=%d", errVhostRequestBodyTooLarge, limit)
+	}
+	_ = r.Body.Close()
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(body)), nil
+	}
+	r.ContentLength = int64(len(body))
+	return body, nil
+}
+
+func fastCGIHTTPHeaderParamName(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", false
+	}
+	if strings.EqualFold(name, "Proxy") {
+		return "", false
+	}
+	return "HTTP_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_")), true
 }
 
 func requestURI(requestPath string, rawQuery string) string {

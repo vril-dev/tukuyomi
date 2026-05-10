@@ -1061,7 +1061,8 @@ func initProxyEngineCompatRuntime(t *testing.T, upstreamURL string, extraFields 
   %s
   "upstreams": [
     { "name": "primary", "url": %q, "weight": 1, "enabled": true }
-  ]
+  ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}}
 }`, extraFields, upstreamURL)
 	if err := os.WriteFile(proxyPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write proxy config: %v", err)

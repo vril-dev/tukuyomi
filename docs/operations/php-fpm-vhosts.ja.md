@@ -118,6 +118,7 @@ sudo make php-fpm-prune RUNTIME=php83
 - アクセスルール単位の Basic 認証
 - `php_value`
 - `php_admin_value`
+- `max_request_body_bytes`
 
 基本手順:
 
@@ -130,6 +131,18 @@ sudo make php-fpm-prune RUNTIME=php83
 7. 直前の保存状態へ戻す必要がある場合だけ `Rollback` を使う
 
 Runtime App の動作は、nginx と同じく集中管理型の設定で決まります。ドキュメントルート内の `.htaccess` のようなファイルは、解析、取り込み、監視、リクエスト時の再読み込みの対象にしません。古い設定に残っている `override_file_name` は移行用として読み取るだけで、`Validate` / `Apply` 時に保存形式から除去されます。
+
+Runtime App の直接配信では、PHP-FPM / PSGI へリクエストを渡す前に次の
+保護を適用します。
+
+- ドットで始まる path segment は 404 を返します。ただし `.well-known`
+  は許可します
+- symlink を解決し、実体がドキュメントルートの外へ出る場合は 404 を
+  返します
+- リクエストボディは `max_request_body_bytes` で上限をかけます。未指定
+  または `0` の場合は 64 MiB、設定できる上限は 2 GiB です
+- `Proxy` リクエストヘッダーは Runtime App backend へ渡さないため、
+  PHP-FPM の `HTTP_PROXY` にもなりません
 
 ## Upstreams と Runtime Apps の境界
 
@@ -150,25 +163,27 @@ Runtime App 保存後の処理は次のとおりです。
 
 - `/runtime-apps` が定義を `data/php-fpm/vhosts.json` へ保存
 - ランタイム層が `data/php-fpm/runtime/<runtime_id>/` に pool / config ファイルを生成
-- 有効なプロキシ実行環境に、`generated_target` 名の生成 upstream が追加される
+- 有効なプロキシ実行環境に、`generated_target` 名の内部 target が追加される
 - `Proxy Rules > Upstreams` の設定済み upstream URL は変更されない
-- Runtime App で公開するアプリケーションへトラフィックを流す場合、運用者が `Proxy Rules` のルートまたは default route から生成 upstream を選択する
+- Runtime App で公開するアプリケーションへトラフィックを流す場合、運用者が `Proxy Rules` に明示した direct upstream を route または default route から選択する
 
 ルートの優先順は `Proxy Rules` が管理します。
 
 - explicit `routes[]`
 - generated site host fallback route
 - `default_route`
-- `upstreams[]`
+
+`upstreams[]` は転送先の定義です。route または default route から選択しない
+限り、トラフィックは公開されません。
 
 補足:
 
 - `hostname` と `listen_port` は PHP-FPM の FastCGI 待ち受けターゲットです
 - `http://<hostname>:<listen_port>` のような HTTP upstream としては扱いません
 - `generated_target` はサーバー側が所有する生成バックエンドのエイリアス / pool 名です。管理 UI では運用者の入力項目として表示しません
-- 通常運用では、`Proxy Rules` から生成 upstream ターゲットへルーティングします
+- 通常運用では、運用者が明示した direct upstream へルーティングします
 
-PHP ランタイムの詳細は `/runtime-apps` で管理し、公開トラフィックの振り分けは `Proxy Rules` で管理します。生成 upstream ターゲットが待ち受け先を表すため、生の `fcgi://` URL を手書きする必要はありません。
+PHP ランタイムの詳細は `/runtime-apps` で管理し、公開トラフィックの振り分けは `Proxy Rules` で管理します。generated Runtime App target は route から直接選択しません。
 
 ## プロセスライフサイクル
 

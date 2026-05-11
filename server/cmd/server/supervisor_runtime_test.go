@@ -224,14 +224,35 @@ func TestActivationGateListenerBlocksUntilActivated(t *testing.T) {
 	}
 }
 
-func TestSupervisorListenerSpecsRejectHTTP3(t *testing.T) {
-	old := config.ServerHTTP3Enabled
+func TestSupervisorListenerSpecsIncludesLegacyHTTP3UDP(t *testing.T) {
+	restore := saveSupervisorListenerConfig()
+	defer restore()
+	config.ListenAddr = "127.0.0.1:19443"
+	config.AdminListenAddr = "127.0.0.1:19091"
+	config.ServerTLSEnabled = true
+	config.ServerTLSRedirectHTTP = true
+	config.ServerTLSHTTPRedirectAddr = "127.0.0.1:19080"
 	config.ServerHTTP3Enabled = true
-	t.Cleanup(func() { config.ServerHTTP3Enabled = old })
+	config.ServerPublicListenersConfigured = false
+	config.ServerPublicListeners = nil
 
-	_, err := supervisorListenerSpecs()
-	if err == nil || !strings.Contains(err.Error(), "HTTP/3") {
-		t.Fatalf("error=%v want HTTP/3 unsupported error", err)
+	specs, err := supervisorListenerSpecs()
+	if err != nil {
+		t.Fatalf("supervisorListenerSpecs: %v", err)
+	}
+	if len(specs) != 4 {
+		t.Fatalf("specs=%#v want public, admin, redirect, http3", specs)
+	}
+	want := []supervisorListenerSpec{
+		{role: "public", network: "tcp", addr: "127.0.0.1:19443"},
+		{role: "admin", network: "tcp", addr: "127.0.0.1:19091"},
+		{role: "redirect", network: "tcp", addr: "127.0.0.1:19080"},
+		{role: "http3", network: "udp", addr: "127.0.0.1:19443"},
+	}
+	for i := range want {
+		if specs[i] != want[i] {
+			t.Fatalf("specs[%d]=%#v want %#v", i, specs[i], want[i])
+		}
 	}
 }
 
@@ -252,7 +273,7 @@ func TestPrepareSupervisorListenerSetCreatesPublicListener(t *testing.T) {
 	if len(set.entries) != 1 {
 		t.Fatalf("entries=%#v want one public listener", set.entries)
 	}
-	if set.entries[0].role != "public" || set.entries[0].listener == nil || set.entries[0].inherited {
+	if set.entries[0].role != "public" || set.entries[0].network != "tcp" || set.entries[0].listener == nil || set.entries[0].inherited {
 		t.Fatalf("entry=%#v", set.entries[0])
 	}
 }
@@ -279,8 +300,78 @@ func TestSupervisorListenerSpecsUsesConfiguredPublicListeners(t *testing.T) {
 	if len(specs) != 3 {
 		t.Fatalf("specs=%#v want setup, https, admin", specs)
 	}
-	if specs[0].role != "public-setup" || specs[1].role != "public-https" || specs[2].role != "admin" {
+	if specs[0].role != "public-setup" || specs[0].network != "tcp" ||
+		specs[1].role != "public-https" || specs[1].network != "tcp" ||
+		specs[2].role != "admin" || specs[2].network != "tcp" {
 		t.Fatalf("specs=%#v", specs)
+	}
+}
+
+func TestSupervisorListenerSpecsUsesConfiguredPublicHTTP3UDP(t *testing.T) {
+	restore := saveSupervisorListenerConfig()
+	defer restore()
+	config.ListenAddr = "127.0.0.1:0"
+	config.AdminListenAddr = ""
+	config.ServerTLSEnabled = true
+	config.ServerTLSRedirectHTTP = false
+	config.ServerHTTP3Enabled = true
+	config.ServerPublicListenersConfigured = true
+	config.ServerPublicListeners = []config.ServerPublicListener{
+		{Name: "setup", ListenAddr: "127.0.0.1:19090", Protocol: config.PublicListenerProtocolHTTP, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+		{Name: "https", ListenAddr: "127.0.0.1:19443", Protocol: config.PublicListenerProtocolHTTPS, HTTPBehavior: config.PublicListenerHTTPBehaviorServe, Enabled: true},
+	}
+
+	specs, err := supervisorListenerSpecs()
+	if err != nil {
+		t.Fatalf("supervisorListenerSpecs: %v", err)
+	}
+	want := []supervisorListenerSpec{
+		{role: "public-setup", network: "tcp", addr: "127.0.0.1:19090"},
+		{role: "public-https", network: "tcp", addr: "127.0.0.1:19443"},
+		{role: "public-https-http3", network: "udp", addr: "127.0.0.1:19443"},
+	}
+	if len(specs) != len(want) {
+		t.Fatalf("specs=%#v want %d entries", specs, len(want))
+	}
+	for i := range want {
+		if specs[i] != want[i] {
+			t.Fatalf("specs[%d]=%#v want %#v", i, specs[i], want[i])
+		}
+	}
+}
+
+func TestPrepareSupervisorListenerSetCreatesHTTP3UDPListener(t *testing.T) {
+	restore := saveSupervisorListenerConfig()
+	defer restore()
+	config.ListenAddr = "127.0.0.1:0"
+	config.AdminListenAddr = ""
+	config.ServerTLSEnabled = true
+	config.ServerTLSRedirectHTTP = false
+	config.ServerHTTP3Enabled = true
+	config.ServerPublicListenersConfigured = false
+	config.ServerPublicListeners = nil
+
+	set, err := prepareSupervisorListenerSet(nil)
+	if err != nil {
+		t.Fatalf("prepareSupervisorListenerSet: %v", err)
+	}
+	defer set.Close()
+	if len(set.entries) != 2 {
+		t.Fatalf("entries=%#v want public TCP and http3 UDP", set.entries)
+	}
+	if set.entries[0].role != "public" || set.entries[0].network != "tcp" || set.entries[0].listener == nil {
+		t.Fatalf("tcp entry=%#v", set.entries[0])
+	}
+	if set.entries[1].role != "http3" || set.entries[1].network != "udp" || set.entries[1].packet == nil {
+		t.Fatalf("udp entry=%#v", set.entries[1])
+	}
+	files, err := set.Files()
+	if err != nil {
+		t.Fatalf("Files: %v", err)
+	}
+	defer closeSupervisorListenerFiles(files)
+	if len(files) != 2 || files[0].role != "public" || files[1].role != "http3" {
+		t.Fatalf("files=%#v", files)
 	}
 }
 

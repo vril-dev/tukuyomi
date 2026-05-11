@@ -29,6 +29,14 @@ func publicListenerRole(listener config.ServerPublicListener) string {
 	return "public-" + name
 }
 
+func publicListenerHTTP3Role(listener config.ServerPublicListener) string {
+	role := publicListenerRole(listener)
+	if role == "public" {
+		return "http3"
+	}
+	return role + "-http3"
+}
+
 func runConfiguredPublicListeners(
 	lifecycle *managedServerLifecycle,
 	activation *systemdActivation,
@@ -78,7 +86,20 @@ func runConfiguredPublicListeners(
 				return fmt.Errorf("create %s listener: %w", role, err)
 			}
 			ln = lifecycle.TrackListener(role, ln)
-			srv := serverFor(firstServeListener, publicHandler)
+			httpsHandler := publicHandler
+			if config.ServerHTTP3Enabled {
+				http3Srv, altSvc, err := buildManagedServerHTTP3ServerForAddr(listener.ListenAddr, tlsConfig, publicHandler)
+				if err != nil {
+					return fmt.Errorf("build %s HTTP/3 config: %w", role, err)
+				}
+				if altSvc != "" {
+					httpsHandler = wrapHTTP3AltSvcHandler(publicHandler, altSvc)
+				}
+				if err := runHTTP3ServerForRole(lifecycle, activation, publicListenerHTTP3Role(listener), listener.ListenAddr, http3Srv); err != nil {
+					return fmt.Errorf("start %s HTTP/3 listener: %w", role, err)
+				}
+			}
+			srv := serverFor(firstServeListener, httpsHandler)
 			firstServeListener = false
 			started++
 			lifecycle.Go(role, func() error {

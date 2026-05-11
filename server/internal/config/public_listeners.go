@@ -62,9 +62,6 @@ func validateAppServerPublicListenersConfig(cfg appConfigFile) error {
 	if len(listeners) == 0 {
 		return nil
 	}
-	if cfg.Server.HTTP3.Enabled {
-		return fmt.Errorf("server.http3.enabled is not supported with server.public_listeners")
-	}
 	if cfg.Server.TLS.RedirectHTTP {
 		return fmt.Errorf("server.tls.redirect_http is replaced by server.public_listeners[].http_behavior=redirect")
 	}
@@ -151,6 +148,9 @@ func validateAppServerPublicListenersConfig(cfg appConfigFile) error {
 	}
 	if len(httpsNames) > 0 && !cfg.Server.TLS.Enabled {
 		return fmt.Errorf("server.tls.enabled must be true when an https public listener is enabled")
+	}
+	if cfg.Server.HTTP3.Enabled && len(httpsNames) == 0 {
+		return fmt.Errorf("server.http3.enabled requires at least one enabled https public listener")
 	}
 	return nil
 }

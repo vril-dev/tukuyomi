@@ -72,13 +72,16 @@ type supervisorRuntime struct {
 }
 
 type supervisorListenerSpec struct {
-	role string
-	addr string
+	role    string
+	network string
+	addr    string
 }
 
 type supervisorListenerEntry struct {
 	role      string
+	network   string
 	listener  net.Listener
+	packet    net.PacketConn
 	inherited bool
 }
 
@@ -601,28 +604,31 @@ func failureMessage(err error) string {
 }
 
 func supervisorListenerSpecs() ([]supervisorListenerSpec, error) {
-	if config.ServerHTTP3Enabled {
-		return nil, fmt.Errorf("supervisor mode does not support HTTP/3 until UDP listener handoff is implemented")
-	}
 	if config.ServerPublicListenersConfigured {
-		specs := make([]supervisorListenerSpec, 0, len(config.ServerPublicListeners)+1)
+		specs := make([]supervisorListenerSpec, 0, len(config.ServerPublicListeners)*2+1)
 		for _, listener := range config.ServerPublicListeners {
 			if !listener.Enabled {
 				continue
 			}
-			specs = append(specs, supervisorListenerSpec{role: publicListenerRole(listener), addr: listener.ListenAddr})
+			specs = append(specs, supervisorListenerSpec{role: publicListenerRole(listener), network: "tcp", addr: listener.ListenAddr})
+			if config.ServerHTTP3Enabled && listener.Protocol == config.PublicListenerProtocolHTTPS {
+				specs = append(specs, supervisorListenerSpec{role: publicListenerHTTP3Role(listener), network: "udp", addr: listener.ListenAddr})
+			}
 		}
 		if strings.TrimSpace(config.AdminListenAddr) != "" {
-			specs = append(specs, supervisorListenerSpec{role: "admin", addr: config.AdminListenAddr})
+			specs = append(specs, supervisorListenerSpec{role: "admin", network: "tcp", addr: config.AdminListenAddr})
 		}
 		return specs, nil
 	}
-	specs := []supervisorListenerSpec{{role: "public", addr: config.ListenAddr}}
+	specs := []supervisorListenerSpec{{role: "public", network: "tcp", addr: config.ListenAddr}}
 	if strings.TrimSpace(config.AdminListenAddr) != "" {
-		specs = append(specs, supervisorListenerSpec{role: "admin", addr: config.AdminListenAddr})
+		specs = append(specs, supervisorListenerSpec{role: "admin", network: "tcp", addr: config.AdminListenAddr})
 	}
 	if config.ServerTLSEnabled && config.ServerTLSRedirectHTTP {
-		specs = append(specs, supervisorListenerSpec{role: "redirect", addr: config.ServerTLSHTTPRedirectAddr})
+		specs = append(specs, supervisorListenerSpec{role: "redirect", network: "tcp", addr: config.ServerTLSHTTPRedirectAddr})
+	}
+	if config.ServerHTTP3Enabled {
+		specs = append(specs, supervisorListenerSpec{role: "http3", network: "udp", addr: config.ListenAddr})
 	}
 	return specs, nil
 }
@@ -634,16 +640,35 @@ func prepareSupervisorListenerSet(activation *systemdActivation) (*supervisorLis
 	}
 	set := &supervisorListenerSet{entries: make([]supervisorListenerEntry, 0, len(specs))}
 	for _, spec := range specs {
-		ln, inherited, err := buildSupervisorTCPListenerForRole(spec.role, spec.addr, activation)
-		if err != nil {
+		switch spec.network {
+		case "", "tcp":
+			ln, inherited, err := buildSupervisorTCPListenerForRole(spec.role, spec.addr, activation)
+			if err != nil {
+				set.Close()
+				return nil, fmt.Errorf("create supervisor listener %s: %w", spec.role, err)
+			}
+			set.entries = append(set.entries, supervisorListenerEntry{
+				role:      spec.role,
+				network:   "tcp",
+				listener:  ln,
+				inherited: inherited,
+			})
+		case "udp":
+			packet, inherited, err := buildSupervisorPacketConnForRole(spec.role, spec.addr, activation)
+			if err != nil {
+				set.Close()
+				return nil, fmt.Errorf("create supervisor UDP listener %s: %w", spec.role, err)
+			}
+			set.entries = append(set.entries, supervisorListenerEntry{
+				role:      spec.role,
+				network:   "udp",
+				packet:    packet,
+				inherited: inherited,
+			})
+		default:
 			set.Close()
-			return nil, fmt.Errorf("create supervisor listener %s: %w", spec.role, err)
+			return nil, fmt.Errorf("supervisor listener %s has unsupported network %q", spec.role, spec.network)
 		}
-		set.entries = append(set.entries, supervisorListenerEntry{
-			role:      spec.role,
-			listener:  ln,
-			inherited: inherited,
-		})
 	}
 	if activation != nil {
 		activation.CloseUnused()
@@ -663,27 +688,69 @@ func buildSupervisorTCPListenerForRole(role string, addr string, activation *sys
 	return ln, false, err
 }
 
+func buildSupervisorPacketConnForRole(role string, addr string, activation *systemdActivation) (net.PacketConn, bool, error) {
+	if activation != nil && activation.Active() {
+		conn, ok, err := activation.TakePacketConn(role, addr)
+		if err != nil || ok {
+			return conn, ok, err
+		}
+		return nil, false, fmt.Errorf("systemd activation is enabled but no fd exists for role %q", role)
+	}
+	conn, err := net.ListenPacket("udp", addr)
+	return conn, false, err
+}
+
 func (s *supervisorListenerSet) Files() ([]supervisorListenerFile, error) {
 	if s == nil || len(s.entries) == 0 {
 		return nil, fmt.Errorf("supervisor listeners are required")
 	}
 	files := make([]supervisorListenerFile, 0, len(s.entries))
 	for _, entry := range s.entries {
-		fileProvider, ok := entry.listener.(interface {
-			File() (*os.File, error)
-		})
-		if !ok {
-			closeSupervisorListenerFiles(files)
-			return nil, fmt.Errorf("listener %s does not expose a file descriptor", entry.role)
-		}
-		file, err := fileProvider.File()
+		file, err := supervisorListenerEntryFile(entry)
 		if err != nil {
 			closeSupervisorListenerFiles(files)
-			return nil, fmt.Errorf("duplicate listener %s fd: %w", entry.role, err)
+			return nil, err
 		}
 		files = append(files, supervisorListenerFile{role: entry.role, file: file})
 	}
 	return files, nil
+}
+
+func supervisorListenerEntryFile(entry supervisorListenerEntry) (*os.File, error) {
+	var fileProvider interface {
+		File() (*os.File, error)
+	}
+	switch entry.network {
+	case "", "tcp":
+		if entry.listener == nil {
+			return nil, fmt.Errorf("listener %s is nil", entry.role)
+		}
+		var ok bool
+		fileProvider, ok = entry.listener.(interface {
+			File() (*os.File, error)
+		})
+		if !ok {
+			return nil, fmt.Errorf("listener %s does not expose a file descriptor", entry.role)
+		}
+	case "udp":
+		if entry.packet == nil {
+			return nil, fmt.Errorf("UDP listener %s is nil", entry.role)
+		}
+		var ok bool
+		fileProvider, ok = entry.packet.(interface {
+			File() (*os.File, error)
+		})
+		if !ok {
+			return nil, fmt.Errorf("UDP listener %s does not expose a file descriptor", entry.role)
+		}
+	default:
+		return nil, fmt.Errorf("listener %s has unsupported network %q", entry.role, entry.network)
+	}
+	file, err := fileProvider.File()
+	if err != nil {
+		return nil, fmt.Errorf("duplicate listener %s fd: %w", entry.role, err)
+	}
+	return file, nil
 }
 
 func (s *supervisorListenerSet) Close() error {
@@ -692,11 +759,15 @@ func (s *supervisorListenerSet) Close() error {
 	}
 	var out error
 	for _, entry := range s.entries {
-		if entry.listener == nil {
-			continue
+		if entry.listener != nil {
+			if err := entry.listener.Close(); err != nil && out == nil {
+				out = err
+			}
 		}
-		if err := entry.listener.Close(); err != nil && out == nil {
-			out = err
+		if entry.packet != nil {
+			if err := entry.packet.Close(); err != nil && out == nil {
+				out = err
+			}
 		}
 	}
 	return out

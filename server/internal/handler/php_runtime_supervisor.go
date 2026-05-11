@@ -18,12 +18,17 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"tukuyomi/internal/daemonruntime"
 )
 
 const (
 	runtimeAppProcessControlSnapshotTimeout = 5 * time.Second
 	runtimeAppProcessControlMutationTimeout = 60 * time.Second
 )
+
+type DaemonRuntimeProcessStatus = daemonruntime.ProcessStatus
+type daemonRuntimeAppSpec = daemonruntime.Spec
 
 type RuntimeAppProcessController interface {
 	PHPRuntimeProcessSnapshot() []PHPRuntimeProcessStatus
@@ -130,6 +135,215 @@ func (localRuntimeAppProcessController) StopDaemonProcess(processID string) erro
 
 func (localRuntimeAppProcessController) ReloadDaemonProcess(processID string) error {
 	return localReloadDaemonProcess(processID)
+}
+
+var (
+	daemonRuntimeSupervisorMu sync.RWMutex
+	daemonRuntimeSupervisorRt *daemonruntime.Supervisor
+)
+
+func InitDaemonRuntimeSupervisor() error {
+	sup := daemonruntime.New(daemonRuntimeSupervisorOptions())
+	daemonRuntimeSupervisorMu.Lock()
+	daemonRuntimeSupervisorRt = sup
+	daemonRuntimeSupervisorMu.Unlock()
+	return ReconcileDaemonRuntimeSupervisor()
+}
+
+func ShutdownDaemonRuntimeSupervisor() error {
+	daemonRuntimeSupervisorMu.Lock()
+	sup := daemonRuntimeSupervisorRt
+	daemonRuntimeSupervisorRt = nil
+	daemonRuntimeSupervisorMu.Unlock()
+	if sup == nil {
+		return nil
+	}
+	return sup.Shutdown()
+}
+
+func daemonRuntimeSupervisorInstance() *daemonruntime.Supervisor {
+	daemonRuntimeSupervisorMu.RLock()
+	defer daemonRuntimeSupervisorMu.RUnlock()
+	return daemonRuntimeSupervisorRt
+}
+
+func DaemonRuntimeProcessSnapshot() []DaemonRuntimeProcessStatus {
+	return runtimeAppProcessController().DaemonRuntimeProcessSnapshot()
+}
+
+func ReconcileDaemonRuntimeSupervisor() error {
+	return runtimeAppProcessController().ReconcileDaemonRuntimeSupervisor()
+}
+
+func StartDaemonProcess(appID string) error {
+	return runtimeAppProcessController().StartDaemonProcess(appID)
+}
+
+func StopDaemonProcess(appID string) error {
+	return runtimeAppProcessController().StopDaemonProcess(appID)
+}
+
+func ReloadDaemonProcess(appID string) error {
+	return runtimeAppProcessController().ReloadDaemonProcess(appID)
+}
+
+func localDaemonRuntimeProcessSnapshot() []DaemonRuntimeProcessStatus {
+	sup := daemonRuntimeSupervisorInstance()
+	if sup == nil {
+		return nil
+	}
+	return sup.Snapshot()
+}
+
+func localReconcileDaemonRuntimeSupervisor() error {
+	sup := daemonRuntimeSupervisorInstance()
+	if sup == nil {
+		return nil
+	}
+	return sup.Reconcile(currentDaemonRuntimeAppSpecs())
+}
+
+func localStartDaemonProcess(appID string) error {
+	sup := daemonRuntimeSupervisorInstance()
+	if sup == nil {
+		return fmt.Errorf("daemon runtime supervisor is not initialized")
+	}
+	return sup.StartProcess(normalizeConfigToken(appID), currentDaemonRuntimeAppSpecs())
+}
+
+func localStopDaemonProcess(appID string) error {
+	sup := daemonRuntimeSupervisorInstance()
+	if sup == nil {
+		return fmt.Errorf("daemon runtime supervisor is not initialized")
+	}
+	return sup.StopProcess(normalizeConfigToken(appID), currentDaemonRuntimeAppSpecs())
+}
+
+func localReloadDaemonProcess(appID string) error {
+	sup := daemonRuntimeSupervisorInstance()
+	if sup == nil {
+		return fmt.Errorf("daemon runtime supervisor is not initialized")
+	}
+	return sup.ReloadProcess(normalizeConfigToken(appID), currentDaemonRuntimeAppSpecs())
+}
+
+func currentDaemonRuntimeAppSpecs() []daemonRuntimeAppSpec {
+	cfg := currentVhostConfig()
+	out := make([]daemonRuntimeAppSpec, 0, len(cfg.Vhosts))
+	for _, vhost := range cfg.Vhosts {
+		if normalizeVhostMode(vhost.Mode) != "daemon" {
+			continue
+		}
+		appID := normalizeConfigToken(vhost.Name)
+		if appID == "" {
+			continue
+		}
+		processID := normalizeConfigToken(vhost.GeneratedTarget)
+		if processID == "" {
+			processID = appID
+		}
+		out = append(out, daemonRuntimeAppSpec{
+			AppID:           appID,
+			ProcessID:       processID,
+			Enabled:         vhost.Enabled,
+			Command:         vhost.Command,
+			Args:            append([]string(nil), vhost.Args...),
+			AppRoot:         vhost.AppRoot,
+			WorkingDir:      vhost.WorkingDir,
+			Env:             cloneStringMap(vhost.Env),
+			RunUser:         vhost.RunUser,
+			RunGroup:        vhost.RunGroup,
+			RestartPolicy:   vhost.RestartPolicy,
+			GracefulStopSec: vhost.GracefulStopSec,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].AppID < out[j].AppID
+	})
+	return out
+}
+
+func daemonRuntimeSupervisorOptions() daemonruntime.Options {
+	return daemonruntime.Options{
+		ResolvePath: absoluteRuntimePath,
+		ResolveIdentity: func(spec daemonruntime.Spec) (daemonruntime.Identity, error) {
+			identity, err := resolveDaemonRuntimeIdentity(spec)
+			if err != nil {
+				return daemonruntime.Identity{}, err
+			}
+			return toDaemonRuntimeIdentity(identity), nil
+		},
+		ValidateIdentity: func(identity daemonruntime.Identity) error {
+			return validatePHPRuntimePrivilegeTransition(fromDaemonRuntimeIdentity(identity))
+		},
+		TrimError: trimStatusError,
+		OnRestart: func() {
+			_ = localReconcileDaemonRuntimeSupervisor()
+		},
+	}
+}
+
+func resolveDaemonRuntimeIdentity(spec daemonRuntimeAppSpec) (phpRuntimeResolvedIdentity, error) {
+	currentUID := uint32(os.Geteuid())
+	currentGID := uint32(os.Getegid())
+	out := phpRuntimeResolvedIdentity{
+		ConfiguredUser:  strings.TrimSpace(spec.RunUser),
+		ConfiguredGroup: strings.TrimSpace(spec.RunGroup),
+		EffectiveUser:   lookupUserLabel(currentUID),
+		EffectiveGroup:  lookupGroupLabel(currentGID),
+		UID:             currentUID,
+		GID:             currentGID,
+	}
+	if out.ConfiguredUser != "" {
+		uid, label, primaryGID, err := resolvePHPRuntimeUserSpec(out.ConfiguredUser)
+		if err != nil {
+			return phpRuntimeResolvedIdentity{}, fmt.Errorf("daemon app %q run_user: %w", spec.AppID, err)
+		}
+		out.UID = uid
+		out.EffectiveUser = label
+		if out.ConfiguredGroup == "" {
+			if primaryGID == nil {
+				return phpRuntimeResolvedIdentity{}, fmt.Errorf("daemon app %q run_group is required when run_user %q has no passwd entry", spec.AppID, out.ConfiguredUser)
+			}
+			out.GID = *primaryGID
+			out.EffectiveGroup = lookupGroupLabel(*primaryGID)
+		}
+	}
+	if out.ConfiguredGroup != "" {
+		gid, label, err := resolvePHPRuntimeGroupSpec(out.ConfiguredGroup)
+		if err != nil {
+			return phpRuntimeResolvedIdentity{}, fmt.Errorf("daemon app %q run_group: %w", spec.AppID, err)
+		}
+		out.GID = gid
+		out.EffectiveGroup = label
+	}
+	return out, nil
+}
+
+func validateDaemonRuntimeLaunch(spec daemonRuntimeAppSpec, identity phpRuntimeResolvedIdentity) error {
+	return daemonruntime.ValidateLaunch(spec, toDaemonRuntimeIdentity(identity), daemonRuntimeSupervisorOptions())
+}
+
+func toDaemonRuntimeIdentity(identity phpRuntimeResolvedIdentity) daemonruntime.Identity {
+	return daemonruntime.Identity{
+		ConfiguredUser:  identity.ConfiguredUser,
+		ConfiguredGroup: identity.ConfiguredGroup,
+		EffectiveUser:   identity.EffectiveUser,
+		EffectiveGroup:  identity.EffectiveGroup,
+		UID:             identity.UID,
+		GID:             identity.GID,
+	}
+}
+
+func fromDaemonRuntimeIdentity(identity daemonruntime.Identity) phpRuntimeResolvedIdentity {
+	return phpRuntimeResolvedIdentity{
+		ConfiguredUser:  identity.ConfiguredUser,
+		ConfiguredGroup: identity.ConfiguredGroup,
+		EffectiveUser:   identity.EffectiveUser,
+		EffectiveGroup:  identity.EffectiveGroup,
+		UID:             identity.UID,
+		GID:             identity.GID,
+	}
 }
 
 type RuntimeAppProcessHTTPController struct {

@@ -1,4 +1,4 @@
-package handler
+package daemonruntime
 
 import (
 	"crypto/sha256"
@@ -22,7 +22,7 @@ const (
 	daemonRuntimeRestartDelay   = 2 * time.Second
 )
 
-type DaemonRuntimeProcessStatus struct {
+type ProcessStatus struct {
 	AppID           string   `json:"app_id"`
 	ProcessID       string   `json:"process_id"`
 	Enabled         bool     `json:"enabled"`
@@ -46,7 +46,7 @@ type DaemonRuntimeProcessStatus struct {
 	LogFile         string   `json:"log_file,omitempty"`
 }
 
-type daemonRuntimeAppSpec struct {
+type Spec struct {
 	AppID           string
 	ProcessID       string
 	Enabled         bool
@@ -61,8 +61,8 @@ type daemonRuntimeAppSpec struct {
 	GracefulStopSec int
 }
 
-type daemonRuntimeManagedProcess struct {
-	spec      daemonRuntimeAppSpec
+type managedProcess struct {
+	spec      Spec
 	signature string
 	cmd       *exec.Cmd
 	logFile   *os.File
@@ -72,81 +72,57 @@ type daemonRuntimeManagedProcess struct {
 	startedAt time.Time
 }
 
-type daemonRuntimeRestartState struct {
+type restartState struct {
 	windowStart time.Time
 	count       int
 }
 
-type daemonRuntimeSupervisor struct {
+type Identity struct {
+	ConfiguredUser  string
+	ConfiguredGroup string
+	EffectiveUser   string
+	EffectiveGroup  string
+	UID             uint32
+	GID             uint32
+}
+
+type Options struct {
+	ResolvePath      func(string) string
+	ResolveIdentity  func(Spec) (Identity, error)
+	ValidateIdentity func(Identity) error
+	TrimError        func(string) string
+	OnRestart        func()
+}
+
+type Supervisor struct {
 	mu        sync.Mutex
-	processes map[string]*daemonRuntimeManagedProcess
-	statuses  map[string]DaemonRuntimeProcessStatus
-	restarts  map[string]daemonRuntimeRestartState
+	options   Options
+	processes map[string]*managedProcess
+	statuses  map[string]ProcessStatus
+	restarts  map[string]restartState
 }
 
-var (
-	daemonRuntimeSupervisorMu sync.RWMutex
-	daemonRuntimeSupervisorRt *daemonRuntimeSupervisor
-)
-
-func InitDaemonRuntimeSupervisor() error {
-	sup := &daemonRuntimeSupervisor{
-		processes: map[string]*daemonRuntimeManagedProcess{},
-		statuses:  map[string]DaemonRuntimeProcessStatus{},
-		restarts:  map[string]daemonRuntimeRestartState{},
+func New(options Options) *Supervisor {
+	return &Supervisor{
+		options:   options,
+		processes: map[string]*managedProcess{},
+		statuses:  map[string]ProcessStatus{},
+		restarts:  map[string]restartState{},
 	}
-	daemonRuntimeSupervisorMu.Lock()
-	daemonRuntimeSupervisorRt = sup
-	daemonRuntimeSupervisorMu.Unlock()
-	return ReconcileDaemonRuntimeSupervisor()
 }
 
-func ShutdownDaemonRuntimeSupervisor() error {
-	daemonRuntimeSupervisorMu.Lock()
-	sup := daemonRuntimeSupervisorRt
-	daemonRuntimeSupervisorRt = nil
-	daemonRuntimeSupervisorMu.Unlock()
-	if sup == nil {
+func ValidateLaunch(spec Spec, identity Identity, options Options) error {
+	return New(options).validateLaunch(spec, identity)
+}
+
+func (s *Supervisor) Snapshot() []ProcessStatus {
+	if s == nil {
 		return nil
 	}
-	return sup.shutdown()
-}
-
-func daemonRuntimeSupervisorInstance() *daemonRuntimeSupervisor {
-	daemonRuntimeSupervisorMu.RLock()
-	defer daemonRuntimeSupervisorMu.RUnlock()
-	return daemonRuntimeSupervisorRt
-}
-
-func DaemonRuntimeProcessSnapshot() []DaemonRuntimeProcessStatus {
-	return runtimeAppProcessController().DaemonRuntimeProcessSnapshot()
-}
-
-func ReconcileDaemonRuntimeSupervisor() error {
-	return runtimeAppProcessController().ReconcileDaemonRuntimeSupervisor()
-}
-
-func StartDaemonProcess(appID string) error {
-	return runtimeAppProcessController().StartDaemonProcess(appID)
-}
-
-func StopDaemonProcess(appID string) error {
-	return runtimeAppProcessController().StopDaemonProcess(appID)
-}
-
-func ReloadDaemonProcess(appID string) error {
-	return runtimeAppProcessController().ReloadDaemonProcess(appID)
-}
-
-func localDaemonRuntimeProcessSnapshot() []DaemonRuntimeProcessStatus {
-	sup := daemonRuntimeSupervisorInstance()
-	if sup == nil {
-		return nil
-	}
-	sup.mu.Lock()
-	defer sup.mu.Unlock()
-	out := make([]DaemonRuntimeProcessStatus, 0, len(sup.statuses))
-	for _, status := range sup.statuses {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]ProcessStatus, 0, len(s.statuses))
+	for _, status := range s.statuses {
 		out = append(out, status)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -155,76 +131,11 @@ func localDaemonRuntimeProcessSnapshot() []DaemonRuntimeProcessStatus {
 	return out
 }
 
-func localReconcileDaemonRuntimeSupervisor() error {
-	sup := daemonRuntimeSupervisorInstance()
-	if sup == nil {
+func (s *Supervisor) Reconcile(desired []Spec) error {
+	if s == nil {
 		return nil
 	}
-	return sup.reconcile(currentDaemonRuntimeAppSpecs())
-}
-
-func localStartDaemonProcess(appID string) error {
-	sup := daemonRuntimeSupervisorInstance()
-	if sup == nil {
-		return fmt.Errorf("daemon runtime supervisor is not initialized")
-	}
-	return sup.startProcess(normalizeConfigToken(appID))
-}
-
-func localStopDaemonProcess(appID string) error {
-	sup := daemonRuntimeSupervisorInstance()
-	if sup == nil {
-		return fmt.Errorf("daemon runtime supervisor is not initialized")
-	}
-	return sup.stopProcess(normalizeConfigToken(appID))
-}
-
-func localReloadDaemonProcess(appID string) error {
-	sup := daemonRuntimeSupervisorInstance()
-	if sup == nil {
-		return fmt.Errorf("daemon runtime supervisor is not initialized")
-	}
-	return sup.reloadProcess(normalizeConfigToken(appID))
-}
-
-func currentDaemonRuntimeAppSpecs() []daemonRuntimeAppSpec {
-	cfg := currentVhostConfig()
-	out := make([]daemonRuntimeAppSpec, 0, len(cfg.Vhosts))
-	for _, vhost := range cfg.Vhosts {
-		if normalizeVhostMode(vhost.Mode) != "daemon" {
-			continue
-		}
-		appID := normalizeConfigToken(vhost.Name)
-		if appID == "" {
-			continue
-		}
-		processID := normalizeConfigToken(vhost.GeneratedTarget)
-		if processID == "" {
-			processID = appID
-		}
-		out = append(out, daemonRuntimeAppSpec{
-			AppID:           appID,
-			ProcessID:       processID,
-			Enabled:         vhost.Enabled,
-			Command:         vhost.Command,
-			Args:            append([]string(nil), vhost.Args...),
-			AppRoot:         vhost.AppRoot,
-			WorkingDir:      vhost.WorkingDir,
-			Env:             cloneStringMap(vhost.Env),
-			RunUser:         vhost.RunUser,
-			RunGroup:        vhost.RunGroup,
-			RestartPolicy:   vhost.RestartPolicy,
-			GracefulStopSec: vhost.GracefulStopSec,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].AppID < out[j].AppID
-	})
-	return out
-}
-
-func (s *daemonRuntimeSupervisor) reconcile(desired []daemonRuntimeAppSpec) error {
-	desiredMap := make(map[string]daemonRuntimeAppSpec, len(desired))
+	desiredMap := make(map[string]Spec, len(desired))
 	for _, spec := range desired {
 		desiredMap[spec.AppID] = spec
 	}
@@ -253,7 +164,10 @@ func (s *daemonRuntimeSupervisor) reconcile(desired []daemonRuntimeAppSpec) erro
 	return nil
 }
 
-func (s *daemonRuntimeSupervisor) shutdown() error {
+func (s *Supervisor) Shutdown() error {
+	if s == nil {
+		return nil
+	}
 	s.mu.Lock()
 	appIDs := make([]string, 0, len(s.processes))
 	for appID := range s.processes {
@@ -269,9 +183,9 @@ func (s *daemonRuntimeSupervisor) shutdown() error {
 	return nil
 }
 
-func (s *daemonRuntimeSupervisor) ensureProcess(spec daemonRuntimeAppSpec, explicit bool) error {
+func (s *Supervisor) ensureProcess(spec Spec, explicit bool) error {
 	signature := daemonRuntimeSpecSignature(spec)
-	identity, err := resolveDaemonRuntimeIdentity(spec)
+	identity, err := s.resolveIdentity(spec)
 	if err != nil {
 		s.updateStatus(spec, nil, false, 0, "identity_error", err.Error())
 		return err
@@ -283,7 +197,7 @@ func (s *daemonRuntimeSupervisor) ensureProcess(spec daemonRuntimeAppSpec, expli
 		s.updateStatus(spec, &identity, false, 0, "disabled", "")
 		return nil
 	}
-	if err := validateDaemonRuntimeLaunch(spec, identity); err != nil {
+	if err := s.validateLaunch(spec, identity); err != nil {
 		s.updateStatus(spec, &identity, false, 0, "preflight_failed", err.Error())
 		return err
 	}
@@ -312,8 +226,8 @@ func (s *daemonRuntimeSupervisor) ensureProcess(spec daemonRuntimeAppSpec, expli
 	return nil
 }
 
-func (s *daemonRuntimeSupervisor) startProcess(appID string) error {
-	spec, ok := daemonRuntimeSpecByAppID(appID)
+func (s *Supervisor) StartProcess(appID string, desired []Spec) error {
+	spec, ok := daemonRuntimeSpecByAppID(appID, desired)
 	if !ok {
 		return fmt.Errorf("daemon app %q is not configured", appID)
 	}
@@ -321,21 +235,21 @@ func (s *daemonRuntimeSupervisor) startProcess(appID string) error {
 	return s.ensureProcess(spec, true)
 }
 
-func (s *daemonRuntimeSupervisor) stopProcess(appID string) error {
-	spec, ok := daemonRuntimeSpecByAppID(appID)
+func (s *Supervisor) StopProcess(appID string, desired []Spec) error {
+	spec, ok := daemonRuntimeSpecByAppID(appID, desired)
 	if !ok {
 		return fmt.Errorf("daemon app %q is not configured", appID)
 	}
 	if err := s.stop(spec.AppID, false); err != nil {
 		return err
 	}
-	identity, _ := resolveDaemonRuntimeIdentity(spec)
+	identity, _ := s.resolveIdentity(spec)
 	s.updateStatus(spec, &identity, false, 0, "manual_stopped", "")
 	return nil
 }
 
-func (s *daemonRuntimeSupervisor) reloadProcess(appID string) error {
-	spec, ok := daemonRuntimeSpecByAppID(appID)
+func (s *Supervisor) ReloadProcess(appID string, desired []Spec) error {
+	spec, ok := daemonRuntimeSpecByAppID(appID, desired)
 	if !ok {
 		return fmt.Errorf("daemon app %q is not configured", appID)
 	}
@@ -346,22 +260,21 @@ func (s *daemonRuntimeSupervisor) reloadProcess(appID string) error {
 	return s.ensureProcess(spec, true)
 }
 
-func daemonRuntimeSpecByAppID(appID string) (daemonRuntimeAppSpec, bool) {
-	appID = normalizeConfigToken(appID)
-	for _, spec := range currentDaemonRuntimeAppSpecs() {
+func daemonRuntimeSpecByAppID(appID string, desired []Spec) (Spec, bool) {
+	for _, spec := range desired {
 		if spec.AppID == appID || spec.ProcessID == appID {
 			return spec, true
 		}
 	}
-	return daemonRuntimeAppSpec{}, false
+	return Spec{}, false
 }
 
-func (s *daemonRuntimeSupervisor) start(spec daemonRuntimeAppSpec, signature string, identity phpRuntimeResolvedIdentity) error {
-	cmdPath, workingDir, err := daemonRuntimeLaunchPaths(spec)
+func (s *Supervisor) start(spec Spec, signature string, identity Identity) error {
+	cmdPath, workingDir, err := s.launchPaths(spec)
 	if err != nil {
 		return err
 	}
-	logPath := daemonRuntimeLogPath(spec.AppID)
+	logPath := s.logPath(spec.AppID)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return err
 	}
@@ -371,7 +284,7 @@ func (s *daemonRuntimeSupervisor) start(spec daemonRuntimeAppSpec, signature str
 	}
 	cmd := exec.Command(cmdPath, spec.Args...)
 	cmd.Dir = workingDir
-	cmd.Env = daemonRuntimeLaunchEnv(spec)
+	cmd.Env = s.launchEnv(spec)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	if uint32(os.Geteuid()) != identity.UID || uint32(os.Getegid()) != identity.GID {
@@ -387,7 +300,7 @@ func (s *daemonRuntimeSupervisor) start(spec daemonRuntimeAppSpec, signature str
 		_ = logFile.Close()
 		return err
 	}
-	proc := &daemonRuntimeManagedProcess{
+	proc := &managedProcess{
 		spec:      spec,
 		signature: signature,
 		cmd:       cmd,
@@ -410,7 +323,7 @@ func (s *daemonRuntimeSupervisor) start(spec daemonRuntimeAppSpec, signature str
 	return nil
 }
 
-func (s *daemonRuntimeSupervisor) stop(appID string, deleteStatus bool) error {
+func (s *Supervisor) stop(appID string, deleteStatus bool) error {
 	s.mu.Lock()
 	proc := s.processes[appID]
 	if proc == nil {
@@ -476,7 +389,7 @@ func (s *daemonRuntimeSupervisor) stop(appID string, deleteStatus bool) error {
 	return nil
 }
 
-func (s *daemonRuntimeSupervisor) handleExit(proc *daemonRuntimeManagedProcess, err error) {
+func (s *Supervisor) handleExit(proc *managedProcess, err error) {
 	if proc.logFile != nil {
 		_ = proc.logFile.Close()
 	}
@@ -493,7 +406,7 @@ func (s *daemonRuntimeSupervisor) handleExit(proc *daemonRuntimeManagedProcess, 
 	status := s.statuses[spec.AppID]
 	if err != nil && !proc.stopping {
 		status.LastAction = "exited"
-		status.LastError = trimStatusError(err.Error())
+		status.LastError = s.trimError(err.Error())
 		s.statuses[spec.AppID] = status
 	}
 	if proc.desired && !proc.stopping {
@@ -516,12 +429,14 @@ func (s *daemonRuntimeSupervisor) handleExit(proc *daemonRuntimeManagedProcess, 
 	if restart {
 		go func() {
 			time.Sleep(daemonRuntimeRestartDelay)
-			_ = ReconcileDaemonRuntimeSupervisor()
+			if s.options.OnRestart != nil {
+				s.options.OnRestart()
+			}
 		}()
 	}
 }
 
-func (s *daemonRuntimeSupervisor) allowRestartLocked(appID string) bool {
+func (s *Supervisor) allowRestartLocked(appID string) bool {
 	now := time.Now()
 	state := s.restarts[appID]
 	if state.windowStart.IsZero() || now.Sub(state.windowStart) > daemonRuntimeRestartWindow {
@@ -533,14 +448,14 @@ func (s *daemonRuntimeSupervisor) allowRestartLocked(appID string) bool {
 	return state.count <= daemonRuntimeMaxRestart
 }
 
-func (s *daemonRuntimeSupervisor) updateStatus(spec daemonRuntimeAppSpec, identity *phpRuntimeResolvedIdentity, running bool, pid int, action string, lastError string) {
+func (s *Supervisor) updateStatus(spec Spec, identity *Identity, running bool, pid int, action string, lastError string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.updateStatusLocked(spec, identity, running, pid, action, lastError)
 }
 
-func (s *daemonRuntimeSupervisor) updateStatusLocked(spec daemonRuntimeAppSpec, identity *phpRuntimeResolvedIdentity, running bool, pid int, action string, lastError string) {
-	status := DaemonRuntimeProcessStatus{
+func (s *Supervisor) updateStatusLocked(spec Spec, identity *Identity, running bool, pid int, action string, lastError string) {
+	status := ProcessStatus{
 		AppID:         spec.AppID,
 		ProcessID:     spec.ProcessID,
 		Enabled:       spec.Enabled,
@@ -552,8 +467,8 @@ func (s *daemonRuntimeSupervisor) updateStatusLocked(spec daemonRuntimeAppSpec, 
 		WorkingDir:    spec.WorkingDir,
 		RestartPolicy: spec.RestartPolicy,
 		LastAction:    action,
-		LastError:     trimStatusError(lastError),
-		LogFile:       daemonRuntimeLogPath(spec.AppID),
+		LastError:     s.trimError(lastError),
+		LogFile:       s.logPath(spec.AppID),
 	}
 	if running {
 		if current := s.processes[spec.AppID]; current != nil && !current.startedAt.IsZero() {
@@ -573,7 +488,7 @@ func (s *daemonRuntimeSupervisor) updateStatusLocked(spec daemonRuntimeAppSpec, 
 	s.statuses[spec.AppID] = status
 }
 
-func daemonRuntimeSpecSignature(spec daemonRuntimeAppSpec) string {
+func daemonRuntimeSpecSignature(spec Spec) string {
 	raw, _ := json.Marshal(struct {
 		Command         string            `json:"command"`
 		Args            []string          `json:"args"`
@@ -599,53 +514,34 @@ func daemonRuntimeSpecSignature(spec daemonRuntimeAppSpec) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func resolveDaemonRuntimeIdentity(spec daemonRuntimeAppSpec) (phpRuntimeResolvedIdentity, error) {
+func (s *Supervisor) resolveIdentity(spec Spec) (Identity, error) {
+	if s.options.ResolveIdentity != nil {
+		return s.options.ResolveIdentity(spec)
+	}
 	currentUID := uint32(os.Geteuid())
 	currentGID := uint32(os.Getegid())
-	out := phpRuntimeResolvedIdentity{
+	return Identity{
 		ConfiguredUser:  strings.TrimSpace(spec.RunUser),
 		ConfiguredGroup: strings.TrimSpace(spec.RunGroup),
-		EffectiveUser:   lookupUserLabel(currentUID),
-		EffectiveGroup:  lookupGroupLabel(currentGID),
+		EffectiveUser:   fmt.Sprintf("%d", currentUID),
+		EffectiveGroup:  fmt.Sprintf("%d", currentGID),
 		UID:             currentUID,
 		GID:             currentGID,
-	}
-	if out.ConfiguredUser != "" {
-		uid, label, primaryGID, err := resolvePHPRuntimeUserSpec(out.ConfiguredUser)
-		if err != nil {
-			return phpRuntimeResolvedIdentity{}, fmt.Errorf("daemon app %q run_user: %w", spec.AppID, err)
-		}
-		out.UID = uid
-		out.EffectiveUser = label
-		if out.ConfiguredGroup == "" {
-			if primaryGID == nil {
-				return phpRuntimeResolvedIdentity{}, fmt.Errorf("daemon app %q run_group is required when run_user %q has no passwd entry", spec.AppID, out.ConfiguredUser)
-			}
-			out.GID = *primaryGID
-			out.EffectiveGroup = lookupGroupLabel(*primaryGID)
-		}
-	}
-	if out.ConfiguredGroup != "" {
-		gid, label, err := resolvePHPRuntimeGroupSpec(out.ConfiguredGroup)
-		if err != nil {
-			return phpRuntimeResolvedIdentity{}, fmt.Errorf("daemon app %q run_group: %w", spec.AppID, err)
-		}
-		out.GID = gid
-		out.EffectiveGroup = label
-	}
-	return out, nil
+	}, nil
 }
 
-func validateDaemonRuntimeLaunch(spec daemonRuntimeAppSpec, identity phpRuntimeResolvedIdentity) error {
-	if err := validatePHPRuntimePrivilegeTransition(identity); err != nil {
-		return err
+func (s *Supervisor) validateLaunch(spec Spec, identity Identity) error {
+	if s.options.ValidateIdentity != nil {
+		if err := s.options.ValidateIdentity(identity); err != nil {
+			return err
+		}
 	}
-	_, _, err := daemonRuntimeLaunchPaths(spec)
+	_, _, err := s.launchPaths(spec)
 	return err
 }
 
-func daemonRuntimeLaunchPaths(spec daemonRuntimeAppSpec) (string, string, error) {
-	root := absoluteRuntimePath(spec.AppRoot)
+func (s *Supervisor) launchPaths(spec Spec) (string, string, error) {
+	root := s.resolvePath(spec.AppRoot)
 	if info, err := os.Stat(root); err != nil {
 		return "", "", fmt.Errorf("app_root %q: %w", spec.AppRoot, err)
 	} else if !info.IsDir() {
@@ -655,7 +551,7 @@ func daemonRuntimeLaunchPaths(spec daemonRuntimeAppSpec) (string, string, error)
 	if err != nil {
 		return "", "", fmt.Errorf("app_root %q: %w", spec.AppRoot, err)
 	}
-	cmdPath := daemonRuntimeCommandPath(spec)
+	cmdPath := s.commandPath(spec)
 	cmdReal, err := filepath.EvalSymlinks(cmdPath)
 	if err != nil {
 		return "", "", fmt.Errorf("command %q: %w", spec.Command, err)
@@ -673,7 +569,7 @@ func daemonRuntimeLaunchPaths(spec daemonRuntimeAppSpec) (string, string, error)
 	if info.Mode()&0o111 == 0 {
 		return "", "", fmt.Errorf("command %q is not executable", spec.Command)
 	}
-	workingDir := daemonRuntimeWorkingDir(spec)
+	workingDir := s.workingDir(spec)
 	workingDirReal, err := filepath.EvalSymlinks(workingDir)
 	if err != nil {
 		return "", "", fmt.Errorf("working_dir %q: %w", spec.WorkingDir, err)
@@ -689,27 +585,29 @@ func daemonRuntimeLaunchPaths(spec daemonRuntimeAppSpec) (string, string, error)
 	return cmdReal, workingDirReal, nil
 }
 
-func daemonRuntimeCommandPath(spec daemonRuntimeAppSpec) string {
-	return filepath.Join(absoluteRuntimePath(spec.AppRoot), filepath.FromSlash(spec.Command))
+func (s *Supervisor) resolvePath(value string) string {
+	if s.options.ResolvePath != nil {
+		return s.options.ResolvePath(value)
+	}
+	if filepath.IsAbs(value) {
+		return filepath.Clean(value)
+	}
+	return filepath.Clean(value)
 }
 
-func daemonRuntimeWorkingDir(spec daemonRuntimeAppSpec) string {
-	root := absoluteRuntimePath(spec.AppRoot)
+func (s *Supervisor) commandPath(spec Spec) string {
+	return filepath.Join(s.resolvePath(spec.AppRoot), filepath.FromSlash(spec.Command))
+}
+
+func (s *Supervisor) workingDir(spec Spec) string {
+	root := s.resolvePath(spec.AppRoot)
 	if strings.TrimSpace(spec.WorkingDir) == "" {
 		return root
 	}
 	return filepath.Join(root, filepath.FromSlash(spec.WorkingDir))
 }
 
-func daemonRuntimePathUnder(root string, target string) bool {
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(target))
-	if err != nil {
-		return false
-	}
-	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
-}
-
-func daemonRuntimeLaunchEnv(spec daemonRuntimeAppSpec) []string {
+func (s *Supervisor) launchEnv(spec Spec) []string {
 	env := os.Environ()
 	keys := make([]string, 0, len(spec.Env))
 	for key := range spec.Env {
@@ -722,15 +620,34 @@ func daemonRuntimeLaunchEnv(spec daemonRuntimeAppSpec) []string {
 	env = append(env,
 		"TUKUYOMI_RUNTIME_APP_ID="+spec.AppID,
 		"TUKUYOMI_RUNTIME_APP_MODE=daemon",
-		"TUKUYOMI_RUNTIME_APP_ROOT="+absoluteRuntimePath(spec.AppRoot),
+		"TUKUYOMI_RUNTIME_APP_ROOT="+s.resolvePath(spec.AppRoot),
 	)
 	return env
 }
 
-func daemonRuntimeLogPath(appID string) string {
-	appID = normalizeConfigToken(appID)
+func (s *Supervisor) logPath(appID string) string {
+	appID = strings.TrimSpace(appID)
 	if appID == "" {
 		appID = "unknown"
 	}
 	return filepath.ToSlash(filepath.Join("data", "daemon-apps", appID, "daemon-supervisor.log"))
+}
+
+func (s *Supervisor) trimError(value string) string {
+	if s.options.TrimError != nil {
+		return s.options.TrimError(value)
+	}
+	value = strings.TrimSpace(value)
+	if len(value) > 512 {
+		return value[:512]
+	}
+	return value
+}
+
+func daemonRuntimePathUnder(root string, target string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(target))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }

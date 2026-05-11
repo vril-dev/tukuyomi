@@ -1593,7 +1593,7 @@ func resetPHPFoundationRuntimesForTest(t *testing.T) func() {
 		daemonRuntimeSupervisorRt = prevDaemonSupervisor
 		daemonRuntimeSupervisorMu.Unlock()
 		if currentDaemonSupervisor != nil {
-			_ = currentDaemonSupervisor.shutdown()
+			_ = currentDaemonSupervisor.Shutdown()
 		}
 
 		phpRuntimeMaterializationMu.Lock()

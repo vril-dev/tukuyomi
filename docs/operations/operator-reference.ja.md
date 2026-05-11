@@ -25,7 +25,7 @@
 
 | ブロック | 役割 |
 | --- | --- |
-| `server` | リスナー、タイムアウト、バックプレッシャー、TLS、HTTP/3、公開／管理リスナー分離 |
+| `server` | リスナー、タイムアウト、バックプレッシャー、TLS、受信側 HTTP/2、HTTP/3、公開／管理リスナー分離 |
 | `runtime` | `gomaxprocs`、`memory_limit_mb` など Go ランタイム制御 |
 | `admin` | UI／API パス、セッション、外部公開方針、信頼 CIDR、管理面のレート制限 |
 | `paths` | rules、bypass、country、rate、bot、semantic、CRS、sites、tasks、アーティファクトの配置 |
@@ -51,7 +51,10 @@
 - `server.write_timeout_sec` はレスポンス書き込みの上限です。slow client がデータプレーンの goroutine を保持し続けることなくクローズします
 - `server.idle_timeout_sec` は keep-alive のリクエスト間アイドル時間の上限です
 - `server.graceful_shutdown_timeout_sec` は、デプロイ／リロード時に稼働中のコネクションをドレインする上限時間です。超過後は強制クローズします
-- TLS 公開リスナーは、このネイティブサーバー経路では HTTP/1.1 をアドバタイズします。HTTP/3 は有効時も専用の HTTP/3 リスナーで処理します
+- TLS 公開リスナーは既定で HTTP/1.1 をアドバタイズします。`server.http2.enabled=true`
+  の場合は、HTTPS 公開リスナーが ALPN で `h2` と `http/1.1` を提示します。
+  HTTP/1.1 は残るため、HTTP/1.1 の Upgrade を使う WebSocket 経路も引き続き利用できます。
+  HTTP/3 は有効時も専用の HTTP/3 リスナーで処理します
 
 ### 過負荷時のバックプレッシャー
 
@@ -79,6 +82,9 @@
 ```json
 "server": {
   "listen_addr": ":9443",
+  "http2": {
+    "enabled": true
+  },
   "http3": {
     "enabled": true,
     "alt_svc_max_age_sec": 86400
@@ -97,6 +103,10 @@
 要点:
 
 - `server.tls.enabled=false` が既定です
+- `server.http2.enabled=true` には組み込み TLS が必要です。この設定は
+  client から Gateway への HTTPS ALPN だけを制御します。Gateway から
+  upstream への transport は変わらないため、必要な場合は Proxy Rules 側の
+  upstream HTTP/2 設定を使います
 - `server.http3.enabled=true` には組み込み TLS が必要です
 - HTTP/3 は `server.listen_addr` と同じ番号のポートを UDP で使用します
 - legacy の単一 listener 構成では、`server.tls.redirect_http=true` を指定すると平文 HTTP リスナーが追加されます

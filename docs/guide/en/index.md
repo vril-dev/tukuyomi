@@ -95,9 +95,9 @@ can read it from cover to cover.
   benchmark / smoke gate shape, reopen checklist.
   (sources: docs/operations/listener-topology.md, reuseport-policy.md,
   reuseport-evaluation.md)
-- **Chapter 15. HTTP/3 and TLS** — Built-in TLS termination, ACME automatic
-  TLS, the dedicated HTTP/3 listener, `server.tls.redirect_http`,
-  HTTP/3 public-entry smoke.
+- **Chapter 15. HTTP/2, HTTP/3, and TLS** — Built-in TLS termination, ACME
+  automatic TLS, inbound HTTP/2 ALPN, the dedicated HTTP/3 listener,
+  `server.tls.redirect_http`, HTTP/3 public-entry smoke.
   (sources: operator-reference.md, docs/operations/http3-public-entry-smoke.md)
 - **Chapter 16. IoT / Edge device enrollment** — Roles, operator flow,
   Center-managed device views, runtime deployment, preview URL, Center URL

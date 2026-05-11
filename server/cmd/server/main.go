@@ -403,6 +403,7 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 		MaxHeaderBytes:    config.ServerMaxHeaderBytes,
 	}
 	handler.RegisterNativeHTTP1ServerMetricsSource(publicSrv)
+	serverruntime.ResetHTTP2Status()
 	serverruntime.ResetHTTP3Status()
 	if splitAdminListener {
 		adminListener, inherited, err := buildManagedTCPListenerForRole("admin", config.AdminListenAddr, adminListenerRuntime, activation)
@@ -491,7 +492,12 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 		if err := runHTTP3Server(lifecycle, activation, http3Srv); err != nil {
 			fatalf("[FATAL] start HTTP/3 server: %v", err)
 		}
-		log.Printf("[INFO] starting HTTPS server on %s inherited=%t engine=native_http1", config.ListenAddr, publicInherited)
+		engine := "native_http1"
+		if config.ServerHTTP2Enabled {
+			engine = "native_http1_http2"
+			serverruntime.RecordHTTP2Configured(true)
+		}
+		log.Printf("[INFO] starting HTTPS server on %s inherited=%t engine=%s", config.ListenAddr, publicInherited, engine)
 		log.Printf("[SERVER] tls enabled source=%s cert_file=%s acme_domains=%s min_version=%s redirect_http=%t redirect_addr=%s",
 			handler.ServerTLSRuntimeStatusSnapshot().Source,
 			config.ServerTLSCertFile,
@@ -508,6 +514,10 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 				http3Status.AltSvc,
 			)
 		}
+		if config.ServerHTTP2Enabled {
+			http2Status := serverruntime.HTTP2StatusSnapshot()
+			log.Printf("[SERVER] http2 enabled advertised=%t", http2Status.Advertised)
+		}
 		log.Printf("[SERVER] read_timeout=%s read_header_timeout=%s write_timeout=%s idle_timeout=%s max_header_bytes=%d",
 			config.ServerReadTimeout,
 			config.ServerReadHeaderTimeout,
@@ -519,6 +529,9 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 			log.Printf("[SERVER] public proxy protocol enabled trusted_cidrs=%s", strings.Join(config.ServerProxyProtocolTrustedCIDRs, ","))
 		}
 		lifecycle.Go("public", func() error {
+			if config.ServerHTTP2Enabled {
+				return publicSrv.ServeTLSHTTP2(publicListener, tlsConfig)
+			}
 			return publicSrv.ServeTLS(publicListener, tlsConfig)
 		}, publicSrv.Shutdown, publicSrv.Close)
 		activation.CloseUnused()

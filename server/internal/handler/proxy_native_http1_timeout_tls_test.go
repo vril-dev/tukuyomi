@@ -17,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/net/http2"
 )
 
 func TestNativeHTTP1ReadHeaderTimeout(t *testing.T) {
@@ -228,6 +230,112 @@ func TestNativeHTTP1TLSHandshakeTimeoutAndH2ALPNRefusal(t *testing.T) {
 	}
 }
 
+func TestNativeHTTP1ServeTLSHTTP2AcceptsH2AndH1Fallback(t *testing.T) {
+	cert := nativeHTTP1TestCertificate(t)
+	got := make(chan string, 2)
+	srv, addr := nativeHTTP1StartConfiguredTLSHTTP2Server(t, &nativeHTTP1Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := proxyRequestContextStateFromContext(r.Context()); !ok {
+				t.Error("proxy request context state missing")
+			}
+			if r.TLS == nil {
+				t.Error("Request.TLS was nil")
+			}
+			got <- r.Proto
+			_, _ = w.Write([]byte("ok"))
+		}),
+	}, &tls.Config{Certificates: []tls.Certificate{cert}})
+	defer srv.Close()
+
+	tr := &http2.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	req, err := http.NewRequest(http.MethodGet, "https://"+addr+"/h2", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("HTTP/2 RoundTrip: %v", err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.ProtoMajor != 2 {
+		t.Fatalf("resp proto=%s want HTTP/2", resp.Proto)
+	}
+	if proto := <-got; proto != "HTTP/2.0" {
+		t.Fatalf("handler proto=%q want HTTP/2.0", proto)
+	}
+
+	conn, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}})
+	if err != nil {
+		t.Fatalf("tls Dial HTTP/1.1: %v", err)
+	}
+	defer conn.Close()
+	if _, err := io.WriteString(conn, "GET /h1 HTTP/1.1\r\nHost: app.example\r\nConnection: close\r\n\r\n"); err != nil {
+		t.Fatalf("write HTTP/1.1 request: %v", err)
+	}
+	h1Resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("ReadResponse: %v", err)
+	}
+	_, _ = io.ReadAll(h1Resp.Body)
+	_ = h1Resp.Body.Close()
+	if h1Resp.ProtoMajor != 1 {
+		t.Fatalf("h1 response proto=%s want HTTP/1.1", h1Resp.Proto)
+	}
+	if proto := <-got; proto != "HTTP/1.1" {
+		t.Fatalf("handler proto=%q want HTTP/1.1", proto)
+	}
+}
+
+func TestNativeHTTP1ServeTLSHTTP2AppliesALPNToDynamicTLSConfig(t *testing.T) {
+	cert := nativeHTTP1TestCertificate(t)
+	sni := make(chan string, 1)
+	srv, addr := nativeHTTP1StartConfiguredTLSHTTP2Server(t, &nativeHTTP1Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(r.Proto))
+		}),
+	}, &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			sni <- hello.ServerName
+			return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
+		},
+	})
+	defer srv.Close()
+
+	tr := &http2.Transport{TLSClientConfig: &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         "app.example",
+	}}
+	req, err := http.NewRequest(http.MethodGet, "https://"+addr+"/dynamic", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("HTTP/2 RoundTrip: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.ProtoMajor != 2 {
+		t.Fatalf("resp proto=%s want HTTP/2", resp.Proto)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != "HTTP/2.0" {
+		t.Fatalf("body=%q want HTTP/2.0", string(body))
+	}
+	select {
+	case got := <-sni:
+		if got != "app.example" {
+			t.Fatalf("SNI=%q want app.example", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not observe TLS ClientHello")
+	}
+}
+
 func TestNativeHTTP1ListenerWrappedRemoteAddr(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer clientConn.Close()
@@ -292,6 +400,24 @@ func nativeHTTP1StartConfiguredTLSServer(t *testing.T, srv *nativeHTTP1Server, t
 		err := srv.ServeTLS(ln, tlsConfig)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			t.Errorf("ServeTLS: %v", err)
+		}
+	}()
+	return srv, ln.Addr().String()
+}
+
+func nativeHTTP1StartConfiguredTLSHTTP2Server(t *testing.T, srv *nativeHTTP1Server, tlsConfig *tls.Config) (*nativeHTTP1Server, string) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	if srv == nil {
+		srv = &nativeHTTP1Server{}
+	}
+	go func() {
+		err := srv.ServeTLSHTTP2(ln, tlsConfig)
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("ServeTLSHTTP2: %v", err)
 		}
 	}()
 	return srv, ln.Addr().String()

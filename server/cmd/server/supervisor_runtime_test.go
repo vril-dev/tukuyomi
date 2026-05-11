@@ -865,6 +865,7 @@ func saveSupervisorListenerConfig() func() {
 	serverTLSEnabled := config.ServerTLSEnabled
 	serverTLSRedirectHTTP := config.ServerTLSRedirectHTTP
 	serverTLSHTTPRedirectAddr := config.ServerTLSHTTPRedirectAddr
+	serverHTTP2Enabled := config.ServerHTTP2Enabled
 	serverHTTP3Enabled := config.ServerHTTP3Enabled
 	return func() {
 		config.ListenAddr = listenAddr
@@ -874,6 +875,7 @@ func saveSupervisorListenerConfig() func() {
 		config.ServerTLSEnabled = serverTLSEnabled
 		config.ServerTLSRedirectHTTP = serverTLSRedirectHTTP
 		config.ServerTLSHTTPRedirectAddr = serverTLSHTTPRedirectAddr
+		config.ServerHTTP2Enabled = serverHTTP2Enabled
 		config.ServerHTTP3Enabled = serverHTTP3Enabled
 	}
 }

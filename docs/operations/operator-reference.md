@@ -30,7 +30,7 @@ Main blocks:
 
 | Block | Purpose |
 | --- | --- |
-| `server` | Listener address, timeouts, backpressure, TLS, HTTP/3, public/admin split listener behavior |
+| `server` | Listener address, timeouts, backpressure, TLS, inbound HTTP/2, HTTP/3, public/admin split listener behavior |
 | `runtime` | Go runtime caps such as `gomaxprocs` and `memory_limit_mb` |
 | `admin` | UI/API paths, session behavior, external exposure policy, trusted CIDRs, admin rate limit |
 | `paths` | File locations for rules, bypass, country, rate, bot, semantic, CRS, sites, scheduled tasks, and artifacts |
@@ -59,8 +59,11 @@ Container startup usually needs only:
   rather than allowed to hold a data-plane goroutine indefinitely.
 - `server.idle_timeout_sec` bounds keep-alive idle time between requests.
 - `server.graceful_shutdown_timeout_sec` bounds deploy/reload drain time before force-closing live connections.
-- TLS public listeners advertise HTTP/1.1 for this native server path. HTTP/3
-  is still handled by the dedicated HTTP/3 listener when enabled.
+- TLS public listeners advertise HTTP/1.1 by default. When
+  `server.http2.enabled=true`, HTTPS public listeners advertise `h2` and
+  `http/1.1` through ALPN; HTTP/1.1 remains available for clients and WebSocket
+  upgrade paths that use it. HTTP/3 is still handled by the dedicated HTTP/3
+  listener when enabled.
 
 ### Overload Backpressure
 
@@ -88,6 +91,9 @@ Container startup usually needs only:
 ```json
 "server": {
   "listen_addr": ":9443",
+  "http2": {
+    "enabled": true
+  },
   "http3": {
     "enabled": true,
     "alt_svc_max_age_sec": 86400
@@ -106,6 +112,9 @@ Container startup usually needs only:
 Notes:
 
 - `server.tls.enabled=false` is the default.
+- `server.http2.enabled=true` requires built-in TLS and controls only
+  client-to-Gateway HTTPS ALPN. It does not change Gateway-to-upstream
+  transport; use Proxy Rules upstream HTTP/2 settings for that.
 - `server.http3.enabled=true` requires built-in TLS termination.
 - HTTP/3 uses the same numeric port as `server.listen_addr`, but over UDP.
 - In the legacy single-listener shape, `server.tls.redirect_http=true` starts a second plain HTTP listener that redirects to HTTPS.

@@ -4,6 +4,10 @@
 
 この文書では、現在の運用モデル、runtime 全体へ適用する平文 HTTP/2 設定、名前付き upstream と route 直指定 upstream を混在させる場合の考え方を整理します。
 
+このページが扱うのは Gateway から upstream への transport です。client から
+Gateway への受信側 HTTP/2 は、公開 HTTPS リスナー設定の `server.http2.enabled`
+で別に制御します。
+
 ## モード
 
 ### `force_http2=false`

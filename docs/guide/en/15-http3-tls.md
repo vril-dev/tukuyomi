@@ -1,12 +1,13 @@
-# Chapter 15. HTTP/3 and TLS
+# Chapter 15. HTTP/2, HTTP/3, and TLS
 
 Chapter 14 framed the current listener-topology decision. This chapter
-covers **what TLS and HTTP/3 do on the public listener path**:
+covers **what TLS, inbound HTTP/2, and HTTP/3 do on the public listener path**:
 
 1. Enabling built-in TLS termination and the available options.
 2. TLS binding ACME (Let's Encrypt automatic certificate refresh).
-3. Built-in HTTP/3 and `Alt-Svc` behavior.
-4. What the HTTP/3 public-entry smoke checks.
+3. Inbound HTTP/2 ALPN on HTTPS public listeners.
+4. Built-in HTTP/3 and `Alt-Svc` behavior.
+5. What the HTTP/3 public-entry smoke checks.
 
 ## 15.1 Built-in TLS termination
 
@@ -20,6 +21,9 @@ Configure TLS in the `server` block of DB `app_config`:
 {
   "server": {
     "listen_addr": ":9443",
+    "http2": {
+      "enabled": true
+    },
     "http3": {
       "enabled": true,
       "alt_svc_max_age_sec": 86400
@@ -39,6 +43,9 @@ Configure TLS in the `server` block of DB `app_config`:
 Key points:
 
 - `server.tls.enabled=false` is the **default**.
+- `server.http2.enabled=true` requires built-in TLS and controls only
+  client-to-Gateway HTTPS ALPN. It does not change Gateway-to-upstream
+  transport.
 - `server.http3.enabled=true` requires built-in TLS.
 - HTTP/3 uses **the same numeric port as `server.listen_addr` over
   UDP**.
@@ -67,9 +74,10 @@ This is loosely related to TLS, but if you publish HTTPS / HTTP/3 as
 a direct entrypoint you should understand the **inbound timeout
 boundary**:
 
-- The public HTTP/1.1 data-plane listener is handled by the Tukuyomi
-  native HTTP/1.1 server. The admin listener, the HTTP redirect
-  listener, and the HTTP/3 helper remain separate control / edge
+- The public data-plane listener is handled by Tukuyomi's native server.
+  HTTP/1.1 remains the default. When `server.http2.enabled=true`, HTTPS
+  public listeners also accept HTTP/2 over ALPN. The admin listener, the HTTP
+  redirect listener, and the HTTP/3 helper remain separate control / edge
   helpers.
 - `server.read_header_timeout_sec` covers the **request line and
   headers only**.
@@ -83,9 +91,9 @@ boundary**:
 - `server.graceful_shutdown_timeout_sec` is the upper bound on
   draining live connections during deploy / reload. **After the
   budget, force-close.**
-- The TLS public listener **advertises HTTP/1.1** on this native
-  server path. HTTP/3 is handled on a **dedicated HTTP/3 listener**
-  even when enabled.
+- The TLS public listener **advertises HTTP/1.1 by default**. With
+  `server.http2.enabled=true`, it advertises `h2` and `http/1.1`. HTTP/3 is
+  handled on a **dedicated HTTP/3 listener** even when enabled.
 - Explicit `server.public_listeners` currently focuses on HTTP/1.1 /
   HTTPS rollout. Do not enable `server.http3.enabled` together with
   `server.public_listeners`.
@@ -124,7 +132,39 @@ This is the persistent byte storage discussion from Chapter 3 §3.5
 revisited, this time from the angle of "where does the ACME
 certificate live?".
 
-## 15.4 Built-in HTTP/3
+## 15.4 Inbound HTTP/2 on HTTPS public listeners
+
+Inbound HTTP/2 is a listener-level setting, not a Routing or upstream setting.
+Enable it with:
+
+```json
+{
+  "server": {
+    "http2": {
+      "enabled": true
+    },
+    "tls": {
+      "enabled": true
+    }
+  }
+}
+```
+
+When enabled, HTTPS public listeners advertise `h2` and `http/1.1` through
+ALPN. Browser and API clients can use HTTP/2 to reach Tukuyomi, while the
+application behind Tukuyomi can still be PHP-FPM, PSGI, or an HTTP/1.1
+upstream.
+
+This is intentionally separate from upstream HTTP/2:
+
+- `server.http2.enabled`: client -> Gateway HTTPS listener.
+- `upstreams[].http2_mode`: Gateway -> named upstream.
+- `action.upstream_http2_mode`: Gateway -> direct route upstream URL.
+
+PHP-FPM and PSGI do not speak HTTP upstream transport, so upstream HTTP/2 mode
+does not apply to them.
+
+## 15.5 Built-in HTTP/3
 
 A typical HTTP/3-enabled configuration:
 
@@ -132,6 +172,9 @@ A typical HTTP/3-enabled configuration:
 {
   "server": {
     "listen_addr": ":443",
+    "http2": {
+      "enabled": true
+    },
     "http3": {
       "enabled": true,
       "alt_svc_max_age_sec": 86400
@@ -151,8 +194,8 @@ Behavioral points:
 
 - HTTP/3 uses **the same numeric port as `listen_addr` over UDP**.
   For `:443`, that means **opening both TCP/443 and UDP/443**.
-- The TLS public listener handles HTTP/2 / HTTP/1.1; HTTP/3 is
-  served on a **dedicated listener**.
+- The TLS public listener handles HTTP/2 / HTTP/1.1 when
+  `server.http2.enabled=true`; HTTP/3 is served on a **dedicated listener**.
 - HTTPS responses include `Alt-Svc`. `alt_svc_max_age_sec` controls
   the advertise TTL.
 - HTTP/3 **does not guarantee QUIC connection continuity across
@@ -162,7 +205,7 @@ Behavioral points:
 When enabling built-in HTTP/3 on a container deployment, **open both
 TCP and UDP** on the listener port (Chapter 4 §4.11).
 
-## 15.5 HTTP/3 public-entry smoke
+## 15.6 HTTP/3 public-entry smoke
 
 Because HTTP/3 is sensitive to environment, tukuyomi provides a
 **dedicated smoke command**:
@@ -171,7 +214,7 @@ Because HTTP/3 is sensitive to environment, tukuyomi provides a
 make http3-public-entry-smoke
 ```
 
-### 15.5.1 What it checks
+### 15.6.1 What it checks
 
 The smoke spins up a temporary local runtime with:
 
@@ -191,7 +234,7 @@ It verifies:
 - **An actual HTTP/3 request over UDP succeeds** against the live
   runtime.
 
-### 15.5.2 Why it is a dedicated command
+### 15.6.2 Why it is a dedicated command
 
 This smoke is **deliberately not** part of `make smoke` /
 `make deployment-smoke` / `make ci-local`, because it depends on:
@@ -205,14 +248,14 @@ It is valuable for release readiness and operator validation, but it
 has too much environmental dependency to live in the fast smoke
 suite.
 
-### 15.5.3 Prerequisites
+### 15.6.3 Prerequisites
 
 - Go toolchain
 - Docker is **not** required.
 - `curl`, `jq`, `python3`, `rsync`, `install`
 - Local UDP loopback is available.
 
-### 15.5.4 Recommended timing
+### 15.6.4 Recommended timing
 
 Run it after any of:
 
@@ -226,7 +269,7 @@ It is also a good fit before announcing **`tukuyomi` as a direct
 HTTPS / HTTP/3 entrypoint**. Smoke usually passes in a setup with a
 fronting LB; for direct exposure it pays to run this once.
 
-## 15.6 Recap
+## 15.7 Recap
 
 - Enable built-in TLS with `server.tls.enabled=true`. TLS is required
   for `http3.enabled=true`. HTTP/3 uses **the same numeric port over

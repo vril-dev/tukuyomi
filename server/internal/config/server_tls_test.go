@@ -23,6 +23,9 @@ func TestLoadAppConfigFileAcceptsServerTLSConfig(t *testing.T) {
 	raw := `{
 		"server": {
 			"listen_addr": ":9443",
+			"http2": {
+				"enabled": true
+			},
 			"http3": {
 				"enabled": true,
 				"alt_svc_max_age_sec": 86400
@@ -65,11 +68,29 @@ func TestLoadAppConfigFileAcceptsServerTLSConfig(t *testing.T) {
 	if cfg.Server.TLS.HTTPRedirectAddr != ":9080" {
 		t.Fatalf("unexpected server.tls.http_redirect_addr: %q", cfg.Server.TLS.HTTPRedirectAddr)
 	}
+	if !cfg.Server.HTTP2.Enabled {
+		t.Fatal("expected server.http2.enabled=true")
+	}
 	if !cfg.Server.HTTP3.Enabled {
 		t.Fatal("expected server.http3.enabled=true")
 	}
 	if cfg.Server.HTTP3.AltSvcMaxAgeSec != 86400 {
 		t.Fatalf("unexpected server.http3.alt_svc_max_age_sec: %d", cfg.Server.HTTP3.AltSvcMaxAgeSec)
+	}
+}
+
+func TestLoadAppConfigFileRejectsHTTP2WithoutTLS(t *testing.T) {
+	t.Parallel()
+
+	cfg := defaultAppConfigFile()
+	cfg.Server.HTTP2.Enabled = true
+	cfg.Server.TLS.Enabled = false
+	err := validateAppConfigFile(cfg)
+	if err == nil {
+		t.Fatal("expected HTTP/2 without TLS error")
+	}
+	if got := err.Error(); got != "server.http2.enabled requires server.tls.enabled=true" {
+		t.Fatalf("error=%q want server.http2.enabled requires server.tls.enabled=true", got)
 	}
 }
 

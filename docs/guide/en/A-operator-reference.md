@@ -72,8 +72,9 @@ Env typically required for container startup:
 - `server.graceful_shutdown_timeout_sec`: upper bound for draining
   live connections on deploy / reload. **Force-close after the
   budget.**
-- The TLS public listener advertises HTTP/1.1. **HTTP/3 lives on a
-  dedicated listener.**
+- The TLS public listener advertises HTTP/1.1 by default. With
+  `server.http2.enabled=true`, it advertises `h2` and `http/1.1`.
+  **HTTP/3 lives on a dedicated listener.**
 
 ### A.1.4 Overload backpressure
 
@@ -102,6 +103,9 @@ Env typically required for container startup:
 ```json
 "server": {
   "listen_addr": ":9443",
+  "http2": {
+    "enabled": true
+  },
   "http3": {
     "enabled": true,
     "alt_svc_max_age_sec": 86400
@@ -120,6 +124,8 @@ Env typically required for container startup:
 Key points:
 
 - `server.tls.enabled=false` is the default.
+- `server.http2.enabled=true` requires built-in TLS and controls only
+  client-to-Gateway HTTPS ALPN.
 - `server.http3.enabled=true` requires built-in TLS.
 - HTTP/3 uses the same numeric port as `server.listen_addr` over **UDP**.
 - In the legacy single-listener shape, `server.tls.redirect_http=true` adds a

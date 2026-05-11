@@ -9,6 +9,7 @@ import (
 
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/handler"
+	"tukuyomi/internal/serverruntime"
 )
 
 func publicListenersNeedTLS(listeners []config.ServerPublicListener) bool {
@@ -81,6 +82,11 @@ func runConfiguredPublicListeners(
 			firstServeListener = false
 			started++
 			lifecycle.Go(role, func() error {
+				if config.ServerHTTP2Enabled {
+					serverruntime.RecordHTTP2Configured(true)
+					log.Printf("[INFO] starting HTTPS public listener name=%s addr=%s inherited=%t engine=native_http1_http2", listener.Name, listener.ListenAddr, inherited)
+					return srv.ServeTLSHTTP2(ln, tlsConfig)
+				}
 				log.Printf("[INFO] starting HTTPS public listener name=%s addr=%s inherited=%t engine=native_http1", listener.Name, listener.ListenAddr, inherited)
 				return srv.ServeTLS(ln, tlsConfig)
 			}, srv.Shutdown, srv.Close)

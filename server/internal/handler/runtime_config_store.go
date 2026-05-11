@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -194,7 +195,7 @@ func (s *wafEventStore) insertVhostConfigRowsTx(tx *sql.Tx, versionID int64, cfg
 		}
 		if _, err := s.txExec(
 			tx,
-			`INSERT INTO vhosts (version_id, position, name, mode, hostname, listen_port, document_root, max_request_body_bytes, runtime_id, generated_target, linked_upstream_name, app_root, psgi_file, workers, max_requests, include_extlib) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO vhosts (version_id, position, name, mode, hostname, listen_port, document_root, max_request_body_bytes, runtime_id, generated_target, linked_upstream_name, app_root, psgi_file, workers, max_requests, include_extlib, enabled, command, args_json, working_dir, run_user, run_group, restart_policy, graceful_stop_sec, persistent_paths_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			versionID,
 			i,
 			vhost.Name,
@@ -211,6 +212,15 @@ func (s *wafEventStore) insertVhostConfigRowsTx(tx *sql.Tx, versionID int64, cfg
 			vhost.Workers,
 			vhost.MaxRequests,
 			includeExtlib,
+			boolToDB(vhost.Enabled),
+			vhost.Command,
+			vhostStringSliceJSON(vhost.Args),
+			vhost.WorkingDir,
+			vhost.RunUser,
+			vhost.RunGroup,
+			vhost.RestartPolicy,
+			vhost.GracefulStopSec,
+			vhostStringSliceJSON(vhost.PersistentPaths),
 		); err != nil {
 			return err
 		}
@@ -282,9 +292,32 @@ func (s *wafEventStore) insertVhostStringMapTx(tx *sql.Tx, table string, version
 	return nil
 }
 
+func vhostStringSliceJSON(values []string) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return "[]"
+	}
+	return string(raw)
+}
+
+func parseVhostStringSliceJSON(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (s *wafEventStore) loadVhostConfigVersion(versionID int64) (VhostConfigFile, error) {
 	rows, err := s.query(
-		`SELECT position, name, mode, hostname, listen_port, document_root, max_request_body_bytes, runtime_id, generated_target, linked_upstream_name, app_root, psgi_file, workers, max_requests, include_extlib
+		`SELECT position, name, mode, hostname, listen_port, document_root, max_request_body_bytes, runtime_id, generated_target, linked_upstream_name, app_root, psgi_file, workers, max_requests, include_extlib, enabled, command, args_json, working_dir, run_user, run_group, restart_policy, graceful_stop_sec, persistent_paths_json
 		   FROM vhosts
 		  WHERE version_id = ?
 		  ORDER BY position`,
@@ -302,7 +335,19 @@ func (s *wafEventStore) loadVhostConfigVersion(versionID int64) (VhostConfigFile
 		var position int
 		var vhost VhostConfig
 		var includeExtlib int
-		if err := rows.Scan(&position, &vhost.Name, &vhost.Mode, &vhost.Hostname, &vhost.ListenPort, &vhost.DocumentRoot, &vhost.MaxRequestBodyBytes, &vhost.RuntimeID, &vhost.GeneratedTarget, &vhost.LinkedUpstreamName, &vhost.AppRoot, &vhost.PSGIFile, &vhost.Workers, &vhost.MaxRequests, &includeExtlib); err != nil {
+		var enabled int
+		var argsJSON sql.NullString
+		var persistentPathsJSON sql.NullString
+		if err := rows.Scan(&position, &vhost.Name, &vhost.Mode, &vhost.Hostname, &vhost.ListenPort, &vhost.DocumentRoot, &vhost.MaxRequestBodyBytes, &vhost.RuntimeID, &vhost.GeneratedTarget, &vhost.LinkedUpstreamName, &vhost.AppRoot, &vhost.PSGIFile, &vhost.Workers, &vhost.MaxRequests, &includeExtlib, &enabled, &vhost.Command, &argsJSON, &vhost.WorkingDir, &vhost.RunUser, &vhost.RunGroup, &vhost.RestartPolicy, &vhost.GracefulStopSec, &persistentPathsJSON); err != nil {
+			_ = rows.Close()
+			return VhostConfigFile{}, err
+		}
+		vhost.Enabled = boolFromDB(enabled)
+		if vhost.Args, err = parseVhostStringSliceJSON(argsJSON.String); err != nil {
+			_ = rows.Close()
+			return VhostConfigFile{}, err
+		}
+		if vhost.PersistentPaths, err = parseVhostStringSliceJSON(persistentPathsJSON.String); err != nil {
 			_ = rows.Close()
 			return VhostConfigFile{}, err
 		}

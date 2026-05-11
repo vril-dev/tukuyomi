@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const latestSchemaMigrationVersionForTest = 39
+const latestSchemaMigrationVersionForTest = 40
 
 func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
@@ -146,6 +146,25 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 	}
 	if remoteSSHOperatorModeColumns != 1 {
 		t.Fatalf("center_remote_ssh_sessions operator_mode column count=%d want 1", remoteSSHOperatorModeColumns)
+	}
+	for _, column := range []string{
+		"enabled",
+		"command",
+		"args_json",
+		"working_dir",
+		"run_user",
+		"run_group",
+		"restart_policy",
+		"graceful_stop_sec",
+		"persistent_paths_json",
+	} {
+		var daemonAppColumns int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('vhosts') WHERE name = ?`, column).Scan(&daemonAppColumns); err != nil {
+			t.Fatalf("query vhosts %s column: %v", column, err)
+		}
+		if daemonAppColumns != 1 {
+			t.Fatalf("vhosts %s column count=%d want 1", column, daemonAppColumns)
+		}
 	}
 	for _, column := range []string{"acme_environment", "acme_email"} {
 		var count int

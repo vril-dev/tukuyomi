@@ -3,6 +3,7 @@ package handler
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"tukuyomi/internal/config"
@@ -148,6 +149,41 @@ func TestNormalizedRuntimeConfigStoresVersionedTypedRows(t *testing.T) {
 	if got := loadedVhost.Vhosts[0].TryFiles[1]; got != "/index.html" {
 		t.Fatalf("try_files[1]=%q", got)
 	}
+	daemonCfg := VhostConfigFile{Vhosts: []VhostConfig{{
+		Name:            "mqtt-broker",
+		Mode:            "daemon",
+		Enabled:         true,
+		GeneratedTarget: "mqtt-broker",
+		AppRoot:         "data/runtime-sites/mqtt-broker/app",
+		Command:         "bin/server",
+		Args:            []string{"--config", "config/broker.yml"},
+		WorkingDir:      ".",
+		RunUser:         "tukuyomi",
+		RestartPolicy:   "on-failure",
+		GracefulStopSec: 5,
+		PersistentPaths: []string{"data", "state"},
+		Env:             map[string]string{"BROKER_MODE": "sample"},
+	}}}
+	if _, err := store.writeVhostConfigVersion("", daemonCfg, configVersionSourceImport, "", "daemon import", 0); err != nil {
+		t.Fatalf("write daemon vhost: %v", err)
+	}
+	loadedDaemon, _, found, err := store.loadActiveVhostConfig()
+	if err != nil || !found {
+		t.Fatalf("load active daemon vhost found=%v err=%v", found, err)
+	}
+	daemon := loadedDaemon.Vhosts[0]
+	if daemon.Mode != "daemon" || !daemon.Enabled || daemon.RuntimeID != "" || daemon.LinkedUpstreamName != "" {
+		t.Fatalf("loaded daemon basics=%+v", daemon)
+	}
+	if got := strings.Join(daemon.Args, " "); got != "--config config/broker.yml" {
+		t.Fatalf("daemon args=%q", got)
+	}
+	if got := strings.Join(daemon.PersistentPaths, ","); got != "data,state" {
+		t.Fatalf("daemon persistent paths=%q", got)
+	}
+	if got := daemon.Env["BROKER_MODE"]; got != "sample" {
+		t.Fatalf("daemon env BROKER_MODE=%q", got)
+	}
 
 	taskCfg := ScheduledTaskConfigFile{Tasks: []ScheduledTaskRecord{{
 		Name:       "cleanup",
@@ -193,7 +229,7 @@ func TestNormalizedRuntimeConfigStoresVersionedTypedRows(t *testing.T) {
 	for table, want := range map[string]int{
 		"sites":                      3,
 		"site_hosts":                 3,
-		"vhosts":                     1,
+		"vhosts":                     2,
 		"vhost_try_files":            2,
 		"scheduled_tasks":            1,
 		"scheduled_task_env":         1,

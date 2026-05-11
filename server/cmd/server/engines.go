@@ -113,6 +113,9 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 			config.APIBasePath+"/psgi-processes/:runtime_app_name/up",
 			config.APIBasePath+"/psgi-processes/:runtime_app_name/down",
 			config.APIBasePath+"/psgi-processes/:runtime_app_name/reload",
+			config.APIBasePath+"/daemon-processes/:runtime_app_name/up",
+			config.APIBasePath+"/daemon-processes/:runtime_app_name/down",
+			config.APIBasePath+"/daemon-processes/:runtime_app_name/reload",
 			config.APIBasePath+"/runtime-apps/validate",
 			config.APIBasePath+"/runtime-apps/rollback",
 			config.APIBasePath+"/scheduled-tasks/validate",
@@ -230,6 +233,9 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 	api.POST("/psgi-processes/:runtime_app_name/up", adminMutate, handler.UpPSGIProcessHandler)
 	api.POST("/psgi-processes/:runtime_app_name/down", adminMutate, handler.DownPSGIProcessHandler)
 	api.POST("/psgi-processes/:runtime_app_name/reload", adminMutate, handler.ReloadPSGIProcessHandler)
+	api.POST("/daemon-processes/:runtime_app_name/up", adminMutate, handler.UpDaemonProcessHandler)
+	api.POST("/daemon-processes/:runtime_app_name/down", adminMutate, handler.DownDaemonProcessHandler)
+	api.POST("/daemon-processes/:runtime_app_name/reload", adminMutate, handler.ReloadDaemonProcessHandler)
 	api.GET("/runtime-apps", handler.GetRuntimeApps)
 	api.POST("/runtime-apps/validate", handler.ValidateRuntimeApps)
 	api.PUT("/runtime-apps", adminMutate, handler.PutRuntimeApps)

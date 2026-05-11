@@ -144,11 +144,11 @@ Gateway checks Runtime App references and running processes again
 before deleting local runtime files.
 
 `Runtime App Deploy` is an **experimental** Center device page for
-small application package delivery to `php-fpm` and `psgi` Runtime
-Apps. Operators define deployment roots, upload a ZIP package to
-Center, review the package-to-package diff, and then create a one-shot
-deploy or rollback request. Optional pre-switch and post-switch shell
-scripts run on the Gateway during that request.
+small application package delivery to `php-fpm`, `psgi`, and `daemon`
+Runtime Apps. Operators define deployment roots, upload a ZIP package
+to Center, review the package-to-package diff, and then create a
+one-shot deploy or rollback request. Optional pre-switch and post-switch
+shell scripts run on the Gateway during that request.
 
 This page is intentionally Center-owned: package history, deployment
 profiles, diff previews, and manual rollback choices live in Center,
@@ -168,11 +168,12 @@ data/app-deployments/<app-id>/
 Multiple logical roots can live under that one `current` symlink. For
 example, a PHP-FPM package may map `public/` to
 `current/public`, while a PSGI package may map `app/` and `static/` to
-`current/app` and `current/static`. Gateway blocks deploy and rollback
-if the matching Runtime App no longer points at the expected managed
-paths, so Center cannot replace an arbitrary document root or app root.
-Rollback is manual: choose an older saved package, review the diff, and
-confirm the rollback request.
+`current/app` and `current/static`. A daemon package maps `app/` to
+`current/app`. Gateway blocks deploy and rollback if the matching
+Runtime App no longer points at the expected managed paths, so Center
+cannot replace an arbitrary document root or app root. Rollback is
+manual: choose an older saved package, review the diff, and confirm the
+rollback request.
 
 Once baseline adoption or the first Center-managed deploy succeeds, the
 Gateway rewrites the matching Runtime Apps binding to the managed path.
@@ -180,10 +181,14 @@ For PHP-FPM, `document_root` typically moves from the original source
 under `data/runtime-sites/<app-id>/...` to
 `data/app-deployments/<app-id>/current/public`. For PSGI, `app_root`
 and/or `document_root` move to the matching `current/<runtime-subpath>`
-entries. After that switch, the old `data/runtime-sites/<app-id>/...`
-directory is only the source that was adopted. Operators should upload a
-new package from Center for future changes, or deliberately point Runtime
-Apps back at a local path before leaving Center-managed deployment.
+entries. For daemon apps, `app_root` moves to
+`data/app-deployments/<app-id>/current/app`, and configured
+`persistent_paths` are symlinked to stable directories under
+`data/app-deployments/<app-id>/persistent/`. After that switch, the old
+`data/runtime-sites/<app-id>/...` directory is only the source that was
+adopted. Operators should upload a new package from Center for future
+changes, or deliberately point Runtime Apps back at a local path before
+leaving Center-managed deployment.
 
 Baseline adoption reads only Gateway-local relative paths under
 `data/runtime-sites/`. Place the source tree under

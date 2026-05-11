@@ -10,6 +10,7 @@
 | WordPress (High Paranoia) | より strict な CRS 設定での CMS protection | `examples/wordpress` |
 | API Gateway | route rule と rate limit を組み合わせる REST API protection | `examples/api-gateway` |
 | Static Vhost Cache | direct static vhost と internal response cache の検証 | `examples/static-vhost-cache` |
+| Daemon MQTT Broker Skeleton | IoT broker 風 process を Runtime Apps daemon として package 化する例 | `examples/daemon-mqtt-broker` |
 
 ## Common flow
 

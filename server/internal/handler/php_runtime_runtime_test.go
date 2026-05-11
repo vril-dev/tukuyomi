@@ -123,6 +123,102 @@ func TestValidateVhostConfigRawRejectsUnavailablePHPRuntime(t *testing.T) {
 	}
 }
 
+func TestValidateVhostConfigRawAcceptsDaemonAppWithoutRuntime(t *testing.T) {
+	raw := `{
+  "vhosts": [{
+    "name": "mqtt-broker",
+    "mode": "daemon",
+    "enabled": true,
+    "app_root": "data/runtime-sites/mqtt-broker/app",
+    "command": "bin/server",
+    "args": ["--config", "config/broker.yml"],
+    "working_dir": ".",
+    "restart_policy": "on-failure",
+    "graceful_stop_sec": 5,
+    "persistent_paths": ["data", "state"],
+    "env": {"BROKER_MODE": "sample"}
+  }]
+}`
+	cfg, err := ValidateVhostConfigRawWithInventories(raw, PHPRuntimeInventoryFile{}, PSGIRuntimeInventoryFile{})
+	if err != nil {
+		t.Fatalf("ValidateVhostConfigRawWithInventories: %v", err)
+	}
+	if len(cfg.Vhosts) != 1 {
+		t.Fatalf("vhost count=%d want 1", len(cfg.Vhosts))
+	}
+	vhost := cfg.Vhosts[0]
+	if vhost.RuntimeID != "" || vhost.LinkedUpstreamName != "" {
+		t.Fatalf("daemon runtime/linked upstream=%q/%q want empty", vhost.RuntimeID, vhost.LinkedUpstreamName)
+	}
+	if vhost.GeneratedTarget != "mqtt-broker" {
+		t.Fatalf("generated_target=%q want mqtt-broker", vhost.GeneratedTarget)
+	}
+	if got := generatedVhostUpstreams(cfg); len(got) != 0 {
+		t.Fatalf("daemon generated upstreams=%+v want none", got)
+	}
+	if got := vhostGeneratedRoutes(cfg); len(got) != 0 {
+		t.Fatalf("daemon generated routes=%+v want none", got)
+	}
+}
+
+func TestValidateVhostConfigRawRejectsDaemonAbsoluteCommand(t *testing.T) {
+	raw := `{
+  "vhosts": [{
+    "name": "mqtt-broker",
+    "mode": "daemon",
+    "app_root": "data/runtime-sites/mqtt-broker/app",
+    "command": "/usr/bin/mosquitto"
+  }]
+}`
+	_, err := ValidateVhostConfigRawWithInventories(raw, PHPRuntimeInventoryFile{}, PSGIRuntimeInventoryFile{})
+	if err == nil || !strings.Contains(err.Error(), "command: must be relative") {
+		t.Fatalf("err=%v want relative command validation", err)
+	}
+}
+
+func TestValidateVhostConfigRawRejectsDaemonHTTPFields(t *testing.T) {
+	raw := `{
+  "vhosts": [{
+    "name": "mqtt-broker",
+    "mode": "daemon",
+    "hostname": "127.0.0.1",
+    "listen_port": 1883,
+    "app_root": "data/runtime-sites/mqtt-broker/app",
+    "command": "bin/server"
+  }]
+}`
+	_, err := ValidateVhostConfigRawWithInventories(raw, PHPRuntimeInventoryFile{}, PSGIRuntimeInventoryFile{})
+	if err == nil || !strings.Contains(err.Error(), "listener fields are not allowed when mode=daemon") {
+		t.Fatalf("err=%v want daemon listener field validation", err)
+	}
+}
+
+func TestValidateDaemonRuntimeLaunchRejectsCommandSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "bin", "server")); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := resolveDaemonRuntimeIdentity(daemonRuntimeAppSpec{AppID: "mqtt-broker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = validateDaemonRuntimeLaunch(daemonRuntimeAppSpec{
+		AppID:   "mqtt-broker",
+		AppRoot: root,
+		Command: "bin/server",
+	}, identity)
+	if err == nil || !strings.Contains(err.Error(), "command escapes app_root") {
+		t.Fatalf("err=%v want command escape validation", err)
+	}
+}
+
 func TestValidateVhostConfigRawRejectsSensitiveDocumentRoot(t *testing.T) {
 	restore := resetPHPFoundationRuntimesForTest(t)
 	defer restore()
@@ -1435,6 +1531,11 @@ func resetPHPFoundationRuntimesForTest(t *testing.T) func() {
 	psgiRuntimeSupervisorRt = nil
 	psgiRuntimeSupervisorMu.Unlock()
 
+	daemonRuntimeSupervisorMu.Lock()
+	prevDaemonSupervisor := daemonRuntimeSupervisorRt
+	daemonRuntimeSupervisorRt = nil
+	daemonRuntimeSupervisorMu.Unlock()
+
 	phpRuntimeMaterializationMu.Lock()
 	prevMaterialized := phpRuntimeMaterialized
 	phpRuntimeMaterialized = nil
@@ -1485,6 +1586,14 @@ func resetPHPFoundationRuntimesForTest(t *testing.T) func() {
 		psgiRuntimeSupervisorMu.Unlock()
 		if currentPSGISupervisor != nil {
 			_ = currentPSGISupervisor.shutdown()
+		}
+
+		daemonRuntimeSupervisorMu.Lock()
+		currentDaemonSupervisor := daemonRuntimeSupervisorRt
+		daemonRuntimeSupervisorRt = prevDaemonSupervisor
+		daemonRuntimeSupervisorMu.Unlock()
+		if currentDaemonSupervisor != nil {
+			_ = currentDaemonSupervisor.shutdown()
 		}
 
 		phpRuntimeMaterializationMu.Lock()

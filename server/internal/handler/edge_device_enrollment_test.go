@@ -2572,6 +2572,53 @@ func TestEdgeRuntimeAvailableForAppDeployRequiresInstalledRuntime(t *testing.T) 
 	if ok, message := edgeRuntimeAvailableForAppDeploy("psgi", "perl538"); !ok {
 		t.Fatalf("psgi availability ok=false message=%q", message)
 	}
+	if ok, message := edgeRuntimeAvailableForAppDeploy("daemon", ""); !ok {
+		t.Fatalf("daemon availability ok=false message=%q", message)
+	}
+}
+
+func TestCurrentEdgeAppDeployCandidatesIncludesDaemonAppRoot(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	tmp := t.TempDir()
+	vhostPath := filepath.Join(tmp, "vhosts.json")
+	raw := `{
+  "vhosts": [{
+    "name": "mqtt-broker",
+    "mode": "daemon",
+    "enabled": true,
+    "app_root": "data/runtime-sites/mqtt-broker/app",
+    "command": "bin/server"
+  }]
+}`
+	if err := os.WriteFile(vhostPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write vhosts: %v", err)
+	}
+	if err := InitVhostRuntime(vhostPath, 2); err != nil {
+		t.Fatalf("InitVhostRuntime: %v", err)
+	}
+	candidates := currentEdgeAppDeployCandidates()
+	if len(candidates) != 1 {
+		t.Fatalf("candidates=%+v want one daemon candidate", candidates)
+	}
+	candidate := candidates[0]
+	if candidate.AppID != "mqtt-broker" || candidate.RuntimeFamily != "daemon" || candidate.RuntimeID != "" {
+		t.Fatalf("candidate=%+v want daemon mqtt-broker without runtime_id", candidate)
+	}
+	if len(candidate.Roots) != 1 {
+		t.Fatalf("roots=%+v want one app_root", candidate.Roots)
+	}
+	root := candidate.Roots[0]
+	if root.RootID != "app_root" || root.RuntimeField != "app_root" {
+		t.Fatalf("root id/field=%q/%q want app_root/app_root", root.RootID, root.RuntimeField)
+	}
+	if root.SourcePath != "data/runtime-sites/mqtt-broker/app" {
+		t.Fatalf("source_path=%q", root.SourcePath)
+	}
+	if root.PackagePrefix != "app" || root.TargetSubpath != "app" || root.RuntimeSubpath != "app" {
+		t.Fatalf("package/target/runtime=%q/%q/%q want app/app/app", root.PackagePrefix, root.TargetSubpath, root.RuntimeSubpath)
+	}
 }
 
 func TestNormalizeEdgeAppDeployRootAllowsSourceRootAndRejectsUnsafeSourcePath(t *testing.T) {
@@ -2698,6 +2745,69 @@ func TestEdgeAppDeployBindingRootsRejectsUnexpectedUnmanagedDeployPath(t *testin
 	})
 	if err == nil || !strings.Contains(err.Error(), "must point to data/app-deployments/app-1/current/public") {
 		t.Fatalf("err=%v want managed path error", err)
+	}
+}
+
+func TestLinkEdgeAppDeployPersistentPathsCreatesStableSymlinks(t *testing.T) {
+	stageDir := t.TempDir()
+	managedRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(stageDir, "app", "bin"), 0o755); err != nil {
+		t.Fatalf("mkdir stage: %v", err)
+	}
+	binding := edgeAppDeployBinding{
+		RuntimeFamily:   "daemon",
+		ManagedRoot:     managedRoot,
+		PersistentPaths: []string{"state", "logs/data"},
+		Roots: []edgeAppDeployBoundRoot{{
+			Root: edgeAppDeployRoot{
+				RuntimeField:  "app_root",
+				TargetSubpath: "app",
+			},
+		}},
+	}
+	if err := linkEdgeAppDeployPersistentPaths(stageDir, managedRoot, binding); err != nil {
+		t.Fatalf("link persistent paths: %v", err)
+	}
+	for _, rel := range []string{"state", "logs/data"} {
+		linkPath := filepath.Join(stageDir, "app", filepath.FromSlash(rel))
+		info, err := os.Lstat(linkPath)
+		if err != nil {
+			t.Fatalf("lstat %s: %v", rel, err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("%s is not a symlink", rel)
+		}
+		target, err := filepath.EvalSymlinks(linkPath)
+		if err != nil {
+			t.Fatalf("eval %s: %v", rel, err)
+		}
+		want := filepath.Join(managedRoot, "persistent", filepath.FromSlash(rel))
+		if filepath.Clean(target) != filepath.Clean(want) {
+			t.Fatalf("target %s=%q want %q", rel, target, want)
+		}
+	}
+}
+
+func TestLinkEdgeAppDeployPersistentPathsRejectsPackagedPath(t *testing.T) {
+	stageDir := t.TempDir()
+	managedRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(stageDir, "app", "state"), 0o755); err != nil {
+		t.Fatalf("mkdir packaged state: %v", err)
+	}
+	binding := edgeAppDeployBinding{
+		RuntimeFamily:   "daemon",
+		ManagedRoot:     managedRoot,
+		PersistentPaths: []string{"state"},
+		Roots: []edgeAppDeployBoundRoot{{
+			Root: edgeAppDeployRoot{
+				RuntimeField:  "app_root",
+				TargetSubpath: "app",
+			},
+		}},
+	}
+	err := linkEdgeAppDeployPersistentPaths(stageDir, managedRoot, binding)
+	if err == nil || !strings.Contains(err.Error(), "must not be included in the app package") {
+		t.Fatalf("err=%v want packaged persistent path rejection", err)
 	}
 }
 

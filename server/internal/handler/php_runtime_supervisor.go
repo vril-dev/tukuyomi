@@ -36,6 +36,11 @@ type RuntimeAppProcessController interface {
 	StartPSGIProcess(processID string) error
 	StopPSGIProcess(processID string) error
 	ReloadPSGIProcess(processID string) error
+	DaemonRuntimeProcessSnapshot() []DaemonRuntimeProcessStatus
+	ReconcileDaemonRuntimeSupervisor() error
+	StartDaemonProcess(processID string) error
+	StopDaemonProcess(processID string) error
+	ReloadDaemonProcess(processID string) error
 }
 
 type localRuntimeAppProcessController struct{}
@@ -105,6 +110,26 @@ func (localRuntimeAppProcessController) StopPSGIProcess(processID string) error 
 
 func (localRuntimeAppProcessController) ReloadPSGIProcess(processID string) error {
 	return localReloadPSGIProcess(processID)
+}
+
+func (localRuntimeAppProcessController) DaemonRuntimeProcessSnapshot() []DaemonRuntimeProcessStatus {
+	return localDaemonRuntimeProcessSnapshot()
+}
+
+func (localRuntimeAppProcessController) ReconcileDaemonRuntimeSupervisor() error {
+	return localReconcileDaemonRuntimeSupervisor()
+}
+
+func (localRuntimeAppProcessController) StartDaemonProcess(processID string) error {
+	return localStartDaemonProcess(processID)
+}
+
+func (localRuntimeAppProcessController) StopDaemonProcess(processID string) error {
+	return localStopDaemonProcess(processID)
+}
+
+func (localRuntimeAppProcessController) ReloadDaemonProcess(processID string) error {
+	return localReloadDaemonProcess(processID)
 }
 
 type RuntimeAppProcessHTTPController struct {
@@ -190,6 +215,32 @@ func (c *RuntimeAppProcessHTTPController) StopPSGIProcess(processID string) erro
 
 func (c *RuntimeAppProcessHTTPController) ReloadPSGIProcess(processID string) error {
 	return c.doJSON(http.MethodPost, "/v1/psgi/action", runtimeAppProcessActionRequest{Action: "reload", ProcessID: processID}, nil, runtimeAppProcessControlMutationTimeout)
+}
+
+func (c *RuntimeAppProcessHTTPController) DaemonRuntimeProcessSnapshot() []DaemonRuntimeProcessStatus {
+	var out struct {
+		Processes []DaemonRuntimeProcessStatus `json:"processes"`
+	}
+	if err := c.doJSON(http.MethodGet, "/v1/daemon/processes", nil, &out, runtimeAppProcessControlSnapshotTimeout); err != nil {
+		return nil
+	}
+	return out.Processes
+}
+
+func (c *RuntimeAppProcessHTTPController) ReconcileDaemonRuntimeSupervisor() error {
+	return c.doJSON(http.MethodPost, "/v1/daemon/reconcile", nil, nil, runtimeAppProcessControlMutationTimeout)
+}
+
+func (c *RuntimeAppProcessHTTPController) StartDaemonProcess(processID string) error {
+	return c.doJSON(http.MethodPost, "/v1/daemon/action", runtimeAppProcessActionRequest{Action: "start", ProcessID: processID}, nil, runtimeAppProcessControlMutationTimeout)
+}
+
+func (c *RuntimeAppProcessHTTPController) StopDaemonProcess(processID string) error {
+	return c.doJSON(http.MethodPost, "/v1/daemon/action", runtimeAppProcessActionRequest{Action: "stop", ProcessID: processID}, nil, runtimeAppProcessControlMutationTimeout)
+}
+
+func (c *RuntimeAppProcessHTTPController) ReloadDaemonProcess(processID string) error {
+	return c.doJSON(http.MethodPost, "/v1/daemon/action", runtimeAppProcessActionRequest{Action: "reload", ProcessID: processID}, nil, runtimeAppProcessControlMutationTimeout)
 }
 
 func (c *RuntimeAppProcessHTTPController) doJSON(method string, path string, in any, out any, timeout time.Duration) error {

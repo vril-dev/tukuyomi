@@ -493,19 +493,19 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 		t.Fatalf("load operator app config: %v", err)
 	}
 	operatorCfg.Admin.ExternalMode = "deny_external"
-	operatorCfg.Admin.TrustedCIDRs = []string{"127.0.0.1/32", "::1/128", "219.104.164.92/32"}
+	operatorCfg.Admin.TrustedCIDRs = []string{"127.0.0.1/32", "::1/128", "198.51.100.10/32"}
 	if _, err := persistSettingsAppConfig(operatorCfg, appETag); err != nil {
 		t.Fatalf("persist operator app config: %v", err)
 	}
 
-	proxyCfg.Routes[1].Match.Hosts = []string{"tukuyomi.vril-dev.com"}
+	proxyCfg.Routes[1].Match.Hosts = []string{"center.example.test"}
 	proxyCfg.Routes[1].Access = &ProxyRouteAccess{
-		AllowCIDRs: []string{"127.0.0.1/32", "::1/128", "219.104.164.92/32"},
+		AllowCIDRs: []string{"127.0.0.1/32", "::1/128", "198.51.100.10/32"},
 		DenyCIDRs:  []string{"203.0.113.0/24"},
 	}
-	proxyCfg.Routes[2].Match.Hosts = []string{"tukuyomi.vril-dev.com"}
+	proxyCfg.Routes[2].Match.Hosts = []string{"center.example.test"}
 	proxyCfg.Routes[2].Access = &ProxyRouteAccess{
-		AllowCIDRs: []string{"127.0.0.1/32", "::1/128", "219.104.164.92/32"},
+		AllowCIDRs: []string{"127.0.0.1/32", "::1/128", "198.51.100.10/32"},
 	}
 	if _, err := store.writeProxyConfigVersion(proxyRec.ETag, proxyCfg, configVersionSourceApply, "operator", "operator proxy access lock", 0); err != nil {
 		t.Fatalf("persist operator proxy config: %v", err)
@@ -544,7 +544,7 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	if afterCfg.Admin.ExternalMode != "deny_external" {
 		t.Fatalf("admin external mode reset to %q", afterCfg.Admin.ExternalMode)
 	}
-	if strings.Join(afterCfg.Admin.TrustedCIDRs, ",") != "127.0.0.1/32,::1/128,219.104.164.92/32" {
+	if strings.Join(afterCfg.Admin.TrustedCIDRs, ",") != "127.0.0.1/32,::1/128,198.51.100.10/32" {
 		t.Fatalf("admin trusted cidrs reset: %+v", afterCfg.Admin.TrustedCIDRs)
 	}
 	proxyAfterCfg, _, found, err := store.loadActiveProxyConfig()
@@ -554,25 +554,25 @@ func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testin
 	if !found {
 		t.Fatal("proxy config missing after second bootstrap")
 	}
-	if got := strings.Join(proxyAfterCfg.Routes[0].Match.Hosts, ","); got != "tukuyomi.vril-dev.com" {
+	if got := strings.Join(proxyAfterCfg.Routes[0].Match.Hosts, ","); got != "center.example.test" {
 		t.Fatalf("center-api hosts were not inherited: %q", got)
 	}
 	if proxyAfterCfg.Routes[0].Access != nil {
 		t.Fatalf("center-api should not inherit manage API source restrictions: %+v", proxyAfterCfg.Routes[0].Access)
 	}
-	if got := strings.Join(proxyAfterCfg.Routes[1].Match.Hosts, ","); got != "tukuyomi.vril-dev.com" {
+	if got := strings.Join(proxyAfterCfg.Routes[1].Match.Hosts, ","); got != "center.example.test" {
 		t.Fatalf("center-manage-api hosts reset: %q", got)
 	}
 	if proxyAfterCfg.Routes[1].Access == nil ||
-		strings.Join(proxyAfterCfg.Routes[1].Access.AllowCIDRs, ",") != "127.0.0.1/32,::1/128,219.104.164.92/32" ||
+		strings.Join(proxyAfterCfg.Routes[1].Access.AllowCIDRs, ",") != "127.0.0.1/32,::1/128,198.51.100.10/32" ||
 		strings.Join(proxyAfterCfg.Routes[1].Access.DenyCIDRs, ",") != "203.0.113.0/24" {
 		t.Fatalf("center-manage-api access reset: %+v", proxyAfterCfg.Routes[1].Access)
 	}
-	if got := strings.Join(proxyAfterCfg.Routes[2].Match.Hosts, ","); got != "tukuyomi.vril-dev.com" {
+	if got := strings.Join(proxyAfterCfg.Routes[2].Match.Hosts, ","); got != "center.example.test" {
 		t.Fatalf("center-ui hosts reset: %q", got)
 	}
 	if proxyAfterCfg.Routes[2].Access == nil ||
-		strings.Join(proxyAfterCfg.Routes[2].Access.AllowCIDRs, ",") != "127.0.0.1/32,::1/128,219.104.164.92/32" {
+		strings.Join(proxyAfterCfg.Routes[2].Access.AllowCIDRs, ",") != "127.0.0.1/32,::1/128,198.51.100.10/32" {
 		t.Fatalf("center-ui access reset: %+v", proxyAfterCfg.Routes[2].Access)
 	}
 	bypassAfterRaw, _, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(bypassConfigBlobKey))

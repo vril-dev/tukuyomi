@@ -494,14 +494,28 @@ func loadProxyRulesStartupPrepared(path string) (proxyRulesPreparedUpdate, int64
 }
 
 func sanitizeLegacyGeneratedProxyRouteTargets(cfg ProxyRulesConfig, sites SiteConfigFile, vhosts VhostConfigFile) (ProxyRulesConfig, bool) {
+	configuredDirectNames := make(map[string]struct{}, len(cfg.Upstreams))
+	for _, upstream := range cfg.Upstreams {
+		if proxyUpstreamIsConfiguredDirect(upstream) {
+			if name := strings.TrimSpace(upstream.Name); name != "" {
+				configuredDirectNames[name] = struct{}{}
+			}
+		}
+	}
 	generatedNames := make(map[string]struct{})
 	for _, upstream := range generatedVhostUpstreams(vhosts) {
 		if name := strings.TrimSpace(upstream.Name); name != "" {
+			if _, configured := configuredDirectNames[name]; configured {
+				continue
+			}
 			generatedNames[name] = struct{}{}
 		}
 	}
 	for _, upstream := range siteGeneratedUpstreams(sites) {
 		if name := strings.TrimSpace(upstream.Name); name != "" {
+			if _, configured := configuredDirectNames[name]; configured {
+				continue
+			}
 			generatedNames[name] = struct{}{}
 		}
 	}

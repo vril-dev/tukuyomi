@@ -55,6 +55,9 @@ type ListenerAdminConfig = {
         cache_dir: string;
       };
     };
+    http2: {
+      enabled: boolean;
+    };
     http3: {
       enabled: boolean;
       alt_svc_max_age_sec: number;
@@ -209,6 +212,8 @@ type ListenerAdminRuntime = {
   server_tls_http_redirect_addr?: string;
   server_public_listeners_configured?: boolean;
   server_public_listeners?: PublicListenerConfig[];
+  server_http2_enabled?: boolean;
+  server_http2_advertised?: boolean;
   server_http3_enabled?: boolean;
   server_http3_advertised?: boolean;
   server_http3_alt_svc?: string;
@@ -324,6 +329,9 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
       http3: {
         enabled: false,
         alt_svc_max_age_sec: 86400,
+      },
+      http2: {
+        enabled: false,
       },
     },
     runtime: {
@@ -506,6 +514,10 @@ function normalizeListenerAdminConfig(
       http3: {
         ...base.server.http3,
         ...value.server?.http3,
+      },
+      http2: {
+        ...base.server.http2,
+        ...value.server?.http2,
       },
     },
     runtime: {
@@ -1428,6 +1440,26 @@ export default function SettingsPanel() {
                     {tx("Public listener rows are active. Use an HTTP listener row with redirect behavior instead.")}
                   </p>
                 ) : null}
+
+                <label className="flex items-center gap-2 text-xs text-neutral-700">
+                  <input
+                    type="checkbox"
+                    checked={listenerAdminConfig.server.http2.enabled}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          http2: {
+                            ...current.server.http2,
+                            enabled: e.target.checked,
+                          },
+                        },
+                      }))
+                    }
+                  />
+                  {tx("Enable HTTP/2 on HTTPS public listeners")}
+                </label>
 
                 <label className="flex items-center gap-2 text-xs text-neutral-700">
                   <input
@@ -2854,6 +2886,10 @@ export default function SettingsPanel() {
                   <RuntimeMetric
                     label={tx("Current TLS Source")}
                     value={runtime.server_tls_source}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current HTTP/2 Advertised")}
+                    value={String(runtime.server_http2_advertised ?? "-")}
                   />
                   <RuntimeMetric
                     label={tx("Current HTTP/3 Advertised")}

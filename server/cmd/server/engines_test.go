@@ -53,7 +53,7 @@ func TestBuildPublicHandlerSingleListenerDeniesUntrustedAdminSurface(t *testing.
 	defer restore()
 
 	config.AdminExternalMode = "deny_external"
-	config.AdminTrustedCIDRs = []string{"127.0.0.1/32", "::1/128", "219.104.164.92/32"}
+	config.AdminTrustedCIDRs = []string{"127.0.0.1/32", "::1/128", "198.51.100.10/32"}
 	config.AdminTrustForwardedFor = false
 	if err := handler.InitAdminGuards(); err != nil {
 		t.Fatalf("InitAdminGuards: %v", err)
@@ -70,7 +70,7 @@ func TestBuildPublicHandlerSingleListenerDeniesUntrustedAdminSurface(t *testing.
 	} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.RemoteAddr = "122.100.25.195:45678"
+		req.RemoteAddr = "203.0.113.25:45678"
 		publicHandler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusForbidden {

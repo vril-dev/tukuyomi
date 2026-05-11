@@ -100,6 +100,13 @@ func validateAppServerTLSConfig(server appServerConfig) error {
 	return nil
 }
 
+func validateAppServerHTTP2Config(server appServerConfig) error {
+	if server.HTTP2.Enabled && !server.TLS.Enabled {
+		return fmt.Errorf("server.http2.enabled requires server.tls.enabled=true")
+	}
+	return nil
+}
+
 func validateAppServerHTTP3Config(server appServerConfig) error {
 	if server.HTTP3.AltSvcMaxAgeSec < 0 {
 		return fmt.Errorf("server.http3.alt_svc_max_age_sec must be >= 0")

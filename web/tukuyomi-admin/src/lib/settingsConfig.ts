@@ -5,6 +5,7 @@ type DriftConfig = {
     graceful_shutdown_timeout_sec: number;
     proxy_protocol: { enabled: boolean; trusted_cidrs: string[] };
     tls: { enabled: boolean };
+    http2?: { enabled: boolean };
   };
   admin: {
     api_base_path: string;
@@ -63,6 +64,7 @@ type DriftRuntime = {
   server_proxy_protocol_enabled?: boolean;
   server_proxy_protocol_trusted_cidrs?: string[];
   server_tls_enabled?: boolean;
+  server_http2_enabled?: boolean;
   server_graceful_shutdown_timeout_sec?: number;
   admin_proxy_protocol_enabled?: boolean;
   admin_proxy_protocol_trusted_cidrs?: string[];
@@ -104,6 +106,7 @@ export function computeSettingsRuntimeDrift(
   if ((runtime.admin_proxy_protocol_enabled ?? false) !== config.admin.proxy_protocol.enabled) drift.push(label("Admin PROXY Protocol"));
   if (JSON.stringify(runtime.admin_proxy_protocol_trusted_cidrs ?? []) !== JSON.stringify(config.admin.proxy_protocol.trusted_cidrs)) drift.push(label("Admin PROXY Protocol Trusted CIDRs"));
   if ((runtime.server_tls_enabled ?? false) !== config.server.tls.enabled) drift.push(label("TLS Enabled"));
+  if ((runtime.server_http2_enabled ?? false) !== (config.server.http2?.enabled ?? false)) drift.push(label("HTTP/2 Enabled"));
   if ((runtime.admin_read_only ?? false) !== config.admin.read_only) drift.push(label("Admin Read Only"));
   if ((runtime.runtime_gomaxprocs ?? 0) !== config.runtime.gomaxprocs) drift.push(label("GOMAXPROCS"));
   if ((runtime.runtime_memory_limit_mb ?? 0) !== config.runtime.memory_limit_mb) drift.push(label("Memory Limit MB"));

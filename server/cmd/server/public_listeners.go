@@ -9,6 +9,7 @@ import (
 
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/handler"
+	"tukuyomi/internal/serverruntime"
 )
 
 func publicListenersNeedTLS(listeners []config.ServerPublicListener) bool {
@@ -26,6 +27,14 @@ func publicListenerRole(listener config.ServerPublicListener) string {
 		return "public"
 	}
 	return "public-" + name
+}
+
+func publicListenerHTTP3Role(listener config.ServerPublicListener) string {
+	role := publicListenerRole(listener)
+	if role == "public" {
+		return "http3"
+	}
+	return role + "-http3"
 }
 
 func runConfiguredPublicListeners(
@@ -77,10 +86,28 @@ func runConfiguredPublicListeners(
 				return fmt.Errorf("create %s listener: %w", role, err)
 			}
 			ln = lifecycle.TrackListener(role, ln)
-			srv := serverFor(firstServeListener, publicHandler)
+			httpsHandler := publicHandler
+			if config.ServerHTTP3Enabled {
+				http3Srv, altSvc, err := buildManagedServerHTTP3ServerForAddr(listener.ListenAddr, tlsConfig, publicHandler)
+				if err != nil {
+					return fmt.Errorf("build %s HTTP/3 config: %w", role, err)
+				}
+				if altSvc != "" {
+					httpsHandler = wrapHTTP3AltSvcHandler(publicHandler, altSvc)
+				}
+				if err := runHTTP3ServerForRole(lifecycle, activation, publicListenerHTTP3Role(listener), listener.ListenAddr, http3Srv); err != nil {
+					return fmt.Errorf("start %s HTTP/3 listener: %w", role, err)
+				}
+			}
+			srv := serverFor(firstServeListener, httpsHandler)
 			firstServeListener = false
 			started++
 			lifecycle.Go(role, func() error {
+				if config.ServerHTTP2Enabled {
+					serverruntime.RecordHTTP2Configured(true)
+					log.Printf("[INFO] starting HTTPS public listener name=%s addr=%s inherited=%t engine=native_http1_http2", listener.Name, listener.ListenAddr, inherited)
+					return srv.ServeTLSHTTP2(ln, tlsConfig)
+				}
 				log.Printf("[INFO] starting HTTPS public listener name=%s addr=%s inherited=%t engine=native_http1", listener.Name, listener.ListenAddr, inherited)
 				return srv.ServeTLS(ln, tlsConfig)
 			}, srv.Shutdown, srv.Close)

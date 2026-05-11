@@ -73,7 +73,7 @@ test("parseProxyRulesEditor reads route fields without dropping unrelated config
           "path": { "type": "prefix", "value": "/servicea/" }
         },
         "access": {
-          "allow_cidrs": ["219.104.164.92/32"],
+          "allow_cidrs": ["198.51.100.10/32"],
           "deny_cidrs": ["203.0.113.0/24"]
         },
         "action": {
@@ -135,7 +135,7 @@ test("parseProxyRulesEditor reads route fields without dropping unrelated config
   assert.equal(parsed.state.routes[0]?.action.canaryUpstream, "service-a-canary");
   assert.equal(parsed.state.routes[0]?.action.hashPolicy, "header");
   assert.equal(parsed.state.routes[0]?.action.hashKey, "X-User");
-  assert.deepEqual(parsed.state.routes[0]?.access.allowCIDRs, ["219.104.164.92/32"]);
+  assert.deepEqual(parsed.state.routes[0]?.access.allowCIDRs, ["198.51.100.10/32"]);
   assert.deepEqual(parsed.state.routes[0]?.access.denyCIDRs, ["203.0.113.0/24"]);
   assert.equal(parsed.state.routes[0]?.action.queryRewrite.set.lang, "ja");
   assert.equal(parsed.state.routes[0]?.action.queryRewrite.removePrefixes[0], "utm_");
@@ -234,7 +234,7 @@ test("serializeProxyRulesEditor updates routing fields and preserves unrelated k
         hosts: ["api.example.com"],
         path: { type: "prefix", value: "/servicea/" },
         access: {
-          allowCIDRs: ["219.104.164.92/32"],
+          allowCIDRs: ["198.51.100.10/32"],
           denyCIDRs: [],
         },
         action: {
@@ -294,7 +294,7 @@ test("serializeProxyRulesEditor updates routing fields and preserves unrelated k
   assert.equal(reparsed.state.routes[0]?.action.backendPool, "site-api");
   assert.equal(reparsed.state.routes[0]?.action.hashPolicy, "cookie");
   assert.equal(reparsed.state.routes[0]?.action.hashKey, "session");
-  assert.deepEqual(reparsed.state.routes[0]?.access.allowCIDRs, ["219.104.164.92/32"]);
+  assert.deepEqual(reparsed.state.routes[0]?.access.allowCIDRs, ["198.51.100.10/32"]);
   assert.equal(reparsed.state.routes[0]?.action.pathRewrite?.prefix, "/service-a/");
   assert.equal(reparsed.state.routes[0]?.action.queryRewrite.set.lang, "ja");
   assert.equal(reparsed.state.routes[0]?.action.queryRewrite.removePrefixes[0], "utm_");

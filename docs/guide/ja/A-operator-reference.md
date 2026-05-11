@@ -65,7 +65,9 @@ container 起動で通常必要になる env:
 - `server.idle_timeout_sec`: keep-alive の request 間 idle 時間の上限
 - `server.graceful_shutdown_timeout_sec`: deploy / reload 時に live
   connection を drain する上限。**超過後は force close**
-- TLS public listener は HTTP/1.1 を advertise。HTTP/3 は **専用 listener**
+- TLS public listener は既定で HTTP/1.1 を advertise します。
+  `server.http2.enabled=true` の場合は `h2` と `http/1.1` を advertise します。
+  HTTP/3 は **専用 listener** で処理します。
 
 ### A.1.4　Overload Backpressure
 
@@ -93,6 +95,9 @@ container 起動で通常必要になる env:
 ```json
 "server": {
   "listen_addr": ":9443",
+  "http2": {
+    "enabled": true
+  },
   "http3": {
     "enabled": true,
     "alt_svc_max_age_sec": 86400
@@ -111,6 +116,8 @@ container 起動で通常必要になる env:
 要点:
 
 - `server.tls.enabled=false` が既定
+- `server.http2.enabled=true` には built-in TLS が必須。client から Gateway
+  への HTTPS ALPN だけを制御します
 - `server.http3.enabled=true` には built-in TLS が必須
 - HTTP/3 は `server.listen_addr` と同じ numeric port を **UDP** で使う
 - legacy の単一 listener 構成では、`server.tls.redirect_http=true` で plain HTTP listener を追加

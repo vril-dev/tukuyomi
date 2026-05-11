@@ -362,6 +362,8 @@ func setServerTLSGlobalsForTest(t *testing.T) func() {
 	prevRedirect := config.ServerTLSRedirectHTTP
 	prevRedirectAddr := config.ServerTLSHTTPRedirectAddr
 	prevListenAddr := config.ListenAddr
+	prevHTTP3Enabled := config.ServerHTTP3Enabled
+	prevHTTP3AltSvcMaxAgeSec := config.ServerHTTP3AltSvcMaxAgeSec
 	handler.SetServerTLSReloadHook(nil)
 
 	return func() {
@@ -386,6 +388,8 @@ func setServerTLSGlobalsForTest(t *testing.T) func() {
 		config.ServerTLSRedirectHTTP = prevRedirect
 		config.ServerTLSHTTPRedirectAddr = prevRedirectAddr
 		config.ListenAddr = prevListenAddr
+		config.ServerHTTP3Enabled = prevHTTP3Enabled
+		config.ServerHTTP3AltSvcMaxAgeSec = prevHTTP3AltSvcMaxAgeSec
 		handler.SetServerTLSReloadHook(nil)
 	}
 }

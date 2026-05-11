@@ -17,6 +17,10 @@ import (
 )
 
 func buildManagedServerHTTP3Server(tlsConfig *tls.Config, appHandler http.Handler) (*http3.Server, string, error) {
+	return buildManagedServerHTTP3ServerForAddr(config.ListenAddr, tlsConfig, appHandler)
+}
+
+func buildManagedServerHTTP3ServerForAddr(listenAddr string, tlsConfig *tls.Config, appHandler http.Handler) (*http3.Server, string, error) {
 	if !config.ServerHTTP3Enabled {
 		return nil, "", nil
 	}
@@ -30,13 +34,13 @@ func buildManagedServerHTTP3Server(tlsConfig *tls.Config, appHandler http.Handle
 		serverruntime.RecordHTTP3Error(err)
 		return nil, "", err
 	}
-	altSvc, err := serverHTTP3AltSvcHeader(config.ListenAddr, config.ServerHTTP3AltSvcMaxAgeSec)
+	altSvc, err := serverHTTP3AltSvcHeader(listenAddr, config.ServerHTTP3AltSvcMaxAgeSec)
 	if err != nil {
 		serverruntime.RecordHTTP3Error(err)
 		return nil, "", err
 	}
 	srv := &http3.Server{
-		Addr:           config.ListenAddr,
+		Addr:           listenAddr,
 		Handler:        appHandler,
 		TLSConfig:      tlsConfig.Clone(),
 		MaxHeaderBytes: config.ServerMaxHeaderBytes,
@@ -81,33 +85,45 @@ func serverHTTP3Port(listenAddr string) (int, error) {
 }
 
 func runHTTP3Server(lifecycle *managedServerLifecycle, activation *systemdActivation, srv *http3.Server) error {
+	return runHTTP3ServerForRole(lifecycle, activation, "http3", config.ListenAddr, srv)
+}
+
+func runHTTP3ServerForRole(lifecycle *managedServerLifecycle, activation *systemdActivation, role string, listenAddr string, srv *http3.Server) error {
 	if srv == nil {
 		return nil
+	}
+	role = strings.TrimSpace(role)
+	if role == "" {
+		role = "http3"
 	}
 	var packetConn net.PacketConn
 	var inherited bool
 	if activation != nil && activation.Active() {
-		conn, ok, err := activation.TakePacketConn("http3", config.ListenAddr)
+		conn, ok, err := activation.TakePacketConn(role, listenAddr)
 		if err != nil {
 			serverruntime.RecordHTTP3Error(err)
 			return err
 		}
 		if !ok {
-			err := fmt.Errorf("systemd activation is enabled but no fd exists for role %q", "http3")
+			err := fmt.Errorf("systemd activation is enabled but no fd exists for role %q", role)
 			serverruntime.RecordHTTP3Error(err)
 			return err
 		}
 		packetConn = conn
 		inherited = true
+	} else {
+		conn, err := net.ListenPacket("udp", listenAddr)
+		if err != nil {
+			serverruntime.RecordHTTP3Error(err)
+			return fmt.Errorf("create %s UDP listener: %w", role, err)
+		}
+		packetConn = conn
 	}
 	lifecycle.Go(
-		"http3",
+		role,
 		func() error {
-			log.Printf("[INFO] starting HTTP/3 server on %s/udp inherited=%t", config.ListenAddr, inherited)
-			if packetConn != nil {
-				return srv.Serve(packetConn)
-			}
-			return srv.ListenAndServe()
+			log.Printf("[INFO] starting HTTP/3 server role=%s addr=%s/udp inherited=%t", role, listenAddr, inherited)
+			return srv.Serve(packetConn)
 		},
 		srv.Shutdown,
 		func() error {

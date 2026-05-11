@@ -191,6 +191,7 @@ func StatusHandler(c *gin.Context) {
 	globalOverload := overloadstate.Snapshot("global")
 	proxyOverload := overloadstate.Snapshot("proxy")
 	serverTLSStatus := ServerTLSRuntimeStatusSnapshot()
+	serverHTTP2Status := serverruntime.HTTP2StatusSnapshot()
 	serverHTTP3Status := serverruntime.HTTP3StatusSnapshot()
 	securityAuditStatus := SecurityAuditStatusSnapshot()
 	_, _, responseCacheCfg, responseCacheStats := ResponseCacheSnapshot()
@@ -439,6 +440,8 @@ func StatusHandler(c *gin.Context) {
 		"server_tls_acme_staging":                             tlsBindingACMEUsesStaging(currentTLSBindingConfig()),
 		"server_tls_acme_success_total":                       serverTLSStatus.ACMESuccessTotal,
 		"server_tls_acme_failure_total":                       serverTLSStatus.ACMEFailureTotal,
+		"server_http2_enabled":                                config.ServerHTTP2Enabled,
+		"server_http2_advertised":                             serverHTTP2Status.Advertised,
 		"server_http3_enabled":                                config.ServerHTTP3Enabled,
 		"server_http3_advertised":                             serverHTTP3Status.Advertised,
 		"server_http3_alt_svc_max_age_sec":                    config.ServerHTTP3AltSvcMaxAgeSec,

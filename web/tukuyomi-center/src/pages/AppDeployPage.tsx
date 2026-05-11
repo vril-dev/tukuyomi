@@ -230,6 +230,19 @@ function packageRuntimeLabel(pkg: Pick<AppDeployPackageRecord, "runtime_family" 
 }
 
 function defaultRootsForFamily(runtimeFamily: string): AppDeployRootRecord[] {
+  if (runtimeFamily === "daemon") {
+    return [
+      {
+        root_id: "app_root",
+        runtime_field: "app_root",
+        source_path: "",
+        package_prefix: "app",
+        target_subpath: "app",
+        runtime_subpath: "app",
+        required: true,
+      },
+    ];
+  }
   if (runtimeFamily === "psgi") {
     return [
       {
@@ -812,6 +825,7 @@ export default function AppDeployPage() {
             >
               <option value="php-fpm">php-fpm</option>
               <option value="psgi">psgi</option>
+              <option value="daemon">daemon</option>
             </select>
           </label>
           <label>

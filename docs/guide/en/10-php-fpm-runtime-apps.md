@@ -9,7 +9,8 @@ Tukuyomi's Runtime Apps live across three screens:
 - **`/options`**: a screen for managing **built runtimes** (PHP /
   PSGI / etc.).
 - **`/runtime-apps`**: a screen for managing **listen / docroot /
-  rewrite / access** for each runtime.
+  rewrite / access** for web runtimes, and supervised daemon process
+  definitions for non-web runtime apps.
 - **`/proxy-rules`**: the screen that decides **how routing reaches
   the generated backends published by Runtime Apps** from the edge.
 
@@ -28,10 +29,13 @@ The three screens, in one line each:
   - Lists built runtimes.
   - Confirms materialization state and process state.
 - **`/runtime-apps`**
-  - Manages **`php-fpm` application definitions**.
+  - Manages **Runtime App definitions**.
   - Handles runtime listen host, FastCGI listen port, docroot, runtime,
-    rewrites, access rules, basic auth, and PHP ini overrides.
-  - Manages the **generated backends**.
+    rewrites, access rules, basic auth, and PHP ini overrides for web
+    runtime apps.
+  - Handles daemon app root, command, arguments, run user, restart
+    policy, and environment for long-running local processes.
+  - Manages the **generated backends** for web runtime apps.
 - **`/proxy-rules`**
   - Manages **direct backends / backend pools / explicit routes** that
     Runtime Apps do not own.
@@ -285,7 +289,79 @@ make php-fpm-remove RUNTIME=php83
 The runtime starts under a **dedicated, non-root user / group** as
 configured.
 
-## 10.8 Tests / smoke
+## 10.8 Daemon Runtime Apps
+
+`daemon` mode is for long-running local processes that should be
+deployed and supervised with the same Runtime Apps / Center flow, but
+should **not** be published as an HTTP Runtime App. Typical examples are
+an IoT broker process, an adapter, or a vendor control daemon.
+
+Daemon Runtime Apps deliberately have a smaller surface:
+
+- no PHP-FPM or PSGI runtime bundle is required
+- `runtime_id` stays empty
+- `hostname`, `listen_port`, `document_root`, rewrites, access rules,
+  and basic auth are not accepted
+- no generated proxy target or route is created
+
+The required daemon fields are:
+
+- `name`
+- `app_root`
+- `command`
+
+Common optional fields are:
+
+- `args`
+- `working_dir`
+- `run_user`
+- `run_group`
+- `restart_policy` (`on-failure`, `always`, or `none`)
+- `graceful_stop_sec`
+- `env`
+- `persistent_paths`
+
+The command is resolved under `app_root` and is executed without a
+shell. Absolute commands and `..` escapes are rejected. If `run_user` or
+`run_group` is configured, tukuyomi can switch identity only when the
+process has the required OS privilege.
+
+Center Runtime App Deploy maps a daemon app root to:
+
+```text
+data/app-deployments/<app-id>/current/app
+```
+
+For daemon apps, `persistent_paths` are stable directories outside the
+release symlink. During deployment, Gateway creates symlinks from the
+new release into:
+
+```text
+data/app-deployments/<app-id>/persistent/<path>
+```
+
+Packages must not include files or directories at those persistent
+paths; state belongs outside immutable releases.
+
+If the daemon exposes an HTTP control endpoint, publish that endpoint
+through an explicit upstream and route. If it exposes MQTT or another
+non-HTTP listener, keep that listener on a dedicated local / VLAN
+segment until a protocol-specific traffic-control layer is introduced.
+Daemon mode is process supervision and package delivery, not an
+implicit network proxy.
+
+The repository includes a skeleton layout at:
+
+```text
+examples/daemon-mqtt-broker/
+```
+
+It is a placeholder for a broker-style daemon package and does not
+implement MQTT by itself. The sample script also does not open a network
+port. Its `listen=127.0.0.1:1883` log field is only an example setting
+value, not an active socket.
+
+## 10.9 Tests / smoke
 
 Two dedicated commands are available:
 
@@ -297,7 +373,7 @@ make php-fpm-smoke VER=8.3
 After PHP-FPM-related changes, at minimum confirm that these pass
 locally before pushing to production.
 
-## 10.9 Recap
+## 10.10 Recap
 
 - Keep the responsibilities of `/options` / `/runtime-apps` /
   `/proxy-rules` distinct.
@@ -306,10 +382,12 @@ locally before pushing to production.
 - Build runtime bundles with `make php-fpm-build VER=...`, stage them
   with `make php-fpm-copy`.
 - The `php-fpm` master process is **supervised per `runtime_id`**.
+- Daemon Runtime Apps are supervised local processes. They do not
+  publish traffic unless an operator adds an explicit network path.
 - The model is validate / apply / rollback on the UI, not
   `.htaccess`.
 
-## 10.10 Bridge to the next chapter
+## 10.11 Bridge to the next chapter
 
 Chapter 11 covers the other runtime — **PSGI (Perl / Starman)
 Runtime Apps**. For readers with Movable Type assets, that is the

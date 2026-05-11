@@ -57,6 +57,9 @@ func startRuntimeAppsControlServer() (*runtimeAppsControlServer, error) {
 	mux.HandleFunc("/v1/psgi/processes", s.handlePSGIProcesses)
 	mux.HandleFunc("/v1/psgi/reconcile", s.handlePSGIReconcile)
 	mux.HandleFunc("/v1/psgi/action", s.handlePSGIAction)
+	mux.HandleFunc("/v1/daemon/processes", s.handleDaemonProcesses)
+	mux.HandleFunc("/v1/daemon/reconcile", s.handleDaemonReconcile)
+	mux.HandleFunc("/v1/daemon/action", s.handleDaemonAction)
 	s.server = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -127,6 +130,18 @@ func initRuntimeAppsProcessOwner() error {
 			log.Printf("[RUNTIME_APPS][WARN] shutdown php runtime supervisor after psgi owner init failure: %v", shutdownErr)
 		}
 		return fmt.Errorf("initialize psgi runtime supervisor: %w", err)
+	}
+	if err := handler.InitDaemonRuntimeSupervisor(); err != nil {
+		if shutdownErr := handler.ShutdownDaemonRuntimeSupervisor(); shutdownErr != nil {
+			log.Printf("[RUNTIME_APPS][WARN] shutdown daemon runtime supervisor after owner init failure: %v", shutdownErr)
+		}
+		if shutdownErr := handler.ShutdownPSGIRuntimeSupervisor(); shutdownErr != nil {
+			log.Printf("[RUNTIME_APPS][WARN] shutdown psgi runtime supervisor after daemon owner init failure: %v", shutdownErr)
+		}
+		if shutdownErr := handler.ShutdownPHPRuntimeSupervisor(); shutdownErr != nil {
+			log.Printf("[RUNTIME_APPS][WARN] shutdown php runtime supervisor after daemon owner init failure: %v", shutdownErr)
+		}
+		return fmt.Errorf("initialize daemon runtime supervisor: %w", err)
 	}
 	return nil
 }
@@ -271,6 +286,63 @@ func (s *runtimeAppsControlServer) handlePSGIAction(w http.ResponseWriter, r *ht
 		actionErr = handler.ReloadPSGIProcess(processID)
 	default:
 		actionErr = fmt.Errorf("unknown psgi runtime action %q", in.Action)
+	}
+	if actionErr != nil {
+		respondRuntimeAppsControlError(w, http.StatusUnprocessableEntity, actionErr.Error())
+		return
+	}
+	respondRuntimeAppsControlJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *runtimeAppsControlServer) handleDaemonProcesses(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondRuntimeAppsControlError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	respondRuntimeAppsControlJSON(w, http.StatusOK, map[string]any{"processes": handler.DaemonRuntimeProcessSnapshot()})
+}
+
+func (s *runtimeAppsControlServer) handleDaemonReconcile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondRuntimeAppsControlError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := refreshRuntimeAppsProcessOwnerState(); err != nil {
+		respondRuntimeAppsControlError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	respondRuntimeAppsControlJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *runtimeAppsControlServer) handleDaemonAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondRuntimeAppsControlError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var in runtimeAppProcessControlActionRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
+		respondRuntimeAppsControlError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := refreshRuntimeAppsProcessOwnerState(); err != nil {
+		respondRuntimeAppsControlError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	processID, err := validateRuntimeAppsControlToken("process_id", in.ProcessID)
+	if err != nil {
+		respondRuntimeAppsControlError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var actionErr error
+	switch strings.TrimSpace(in.Action) {
+	case "start":
+		actionErr = handler.StartDaemonProcess(processID)
+	case "stop":
+		actionErr = handler.StopDaemonProcess(processID)
+	case "reload":
+		actionErr = handler.ReloadDaemonProcess(processID)
+	default:
+		actionErr = fmt.Errorf("unknown daemon runtime action %q", in.Action)
 	}
 	if actionErr != nil {
 		respondRuntimeAppsControlError(w, http.StatusUnprocessableEntity, actionErr.Error())

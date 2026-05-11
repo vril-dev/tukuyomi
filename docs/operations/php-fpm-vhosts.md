@@ -10,9 +10,10 @@ This document covers the optional PHP-FPM workflow exposed through `/options`, `
   - built runtime inventory
   - materialization and process visibility
 - `/runtime-apps`
-  - source of truth for managed `php-fpm` applications
+  - source of truth for managed Runtime App definitions
   - runtime listen host, FastCGI listen port, docroot, runtime, rewrite, access rules, basic auth, and PHP ini overrides
-  - generated backend ownership
+  - daemon app root, command, arguments, run user, restart policy, and environment for supervised local processes
+  - generated backend ownership for web runtime apps
 - `/proxy-rules`
   - direct backends, backend pools, and explicit routes for traffic not owned by Runtime Apps
   - PHP-FPM application backend settings move to `/runtime-apps`
@@ -97,11 +98,12 @@ Notes:
 
 ## Runtime App Workflow
 
-Use `/runtime-apps` when you need to define managed PHP-FPM application ownership.
+Use `/runtime-apps` when you need to define managed application ownership.
 
-`/runtime-apps` is visible only after at least one runtime bundle is built and detected.
+`/runtime-apps` is visible after at least one PHP-FPM or PSGI runtime bundle is
+built and detected, or when daemon Runtime Apps are configured.
 
-Each runtime app requires:
+Each PHP-FPM runtime app requires:
 
 - `name`
 - `hostname`
@@ -144,6 +146,61 @@ or PSGI receives a request:
   uses the 64 MiB default, and the configured upper bound is 2 GiB
 - the request header `Proxy` is stripped before Runtime App backend
   delivery, so PHP-FPM never receives it as `HTTP_PROXY`
+
+## Daemon Runtime Apps
+
+Use `daemon` mode for a long-running local process that should be deployed and
+supervised by Gateway, such as an IoT broker process, adapter, or vendor control
+daemon.
+
+Daemon Runtime Apps require:
+
+- `name`
+- `app_root`
+- `command`
+
+Optional daemon controls:
+
+- `args`
+- `working_dir`
+- `run_user`
+- `run_group`
+- `restart_policy` (`on-failure`, `always`, or `none`)
+- `graceful_stop_sec`
+- `env`
+- `persistent_paths`
+
+Daemon mode rejects web runtime fields such as `hostname`, `listen_port`,
+`document_root`, rewrites, access rules, and basic auth. It also keeps
+`runtime_id` empty. Gateway resolves `command` under `app_root`, executes it
+without a shell, and rejects absolute paths or `..` escapes.
+
+Daemon Runtime Apps do not create generated proxy targets or routes. Publish
+only explicit HTTP control endpoints through Proxy Rules. Keep MQTT or other
+non-HTTP listeners on a dedicated local/VLAN segment unless a protocol-specific
+traffic-control layer is configured.
+
+Center Runtime App Deploy maps daemon packages to:
+
+```text
+data/app-deployments/<app-id>/current/app
+```
+
+`persistent_paths` are directories that survive release replacement. Gateway
+creates them under:
+
+```text
+data/app-deployments/<app-id>/persistent/<path>
+```
+
+and symlinks the path into the new `current/app` release. A package must not
+contain the same path, because release contents and persistent state are kept
+separate.
+
+See `examples/daemon-mqtt-broker/` for a broker-style daemon package skeleton.
+That sample is a supervision/deploy smoke target only. It does not implement
+MQTT and does not open a network port; `listen=127.0.0.1:1883` in its log is
+only an example setting value.
 
 ## Upstreams to Runtime Apps Boundary
 
@@ -213,6 +270,10 @@ make php-fpm-remove RUNTIME=php83
 ```
 
 The runtime is launched under a dedicated non-root user/group when configured.
+
+Daemon Runtime Apps are supervised per `name`. `Start`, `Restart`, and `Stop`
+controls are available from `/runtime-apps`, and App Deploy restart behavior
+can reload or restart the daemon after a package switch.
 
 ## Tests and Smoke
 

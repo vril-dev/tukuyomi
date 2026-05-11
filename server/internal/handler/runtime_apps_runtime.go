@@ -36,6 +36,7 @@ func GetRuntimeApps(c *gin.Context) {
 		"runtime_status":    VhostRuntimeStatusSnapshot(),
 		"materialized":      PHPRuntimeMaterializationSnapshot(),
 		"psgi_materialized": PSGIRuntimeMaterializationSnapshot(),
+		"daemon_processes":  DaemonRuntimeProcessSnapshot(),
 		"rollback_depth":    rollbackDepth,
 	})
 }
@@ -154,6 +155,15 @@ type VhostConfig struct {
 	MaxRequests        int                `json:"max_requests,omitempty"`
 	IncludeExtlib      *bool              `json:"include_extlib,omitempty"`
 	Env                map[string]string  `json:"env,omitempty"`
+	Enabled            bool               `json:"enabled,omitempty"`
+	Command            string             `json:"command,omitempty"`
+	Args               []string           `json:"args,omitempty"`
+	WorkingDir         string             `json:"working_dir,omitempty"`
+	RunUser            string             `json:"run_user,omitempty"`
+	RunGroup           string             `json:"run_group,omitempty"`
+	RestartPolicy      string             `json:"restart_policy,omitempty"`
+	GracefulStopSec    int                `json:"graceful_stop_sec,omitempty"`
+	PersistentPaths    []string           `json:"persistent_paths,omitempty"`
 	RuntimeID          string             `json:"runtime_id,omitempty"`
 	GeneratedTarget    string             `json:"generated_target,omitempty"`
 	LinkedUpstreamName string             `json:"linked_upstream_name,omitempty"`
@@ -263,6 +273,9 @@ func InitVhostRuntime(path string, rollbackMax int) error {
 			if err := ReconcilePSGIRuntimeSupervisor(); err != nil {
 				return fmt.Errorf("reconcile psgi runtime supervisor: %w", err)
 			}
+			if err := ReconcileDaemonRuntimeSupervisor(); err != nil {
+				return fmt.Errorf("reconcile daemon runtime supervisor: %w", err)
+			}
 			return nil
 		}
 		return fmt.Errorf("normalized Runtime Apps config missing in db; run make db-import before removing seed files")
@@ -292,6 +305,9 @@ func InitVhostRuntime(path string, rollbackMax int) error {
 		if err := ReconcilePSGIRuntimeSupervisor(); err != nil {
 			return fmt.Errorf("reconcile isolated psgi runtime supervisor: %w", err)
 		}
+		if err := ReconcileDaemonRuntimeSupervisor(); err != nil {
+			return fmt.Errorf("reconcile isolated daemon runtime supervisor: %w", err)
+		}
 		return startupErr
 	}
 	if store := getLogsStatsStore(); store != nil {
@@ -317,6 +333,9 @@ func InitVhostRuntime(path string, rollbackMax int) error {
 	}
 	if err := ReconcilePSGIRuntimeSupervisor(); err != nil {
 		return fmt.Errorf("reconcile psgi runtime supervisor: %w", err)
+	}
+	if err := ReconcileDaemonRuntimeSupervisor(); err != nil {
+		return fmt.Errorf("reconcile daemon runtime supervisor: %w", err)
 	}
 	return nil
 }
@@ -482,6 +501,7 @@ func ApplyVhostConfigRaw(ifMatch string, raw string) (string, VhostConfigFile, e
 		_ = ReconcilePHPRuntimeSupervisor()
 		_ = refreshPSGIRuntimeMaterializationWithConfig(currentPSGIRuntimeInventoryConfig(), prevCfg)
 		_ = ReconcilePSGIRuntimeSupervisor()
+		_ = ReconcileDaemonRuntimeSupervisor()
 		return "", VhostConfigFile{}, err
 	}
 	if err := refreshPSGIRuntimeMaterializationWithConfig(currentPSGIRuntimeInventoryConfig(), prepared.cfg); err != nil {
@@ -498,6 +518,7 @@ func ApplyVhostConfigRaw(ifMatch string, raw string) (string, VhostConfigFile, e
 		_ = ReconcilePHPRuntimeSupervisor()
 		_ = refreshPSGIRuntimeMaterializationWithConfig(currentPSGIRuntimeInventoryConfig(), prevCfg)
 		_ = ReconcilePSGIRuntimeSupervisor()
+		_ = ReconcileDaemonRuntimeSupervisor()
 		return "", VhostConfigFile{}, err
 	}
 	if err := ReconcilePSGIRuntimeSupervisor(); err != nil {
@@ -514,6 +535,24 @@ func ApplyVhostConfigRaw(ifMatch string, raw string) (string, VhostConfigFile, e
 		_ = ReconcilePHPRuntimeSupervisor()
 		_ = refreshPSGIRuntimeMaterializationWithConfig(currentPSGIRuntimeInventoryConfig(), prevCfg)
 		_ = ReconcilePSGIRuntimeSupervisor()
+		_ = ReconcileDaemonRuntimeSupervisor()
+		return "", VhostConfigFile{}, err
+	}
+	if err := ReconcileDaemonRuntimeSupervisor(); err != nil {
+		rt.raw = prevRaw
+		rt.etag = prevETag
+		rt.versionID = prevVersionID
+		rt.cfg = prevCfg
+		rt.loadError = prevLoadError
+		if restoredETag, restoredVersionID, restoreErr := persistVhostConfigAuthoritative(rt.configPath, prepared.etag, vhostPreparedConfig{raw: prevRaw, etag: prevETag, cfg: prevCfg}, configVersionSourceRollback, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
+		_ = refreshPHPRuntimeMaterializationWithConfig(currentPHPRuntimeInventoryConfig(), prevCfg)
+		_ = ReconcilePHPRuntimeSupervisor()
+		_ = refreshPSGIRuntimeMaterializationWithConfig(currentPSGIRuntimeInventoryConfig(), prevCfg)
+		_ = ReconcilePSGIRuntimeSupervisor()
+		_ = ReconcileDaemonRuntimeSupervisor()
 		return "", VhostConfigFile{}, err
 	}
 	if err := reloadProxyRuntimeWithSitesAndVhosts(currentSiteConfig(), prepared.cfg); err != nil {
@@ -530,6 +569,7 @@ func ApplyVhostConfigRaw(ifMatch string, raw string) (string, VhostConfigFile, e
 		_ = ReconcilePHPRuntimeSupervisor()
 		_ = refreshPSGIRuntimeMaterializationWithConfig(currentPSGIRuntimeInventoryConfig(), prevCfg)
 		_ = ReconcilePSGIRuntimeSupervisor()
+		_ = ReconcileDaemonRuntimeSupervisor()
 		return "", VhostConfigFile{}, err
 	}
 	rt.pushRollbackLocked(proxyRollbackEntry{
@@ -605,6 +645,7 @@ func RollbackVhostConfig() (string, VhostConfigFile, proxyRollbackEntry, error) 
 		_ = ReconcilePHPRuntimeSupervisor()
 		_ = refreshPSGIRuntimeMaterializationWithConfig(currentPSGIRuntimeInventoryConfig(), prevCfg)
 		_ = ReconcilePSGIRuntimeSupervisor()
+		_ = ReconcileDaemonRuntimeSupervisor()
 		rt.pushRollbackLocked(entry)
 		return "", VhostConfigFile{}, proxyRollbackEntry{}, err
 	}
@@ -620,6 +661,9 @@ func RollbackVhostConfig() (string, VhostConfigFile, proxyRollbackEntry, error) 
 		}
 		_ = refreshPHPRuntimeMaterializationWithConfig(currentPHPRuntimeInventoryConfig(), prevCfg)
 		_ = ReconcilePHPRuntimeSupervisor()
+		_ = refreshPSGIRuntimeMaterializationWithConfig(currentPSGIRuntimeInventoryConfig(), prevCfg)
+		_ = ReconcilePSGIRuntimeSupervisor()
+		_ = ReconcileDaemonRuntimeSupervisor()
 		rt.pushRollbackLocked(entry)
 		return "", VhostConfigFile{}, proxyRollbackEntry{}, err
 	}
@@ -637,6 +681,7 @@ func RollbackVhostConfig() (string, VhostConfigFile, proxyRollbackEntry, error) 
 		_ = ReconcilePHPRuntimeSupervisor()
 		_ = refreshPSGIRuntimeMaterializationWithConfig(currentPSGIRuntimeInventoryConfig(), prevCfg)
 		_ = ReconcilePSGIRuntimeSupervisor()
+		_ = ReconcileDaemonRuntimeSupervisor()
 		rt.pushRollbackLocked(entry)
 		return "", VhostConfigFile{}, proxyRollbackEntry{}, err
 	}
@@ -654,6 +699,25 @@ func RollbackVhostConfig() (string, VhostConfigFile, proxyRollbackEntry, error) 
 		_ = ReconcilePHPRuntimeSupervisor()
 		_ = refreshPSGIRuntimeMaterializationWithConfig(currentPSGIRuntimeInventoryConfig(), prevCfg)
 		_ = ReconcilePSGIRuntimeSupervisor()
+		_ = ReconcileDaemonRuntimeSupervisor()
+		rt.pushRollbackLocked(entry)
+		return "", VhostConfigFile{}, proxyRollbackEntry{}, err
+	}
+	if err := ReconcileDaemonRuntimeSupervisor(); err != nil {
+		rt.raw = prevRaw
+		rt.etag = prevETag
+		rt.versionID = prevVersionID
+		rt.cfg = prevCfg
+		rt.loadError = prevLoadError
+		if restoredETag, restoredVersionID, restoreErr := persistVhostConfigAuthoritative(rt.configPath, prepared.etag, vhostPreparedConfig{raw: prevRaw, etag: prevETag, cfg: prevCfg}, configVersionSourceApply, prevVersionID); restoreErr == nil {
+			rt.etag = restoredETag
+			rt.versionID = restoredVersionID
+		}
+		_ = refreshPHPRuntimeMaterializationWithConfig(currentPHPRuntimeInventoryConfig(), prevCfg)
+		_ = ReconcilePHPRuntimeSupervisor()
+		_ = refreshPSGIRuntimeMaterializationWithConfig(currentPSGIRuntimeInventoryConfig(), prevCfg)
+		_ = ReconcilePSGIRuntimeSupervisor()
+		_ = ReconcileDaemonRuntimeSupervisor()
 		rt.pushRollbackLocked(entry)
 		return "", VhostConfigFile{}, proxyRollbackEntry{}, err
 	}
@@ -671,6 +735,7 @@ func RollbackVhostConfig() (string, VhostConfigFile, proxyRollbackEntry, error) 
 		_ = ReconcilePHPRuntimeSupervisor()
 		_ = refreshPSGIRuntimeMaterializationWithConfig(currentPSGIRuntimeInventoryConfig(), prevCfg)
 		_ = ReconcilePSGIRuntimeSupervisor()
+		_ = ReconcileDaemonRuntimeSupervisor()
 		rt.pushRollbackLocked(entry)
 		return "", VhostConfigFile{}, proxyRollbackEntry{}, err
 	}
@@ -717,7 +782,27 @@ func parseVhostConfigRaw(raw string) (VhostConfigFile, error) {
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return VhostConfigFile{}, fmt.Errorf("invalid json")
 	}
+	if err := validateVhostRawModeFieldSeparation(in); err != nil {
+		return VhostConfigFile{}, err
+	}
 	return normalizeVhostConfigFile(in), nil
+}
+
+func validateVhostRawModeFieldSeparation(in VhostConfigFile) error {
+	for i, vhost := range in.Vhosts {
+		field := fmt.Sprintf("vhosts[%d]", i)
+		mode := normalizeVhostMode(vhost.Mode)
+		if mode == "daemon" {
+			if vhost.Hostname != "" || vhost.ListenPort != 0 || vhost.DocumentRoot != "" || vhost.MaxRequestBodyBytes != 0 || vhost.OverrideFileName != "" || len(vhost.TryFiles) > 0 || len(vhost.RewriteRules) > 0 || len(vhost.AccessRules) > 0 || vhost.BasicAuth != nil || len(vhost.PHPValues) > 0 || len(vhost.PHPAdminValues) > 0 || vhost.PSGIFile != "" || vhost.Workers != 0 || vhost.MaxRequests != 0 || vhost.IncludeExtlib != nil || vhost.RuntimeID != "" || vhost.LinkedUpstreamName != "" {
+				return fmt.Errorf("%s HTTP/PHP/PSGI listener fields are not allowed when mode=daemon", field)
+			}
+			continue
+		}
+		if vhost.Command != "" || len(vhost.Args) > 0 || vhost.WorkingDir != "" || vhost.RunUser != "" || vhost.RunGroup != "" || vhost.RestartPolicy != "" || vhost.GracefulStopSec != 0 || len(vhost.PersistentPaths) > 0 {
+			return fmt.Errorf("%s command/args/working_dir/run_user/run_group/restart_policy/graceful_stop_sec/persistent_paths require mode=daemon", field)
+		}
+	}
+	return nil
 }
 
 func normalizeVhostConfigFile(in VhostConfigFile) VhostConfigFile {
@@ -744,6 +829,17 @@ func normalizeVhostConfigFile(in VhostConfigFile) VhostConfigFile {
 		vhost.AppRoot = normalizeOptionalLocalPath(vhost.AppRoot)
 		vhost.PSGIFile = normalizeRelativeLocalPath(vhost.PSGIFile)
 		vhost.Env = normalizeVhostEnv(vhost.Env)
+		vhost.Command = normalizeRelativeLocalPath(vhost.Command)
+		vhost.Args = normalizeVhostDaemonArgs(vhost.Args)
+		vhost.WorkingDir = normalizeOptionalRelativeLocalPath(vhost.WorkingDir)
+		vhost.RunUser = strings.TrimSpace(vhost.RunUser)
+		vhost.RunGroup = strings.TrimSpace(vhost.RunGroup)
+		if vhost.Mode == "daemon" {
+			vhost.RestartPolicy = normalizeVhostDaemonRestartPolicy(vhost.RestartPolicy)
+		} else {
+			vhost.RestartPolicy = ""
+		}
+		vhost.PersistentPaths = normalizeVhostDaemonPersistentPaths(vhost.PersistentPaths)
 		vhost.RuntimeID = normalizeConfigToken(vhost.RuntimeID)
 		vhost.GeneratedTarget = normalizeConfigToken(vhost.GeneratedTarget)
 		vhost.LinkedUpstreamName = normalizeConfigToken(vhost.LinkedUpstreamName)
@@ -755,6 +851,24 @@ func normalizeVhostConfigFile(in VhostConfigFile) VhostConfigFile {
 		}
 		if vhost.Mode == "static" {
 			vhost.RuntimeID = ""
+		}
+		if vhost.Mode == "daemon" {
+			vhost.Hostname = ""
+			vhost.ListenPort = 0
+			vhost.DocumentRoot = ""
+			vhost.MaxRequestBodyBytes = 0
+			vhost.TryFiles = nil
+			vhost.RewriteRules = nil
+			vhost.AccessRules = nil
+			vhost.BasicAuth = nil
+			vhost.PHPValues = nil
+			vhost.PHPAdminValues = nil
+			vhost.PSGIFile = ""
+			vhost.Workers = 0
+			vhost.MaxRequests = 0
+			vhost.IncludeExtlib = nil
+			vhost.RuntimeID = ""
+			vhost.LinkedUpstreamName = ""
 		}
 		if vhost.Mode == "psgi" {
 			if vhost.Workers == 0 {
@@ -793,6 +907,8 @@ func generatedTargetConflictSuffix(mode string) string {
 		return "-php"
 	case "psgi":
 		return "-psgi"
+	case "daemon":
+		return "-daemon"
 	case "static":
 		return "-static"
 	default:
@@ -858,47 +974,49 @@ func validateVhostConfigFileWithInventories(cfg VhostConfigFile, phpInventory PH
 		}
 		seenNames[vhost.Name] = struct{}{}
 		switch vhost.Mode {
-		case "static", "php-fpm", "psgi":
+		case "static", "php-fpm", "psgi", "daemon":
 		default:
-			return fmt.Errorf("%s.mode must be one of: static, php-fpm, psgi", field)
+			return fmt.Errorf("%s.mode must be one of: static, php-fpm, psgi, daemon", field)
 		}
-		if err := validateRuntimeListenHost(vhost.Hostname, field+".hostname"); err != nil {
-			return err
-		}
-		if vhost.ListenPort < 1 || vhost.ListenPort > 65535 {
-			return fmt.Errorf("%s.listen_port must be between 1 and 65535", field)
-		}
-		pairKey := runtimeListenEndpoint(vhost.Hostname, vhost.ListenPort)
-		if _, exists := seenListenPairs[pairKey]; exists {
-			return fmt.Errorf("%s listen target duplicates %q", field, pairKey)
-		}
-		seenListenPairs[pairKey] = struct{}{}
-		if vhost.DocumentRoot == "" || vhost.DocumentRoot == "." {
-			return fmt.Errorf("%s.document_root is required", field)
-		}
-		if err := validateVhostRootPath(vhost.DocumentRoot); err != nil {
-			return fmt.Errorf("%s.document_root: %w", field, err)
-		}
-		if vhost.MaxRequestBodyBytes < 0 {
-			return fmt.Errorf("%s.max_request_body_bytes must not be negative", field)
-		}
-		if vhost.MaxRequestBodyBytes > maxVhostMaxRequestBodyBytes {
-			return fmt.Errorf("%s.max_request_body_bytes must be <= %d", field, maxVhostMaxRequestBodyBytes)
-		}
-		if err := validateVhostTryFiles(vhost.TryFiles, field); err != nil {
-			return err
-		}
-		if vhost.Mode != "psgi" && vhostTryFilesContainPSGI(vhost.TryFiles) {
-			return fmt.Errorf("%s.try_files @psgi requires mode=psgi", field)
-		}
-		if err := validateVhostRewriteRules(vhost.RewriteRules, field); err != nil {
-			return err
-		}
-		if err := validateVhostAccessRules(vhost.AccessRules, field); err != nil {
-			return err
-		}
-		if err := validateVhostBasicAuth(vhost.BasicAuth, field+".basic_auth"); err != nil {
-			return err
+		if vhost.Mode != "daemon" {
+			if err := validateRuntimeListenHost(vhost.Hostname, field+".hostname"); err != nil {
+				return err
+			}
+			if vhost.ListenPort < 1 || vhost.ListenPort > 65535 {
+				return fmt.Errorf("%s.listen_port must be between 1 and 65535", field)
+			}
+			pairKey := runtimeListenEndpoint(vhost.Hostname, vhost.ListenPort)
+			if _, exists := seenListenPairs[pairKey]; exists {
+				return fmt.Errorf("%s listen target duplicates %q", field, pairKey)
+			}
+			seenListenPairs[pairKey] = struct{}{}
+			if vhost.DocumentRoot == "" || vhost.DocumentRoot == "." {
+				return fmt.Errorf("%s.document_root is required", field)
+			}
+			if err := validateVhostRootPath(vhost.DocumentRoot); err != nil {
+				return fmt.Errorf("%s.document_root: %w", field, err)
+			}
+			if vhost.MaxRequestBodyBytes < 0 {
+				return fmt.Errorf("%s.max_request_body_bytes must not be negative", field)
+			}
+			if vhost.MaxRequestBodyBytes > maxVhostMaxRequestBodyBytes {
+				return fmt.Errorf("%s.max_request_body_bytes must be <= %d", field, maxVhostMaxRequestBodyBytes)
+			}
+			if err := validateVhostTryFiles(vhost.TryFiles, field); err != nil {
+				return err
+			}
+			if vhost.Mode != "psgi" && vhostTryFilesContainPSGI(vhost.TryFiles) {
+				return fmt.Errorf("%s.try_files @psgi requires mode=psgi", field)
+			}
+			if err := validateVhostRewriteRules(vhost.RewriteRules, field); err != nil {
+				return err
+			}
+			if err := validateVhostAccessRules(vhost.AccessRules, field); err != nil {
+				return err
+			}
+			if err := validateVhostBasicAuth(vhost.BasicAuth, field+".basic_auth"); err != nil {
+				return err
+			}
 		}
 		if vhost.GeneratedTarget == "" {
 			return fmt.Errorf("%s.generated_target is required", field)
@@ -985,8 +1103,54 @@ func validateVhostConfigFileWithInventories(cfg VhostConfigFile, phpInventory PH
 		if vhost.Mode == "static" && (len(vhost.PHPValues) > 0 || len(vhost.PHPAdminValues) > 0) {
 			return fmt.Errorf("%s php_value/php_admin_value require mode=php-fpm", field)
 		}
-		if vhost.Mode != "psgi" && (vhost.AppRoot != "" || vhost.PSGIFile != "" || vhost.Workers != 0 || vhost.MaxRequests != 0 || vhost.IncludeExtlib != nil || len(vhost.Env) > 0) {
-			return fmt.Errorf("%s app_root/psgi_file/workers/max_requests/include_extlib/env require mode=psgi", field)
+		if vhost.Mode == "daemon" {
+			if vhost.AppRoot == "" || vhost.AppRoot == "." {
+				return fmt.Errorf("%s.app_root is required when mode=daemon", field)
+			}
+			if err := validateVhostRootPath(vhost.AppRoot); err != nil {
+				return fmt.Errorf("%s.app_root: %w", field, err)
+			}
+			if vhost.Command == "" {
+				return fmt.Errorf("%s.command is required when mode=daemon", field)
+			}
+			if err := validateVhostRelativePath(vhost.Command); err != nil {
+				return fmt.Errorf("%s.command: %w", field, err)
+			}
+			if vhost.WorkingDir != "" {
+				if err := validateVhostRelativePath(vhost.WorkingDir); err != nil {
+					return fmt.Errorf("%s.working_dir: %w", field, err)
+				}
+			}
+			if vhost.RunUser != "" && !isValidRuntimePrincipalToken(vhost.RunUser) {
+				return fmt.Errorf("%s.run_user must contain only [A-Za-z0-9._-]", field)
+			}
+			if vhost.RunGroup != "" && !isValidRuntimePrincipalToken(vhost.RunGroup) {
+				return fmt.Errorf("%s.run_group must contain only [A-Za-z0-9._-]", field)
+			}
+			if err := validateVhostDaemonArgs(vhost.Args, field+".args"); err != nil {
+				return err
+			}
+			if err := validateVhostEnv(vhost.Env, field+".env"); err != nil {
+				return err
+			}
+			if err := validateVhostDaemonRestartPolicy(vhost.RestartPolicy, field+".restart_policy"); err != nil {
+				return err
+			}
+			if err := validateVhostDaemonPersistentPaths(vhost.PersistentPaths, field+".persistent_paths"); err != nil {
+				return err
+			}
+			if vhost.GracefulStopSec < 0 || vhost.GracefulStopSec > 60 {
+				return fmt.Errorf("%s.graceful_stop_sec must be between 0 and 60", field)
+			}
+		}
+		if vhost.Mode != "psgi" && vhost.Mode != "daemon" && (vhost.AppRoot != "" || vhost.PSGIFile != "" || vhost.Workers != 0 || vhost.MaxRequests != 0 || vhost.IncludeExtlib != nil || len(vhost.Env) > 0) {
+			return fmt.Errorf("%s app_root/psgi_file/workers/max_requests/include_extlib/env require mode=psgi or mode=daemon", field)
+		}
+		if vhost.Mode != "daemon" && (vhost.Command != "" || len(vhost.Args) > 0 || vhost.WorkingDir != "" || vhost.RunUser != "" || vhost.RunGroup != "" || vhost.RestartPolicy != "" || vhost.GracefulStopSec != 0 || len(vhost.PersistentPaths) > 0) {
+			return fmt.Errorf("%s command/args/working_dir/run_user/run_group/restart_policy/graceful_stop_sec/persistent_paths require mode=daemon", field)
+		}
+		if vhost.Mode == "daemon" && (vhost.Hostname != "" || vhost.ListenPort != 0 || vhost.DocumentRoot != "" || len(vhost.TryFiles) > 0 || len(vhost.RewriteRules) > 0 || len(vhost.AccessRules) > 0 || vhost.BasicAuth != nil || len(vhost.PHPValues) > 0 || len(vhost.PHPAdminValues) > 0 || vhost.PSGIFile != "" || vhost.Workers != 0 || vhost.MaxRequests != 0 || vhost.IncludeExtlib != nil || vhost.RuntimeID != "" || vhost.LinkedUpstreamName != "") {
+			return fmt.Errorf("%s HTTP/PHP/PSGI listener fields are not allowed when mode=daemon", field)
 		}
 	}
 	return nil
@@ -1006,6 +1170,8 @@ func cloneVhostConfigFile(in VhostConfigFile) VhostConfigFile {
 		cp.PHPAdminValues = cloneStringMap(vhost.PHPAdminValues)
 		cp.IncludeExtlib = cloneBoolPtr(vhost.IncludeExtlib)
 		cp.Env = cloneStringMap(vhost.Env)
+		cp.Args = append([]string(nil), vhost.Args...)
+		cp.PersistentPaths = append([]string(nil), vhost.PersistentPaths...)
 		out.Vhosts[i] = cp
 	}
 	return out
@@ -1392,6 +1558,14 @@ func normalizeRelativeLocalPath(value string) string {
 	return value
 }
 
+func normalizeOptionalRelativeLocalPath(value string) string {
+	value = normalizeRelativeLocalPath(value)
+	if value == "." {
+		return ""
+	}
+	return value
+}
+
 func validateVhostRootPath(value string) error {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -1437,6 +1611,96 @@ func validateVhostRelativePath(value string) error {
 		switch part {
 		case "", ".", "..":
 			return fmt.Errorf("must not contain empty, '.', or '..' path segments")
+		}
+	}
+	return nil
+}
+
+func normalizeVhostDaemonArgs(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, value := range in {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		out = append(out, value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func validateVhostDaemonArgs(in []string, field string) error {
+	if len(in) > 128 {
+		return fmt.Errorf("%s must contain at most 128 entries", field)
+	}
+	for i, value := range in {
+		if strings.ContainsAny(value, "\x00\r\n") {
+			return fmt.Errorf("%s[%d] must be a single line without NUL", field, i)
+		}
+		if len(value) > 4096 {
+			return fmt.Errorf("%s[%d] is too long", field, i)
+		}
+	}
+	return nil
+}
+
+func normalizeVhostDaemonRestartPolicy(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "", "on-failure":
+		return "on-failure"
+	case "none", "always":
+		return value
+	default:
+		return value
+	}
+}
+
+func validateVhostDaemonRestartPolicy(value string, field string) error {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "none", "on-failure", "always":
+		return nil
+	default:
+		return fmt.Errorf("%s must be one of: none, on-failure, always", field)
+	}
+}
+
+func normalizeVhostDaemonPersistentPaths(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	seen := make(map[string]struct{}, len(in))
+	for _, value := range in {
+		value = normalizeRelativeLocalPath(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
+}
+
+func validateVhostDaemonPersistentPaths(in []string, field string) error {
+	if len(in) > 64 {
+		return fmt.Errorf("%s must contain at most 64 entries", field)
+	}
+	for i, value := range in {
+		if err := validateVhostRelativePath(value); err != nil {
+			return fmt.Errorf("%s[%d]: %w", field, i, err)
 		}
 	}
 	return nil

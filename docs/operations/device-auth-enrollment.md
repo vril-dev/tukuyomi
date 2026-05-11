@@ -81,12 +81,12 @@ Runtime App references plus running processes again immediately before deleting
 local runtime files.
 
 `Runtime App Deploy` is an experimental selected-device page for small
-application package delivery to `php-fpm` and `psgi` Runtime Apps. Center stores
-deployment profiles, immutable ZIP packages, package file manifests, diff
-previews, and deployment history. Gateway receives one pending app deployment
-request during polling, downloads the signed package, stages a full replacement
-release, switches the app-level `current` symlink, then reloads or restarts the
-runtime when requested.
+application package delivery to `php-fpm`, `psgi`, and `daemon` Runtime Apps.
+Center stores deployment profiles, immutable ZIP packages, package file
+manifests, diff previews, and deployment history. Gateway receives one pending
+app deployment request during polling, downloads the signed package, stages a
+full replacement release, switches the app-level `current` symlink, then reloads
+or restarts the runtime when requested.
 
 Each profile can contain multiple logical roots. The Gateway still switches only
 one app-level symlink:
@@ -97,9 +97,9 @@ data/app-deployments/<app-id>/current
 
 For example, PHP-FPM commonly maps package `public/` to `current/public`. PSGI
 can map package `app/` and `static/` to separate runtime fields under the same
-`current` release. Gateway blocks deploy and rollback if the Runtime App no
-longer points at the expected managed paths, so Center cannot replace an
-arbitrary path.
+`current` release. Daemon apps map package `app/` to `current/app`. Gateway
+blocks deploy and rollback if the Runtime App no longer points at the expected
+managed paths, so Center cannot replace an arbitrary path.
 
 After baseline adoption or the first successful Center-managed deploy, Gateway
 rewrites the matching Runtime Apps binding to the managed path. For PHP-FPM,
@@ -111,11 +111,14 @@ data/app-deployments/<app-id>/current/public
 ```
 
 For PSGI, `app_root` and/or `document_root` are rewritten to the corresponding
-`current/<runtime-subpath>` entries. The original `data/runtime-sites/<app-id>/...`
-directory is the baseline source only; editing it later does not update the
-Center-managed Runtime App. Make subsequent changes by uploading a new Center
-package, or intentionally move the Runtime App binding back to a local path
-before returning to local-only management.
+`current/<runtime-subpath>` entries. For daemon apps, `app_root` is rewritten to
+`data/app-deployments/<app-id>/current/app`, and configured `persistent_paths`
+are symlinked to stable directories under
+`data/app-deployments/<app-id>/persistent/`. The original
+`data/runtime-sites/<app-id>/...` directory is the baseline source only; editing
+it later does not update the Center-managed Runtime App. Make subsequent changes
+by uploading a new Center package, or intentionally move the Runtime App binding
+back to a local path before returning to local-only management.
 
 Baseline adoption only reads Gateway-local relative paths under
 `data/runtime-sites/`. Move or copy the source tree there before adopting an

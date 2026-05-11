@@ -2269,6 +2269,18 @@ func currentEdgeAppDeployCandidates() []edgeAppDeployCandidate {
 					Required:      true,
 				})
 			}
+		case "daemon":
+			if strings.TrimSpace(vhost.AppRoot) != "" {
+				roots = append(roots, edgeAppDeployRoot{
+					RootID:         "app_root",
+					RuntimeField:   "app_root",
+					SourcePath:     edgeAppDeploySafeSourcePathForApp(vhost.AppRoot, appID),
+					PackagePrefix:  "app",
+					TargetSubpath:  "app",
+					RuntimeSubpath: "app",
+					Required:       true,
+				})
+			}
 		default:
 			continue
 		}
@@ -2295,11 +2307,11 @@ func currentEdgeAppDeployCandidates() []edgeAppDeployCandidate {
 func edgeRuntimeAvailableForAppDeploy(family string, runtimeID string) (bool, string) {
 	family = strings.ToLower(strings.TrimSpace(family))
 	runtimeID = clampEdgeMetadataText(runtimeID, 64)
-	if runtimeID == "" {
-		return false, "Runtime Apps binding runtime_id is empty"
-	}
 	switch family {
 	case "php-fpm":
+		if runtimeID == "" {
+			return false, "Runtime Apps binding runtime_id is empty"
+		}
 		for _, runtime := range currentPHPRuntimeInventoryConfig().Runtimes {
 			if strings.TrimSpace(runtime.RuntimeID) != runtimeID {
 				continue
@@ -2311,6 +2323,9 @@ func edgeRuntimeAvailableForAppDeploy(family string, runtimeID string) (bool, st
 		}
 		return false, "php-fpm runtime " + runtimeID + " is not installed"
 	case "psgi":
+		if runtimeID == "" {
+			return false, "Runtime Apps binding runtime_id is empty"
+		}
 		for _, runtime := range currentPSGIRuntimeInventoryConfig().Runtimes {
 			if strings.TrimSpace(runtime.RuntimeID) != runtimeID {
 				continue
@@ -2321,6 +2336,8 @@ func edgeRuntimeAvailableForAppDeploy(family string, runtimeID string) (bool, st
 			return true, ""
 		}
 		return false, "psgi runtime " + runtimeID + " is not installed"
+	case "daemon":
+		return true, ""
 	default:
 		return false, "Runtime Apps binding family is unsupported"
 	}
@@ -3008,12 +3025,13 @@ func reloadWAFRuleAssetsAfterCenterApply(assets []wafRuleAssetVersion) error {
 }
 
 type edgeAppDeployBinding struct {
-	AppID         string
-	RuntimeFamily string
-	RuntimeID     string
-	ProcessID     string
-	ManagedRoot   string
-	Roots         []edgeAppDeployBoundRoot
+	AppID           string
+	RuntimeFamily   string
+	RuntimeID       string
+	ProcessID       string
+	ManagedRoot     string
+	Roots           []edgeAppDeployBoundRoot
+	PersistentPaths []string
 }
 
 type edgeAppDeployBoundRoot struct {
@@ -3402,12 +3420,13 @@ func edgeAppDeployBindingForAssignment(assignment edgeAppDeployDeviceAssignment)
 			processID = strings.TrimSpace(vhost.Name)
 		}
 		return edgeAppDeployBinding{
-			AppID:         appID,
-			RuntimeFamily: family,
-			RuntimeID:     runtimeID,
-			ProcessID:     processID,
-			ManagedRoot:   root,
-			Roots:         boundRoots,
+			AppID:           appID,
+			RuntimeFamily:   family,
+			RuntimeID:       runtimeID,
+			ProcessID:       processID,
+			ManagedRoot:     root,
+			Roots:           boundRoots,
+			PersistentPaths: append([]string(nil), vhost.PersistentPaths...),
 		}, nil
 	}
 	return edgeAppDeployBinding{}, fmt.Errorf("Runtime Apps binding for app_id %q was not found", appID)
@@ -3799,6 +3818,9 @@ func installEdgeAppDeployPackage(ctx context.Context, binding edgeAppDeployBindi
 	if err := extractEdgeAppDeployPackageToStage(downloaded.Parsed, stageAbs, binding.Roots); err != nil {
 		return "", "", err
 	}
+	if err := linkEdgeAppDeployPersistentPaths(stageAbs, rootAbs, binding); err != nil {
+		return "", "", err
+	}
 	scriptBinding := binding
 	scriptBinding.ManagedRoot = rootAbs
 	output, err := runEdgeAppDeployScript(ctx, assignment.PreSwitchScript, stageAbs, assignment.ScriptTimeoutSec, scriptBinding, downloaded.PackageRevision, downloaded.Parsed)
@@ -3857,6 +3879,68 @@ func extractEdgeAppDeployPackageToStage(parsed appdeploybundle.Parsed, stageDir 
 		if written != len(file.Body) {
 			_ = os.Remove(target)
 			return fmt.Errorf("app deploy package file size mismatch")
+		}
+	}
+	return nil
+}
+
+func linkEdgeAppDeployPersistentPaths(stageDir string, managedRoot string, binding edgeAppDeployBinding) error {
+	if binding.RuntimeFamily != "daemon" || len(binding.PersistentPaths) == 0 {
+		return nil
+	}
+	stageAbs, err := filepath.Abs(filepath.Clean(stageDir))
+	if err != nil {
+		return err
+	}
+	managedAbs, err := filepath.Abs(filepath.Clean(managedRoot))
+	if err != nil {
+		return err
+	}
+	persistentRoot := filepath.Join(managedAbs, "persistent")
+	if err := os.MkdirAll(persistentRoot, 0o755); err != nil {
+		return err
+	}
+	appRoots := make([]edgeAppDeployBoundRoot, 0, len(binding.Roots))
+	for _, root := range binding.Roots {
+		if strings.EqualFold(strings.TrimSpace(root.Root.RuntimeField), "app_root") {
+			appRoots = append(appRoots, root)
+		}
+	}
+	if len(appRoots) == 0 {
+		return fmt.Errorf("daemon app deploy has no app_root deployment root")
+	}
+	for _, persistentPath := range binding.PersistentPaths {
+		rel, ok := cleanEdgeAppDeployRelativePath(persistentPath)
+		if !ok || rel == "" {
+			return fmt.Errorf("daemon persistent path %q is invalid", persistentPath)
+		}
+		persistentAbs := filepath.Join(persistentRoot, filepath.FromSlash(rel))
+		if !edgePathWithin(persistentRoot, persistentAbs) {
+			return fmt.Errorf("daemon persistent path escapes managed directory")
+		}
+		if err := os.MkdirAll(persistentAbs, 0o755); err != nil {
+			return err
+		}
+		for _, root := range appRoots {
+			linkAbs := filepath.Join(stageAbs, filepath.FromSlash(root.Root.TargetSubpath), filepath.FromSlash(rel))
+			if !edgePathWithin(stageAbs, linkAbs) {
+				return fmt.Errorf("daemon persistent link escapes stage directory")
+			}
+			if _, err := os.Lstat(linkAbs); err == nil {
+				return fmt.Errorf("daemon persistent path %q must not be included in the app package", rel)
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(linkAbs), 0o755); err != nil {
+				return err
+			}
+			linkTarget, err := filepath.Rel(filepath.Dir(linkAbs), persistentAbs)
+			if err != nil {
+				return err
+			}
+			if err := os.Symlink(linkTarget, linkAbs); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -3996,6 +4080,11 @@ func restartEdgeAppDeployRuntime(binding edgeAppDeployBinding, behavior string) 
 				return fmt.Errorf("psgi process id is empty")
 			}
 			return ReloadPSGIProcess(binding.ProcessID)
+		case "daemon":
+			if binding.ProcessID == "" {
+				return fmt.Errorf("daemon process id is empty")
+			}
+			return ReloadDaemonProcess(binding.ProcessID)
 		default:
 			return nil
 		}
@@ -4017,6 +4106,14 @@ func restartEdgeAppDeployRuntime(binding edgeAppDeployBinding, behavior string) 
 				return err
 			}
 			return StartPSGIProcess(binding.ProcessID)
+		case "daemon":
+			if binding.ProcessID == "" {
+				return fmt.Errorf("daemon process id is empty")
+			}
+			if err := StopDaemonProcess(binding.ProcessID); err != nil {
+				return err
+			}
+			return StartDaemonProcess(binding.ProcessID)
 		default:
 			return nil
 		}

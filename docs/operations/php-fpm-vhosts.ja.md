@@ -166,7 +166,7 @@ daemon Runtime App の必須項目は次のとおりです。
 - `env`
 - `persistent_paths`
 
-daemon mode では、`hostname`、`listen_port`、`document_root`、rewrite、アクセスルール、Basic 認証などの web runtime 用項目を拒否します。`runtime_id` も空のままです。Gateway は `command` を `app_root` 配下の相対パスとして解決し、shell を介さずに実行します。絶対パスや `..` による脱出は拒否されます。
+daemon mode では、`hostname`、`listen_port`、`document_root`、rewrite、アクセスルール、Basic 認証などの web runtime 用項目を拒否します。`runtime_id` も空のままです。Gateway は `command` を `app_root` 配下の相対パスとして解決し、シェルを介さずに実行します。絶対パスや `..` による親ディレクトリへの脱出は拒否されます。
 
 daemon Runtime App は generated proxy target や route を作りません。HTTP の管理エンドポイントを公開する場合だけ、Proxy Rules で明示的な upstream と route を作成してください。MQTT など非 HTTP の待ち受けは、プロトコル専用の traffic control layer を設定するまでは、専用のローカルネットワークまたは VLAN に閉じます。
 
@@ -185,6 +185,9 @@ data/app-deployments/<app-id>/persistent/<path>
 そのうえで、新しい `current/app` release から symlink を作ります。package 側に同じ path を含めることはできません。release contents と persistent state は分離します。
 
 broker 風 daemon package の雛形は `examples/daemon-mqtt-broker/` にあります。
+このサンプルは監視と配備のスモーク用であり、MQTT は実装していません。ネットワーク
+ポートも開かず、ログに出る `listen=127.0.0.1:1883` はサンプル設定値の表示だけ
+です。
 
 ## Upstreams と Runtime Apps の境界
 

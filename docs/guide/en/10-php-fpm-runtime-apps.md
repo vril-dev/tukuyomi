@@ -357,7 +357,9 @@ examples/daemon-mqtt-broker/
 ```
 
 It is a placeholder for a broker-style daemon package and does not
-implement MQTT by itself.
+implement MQTT by itself. The sample script also does not open a network
+port. Its `listen=127.0.0.1:1883` log field is only an example setting
+value, not an active socket.
 
 ## 10.9 Tests / smoke
 

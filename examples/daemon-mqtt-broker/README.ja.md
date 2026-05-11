@@ -6,9 +6,11 @@
 で、ベンダー製 MQTT broker や broker 相当の制御 daemon を Center から配備し、
 Gateway 側で監視する構成を想定しています。
 
-同梱のスクリプトはプレースホルダーです。MQTT broker は実装しておらず、ネット
-ワークポートも開きません。実運用では `app/bin/sample-broker-daemon` を broker
-バイナリ、または起動用ラッパーに置き換えてください。
+同梱のスクリプトはプレースホルダーです。MQTT broker は実装しておらず、
+ネットワークポートも開きません。実運用では `app/bin/sample-broker-daemon` を
+broker バイナリ、または起動用ラッパーに置き換えてください。
+ログには `listen=127.0.0.1:1883` が出ますが、これはサンプル設定値の表示だけ
+です。このスクリプトはそのアドレスで bind / listen しません。
 
 ## Runtime Apps の設定値
 

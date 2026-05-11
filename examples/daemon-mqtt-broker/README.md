@@ -9,6 +9,8 @@ daemon is deployed by Center, then supervised by Gateway.
 The included script is only a placeholder daemon. It does not implement MQTT
 and does not open a network port. Replace `app/bin/sample-broker-daemon` with
 your broker binary or startup wrapper before using this layout for real traffic.
+Its log line includes `listen=127.0.0.1:1883`, but that is only the configured
+sample value. The script does not bind or listen on that address.
 
 ## Runtime Apps fields
 

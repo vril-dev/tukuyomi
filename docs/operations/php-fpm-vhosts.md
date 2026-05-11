@@ -198,6 +198,9 @@ contain the same path, because release contents and persistent state are kept
 separate.
 
 See `examples/daemon-mqtt-broker/` for a broker-style daemon package skeleton.
+That sample is a supervision/deploy smoke target only. It does not implement
+MQTT and does not open a network port; `listen=127.0.0.1:1883` in its log is
+only an example setting value.
 
 ## Upstreams to Runtime Apps Boundary
 

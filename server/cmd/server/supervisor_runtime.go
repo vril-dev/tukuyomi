@@ -146,7 +146,7 @@ func runSupervisorServer() error {
 	}
 	defer listeners.Close()
 	for _, entry := range listeners.entries {
-		log.Printf("[SUPERVISOR] listener ready role=%s addr=%s inherited=%t", entry.role, entry.listener.Addr(), entry.inherited)
+		log.Printf("[SUPERVISOR] listener ready role=%s network=%s addr=%s inherited=%t", entry.role, entry.network, supervisorListenerEntryAddr(entry), entry.inherited)
 	}
 
 	releasesDir := supervisorReleasesDirFromEnv()
@@ -751,6 +751,23 @@ func supervisorListenerEntryFile(entry supervisorListenerEntry) (*os.File, error
 		return nil, fmt.Errorf("duplicate listener %s fd: %w", entry.role, err)
 	}
 	return file, nil
+}
+
+func supervisorListenerEntryAddr(entry supervisorListenerEntry) string {
+	switch entry.network {
+	case "", "tcp":
+		if entry.listener == nil || entry.listener.Addr() == nil {
+			return ""
+		}
+		return entry.listener.Addr().String()
+	case "udp":
+		if entry.packet == nil || entry.packet.LocalAddr() == nil {
+			return ""
+		}
+		return entry.packet.LocalAddr().String()
+	default:
+		return ""
+	}
 }
 
 func (s *supervisorListenerSet) Close() error {

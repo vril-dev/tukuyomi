@@ -365,6 +365,12 @@ func TestPrepareSupervisorListenerSetCreatesHTTP3UDPListener(t *testing.T) {
 	if set.entries[1].role != "http3" || set.entries[1].network != "udp" || set.entries[1].packet == nil {
 		t.Fatalf("udp entry=%#v", set.entries[1])
 	}
+	if got := supervisorListenerEntryAddr(set.entries[0]); !strings.Contains(got, ":") {
+		t.Fatalf("tcp addr=%q", got)
+	}
+	if got := supervisorListenerEntryAddr(set.entries[1]); !strings.Contains(got, ":") {
+		t.Fatalf("udp addr=%q", got)
+	}
 	files, err := set.Files()
 	if err != nil {
 		t.Fatalf("Files: %v", err)

@@ -1450,7 +1450,7 @@ function RouteEditorCard({
             parse={multilineToStringList}
             equals={stringListEqual}
             spellCheck={false}
-            placeholder={"219.104.164.92/32\n2001:db8::/32"}
+            placeholder={"198.51.100.10/32\n2001:db8::/32"}
           />
         </Field>
         <Field label="Deny CIDRs" hint="One IP or CIDR per line. Deny CIDRs are checked before Allow CIDRs; leave empty when Allow CIDRs should be the only permit list.">
@@ -1462,7 +1462,7 @@ function RouteEditorCard({
             parse={multilineToStringList}
             equals={stringListEqual}
             spellCheck={false}
-            placeholder={"203.0.113.0/24\n198.51.100.10"}
+            placeholder={"203.0.113.0/24\n192.0.2.10"}
           />
         </Field>
       </div>

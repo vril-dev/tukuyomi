@@ -214,6 +214,58 @@ func TestSanitizeLegacyGeneratedProxyRouteTargets(t *testing.T) {
 	}
 }
 
+func TestSanitizeLegacyGeneratedProxyRouteTargetsKeepsExplicitDirectNameCollision(t *testing.T) {
+	restore := resetPHPProxyFoundationForTest(t)
+	defer restore()
+
+	cfg := normalizeProxyRulesConfig(ProxyRulesConfig{
+		Upstreams: []ProxyUpstream{
+			{Name: "app-php", URL: "fcgi://127.0.0.1:9081", Weight: 1, Enabled: true},
+		},
+		BackendPools: []ProxyBackendPool{
+			{Name: "apps", Members: []string{"app-php"}},
+		},
+		Routes: []ProxyRoute{
+			{
+				Name:     "explicit-direct-route",
+				Priority: 10,
+				Match:    ProxyRouteMatch{Path: &ProxyRoutePathMatch{Type: "prefix", Value: "/app"}},
+				Action:   ProxyRouteAction{Upstream: "app-php"},
+			},
+		},
+		DefaultRoute: &ProxyDefaultRoute{
+			Action: ProxyRouteAction{BackendPool: "apps"},
+		},
+	})
+	vhosts := VhostConfigFile{
+		Vhosts: []VhostConfig{
+			{
+				Name:            "app",
+				Mode:            "php-fpm",
+				Hostname:        "127.0.0.1",
+				ListenPort:      9081,
+				DocumentRoot:    "apps/app/public",
+				RuntimeID:       "php82",
+				GeneratedTarget: "app-php",
+			},
+		},
+	}
+
+	sanitized, changed := sanitizeLegacyGeneratedProxyRouteTargets(cfg, SiteConfigFile{}, vhosts)
+	if changed {
+		t.Fatalf("explicit direct upstream collision should not be sanitized: %+v", sanitized)
+	}
+	if sanitized.DefaultRoute == nil {
+		t.Fatal("default route referencing explicit direct upstream pool was removed")
+	}
+	if len(sanitized.Routes) != 1 || sanitized.Routes[0].Name != "explicit-direct-route" {
+		t.Fatalf("routes=%+v, want explicit direct route", sanitized.Routes)
+	}
+	if _, err := prepareProxyRulesRawWithSitesAndVhosts(mustJSON(sanitized), SiteConfigFile{}, vhosts); err != nil {
+		t.Fatalf("explicit direct name collision should validate: %v", err)
+	}
+}
+
 func TestPrepareProxyRulesRawWithSitesAndVhostsAllowsVhostWithoutConfiguredLinkedUpstream(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()

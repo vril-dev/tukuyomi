@@ -152,6 +152,18 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 			}
 			log.Fatalf("[FATAL] failed to initialize psgi runtime supervisor: %v", err)
 		}
+		if err := handler.InitDaemonRuntimeSupervisor(); err != nil {
+			if shutdownErr := handler.ShutdownDaemonRuntimeSupervisor(); shutdownErr != nil {
+				log.Printf("[RUNTIME_APPS][WARN] shutdown daemon runtime supervisor after init failure: %v", shutdownErr)
+			}
+			if shutdownErr := handler.ShutdownPSGIRuntimeSupervisor(); shutdownErr != nil {
+				log.Printf("[RUNTIME_APPS][WARN] shutdown psgi runtime supervisor after daemon init failure: %v", shutdownErr)
+			}
+			if shutdownErr := handler.ShutdownPHPRuntimeSupervisor(); shutdownErr != nil {
+				log.Printf("[RUNTIME_APPS][WARN] shutdown php runtime supervisor after daemon init failure: %v", shutdownErr)
+			}
+			log.Fatalf("[FATAL] failed to initialize daemon runtime supervisor: %v", err)
+		}
 		runtimeAppsShutdown = shutdownRuntimeAppSupervisors
 	}
 	defer runtimeAppsShutdown()
@@ -671,6 +683,9 @@ func initRuntimeDBStoreOrFatal(prefix string) {
 }
 
 func shutdownRuntimeAppSupervisors() {
+	if err := handler.ShutdownDaemonRuntimeSupervisor(); err != nil {
+		log.Printf("[RUNTIME_APPS][WARN] shutdown daemon runtime supervisor: %v", err)
+	}
 	if err := handler.ShutdownPSGIRuntimeSupervisor(); err != nil {
 		log.Printf("[RUNTIME_APPS][WARN] shutdown psgi runtime supervisor: %v", err)
 	}

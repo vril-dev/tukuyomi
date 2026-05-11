@@ -1,0 +1,46 @@
+#!/usr/bin/env sh
+set -eu
+
+root="${TUKUYOMI_RUNTIME_APP_ROOT:-$(pwd)}"
+config="${1:-config/broker.env.example}"
+
+: "${BROKER_LISTEN_ADDR:=127.0.0.1:1883}"
+: "${BROKER_HEARTBEAT_SECONDS:=30}"
+
+if [ -f "$config" ]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      BROKER_LISTEN_ADDR)
+        BROKER_LISTEN_ADDR="$value"
+        ;;
+      BROKER_HEARTBEAT_SECONDS)
+        case "$value" in
+          ''|*[!0-9]*)
+            ;;
+          *)
+            BROKER_HEARTBEAT_SECONDS="$value"
+            ;;
+        esac
+        ;;
+    esac
+  done < "$config"
+fi
+
+mkdir -p "$root/state"
+
+log() {
+  printf '%s sample-broker-daemon app=%s listen=%s %s\n' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    "${TUKUYOMI_RUNTIME_APP_ID:-unknown}" \
+    "$BROKER_LISTEN_ADDR" \
+    "$1"
+}
+
+trap 'log "stopping"; exit 0' INT TERM
+
+log "started"
+while :; do
+  log "heartbeat" >> "$root/state/heartbeat.log"
+  sleep "$BROKER_HEARTBEAT_SECONDS" &
+  wait "$!"
+done

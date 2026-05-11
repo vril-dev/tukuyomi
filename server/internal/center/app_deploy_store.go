@@ -1056,7 +1056,7 @@ func appDeployProfileRevision(deviceID, appID, runtimeFamily, runtimeID, rootsJS
 func normalizeAppDeployRuntimeFamily(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	switch value {
-	case "php-fpm", "psgi":
+	case "php-fpm", "psgi", "daemon":
 		return value
 	default:
 		return ""

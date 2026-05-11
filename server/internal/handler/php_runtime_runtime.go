@@ -1127,6 +1127,45 @@ func ReloadPSGIProcessHandler(c *gin.Context) {
 	})
 }
 
+func UpDaemonProcessHandler(c *gin.Context) {
+	appName := runtimeAppNameParam(c)
+	if err := StartDaemonProcess(appName); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":               true,
+		"runtime_app_name": normalizeConfigToken(appName),
+		"daemon_processes": DaemonRuntimeProcessSnapshot(),
+	})
+}
+
+func DownDaemonProcessHandler(c *gin.Context) {
+	appName := runtimeAppNameParam(c)
+	if err := StopDaemonProcess(appName); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":               true,
+		"runtime_app_name": normalizeConfigToken(appName),
+		"daemon_processes": DaemonRuntimeProcessSnapshot(),
+	})
+}
+
+func ReloadDaemonProcessHandler(c *gin.Context) {
+	appName := runtimeAppNameParam(c)
+	if err := ReloadDaemonProcess(appName); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":               true,
+		"runtime_app_name": normalizeConfigToken(appName),
+		"daemon_processes": DaemonRuntimeProcessSnapshot(),
+	})
+}
+
 func runtimeAppNameParam(c *gin.Context) string {
 	if c == nil {
 		return ""

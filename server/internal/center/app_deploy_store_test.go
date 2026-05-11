@@ -45,6 +45,15 @@ func TestNormalizeAppDeployRootsAllowsSourceRoot(t *testing.T) {
 	}
 }
 
+func TestNormalizeAppDeployRuntimeFamilyAllowsDaemon(t *testing.T) {
+	if got := normalizeAppDeployRuntimeFamily(" daemon "); got != "daemon" {
+		t.Fatalf("normalize daemon=%q", got)
+	}
+	if got := normalizeAppDeployRuntimeFamily("fcgi"); got != "" {
+		t.Fatalf("normalize unsupported=%q want empty", got)
+	}
+}
+
 func TestNormalizeAppDeployRootsRejectsUnsafeSourcePath(t *testing.T) {
 	for _, sourcePath := range []string{"/srv/app", "etc", "data", "data/vhosts/app"} {
 		_, _, err := normalizeAppDeployRoots([]AppDeployRootRecord{{

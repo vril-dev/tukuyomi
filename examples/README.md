@@ -10,6 +10,7 @@ The examples below show practical deployment patterns with tukuyomi as the front
 | WordPress (High Paranoia) | CMS protection with stricter CRS setup | `examples/wordpress` |
 | API Gateway | REST API protection with rate-limit-first policy | `examples/api-gateway` |
 | Static Vhost Cache | Direct static vhost protection with internal response cache verification | `examples/static-vhost-cache` |
+| Daemon MQTT Broker Skeleton | Runtime Apps daemon packaging for an IoT broker-style process | `examples/daemon-mqtt-broker` |
 
 ## Common flow
 

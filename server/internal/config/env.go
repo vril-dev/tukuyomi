@@ -83,6 +83,7 @@ var (
 	ServerTLSMinVersion                    string
 	ServerTLSRedirectHTTP                  bool
 	ServerTLSHTTPRedirectAddr              string
+	ServerHTTP2Enabled                     bool
 	ServerHTTP3Enabled                     bool
 	ServerHTTP3AltSvcMaxAgeSec             int
 	ServerTLSACMEEnabled                   bool
@@ -358,6 +359,7 @@ func applyAppConfig(cfg appConfigFile) {
 	if ServerTLSHTTPRedirectAddr != "" {
 		ServerTLSHTTPRedirectAddr = parseListenAddr(ServerTLSHTTPRedirectAddr)
 	}
+	ServerHTTP2Enabled = cfg.Server.HTTP2.Enabled
 	ServerHTTP3Enabled = cfg.Server.HTTP3.Enabled
 	ServerHTTP3AltSvcMaxAgeSec = cfg.Server.HTTP3.AltSvcMaxAgeSec
 	if ServerHTTP3AltSvcMaxAgeSec < 0 {

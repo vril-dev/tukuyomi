@@ -227,6 +227,7 @@ export default function Status() {
                 <Metric label={tx("Public PROXY Protocol")} value={String(data.public_listener_proxy_protocol_enabled ?? "-")} />
                 <Metric label={tx("Admin PROXY Protocol")} value={String(data.admin_listener_proxy_protocol_enabled ?? "-")} />
                 <Metric label={tx("Public TLS Enabled")} value={String(data.public_listener_tls_enabled ?? data.server_tls_enabled ?? "-")} />
+                <Metric label={tx("Public HTTP/2 Advertised")} value={String(data.server_http2_advertised ?? "-")} />
                 <Metric label={tx("API Base")} value={String(data.api_base ?? "-")} />
                 <Metric label={tx("Site Config Storage")} value={String(data.site_config_storage ?? "-")} />
                 <Metric label={tx("Scheduled Task Config Storage")} value={String(data.scheduled_task_config_storage ?? "-")} />

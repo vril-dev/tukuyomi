@@ -345,6 +345,38 @@ func TestValidateAppServerPublicListenersConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts http3 with https production listener", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.Server.TLS.Enabled = true
+		cfg.Server.HTTP3.Enabled = true
+		cfg.Server.PublicListeners = []appServerPublicListenerConfig{
+			{Name: "setup", ListenAddr: ":9090", Protocol: "http", HTTPBehavior: "serve", Enabled: true},
+			{Name: "https", ListenAddr: ":443", Protocol: "https", HTTPBehavior: "serve", Enabled: true},
+		}
+
+		if err := validateAppConfigFile(cfg); err != nil {
+			t.Fatalf("validateAppConfigFile() error = %v", err)
+		}
+	})
+
+	t.Run("rejects http3 without enabled https production listener", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.Server.TLS.Enabled = true
+		cfg.Server.HTTP3.Enabled = true
+		cfg.Server.PublicListeners = []appServerPublicListenerConfig{
+			{Name: "setup", ListenAddr: ":9090", Protocol: "http", HTTPBehavior: "serve", Enabled: true},
+			{Name: "https", ListenAddr: ":443", Protocol: "https", HTTPBehavior: "serve", Enabled: false},
+		}
+
+		err := validateAppConfigFile(cfg)
+		if err == nil {
+			t.Fatal("expected http3 https listener error")
+		}
+		if got := err.Error(); got != "server.http3.enabled requires at least one enabled https public listener" {
+			t.Fatalf("error=%q want http3 https listener error", got)
+		}
+	})
+
 	t.Run("rejects duplicate listener address", func(t *testing.T) {
 		cfg := defaultAppConfigFile()
 		cfg.Server.PublicListeners = []appServerPublicListenerConfig{

@@ -77,6 +77,7 @@ type appServerConfig struct {
 	QueuedProxyRequestTimeoutMS int                             `json:"queued_proxy_request_timeout_ms"`
 	ProxyProtocol               appListenerProxyProtocolConfig  `json:"proxy_protocol"`
 	TLS                         appServerTLSConfig              `json:"tls"`
+	HTTP2                       appServerHTTP2Config            `json:"http2"`
 	HTTP3                       appServerHTTP3Config            `json:"http3"`
 }
 
@@ -110,6 +111,10 @@ type appServerTLSACMEConfig struct {
 type appServerHTTP3Config struct {
 	Enabled         bool `json:"enabled"`
 	AltSvcMaxAgeSec int  `json:"alt_svc_max_age_sec"`
+}
+
+type appServerHTTP2Config struct {
+	Enabled bool `json:"enabled"`
 }
 
 type appRuntimeConfig struct {
@@ -370,6 +375,9 @@ func defaultAppConfigFile() appConfigFile {
 					CacheDir: "",
 					Staging:  false,
 				},
+			},
+			HTTP2: appServerHTTP2Config{
+				Enabled: false,
 			},
 			HTTP3: appServerHTTP3Config{
 				Enabled:         false,
@@ -830,6 +838,9 @@ func validateAppConfigFile(cfg appConfigFile) error {
 		return fmt.Errorf("server queued request timeout values must be <= 60000")
 	}
 	if err := validateAppServerTLSConfig(cfg.Server); err != nil {
+		return err
+	}
+	if err := validateAppServerHTTP2Config(cfg.Server); err != nil {
 		return err
 	}
 	if err := validateAppServerHTTP3Config(cfg.Server); err != nil {

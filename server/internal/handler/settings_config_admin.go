@@ -32,6 +32,10 @@ type settingsListenerAdminServerHTTP3Config struct {
 	AltSvcMaxAgeSec int  `json:"alt_svc_max_age_sec"`
 }
 
+type settingsListenerAdminServerHTTP2Config struct {
+	Enabled bool `json:"enabled"`
+}
+
 type settingsListenerAdminProxyProtocolConfig struct {
 	Enabled      bool     `json:"enabled"`
 	TrustedCIDRs []string `json:"trusted_cidrs"`
@@ -63,6 +67,7 @@ type settingsListenerAdminServerConfig struct {
 	QueuedProxyRequestTimeoutMS int                                         `json:"queued_proxy_request_timeout_ms"`
 	ProxyProtocol               settingsListenerAdminProxyProtocolConfig    `json:"proxy_protocol"`
 	TLS                         settingsListenerAdminServerTLSConfig        `json:"tls"`
+	HTTP2                       settingsListenerAdminServerHTTP2Config      `json:"http2"`
 	HTTP3                       settingsListenerAdminServerHTTP3Config      `json:"http3"`
 }
 
@@ -299,6 +304,8 @@ type settingsListenerAdminRuntimeStatus struct {
 	ServerTLSHTTPRedirectAddr          string                                      `json:"server_tls_http_redirect_addr"`
 	ServerPublicListenersConfigured    bool                                        `json:"server_public_listeners_configured"`
 	ServerPublicListeners              []settingsListenerAdminPublicListenerConfig `json:"server_public_listeners"`
+	ServerHTTP2Enabled                 bool                                        `json:"server_http2_enabled"`
+	ServerHTTP2Advertised              bool                                        `json:"server_http2_advertised"`
 	ServerHTTP3Enabled                 bool                                        `json:"server_http3_enabled"`
 	ServerHTTP3Advertised              bool                                        `json:"server_http3_advertised"`
 	ServerHTTP3AltSvc                  string                                      `json:"server_http3_alt_svc"`
@@ -598,6 +605,9 @@ func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListener
 				Enabled:         cfg.Server.HTTP3.Enabled,
 				AltSvcMaxAgeSec: cfg.Server.HTTP3.AltSvcMaxAgeSec,
 			},
+			HTTP2: settingsListenerAdminServerHTTP2Config{
+				Enabled: cfg.Server.HTTP2.Enabled,
+			},
 		},
 		Runtime: settingsListenerAdminRuntimeConfig{
 			GOMAXPROCS:    cfg.Runtime.GOMAXPROCS,
@@ -776,6 +786,7 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 	cfg.Server.TLS.RedirectHTTP = next.Server.TLS.RedirectHTTP
 	cfg.Server.TLS.HTTPRedirectAddr = next.Server.TLS.HTTPRedirectAddr
 	cfg.Server.TLS.ACME.CacheDir = next.Server.TLS.ACME.CacheDir
+	cfg.Server.HTTP2.Enabled = next.Server.HTTP2.Enabled
 	cfg.Server.HTTP3.Enabled = next.Server.HTTP3.Enabled
 	cfg.Server.HTTP3.AltSvcMaxAgeSec = next.Server.HTTP3.AltSvcMaxAgeSec
 	cfg.Runtime.GOMAXPROCS = next.Runtime.GOMAXPROCS
@@ -891,6 +902,7 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 }
 
 func buildSettingsListenerAdminRuntimeStatus() settingsListenerAdminRuntimeStatus {
+	serverHTTP2Status := serverruntime.HTTP2StatusSnapshot()
 	serverHTTP3Status := serverruntime.HTTP3StatusSnapshot()
 	serverTLSStatus := ServerTLSRuntimeStatusSnapshot()
 	requestCountryStatus := RequestCountryRuntimeStatusSnapshot()
@@ -913,6 +925,8 @@ func buildSettingsListenerAdminRuntimeStatus() settingsListenerAdminRuntimeStatu
 		ServerTLSHTTPRedirectAddr:          config.ServerTLSHTTPRedirectAddr,
 		ServerPublicListenersConfigured:    config.ServerPublicListenersConfigured,
 		ServerPublicListeners:              buildRuntimePublicListeners(config.ServerPublicListeners),
+		ServerHTTP2Enabled:                 config.ServerHTTP2Enabled,
+		ServerHTTP2Advertised:              serverHTTP2Status.Advertised,
 		ServerHTTP3Enabled:                 config.ServerHTTP3Enabled,
 		ServerHTTP3Advertised:              serverHTTP3Status.Advertised,
 		ServerHTTP3AltSvc:                  serverHTTP3Status.AltSvc,

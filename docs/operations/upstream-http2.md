@@ -2,6 +2,10 @@
 
 `tukuyomi` already supported HTTPS upstream HTTP/2 negotiation through `force_http2`, but that knob was easy to misread as a strict protocol switch. This document defines the current operator model, the runtime-wide cleartext extension, and the mixed-topology shape for named upstreams and direct route targets.
 
+This page is about Gateway-to-upstream transport. Client-to-Gateway HTTP/2 is
+configured separately with `server.http2.enabled` under the public HTTPS
+listener settings.
+
 ## Modes
 
 ### `force_http2=false`

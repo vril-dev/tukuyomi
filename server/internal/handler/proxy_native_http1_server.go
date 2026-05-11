@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/net/http2"
+
 	"tukuyomi/internal/proxybuffer"
 )
 
@@ -100,17 +102,24 @@ type nativeHTTP1ServerConn struct {
 }
 
 func (s *nativeHTTP1Server) Serve(ln net.Listener) error {
-	return s.serve(ln, nil)
+	return s.serve(ln, nil, false)
 }
 
 func (s *nativeHTTP1Server) ServeTLS(ln net.Listener, tlsConfig *tls.Config) error {
 	if tlsConfig == nil {
 		return fmt.Errorf("native http1 TLS config is required")
 	}
-	return s.serve(ln, nativeHTTP1ServerTLSConfig(tlsConfig))
+	return s.serve(ln, nativeHTTP1ServerTLSConfig(tlsConfig), false)
 }
 
-func (s *nativeHTTP1Server) serve(ln net.Listener, tlsConfig *tls.Config) error {
+func (s *nativeHTTP1Server) ServeTLSHTTP2(ln net.Listener, tlsConfig *tls.Config) error {
+	if tlsConfig == nil {
+		return fmt.Errorf("native http1/http2 TLS config is required")
+	}
+	return s.serve(ln, nativeHTTP1ServerTLSHTTP2Config(tlsConfig), true)
+}
+
+func (s *nativeHTTP1Server) serve(ln net.Listener, tlsConfig *tls.Config, allowHTTP2 bool) error {
 	if ln == nil {
 		return fmt.Errorf("native http1 listener is nil")
 	}
@@ -165,7 +174,7 @@ func (s *nativeHTTP1Server) serve(ln net.Listener, tlsConfig *tls.Config) error 
 		}
 		s.acceptedConnections.Add(1)
 		s.wg.Add(1)
-		go s.serveConn(baseCtx, conn, tlsConfig)
+		go s.serveConn(baseCtx, conn, tlsConfig, allowHTTP2)
 	}
 }
 
@@ -226,7 +235,7 @@ func (s *nativeHTTP1Server) Close() error {
 	return nil
 }
 
-func (s *nativeHTTP1Server) serveConn(baseCtx context.Context, conn net.Conn, tlsConfig *tls.Config) {
+func (s *nativeHTTP1Server) serveConn(baseCtx context.Context, conn net.Conn, tlsConfig *tls.Config, allowHTTP2 bool) {
 	ctx, cancel := context.WithCancel(baseCtx)
 	ctx = context.WithValue(ctx, http.LocalAddrContextKey, conn.LocalAddr())
 	var releaseWGOnce sync.Once
@@ -274,6 +283,11 @@ func (s *nativeHTTP1Server) serveConn(baseCtx context.Context, conn net.Conn, tl
 		}
 		release()
 	}()
+
+	if allowHTTP2 && tlsState != nil && tlsState.NegotiatedProtocol == "h2" {
+		s.serveHTTP2Conn(ctx, conn)
+		return
+	}
 
 	br := nativeHTTP1AcquireServerReader(conn)
 	defer func() {
@@ -357,6 +371,37 @@ func (s *nativeHTTP1Server) serveConn(baseCtx context.Context, conn net.Conn, tl
 		}
 		reused = true
 	}
+}
+
+func (s *nativeHTTP1Server) serveHTTP2Conn(ctx context.Context, conn net.Conn) {
+	baseHandler := s.Handler
+	if baseHandler == nil {
+		baseHandler = http.DefaultServeMux
+	}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqCtx, _ := withNewProxyRequestContextState(r.Context())
+		baseHandler.ServeHTTP(w, r.WithContext(reqCtx))
+	})
+	baseConfig := &http.Server{
+		Handler:           handler,
+		ReadTimeout:       s.ReadTimeout,
+		ReadHeaderTimeout: s.ReadHeaderTimeout,
+		WriteTimeout:      s.WriteTimeout,
+		IdleTimeout:       s.IdleTimeout,
+		MaxHeaderBytes:    s.maxHeaderBytes(),
+	}
+	h2 := &http2.Server{
+		IdleTimeout:      s.IdleTimeout,
+		WriteByteTimeout: s.WriteTimeout,
+		CountError: func(string) {
+			s.parseErrors.Add(1)
+		},
+	}
+	h2.ServeConn(conn, &http2.ServeConnOpts{
+		Context:    ctx,
+		BaseConfig: baseConfig,
+		Handler:    handler,
+	})
 }
 
 func nativeHTTP1AcquireServerReader(conn net.Conn) *bufio.Reader {
@@ -1191,15 +1236,26 @@ func nativeHTTP1IsTimeoutError(err error) bool {
 }
 
 func nativeHTTP1ServerTLSConfig(cfg *tls.Config) *tls.Config {
+	return nativeHTTP1ServerTLSConfigWithProtos(cfg, []string{"http/1.1"})
+}
+
+func nativeHTTP1ServerTLSHTTP2Config(cfg *tls.Config) *tls.Config {
+	return nativeHTTP1ServerTLSConfigWithProtos(cfg, []string{"h2", "http/1.1"})
+}
+
+func nativeHTTP1ServerTLSConfigWithProtos(cfg *tls.Config, supportedProtos []string) *tls.Config {
 	if cfg == nil {
 		return nil
 	}
+	if len(supportedProtos) == 0 {
+		supportedProtos = []string{"http/1.1"}
+	}
 	out := cfg.Clone()
-	out.NextProtos = []string{"http/1.1"}
+	out.NextProtos = append([]string(nil), supportedProtos...)
 	baseGetConfigForClient := out.GetConfigForClient
 	out.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
-		if nativeHTTP1ClientOfferedUnsupportedOnlyALPN(hello) {
-			return nil, fmt.Errorf("native http1 server does not accept requested ALPN protocols")
+		if nativeHTTP1ClientOfferedUnsupportedOnlyALPN(hello, supportedProtos) {
+			return nil, fmt.Errorf("native http server does not accept requested ALPN protocols")
 		}
 		if baseGetConfigForClient == nil {
 			return nil, nil
@@ -1209,18 +1265,24 @@ func nativeHTTP1ServerTLSConfig(cfg *tls.Config) *tls.Config {
 			return next, err
 		}
 		cloned := next.Clone()
-		cloned.NextProtos = []string{"http/1.1"}
+		cloned.NextProtos = append([]string(nil), supportedProtos...)
 		return cloned, nil
 	}
 	return out
 }
 
-func nativeHTTP1ClientOfferedUnsupportedOnlyALPN(hello *tls.ClientHelloInfo) bool {
+func nativeHTTP1ClientOfferedUnsupportedOnlyALPN(hello *tls.ClientHelloInfo, supportedProtos []string) bool {
 	if hello == nil || len(hello.SupportedProtos) == 0 {
 		return false
 	}
+	supported := make(map[string]struct{}, len(supportedProtos))
+	for _, proto := range supportedProtos {
+		if proto != "" {
+			supported[proto] = struct{}{}
+		}
+	}
 	for _, proto := range hello.SupportedProtos {
-		if proto == "http/1.1" {
+		if _, ok := supported[proto]; ok {
 			return false
 		}
 	}

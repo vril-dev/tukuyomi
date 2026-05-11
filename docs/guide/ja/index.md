@@ -93,8 +93,9 @@ build: "pandoc → HTML → Chrome headless で PDF 化"
   当面の方針、再検討条件、Host/runtime matrix、Docker published-port policy、
   benchmark / smoke gate shape、再開 checklist。
   （source: docs/operations/listener-topology.ja.md, reuseport-policy.ja.md, reuseport-evaluation.ja.md）
-- **第15章　HTTP/3 と TLS** — built-in TLS termination、ACME 自動 TLS、
-  HTTP/3 の専用 listener、`server.tls.redirect_http`、HTTP/3 public-entry smoke。
+- **第15章　HTTP/2、HTTP/3 と TLS** — built-in TLS termination、ACME 自動 TLS、
+  受信側 HTTP/2 ALPN、HTTP/3 の専用 listener、`server.tls.redirect_http`、
+  HTTP/3 public-entry smoke。
   （source: operator-reference.ja.md, docs/operations/http3-public-entry-smoke.ja.md）
 - **第16章　IoT / Edge デバイス登録** — 役割、運用フロー、Center 管理の
   device 画面、runtime 配備、preview URL、Center URL ルール、

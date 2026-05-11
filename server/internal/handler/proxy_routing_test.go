@@ -105,7 +105,7 @@ func TestProxyRouteAccessValidationAndDecision(t *testing.T) {
       "priority": 10,
       "match": { "path": { "type": "prefix", "value": "/center-ui" } },
       "access": {
-        "allow_cidrs": ["219.104.164.92/32", "2001:db8::/32"],
+        "allow_cidrs": ["198.51.100.10/32", "2001:db8::/32"],
         "deny_cidrs": ["203.0.113.0/24"]
       },
       "action": { "upstream": "svc-a" }
@@ -115,13 +115,13 @@ func TestProxyRouteAccessValidationAndDecision(t *testing.T) {
 	if cfg.Routes[0].Access == nil {
 		t.Fatal("route access missing")
 	}
-	if allowed, reason, _ := proxyRouteAccessAllowed(cfg.Routes[0].Access, "219.104.164.92"); !allowed || reason != "" {
+	if allowed, reason, _ := proxyRouteAccessAllowed(cfg.Routes[0].Access, "198.51.100.10"); !allowed || reason != "" {
 		t.Fatalf("allow CIDR denied: allowed=%v reason=%q", allowed, reason)
 	}
 	if allowed, reason, matched := proxyRouteAccessAllowed(cfg.Routes[0].Access, "203.0.113.8"); allowed || reason != "deny_match" || matched != "203.0.113.0/24" {
 		t.Fatalf("deny CIDR decision mismatch: allowed=%v reason=%q matched=%q", allowed, reason, matched)
 	}
-	if allowed, reason, _ := proxyRouteAccessAllowed(cfg.Routes[0].Access, "198.51.100.10"); allowed || reason != "allow_miss" {
+	if allowed, reason, _ := proxyRouteAccessAllowed(cfg.Routes[0].Access, "192.0.2.10"); allowed || reason != "allow_miss" {
 		t.Fatalf("allow miss decision mismatch: allowed=%v reason=%q", allowed, reason)
 	}
 	if allowed, reason, _ := proxyRouteAccessAllowed(cfg.Routes[0].Access, "not-an-ip"); allowed || reason != "invalid_source" {

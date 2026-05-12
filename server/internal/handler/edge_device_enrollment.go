@@ -3029,6 +3029,7 @@ type edgeAppDeployBinding struct {
 	RuntimeFamily   string
 	RuntimeID       string
 	ProcessID       string
+	Command         string
 	ManagedRoot     string
 	Roots           []edgeAppDeployBoundRoot
 	PersistentPaths []string
@@ -3424,6 +3425,7 @@ func edgeAppDeployBindingForAssignment(assignment edgeAppDeployDeviceAssignment)
 			RuntimeFamily:   family,
 			RuntimeID:       runtimeID,
 			ProcessID:       processID,
+			Command:         strings.TrimSpace(vhost.Command),
 			ManagedRoot:     root,
 			Roots:           boundRoots,
 			PersistentPaths: append([]string(nil), vhost.PersistentPaths...),
@@ -3827,6 +3829,9 @@ func installEdgeAppDeployPackage(ctx context.Context, binding edgeAppDeployBindi
 	if err != nil {
 		return "", output, err
 	}
+	if err := prepareEdgeAppDeployPackageBeforeSwitch(stageAbs, binding); err != nil {
+		return "", output, err
+	}
 	if err := os.Rename(stageAbs, releaseAbs); err != nil {
 		return "", output, err
 	}
@@ -3858,10 +3863,7 @@ func extractEdgeAppDeployPackageToStage(parsed appdeploybundle.Parsed, stageDir 
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
-		mode := os.FileMode(file.Mode) & 0o777
-		if mode == 0 {
-			mode = 0o644
-		}
+		mode := edgeAppDeployExtractFileMode(file.Mode)
 		out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 		if err != nil {
 			return err
@@ -3882,6 +3884,82 @@ func extractEdgeAppDeployPackageToStage(parsed appdeploybundle.Parsed, stageDir 
 		}
 	}
 	return nil
+}
+
+func edgeAppDeployExtractFileMode(raw int64) os.FileMode {
+	mode := os.FileMode(raw) & 0o777
+	if mode == 0 {
+		return 0o644
+	}
+	return mode &^ 0o022
+}
+
+func prepareEdgeAppDeployPackageBeforeSwitch(stageDir string, binding edgeAppDeployBinding) error {
+	if binding.RuntimeFamily != "daemon" {
+		return nil
+	}
+	return prepareEdgeAppDeployDaemonCommand(stageDir, binding)
+}
+
+func prepareEdgeAppDeployDaemonCommand(stageDir string, binding edgeAppDeployBinding) error {
+	command, ok := cleanEdgeAppDeployRelativePath(binding.Command)
+	if !ok || command == "" {
+		return fmt.Errorf("daemon command is invalid")
+	}
+	stageAbs, err := filepath.Abs(filepath.Clean(stageDir))
+	if err != nil {
+		return err
+	}
+	var appRoot edgeAppDeployBoundRoot
+	found := false
+	for _, root := range binding.Roots {
+		if strings.EqualFold(strings.TrimSpace(root.Root.RuntimeField), "app_root") {
+			appRoot = root
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("daemon app deploy has no app_root deployment root")
+	}
+	appRootAbs := filepath.Join(stageAbs, filepath.FromSlash(appRoot.Root.TargetSubpath))
+	if !edgePathWithin(stageAbs, appRootAbs) {
+		return fmt.Errorf("daemon app_root escapes stage directory")
+	}
+	commandPath := filepath.Join(appRootAbs, filepath.FromSlash(command))
+	if !edgePathWithin(appRootAbs, commandPath) {
+		return fmt.Errorf("daemon command escapes app_root")
+	}
+	info, err := os.Stat(commandPath)
+	if err != nil {
+		return fmt.Errorf("daemon command %q: %w", binding.Command, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("daemon command %q points to a directory", binding.Command)
+	}
+	mode := info.Mode().Perm()
+	if mode&0o111 != 0 {
+		return nil
+	}
+	if !edgeFileHasShebang(commandPath) {
+		return fmt.Errorf("daemon command %q is not executable", binding.Command)
+	}
+	nextMode := (mode &^ 0o022) | 0o111
+	if err := os.Chmod(commandPath, nextMode); err != nil {
+		return fmt.Errorf("chmod daemon command %q: %w", binding.Command, err)
+	}
+	return nil
+}
+
+func edgeFileHasShebang(path string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	var prefix [2]byte
+	n, err := io.ReadFull(file, prefix[:])
+	return err == nil && n == len(prefix) && prefix[0] == '#' && prefix[1] == '!'
 }
 
 func linkEdgeAppDeployPersistentPaths(stageDir string, managedRoot string, binding edgeAppDeployBinding) error {

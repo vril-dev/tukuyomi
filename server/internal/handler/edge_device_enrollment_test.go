@@ -23,6 +23,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"tukuyomi/internal/appdeploybundle"
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/edgeartifactbundle"
@@ -2845,6 +2846,90 @@ func TestLinkEdgeAppDeployPersistentPathsRejectsPackagedPath(t *testing.T) {
 	err := linkEdgeAppDeployPersistentPaths(stageDir, managedRoot, binding)
 	if err == nil || !strings.Contains(err.Error(), "must not be included in the app package") {
 		t.Fatalf("err=%v want packaged persistent path rejection", err)
+	}
+}
+
+func TestExtractEdgeAppDeployPackageDropsGroupWorldWritableBits(t *testing.T) {
+	stageDir := t.TempDir()
+	parsed := appdeploybundle.Parsed{
+		Files: []appdeploybundle.File{{
+			Path: "app/config.txt",
+			Mode: 0o666,
+			Body: []byte("config"),
+		}},
+	}
+	roots := []edgeAppDeployBoundRoot{{
+		Root: edgeAppDeployRoot{
+			RuntimeField:  "app_root",
+			PackagePrefix: "app",
+			TargetSubpath: "app",
+		},
+	}}
+	if err := extractEdgeAppDeployPackageToStage(parsed, stageDir, roots); err != nil {
+		t.Fatalf("extractEdgeAppDeployPackageToStage: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(stageDir, "app", "config.txt"))
+	if err != nil {
+		t.Fatalf("stat extracted file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Fatalf("mode=%#o want 0644", got)
+	}
+}
+
+func TestPrepareEdgeAppDeployDaemonCommandRestoresShebangExecutableBit(t *testing.T) {
+	stageDir := t.TempDir()
+	commandPath := filepath.Join(stageDir, "app", "bin", "sample-broker-daemon")
+	if err := os.MkdirAll(filepath.Dir(commandPath), 0o755); err != nil {
+		t.Fatalf("mkdir command dir: %v", err)
+	}
+	if err := os.WriteFile(commandPath, []byte("#!/bin/sh\nexit 0\n"), 0o644); err != nil {
+		t.Fatalf("write command: %v", err)
+	}
+	binding := edgeAppDeployBinding{
+		RuntimeFamily: "daemon",
+		Command:       "bin/sample-broker-daemon",
+		Roots: []edgeAppDeployBoundRoot{{
+			Root: edgeAppDeployRoot{
+				RuntimeField:  "app_root",
+				TargetSubpath: "app",
+			},
+		}},
+	}
+	if err := prepareEdgeAppDeployDaemonCommand(stageDir, binding); err != nil {
+		t.Fatalf("prepareEdgeAppDeployDaemonCommand: %v", err)
+	}
+	info, err := os.Stat(commandPath)
+	if err != nil {
+		t.Fatalf("stat command: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("mode=%#o want 0755", got)
+	}
+}
+
+func TestPrepareEdgeAppDeployDaemonCommandRejectsNonExecutableWithoutShebang(t *testing.T) {
+	stageDir := t.TempDir()
+	commandPath := filepath.Join(stageDir, "app", "bin", "sample-broker-daemon")
+	if err := os.MkdirAll(filepath.Dir(commandPath), 0o755); err != nil {
+		t.Fatalf("mkdir command dir: %v", err)
+	}
+	if err := os.WriteFile(commandPath, []byte("plain text\n"), 0o644); err != nil {
+		t.Fatalf("write command: %v", err)
+	}
+	binding := edgeAppDeployBinding{
+		RuntimeFamily: "daemon",
+		Command:       "bin/sample-broker-daemon",
+		Roots: []edgeAppDeployBoundRoot{{
+			Root: edgeAppDeployRoot{
+				RuntimeField:  "app_root",
+				TargetSubpath: "app",
+			},
+		}},
+	}
+	err := prepareEdgeAppDeployDaemonCommand(stageDir, binding)
+	if err == nil || !strings.Contains(err.Error(), "is not executable") {
+		t.Fatalf("err=%v want not executable", err)
 	}
 }
 

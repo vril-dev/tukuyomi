@@ -28,7 +28,7 @@ systemd 配備は、大きく次の流れで進みます。
 
 まず、build host または作業端末で tukuyomi バイナリを build します。
 
-必要なものは、`make`、Go toolchain 1.26.2 以上、そして Gateway / Center UI
+必要なものは、`make`、Go toolchain 1.26.3 以上、そして Gateway / Center UI
 を build するための Node.js 24 LTS + npm 11+ です。Node.js 24 LTS + npm 11+
 がローカルに無い場合、既定の `tools/npm-node24.sh` は Docker イメージ
 `node:24-alpine` を使います。そのため、最小構成の VPS では Docker を入れるだけでなく、
@@ -44,7 +44,7 @@ sudo usermod -aG docker "$USER"
 
 `docker` グループの反映には再ログインが必要です。再ログイン後に `docker ps` が
 通ることを確認してください。ディストリビューションの Go パッケージが古い場合は、
-Go 公式 tarball から 1.26.2 以上を導入します。
+Go 公式 tarball から 1.26.3 以上を導入します。
 
 ```bash
 make setup

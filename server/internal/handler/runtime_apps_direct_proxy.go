@@ -738,6 +738,9 @@ func buildFastCGIRequest(r *http.Request, vhost VhostConfig, resolved vhostResol
 		params["CONTENT_LENGTH"] = strconv.Itoa(len(body))
 	}
 	if r != nil {
+		if host := strings.TrimSpace(r.Host); host != "" {
+			params["HTTP_HOST"] = host
+		}
 		if contentType := strings.TrimSpace(r.Header.Get("Content-Type")); contentType != "" {
 			params["CONTENT_TYPE"] = contentType
 		}

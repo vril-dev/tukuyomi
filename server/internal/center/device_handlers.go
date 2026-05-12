@@ -863,7 +863,7 @@ func postAppDeployBaselineUpload(c *gin.Context) {
 		respondAppDeployError(c, err)
 		return
 	}
-	pkg, err := StoreAppDeployPackage(c.Request.Context(), AppDeployPackageImport{
+	pkg, created, err := StoreAppDeployPackage(c.Request.Context(), AppDeployPackageImport{
 		DeviceID:        verified.DeviceID,
 		AppID:           verified.AppID,
 		RuntimeFamily:   verified.RuntimeFamily,
@@ -882,7 +882,7 @@ func postAppDeployBaselineUpload(c *gin.Context) {
 		respondAppDeployError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"package": pkg})
+	c.JSON(http.StatusCreated, gin.H{"package": pkg, "created": created})
 }
 
 func getCenterDevices(c *gin.Context) {
@@ -1451,7 +1451,7 @@ func postCenterDeviceAppDeployPackageImport(c *gin.Context) {
 		respondAppDeployError(c, err)
 		return
 	}
-	pkg, err := StoreAppDeployPackage(c.Request.Context(), AppDeployPackageImport{
+	pkg, created, err := StoreAppDeployPackage(c.Request.Context(), AppDeployPackageImport{
 		DeviceID:       deviceID,
 		AppID:          c.PostForm("app_id"),
 		RuntimeFamily:  c.PostForm("runtime_family"),
@@ -1468,7 +1468,7 @@ func postCenterDeviceAppDeployPackageImport(c *gin.Context) {
 		respondAppDeployError(c, err)
 		return
 	}
-	resp := gin.H{"package": pkg}
+	resp := gin.H{"package": pkg, "created": created}
 	if parseBoolQuery(c.PostForm("assign")) {
 		reason := strings.TrimSpace(c.PostForm("reason"))
 		if reason == "" {

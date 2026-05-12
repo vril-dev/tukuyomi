@@ -168,7 +168,7 @@ func TestStoreAppDeployGatewayBaselineWithSavedProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAppDeployRequest: %v", err)
 	}
-	pkg, err := StoreAppDeployPackage(ctx, AppDeployPackageImport{
+	pkg, _, err := StoreAppDeployPackage(ctx, AppDeployPackageImport{
 		DeviceID:      deviceID,
 		AppID:         "app-1",
 		RuntimeFamily: "php-fpm",
@@ -218,7 +218,7 @@ func TestStoreAppDeployPackageUsesFileBackedPayload(t *testing.T) {
 		t.Fatalf("UpsertAppDeployCandidates: %v", err)
 	}
 	archive := testAppDeployZip(t, map[string]string{"public/index.php": "<?php echo 'ok';"})
-	pkg, err := StoreAppDeployPackage(ctx, AppDeployPackageImport{
+	pkg, created, err := StoreAppDeployPackage(ctx, AppDeployPackageImport{
 		DeviceID:       deviceID,
 		AppID:          "app-1",
 		RuntimeFamily:  "php-fpm",
@@ -232,6 +232,9 @@ func TestStoreAppDeployPackageUsesFileBackedPayload(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("StoreAppDeployPackage: %v", err)
+	}
+	if !created {
+		t.Fatal("first file-backed package store reported duplicate")
 	}
 	var blobColumnExists bool
 	if err := withCenterDB(ctx, func(db *sql.DB, driver string) error {
@@ -258,6 +261,27 @@ func TestStoreAppDeployPackageUsesFileBackedPayload(t *testing.T) {
 	if !bytes.Equal(downloaded, archive) {
 		t.Fatal("downloaded package body mismatch")
 	}
+	duplicate, duplicateCreated, err := StoreAppDeployPackage(ctx, AppDeployPackageImport{
+		DeviceID:       deviceID,
+		AppID:          "app-1",
+		RuntimeFamily:  "php-fpm",
+		RuntimeID:      "php85",
+		Roots:          roots,
+		SourceType:     AppDeploySourceUpload,
+		Archive:        archive,
+		UploadedBy:     "operator",
+		UploadedAtUnix: 2001,
+		UpsertProfile:  true,
+	})
+	if err != nil {
+		t.Fatalf("StoreAppDeployPackage duplicate: %v", err)
+	}
+	if duplicateCreated {
+		t.Fatal("duplicate package store reported new package")
+	}
+	if duplicate.PackageRevision != pkg.PackageRevision {
+		t.Fatalf("duplicate package revision changed: got %q want %q", duplicate.PackageRevision, pkg.PackageRevision)
+	}
 }
 
 func TestDownloadAppDeployPackageMigratesLegacyBlob(t *testing.T) {
@@ -283,7 +307,7 @@ func TestDownloadAppDeployPackageMigratesLegacyBlob(t *testing.T) {
 		t.Fatalf("UpsertAppDeployCandidates: %v", err)
 	}
 	archive := testAppDeployZip(t, map[string]string{"public/index.php": "<?php echo 'legacy';"})
-	pkg, err := StoreAppDeployPackage(ctx, AppDeployPackageImport{
+	pkg, _, err := StoreAppDeployPackage(ctx, AppDeployPackageImport{
 		DeviceID:       deviceID,
 		AppID:          "app-1",
 		RuntimeFamily:  "php-fpm",

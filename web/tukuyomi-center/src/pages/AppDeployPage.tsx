@@ -144,6 +144,7 @@ type AppDeployPackageFileDetail = {
 
 type AppDeployPackageImportResult = {
   package: AppDeployPackageRecord;
+  created?: boolean;
   request?: AppDeployRequestRecord;
 };
 
@@ -514,11 +515,18 @@ export default function AppDeployPage() {
           current ? { ...current, packages: packagesWithUploadedPackage(current.packages, result.package) } : current,
         );
       }
+      const duplicateMessage = result.created === false;
       setUploadMessage({
         kind: "success",
         text: result.request
-          ? tx("App package uploaded and deployment request queued.")
-          : tx("App package uploaded. Use Deploy in Saved app packages to apply it."),
+          ? duplicateMessage
+            ? tx("App package is already registered and deployment request queued.")
+            : tx("App package uploaded and deployment request queued.")
+          : duplicateMessage
+            ? tx(
+                "App package is already registered. Use Deploy in Saved app packages to apply it.",
+              )
+            : tx("App package uploaded. Use Deploy in Saved app packages to apply it."),
       });
     } catch (err) {
       setUploadMessage({ kind: "error", text: err instanceof Error ? err.message : tx("Failed to upload app package") });

@@ -223,9 +223,12 @@ const JA_STRINGS: Record<string, string> = {
   "Deploy after upload": "アップロード後に配信",
   "Upload package": "パッケージをアップロード",
   "App package uploaded and deployment request queued.": "アプリパッケージをアップロードし、配信要求を登録しました。",
+  "App package is already registered and deployment request queued.": "登録済みデータです。配信要求を登録しました。",
   "App package uploaded.": "アプリパッケージをアップロードしました。",
   "App package uploaded. Use Deploy in Saved app packages to apply it.":
     "アプリパッケージをアップロードしました。Saved app packages の Deploy から配信します。",
+  "App package is already registered. Use Deploy in Saved app packages to apply it.":
+    "登録済みデータです。Saved app packages の Deploy から配信します。",
   "Failed to upload app package": "アプリパッケージのアップロードに失敗しました",
   "Pending app deploy request": "保留中のアプリ配信要求",
   "No pending app deployment request.": "保留中のアプリ配信要求はありません。",

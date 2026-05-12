@@ -404,10 +404,10 @@ func LoadAppDeployPackageFileForDevice(ctx context.Context, deviceID, revision, 
 	return detail, ErrAppDeployNotFound
 }
 
-func StoreAppDeployPackage(ctx context.Context, in AppDeployPackageImport) (AppDeployPackageRecord, error) {
+func StoreAppDeployPackage(ctx context.Context, in AppDeployPackageImport) (AppDeployPackageRecord, bool, error) {
 	normalized, parsed, files, manifestJSON, rootsJSON, err := normalizeAppDeployPackageImport(in)
 	if err != nil {
-		return AppDeployPackageRecord{}, err
+		return AppDeployPackageRecord{}, false, err
 	}
 	if normalized.UploadedAtUnix <= 0 {
 		normalized.UploadedAtUnix = time.Now().UTC().Unix()
@@ -446,8 +446,9 @@ func StoreAppDeployPackage(ctx context.Context, in AppDeployPackageImport) (AppD
 		parsed.PackageHash,
 	)
 	if err != nil {
-		return AppDeployPackageRecord{}, fmt.Errorf("%w: %v", ErrAppDeployInvalid, err)
+		return AppDeployPackageRecord{}, false, fmt.Errorf("%w: %v", ErrAppDeployInvalid, err)
 	}
+	created := true
 	err = withCenterDB(ctx, func(db *sql.DB, driver string) error {
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
@@ -489,6 +490,7 @@ func StoreAppDeployPackage(ctx context.Context, in AppDeployPackageImport) (AppD
 				}
 				if found && existing.PackageHash == out.PackageHash && existing.DeviceID == out.DeviceID && existing.AppID == out.AppID {
 					out = existing
+					created = false
 					return tx.Commit()
 				}
 			}
@@ -504,7 +506,7 @@ func StoreAppDeployPackage(ctx context.Context, in AppDeployPackageImport) (AppD
 	if err != nil && !payloadExisted {
 		removeCenterPayloadFile(centerPayloadAppDeploy, packageRevision, centerPayloadAppDeployExt)
 	}
-	return out, err
+	return out, created && err == nil, err
 }
 
 func CreateAppDeployRequest(ctx context.Context, in AppDeployRequestUpdate) (AppDeployRequestRecord, error) {

@@ -135,6 +135,7 @@ func registerDeviceEnrollmentRoutes(r *gin.Engine, runtimeCfg RuntimeConfig) {
 	if runtimeCfg.ExperimentalAppDeployEnabled {
 		r.POST("/v1/app-deploy-package-download", postAppDeployPackageDownload)
 		r.POST("/v1/app-deploy-baseline-upload", postAppDeployBaselineUpload)
+		r.POST("/v1/daemon-log-archive-upload", postDaemonLogArchiveUpload)
 	}
 	r.GET("/v1/remote-ssh/signing-key", getPublicRemoteSSHSigningKey)
 	r.GET("/v1/remote-ssh/gateway-stream", getRemoteSSHGatewayStream)
@@ -185,6 +186,8 @@ func registerCenterDeviceAdminRoutes(api *gin.RouterGroup, runtimeCfg RuntimeCon
 		api.POST("/devices/:device_id/app-deployments/packages/import", postCenterDeviceAppDeployPackageImport)
 		api.POST("/devices/:device_id/app-deployments/requests", postCenterDeviceAppDeployRequest)
 		api.POST("/devices/:device_id/app-deployments/requests/clear", postCenterDeviceAppDeployRequestClear)
+		api.GET("/devices/:device_id/app-deployments/daemon-logs/:revision/download", getCenterDeviceDaemonLogArchiveDownload)
+		api.POST("/devices/:device_id/app-deployments/daemon-logs/:revision/delete", postCenterDeviceDaemonLogArchiveDelete)
 	}
 	api.POST("/devices/:device_id/runtime-assignments", postCenterDeviceRuntimeAssignment)
 	api.POST("/devices/:device_id/runtime-assignments/remove", postCenterDeviceRuntimeAssignmentRemoval)
@@ -863,7 +866,7 @@ func postAppDeployBaselineUpload(c *gin.Context) {
 		respondAppDeployError(c, err)
 		return
 	}
-	pkg, err := StoreAppDeployPackage(c.Request.Context(), AppDeployPackageImport{
+	pkg, created, err := StoreAppDeployPackage(c.Request.Context(), AppDeployPackageImport{
 		DeviceID:        verified.DeviceID,
 		AppID:           verified.AppID,
 		RuntimeFamily:   verified.RuntimeFamily,
@@ -882,7 +885,66 @@ func postAppDeployBaselineUpload(c *gin.Context) {
 		respondAppDeployError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"package": pkg})
+	c.JSON(http.StatusCreated, gin.H{"package": pkg, "created": created})
+}
+
+func postDaemonLogArchiveUpload(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxDaemonLogArchiveUploadBodyBytes)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	var req DaemonLogArchiveUploadRequest
+	if err := decoder.Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid daemon log archive upload payload"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid daemon log archive upload payload"})
+		return
+	}
+	normalizedReq, _, err := normalizeDaemonLogArchiveUploadRequest(req, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	req = normalizedReq
+	record, err := LookupDeviceStatus(c.Request.Context(), req.DeviceID, req.KeyID, req.PublicKeyFingerprintSHA256)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrDeviceStatusNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "device status not found"})
+		case errors.Is(err, ErrDeviceStatusKeyMismatch):
+			c.JSON(http.StatusForbidden, gin.H{"error": "device key mismatch"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load device status"})
+		}
+		return
+	}
+	if !record.FromApprovedDevice || record.Status != DeviceStatusApproved {
+		c.JSON(http.StatusForbidden, gin.H{"error": "device is not approved"})
+		return
+	}
+	verified, err := VerifyDaemonLogArchiveUploadRequest(req, record.PublicKeyPEM, time.Now().UTC())
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	archive, created, err := StoreDaemonLogArchive(c.Request.Context(), DaemonLogArchiveImport{
+		DeviceID:         verified.DeviceID,
+		AppID:            verified.AppID,
+		ProcessID:        verified.ProcessID,
+		LogFile:          verified.LogFile,
+		ArchiveName:      verified.ArchiveName,
+		ArchiveHash:      verified.ArchiveHash,
+		CompressedSize:   verified.CompressedSize,
+		UncompressedSize: verified.UncompressedSize,
+		RotatedAtUnix:    verified.RotatedAtUnix,
+		Archive:          verified.Archive,
+	})
+	if err != nil {
+		respondAppDeployError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"archive": archive, "created": created})
 }
 
 func getCenterDevices(c *gin.Context) {
@@ -1420,6 +1482,43 @@ func getCenterDeviceAppDeployPackageFile(c *gin.Context) {
 	})
 }
 
+func getCenterDeviceDaemonLogArchiveDownload(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	revision, ok := parseConfigRevisionParam(c)
+	if !ok {
+		return
+	}
+	archive, body, err := DownloadDaemonLogArchiveForDevice(c.Request.Context(), deviceID, revision)
+	if err != nil {
+		respondAppDeployError(c, err)
+		return
+	}
+	c.Header("Content-Disposition", `attachment; filename="`+safeDaemonLogArchiveFilename(archive)+`"`)
+	c.Header("X-Tukuyomi-Daemon-Log-Archive-Revision", archive.ArchiveRevision)
+	c.Header("X-Tukuyomi-Daemon-Log-Archive-Hash", archive.ArchiveHash)
+	c.Data(http.StatusOK, "application/gzip", body)
+}
+
+func postCenterDeviceDaemonLogArchiveDelete(c *gin.Context) {
+	deviceID, ok := parseDeviceIDParam(c)
+	if !ok {
+		return
+	}
+	revision, ok := parseConfigRevisionParam(c)
+	if !ok {
+		return
+	}
+	deleted, err := DeleteDaemonLogArchiveForDevice(c.Request.Context(), deviceID, revision)
+	if err != nil {
+		respondAppDeployError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
+}
+
 func postCenterDeviceAppDeployPackageImport(c *gin.Context) {
 	deviceID, ok := parseDeviceIDParam(c)
 	if !ok {
@@ -1451,7 +1550,7 @@ func postCenterDeviceAppDeployPackageImport(c *gin.Context) {
 		respondAppDeployError(c, err)
 		return
 	}
-	pkg, err := StoreAppDeployPackage(c.Request.Context(), AppDeployPackageImport{
+	pkg, created, err := StoreAppDeployPackage(c.Request.Context(), AppDeployPackageImport{
 		DeviceID:       deviceID,
 		AppID:          c.PostForm("app_id"),
 		RuntimeFamily:  c.PostForm("runtime_family"),
@@ -1468,7 +1567,7 @@ func postCenterDeviceAppDeployPackageImport(c *gin.Context) {
 		respondAppDeployError(c, err)
 		return
 	}
-	resp := gin.H{"package": pkg}
+	resp := gin.H{"package": pkg, "created": created}
 	if parseBoolQuery(c.PostForm("assign")) {
 		reason := strings.TrimSpace(c.PostForm("reason"))
 		if reason == "" {
@@ -2158,6 +2257,10 @@ func safeWAFRuleBundleFilename(deviceID string, revision string) string {
 
 func safeAppDeployPackageFilename(appID string, revision string) string {
 	return safeDeviceFilenamePrefix(appID) + "-app-deploy-" + safeRevisionFilenamePart(revision, "package") + ".zip"
+}
+
+func safeDaemonLogArchiveFilename(archive DaemonLogArchiveRecord) string {
+	return safeDeviceFilenamePrefix(archive.AppID) + "-daemon-log-" + safeRevisionFilenamePart(archive.ArchiveRevision, "archive") + ".log.gz"
 }
 
 func parseAppDeployRootsJSON(raw string) ([]AppDeployRootRecord, error) {

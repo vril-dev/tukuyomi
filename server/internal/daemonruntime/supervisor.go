@@ -1,10 +1,12 @@
 package daemonruntime
 
 import (
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +22,11 @@ const (
 	daemonRuntimeMaxRestart     = 5
 	daemonRuntimeRestartWindow  = time.Minute
 	daemonRuntimeRestartDelay   = 2 * time.Second
+	daemonRuntimeDefaultLogTail = 16 * 1024
+	daemonRuntimeMaxLogTail     = 64 * 1024
+	daemonRuntimeMaxLogBytes    = 10 * 1024 * 1024
+	daemonRuntimeLocalArchives  = 3
+	daemonRuntimeArchiveSuffix  = ".log.gz"
 )
 
 type ProcessStatus struct {
@@ -46,6 +53,27 @@ type ProcessStatus struct {
 	LogFile         string   `json:"log_file,omitempty"`
 }
 
+type ProcessLog struct {
+	AppID     string `json:"app_id"`
+	ProcessID string `json:"process_id"`
+	LogFile   string `json:"log_file"`
+	Tail      string `json:"tail"`
+	Truncated bool   `json:"truncated"`
+	MaxBytes  int64  `json:"max_bytes"`
+}
+
+type LogArchive struct {
+	AppID            string
+	ProcessID        string
+	LogFile          string
+	ArchiveName      string
+	Path             string
+	SHA256           string
+	CompressedSize   int64
+	UncompressedSize int64
+	RotatedAtUnix    int64
+}
+
 type Spec struct {
 	AppID           string
 	ProcessID       string
@@ -65,7 +93,7 @@ type managedProcess struct {
 	spec      Spec
 	signature string
 	cmd       *exec.Cmd
-	logFile   *os.File
+	logFile   io.Closer
 	done      chan error
 	desired   bool
 	stopping  bool
@@ -100,6 +128,7 @@ type Supervisor struct {
 	processes map[string]*managedProcess
 	statuses  map[string]ProcessStatus
 	restarts  map[string]restartState
+	manual    map[string]bool
 }
 
 func New(options Options) *Supervisor {
@@ -108,6 +137,7 @@ func New(options Options) *Supervisor {
 		processes: map[string]*managedProcess{},
 		statuses:  map[string]ProcessStatus{},
 		restarts:  map[string]restartState{},
+		manual:    map[string]bool{},
 	}
 }
 
@@ -194,6 +224,7 @@ func (s *Supervisor) ensureProcess(spec Spec, explicit bool) error {
 		if err := s.stop(spec.AppID, false); err != nil {
 			return err
 		}
+		s.clearManualStop(spec.AppID)
 		s.updateStatus(spec, &identity, false, 0, "disabled", "")
 		return nil
 	}
@@ -203,6 +234,13 @@ func (s *Supervisor) ensureProcess(spec Spec, explicit bool) error {
 	}
 
 	s.mu.Lock()
+	if explicit {
+		delete(s.manual, spec.AppID)
+	} else if spec.Enabled && s.manual[spec.AppID] {
+		s.mu.Unlock()
+		s.updateStatus(spec, &identity, false, 0, "manual_stopped", "")
+		return nil
+	}
 	current := s.processes[spec.AppID]
 	if current != nil {
 		current.desired = true
@@ -232,6 +270,7 @@ func (s *Supervisor) StartProcess(appID string, desired []Spec) error {
 		return fmt.Errorf("daemon app %q is not configured", appID)
 	}
 	spec.Enabled = true
+	s.clearManualStop(spec.AppID)
 	return s.ensureProcess(spec, true)
 }
 
@@ -243,6 +282,7 @@ func (s *Supervisor) StopProcess(appID string, desired []Spec) error {
 	if err := s.stop(spec.AppID, false); err != nil {
 		return err
 	}
+	s.setManualStop(spec.AppID)
 	identity, _ := s.resolveIdentity(spec)
 	s.updateStatus(spec, &identity, false, 0, "manual_stopped", "")
 	return nil
@@ -253,6 +293,7 @@ func (s *Supervisor) ReloadProcess(appID string, desired []Spec) error {
 	if !ok {
 		return fmt.Errorf("daemon app %q is not configured", appID)
 	}
+	s.clearManualStop(spec.AppID)
 	if err := s.stop(spec.AppID, false); err != nil {
 		return err
 	}
@@ -278,7 +319,7 @@ func (s *Supervisor) start(spec Spec, signature string, identity Identity) error
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return err
 	}
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := newRotatingDaemonLogWriter(logPath, daemonRuntimeMaxLogBytes, daemonRuntimeLocalArchives)
 	if err != nil {
 		return err
 	}
@@ -330,6 +371,7 @@ func (s *Supervisor) stop(appID string, deleteStatus bool) error {
 		if deleteStatus {
 			delete(s.statuses, appID)
 			delete(s.restarts, appID)
+			delete(s.manual, appID)
 		}
 		s.mu.Unlock()
 		return nil
@@ -375,6 +417,7 @@ func (s *Supervisor) stop(appID string, deleteStatus bool) error {
 		s.mu.Lock()
 		delete(s.statuses, appID)
 		delete(s.restarts, appID)
+		delete(s.manual, appID)
 		s.mu.Unlock()
 		return nil
 	}
@@ -486,6 +529,102 @@ func (s *Supervisor) updateStatusLocked(spec Spec, identity *Identity, running b
 		status.EffectiveGID = int(identity.GID)
 	}
 	s.statuses[spec.AppID] = status
+}
+
+func (s *Supervisor) setManualStop(appID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.manual[appID] = true
+}
+
+func (s *Supervisor) clearManualStop(appID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.manual, appID)
+}
+
+func (s *Supervisor) LogTail(appID string, maxBytes int64) (ProcessLog, error) {
+	if s == nil {
+		return ProcessLog{}, fmt.Errorf("daemon runtime supervisor is not initialized")
+	}
+	maxBytes = normalizeDaemonRuntimeLogTailBytes(maxBytes)
+	appID = strings.TrimSpace(appID)
+	if appID == "" {
+		return ProcessLog{}, fmt.Errorf("daemon app id is required")
+	}
+
+	s.mu.Lock()
+	status, ok := s.statuses[appID]
+	if !ok {
+		for _, candidate := range s.statuses {
+			if candidate.ProcessID == appID {
+				status = candidate
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		s.mu.Unlock()
+		return ProcessLog{}, fmt.Errorf("daemon app %q is not configured", appID)
+	}
+	logPath := s.logPath(status.AppID)
+	out := ProcessLog{
+		AppID:     status.AppID,
+		ProcessID: status.ProcessID,
+		LogFile:   logPath,
+		MaxBytes:  maxBytes,
+	}
+	s.mu.Unlock()
+
+	tail, truncated, err := daemonRuntimeReadFileTail(logPath, maxBytes)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return ProcessLog{}, err
+	}
+	out.Tail = tail
+	out.Truncated = truncated
+	return out, nil
+}
+
+func (s *Supervisor) PendingLogArchives(limit int) ([]LogArchive, error) {
+	if s == nil {
+		return nil, fmt.Errorf("daemon runtime supervisor is not initialized")
+	}
+	if limit <= 0 || limit > 16 {
+		limit = 16
+	}
+	s.mu.Lock()
+	statuses := make(map[string]ProcessStatus, len(s.statuses))
+	for appID, status := range s.statuses {
+		statuses[appID] = status
+	}
+	s.mu.Unlock()
+	return pendingDaemonLogArchives(statuses, limit)
+}
+
+func PendingLogArchives(limit int) ([]LogArchive, error) {
+	if limit <= 0 || limit > 16 {
+		limit = 16
+	}
+	return pendingDaemonLogArchives(nil, limit)
+}
+
+func RemoveLogArchive(path string) error {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "." || path == "" {
+		return fmt.Errorf("daemon log archive path is required")
+	}
+	if !strings.HasSuffix(path, daemonRuntimeArchiveSuffix) {
+		return fmt.Errorf("daemon log archive path is invalid")
+	}
+	cleanRoot := filepath.Clean(filepath.Join("data", "daemon-apps"))
+	if !daemonRuntimePathUnder(cleanRoot, path) {
+		return fmt.Errorf("daemon log archive path escapes daemon app root")
+	}
+	return os.Remove(path)
 }
 
 func daemonRuntimeSpecSignature(spec Spec) string {
@@ -626,7 +765,7 @@ func (s *Supervisor) launchEnv(spec Spec) []string {
 }
 
 func (s *Supervisor) logPath(appID string) string {
-	appID = strings.TrimSpace(appID)
+	appID = daemonRuntimeSafePathToken(appID)
 	if appID == "" {
 		appID = "unknown"
 	}
@@ -650,4 +789,351 @@ func daemonRuntimePathUnder(root string, target string) bool {
 		return false
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func daemonRuntimeSafePathToken(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '.', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+func normalizeDaemonRuntimeLogTailBytes(value int64) int64 {
+	if value <= 0 {
+		return daemonRuntimeDefaultLogTail
+	}
+	if value > daemonRuntimeMaxLogTail {
+		return daemonRuntimeMaxLogTail
+	}
+	return value
+}
+
+func daemonRuntimeReadFileTail(path string, maxBytes int64) (string, bool, error) {
+	maxBytes = normalizeDaemonRuntimeLogTailBytes(maxBytes)
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", false, err
+	}
+	if info.IsDir() {
+		return "", false, fmt.Errorf("daemon log path is a directory")
+	}
+	size := info.Size()
+	offset := int64(0)
+	truncated := false
+	if size > maxBytes {
+		offset = size - maxBytes
+		truncated = true
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false, err
+	}
+	defer f.Close()
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			return "", false, err
+		}
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maxBytes))
+	if err != nil {
+		return "", false, err
+	}
+	return string(raw), truncated, nil
+}
+
+type rotatingDaemonLogWriter struct {
+	mu       sync.Mutex
+	path     string
+	maxBytes int64
+	keep     int
+	file     *os.File
+	size     int64
+}
+
+func newRotatingDaemonLogWriter(path string, maxBytes int64, keep int) (*rotatingDaemonLogWriter, error) {
+	if maxBytes <= 0 {
+		maxBytes = daemonRuntimeMaxLogBytes
+	}
+	if keep < 0 {
+		keep = 0
+	}
+	writer := &rotatingDaemonLogWriter{
+		path:     filepath.Clean(path),
+		maxBytes: maxBytes,
+		keep:     keep,
+	}
+	if err := os.MkdirAll(filepath.Dir(writer.path), 0o755); err != nil {
+		return nil, err
+	}
+	if err := writer.openLocked(); err != nil {
+		return nil, err
+	}
+	return writer, nil
+}
+
+func (w *rotatingDaemonLogWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.file == nil {
+		if err := w.openLocked(); err != nil {
+			return 0, err
+		}
+	}
+	if w.maxBytes > 0 && w.size > 0 && w.size+int64(len(p)) > w.maxBytes {
+		if err := w.rotateLocked(); err != nil {
+			return 0, err
+		}
+	}
+	n, err := w.file.Write(p)
+	w.size += int64(n)
+	return n, err
+}
+
+func (w *rotatingDaemonLogWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.file == nil {
+		return nil
+	}
+	err := w.file.Close()
+	w.file = nil
+	return err
+}
+
+func (w *rotatingDaemonLogWriter) openLocked() error {
+	file, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return err
+	}
+	w.file = file
+	w.size = info.Size()
+	if w.maxBytes > 0 && w.size > w.maxBytes {
+		return w.rotateLocked()
+	}
+	return nil
+}
+
+func (w *rotatingDaemonLogWriter) rotateLocked() error {
+	if w.file != nil {
+		if err := w.file.Close(); err != nil {
+			w.file = nil
+			return err
+		}
+		w.file = nil
+	}
+	info, err := os.Stat(w.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return w.openLocked()
+		}
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("daemon log path is a directory")
+	}
+	if info.Size() <= 0 {
+		_ = os.Remove(w.path)
+		return w.openLocked()
+	}
+	archivePath := filepath.Join(filepath.Dir(w.path), fmt.Sprintf("daemon-supervisor.%d%s", time.Now().UTC().UnixNano(), daemonRuntimeArchiveSuffix))
+	if err := gzipDaemonLogFile(w.path, archivePath); err != nil {
+		return err
+	}
+	if err := os.Remove(w.path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := pruneDaemonLogArchives(filepath.Dir(w.path), w.keep); err != nil {
+		return err
+	}
+	return w.openLocked()
+}
+
+func gzipDaemonLogFile(sourcePath, archivePath string) error {
+	in, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	tmpPath := archivePath + ".tmp"
+	out, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	writeErr := func() error {
+		gz := gzip.NewWriter(out)
+		gz.Name = filepath.Base(sourcePath)
+		gz.ModTime = time.Now().UTC()
+		if _, err := io.Copy(gz, in); err != nil {
+			_ = gz.Close()
+			return err
+		}
+		if err := gz.Close(); err != nil {
+			return err
+		}
+		return out.Close()
+	}()
+	if writeErr != nil {
+		_ = out.Close()
+		_ = os.Remove(tmpPath)
+		return writeErr
+	}
+	if err := os.Rename(tmpPath, archivePath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+func pruneDaemonLogArchives(dir string, keep int) error {
+	if keep <= 0 {
+		keep = 0
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	type archive struct {
+		path    string
+		modTime time.Time
+	}
+	archives := make([]archive, 0)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), daemonRuntimeArchiveSuffix) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		archives = append(archives, archive{
+			path:    filepath.Join(dir, entry.Name()),
+			modTime: info.ModTime(),
+		})
+	}
+	sort.Slice(archives, func(i, j int) bool {
+		return archives[i].modTime.After(archives[j].modTime)
+	})
+	for i := keep; i < len(archives); i++ {
+		if err := os.Remove(archives[i].path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func pendingDaemonLogArchives(statuses map[string]ProcessStatus, limit int) ([]LogArchive, error) {
+	root := filepath.Clean(filepath.Join("data", "daemon-apps"))
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]LogArchive, 0)
+	for _, appEntry := range entries {
+		if !appEntry.IsDir() {
+			continue
+		}
+		appID := daemonRuntimeSafePathToken(appEntry.Name())
+		if appID == "" || appID != appEntry.Name() {
+			continue
+		}
+		dir := filepath.Join(root, appID)
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		status := statuses[appID]
+		for _, file := range files {
+			if file.IsDir() || !strings.HasSuffix(file.Name(), daemonRuntimeArchiveSuffix) {
+				continue
+			}
+			path := filepath.Join(dir, file.Name())
+			rec, err := describeDaemonLogArchive(appID, status.ProcessID, path)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, rec)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].RotatedAtUnix == out[j].RotatedAtUnix {
+			return out[i].Path < out[j].Path
+		}
+		return out[i].RotatedAtUnix < out[j].RotatedAtUnix
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func describeDaemonLogArchive(appID, processID, path string) (LogArchive, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return LogArchive{}, err
+	}
+	if info.IsDir() {
+		return LogArchive{}, fmt.Errorf("daemon log archive path is a directory")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return LogArchive{}, err
+	}
+	sum := sha256.Sum256(raw)
+	uncompressed, err := gzipUncompressedSize(path)
+	if err != nil {
+		return LogArchive{}, err
+	}
+	return LogArchive{
+		AppID:            appID,
+		ProcessID:        processID,
+		LogFile:          filepath.ToSlash(filepath.Join("data", "daemon-apps", appID, "daemon-supervisor.log")),
+		ArchiveName:      filepath.Base(path),
+		Path:             filepath.ToSlash(path),
+		SHA256:           hex.EncodeToString(sum[:]),
+		CompressedSize:   info.Size(),
+		UncompressedSize: uncompressed,
+		RotatedAtUnix:    info.ModTime().UTC().Unix(),
+	}, nil
+}
+
+func gzipUncompressedSize(path string) (int64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+	reader, err := gzip.NewReader(file)
+	if err != nil {
+		return 0, err
+	}
+	defer reader.Close()
+	n, err := io.Copy(io.Discard, reader)
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }

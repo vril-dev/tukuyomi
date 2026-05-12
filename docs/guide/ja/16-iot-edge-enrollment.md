@@ -142,6 +142,8 @@ baseline adoption または最初の Center 管理 deploy が成功すると、G
 
 baseline adoption が読み取る採用元は、Gateway ローカルの相対パス `data/runtime-sites/` 配下だけです。Center 管理へ採用する前に、対象アプリのソースツリーを `data/runtime-sites/<app-id>/` 配下へ配置してください。
 
+`daemon` Runtime App では、Gateway が supervisor log のライフサイクルも管理します。書き込み中のログは `data/daemon-apps/<app-id>/daemon-supervisor.log` に置かれ、無制限に増えないように圧縮済みアーカイブへローテーションされます。Center と連携していない Gateway は、そのアーカイブをローカルに保持するだけです。Center に承認済みの Gateway は、署名付きステータスポーリングの中で閉じたアーカイブをアップロードします。Center 側では対象デバイスの `Runtime App Deploy` 画面からダウンロードまたは削除できます。書き込み中のログ本体はアップロードしません。
+
 この機能は Center 側の `TUKUYOMI_CENTER_EXPERIMENTAL_APP_DEPLOY_ENABLED` で保護されています。中核となる Gateway / Center 登録経路を変えずに、運用画面から試験機能だけを外せるようにするためです。
 
 ## 16.4　Preview URL

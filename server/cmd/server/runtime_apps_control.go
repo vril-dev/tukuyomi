@@ -58,6 +58,7 @@ func startRuntimeAppsControlServer() (*runtimeAppsControlServer, error) {
 	mux.HandleFunc("/v1/psgi/reconcile", s.handlePSGIReconcile)
 	mux.HandleFunc("/v1/psgi/action", s.handlePSGIAction)
 	mux.HandleFunc("/v1/daemon/processes", s.handleDaemonProcesses)
+	mux.HandleFunc("/v1/daemon/log", s.handleDaemonLog)
 	mux.HandleFunc("/v1/daemon/reconcile", s.handleDaemonReconcile)
 	mux.HandleFunc("/v1/daemon/action", s.handleDaemonAction)
 	s.server = &http.Server{
@@ -302,6 +303,29 @@ func (s *runtimeAppsControlServer) handleDaemonProcesses(w http.ResponseWriter, 
 	respondRuntimeAppsControlJSON(w, http.StatusOK, map[string]any{"processes": handler.DaemonRuntimeProcessSnapshot()})
 }
 
+func (s *runtimeAppsControlServer) handleDaemonLog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondRuntimeAppsControlError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var in runtimeAppProcessControlActionRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
+		respondRuntimeAppsControlError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	processID, err := validateRuntimeAppsControlToken("process_id", in.ProcessID)
+	if err != nil {
+		respondRuntimeAppsControlError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := handler.DaemonRuntimeProcessLogTail(processID, in.MaxBytes)
+	if err != nil {
+		respondRuntimeAppsControlError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	respondRuntimeAppsControlJSON(w, http.StatusOK, out)
+}
+
 func (s *runtimeAppsControlServer) handleDaemonReconcile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		respondRuntimeAppsControlError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -355,6 +379,7 @@ type runtimeAppProcessControlActionRequest struct {
 	Action    string `json:"action"`
 	RuntimeID string `json:"runtime_id,omitempty"`
 	ProcessID string `json:"process_id,omitempty"`
+	MaxBytes  int64  `json:"max_bytes,omitempty"`
 }
 
 func validateRuntimeAppsControlToken(field string, value string) (string, error) {

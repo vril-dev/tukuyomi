@@ -17,7 +17,7 @@ mkdir -p "$DIST" "$TMP"
 
 TITLE="tukuyomi 運用ガイド（日本語版）"
 SUBTITLE="Coraza + CRS WAF を中核とする application-edge control plane の導入と運用"
-VERSION="v1.5.0 ベース"
+VERSION="v1.5.1 ベース"
 TODAY="$(date +%Y-%m-%d)"
 COVER_EYEBROW="Operation Guide"
 COVER_BRAND="tukuyomi"

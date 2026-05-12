@@ -34,6 +34,7 @@ const (
 	MaxWAFRuleArtifactDownloadBodyBytes  = 16 * 1024
 	MaxAppDeployPackageDownloadBodyBytes = 16 * 1024
 	MaxAppDeployBaselineUploadBodyBytes  = appdeploybundle.MaxCompressedBytes*2 + 64*1024
+	MaxDaemonLogArchiveUploadBodyBytes   = MaxDaemonLogArchiveBytes*2 + 64*1024
 	enrollmentFreshness                  = 10 * time.Minute
 )
 
@@ -235,6 +236,25 @@ type AppDeployBaselineUploadRequest struct {
 	PackageB64                 string                `json:"package_b64"`
 }
 
+type DaemonLogArchiveUploadRequest struct {
+	DeviceID                   string `json:"device_id"`
+	KeyID                      string `json:"key_id"`
+	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string `json:"timestamp"`
+	Nonce                      string `json:"nonce"`
+	AppID                      string `json:"app_id"`
+	ProcessID                  string `json:"process_id,omitempty"`
+	LogFile                    string `json:"log_file,omitempty"`
+	ArchiveName                string `json:"archive_name,omitempty"`
+	ArchiveHash                string `json:"archive_hash"`
+	CompressedSize             int64  `json:"compressed_size"`
+	UncompressedSize           int64  `json:"uncompressed_size"`
+	RotatedAtUnix              int64  `json:"rotated_at_unix"`
+	BodyHash                   string `json:"body_hash"`
+	SignatureB64               string `json:"signature_b64"`
+	ArchiveB64                 string `json:"archive_b64"`
+}
+
 type verifiedEnrollment struct {
 	DeviceID                   string
 	KeyID                      string
@@ -358,6 +378,22 @@ type verifiedAppDeployBaselineUploadRequest struct {
 	UncompressedSize           int64
 	FileCount                  int
 	Package                    []byte
+}
+
+type verifiedDaemonLogArchiveUploadRequest struct {
+	DeviceID                   string
+	KeyID                      string
+	PublicKeyFingerprintSHA256 string
+	Timestamp                  time.Time
+	AppID                      string
+	ProcessID                  string
+	LogFile                    string
+	ArchiveName                string
+	ArchiveHash                string
+	CompressedSize             int64
+	UncompressedSize           int64
+	RotatedAtUnix              int64
+	Archive                    []byte
 }
 
 func VerifyEnrollmentRequest(req EnrollmentRequest, now time.Time) (verifiedEnrollment, error) {
@@ -773,6 +809,56 @@ func VerifyAppDeployBaselineUploadRequest(req AppDeployBaselineUploadRequest, pu
 		UncompressedSize:           req.UncompressedSize,
 		FileCount:                  req.FileCount,
 		Package:                    body,
+	}, nil
+}
+
+func VerifyDaemonLogArchiveUploadRequest(req DaemonLogArchiveUploadRequest, publicKeyPEM string, now time.Time) (verifiedDaemonLogArchiveUploadRequest, error) {
+	normalized, ts, err := normalizeDaemonLogArchiveUploadRequest(req, now)
+	if err != nil {
+		return verifiedDaemonLogArchiveUploadRequest{}, err
+	}
+	req = normalized
+
+	publicKeyDER, publicKey, err := parseStoredEnrollmentPublicKey(publicKeyPEM)
+	if err != nil {
+		return verifiedDaemonLogArchiveUploadRequest{}, err
+	}
+	fingerprint := sha256.Sum256(publicKeyDER)
+	if !secureEqualHex(hex.EncodeToString(fingerprint[:]), req.PublicKeyFingerprintSHA256) {
+		return verifiedDaemonLogArchiveUploadRequest{}, fmt.Errorf("%w: public key fingerprint mismatch", ErrInvalidEnrollment)
+	}
+	if !secureEqualHex(daemonLogArchiveUploadBodyHash(req), req.BodyHash) {
+		return verifiedDaemonLogArchiveUploadRequest{}, fmt.Errorf("%w: body_hash mismatch", ErrInvalidEnrollment)
+	}
+	signature, err := base64.StdEncoding.DecodeString(req.SignatureB64)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return verifiedDaemonLogArchiveUploadRequest{}, fmt.Errorf("%w: invalid signature", ErrInvalidEnrollment)
+	}
+	if !ed25519.Verify(publicKey, []byte(signedEnvelopeMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)), signature) {
+		return verifiedDaemonLogArchiveUploadRequest{}, fmt.Errorf("%w: signature verification failed", ErrInvalidEnrollment)
+	}
+	body, err := base64.StdEncoding.DecodeString(req.ArchiveB64)
+	if err != nil || len(body) == 0 || int64(len(body)) != req.CompressedSize || int64(len(body)) > MaxDaemonLogArchiveBytes {
+		return verifiedDaemonLogArchiveUploadRequest{}, fmt.Errorf("%w: invalid archive", ErrInvalidEnrollment)
+	}
+	sum := sha256.Sum256(body)
+	if !secureEqualHex(hex.EncodeToString(sum[:]), req.ArchiveHash) {
+		return verifiedDaemonLogArchiveUploadRequest{}, fmt.Errorf("%w: archive hash mismatch", ErrInvalidEnrollment)
+	}
+	return verifiedDaemonLogArchiveUploadRequest{
+		DeviceID:                   req.DeviceID,
+		KeyID:                      req.KeyID,
+		PublicKeyFingerprintSHA256: req.PublicKeyFingerprintSHA256,
+		Timestamp:                  ts.UTC(),
+		AppID:                      req.AppID,
+		ProcessID:                  req.ProcessID,
+		LogFile:                    req.LogFile,
+		ArchiveName:                req.ArchiveName,
+		ArchiveHash:                req.ArchiveHash,
+		CompressedSize:             req.CompressedSize,
+		UncompressedSize:           req.UncompressedSize,
+		RotatedAtUnix:              req.RotatedAtUnix,
+		Archive:                    body,
 	}, nil
 }
 
@@ -1571,6 +1657,67 @@ func normalizeAppDeployBaselineUploadRequest(req AppDeployBaselineUploadRequest,
 	return req, ts.UTC(), nil
 }
 
+func normalizeDaemonLogArchiveUploadRequest(req DaemonLogArchiveUploadRequest, now time.Time) (DaemonLogArchiveUploadRequest, time.Time, error) {
+	req.DeviceID = strings.TrimSpace(req.DeviceID)
+	req.KeyID = strings.TrimSpace(req.KeyID)
+	req.PublicKeyFingerprintSHA256 = strings.ToLower(strings.TrimSpace(req.PublicKeyFingerprintSHA256))
+	req.Timestamp = strings.TrimSpace(req.Timestamp)
+	req.Nonce = strings.TrimSpace(req.Nonce)
+	req.AppID = normalizeAppDeployID(req.AppID)
+	req.ProcessID = normalizeAppDeployID(req.ProcessID)
+	req.LogFile = cleanDaemonLogArchivePath(req.LogFile)
+	req.ArchiveName = cleanDaemonLogArchiveName(req.ArchiveName)
+	req.ArchiveHash = strings.ToLower(strings.TrimSpace(req.ArchiveHash))
+	req.BodyHash = strings.ToLower(strings.TrimSpace(req.BodyHash))
+	req.SignatureB64 = strings.TrimSpace(req.SignatureB64)
+	req.ArchiveB64 = strings.TrimSpace(req.ArchiveB64)
+
+	if !deviceIDPattern.MatchString(req.DeviceID) {
+		return DaemonLogArchiveUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid device_id", ErrInvalidEnrollment)
+	}
+	if !keyIDPattern.MatchString(req.KeyID) {
+		return DaemonLogArchiveUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid key_id", ErrInvalidEnrollment)
+	}
+	if !noncePattern.MatchString(req.Nonce) {
+		return DaemonLogArchiveUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid nonce", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.PublicKeyFingerprintSHA256) {
+		return DaemonLogArchiveUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid public key fingerprint", ErrInvalidEnrollment)
+	}
+	if req.AppID == "" {
+		return DaemonLogArchiveUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid app_id", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.ArchiveHash) {
+		return DaemonLogArchiveUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid archive_hash", ErrInvalidEnrollment)
+	}
+	if req.CompressedSize <= 0 || req.CompressedSize > MaxDaemonLogArchiveBytes ||
+		req.UncompressedSize <= 0 || req.UncompressedSize > MaxDaemonLogUncompressedBytes ||
+		req.RotatedAtUnix <= 0 {
+		return DaemonLogArchiveUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid archive metadata", ErrInvalidEnrollment)
+	}
+	if !hex64Pattern.MatchString(req.BodyHash) {
+		return DaemonLogArchiveUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid body_hash", ErrInvalidEnrollment)
+	}
+	if req.SignatureB64 == "" || len(req.SignatureB64) > 4096 {
+		return DaemonLogArchiveUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid signature", ErrInvalidEnrollment)
+	}
+	if req.ArchiveB64 == "" || len(req.ArchiveB64) > MaxDaemonLogArchiveUploadBodyBytes {
+		return DaemonLogArchiveUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid archive", ErrInvalidEnrollment)
+	}
+
+	ts, err := time.Parse(time.RFC3339Nano, req.Timestamp)
+	if err != nil {
+		return DaemonLogArchiveUploadRequest{}, time.Time{}, fmt.Errorf("%w: invalid timestamp", ErrInvalidEnrollment)
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if ts.After(now.Add(enrollmentFreshness)) || ts.Before(now.Add(-enrollmentFreshness)) {
+		return DaemonLogArchiveUploadRequest{}, time.Time{}, fmt.Errorf("%w: stale timestamp", ErrInvalidEnrollment)
+	}
+	return req, ts.UTC(), nil
+}
+
 func parseEnrollmentPublicKey(publicKeyPEMB64 string) ([]byte, []byte, ed25519.PublicKey, error) {
 	pemBytes, err := base64.StdEncoding.DecodeString(publicKeyPEMB64)
 	if err != nil {
@@ -1903,6 +2050,25 @@ func appDeployBaselineUploadBodyHash(req AppDeployBaselineUploadRequest) string 
 			strconv.FormatInt(req.CompressedSize, 10) + "\n" +
 			strconv.FormatInt(req.UncompressedSize, 10) + "\n" +
 			strconv.Itoa(req.FileCount),
+	))
+	return hex.EncodeToString(sum[:])
+}
+
+func daemonLogArchiveUploadBodyHash(req DaemonLogArchiveUploadRequest) string {
+	sum := sha256.Sum256([]byte(
+		req.DeviceID + "\n" +
+			req.KeyID + "\n" +
+			req.PublicKeyFingerprintSHA256 + "\n" +
+			req.Timestamp + "\n" +
+			req.Nonce + "\n" +
+			req.AppID + "\n" +
+			req.ProcessID + "\n" +
+			req.LogFile + "\n" +
+			req.ArchiveName + "\n" +
+			req.ArchiveHash + "\n" +
+			strconv.FormatInt(req.CompressedSize, 10) + "\n" +
+			strconv.FormatInt(req.UncompressedSize, 10) + "\n" +
+			strconv.FormatInt(req.RotatedAtUnix, 10),
 	))
 	return hex.EncodeToString(sum[:])
 }

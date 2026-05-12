@@ -202,6 +202,21 @@ That sample is a supervision/deploy smoke target only. It does not implement
 MQTT and does not open a network port; `listen=127.0.0.1:1883` in its log is
 only an example setting value.
 
+Daemon supervisor output is written to:
+
+```text
+data/daemon-apps/<app-id>/daemon-supervisor.log
+```
+
+Gateway rotates this log before it can grow without bound. Closed archives are
+kept locally as compressed `*.log.gz` files; standalone Gateways only keep the
+local archive set. When the Gateway is approved by Center, the next signed
+status polling cycle uploads rotated archives to the selected device's
+`Runtime App Deploy` page. Operators can download those archives for incident
+review or delete them from Center after retention requirements are met. The
+active `daemon-supervisor.log` is never uploaded while it is still being
+written.
+
 ## Upstreams to Runtime Apps Boundary
 
 Do not model Tukuyomi-owned PHP-FPM applications as direct backends in `Proxy Rules > Upstreams`; move those connection settings to `/runtime-apps`.

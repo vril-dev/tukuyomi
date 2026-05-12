@@ -15,11 +15,13 @@ import (
 )
 
 const (
-	centerPayloadRuntimeArtifacts = "runtime-artifacts"
-	centerPayloadAppDeploy        = "app-deploy-packages"
+	centerPayloadRuntimeArtifacts  = "runtime-artifacts"
+	centerPayloadAppDeploy         = "app-deploy-packages"
+	centerPayloadDaemonLogArchives = "daemon-log-archives"
 
-	centerPayloadRuntimeArtifactExt = ".bundle"
-	centerPayloadAppDeployExt       = ".zip"
+	centerPayloadRuntimeArtifactExt  = ".bundle"
+	centerPayloadAppDeployExt        = ".zip"
+	centerPayloadDaemonLogArchiveExt = ".log.gz"
 )
 
 var errCenterPayloadFileNotFound = errors.New("center payload file not found")
@@ -120,7 +122,7 @@ func centerPayloadFilePath(kind, revision, ext string) (string, error) {
 
 func centerPayloadKindDir(kind string) (string, error) {
 	switch kind {
-	case centerPayloadRuntimeArtifacts, centerPayloadAppDeploy:
+	case centerPayloadRuntimeArtifacts, centerPayloadAppDeploy, centerPayloadDaemonLogArchives:
 	default:
 		return "", fmt.Errorf("invalid center payload kind")
 	}
@@ -133,12 +135,12 @@ func centerPayloadKindDir(kind string) (string, error) {
 
 func validateCenterPayloadIdentity(kind, revision, ext string) error {
 	switch kind {
-	case centerPayloadRuntimeArtifacts, centerPayloadAppDeploy:
+	case centerPayloadRuntimeArtifacts, centerPayloadAppDeploy, centerPayloadDaemonLogArchives:
 	default:
 		return fmt.Errorf("invalid center payload kind")
 	}
 	switch ext {
-	case centerPayloadRuntimeArtifactExt, centerPayloadAppDeployExt:
+	case centerPayloadRuntimeArtifactExt, centerPayloadAppDeployExt, centerPayloadDaemonLogArchiveExt:
 	default:
 		return fmt.Errorf("invalid center payload extension")
 	}

@@ -547,6 +547,13 @@ func CreateAppDeployRequest(ctx context.Context, in AppDeployRequestUpdate) (App
 				Roots:           pkg.Roots,
 			}
 		case AppDeployOperationAdopt:
+			candidate, found, err := loadAppDeployCandidateForAppTx(ctx, tx, driver, normalized.DeviceID, normalized.AppID)
+			if err != nil {
+				return err
+			}
+			if !found || candidate.Managed {
+				return ErrAppDeployIncompatible
+			}
 			profile = AppDeployProfileRecord{
 				DeviceID:        normalized.DeviceID,
 				AppID:           normalized.AppID,
@@ -984,7 +991,7 @@ func normalizeAppDeployRequestUpdate(in AppDeployRequestUpdate) (AppDeployReques
 		if err != nil {
 			return AppDeployRequestUpdate{}, err
 		}
-		if err := validateAppDeployRootsForApp(in.AppID, roots); err != nil {
+		if err := validateAppDeployAdoptionRootsForApp(in.AppID, roots); err != nil {
 			return AppDeployRequestUpdate{}, err
 		}
 		in.Roots = roots
@@ -1240,6 +1247,18 @@ func validateAppDeployRootsForApp(appID string, roots []AppDeployRootRecord) err
 			continue
 		}
 		if !appDeploySourcePathAllowedForApp(sourcePath, appID) {
+			return ErrAppDeployInvalid
+		}
+	}
+	return nil
+}
+
+func validateAppDeployAdoptionRootsForApp(appID string, roots []AppDeployRootRecord) error {
+	if err := validateAppDeployRootsForApp(appID, roots); err != nil {
+		return err
+	}
+	for _, root := range roots {
+		if strings.TrimSpace(root.SourcePath) == "" {
 			return ErrAppDeployInvalid
 		}
 	}

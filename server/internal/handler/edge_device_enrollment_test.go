@@ -2621,6 +2621,43 @@ func TestCurrentEdgeAppDeployCandidatesIncludesDaemonAppRoot(t *testing.T) {
 	}
 }
 
+func TestCurrentEdgeAppDeployCandidatesMarksManagedDaemonWithoutAdoptionSource(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	tmp := t.TempDir()
+	vhostPath := filepath.Join(tmp, "vhosts.json")
+	raw := `{
+  "vhosts": [{
+    "name": "mqtt-broker",
+    "mode": "daemon",
+    "enabled": true,
+    "app_root": "data/app-deployments/mqtt-broker/current/app",
+    "command": "bin/server"
+  }]
+}`
+	if err := os.WriteFile(vhostPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write vhosts: %v", err)
+	}
+	if err := InitVhostRuntime(vhostPath, 2); err != nil {
+		t.Fatalf("InitVhostRuntime: %v", err)
+	}
+	candidates := currentEdgeAppDeployCandidates()
+	if len(candidates) != 1 {
+		t.Fatalf("candidates=%+v want one daemon candidate", candidates)
+	}
+	candidate := candidates[0]
+	if !candidate.Managed {
+		t.Fatalf("candidate.Managed=false want true")
+	}
+	if len(candidate.Roots) != 1 {
+		t.Fatalf("roots=%+v want one app_root", candidate.Roots)
+	}
+	if candidate.Roots[0].SourcePath != "" {
+		t.Fatalf("managed daemon source_path=%q want empty", candidate.Roots[0].SourcePath)
+	}
+}
+
 func TestNormalizeEdgeAppDeployRootAllowsSourceRootAndRejectsUnsafeSourcePath(t *testing.T) {
 	root, ok := normalizeEdgeAppDeployRoot(edgeAppDeployRoot{
 		RootID:         "source_root",

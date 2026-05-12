@@ -309,6 +309,31 @@ function prettyRoots(roots: AppDeployRootRecord[] | undefined) {
   }).join(", ");
 }
 
+function candidateHasAdoptionSource(candidate: AppDeployCandidateRecord) {
+  const roots = candidate.roots || [];
+  return roots.length > 0 && roots.every((root) => (root.source_path || "").trim() !== "");
+}
+
+function adoptionButtonLabel(candidate: AppDeployCandidateRecord, tx: (value: string) => string) {
+  if (candidate.managed) {
+    return tx("Managed");
+  }
+  if (!candidateHasAdoptionSource(candidate)) {
+    return tx("No source");
+  }
+  return tx("Adopt current source");
+}
+
+function adoptionButtonTitle(candidate: AppDeployCandidateRecord, tx: (value: string) => string) {
+  if (candidate.managed) {
+    return tx("This Runtime App is already Center-managed. Download a saved package or upload a new package.");
+  }
+  if (!candidateHasAdoptionSource(candidate)) {
+    return tx("No Gateway source path is available for adoption.");
+  }
+  return undefined;
+}
+
 function normalizePositiveInt(value: string, fallback: number) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -744,6 +769,7 @@ export default function AppDeployPage() {
               {candidates.length > 0 ? (
                 candidates.map((candidate) => {
                   const profile = profileByApp.get(candidate.app_id);
+                  const canAdopt = !candidate.managed && candidateHasAdoptionSource(candidate);
                   return (
                     <tr key={candidate.app_id}>
                       <td className="actions-cell">
@@ -754,10 +780,11 @@ export default function AppDeployPage() {
                           <button
                             type="button"
                             className="secondary-btn"
-                            disabled={Boolean(request) || busy === `adopt:${candidate.app_id}`}
+                            disabled={Boolean(request) || busy === `adopt:${candidate.app_id}` || !canAdopt}
+                            title={adoptionButtonTitle(candidate, tx)}
                             onClick={() => void createAdoptionRequest(candidate)}
                           >
-                            {tx("Adopt current source")}
+                            {adoptionButtonLabel(candidate, tx)}
                           </button>
                         </div>
                       </td>

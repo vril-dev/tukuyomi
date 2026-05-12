@@ -246,6 +246,11 @@ const JA_STRINGS: Record<string, string> = {
   "Failed to queue app deployment request": "アプリ配信要求の登録に失敗しました",
   "App deployment request canceled.": "アプリ配信要求をキャンセルしました。",
   "Failed to cancel app deployment request": "アプリ配信要求のキャンセルに失敗しました",
+  Managed: "管理中",
+  "No source": "採用元なし",
+  "This Runtime App is already Center-managed. Download a saved package or upload a new package.":
+    "この Runtime App はすでに Center 管理中です。保存済みパッケージをダウンロードするか、新しいパッケージをアップロードしてください。",
+  "No Gateway source path is available for adoption.": "採用できる Gateway 側ソースパスがありません。",
   "App package files": "アプリパッケージのファイル",
   "App package file": "アプリパッケージファイル",
   "Failed to load app package": "アプリパッケージの読み込みに失敗しました",

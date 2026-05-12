@@ -86,6 +86,20 @@ func TestValidateAppDeployRootsForAppRequiresAppDirectory(t *testing.T) {
 	}
 }
 
+func TestValidateAppDeployAdoptionRootsForAppRequiresSourcePath(t *testing.T) {
+	err := validateAppDeployAdoptionRootsForApp("app-1", []AppDeployRootRecord{{
+		SourcePath: "",
+	}})
+	if !errors.Is(err, ErrAppDeployInvalid) {
+		t.Fatalf("err=%v want ErrAppDeployInvalid", err)
+	}
+	if err := validateAppDeployAdoptionRootsForApp("app-1", []AppDeployRootRecord{{
+		SourcePath: "data/runtime-sites/app-1/public",
+	}}); err != nil {
+		t.Fatalf("validateAppDeployAdoptionRootsForApp(valid): %v", err)
+	}
+}
+
 func TestAppDeployFilesForParsedPackageAllowsRootPackagePrefix(t *testing.T) {
 	roots, _, err := normalizeAppDeployRoots([]AppDeployRootRecord{{
 		RootID:         "source_root",
@@ -392,6 +406,45 @@ func TestEnsureAppDeployCandidateMatchesProfileIgnoresSourceRootShape(t *testing
 		return ensureAppDeployCandidateMatchesProfileTx(ctx, db, driver, profile)
 	}); err != nil {
 		t.Fatalf("ensureAppDeployCandidateMatchesProfileTx: %v", err)
+	}
+}
+
+func TestCreateAppDeployRequestRejectsManagedCandidateAdoption(t *testing.T) {
+	setupRemoteSSHStoreTest(t)
+	deviceID := "tky-app-deploy-managed-adopt"
+	insertRemoteSSHApprovedDeviceForTest(t, deviceID)
+	ctx := context.Background()
+	roots := []AppDeployRootRecord{{
+		RootID:         "app_root",
+		RuntimeField:   "app_root",
+		SourcePath:     "data/runtime-sites/mqtt-broker/app",
+		PackagePrefix:  "app",
+		TargetSubpath:  "app",
+		RuntimeSubpath: "app",
+		Required:       true,
+	}}
+	if err := UpsertAppDeployCandidates(ctx, deviceID, []AppDeployCandidateRecord{{
+		AppID:         "mqtt-broker",
+		RuntimeFamily: "daemon",
+		Roots:         roots,
+		Managed:       true,
+	}}, 1000); err != nil {
+		t.Fatalf("UpsertAppDeployCandidates: %v", err)
+	}
+	_, err := CreateAppDeployRequest(ctx, AppDeployRequestUpdate{
+		DeviceID:         deviceID,
+		AppID:            "mqtt-broker",
+		Operation:        AppDeployOperationAdopt,
+		RuntimeFamily:    "daemon",
+		Roots:            roots,
+		RestartBehavior:  "restart-runtime",
+		ScriptTimeoutSec: 60,
+		Reason:           "repeat baseline",
+		RequestedBy:      "test",
+		RequestedAtUnix:  1001,
+	})
+	if !errors.Is(err, ErrAppDeployIncompatible) {
+		t.Fatalf("err=%v want ErrAppDeployIncompatible", err)
 	}
 }
 

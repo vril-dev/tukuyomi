@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,8 @@ const (
 	daemonRuntimeMaxRestart     = 5
 	daemonRuntimeRestartWindow  = time.Minute
 	daemonRuntimeRestartDelay   = 2 * time.Second
+	daemonRuntimeDefaultLogTail = 16 * 1024
+	daemonRuntimeMaxLogTail     = 64 * 1024
 )
 
 type ProcessStatus struct {
@@ -44,6 +47,15 @@ type ProcessStatus struct {
 	LastAction      string   `json:"last_action,omitempty"`
 	LastError       string   `json:"last_error,omitempty"`
 	LogFile         string   `json:"log_file,omitempty"`
+}
+
+type ProcessLog struct {
+	AppID     string `json:"app_id"`
+	ProcessID string `json:"process_id"`
+	LogFile   string `json:"log_file"`
+	Tail      string `json:"tail"`
+	Truncated bool   `json:"truncated"`
+	MaxBytes  int64  `json:"max_bytes"`
 }
 
 type Spec struct {
@@ -100,6 +112,7 @@ type Supervisor struct {
 	processes map[string]*managedProcess
 	statuses  map[string]ProcessStatus
 	restarts  map[string]restartState
+	manual    map[string]bool
 }
 
 func New(options Options) *Supervisor {
@@ -108,6 +121,7 @@ func New(options Options) *Supervisor {
 		processes: map[string]*managedProcess{},
 		statuses:  map[string]ProcessStatus{},
 		restarts:  map[string]restartState{},
+		manual:    map[string]bool{},
 	}
 }
 
@@ -194,6 +208,7 @@ func (s *Supervisor) ensureProcess(spec Spec, explicit bool) error {
 		if err := s.stop(spec.AppID, false); err != nil {
 			return err
 		}
+		s.clearManualStop(spec.AppID)
 		s.updateStatus(spec, &identity, false, 0, "disabled", "")
 		return nil
 	}
@@ -203,6 +218,13 @@ func (s *Supervisor) ensureProcess(spec Spec, explicit bool) error {
 	}
 
 	s.mu.Lock()
+	if explicit {
+		delete(s.manual, spec.AppID)
+	} else if spec.Enabled && s.manual[spec.AppID] {
+		s.mu.Unlock()
+		s.updateStatus(spec, &identity, false, 0, "manual_stopped", "")
+		return nil
+	}
 	current := s.processes[spec.AppID]
 	if current != nil {
 		current.desired = true
@@ -232,6 +254,7 @@ func (s *Supervisor) StartProcess(appID string, desired []Spec) error {
 		return fmt.Errorf("daemon app %q is not configured", appID)
 	}
 	spec.Enabled = true
+	s.clearManualStop(spec.AppID)
 	return s.ensureProcess(spec, true)
 }
 
@@ -243,6 +266,7 @@ func (s *Supervisor) StopProcess(appID string, desired []Spec) error {
 	if err := s.stop(spec.AppID, false); err != nil {
 		return err
 	}
+	s.setManualStop(spec.AppID)
 	identity, _ := s.resolveIdentity(spec)
 	s.updateStatus(spec, &identity, false, 0, "manual_stopped", "")
 	return nil
@@ -253,6 +277,7 @@ func (s *Supervisor) ReloadProcess(appID string, desired []Spec) error {
 	if !ok {
 		return fmt.Errorf("daemon app %q is not configured", appID)
 	}
+	s.clearManualStop(spec.AppID)
 	if err := s.stop(spec.AppID, false); err != nil {
 		return err
 	}
@@ -330,6 +355,7 @@ func (s *Supervisor) stop(appID string, deleteStatus bool) error {
 		if deleteStatus {
 			delete(s.statuses, appID)
 			delete(s.restarts, appID)
+			delete(s.manual, appID)
 		}
 		s.mu.Unlock()
 		return nil
@@ -375,6 +401,7 @@ func (s *Supervisor) stop(appID string, deleteStatus bool) error {
 		s.mu.Lock()
 		delete(s.statuses, appID)
 		delete(s.restarts, appID)
+		delete(s.manual, appID)
 		s.mu.Unlock()
 		return nil
 	}
@@ -486,6 +513,64 @@ func (s *Supervisor) updateStatusLocked(spec Spec, identity *Identity, running b
 		status.EffectiveGID = int(identity.GID)
 	}
 	s.statuses[spec.AppID] = status
+}
+
+func (s *Supervisor) setManualStop(appID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.manual[appID] = true
+}
+
+func (s *Supervisor) clearManualStop(appID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.manual, appID)
+}
+
+func (s *Supervisor) LogTail(appID string, maxBytes int64) (ProcessLog, error) {
+	if s == nil {
+		return ProcessLog{}, fmt.Errorf("daemon runtime supervisor is not initialized")
+	}
+	maxBytes = normalizeDaemonRuntimeLogTailBytes(maxBytes)
+	appID = strings.TrimSpace(appID)
+	if appID == "" {
+		return ProcessLog{}, fmt.Errorf("daemon app id is required")
+	}
+
+	s.mu.Lock()
+	status, ok := s.statuses[appID]
+	if !ok {
+		for _, candidate := range s.statuses {
+			if candidate.ProcessID == appID {
+				status = candidate
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		s.mu.Unlock()
+		return ProcessLog{}, fmt.Errorf("daemon app %q is not configured", appID)
+	}
+	logPath := s.logPath(status.AppID)
+	out := ProcessLog{
+		AppID:     status.AppID,
+		ProcessID: status.ProcessID,
+		LogFile:   logPath,
+		MaxBytes:  maxBytes,
+	}
+	s.mu.Unlock()
+
+	tail, truncated, err := daemonRuntimeReadFileTail(logPath, maxBytes)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return ProcessLog{}, err
+	}
+	out.Tail = tail
+	out.Truncated = truncated
+	return out, nil
 }
 
 func daemonRuntimeSpecSignature(spec Spec) string {
@@ -626,7 +711,7 @@ func (s *Supervisor) launchEnv(spec Spec) []string {
 }
 
 func (s *Supervisor) logPath(appID string) string {
-	appID = strings.TrimSpace(appID)
+	appID = daemonRuntimeSafePathToken(appID)
 	if appID == "" {
 		appID = "unknown"
 	}
@@ -650,4 +735,70 @@ func daemonRuntimePathUnder(root string, target string) bool {
 		return false
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func daemonRuntimeSafePathToken(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '.', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+func normalizeDaemonRuntimeLogTailBytes(value int64) int64 {
+	if value <= 0 {
+		return daemonRuntimeDefaultLogTail
+	}
+	if value > daemonRuntimeMaxLogTail {
+		return daemonRuntimeMaxLogTail
+	}
+	return value
+}
+
+func daemonRuntimeReadFileTail(path string, maxBytes int64) (string, bool, error) {
+	maxBytes = normalizeDaemonRuntimeLogTailBytes(maxBytes)
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", false, err
+	}
+	if info.IsDir() {
+		return "", false, fmt.Errorf("daemon log path is a directory")
+	}
+	size := info.Size()
+	offset := int64(0)
+	truncated := false
+	if size > maxBytes {
+		offset = size - maxBytes
+		truncated = true
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false, err
+	}
+	defer f.Close()
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			return "", false, err
+		}
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maxBytes))
+	if err != nil {
+		return "", false, err
+	}
+	return string(raw), truncated, nil
 }

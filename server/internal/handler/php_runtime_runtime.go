@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1164,6 +1165,25 @@ func ReloadDaemonProcessHandler(c *gin.Context) {
 		"runtime_app_name": normalizeConfigToken(appName),
 		"daemon_processes": DaemonRuntimeProcessSnapshot(),
 	})
+}
+
+func GetDaemonProcessLogHandler(c *gin.Context) {
+	appName := runtimeAppNameParam(c)
+	maxBytes := int64(0)
+	if raw := strings.TrimSpace(c.Query("max_bytes")); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "messages": []string{"max_bytes is invalid"}})
+			return
+		}
+		maxBytes = parsed
+	}
+	out, err := DaemonRuntimeProcessLogTail(appName, maxBytes)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "messages": []string{err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func runtimeAppNameParam(c *gin.Context) string {

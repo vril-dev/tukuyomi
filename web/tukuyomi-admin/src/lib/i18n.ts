@@ -979,6 +979,10 @@ const JA_STRINGS: Record<string, string> = {
   "Runtime Apps": "Runtime Apps",
   "Loading Runtime Apps...": "Runtime Apps を読み込んでいます...",
   "Saved. Runtime Apps config applied.": "保存しました。Runtime Apps 設定を適用しました。",
+  "Daemon log": "daemon ログ",
+  "View log": "ログ表示",
+  "No daemon log output.": "daemon ログ出力はありません。",
+  "Showing the latest bounded log output.": "上限内の最新ログ出力を表示しています。",
   "Add app": "app 追加",
   "No runtime-backed apps configured. Add one to publish a managed application listener.":
     "runtime backed app は未設定です。managed application listener を公開するには追加してください。",

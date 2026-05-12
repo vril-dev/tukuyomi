@@ -41,6 +41,25 @@ func TestRuntimeAppHTTPProcessControllerUsesUnixSocket(t *testing.T) {
 		actionCh <- in
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	})
+	mux.HandleFunc("/v1/daemon/log", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method=%s want POST", r.Method)
+		}
+		var in runtimeAppProcessActionRequest
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Fatalf("decode daemon log request: %v", err)
+		}
+		if in.ProcessID != "mqtt-broker" || in.MaxBytes != 4096 {
+			t.Fatalf("daemon log request=%+v", in)
+		}
+		_ = json.NewEncoder(w).Encode(DaemonRuntimeProcessLog{
+			AppID:     "mqtt-broker",
+			ProcessID: "mqtt-broker",
+			LogFile:   "data/daemon-apps/mqtt-broker/daemon-supervisor.log",
+			Tail:      "ready\n",
+			MaxBytes:  4096,
+		})
+	})
 	srv := &http.Server{Handler: mux}
 	go func() {
 		_ = srv.Serve(ln)
@@ -64,6 +83,13 @@ func TestRuntimeAppHTTPProcessControllerUsesUnixSocket(t *testing.T) {
 	got := <-actionCh
 	if got.Action != "reload" || got.RuntimeID != "php85" {
 		t.Fatalf("action=%+v", got)
+	}
+	logTail, err := controller.DaemonRuntimeProcessLog("mqtt-broker", 4096)
+	if err != nil {
+		t.Fatalf("DaemonRuntimeProcessLog: %v", err)
+	}
+	if logTail.AppID != "mqtt-broker" || logTail.Tail != "ready\n" {
+		t.Fatalf("daemon log=%+v", logTail)
 	}
 }
 

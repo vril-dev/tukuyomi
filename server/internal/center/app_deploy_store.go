@@ -220,6 +220,7 @@ type AppDeployView struct {
 	Request    *AppDeployRequestRecord      `json:"request"`
 	Status     []AppDeployApplyStatusRecord `json:"status"`
 	History    []AppDeployHistoryRecord     `json:"history"`
+	DaemonLogs []DaemonLogArchiveRecord     `json:"daemon_logs"`
 }
 
 type AppDeployPackageDetail struct {
@@ -284,6 +285,10 @@ func AppDeploymentsForDevice(ctx context.Context, deviceID string) (AppDeployVie
 			return err
 		}
 		out.History, err = listAppDeployHistoryForDeviceTx(ctx, db, driver, deviceID, 50)
+		if err != nil {
+			return err
+		}
+		out.DaemonLogs, err = listDaemonLogArchivesForDeviceTx(ctx, db, driver, deviceID, DaemonLogArchiveListLimit)
 		return err
 	})
 	return out, err
@@ -404,10 +409,10 @@ func LoadAppDeployPackageFileForDevice(ctx context.Context, deviceID, revision, 
 	return detail, ErrAppDeployNotFound
 }
 
-func StoreAppDeployPackage(ctx context.Context, in AppDeployPackageImport) (AppDeployPackageRecord, error) {
+func StoreAppDeployPackage(ctx context.Context, in AppDeployPackageImport) (AppDeployPackageRecord, bool, error) {
 	normalized, parsed, files, manifestJSON, rootsJSON, err := normalizeAppDeployPackageImport(in)
 	if err != nil {
-		return AppDeployPackageRecord{}, err
+		return AppDeployPackageRecord{}, false, err
 	}
 	if normalized.UploadedAtUnix <= 0 {
 		normalized.UploadedAtUnix = time.Now().UTC().Unix()
@@ -446,8 +451,9 @@ func StoreAppDeployPackage(ctx context.Context, in AppDeployPackageImport) (AppD
 		parsed.PackageHash,
 	)
 	if err != nil {
-		return AppDeployPackageRecord{}, fmt.Errorf("%w: %v", ErrAppDeployInvalid, err)
+		return AppDeployPackageRecord{}, false, fmt.Errorf("%w: %v", ErrAppDeployInvalid, err)
 	}
+	created := true
 	err = withCenterDB(ctx, func(db *sql.DB, driver string) error {
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
@@ -489,6 +495,7 @@ func StoreAppDeployPackage(ctx context.Context, in AppDeployPackageImport) (AppD
 				}
 				if found && existing.PackageHash == out.PackageHash && existing.DeviceID == out.DeviceID && existing.AppID == out.AppID {
 					out = existing
+					created = false
 					return tx.Commit()
 				}
 			}
@@ -504,7 +511,7 @@ func StoreAppDeployPackage(ctx context.Context, in AppDeployPackageImport) (AppD
 	if err != nil && !payloadExisted {
 		removeCenterPayloadFile(centerPayloadAppDeploy, packageRevision, centerPayloadAppDeployExt)
 	}
-	return out, err
+	return out, created && err == nil, err
 }
 
 func CreateAppDeployRequest(ctx context.Context, in AppDeployRequestUpdate) (AppDeployRequestRecord, error) {
@@ -547,6 +554,13 @@ func CreateAppDeployRequest(ctx context.Context, in AppDeployRequestUpdate) (App
 				Roots:           pkg.Roots,
 			}
 		case AppDeployOperationAdopt:
+			candidate, found, err := loadAppDeployCandidateForAppTx(ctx, tx, driver, normalized.DeviceID, normalized.AppID)
+			if err != nil {
+				return err
+			}
+			if !found || candidate.Managed {
+				return ErrAppDeployIncompatible
+			}
 			profile = AppDeployProfileRecord{
 				DeviceID:        normalized.DeviceID,
 				AppID:           normalized.AppID,
@@ -984,7 +998,7 @@ func normalizeAppDeployRequestUpdate(in AppDeployRequestUpdate) (AppDeployReques
 		if err != nil {
 			return AppDeployRequestUpdate{}, err
 		}
-		if err := validateAppDeployRootsForApp(in.AppID, roots); err != nil {
+		if err := validateAppDeployAdoptionRootsForApp(in.AppID, roots); err != nil {
 			return AppDeployRequestUpdate{}, err
 		}
 		in.Roots = roots
@@ -1240,6 +1254,18 @@ func validateAppDeployRootsForApp(appID string, roots []AppDeployRootRecord) err
 			continue
 		}
 		if !appDeploySourcePathAllowedForApp(sourcePath, appID) {
+			return ErrAppDeployInvalid
+		}
+	}
+	return nil
+}
+
+func validateAppDeployAdoptionRootsForApp(appID string, roots []AppDeployRootRecord) error {
+	if err := validateAppDeployRootsForApp(appID, roots); err != nil {
+		return err
+	}
+	for _, root := range roots {
+		if strings.TrimSpace(root.SourcePath) == "" {
 			return ErrAppDeployInvalid
 		}
 	}

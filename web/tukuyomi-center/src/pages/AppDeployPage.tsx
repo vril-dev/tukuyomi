@@ -115,6 +115,21 @@ type AppDeployHistoryRecord = {
   updated_at_unix: number;
 };
 
+type DaemonLogArchiveRecord = {
+  device_id: string;
+  app_id: string;
+  archive_revision: string;
+  archive_hash: string;
+  process_id?: string;
+  log_file?: string;
+  archive_name?: string;
+  compressed_size: number;
+  uncompressed_size: number;
+  rotated_at_unix: number;
+  uploaded_at_unix: number;
+  uploaded_at: string;
+};
+
 type AppDeployView = {
   device: DeviceRecord;
   candidates?: AppDeployCandidateRecord[];
@@ -123,6 +138,7 @@ type AppDeployView = {
   request?: AppDeployRequestRecord | null;
   status?: AppDeployApplyStatusRecord[];
   history?: AppDeployHistoryRecord[];
+  daemon_logs?: DaemonLogArchiveRecord[];
 };
 
 type AppDeployPackageFileRecord = {
@@ -144,6 +160,7 @@ type AppDeployPackageFileDetail = {
 
 type AppDeployPackageImportResult = {
   package: AppDeployPackageRecord;
+  created?: boolean;
   request?: AppDeployRequestRecord;
 };
 
@@ -221,6 +238,12 @@ function applyStateClass(state: string) {
 
 function appDeployPackageDownloadPath(deviceID: string, revision: string) {
   return `${getAPIBasePath()}/devices/${encodeURIComponent(deviceID)}/app-deployments/packages/${encodeURIComponent(
+    revision,
+  )}/download`;
+}
+
+function daemonLogArchiveDownloadPath(deviceID: string, revision: string) {
+  return `${getAPIBasePath()}/devices/${encodeURIComponent(deviceID)}/app-deployments/daemon-logs/${encodeURIComponent(
     revision,
   )}/download`;
 }
@@ -309,6 +332,31 @@ function prettyRoots(roots: AppDeployRootRecord[] | undefined) {
   }).join(", ");
 }
 
+function candidateHasAdoptionSource(candidate: AppDeployCandidateRecord) {
+  const roots = candidate.roots || [];
+  return roots.length > 0 && roots.every((root) => (root.source_path || "").trim() !== "");
+}
+
+function adoptionButtonLabel(candidate: AppDeployCandidateRecord, tx: (value: string) => string) {
+  if (candidate.managed) {
+    return tx("Managed");
+  }
+  if (!candidateHasAdoptionSource(candidate)) {
+    return tx("No source");
+  }
+  return tx("Adopt current source");
+}
+
+function adoptionButtonTitle(candidate: AppDeployCandidateRecord, tx: (value: string) => string) {
+  if (candidate.managed) {
+    return tx("This Runtime App is already Center-managed. Download a saved package or upload a new package.");
+  }
+  if (!candidateHasAdoptionSource(candidate)) {
+    return tx("No Gateway source path is available for adoption.");
+  }
+  return undefined;
+}
+
 function normalizePositiveInt(value: string, fallback: number) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -329,6 +377,7 @@ export default function AppDeployPage() {
   const [candidateMessage, setCandidateMessage] = useState<PageMessage | null>(null);
   const [pendingMessage, setPendingMessage] = useState<PageMessage | null>(null);
   const [packageMessage, setPackageMessage] = useState<PageMessage | null>(null);
+  const [daemonLogMessage, setDaemonLogMessage] = useState<PageMessage | null>(null);
   const [modalMessage, setModalMessage] = useState<PageMessage | null>(null);
   const [selectedPackage, setSelectedPackage] = useState<AppDeployPackageDetail | null>(null);
   const [selectedFile, setSelectedFile] = useState<AppDeployPackageFileDetail | null>(null);
@@ -353,6 +402,7 @@ export default function AppDeployPage() {
   const packages = useMemo(() => [...(view?.packages || [])], [view?.packages]);
   const statuses = useMemo(() => [...(view?.status || [])], [view?.status]);
   const history = useMemo(() => [...(view?.history || [])], [view?.history]);
+  const daemonLogs = useMemo(() => [...(view?.daemon_logs || [])], [view?.daemon_logs]);
 
   const statusByApp = useMemo(() => {
     const out = new Map<string, AppDeployApplyStatusRecord>();
@@ -489,11 +539,18 @@ export default function AppDeployPage() {
           current ? { ...current, packages: packagesWithUploadedPackage(current.packages, result.package) } : current,
         );
       }
+      const duplicateMessage = result.created === false;
       setUploadMessage({
         kind: "success",
         text: result.request
-          ? tx("App package uploaded and deployment request queued.")
-          : tx("App package uploaded. Use Deploy in Saved app packages to apply it."),
+          ? duplicateMessage
+            ? tx("App package is already registered and deployment request queued.")
+            : tx("App package uploaded and deployment request queued.")
+          : duplicateMessage
+            ? tx(
+                "App package is already registered. Use Deploy in Saved app packages to apply it.",
+              )
+            : tx("App package uploaded. Use Deploy in Saved app packages to apply it."),
       });
     } catch (err) {
       setUploadMessage({ kind: "error", text: err instanceof Error ? err.message : tx("Failed to upload app package") });
@@ -638,6 +695,31 @@ export default function AppDeployPage() {
     }
   };
 
+  const deleteDaemonLogArchive = async (archive: DaemonLogArchiveRecord) => {
+    if (!deviceID) {
+      return;
+    }
+    setBusy(`daemon-log-delete:${archive.archive_revision}`);
+    setDaemonLogMessage(null);
+    try {
+      await apiPostJson(
+        `/devices/${encodeURIComponent(deviceID)}/app-deployments/daemon-logs/${encodeURIComponent(
+          archive.archive_revision,
+        )}/delete`,
+        {},
+      );
+      await loadDeployments();
+      setDaemonLogMessage({ kind: "success", text: tx("Daemon log archive deleted.") });
+    } catch (err) {
+      setDaemonLogMessage({
+        kind: "error",
+        text: err instanceof Error ? err.message : tx("Failed to delete daemon log archive"),
+      });
+    } finally {
+      setBusy("");
+    }
+  };
+
   const openFile = async (file: AppDeployPackageFileRecord) => {
     if (!deviceID || !selectedPackage) {
       return;
@@ -744,6 +826,7 @@ export default function AppDeployPage() {
               {candidates.length > 0 ? (
                 candidates.map((candidate) => {
                   const profile = profileByApp.get(candidate.app_id);
+                  const canAdopt = !candidate.managed && candidateHasAdoptionSource(candidate);
                   return (
                     <tr key={candidate.app_id}>
                       <td className="actions-cell">
@@ -754,10 +837,11 @@ export default function AppDeployPage() {
                           <button
                             type="button"
                             className="secondary-btn"
-                            disabled={Boolean(request) || busy === `adopt:${candidate.app_id}`}
+                            disabled={Boolean(request) || busy === `adopt:${candidate.app_id}` || !canAdopt}
+                            title={adoptionButtonTitle(candidate, tx)}
                             onClick={() => void createAdoptionRequest(candidate)}
                           >
-                            {tx("Adopt current source")}
+                            {adoptionButtonLabel(candidate, tx)}
                           </button>
                         </div>
                       </td>
@@ -1104,6 +1188,72 @@ export default function AppDeployPage() {
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section className="device-detail-section">
+        <h3>{tx("Daemon log archives")}</h3>
+        <p className="section-subtitle">{tx("Rotated daemon supervisor logs uploaded by this Gateway.")}</p>
+        <div className="table-wrap app-deploy-package-table">
+          <table>
+            <colgroup>
+              <col className="app-deploy-col-actions-wide" />
+              <col className="app-deploy-col-app" />
+              <col className="app-deploy-col-revision" />
+              <col className="app-deploy-col-time" />
+              <col className="app-deploy-col-time" />
+              <col className="app-deploy-col-size" />
+              <col className="app-deploy-col-size" />
+              <col className="app-deploy-col-hash" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>{tx("Actions")}</th>
+                <th>{tx("App ID")}</th>
+                <th>{tx("Archive")}</th>
+                <th>{tx("Rotated")}</th>
+                <th>{tx("Uploaded")}</th>
+                <th>{tx("Compressed")}</th>
+                <th>{tx("Uncompressed")}</th>
+                <th>{tx("Archive hash")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {daemonLogs.length > 0 ? (
+                daemonLogs.map((archive) => (
+                  <tr key={archive.archive_revision}>
+                    <td className="actions-cell">
+                      <div className="inline-actions">
+                        <a className="button-link" href={daemonLogArchiveDownloadPath(deviceID, archive.archive_revision)}>
+                          {tx("Download")}
+                        </a>
+                        <button
+                          type="button"
+                          className="danger"
+                          disabled={busy === `daemon-log-delete:${archive.archive_revision}`}
+                          onClick={() => void deleteDaemonLogArchive(archive)}
+                        >
+                          {tx("Delete")}
+                        </button>
+                      </div>
+                    </td>
+                    <td title={archive.process_id || archive.app_id}>{archive.app_id}</td>
+                    <td title={archive.archive_revision}>{compactRevision(archive.archive_revision)}</td>
+                    <td>{formatUnix(archive.rotated_at_unix, locale)}</td>
+                    <td>{formatUnix(archive.uploaded_at_unix, locale)}</td>
+                    <td>{formatSize(archive.compressed_size)}</td>
+                    <td>{formatSize(archive.uncompressed_size)}</td>
+                    <td title={archive.archive_hash}>{compactHash(archive.archive_hash)}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={8}>{tx("No daemon log archives uploaded.")}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {daemonLogMessage ? <p className={`form-message ${daemonLogMessage.kind}`}>{daemonLogMessage.text}</p> : null}
       </section>
 
       {pendingDiff ? (

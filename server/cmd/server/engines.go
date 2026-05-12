@@ -116,6 +116,7 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 			config.APIBasePath+"/daemon-processes/:runtime_app_name/up",
 			config.APIBasePath+"/daemon-processes/:runtime_app_name/down",
 			config.APIBasePath+"/daemon-processes/:runtime_app_name/reload",
+			config.APIBasePath+"/daemon-processes/:runtime_app_name/log",
 			config.APIBasePath+"/runtime-apps/validate",
 			config.APIBasePath+"/runtime-apps/rollback",
 			config.APIBasePath+"/scheduled-tasks/validate",
@@ -236,6 +237,7 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 	api.POST("/daemon-processes/:runtime_app_name/up", adminMutate, handler.UpDaemonProcessHandler)
 	api.POST("/daemon-processes/:runtime_app_name/down", adminMutate, handler.DownDaemonProcessHandler)
 	api.POST("/daemon-processes/:runtime_app_name/reload", adminMutate, handler.ReloadDaemonProcessHandler)
+	api.GET("/daemon-processes/:runtime_app_name/log", handler.GetDaemonProcessLogHandler)
 	api.GET("/runtime-apps", handler.GetRuntimeApps)
 	api.POST("/runtime-apps/validate", handler.ValidateRuntimeApps)
 	api.PUT("/runtime-apps", adminMutate, handler.PutRuntimeApps)

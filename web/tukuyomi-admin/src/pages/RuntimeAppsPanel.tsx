@@ -161,6 +161,15 @@ type DaemonRuntimeProcessStatus = {
   log_file?: string;
 };
 
+type DaemonRuntimeProcessLog = {
+  app_id: string;
+  process_id: string;
+  log_file: string;
+  tail: string;
+  truncated: boolean;
+  max_bytes: number;
+};
+
 let runtimeAppFormIDSequence = 0;
 
 function nextRuntimeAppFormID(prefix: string) {
@@ -679,6 +688,10 @@ export default function RuntimeAppsPanel() {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [daemonLog, setDaemonLog] = useState<DaemonRuntimeProcessLog | null>(
+    null,
+  );
+  const [daemonLogLoading, setDaemonLogLoading] = useState(false);
 
   const rawPreview = useMemo(() => runtimeAppsToRaw(vhosts), [vhosts]);
   const legacyStaticCount = useMemo(
@@ -1006,6 +1019,24 @@ export default function RuntimeAppsPanel() {
     [refreshRuntimeState, tx],
   );
 
+  const openDaemonLog = useCallback(
+    async (appID: string) => {
+      setDaemonLogLoading(true);
+      setError("");
+      try {
+        const out = await apiGetJson<DaemonRuntimeProcessLog>(
+          `/daemon-processes/${encodeURIComponent(appID)}/log?max_bytes=32768`,
+        );
+        setDaemonLog(out);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setDaemonLogLoading(false);
+      }
+    },
+    [],
+  );
+
   if (loading) {
     return (
       <div className="w-full p-4 text-neutral-500">
@@ -1285,6 +1316,8 @@ export default function RuntimeAppsPanel() {
                         onAction={(action) =>
                           void runDaemonAction(app.name, action)
                         }
+                        onViewLog={() => void openDaemonLog(app.name)}
+                        logLoading={daemonLogLoading}
                       />
                     ) : app.mode === "psgi" ? (
                       <PSGIStateSummary
@@ -2064,6 +2097,33 @@ export default function RuntimeAppsPanel() {
           ))}
         </div>
       </section>
+      {daemonLog ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 py-6">
+          <div className="w-full max-w-5xl rounded-lg border border-neutral-200 bg-white shadow-lg">
+            <div className="flex items-start justify-between gap-3 border-b border-neutral-200 px-4 py-3">
+              <div>
+                <h2 className="text-sm">{tx("Daemon log")}</h2>
+                <p className="text-xs text-neutral-500">
+                  {daemonLog.app_id} / {daemonLog.log_file}
+                </p>
+              </div>
+              <button type="button" onClick={() => setDaemonLog(null)}>
+                {tx("Close")}
+              </button>
+            </div>
+            <div className="p-4">
+              {daemonLog.truncated ? (
+                <p className="form-message info">
+                  {tx("Showing the latest bounded log output.")}
+                </p>
+              ) : null}
+              <pre className="max-h-[60vh] overflow-auto rounded border border-neutral-200 bg-white p-3 font-mono text-xs leading-5 text-neutral-900">
+                {daemonLog.tail || tx("No daemon log output.")}
+              </pre>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2224,6 +2284,8 @@ function DaemonStateSummary({
   readOnly,
   saving,
   onAction,
+  onViewLog,
+  logLoading,
 }: {
   tx: (
     key: string,
@@ -2234,6 +2296,8 @@ function DaemonStateSummary({
   readOnly: boolean;
   saving: boolean;
   onAction: (action: "up" | "down" | "reload") => void;
+  onViewLog: () => void;
+  logLoading: boolean;
 }) {
   const state =
     process?.last_action ||
@@ -2303,6 +2367,13 @@ function DaemonStateSummary({
           disabled={readOnly || saving || process?.running !== true}
         >
           {tx("Stop")}
+        </button>
+        <button
+          type="button"
+          onClick={onViewLog}
+          disabled={saving || logLoading || !process?.log_file}
+        >
+          {logLoading ? tx("Loading...") : tx("View log")}
         </button>
       </div>
     </div>

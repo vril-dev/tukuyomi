@@ -28,6 +28,7 @@ const (
 )
 
 type DaemonRuntimeProcessStatus = daemonruntime.ProcessStatus
+type DaemonRuntimeProcessLog = daemonruntime.ProcessLog
 type daemonRuntimeAppSpec = daemonruntime.Spec
 
 type RuntimeAppProcessController interface {
@@ -42,6 +43,7 @@ type RuntimeAppProcessController interface {
 	StopPSGIProcess(processID string) error
 	ReloadPSGIProcess(processID string) error
 	DaemonRuntimeProcessSnapshot() []DaemonRuntimeProcessStatus
+	DaemonRuntimeProcessLog(processID string, maxBytes int64) (DaemonRuntimeProcessLog, error)
 	ReconcileDaemonRuntimeSupervisor() error
 	StartDaemonProcess(processID string) error
 	StopDaemonProcess(processID string) error
@@ -121,6 +123,10 @@ func (localRuntimeAppProcessController) DaemonRuntimeProcessSnapshot() []DaemonR
 	return localDaemonRuntimeProcessSnapshot()
 }
 
+func (localRuntimeAppProcessController) DaemonRuntimeProcessLog(processID string, maxBytes int64) (DaemonRuntimeProcessLog, error) {
+	return localDaemonRuntimeProcessLog(processID, maxBytes)
+}
+
 func (localRuntimeAppProcessController) ReconcileDaemonRuntimeSupervisor() error {
 	return localReconcileDaemonRuntimeSupervisor()
 }
@@ -171,6 +177,10 @@ func DaemonRuntimeProcessSnapshot() []DaemonRuntimeProcessStatus {
 	return runtimeAppProcessController().DaemonRuntimeProcessSnapshot()
 }
 
+func DaemonRuntimeProcessLogTail(appID string, maxBytes int64) (DaemonRuntimeProcessLog, error) {
+	return runtimeAppProcessController().DaemonRuntimeProcessLog(appID, maxBytes)
+}
+
 func ReconcileDaemonRuntimeSupervisor() error {
 	return runtimeAppProcessController().ReconcileDaemonRuntimeSupervisor()
 }
@@ -193,6 +203,14 @@ func localDaemonRuntimeProcessSnapshot() []DaemonRuntimeProcessStatus {
 		return nil
 	}
 	return sup.Snapshot()
+}
+
+func localDaemonRuntimeProcessLog(appID string, maxBytes int64) (DaemonRuntimeProcessLog, error) {
+	sup := daemonRuntimeSupervisorInstance()
+	if sup == nil {
+		return DaemonRuntimeProcessLog{}, fmt.Errorf("daemon runtime supervisor is not initialized")
+	}
+	return sup.LogTail(normalizeConfigToken(appID), maxBytes)
 }
 
 func localReconcileDaemonRuntimeSupervisor() error {
@@ -355,6 +373,7 @@ type runtimeAppProcessActionRequest struct {
 	Action    string `json:"action"`
 	RuntimeID string `json:"runtime_id,omitempty"`
 	ProcessID string `json:"process_id,omitempty"`
+	MaxBytes  int64  `json:"max_bytes,omitempty"`
 }
 
 type runtimeAppProcessErrorResponse struct {
@@ -439,6 +458,15 @@ func (c *RuntimeAppProcessHTTPController) DaemonRuntimeProcessSnapshot() []Daemo
 		return nil
 	}
 	return out.Processes
+}
+
+func (c *RuntimeAppProcessHTTPController) DaemonRuntimeProcessLog(processID string, maxBytes int64) (DaemonRuntimeProcessLog, error) {
+	var out DaemonRuntimeProcessLog
+	err := c.doJSON(http.MethodPost, "/v1/daemon/log", runtimeAppProcessActionRequest{
+		ProcessID: processID,
+		MaxBytes:  maxBytes,
+	}, &out, runtimeAppProcessControlSnapshotTimeout)
+	return out, err
 }
 
 func (c *RuntimeAppProcessHTTPController) ReconcileDaemonRuntimeSupervisor() error {

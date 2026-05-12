@@ -46,6 +46,7 @@ import (
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/centertls"
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/daemonruntime"
 	"tukuyomi/internal/edgeartifactbundle"
 	"tukuyomi/internal/edgeconfigsnapshot"
 	"tukuyomi/internal/remotestream"
@@ -54,13 +55,15 @@ import (
 )
 
 const (
-	edgeDeviceIdentityID        = int64(1)
-	edgeEnrollmentTokenMaxBytes = 256
-	edgeEnrollmentHTTPTimeout   = 10 * time.Second
-	edgeRuntimeArtifactTimeout  = 10 * time.Minute
-	edgeProxyRuleBundleMaxBytes = edgeconfigsnapshot.MaxBytes
-	edgeWAFRuleArtifactMaxBytes = edgeartifactbundle.MaxCompressedBytes
-	edgeAppDeployPackageTimeout = 10 * time.Minute
+	edgeDeviceIdentityID                   = int64(1)
+	edgeEnrollmentTokenMaxBytes            = 256
+	edgeEnrollmentHTTPTimeout              = 10 * time.Second
+	edgeRuntimeArtifactTimeout             = 10 * time.Minute
+	edgeProxyRuleBundleMaxBytes            = edgeconfigsnapshot.MaxBytes
+	edgeWAFRuleArtifactMaxBytes            = edgeartifactbundle.MaxCompressedBytes
+	edgeAppDeployPackageTimeout            = 10 * time.Minute
+	edgeDaemonLogArchiveMaxBytes           = 16 * 1024 * 1024
+	edgeDaemonLogArchiveMaxUploadBodyBytes = edgeDaemonLogArchiveMaxBytes*2 + 64*1024
 )
 
 const (
@@ -371,6 +374,25 @@ type edgeAppDeployBaselineUploadWireRequest struct {
 	BodyHash                   string              `json:"body_hash"`
 	SignatureB64               string              `json:"signature_b64"`
 	PackageB64                 string              `json:"package_b64"`
+}
+
+type edgeDaemonLogArchiveUploadWireRequest struct {
+	DeviceID                   string `json:"device_id"`
+	KeyID                      string `json:"key_id"`
+	PublicKeyFingerprintSHA256 string `json:"public_key_fingerprint_sha256"`
+	Timestamp                  string `json:"timestamp"`
+	Nonce                      string `json:"nonce"`
+	AppID                      string `json:"app_id"`
+	ProcessID                  string `json:"process_id,omitempty"`
+	LogFile                    string `json:"log_file,omitempty"`
+	ArchiveName                string `json:"archive_name,omitempty"`
+	ArchiveHash                string `json:"archive_hash"`
+	CompressedSize             int64  `json:"compressed_size"`
+	UncompressedSize           int64  `json:"uncompressed_size"`
+	RotatedAtUnix              int64  `json:"rotated_at_unix"`
+	BodyHash                   string `json:"body_hash"`
+	SignatureB64               string `json:"signature_b64"`
+	ArchiveB64                 string `json:"archive_b64"`
 }
 
 type edgeAppDeployBaselineUploadResponse struct {
@@ -889,6 +911,7 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 		if pushEdgeRuleArtifactBundle(ctx, &identity, payload.RuleArtifactUploadRequired) {
 			pushEdgeConfigSnapshot(ctx, &identity, payload.ConfigSnapshotUploadRequired)
 		}
+		pushEdgeDaemonLogArchives(ctx, &identity)
 	}
 	if err := upsertEdgeDeviceIdentity(store, identity); err != nil {
 		return edgeDeviceAuthStatusResponse{}, err
@@ -1511,6 +1534,7 @@ func normalizeCenterDeviceAPIBasePath(rawPath string) (string, error) {
 		"/v1/waf-rule-artifact-download",
 		"/v1/app-deploy-package-download",
 		"/v1/app-deploy-baseline-upload",
+		"/v1/daemon-log-archive-upload",
 		"/v1/remote-ssh/signing-key",
 		"/v1/remote-ssh/gateway-stream",
 	} {
@@ -1587,6 +1611,10 @@ func centerAppDeployPackageDownloadURL(centerBaseURL string) (string, error) {
 
 func centerAppDeployBaselineUploadURL(centerBaseURL string) (string, error) {
 	return centerDeviceAPIURL(centerBaseURL, "/v1/app-deploy-baseline-upload")
+}
+
+func centerDaemonLogArchiveUploadURL(centerBaseURL string) (string, error) {
+	return centerDeviceAPIURL(centerBaseURL, "/v1/daemon-log-archive-upload")
 }
 
 type edgeConfigSnapshotRuleAsset struct {
@@ -5374,6 +5402,49 @@ func signedEdgeAppDeployBaselineUploadRequest(identity edgeDeviceIdentityRecord,
 	return req, nil
 }
 
+func signedEdgeDaemonLogArchiveUploadRequest(identity edgeDeviceIdentityRecord, archive daemonruntime.LogArchive, body []byte) (edgeDaemonLogArchiveUploadWireRequest, error) {
+	privateKey, _, err := parseEdgeDevicePrivateKey(identity.PrivateKeyPEM)
+	if err != nil {
+		return edgeDaemonLogArchiveUploadWireRequest{}, err
+	}
+	if len(body) == 0 || int64(len(body)) != archive.CompressedSize || int64(len(body)) > edgeDaemonLogArchiveMaxBytes {
+		return edgeDaemonLogArchiveUploadWireRequest{}, fmt.Errorf("daemon log archive size mismatch")
+	}
+	sum := sha256.Sum256(body)
+	hash := hex.EncodeToString(sum[:])
+	if hash != archive.SHA256 {
+		return edgeDaemonLogArchiveUploadWireRequest{}, fmt.Errorf("daemon log archive hash mismatch")
+	}
+	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	nonce, err := randomEdgeIdentifier("nonce")
+	if err != nil {
+		return edgeDaemonLogArchiveUploadWireRequest{}, err
+	}
+	req := edgeDaemonLogArchiveUploadWireRequest{
+		DeviceID:                   identity.DeviceID,
+		KeyID:                      identity.KeyID,
+		PublicKeyFingerprintSHA256: identity.PublicKeyFingerprintSHA256,
+		Timestamp:                  timestamp,
+		Nonce:                      nonce,
+		AppID:                      normalizeEdgeAppDeployID(archive.AppID),
+		ProcessID:                  normalizeEdgeAppDeployID(archive.ProcessID),
+		LogFile:                    clampEdgeMetadataText(archive.LogFile, 512),
+		ArchiveName:                clampEdgeMetadataText(archive.ArchiveName, 255),
+		ArchiveHash:                hash,
+		CompressedSize:             int64(len(body)),
+		UncompressedSize:           archive.UncompressedSize,
+		RotatedAtUnix:              archive.RotatedAtUnix,
+		ArchiveB64:                 base64.StdEncoding.EncodeToString(body),
+	}
+	if req.AppID == "" || req.ArchiveHash == "" || req.UncompressedSize <= 0 || req.RotatedAtUnix <= 0 {
+		return edgeDaemonLogArchiveUploadWireRequest{}, fmt.Errorf("daemon log archive metadata is incomplete")
+	}
+	req.BodyHash = edgeDaemonLogArchiveUploadBodyHash(req)
+	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(req.DeviceID, req.KeyID, req.Timestamp, req.Nonce, req.BodyHash)))
+	req.SignatureB64 = base64.StdEncoding.EncodeToString(signature)
+	return req, nil
+}
+
 func parseEdgeDevicePrivateKey(raw string) (ed25519.PrivateKey, []byte, error) {
 	block, rest := pem.Decode([]byte(raw))
 	if block == nil || block.Type != "PRIVATE KEY" || len(strings.TrimSpace(string(rest))) != 0 {
@@ -5836,6 +5907,37 @@ func sendEdgeAppDeployBaselineUpload(ctx context.Context, uploadURL string, wire
 	return res.StatusCode, resBody, nil
 }
 
+func sendEdgeDaemonLogArchiveUpload(ctx context.Context, uploadURL string, wireReq edgeDaemonLogArchiveUploadWireRequest) (int, []byte, error) {
+	body, err := json.Marshal(wireReq)
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(body) > edgeDaemonLogArchiveMaxUploadBodyBytes {
+		return 0, nil, fmt.Errorf("daemon log archive upload payload exceeds limit")
+	}
+	ctx, cancel := context.WithTimeout(ctx, edgeEnrollmentHTTPTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client, err := edgeCenterHTTPClient()
+	if err != nil {
+		return 0, nil, err
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer res.Body.Close()
+	resBody, readErr := io.ReadAll(io.LimitReader(res.Body, 1024*1024))
+	if readErr != nil {
+		return res.StatusCode, nil, readErr
+	}
+	return res.StatusCode, resBody, nil
+}
+
 func pushEdgeRuleArtifactBundleIfChanged(ctx context.Context, identity *edgeDeviceIdentityRecord) bool {
 	return pushEdgeRuleArtifactBundle(ctx, identity, false)
 }
@@ -5973,6 +6075,49 @@ func pushEdgeConfigSnapshot(ctx context.Context, identity *edgeDeviceIdentityRec
 		identity.ConfigSnapshotPushedAtUnix = payload.ReceivedAtUnix
 	}
 	identity.ConfigSnapshotError = ""
+}
+
+func pushEdgeDaemonLogArchives(ctx context.Context, identity *edgeDeviceIdentityRecord) {
+	if identity == nil || strings.TrimSpace(identity.CenterURL) == "" || strings.TrimSpace(identity.PrivateKeyPEM) == "" {
+		return
+	}
+	archives, err := daemonruntime.PendingLogArchives(3)
+	if err != nil {
+		log.Printf("[EDGE][DAEMON_LOG][WARN] list pending daemon log archives: %v", err)
+		return
+	}
+	if len(archives) == 0 {
+		return
+	}
+	uploadURL, err := centerDaemonLogArchiveUploadURL(identity.CenterURL)
+	if err != nil {
+		log.Printf("[EDGE][DAEMON_LOG][WARN] build upload URL: %v", err)
+		return
+	}
+	for _, archive := range archives {
+		body, err := os.ReadFile(filepath.Clean(archive.Path))
+		if err != nil {
+			log.Printf("[EDGE][DAEMON_LOG][WARN] read archive %s: %v", archive.Path, err)
+			continue
+		}
+		wireReq, err := signedEdgeDaemonLogArchiveUploadRequest(*identity, archive, body)
+		if err != nil {
+			log.Printf("[EDGE][DAEMON_LOG][WARN] sign archive %s: %v", archive.Path, err)
+			continue
+		}
+		status, respBody, err := sendEdgeDaemonLogArchiveUpload(ctx, uploadURL, wireReq)
+		if err != nil {
+			log.Printf("[EDGE][DAEMON_LOG][WARN] upload archive %s: %v", archive.Path, err)
+			return
+		}
+		if status < 200 || status >= 300 {
+			log.Printf("[EDGE][DAEMON_LOG][WARN] %s", centerHTTPErrorMessage("center daemon log archive upload failed", status, respBody))
+			return
+		}
+		if err := daemonruntime.RemoveLogArchive(archive.Path); err != nil && !os.IsNotExist(err) {
+			log.Printf("[EDGE][DAEMON_LOG][WARN] remove uploaded archive %s: %v", archive.Path, err)
+		}
+	}
 }
 
 func centerEnrollmentErrorMessage(status int, body []byte) string {
@@ -6342,6 +6487,25 @@ func edgeAppDeployBaselineUploadBodyHash(req edgeAppDeployBaselineUploadWireRequ
 			strconv.FormatInt(req.CompressedSize, 10) + "\n" +
 			strconv.FormatInt(req.UncompressedSize, 10) + "\n" +
 			strconv.Itoa(req.FileCount),
+	))
+	return hex.EncodeToString(sum[:])
+}
+
+func edgeDaemonLogArchiveUploadBodyHash(req edgeDaemonLogArchiveUploadWireRequest) string {
+	sum := sha256.Sum256([]byte(
+		req.DeviceID + "\n" +
+			req.KeyID + "\n" +
+			req.PublicKeyFingerprintSHA256 + "\n" +
+			req.Timestamp + "\n" +
+			req.Nonce + "\n" +
+			req.AppID + "\n" +
+			req.ProcessID + "\n" +
+			req.LogFile + "\n" +
+			req.ArchiveName + "\n" +
+			req.ArchiveHash + "\n" +
+			strconv.FormatInt(req.CompressedSize, 10) + "\n" +
+			strconv.FormatInt(req.UncompressedSize, 10) + "\n" +
+			strconv.FormatInt(req.RotatedAtUnix, 10),
 	))
 	return hex.EncodeToString(sum[:])
 }

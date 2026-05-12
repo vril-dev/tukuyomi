@@ -195,6 +195,15 @@ Baseline adoption reads only Gateway-local relative paths under
 `data/runtime-sites/<app-id>/` before adopting an app into Center
 management.
 
+For `daemon` Runtime Apps, Gateway also owns the supervisor log lifecycle.
+The active log remains local at
+`data/daemon-apps/<app-id>/daemon-supervisor.log`. Gateway rotates it into
+compressed archives before it can grow without bound. Standalone Gateways keep
+those archives locally. Center-approved Gateways upload closed archives during
+the signed status polling flow, and Center exposes them from the device's
+`Runtime App Deploy` page for download or deletion. The active log file is not
+uploaded while the daemon is still writing to it.
+
 The feature is guarded by
 `TUKUYOMI_CENTER_EXPERIMENTAL_APP_DEPLOY_ENABLED` on the Center side so
 it can be removed from the operator surface without changing the core

@@ -220,6 +220,7 @@ type AppDeployView struct {
 	Request    *AppDeployRequestRecord      `json:"request"`
 	Status     []AppDeployApplyStatusRecord `json:"status"`
 	History    []AppDeployHistoryRecord     `json:"history"`
+	DaemonLogs []DaemonLogArchiveRecord     `json:"daemon_logs"`
 }
 
 type AppDeployPackageDetail struct {
@@ -284,6 +285,10 @@ func AppDeploymentsForDevice(ctx context.Context, deviceID string) (AppDeployVie
 			return err
 		}
 		out.History, err = listAppDeployHistoryForDeviceTx(ctx, db, driver, deviceID, 50)
+		if err != nil {
+			return err
+		}
+		out.DaemonLogs, err = listDaemonLogArchivesForDeviceTx(ctx, db, driver, deviceID, DaemonLogArchiveListLimit)
 		return err
 	})
 	return out, err

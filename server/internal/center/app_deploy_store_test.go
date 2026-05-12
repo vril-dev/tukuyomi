@@ -3,6 +3,7 @@ package center
 import (
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -281,6 +282,86 @@ func TestStoreAppDeployPackageUsesFileBackedPayload(t *testing.T) {
 	}
 	if duplicate.PackageRevision != pkg.PackageRevision {
 		t.Fatalf("duplicate package revision changed: got %q want %q", duplicate.PackageRevision, pkg.PackageRevision)
+	}
+}
+
+func TestStoreDaemonLogArchiveUsesFileBackedPayload(t *testing.T) {
+	setupRemoteSSHStoreTest(t)
+	deviceID := "tky-daemon-log-archive"
+	insertRemoteSSHApprovedDeviceForTest(t, deviceID)
+	ctx := context.Background()
+	uncompressed := []byte("daemon supervisor log\n")
+	archive := testGzip(t, uncompressed)
+	archiveHash := sha256.Sum256(archive)
+	rec, created, err := StoreDaemonLogArchive(ctx, DaemonLogArchiveImport{
+		DeviceID:         deviceID,
+		AppID:            "mqtt-broker",
+		ProcessID:        "mqtt-broker",
+		LogFile:          "data/daemon-apps/mqtt-broker/daemon-supervisor.log",
+		ArchiveName:      "daemon-supervisor.1000.log.gz",
+		ArchiveHash:      hex.EncodeToString(archiveHash[:]),
+		CompressedSize:   int64(len(archive)),
+		UncompressedSize: int64(len(uncompressed)),
+		RotatedAtUnix:    1000,
+		Archive:          archive,
+	})
+	if err != nil {
+		t.Fatalf("StoreDaemonLogArchive: %v", err)
+	}
+	if !created {
+		t.Fatal("first daemon log archive store reported duplicate")
+	}
+	stored, err := readCenterPayloadFile(centerPayloadDaemonLogArchives, rec.ArchiveRevision, centerPayloadDaemonLogArchiveExt, rec.CompressedSize, rec.ArchiveHash)
+	if err != nil {
+		t.Fatalf("read file-backed daemon log archive: %v", err)
+	}
+	if !bytes.Equal(stored, archive) {
+		t.Fatal("file-backed daemon log archive body mismatch")
+	}
+	listed, err := ListDaemonLogArchivesForDevice(ctx, deviceID, 20)
+	if err != nil {
+		t.Fatalf("ListDaemonLogArchivesForDevice: %v", err)
+	}
+	if len(listed) != 1 || listed[0].ArchiveRevision != rec.ArchiveRevision {
+		t.Fatalf("listed daemon log archives mismatch: %+v want %q", listed, rec.ArchiveRevision)
+	}
+	downloadedRec, downloaded, err := DownloadDaemonLogArchiveForDevice(ctx, deviceID, rec.ArchiveRevision)
+	if err != nil {
+		t.Fatalf("DownloadDaemonLogArchiveForDevice: %v", err)
+	}
+	if downloadedRec.AppID != "mqtt-broker" || !bytes.Equal(downloaded, archive) {
+		t.Fatalf("downloaded daemon log archive mismatch rec=%+v body=%q", downloadedRec, string(downloaded))
+	}
+	duplicate, duplicateCreated, err := StoreDaemonLogArchive(ctx, DaemonLogArchiveImport{
+		DeviceID:         deviceID,
+		AppID:            "mqtt-broker",
+		ProcessID:        "mqtt-broker",
+		LogFile:          "data/daemon-apps/mqtt-broker/daemon-supervisor.log",
+		ArchiveName:      "daemon-supervisor.1000.log.gz",
+		ArchiveHash:      hex.EncodeToString(archiveHash[:]),
+		CompressedSize:   int64(len(archive)),
+		UncompressedSize: int64(len(uncompressed)),
+		RotatedAtUnix:    1000,
+		Archive:          archive,
+	})
+	if err != nil {
+		t.Fatalf("StoreDaemonLogArchive duplicate: %v", err)
+	}
+	if duplicateCreated || duplicate.ArchiveRevision != rec.ArchiveRevision {
+		t.Fatalf("duplicate daemon log archive mismatch created=%v rec=%+v", duplicateCreated, duplicate)
+	}
+	deleted, err := DeleteDaemonLogArchiveForDevice(ctx, deviceID, rec.ArchiveRevision)
+	if err != nil {
+		t.Fatalf("DeleteDaemonLogArchiveForDevice: %v", err)
+	}
+	if !deleted {
+		t.Fatal("DeleteDaemonLogArchiveForDevice reported no delete")
+	}
+	if _, _, err := DownloadDaemonLogArchiveForDevice(ctx, deviceID, rec.ArchiveRevision); !errors.Is(err, ErrAppDeployNotFound) {
+		t.Fatalf("download deleted daemon log archive err=%v want ErrAppDeployNotFound", err)
+	}
+	if _, err := readCenterPayloadFile(centerPayloadDaemonLogArchives, rec.ArchiveRevision, centerPayloadDaemonLogArchiveExt, rec.CompressedSize, rec.ArchiveHash); !errors.Is(err, errCenterPayloadFileNotFound) {
+		t.Fatalf("deleted daemon log payload read err=%v want not found", err)
 	}
 }
 
@@ -574,6 +655,19 @@ func testAppDeployZip(t *testing.T, files map[string]string) []byte {
 	}
 	if err := zw.Close(); err != nil {
 		t.Fatalf("close zip: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func testGzip(t *testing.T, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(body); err != nil {
+		t.Fatalf("write gzip body: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close gzip body: %v", err)
 	}
 	return buf.Bytes()
 }

@@ -115,6 +115,21 @@ type AppDeployHistoryRecord = {
   updated_at_unix: number;
 };
 
+type DaemonLogArchiveRecord = {
+  device_id: string;
+  app_id: string;
+  archive_revision: string;
+  archive_hash: string;
+  process_id?: string;
+  log_file?: string;
+  archive_name?: string;
+  compressed_size: number;
+  uncompressed_size: number;
+  rotated_at_unix: number;
+  uploaded_at_unix: number;
+  uploaded_at: string;
+};
+
 type AppDeployView = {
   device: DeviceRecord;
   candidates?: AppDeployCandidateRecord[];
@@ -123,6 +138,7 @@ type AppDeployView = {
   request?: AppDeployRequestRecord | null;
   status?: AppDeployApplyStatusRecord[];
   history?: AppDeployHistoryRecord[];
+  daemon_logs?: DaemonLogArchiveRecord[];
 };
 
 type AppDeployPackageFileRecord = {
@@ -222,6 +238,12 @@ function applyStateClass(state: string) {
 
 function appDeployPackageDownloadPath(deviceID: string, revision: string) {
   return `${getAPIBasePath()}/devices/${encodeURIComponent(deviceID)}/app-deployments/packages/${encodeURIComponent(
+    revision,
+  )}/download`;
+}
+
+function daemonLogArchiveDownloadPath(deviceID: string, revision: string) {
+  return `${getAPIBasePath()}/devices/${encodeURIComponent(deviceID)}/app-deployments/daemon-logs/${encodeURIComponent(
     revision,
   )}/download`;
 }
@@ -355,6 +377,7 @@ export default function AppDeployPage() {
   const [candidateMessage, setCandidateMessage] = useState<PageMessage | null>(null);
   const [pendingMessage, setPendingMessage] = useState<PageMessage | null>(null);
   const [packageMessage, setPackageMessage] = useState<PageMessage | null>(null);
+  const [daemonLogMessage, setDaemonLogMessage] = useState<PageMessage | null>(null);
   const [modalMessage, setModalMessage] = useState<PageMessage | null>(null);
   const [selectedPackage, setSelectedPackage] = useState<AppDeployPackageDetail | null>(null);
   const [selectedFile, setSelectedFile] = useState<AppDeployPackageFileDetail | null>(null);
@@ -379,6 +402,7 @@ export default function AppDeployPage() {
   const packages = useMemo(() => [...(view?.packages || [])], [view?.packages]);
   const statuses = useMemo(() => [...(view?.status || [])], [view?.status]);
   const history = useMemo(() => [...(view?.history || [])], [view?.history]);
+  const daemonLogs = useMemo(() => [...(view?.daemon_logs || [])], [view?.daemon_logs]);
 
   const statusByApp = useMemo(() => {
     const out = new Map<string, AppDeployApplyStatusRecord>();
@@ -666,6 +690,31 @@ export default function AppDeployPage() {
       setModalMessage(null);
     } catch (err) {
       setPackageMessage({ kind: "error", text: err instanceof Error ? err.message : tx("Failed to load app package") });
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const deleteDaemonLogArchive = async (archive: DaemonLogArchiveRecord) => {
+    if (!deviceID) {
+      return;
+    }
+    setBusy(`daemon-log-delete:${archive.archive_revision}`);
+    setDaemonLogMessage(null);
+    try {
+      await apiPostJson(
+        `/devices/${encodeURIComponent(deviceID)}/app-deployments/daemon-logs/${encodeURIComponent(
+          archive.archive_revision,
+        )}/delete`,
+        {},
+      );
+      await loadDeployments();
+      setDaemonLogMessage({ kind: "success", text: tx("Daemon log archive deleted.") });
+    } catch (err) {
+      setDaemonLogMessage({
+        kind: "error",
+        text: err instanceof Error ? err.message : tx("Failed to delete daemon log archive"),
+      });
     } finally {
       setBusy("");
     }
@@ -1139,6 +1188,72 @@ export default function AppDeployPage() {
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section className="device-detail-section">
+        <h3>{tx("Daemon log archives")}</h3>
+        <p className="section-subtitle">{tx("Rotated daemon supervisor logs uploaded by this Gateway.")}</p>
+        <div className="table-wrap app-deploy-package-table">
+          <table>
+            <colgroup>
+              <col className="app-deploy-col-actions-wide" />
+              <col className="app-deploy-col-app" />
+              <col className="app-deploy-col-revision" />
+              <col className="app-deploy-col-time" />
+              <col className="app-deploy-col-time" />
+              <col className="app-deploy-col-size" />
+              <col className="app-deploy-col-size" />
+              <col className="app-deploy-col-hash" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>{tx("Actions")}</th>
+                <th>{tx("App ID")}</th>
+                <th>{tx("Archive")}</th>
+                <th>{tx("Rotated")}</th>
+                <th>{tx("Uploaded")}</th>
+                <th>{tx("Compressed")}</th>
+                <th>{tx("Uncompressed")}</th>
+                <th>{tx("Archive hash")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {daemonLogs.length > 0 ? (
+                daemonLogs.map((archive) => (
+                  <tr key={archive.archive_revision}>
+                    <td className="actions-cell">
+                      <div className="inline-actions">
+                        <a className="button-link" href={daemonLogArchiveDownloadPath(deviceID, archive.archive_revision)}>
+                          {tx("Download")}
+                        </a>
+                        <button
+                          type="button"
+                          className="danger"
+                          disabled={busy === `daemon-log-delete:${archive.archive_revision}`}
+                          onClick={() => void deleteDaemonLogArchive(archive)}
+                        >
+                          {tx("Delete")}
+                        </button>
+                      </div>
+                    </td>
+                    <td title={archive.process_id || archive.app_id}>{archive.app_id}</td>
+                    <td title={archive.archive_revision}>{compactRevision(archive.archive_revision)}</td>
+                    <td>{formatUnix(archive.rotated_at_unix, locale)}</td>
+                    <td>{formatUnix(archive.uploaded_at_unix, locale)}</td>
+                    <td>{formatSize(archive.compressed_size)}</td>
+                    <td>{formatSize(archive.uncompressed_size)}</td>
+                    <td title={archive.archive_hash}>{compactHash(archive.archive_hash)}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={8}>{tx("No daemon log archives uploaded.")}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {daemonLogMessage ? <p className={`form-message ${daemonLogMessage.kind}`}>{daemonLogMessage.text}</p> : null}
       </section>
 
       {pendingDiff ? (

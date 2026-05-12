@@ -16,7 +16,7 @@ Build on a workstation or build host:
 Prerequisites:
 
 - `make`
-- Go toolchain 1.26.2 or newer
+- Go toolchain 1.26.3 or newer
 - Node.js 24 LTS + npm 11+ for Gateway / Center UI builds, or Docker
 
 When local Node.js 24 LTS + npm 11+ is unavailable, the default
@@ -34,7 +34,7 @@ sudo usermod -aG docker "$USER"
 ```
 
 After logging in again, confirm that `docker ps` works. If the distribution Go
-package is too old, install Go 1.26.2 or newer from the official Go tarball.
+package is too old, install Go 1.26.3 or newer from the official Go tarball.
 
 ```bash
 make setup

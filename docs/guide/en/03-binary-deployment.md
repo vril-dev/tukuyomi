@@ -31,7 +31,7 @@ afterwards".
 
 First, build the tukuyomi binary on the build host or your workstation.
 
-You need `make`, Go toolchain 1.26.2 or newer, and Node.js 24 LTS + npm 11+
+You need `make`, Go toolchain 1.26.3 or newer, and Node.js 24 LTS + npm 11+
 for the Gateway / Center UI build. When local Node.js 24 LTS + npm 11+ is not
 available, the default `tools/npm-node24.sh` wrapper uses Docker image
 `node:24-alpine`. On a minimal VPS, that means Docker must not only be
@@ -47,7 +47,7 @@ sudo usermod -aG docker "$USER"
 
 The `docker` group change requires a new login session. After logging in again,
 confirm that `docker ps` works. If the distribution Go package is too old,
-install Go 1.26.2 or newer from the official Go tarball.
+install Go 1.26.3 or newer from the official Go tarball.
 
 ```bash
 make setup

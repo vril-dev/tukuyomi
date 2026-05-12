@@ -16,7 +16,7 @@
 事前に必要なもの:
 
 - `make`
-- Go toolchain 1.26.2 以上
+- Go toolchain 1.26.3 以上
 - Gateway ／ Center UI をビルドするための Node.js 24 LTS + npm 11+、または Docker
 
 Node.js 24 LTS + npm 11+ がローカルに無い場合、既定の `tools/npm-node24.sh` は
@@ -34,7 +34,7 @@ sudo usermod -aG docker "$USER"
 
 いったんログアウトして再ログインした後、`docker ps` が通ることを確認してください。
 Go はディストリビューションのパッケージが古い場合があるため、Go 公式 tarball から
-1.26.2 以上を入れてください。
+1.26.3 以上を入れてください。
 
 ```bash
 make setup

@@ -1186,6 +1186,39 @@ func TestFastCGIRequestOmitsHTTPProxyHeader(t *testing.T) {
 	}
 }
 
+func TestFastCGIRequestSetsHTTPHostFromRequestHost(t *testing.T) {
+	tmp := t.TempDir()
+	docroot := filepath.Join(tmp, "php-app", "public")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(docroot): %v", err)
+	}
+	script := filepath.Join(docroot, "index.php")
+	req := httptest.NewRequest(http.MethodGet, "http://runtime.example.test:8443/index.php", nil)
+	params, _, err := buildFastCGIRequest(req, VhostConfig{
+		Name:                "php-app",
+		Mode:                "php-fpm",
+		DocumentRoot:        docroot,
+		MaxRequestBodyBytes: defaultVhostMaxRequestBodyBytes,
+	}, vhostResolvedRequest{
+		Kind:           "php",
+		ScriptFilename: script,
+		ScriptName:     "/index.php",
+		RequestPath:    "/index.php",
+	})
+	if err != nil {
+		t.Fatalf("buildFastCGIRequest: %v", err)
+	}
+	if got := params["HTTP_HOST"]; got != "runtime.example.test:8443" {
+		t.Fatalf("HTTP_HOST=%q want runtime.example.test:8443", got)
+	}
+	if got := params["SERVER_NAME"]; got != "runtime.example.test" {
+		t.Fatalf("SERVER_NAME=%q want runtime.example.test", got)
+	}
+	if got := params["SERVER_PORT"]; got != "8443" {
+		t.Fatalf("SERVER_PORT=%q want 8443", got)
+	}
+}
+
 func TestServeProxyReturnsGeneric500ForFastCGIStderrOnly(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()

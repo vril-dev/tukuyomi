@@ -477,6 +477,74 @@ func TestRefreshPHPRuntimeMaterializationDoesNotCreateDefaultRuntimeDirForEmptyV
 	}
 }
 
+func TestRefreshPHPRuntimeMaterializationWritesPHPPoolSettings(t *testing.T) {
+	restore := resetPHPProxyFoundationForTest(t)
+	defer restore()
+
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	inventory := PHPRuntimeInventoryFile{
+		Runtimes: []PHPRuntimeRecord{
+			{
+				RuntimeID:  "php82",
+				BinaryPath: "data/php-fpm/binaries/php82/php-fpm",
+				Available:  true,
+			},
+		},
+	}
+	cfg := VhostConfigFile{Vhosts: []VhostConfig{{
+		Name:            "app",
+		Mode:            "php-fpm",
+		Hostname:        "127.0.0.1",
+		ListenPort:      9081,
+		DocumentRoot:    "apps/app/public",
+		RuntimeID:       "php82",
+		GeneratedTarget: "app-php",
+		PHPPoolSettings: "pm.max_children = 8\nrequest_slowlog_timeout = 2s",
+	}}}
+	if err := os.MkdirAll("apps/app/public", 0o755); err != nil {
+		t.Fatalf("MkdirAll(docroot): %v", err)
+	}
+	if err := refreshPHPRuntimeMaterializationWithConfig(inventory, cfg); err != nil {
+		t.Fatalf("refreshPHPRuntimeMaterializationWithConfig: %v", err)
+	}
+	runtimeDir := filepath.Join("data", "php-fpm", "runtime", "php82")
+	poolPath := filepath.Join(runtimeDir, "pools", "app-php.conf")
+	body, err := os.ReadFile(poolPath)
+	if err != nil {
+		t.Fatalf("read pool file: %v", err)
+	}
+	slowLogPath := filepath.Join(runtimeDir, "slowlogs", "app-php.slow.log")
+	absSlowLogPath, err := filepath.Abs(slowLogPath)
+	if err != nil {
+		t.Fatalf("filepath.Abs(slowlog): %v", err)
+	}
+	text := string(body)
+	for _, want := range []string{
+		"slowlog = " + absSlowLogPath,
+		"pm.max_children = 8",
+		"request_slowlog_timeout = 2s",
+		"request_slowlog_trace_depth = 30",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("pool config missing %q: %s", want, text)
+		}
+	}
+	if strings.Contains(text, "pm.max_children = 4") {
+		t.Fatalf("pool config contains overridden default pm.max_children: %s", text)
+	}
+	if _, err := os.Stat(filepath.Join(runtimeDir, "slowlogs")); err != nil {
+		t.Fatalf("stat slowlogs dir: %v", err)
+	}
+	snapshot := PHPRuntimeMaterializationSnapshot()
+	if len(snapshot) != 1 {
+		t.Fatalf("materialized runtime count=%d want=1", len(snapshot))
+	}
+	if len(snapshot[0].SlowLogFiles) != 1 || snapshot[0].SlowLogFiles[0] != slowLogPath {
+		t.Fatalf("slowlog files=%+v want %q", snapshot[0].SlowLogFiles, slowLogPath)
+	}
+}
+
 func TestApplyVhostConfigRawRefreshesProxyGeneratedTargets(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()

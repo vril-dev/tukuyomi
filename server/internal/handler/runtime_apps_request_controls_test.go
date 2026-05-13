@@ -272,7 +272,7 @@ func TestBuildPHPRuntimePoolConfigIncludesINIOverrides(t *testing.T) {
 			"open_basedir": "/srv/app",
 		},
 	}
-	body := buildPHPRuntimePoolConfig(vhost, "app")
+	body := buildPHPRuntimePoolConfig(vhost, "app", "", phpFPMPoolSettings{byName: map[string]string{}})
 	if !strings.Contains(body, `php_value[memory_limit] = "512M"`) {
 		t.Fatalf("pool config missing php_value override: %s", body)
 	}

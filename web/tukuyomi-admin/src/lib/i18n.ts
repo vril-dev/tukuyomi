@@ -996,6 +996,11 @@ const JA_STRINGS: Record<string, string> = {
   "Max request body bytes": "最大リクエストボディサイズ (bytes)",
   "0 uses the 64 MiB default. Maximum: 2 GiB.":
     "0 の場合はデフォルトの 64 MiB を使います。最大: 2 GiB。",
+  "PHP-FPM pool settings": "PHP-FPM pool settings",
+  "Show blocked PHP-FPM pool settings":
+    "変更できない PHP-FPM pool settings を表示",
+  "Not configurable here": "ここでは変更できない設定",
+  "Slow logs": "slowlog path",
   "Runtime App Basic Auth Realm": "Runtime App Basic Auth Realm",
   "Server-side Runtime Apps revision was refreshed; the editor values were kept. Review the error and apply again.":
     "サーバ側の Runtime Apps revision を更新しました。編集中の値は保持しています。エラー内容を確認してから再度適用してください。",

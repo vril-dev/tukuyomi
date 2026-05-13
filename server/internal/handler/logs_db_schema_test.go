@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const latestSchemaMigrationVersionForTest = 41
+const latestSchemaMigrationVersionForTest = 42
 
 func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")
@@ -158,6 +158,7 @@ func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations
 		"restart_policy",
 		"graceful_stop_sec",
 		"persistent_paths_json",
+		"php_fpm_pool_settings",
 	} {
 		var daemonAppColumns int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('vhosts') WHERE name = ?`, column).Scan(&daemonAppColumns); err != nil {

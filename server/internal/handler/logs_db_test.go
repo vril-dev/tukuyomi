@@ -607,6 +607,12 @@ func TestLogsDownloadUsesSQLiteStoreForWAF(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
+	if got := w.Header().Get("Content-Type"); got != "application/gzip" {
+		t.Fatalf("content-type=%q want application/gzip", got)
+	}
+	if got := w.Header().Get("Content-Encoding"); got != "" {
+		t.Fatalf("content-encoding=%q want empty", got)
+	}
 
 	gr, err := gzip.NewReader(bytes.NewReader(w.Body.Bytes()))
 	if err != nil {

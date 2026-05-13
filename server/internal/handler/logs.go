@@ -358,10 +358,10 @@ func LogsDownload(c *gin.Context) {
 		return
 	}
 
-	c.Header("Content-Type", "application/x-ndjson")
+	c.Header("Content-Type", "application/gzip")
 	filename := fmt.Sprintf("%s-%s.ndjson.gz", src, time.Now().Format("20060102"))
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	c.Header("Content-Encoding", "gzip")
+	c.Header("X-Content-Type-Options", "nosniff")
 
 	gw := gzip.NewWriter(c.Writer)
 	defer gw.Close()

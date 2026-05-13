@@ -726,7 +726,7 @@ function FPTunerAuditDetailModal({
               {formatFPTunerAuditAction(entry.event)} / {formatFPTunerAuditStatus(entry.event)}
             </p>
           </div>
-          <button type="button" className="text-xs underline" onClick={onClose}>
+          <button type="button" className="text-xs" onClick={onClose}>
             {tx("close")}
           </button>
         </div>

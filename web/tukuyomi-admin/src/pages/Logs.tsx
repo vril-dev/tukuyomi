@@ -190,6 +190,81 @@ function formatPolicyLabel(policy: PolicyFamily) {
   return formatPolicyFamilyLabel(policy);
 }
 
+type SelectedEventField = {
+  key: string;
+  label: string;
+};
+
+const ROUTE_EVENT_FIELDS: SelectedEventField[] = [
+  { key: "route_source", label: "Route source" },
+  { key: "selected_route", label: "Selected route" },
+  { key: "original_scheme", label: "Original scheme" },
+  { key: "original_host", label: "Original host" },
+  { key: "original_path", label: "Original path" },
+  { key: "original_query", label: "Original query" },
+  { key: "rewritten_host", label: "Rewritten host" },
+  { key: "rewritten_path", label: "Rewritten path" },
+  { key: "rewritten_query", label: "Rewritten query" },
+  { key: "selected_upstream", label: "Selected upstream" },
+  { key: "selected_upstream_url", label: "Selected upstream URL" },
+  { key: "selected_http2_mode", label: "Selected HTTP/2 mode" },
+];
+
+const ACCESS_EVENT_FIELDS: SelectedEventField[] = [
+  { key: "status", label: "Status" },
+  { key: "method", label: "Method" },
+  { key: "path", label: "Path" },
+  { key: "route_source", label: "Route source" },
+  { key: "selected_route", label: "Selected route" },
+  { key: "selected_upstream", label: "Selected upstream" },
+  { key: "selected_upstream_url", label: "Selected upstream URL" },
+  { key: "selected_http2_mode", label: "Selected HTTP/2 mode" },
+  { key: "selected_upstream_admin_state", label: "Upstream admin state" },
+  { key: "selected_upstream_health_state", label: "Upstream health state" },
+  { key: "selected_upstream_effective_selectable", label: "Upstream selectable" },
+  { key: "selected_upstream_effective_weight", label: "Upstream weight" },
+  { key: "selected_upstream_inflight", label: "Upstream inflight" },
+  { key: "request_body_bytes", label: "Request body bytes" },
+  { key: "response_body_bytes", label: "Response body bytes" },
+];
+
+function selectedEventDescription(event: unknown) {
+  if (event === "proxy_route") {
+    return translateCurrent("Routing decision captured before the upstream response is known.");
+  }
+  if (event === "proxy_access") {
+    return translateCurrent("Final access result captured after the response is produced.");
+  }
+  return translateCurrent("Selected log event for this request.");
+}
+
+function selectedEventFields(line: LogLine): SelectedEventField[] {
+  if (line.event === "proxy_route") {
+    return ROUTE_EVENT_FIELDS;
+  }
+  if (line.event === "proxy_access") {
+    return ACCESS_EVENT_FIELDS;
+  }
+  return [
+    { key: "event", label: "Event" },
+    { key: "status", label: "Status" },
+    { key: "method", label: "Method" },
+    { key: "path", label: "Path" },
+    { key: "rule_id", label: "Rule ID" },
+    { key: "action", label: "Action" },
+  ];
+}
+
+function formatSelectedEventValue(value: unknown) {
+  if (value == null || value === "") {
+    return "-";
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
 function roleBadgeClass(role: RequestEventRole) {
   switch (role) {
     case "enforced":
@@ -238,6 +313,7 @@ export default function Logs() {
   const [canNext, setCanNext] = useState(false);
   const [detailReqID, setDetailReqID] = useState<string | null>(null);
   const [detailLines, setDetailLines] = useState<LogLine[]>([]);
+  const [detailSelectedLine, setDetailSelectedLine] = useState<LogLine | null>(null);
   const [detailAudit, setDetailAudit] = useState<SecurityAuditRecord | null>(null);
   const [detailAuditVerify, setDetailAuditVerify] = useState<SecurityAuditVerifyResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -334,7 +410,7 @@ export default function Logs() {
   );
 
   const openRequestDetail = useCallback(
-    async (rawReqID: string) => {
+    async (rawReqID: string, selectedLine?: LogLine) => {
       const reqID = rawReqID.trim();
       if (!reqID) {
         return;
@@ -347,6 +423,7 @@ export default function Logs() {
       detailControllerRef.current = ac;
 
       setDetailReqID(reqID);
+      setDetailSelectedLine(selectedLine ?? null);
       setDetailLoading(true);
       setDetailError("");
       try {
@@ -418,10 +495,19 @@ export default function Logs() {
   }
 
   const detailSummary = detailReqID ? summarizeRequestEvents(detailReqID, detailLines) : null;
+  const selectedDetailFields = detailSelectedLine
+    ? selectedEventFields(detailSelectedLine)
+        .map((field) => ({
+          label: tx(field.label),
+          value: formatSelectedEventValue(detailSelectedLine[field.key]),
+        }))
+        .filter((field) => field.value !== "-")
+    : [];
   const searchActive = searchQuery.trim();
   const rangeActive = !!fromQuery.trim() || !!toQuery.trim();
   const filterActive = !!searchActive || rangeActive;
   const displayLines = useMemo(() => sortLogLinesNewestFirst(data?.lines ?? []), [data?.lines]);
+  const hasRows = displayLines.length > 0;
 
   return (
     <div className="p-4 space-y-4">
@@ -511,7 +597,7 @@ export default function Logs() {
         )}
 
         <button
-          className="ml-auto text-xs underline"
+          className="ml-auto text-xs"
           onClick={async () => {
             try {
               await downloadAll();
@@ -604,7 +690,7 @@ export default function Logs() {
                     colorClass(line),
                     clickable && "cursor-pointer hover:bg-neutral-50/80"
                   )}
-                  onClick={clickable ? () => void openRequestDetail(reqID) : undefined}
+                  onClick={clickable ? () => void openRequestDetail(reqID, line) : undefined}
                 >
                   <td className="whitespace-nowrap px-2 py-1">{formatTimestamp(line.ts, locale)}</td>
                   <td className="px-2 py-1">{line.status ?? "-"}</td>
@@ -641,18 +727,37 @@ export default function Logs() {
         </div>
       </div>
 
-      {data && (
-        <div className="text-xs text-gray-500">
-          has_more: {String(data.has_more)} / next_cursor:{" "}
-          {data.next_cursor != null ? data.next_cursor : "-"} / page: [{pageStart ?? "-"},{" "}
-          {pageEnd ?? "-"}) / search: {searchActive || "-"} / range: {fromQuery || "-"} -{" "}
-          {toQuery || "-"}
+      {hasRows && (
+        <div className="flex items-center gap-2">
+          <button
+            disabled={loading || !canPrev || pageEnd == null}
+            onClick={() => load({ dir: "next", cursor: pageEnd })}
+            className="rounded border px-3 py-1 text-xs"
+            title={tx("Previous page")}
+          >
+            {tx("◀ prev")}
+          </button>
+          <button
+            disabled={loading || !canNext || pageStart == null}
+            onClick={() => load({ dir: "prev", cursor: pageStart })}
+            className="rounded border px-3 py-1 text-xs"
+            title={tx("Next page")}
+          >
+            {tx("next ▶")}
+          </button>
         </div>
       )}
 
       {detailReqID && (
         <div className="fixed inset-0 z-40">
-          <div className="absolute inset-0 bg-black/20" onClick={() => setDetailReqID(null)} aria-hidden="true" />
+          <div
+            className="absolute inset-0 bg-black/20"
+            onClick={() => {
+              setDetailReqID(null);
+              setDetailSelectedLine(null);
+            }}
+            aria-hidden="true"
+          />
           <div className="relative ml-auto h-full w-full max-w-2xl overflow-y-auto border-l bg-white shadow-2xl">
             <div className="sticky top-0 border-b bg-white px-4 py-3">
               <div className="flex items-start justify-between gap-4">
@@ -670,7 +775,10 @@ export default function Logs() {
                 </div>
                 <button
                   className="rounded border px-3 py-1 text-xs"
-                  onClick={() => setDetailReqID(null)}
+                  onClick={() => {
+                    setDetailReqID(null);
+                    setDetailSelectedLine(null);
+                  }}
                 >
                   {tx("Close")}
                 </button>
@@ -771,6 +879,37 @@ export default function Logs() {
                       </div>
                     </div>
                   </div>
+                </section>
+              )}
+              {detailSelectedLine && (
+                <section className="rounded border bg-white p-4">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="rounded bg-black px-2 py-0.5 text-xs text-white">
+                      {String(detailSelectedLine.event ?? "unknown")}
+                    </span>
+                    <span className="text-xs text-gray-600">
+                      {formatTimestamp(detailSelectedLine.ts, locale)}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs text-gray-600">
+                    {selectedEventDescription(detailSelectedLine.event)}
+                  </p>
+                  {selectedDetailFields.length > 0 ? (
+                    <dl className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                      {selectedDetailFields.map((field) => (
+                        <div key={`${field.label}:${field.value}`} className="rounded bg-gray-50 p-2">
+                          <dt className="text-xs uppercase tracking-wide text-gray-500">
+                            {field.label}
+                          </dt>
+                          <dd className="mt-1 break-all font-mono text-xs text-gray-900">
+                            {field.value}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  ) : (
+                    <p className="mt-3 text-xs text-gray-500">{tx("No event-specific fields.")}</p>
+                  )}
                 </section>
               )}
               {detailAudit && (

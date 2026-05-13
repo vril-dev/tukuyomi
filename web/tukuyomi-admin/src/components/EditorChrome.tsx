@@ -206,7 +206,7 @@ export function QuietActionButton({
   return (
     <button
       type="button"
-      className="px-2 py-1 text-xs text-neutral-500 hover:text-neutral-800 hover:underline disabled:opacity-40"
+      className="px-2 py-1 text-xs text-neutral-500 hover:text-neutral-800 disabled:opacity-40"
       onClick={onClick}
       disabled={disabled}
     >
@@ -250,7 +250,7 @@ export function Alert({
       <div className="font-semibold">{title}</div>
       <div className="flex-1 whitespace-pre-wrap">{message}</div>
       {onClose ? (
-        <button className="text-xs text-neutral-500 hover:underline" onClick={onClose}>
+        <button className="text-xs text-neutral-500" onClick={onClose}>
           {closeLabel}
         </button>
       ) : null}

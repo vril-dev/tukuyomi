@@ -1167,7 +1167,7 @@ export default function RuntimeAppsPanel() {
                 </div>
                 <button
                   type="button"
-                  className="text-xs underline"
+                  className="text-xs"
                   onClick={() =>
                     setRuntimeApps((current) =>
                       current.filter(
@@ -1807,7 +1807,7 @@ export default function RuntimeAppsPanel() {
                             </label>
                             <button
                               type="button"
-                              className="text-xs underline text-left"
+                              className="text-xs text-left"
                               onClick={() =>
                                 updateRuntimeApp(index, {
                                   ...app,
@@ -1981,7 +1981,7 @@ export default function RuntimeAppsPanel() {
                             </div>
                             <button
                               type="button"
-                              className="text-xs underline text-left"
+                              className="text-xs text-left"
                               onClick={() =>
                                 updateRuntimeApp(index, {
                                   ...app,

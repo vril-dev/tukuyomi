@@ -102,6 +102,9 @@ func TestProxyHandlerEmitsAccessLogWithBodyByteCounts(t *testing.T) {
 	if got := intValue(evt["status"]); got != http.StatusCreated {
 		t.Fatalf("proxy_access status=%d want=%d", got, http.StatusCreated)
 	}
+	if got := anyToString(evt["method"]); got != http.MethodPost {
+		t.Fatalf("proxy_access method=%q want=%s", got, http.MethodPost)
+	}
 	if got := anyToString(evt["selected_upstream"]); got != "primary" {
 		t.Fatalf("proxy_access selected_upstream=%q want=primary", got)
 	}
@@ -506,6 +509,9 @@ func TestProxyHandlerCountryBlockLogOmitsSelectedTargetFields(t *testing.T) {
 
 	events := readProxyLogEvents(t)
 	routeEvt := findLastProxyLogEvent(t, events, "proxy_route")
+	if got := anyToString(routeEvt["method"]); got != http.MethodGet {
+		t.Fatalf("proxy_route method=%q want=%s", got, http.MethodGet)
+	}
 	if got := anyToString(routeEvt["selected_route"]); got != "service-a" {
 		t.Fatalf("proxy_route selected_route=%q want=service-a", got)
 	}

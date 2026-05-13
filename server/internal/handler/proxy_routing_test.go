@@ -1709,6 +1709,9 @@ func TestAppendProxyRouteLogFields_ClassificationOnlyOmitsSelectedTarget(t *test
 	if got := anyToString(evt["selected_route"]); got != "service-a" {
 		t.Fatalf("selected_route=%q want=service-a", got)
 	}
+	if got := anyToString(evt["method"]); got != http.MethodGet {
+		t.Fatalf("method=%q want=%s", got, http.MethodGet)
+	}
 	if got := anyToString(evt["selected_upstream"]); got != "" {
 		t.Fatalf("selected_upstream=%q want empty", got)
 	}

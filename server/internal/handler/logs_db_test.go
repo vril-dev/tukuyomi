@@ -329,6 +329,25 @@ func TestLogsReadUsesSQLiteStoreFreeTextSearch(t *testing.T) {
 			"country": "US",
 			"status":  403,
 		},
+		{
+			"ts":                now.Add(-30 * time.Second).Format(time.RFC3339Nano),
+			"event":             "proxy_route",
+			"req_id":            "req-route",
+			"path":              "/",
+			"route_source":      "route",
+			"selected_route":    "site",
+			"selected_upstream": "app",
+			"country":           "JP",
+		},
+		{
+			"ts":                now.Format(time.RFC3339Nano),
+			"event":             "proxy_access",
+			"req_id":            "req-access",
+			"path":              "/",
+			"status":            200,
+			"selected_upstream": "app",
+			"country":           "JP",
+		},
 	}
 
 	tmp := t.TempDir()
@@ -360,6 +379,22 @@ func TestLogsReadUsesSQLiteStoreFreeTextSearch(t *testing.T) {
 	}
 	if got := anyToString(literalSearch.Lines[0]["req_id"]); got != "req-percent-literal" {
 		t.Fatalf("literal search req_id=%q want=req-percent-literal", got)
+	}
+
+	routeSearch := callLogsRead(t, "/tukuyomi-api/logs/read?src=waf&tail=10&q=proxy_route")
+	if len(routeSearch.Lines) != 1 {
+		t.Fatalf("route event search lines=%d want=1", len(routeSearch.Lines))
+	}
+	if got := anyToString(routeSearch.Lines[0]["event"]); got != "proxy_route" {
+		t.Fatalf("route event search event=%q want=proxy_route", got)
+	}
+
+	accessSearch := callLogsRead(t, "/tukuyomi-api/logs/read?src=waf&tail=10&q=proxy_access")
+	if len(accessSearch.Lines) != 1 {
+		t.Fatalf("access event search lines=%d want=1", len(accessSearch.Lines))
+	}
+	if got := anyToString(accessSearch.Lines[0]["event"]); got != "proxy_access" {
+		t.Fatalf("access event search event=%q want=proxy_access", got)
 	}
 }
 

@@ -1345,6 +1345,7 @@ func appendProxyRouteLogFields(evt map[string]any, req *http.Request) {
 		return
 	}
 	if req != nil {
+		evt["method"] = req.Method
 		evt["original_scheme"] = requestScheme(req)
 		evt["original_host"] = req.Host
 		evt["original_path"] = requestPath(req)

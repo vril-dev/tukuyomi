@@ -54,8 +54,11 @@ make go-build
 再現性のあるリリースアーティファクトを作る場合は次を使います。
 
 ```bash
-make release-linux-all VERSION=v0.8.0
+make release-linux-all
 ```
+
+`VERSION` は現在の Git tag またはリリースブランチから自動判定されます。
+意図して上書きする場合だけ `VERSION=vX.Y.Z` を指定します。
 
 ## One-shot install
 

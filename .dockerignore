@@ -3,6 +3,8 @@
 .playwright-mcp
 bin
 dist
+docs/.tmp
+docs/dist
 data/logs
 data/geoip/*
 !data/geoip/README.md
@@ -10,6 +12,12 @@ data/php-fpm/binaries
 data/php-fpm/runtime
 data/php-fpm/*.json
 data/php-fpm/*.bak
+data/psgi/binaries
+data/psgi/runtime
+data/psgi/*.json
+data/psgi/*.bak
+data/runtime-sites/*
+!data/runtime-sites/README.md
 data/scheduled-tasks/*
 !data/scheduled-tasks/README.md
 examples/*/data/logs

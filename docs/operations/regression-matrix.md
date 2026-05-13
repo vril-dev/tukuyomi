@@ -171,14 +171,14 @@ Use it before performance-sensitive release work or when a change crosses both p
 | Quick runtime sanity | `make smoke` |
 | Local CI baseline | `make ci-local` |
 | Deployment-doc validation | `make deployment-smoke` |
-| Public binary artifact validation | `make release-binary-smoke VERSION=vX.Y.Z` |
+| Public binary artifact validation | `make release-binary-smoke` |
 | Release readiness without WAF corpus | `make ci-local-extended` |
 | Release readiness with WAF corpus | `make ci-local-extended && make gotestwaf` |
 | Proxy performance comparison | `make bench-proxy` |
 | WAF performance comparison | `make bench-waf` |
 | Combined performance comparison | `make bench-full` |
 | Direct HTTPS/HTTP/3 entry readiness | `make http3-public-entry-smoke` |
-| Full public binary release readiness | `make ci-local-extended && make gotestwaf && make release-binary-smoke VERSION=vX.Y.Z` |
+| Full public binary release readiness | `make ci-local-extended && make gotestwaf && make release-binary-smoke` |
 
 ## Known routine-validation gaps
 

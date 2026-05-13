@@ -166,14 +166,14 @@ performance に敏感な release 前、または proxy transport と WAF inspect
 | まず runtime sanity | `make smoke` |
 | ローカル CI 基準 | `make ci-local` |
 | deployment docs の妥当性確認 | `make deployment-smoke` |
-| 公開 binary artifact の妥当性確認 | `make release-binary-smoke VERSION=vX.Y.Z` |
+| 公開 binary artifact の妥当性確認 | `make release-binary-smoke` |
 | WAF corpus を除く release readiness | `make ci-local-extended` |
 | WAF corpus を含む release readiness | `make ci-local-extended && make gotestwaf` |
 | proxy performance 比較 | `make bench-proxy` |
 | WAF performance 比較 | `make bench-waf` |
 | combined performance 比較 | `make bench-full` |
 | direct HTTPS/HTTP/3 entry readiness | `make http3-public-entry-smoke` |
-| 公開バイナリ release readiness | `make ci-local-extended && make gotestwaf && make release-binary-smoke VERSION=vX.Y.Z` |
+| 公開バイナリ release readiness | `make ci-local-extended && make gotestwaf && make release-binary-smoke` |
 
 ## 通常検証でまだ埋まっていない範囲
 

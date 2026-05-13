@@ -85,8 +85,6 @@ const JA_STRINGS: Record<string, string> = {
   English: "English",
   Japanese: "日本語",
   "Admin Sign In": "管理ログイン",
-  "Sign in with your admin user to create a browser session.":
-    "管理ユーザーでログインしてブラウザセッションを作成します。",
   "Username or email": "ユーザー名またはメールアドレス",
   "admin username or email": "管理ユーザー名またはメールアドレス",
   Password: "パスワード",

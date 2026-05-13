@@ -19,7 +19,6 @@ const JA_STRINGS: Record<string, string> = {
   "Admin session check failed.": "管理セッションの確認に失敗しました。",
   Retry: "再試行",
   "Admin Sign In": "管理ログイン",
-  "Sign in with your admin user to create a browser session.": "管理ユーザーでログインしてブラウザセッションを作成します。",
   "Username or email": "ユーザー名またはメールアドレス",
   "admin username or email": "管理ユーザー名またはメールアドレス",
   Password: "パスワード",

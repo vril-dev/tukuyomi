@@ -31,9 +31,6 @@ export default function Login() {
             TUKUYOMI
           </p>
           <h1 className="text-3xl font-semibold">{tx("Admin Sign In")}</h1>
-          <p className="text-xs text-neutral-600">
-            {tx("Sign in with your admin user to create a browser session.")}
-          </p>
         </div>
 
         <form className="space-y-4" onSubmit={onSubmit}>

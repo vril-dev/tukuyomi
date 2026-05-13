@@ -272,6 +272,7 @@ func emitProxyAccessLog(req *http.Request, w http.ResponseWriter, reqID, clientI
 		"trace_id": observability.TraceIDFromContext(req.Context()),
 		"ip":       clientIP,
 		"country":  country,
+		"method":   req.Method,
 		"path":     req.URL.Path,
 		"status":   proxyResponseStatus(w, http.StatusOK),
 	}

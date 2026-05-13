@@ -50,7 +50,7 @@ APP_PKG ?= ./cmd/server
 DB_MIGRATE_BIN ?= $(abspath $(BIN_DIR))/$(APP_NAME)
 DB_MIGRATE_WORKDIR ?= data
 DB_MIGRATE_CONFIG ?= conf/config.json
-VERSION ?=
+VERSION ?= $(shell bash scripts/detect_version.sh 2>/dev/null || printf dev)
 GO_LDFLAGS ?= $(if $(VERSION),-X tukuyomi/internal/buildinfo.Version=$(VERSION),)
 RELEASE_DIR ?= dist/release
 RELEASE_DOCKERFILE ?= build/Dockerfile.release
@@ -78,7 +78,8 @@ export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_ADMIN_USERNAME
 	help setup env-init crs-install crs-ensure \
 	install deploy-render install-smoke deploy-render-smoke \
 	go-test go-fuzz-short go-build db-migrate db-import db-import-waf-rule-assets build \
-	release-linux-amd64 release-linux-arm64 release-linux-all \
+	release-linux-amd64 release-linux-arm64 release-linux-all release-assets release-artifacts \
+	guide-pdf guide-pdf-ja guide-pdf-en \
 	ui-install ui-test ui-build ui-sync ui-build-sync center-ui-install center-ui-test center-ui-build center-ui-sync center-ui-build-sync \
 	fleet-preview-up fleet-preview-down gateway-preview-up gateway-preview-down gateway-preview-smoke center-preview-up center-preview-down \
 	php-fpm-build php-fpm-copy php-fpm-prune php-fpm-remove php-fpm-up php-fpm-down php-fpm-reload php-fpm-test php-fpm-smoke \
@@ -111,6 +112,8 @@ help:
 	@echo "  make release-linux-amd64        Build release tarball for linux/amd64 via docker buildx"
 	@echo "  make release-linux-arm64        Build release tarball for linux/arm64 via docker buildx"
 	@echo "  make release-linux-all          Build linux/amd64 + linux/arm64 and combined checksums"
+	@echo "  make guide-pdf                  Build Japanese + English operator guide PDFs"
+	@echo "  make release-assets             Build release tarballs + operator guide PDFs"
 	@echo ""
 	@echo "  make ui-install                 Install Gateway UI dependencies"
 	@echo "  make ui-test                    Run Gateway UI tests"
@@ -526,6 +529,10 @@ release-linux-amd64:
 		-f "$(RELEASE_DOCKERFILE)" .; \
 	find "$$tmp_dir" -maxdepth 1 -type f -exec mv {} "$$out_dir"/ \; ; \
 	rm -rf "$$tmp_dir"; \
+	versioned="$$out_dir/$(APP_NAME)_$(VERSION)_linux_amd64.tar.gz"; \
+	alias="$$out_dir/$(APP_NAME)-linux-amd64.tar.gz"; \
+	cp -f "$$versioned" "$$alias"; \
+	(cd "$$out_dir" && sha256sum "$$(basename "$$alias")" > "$$(basename "$$alias").sha256"); \
 	echo "[release] built linux/amd64 into $$out_dir"
 
 release-linux-arm64:
@@ -542,17 +549,38 @@ release-linux-arm64:
 		-f "$(RELEASE_DOCKERFILE)" .; \
 	find "$$tmp_dir" -maxdepth 1 -type f -exec mv {} "$$out_dir"/ \; ; \
 	rm -rf "$$tmp_dir"; \
+	versioned="$$out_dir/$(APP_NAME)_$(VERSION)_linux_arm64.tar.gz"; \
+	alias="$$out_dir/$(APP_NAME)-linux-arm64.tar.gz"; \
+	cp -f "$$versioned" "$$alias"; \
+	(cd "$$out_dir" && sha256sum "$$(basename "$$alias")" > "$$(basename "$$alias").sha256"); \
 	echo "[release] built linux/arm64 into $$out_dir"
 
 release-linux-all: release-linux-amd64 release-linux-arm64
 	@set -euo pipefail; \
 	out_dir="$(abspath $(RELEASE_DIR))"; \
 	sums_file="$$out_dir/$(APP_NAME)_$(VERSION)_SHA256SUMS"; \
+	alias_sums_file="$$out_dir/$(APP_NAME)-SHA256SUMS"; \
 	cat \
 		"$$out_dir/$(APP_NAME)_$(VERSION)_linux_amd64.tar.gz.sha256" \
 		"$$out_dir/$(APP_NAME)_$(VERSION)_linux_arm64.tar.gz.sha256" \
 		> "$$sums_file"; \
-	echo "[release] wrote $$sums_file"
+	cat \
+		"$$out_dir/$(APP_NAME)-linux-amd64.tar.gz.sha256" \
+		"$$out_dir/$(APP_NAME)-linux-arm64.tar.gz.sha256" \
+		> "$$alias_sums_file"; \
+	echo "[release] wrote $$sums_file and $$alias_sums_file"
+
+guide-pdf:
+	docs/guide/build-pdf.sh all
+
+guide-pdf-ja:
+	docs/guide/build-pdf.sh ja
+
+guide-pdf-en:
+	docs/guide/build-pdf.sh en
+
+release-assets release-artifacts: release-linux-all guide-pdf
+	@echo "[release] assets ready in $(abspath $(RELEASE_DIR)) and docs/dist"
 
 ui-install:
 	cd $(UI_DIR) && $(NPM) ci

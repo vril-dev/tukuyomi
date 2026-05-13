@@ -312,11 +312,12 @@ Brief notes on the major commands:
 For the public-facing tarball, there is a dedicated top-level smoke:
 
 ```bash
-make release-binary-smoke VERSION=v0.8.1
+make release-binary-smoke
 ```
 
 Optional variables:
 
+- `VERSION=vX.Y.Z` to override the Git-derived release version
 - `RELEASE_BINARY_SMOKE_ARCH=amd64|arm64`
 - `RELEASE_BINARY_SMOKE_SKIP_BUILD=1`
 - `RELEASE_BINARY_SMOKE_KEEP_EXTRACTED=1`
@@ -378,14 +379,14 @@ The mapping from intent to commands:
 | Quick runtime sanity | `make smoke` |
 | Local CI baseline | `make ci-local` |
 | Deployment-docs validity | `make deployment-smoke` |
-| Public binary artifact validity | `make release-binary-smoke VERSION=vX.Y.Z` |
+| Public binary artifact validity | `make release-binary-smoke` |
 | Release readiness without WAF corpus | `make ci-local-extended` |
 | Release readiness with WAF corpus | `make ci-local-extended && make gotestwaf` |
 | Proxy performance comparison | `make bench-proxy` |
 | WAF performance comparison | `make bench-waf` |
 | Combined performance comparison | `make bench-full` |
 | Direct HTTPS / HTTP/3 entry readiness | `make http3-public-entry-smoke` |
-| Public binary release readiness | `make ci-local-extended && make gotestwaf && make release-binary-smoke VERSION=vX.Y.Z` |
+| Public binary release readiness | `make ci-local-extended && make gotestwaf && make release-binary-smoke` |
 
 ## 18.5 Gaps not yet covered by routine validation
 

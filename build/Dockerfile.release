@@ -88,6 +88,10 @@ COPY data/runtime-sites/ ./data/runtime-sites/
 COPY scripts/install_crs.sh ./scripts/install_crs.sh
 COPY scripts/stage_waf_rule_assets.sh ./scripts/stage_waf_rule_assets.sh
 COPY scripts/update_country_db.sh ./scripts/update_country_db.sh
+COPY scripts/php_fpm_runtime_build.sh ./scripts/php_fpm_runtime_build.sh
+COPY scripts/psgi_runtime_build.sh ./scripts/psgi_runtime_build.sh
+COPY build/Dockerfile.php-fpm-runtime ./build/Dockerfile.php-fpm-runtime
+COPY build/Dockerfile.psgi-runtime ./build/Dockerfile.psgi-runtime
 COPY seeds/conf/ ./seeds/conf/
 COPY seeds/waf/rules/ ./seeds/waf/rules/
 

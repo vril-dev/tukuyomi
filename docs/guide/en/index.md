@@ -158,4 +158,4 @@ this book with the relative path `../../images/ui-samples/`.
 - Print: `google-chrome --headless --print-to-pdf` writes the final PDF; A4
   margins are unified via `@page`, with the page number centered in the
   footer.
-- Build script: `scripts/build-pdf-en.sh`.
+- Build script: `make guide-pdf` or `docs/guide/build-pdf.sh en`.

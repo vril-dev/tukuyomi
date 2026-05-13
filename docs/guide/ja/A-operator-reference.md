@@ -268,7 +268,7 @@ make smoke-extended
 make ci-local
 make ci-local-extended
 make deployment-smoke
-make release-binary-smoke VERSION=v0.8.1
+make release-binary-smoke
 make http3-public-entry-smoke
 make compose-down
 ```

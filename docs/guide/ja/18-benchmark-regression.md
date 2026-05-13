@@ -289,11 +289,12 @@ make bench
 公開配布する tarball については、専用の top-level smoke が用意されています。
 
 ```bash
-make release-binary-smoke VERSION=v0.8.1
+make release-binary-smoke
 ```
 
 任意の変数:
 
+- `VERSION=vX.Y.Z`: Git から推定したリリースバージョンを上書きする
 - `RELEASE_BINARY_SMOKE_ARCH=amd64|arm64`
 - `RELEASE_BINARY_SMOKE_SKIP_BUILD=1`
 - `RELEASE_BINARY_SMOKE_KEEP_EXTRACTED=1`
@@ -354,14 +355,14 @@ RELEASE_BINARY_SMOKE_ALLOW_CROSS_ARCH=1
 | まず runtime sanity | `make smoke` |
 | ローカル CI 基準 | `make ci-local` |
 | deployment docs の妥当性確認 | `make deployment-smoke` |
-| 公開 binary artifact の妥当性確認 | `make release-binary-smoke VERSION=vX.Y.Z` |
+| 公開 binary artifact の妥当性確認 | `make release-binary-smoke` |
 | WAF corpus を除く release readiness | `make ci-local-extended` |
 | WAF corpus を含む release readiness | `make ci-local-extended && make gotestwaf` |
 | proxy performance 比較 | `make bench-proxy` |
 | WAF performance 比較 | `make bench-waf` |
 | combined performance 比較 | `make bench-full` |
 | direct HTTPS / HTTP/3 entry readiness | `make http3-public-entry-smoke` |
-| 公開バイナリ release readiness | `make ci-local-extended && make gotestwaf && make release-binary-smoke VERSION=vX.Y.Z` |
+| 公開バイナリ release readiness | `make ci-local-extended && make gotestwaf && make release-binary-smoke` |
 
 ## 18.5　通常検証で埋まっていない gap
 

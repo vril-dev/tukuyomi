@@ -153,4 +153,4 @@ books/tukuyomi/
   CSS、code block の monospace を当てる。
 - 印刷: `google-chrome --headless --print-to-pdf` で PDF を出力。`@page` で A4 余白
   を統一し、ヘッダ／フッタにタイトルとページ番号を入れる。
-- ビルドスクリプトは `scripts/build-pdf.sh`（後続タスクで作成）。
+- ビルドスクリプトは `make guide-pdf` または `docs/guide/build-pdf.sh ja`。

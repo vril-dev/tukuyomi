@@ -58,8 +58,11 @@ make go-build
 For reproducible release artifacts, use:
 
 ```bash
-make release-linux-all VERSION=v0.8.0
+make release-linux-all
 ```
+
+`VERSION` is derived from the current Git tag or release branch. Set
+`VERSION=vX.Y.Z` only when you intentionally need an override.
 
 ## One-Shot Install
 

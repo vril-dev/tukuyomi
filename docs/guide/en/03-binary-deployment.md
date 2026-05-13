@@ -64,12 +64,14 @@ binary:
 make go-build
 ```
 
-To produce a reproducible release artifact, declare the version
-explicitly:
+To produce a reproducible release artifact:
 
 ```bash
-make release-linux-all VERSION=v0.8.0
+make release-linux-all
 ```
+
+`VERSION` is derived from the current Git tag or release branch. Set
+`VERSION=vX.Y.Z` only when an explicit override is needed.
 
 ## 3.3 One-shot install: `make install TARGET=linux-systemd`
 

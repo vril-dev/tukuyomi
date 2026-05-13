@@ -6,11 +6,12 @@
 ## コマンド
 
 ```bash
-make release-binary-smoke VERSION=v0.8.1
+make release-binary-smoke
 ```
 
 必要に応じて指定する変数:
 
+- `VERSION=vX.Y.Z`: Git から推定したリリースバージョンを上書きする
 - `RELEASE_BINARY_SMOKE_ARCH=amd64|arm64`
 - `RELEASE_BINARY_SMOKE_SKIP_BUILD=1`
 - `RELEASE_BINARY_SMOKE_KEEP_EXTRACTED=1`
@@ -51,8 +52,18 @@ make release-binary-smoke VERSION=v0.8.1
 ```bash
 make ci-local-extended
 make gotestwaf
-make release-binary-smoke VERSION=v0.8.1
+make release-binary-smoke
 ```
+
+GitHub Release tag に添付する成果物をまとめて用意する場合は、次を実行します。
+
+```bash
+make release-assets
+```
+
+Linux 向けリリース tarball と、`docs/dist/` 配下の運用ガイド PDF 2 ファイルを作成します。
+リリースディレクトリには、追跡用のバージョン付き tarball と、GitHub Release tag
+に添付しやすい `tukuyomi-linux-amd64.tar.gz` 形式のファイル名も出力されます。
 
 ## マルチアーキテクチャ方針
 

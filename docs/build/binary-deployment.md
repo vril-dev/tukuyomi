@@ -301,8 +301,8 @@ Notes:
 ## Persistent Byte Storage
 
 Runtime artifacts that must remain durable as files/objects, rather than DB
-rows, are managed by `persistent_storage`. The current primary user is
-TLS binding ACME: account keys, challenge tokens, and certificate cache.
+rows, are managed by `persistent_storage`. Current users include TLS binding
+ACME material and WAF log archives.
 
 The default backend is local:
 

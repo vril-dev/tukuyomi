@@ -20,6 +20,7 @@ INSTALL_ENABLE_SYSTEMD="${INSTALL_ENABLE_SYSTEMD:-1}"
 INSTALL_ENABLE_BOOT="${INSTALL_ENABLE_BOOT:-1}"
 INSTALL_START="${INSTALL_START:-1}"
 INSTALL_ENABLE_SCHEDULED_TASKS="${INSTALL_ENABLE_SCHEDULED_TASKS:-1}"
+INSTALL_BOOTSTRAP_SCHEDULED_TASK_DEFAULTS="${INSTALL_BOOTSTRAP_SCHEDULED_TASK_DEFAULTS:-1}"
 INSTALL_REFRESH_WAF_ASSETS="${INSTALL_REFRESH_WAF_ASSETS:-1}"
 INSTALL_DB_SEED="${INSTALL_DB_SEED:-auto}"
 INSTALL_DRY_RUN="${INSTALL_DRY_RUN:-0}"
@@ -998,6 +999,9 @@ initialize_db() {
 
   if [[ "${seed_db}" == "1" ]]; then
     run_runtime db-import
+  fi
+  if install_role_includes_gateway && is_enabled "${INSTALL_ENABLE_SCHEDULED_TASKS}" && is_enabled "${INSTALL_BOOTSTRAP_SCHEDULED_TASK_DEFAULTS}"; then
+    run_runtime bootstrap-scheduled-task-defaults
   fi
   bootstrap_center_protected_enrollment
 }

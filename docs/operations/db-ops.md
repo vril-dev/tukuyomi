@@ -66,7 +66,7 @@ The DB connection bootstrap is configured in `data/conf/config.json` under
 - `db_driver`: `sqlite`, `mysql`, or `pgsql`
 - `db_path`: SQLite database path
 - `db_dsn`: MySQL or PostgreSQL DSN
-- `db_retention_days`: WAF event retention
+- `db_retention_days`: hot WAF event retention in DB
 - `db_sync_interval_sec`: optional periodic DB-to-runtime reconcile loop
 
 `storage.backend` is deprecated. Leave it unset. `storage.backend=file` is
@@ -158,6 +158,8 @@ separate. When TLS binding ACME uses the local backend, preserve
 `cache_store.store_dir`, security / FP tuner / proxy-rules audit files,
 scheduled-task logs, and PHP-FPM runtime logs/sockets are runtime artifacts, not
 DB configuration authority.
+WAF log archives also live under `persistent_storage` when
+`storage.log_archive.enabled=true`.
 
 Other seed/export files may be kept for operator workflows but are not runtime
 authority after their normalized DB rows exist. After `make db-migrate`,
@@ -196,6 +198,23 @@ runtimes this is DB-to-memory/runtime reload, not DB-to-file restoration.
 
 - `30` (default): keep the last 30 days
 - `0`: disable pruning
+
+When `storage.log_archive.enabled=true` (default), expired complete UTC days are
+written to gzip NDJSON archives before DB rows are pruned. The default location
+is:
+
+```text
+data/persistent/log-archives/waf/yyyy=<YYYY>/mm=<MM>/dd=<DD>/part-000001.ndjson.gz
+```
+
+The same key layout is used below `persistent_storage.s3.prefix` when
+`persistent_storage.backend=s3`. `make install` bootstraps a default Scheduled
+Task named `tukuyomi-waf-log-archive` once, scheduled at `03:17 UTC`. If an
+operator later disables, changes, or deletes that task, later installs do not
+recreate it.
+
+If `storage.log_archive.enabled=false`, tukuyomi keeps the direct DB pruning
+behavior.
 
 `config_blobs` are not pruned by retention.
 

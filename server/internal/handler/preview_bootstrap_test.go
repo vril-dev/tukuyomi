@@ -83,6 +83,47 @@ func TestImportPreviewConfigStorageSeedsIPReputationFailOpen(t *testing.T) {
 	}
 }
 
+func TestImportPreviewConfigStorageSeedsDefaultScheduledArchiveTask(t *testing.T) {
+	cfgPath := writeSettingsConfigFixture(t)
+	restore := saveConfigFilePathForTest(t, cfgPath)
+	defer restore()
+	initSettingsDBStoreForTest(t)
+
+	if err := ImportPreviewConfigStorage(PreviewBootstrapOptions{}); err != nil {
+		t.Fatalf("ImportPreviewConfigStorage: %v", err)
+	}
+
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("expected db store")
+	}
+	cfg, _, found, err := store.loadActiveScheduledTaskConfig()
+	if err != nil || !found {
+		t.Fatalf("loadActiveScheduledTaskConfig found=%v err=%v", found, err)
+	}
+	if len(cfg.Tasks) != 1 {
+		t.Fatalf("scheduled task count=%d want 1", len(cfg.Tasks))
+	}
+	task := cfg.Tasks[0]
+	if task.Name != defaultWAFLogArchiveTaskName || task.Command != "./bin/tukuyomi archive-waf-logs" || task.Schedule != "17 3 * * *" || task.Timezone != "UTC" || !task.Enabled {
+		t.Fatalf("default scheduled archive task=%+v", task)
+	}
+	if _, _, found, err := store.GetConfigBlob(defaultScheduledTaskMarkerKey); err != nil || !found {
+		t.Fatalf("default scheduled task marker found=%v err=%v", found, err)
+	}
+
+	if err := ImportPreviewConfigStorage(PreviewBootstrapOptions{}); err != nil {
+		t.Fatalf("second ImportPreviewConfigStorage: %v", err)
+	}
+	cfg, _, found, err = store.loadActiveScheduledTaskConfig()
+	if err != nil || !found {
+		t.Fatalf("reload scheduled tasks found=%v err=%v", found, err)
+	}
+	if len(cfg.Tasks) != 1 || cfg.Tasks[0].Name != defaultWAFLogArchiveTaskName {
+		t.Fatalf("second preview import scheduled tasks=%+v", cfg.Tasks)
+	}
+}
+
 func TestImportPreviewConfigStorageCanSeedProxyFromStartupBundle(t *testing.T) {
 	cfgPath := writeSettingsConfigFixture(t)
 	restore := saveConfigFilePathForTest(t, cfgPath)

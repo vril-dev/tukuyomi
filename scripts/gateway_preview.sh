@@ -486,6 +486,7 @@ seed_preview_database() {
 
 upgrade_preview_database() {
   run_preview_command db-migrate
+  run_preview_command bootstrap-scheduled-task-defaults
 }
 
 load_preview_topology() {

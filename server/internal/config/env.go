@@ -138,14 +138,19 @@ var (
 	FPTunerApprovalTTL     time.Duration
 	FPTunerAuditFile       string
 
-	DBDriver        string
-	DBDSN           string
-	DBPath          string
-	DBRetentionDays int
-	DBSyncInterval  time.Duration
-	FileRotateBytes int64
-	FileMaxBytes    int64
-	FileRetention   time.Duration
+	DBDriver                string
+	DBDSN                   string
+	DBPath                  string
+	DBRetentionDays         int
+	DBSyncInterval          time.Duration
+	FileRotateBytes         int64
+	FileMaxBytes            int64
+	FileRetention           time.Duration
+	LogArchiveEnabled       bool
+	LogArchivePrefix        string
+	LogArchiveMaxPartBytes  int64
+	LogArchiveMaxPartRows   int
+	LogArchiveMaxDaysPerRun int
 
 	PersistentStorageBackend          string
 	PersistentStorageLocalBaseDir     string
@@ -530,6 +535,14 @@ func applyAppConfig(cfg appConfigFile) {
 	FileRotateBytes = cfg.Storage.FileRotateBytes
 	FileMaxBytes = cfg.Storage.FileMaxBytes
 	FileRetention = time.Duration(cfg.Storage.FileRetentionDays) * 24 * time.Hour
+	LogArchiveEnabled = cfg.Storage.LogArchive.Enabled
+	LogArchivePrefix = strings.Trim(strings.TrimSpace(cfg.Storage.LogArchive.Prefix), "/")
+	if LogArchivePrefix == "" {
+		LogArchivePrefix = DefaultLogArchivePrefix
+	}
+	LogArchiveMaxPartBytes = cfg.Storage.LogArchive.MaxPartBytes
+	LogArchiveMaxPartRows = cfg.Storage.LogArchive.MaxPartRows
+	LogArchiveMaxDaysPerRun = cfg.Storage.LogArchive.MaxDaysPerRun
 
 	PersistentStorageBackend = strings.ToLower(strings.TrimSpace(cfg.Persistent.Backend))
 	if PersistentStorageBackend == "" {

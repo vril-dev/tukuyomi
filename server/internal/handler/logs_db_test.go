@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"tukuyomi/internal/config"
+	"tukuyomi/internal/persistentstore"
 )
 
 func TestLogsStatsSQLiteStoreAggregatesAndIngestsIncrementally(t *testing.T) {
@@ -102,6 +105,29 @@ func TestLogsStatsSQLiteStoreAggregatesAndIngestsIncrementally(t *testing.T) {
 	}
 }
 
+func readGzipLinesForTest(t *testing.T, path string) []string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open gzip: %v", err)
+	}
+	defer f.Close()
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatalf("new gzip reader: %v", err)
+	}
+	defer gr.Close()
+	body, err := io.ReadAll(gr)
+	if err != nil {
+		t.Fatalf("read gzip: %v", err)
+	}
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return nil
+	}
+	return strings.Split(text, "\n")
+}
+
 func TestLogsStatsSQLiteStoreRetentionPrunesOldEvents(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -152,6 +178,74 @@ func TestLogsStatsSQLiteStoreRetentionPrunesOldEvents(t *testing.T) {
 	}
 	if got := anyToString(read.Lines[0]["req_id"]); got != "req-new" {
 		t.Fatalf("req_id=%q want=req-new", got)
+	}
+}
+
+func TestWAFLogArchiveCatchesUpInitialBacklog(t *testing.T) {
+	restoreArchiveEnabled := config.LogArchiveEnabled
+	config.LogArchiveEnabled = true
+	defer func() {
+		config.LogArchiveEnabled = restoreArchiveEnabled
+	}()
+
+	now := time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStore(true, dbPath, 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+	store := getLogsStatsStore()
+
+	var raws [][]byte
+	for i := 0; i < 15; i++ {
+		day := time.Date(2026, 3, 20+i, 12, 0, 0, 0, time.UTC)
+		raws = append(raws, []byte(fmt.Sprintf(`{"ts":%q,"event":"proxy_access","path":"/old-%02d","status":200,"req_id":"old-%02d"}`, day.Format(time.RFC3339Nano), i, i)))
+	}
+	raws = append(raws, []byte(fmt.Sprintf(`{"ts":%q,"event":"proxy_access","path":"/hot","status":200,"req_id":"hot"}`, now.Add(-time.Hour).Format(time.RFC3339Nano))))
+	if err := store.AppendWAFEventLines(raws); err != nil {
+		t.Fatalf("append waf events: %v", err)
+	}
+
+	blobStore, err := persistentstore.NewLocalBlobStore(filepath.Join(tmp, "persistent"))
+	if err != nil {
+		t.Fatalf("NewLocalBlobStore: %v", err)
+	}
+	result, err := store.archiveWAFLogs(context.Background(), wafLogArchiveOptions{
+		Now:            now,
+		RetentionDays:  30,
+		Prefix:         "log-archives",
+		MaxPartBytes:   config.DefaultLogArchiveMaxPartBytes,
+		MaxPartRows:    config.DefaultLogArchiveMaxPartRows,
+		MaxDaysPerRun:  31,
+		StorageBackend: "local",
+		BlobStore:      blobStore,
+	})
+	if err != nil {
+		t.Fatalf("archiveWAFLogs: %v", err)
+	}
+	if result.DaysProcessed != 15 || result.RowsArchived != 15 || result.RowsPruned != 15 {
+		t.Fatalf("result=%+v want 15 processed/archive/prune rows", result)
+	}
+	remaining, err := store.queryCount(`SELECT COUNT(*) FROM waf_events`)
+	if err != nil {
+		t.Fatalf("count remaining: %v", err)
+	}
+	if remaining != 1 {
+		t.Fatalf("remaining rows=%d want 1", remaining)
+	}
+	parts, err := filepath.Glob(filepath.Join(tmp, "persistent", "log-archives", "waf", "yyyy=2026", "mm=03", "dd=20", "part-*.ndjson.gz"))
+	if err != nil {
+		t.Fatalf("glob archive parts: %v", err)
+	}
+	if len(parts) != 1 {
+		t.Fatalf("first day archive parts=%d want 1", len(parts))
+	}
+	lines := readGzipLinesForTest(t, parts[0])
+	if len(lines) != 1 || !strings.Contains(lines[0], `"req_id":"old-00"`) {
+		t.Fatalf("first archive lines=%v", lines)
 	}
 }
 

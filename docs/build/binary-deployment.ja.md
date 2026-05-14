@@ -240,7 +240,7 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
 ## 永続バイトストレージ
 
 DB ではなくファイル／オブジェクトとして保持するランタイムアーティファクトは `persistent_storage` で管理します。
-現在の主用途は、サイト管理 ACME のアカウント鍵、チャレンジトークン、証明書キャッシュです。
+現在の用途には、サイト管理 ACME のアカウント鍵、チャレンジトークン、証明書キャッシュ、および WAF log archive が含まれます。
 
 既定はローカルバックエンドです。
 

@@ -31,6 +31,27 @@
 
 - `paths.scheduled_task_config_file`
 
+## 組み込み既定タスク
+
+`make install` は、Gateway role が scheduled tasks を所有する構成で、次の
+product-owned default task を一度だけ bootstrap します。
+
+```json
+{
+  "name": "tukuyomi-waf-log-archive",
+  "enabled": true,
+  "schedule": "17 3 * * *",
+  "timezone": "UTC",
+  "command": "./bin/tukuyomi archive-waf-logs",
+  "timeout_sec": 3600
+}
+```
+
+この default は、hot DB storage から期限切れの WAF ／アクセスイベントを
+`persistent_storage` へ archive します。bootstrap は一度だけです。operator
+が後でこの task を変更、無効化、または削除した場合、以後の install では
+再作成も初期値へのリセットも行いません。
+
 ## タスクモデル
 
 各タスクは、cron 形式のスケジュールと完全なコマンドラインを 1 本持ちます。

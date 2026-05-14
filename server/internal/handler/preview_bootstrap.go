@@ -98,6 +98,10 @@ func ImportPreviewConfigStorage(opts PreviewBootstrapOptions) error {
 		return fmt.Errorf("import preview scheduled tasks config: %w", err)
 	}
 	_ = store.DeleteConfigBlob(scheduledTaskConfigBlobKey)
+	_ = store.DeleteConfigBlob(defaultScheduledTaskMarkerKey)
+	if _, err := BootstrapDefaultScheduledTasks(config.ScheduledTaskConfigFile); err != nil {
+		return fmt.Errorf("bootstrap preview scheduled task defaults: %w", err)
+	}
 
 	proxyRaw, err := previewProxyConfigRaw()
 	if err != nil {

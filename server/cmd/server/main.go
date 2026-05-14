@@ -51,10 +51,14 @@ func runMain(args []string) {
 		runDBImportWAFRuleAssetsCommand()
 	case serverCommandAdminBootstrap:
 		runAdminBootstrapCommand()
+	case serverCommandBootstrapScheduledTasks:
+		runBootstrapScheduledTaskDefaultsCommand()
 	case serverCommandPreviewPrintTopology:
 		runPreviewPrintTopologyCommand()
 	case serverCommandRunScheduledTasks:
 		runScheduledTasksCommand()
+	case serverCommandArchiveWAFLogs:
+		runArchiveWAFLogsCommand()
 	case serverCommandUpdateCountryDB:
 		runUpdateCountryDBCommand()
 	case serverCommandBootstrapProtectedGateway:
@@ -655,6 +659,48 @@ func runScheduledTasksCommand() {
 	if err := handler.RunDueScheduledTasks(time.Now()); err != nil {
 		log.Fatalf("[SCHEDULE][FATAL] %v", err)
 	}
+}
+
+func runBootstrapScheduledTaskDefaultsCommand() {
+	config.LoadEnv()
+	initRuntimeDBStoreOrFatal("[SCHEDULE][BOOTSTRAP][DB][BOOTSTRAP]")
+	if err := handler.SyncAppConfigStorage(); err != nil {
+		log.Fatalf("[SCHEDULE][BOOTSTRAP][CONFIG][FATAL] sync failed: %v", err)
+	}
+	initRuntimeDBStoreOrFatal("[SCHEDULE][BOOTSTRAP][DB]")
+	if err := handler.InitPHPRuntimeInventoryRuntime(config.PHPRuntimeInventoryFile, config.ProxyRollbackMax); err != nil {
+		log.Fatalf("[SCHEDULE][BOOTSTRAP][FATAL] initialize php runtime inventory: %v", err)
+	}
+	result, err := handler.BootstrapDefaultScheduledTasks(config.ScheduledTaskConfigFile)
+	if err != nil {
+		log.Fatalf("[SCHEDULE][BOOTSTRAP][FATAL] %v", err)
+	}
+	switch {
+	case result.Added:
+		log.Printf("[SCHEDULE][BOOTSTRAP] added default tukuyomi-waf-log-archive task")
+	case result.TaskFound:
+		log.Printf("[SCHEDULE][BOOTSTRAP] default task already exists; marked bootstrap complete")
+	case result.MarkerFound:
+		log.Printf("[SCHEDULE][BOOTSTRAP] skipped; default task bootstrap already completed")
+	default:
+		log.Printf("[SCHEDULE][BOOTSTRAP] no changes")
+	}
+}
+
+func runArchiveWAFLogsCommand() {
+	config.LoadEnv()
+	initRuntimeDBStoreOrFatal("[LOG_ARCHIVE][DB][BOOTSTRAP]")
+	if err := handler.SyncAppConfigStorage(); err != nil {
+		log.Fatalf("[LOG_ARCHIVE][CONFIG][FATAL] sync failed: %v", err)
+	}
+	initRuntimeDBStoreOrFatal("[LOG_ARCHIVE][DB]")
+	ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
+	defer cancel()
+	result, err := handler.RunWAFLogArchive(ctx)
+	if err != nil {
+		log.Fatalf("[LOG_ARCHIVE][FATAL] %v", err)
+	}
+	log.Printf("[LOG_ARCHIVE] completed days=%d parts=%d archived_rows=%d pruned_rows=%d", result.DaysProcessed, result.PartsWritten, result.RowsArchived, result.RowsPruned)
 }
 
 func applyRuntimeResourceLimits() {

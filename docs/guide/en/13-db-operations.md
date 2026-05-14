@@ -92,7 +92,7 @@ The DB connection bootstrap sits in the `storage` block of
 | `db_driver` | One of `sqlite` / `mysql` / `pgsql`. |
 | `db_path` | SQLite database path. |
 | `db_dsn` | DSN for MySQL / PostgreSQL. |
-| `db_retention_days` | WAF event retention. |
+| `db_retention_days` | Hot WAF event retention in DB. |
 | `db_sync_interval_sec` | Interval of the periodic DB-to-runtime reconciliation loop. |
 
 Notes:
@@ -197,6 +197,7 @@ handled separately:
 - security / FP Tuner / proxy-rules audit
 - scheduled-task logs
 - PHP-FPM runtime logs / sockets
+- WAF log archives under `storage.log_archive.enabled=true`
 
 These are **runtime artifacts, not DB-side configuration**.
 
@@ -246,6 +247,23 @@ DB to file**.
 
 - `30` (default): retain the last 30 days.
 - `0`: disable pruning.
+
+With `storage.log_archive.enabled=true` (default), tukuyomi archives
+expired complete UTC days before deleting DB rows. The local backend
+path is:
+
+```text
+data/persistent/log-archives/waf/yyyy=<YYYY>/mm=<MM>/dd=<DD>/part-000001.ndjson.gz
+```
+
+For S3, the same key layout is placed below
+`persistent_storage.s3.prefix`. The archive job is a Scheduled Task
+named `tukuyomi-waf-log-archive`; `make install` adds it once at
+`03:17 UTC`. If an operator changes, disables, or deletes that task,
+later installs leave that choice alone.
+
+With `storage.log_archive.enabled=false`, retention falls back to
+direct DB pruning.
 
 `config_blobs` is **not** pruned by retention.
 

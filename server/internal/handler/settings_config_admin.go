@@ -85,14 +85,23 @@ type settingsListenerAdminRequestMetadataConfig struct {
 }
 
 type settingsListenerAdminStorageConfig struct {
-	Backend           string `json:"backend,omitempty"`
-	DBDriver          string `json:"db_driver"`
-	DBPath            string `json:"db_path"`
-	DBRetentionDays   int    `json:"db_retention_days"`
-	DBSyncIntervalSec int    `json:"db_sync_interval_sec"`
-	FileRotateBytes   int64  `json:"file_rotate_bytes"`
-	FileMaxBytes      int64  `json:"file_max_bytes"`
-	FileRetentionDays int    `json:"file_retention_days"`
+	Backend           string                                `json:"backend,omitempty"`
+	DBDriver          string                                `json:"db_driver"`
+	DBPath            string                                `json:"db_path"`
+	DBRetentionDays   int                                   `json:"db_retention_days"`
+	DBSyncIntervalSec int                                   `json:"db_sync_interval_sec"`
+	FileRotateBytes   int64                                 `json:"file_rotate_bytes"`
+	FileMaxBytes      int64                                 `json:"file_max_bytes"`
+	FileRetentionDays int                                   `json:"file_retention_days"`
+	LogArchive        settingsListenerAdminLogArchiveConfig `json:"log_archive"`
+}
+
+type settingsListenerAdminLogArchiveConfig struct {
+	Enabled       bool   `json:"enabled"`
+	Prefix        string `json:"prefix"`
+	MaxPartBytes  int64  `json:"max_part_bytes"`
+	MaxPartRows   int    `json:"max_part_rows"`
+	MaxDaysPerRun int    `json:"max_days_per_run"`
 }
 
 type settingsListenerAdminPersistentStorageConfig struct {
@@ -347,6 +356,11 @@ type settingsListenerAdminRuntimeStatus struct {
 	StorageFileRotateBytes             int64                                       `json:"storage_file_rotate_bytes"`
 	StorageFileMaxBytes                int64                                       `json:"storage_file_max_bytes"`
 	StorageFileRetentionDays           int                                         `json:"storage_file_retention_days"`
+	StorageLogArchiveEnabled           bool                                        `json:"storage_log_archive_enabled"`
+	StorageLogArchivePrefix            string                                      `json:"storage_log_archive_prefix"`
+	StorageLogArchiveMaxPartBytes      int64                                       `json:"storage_log_archive_max_part_bytes"`
+	StorageLogArchiveMaxPartRows       int                                         `json:"storage_log_archive_max_part_rows"`
+	StorageLogArchiveMaxDaysPerRun     int                                         `json:"storage_log_archive_max_days_per_run"`
 	PersistentStorageBackend           string                                      `json:"persistent_storage_backend"`
 	PersistentStorageLocalBaseDir      string                                      `json:"persistent_storage_local_base_dir"`
 	PersistentStorageS3Bucket          string                                      `json:"persistent_storage_s3_bucket"`
@@ -648,6 +662,13 @@ func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListener
 			FileRotateBytes:   cfg.Storage.FileRotateBytes,
 			FileMaxBytes:      cfg.Storage.FileMaxBytes,
 			FileRetentionDays: cfg.Storage.FileRetentionDays,
+			LogArchive: settingsListenerAdminLogArchiveConfig{
+				Enabled:       cfg.Storage.LogArchive.Enabled,
+				Prefix:        cfg.Storage.LogArchive.Prefix,
+				MaxPartBytes:  cfg.Storage.LogArchive.MaxPartBytes,
+				MaxPartRows:   cfg.Storage.LogArchive.MaxPartRows,
+				MaxDaysPerRun: cfg.Storage.LogArchive.MaxDaysPerRun,
+			},
 		},
 		Persistent: settingsListenerAdminPersistentStorageConfig{
 			Backend: cfg.Persistent.Backend,
@@ -816,6 +837,11 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 	cfg.Storage.FileRotateBytes = next.Storage.FileRotateBytes
 	cfg.Storage.FileMaxBytes = next.Storage.FileMaxBytes
 	cfg.Storage.FileRetentionDays = next.Storage.FileRetentionDays
+	cfg.Storage.LogArchive.Enabled = next.Storage.LogArchive.Enabled
+	cfg.Storage.LogArchive.Prefix = next.Storage.LogArchive.Prefix
+	cfg.Storage.LogArchive.MaxPartBytes = next.Storage.LogArchive.MaxPartBytes
+	cfg.Storage.LogArchive.MaxPartRows = next.Storage.LogArchive.MaxPartRows
+	cfg.Storage.LogArchive.MaxDaysPerRun = next.Storage.LogArchive.MaxDaysPerRun
 
 	cfg.Persistent.Backend = next.Persistent.Backend
 	cfg.Persistent.Local.BaseDir = next.Persistent.Local.BaseDir
@@ -968,6 +994,11 @@ func buildSettingsListenerAdminRuntimeStatus() settingsListenerAdminRuntimeStatu
 		StorageFileRotateBytes:             config.FileRotateBytes,
 		StorageFileMaxBytes:                config.FileMaxBytes,
 		StorageFileRetentionDays:           int(config.FileRetention / (24 * time.Hour)),
+		StorageLogArchiveEnabled:           config.LogArchiveEnabled,
+		StorageLogArchivePrefix:            config.LogArchivePrefix,
+		StorageLogArchiveMaxPartBytes:      config.LogArchiveMaxPartBytes,
+		StorageLogArchiveMaxPartRows:       config.LogArchiveMaxPartRows,
+		StorageLogArchiveMaxDaysPerRun:     config.LogArchiveMaxDaysPerRun,
 		PersistentStorageBackend:           config.PersistentStorageBackend,
 		PersistentStorageLocalBaseDir:      config.PersistentStorageLocalBaseDir,
 		PersistentStorageS3Bucket:          config.PersistentStorageS3Bucket,

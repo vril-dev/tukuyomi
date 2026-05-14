@@ -24,6 +24,7 @@ import (
 	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
+	"tukuyomi/internal/config"
 	"tukuyomi/internal/requestmeta"
 )
 
@@ -1135,6 +1136,9 @@ func (s *wafEventStore) loadIngestState(source string) (logIngestState, error) {
 
 func (s *wafEventStore) pruneExpiredWAFEvents(tx *sql.Tx, now time.Time) error {
 	if s == nil || s.retentionDays <= 0 {
+		return nil
+	}
+	if config.LogArchiveEnabled {
 		return nil
 	}
 	cutoffUnix := now.AddDate(0, 0, -s.retentionDays).Unix()

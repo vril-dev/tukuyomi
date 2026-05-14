@@ -49,6 +49,66 @@ func TestLogsStatsSQLiteStoreAggregatesAndIngestsIncrementally(t *testing.T) {
 			"event": "waf_hit_allow",
 			"path":  "/allow",
 		},
+		{
+			"ts":        now.Add(-20 * time.Minute).Format(time.RFC3339Nano),
+			"event":     "rate_limited",
+			"policy_id": "default",
+			"path":      "/api",
+			"country":   "JP",
+			"status":    429,
+			"req_id":    "req-rate",
+		},
+		{
+			"ts":      now.Add(-25 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "country_block",
+			"path":    "/",
+			"country": "DE",
+			"status":  403,
+			"req_id":  "req-country",
+		},
+		{
+			"ts":          now.Add(-30 * time.Minute).Format(time.RFC3339Nano),
+			"event":       "bot_challenge",
+			"flow_policy": "login",
+			"path":        "/login",
+			"country":     "US",
+			"status":      403,
+			"req_id":      "req-bot",
+		},
+		{
+			"ts":      now.Add(-35 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "semantic_anomaly",
+			"action":  "block",
+			"path":    "/search",
+			"country": "US",
+			"status":  403,
+			"req_id":  "req-semantic",
+		},
+		{
+			"ts":         now.Add(-40 * time.Minute).Format(time.RFC3339Nano),
+			"event":      "ip_reputation",
+			"host_scope": "default",
+			"path":       "/admin",
+			"country":    "NL",
+			"status":     403,
+			"req_id":     "req-iprep",
+		},
+		{
+			"ts":      now.Add(-45 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "semantic_anomaly",
+			"action":  "log",
+			"path":    "/observe",
+			"country": "JP",
+			"req_id":  "req-semantic-log",
+		},
+		{
+			"ts":      now.Add(-50 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "bot_challenge_dry_run",
+			"path":    "/dry-run",
+			"country": "JP",
+			"status":  403,
+			"req_id":  "req-bot-dry",
+		},
 	}
 
 	tmp := t.TempDir()
@@ -79,6 +139,33 @@ func TestLogsStatsSQLiteStoreAggregatesAndIngestsIncrementally(t *testing.T) {
 	if first.WAFBlock.Last24h != 2 {
 		t.Fatalf("first last_24h=%d want=2", first.WAFBlock.Last24h)
 	}
+	if first.SecurityBlocks.TotalInScan != 7 {
+		t.Fatalf("first security total_in_scan=%d want=7", first.SecurityBlocks.TotalInScan)
+	}
+	if first.SecurityBlocks.Last1h != 6 {
+		t.Fatalf("first security last_1h=%d want=6", first.SecurityBlocks.Last1h)
+	}
+	if first.SecurityBlocks.Last24h != 7 {
+		t.Fatalf("first security last_24h=%d want=7", first.SecurityBlocks.Last24h)
+	}
+	for family, want := range map[string]int{
+		"waf":           2,
+		"rate_limit":    1,
+		"country_block": 1,
+		"bot_defense":   1,
+		"semantic":      1,
+		"ip_reputation": 1,
+	} {
+		if got := securityFamilyCount(first.SecurityBlocks.ByFamily24h, family); got != want {
+			t.Fatalf("first family %s count=%d want=%d", family, got, want)
+		}
+	}
+	if got := securityTopBlockCount(first.SecurityBlocks.TopBlocks24h, "waf_block (942100)"); got != 1 {
+		t.Fatalf("first top waf_block count=%d want=1", got)
+	}
+	if got := securityTopBlockCount(first.SecurityBlocks.TopBlocks24h, "rate_limited (default)"); got != 1 {
+		t.Fatalf("first top rate_limited count=%d want=1", got)
+	}
 
 	appendNDJSONLine(t, logPath, map[string]any{
 		"ts":      now.Add(-2 * time.Minute).Format(time.RFC3339Nano),
@@ -102,6 +189,18 @@ func TestLogsStatsSQLiteStoreAggregatesAndIngestsIncrementally(t *testing.T) {
 	}
 	if second.WAFBlock.Last24h != 3 {
 		t.Fatalf("second last_24h=%d want=3", second.WAFBlock.Last24h)
+	}
+	if second.SecurityBlocks.TotalInScan != 8 {
+		t.Fatalf("second security total_in_scan=%d want=8", second.SecurityBlocks.TotalInScan)
+	}
+	if second.SecurityBlocks.Last1h != 7 {
+		t.Fatalf("second security last_1h=%d want=7", second.SecurityBlocks.Last1h)
+	}
+	if second.SecurityBlocks.Last24h != 8 {
+		t.Fatalf("second security last_24h=%d want=8", second.SecurityBlocks.Last24h)
+	}
+	if got := securityTopBlockCount(second.SecurityBlocks.TopBlocks24h, "waf_block (942100)"); got != 2 {
+		t.Fatalf("second top waf_block count=%d want=2", got)
 	}
 }
 
@@ -1148,6 +1247,24 @@ func callLogsStats(t *testing.T, path string) logsStatsResp {
 		t.Fatalf("decode response: %v", err)
 	}
 	return out
+}
+
+func securityFamilyCount(items []securityFamilyBucket, family string) int {
+	for _, item := range items {
+		if item.Family == family {
+			return item.Count
+		}
+	}
+	return 0
+}
+
+func securityTopBlockCount(items []securityBlockBucket, label string) int {
+	for _, item := range items {
+		if item.Label == label {
+			return item.Count
+		}
+	}
+	return 0
 }
 
 func appendNDJSONLine(t *testing.T, path string, entry map[string]any) {

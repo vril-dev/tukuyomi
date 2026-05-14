@@ -204,6 +204,94 @@ func TestLogsStatsSQLiteStoreAggregatesAndIngestsIncrementally(t *testing.T) {
 	}
 }
 
+func TestLogsStatsSecurityRangeBucketsUseSelectedRange(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	now := time.Now().UTC()
+	entries := []map[string]any{
+		{
+			"ts":      now.Add(-2 * time.Hour).Format(time.RFC3339Nano),
+			"event":   "waf_block",
+			"rule_id": 942100,
+			"path":    "/login",
+			"country": "JP",
+			"status":  403,
+			"req_id":  "req-waf",
+		},
+		{
+			"ts":        now.Add(-48 * time.Hour).Format(time.RFC3339Nano),
+			"event":     "rate_limited",
+			"policy_id": "burst",
+			"path":      "/api",
+			"country":   "BG",
+			"status":    429,
+			"req_id":    "req-rate-old",
+		},
+		{
+			"ts":      now.Add(-48 * time.Hour).Format(time.RFC3339Nano),
+			"event":   "country_block",
+			"path":    "/",
+			"country": "DE",
+			"status":  403,
+			"req_id":  "req-country-old",
+		},
+		{
+			"ts":             now.Add(-48 * time.Hour).Format(time.RFC3339Nano),
+			"event":          "proxy_route_access_block",
+			"path":           "/center-ui",
+			"country":        "JP",
+			"status":         403,
+			"reason":         "allow_miss",
+			"selected_route": "center-ui",
+			"req_id":         "req-route-access-old",
+		},
+	}
+
+	tmp := t.TempDir()
+	logPath := filepath.Join(tmp, "waf-events.ndjson")
+	writeNDJSONFile(t, logPath, entries)
+
+	restoreLogPath := setWAFLogPathForTest(t, logPath)
+	defer restoreLogPath()
+
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStore(true, dbPath, 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	stats := callLogsStats(t, "/tukuyomi-api/logs/stats?hours=72")
+	if stats.SecurityBlocks.Last24h != 1 {
+		t.Fatalf("last_24h=%d want=1", stats.SecurityBlocks.Last24h)
+	}
+	if got := securityFamilyCount(stats.SecurityBlocks.ByFamily24h, "rate_limit"); got != 0 {
+		t.Fatalf("24h rate_limit count=%d want=0", got)
+	}
+	if got := securityFamilyCount(stats.SecurityBlocks.ByFamilyRange, "rate_limit"); got != 1 {
+		t.Fatalf("range rate_limit count=%d want=1", got)
+	}
+	if got := securityFamilyCount(stats.SecurityBlocks.ByFamilyRange, "country_block"); got != 1 {
+		t.Fatalf("range country_block count=%d want=1", got)
+	}
+	if got := securityFamilyCount(stats.SecurityBlocks.ByFamilyRange, "route_access"); got != 1 {
+		t.Fatalf("range route_access count=%d want=1", got)
+	}
+	if got := securityTopBlockCount(stats.SecurityBlocks.TopBlocks24h, "rate_limited (burst)"); got != 0 {
+		t.Fatalf("24h top rate_limited count=%d want=0", got)
+	}
+	if got := securityTopBlockCount(stats.SecurityBlocks.TopBlocksRange, "rate_limited (burst)"); got != 1 {
+		t.Fatalf("range top rate_limited count=%d want=1", got)
+	}
+	if got := securityTopBlockCount(stats.SecurityBlocks.TopBlocksRange, "country_block (DE)"); got != 1 {
+		t.Fatalf("range top country_block count=%d want=1", got)
+	}
+	if got := securityTopBlockCount(stats.SecurityBlocks.TopBlocksRange, "proxy_route_access_block (allow_miss)"); got != 1 {
+		t.Fatalf("range top route_access count=%d want=1", got)
+	}
+}
+
 func readGzipLinesForTest(t *testing.T, path string) []string {
 	t.Helper()
 	f, err := os.Open(path)

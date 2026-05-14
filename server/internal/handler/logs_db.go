@@ -39,7 +39,7 @@ const (
 	maxDBMatchedValueBytes = 2048
 )
 
-const securityBlockWhereSQL = `(event IN ('waf_block', 'rate_limited', 'country_block', 'ip_reputation', 'bot_challenge', 'bot_quarantine') OR (event = 'semantic_anomaly' AND status > 0))`
+const securityBlockWhereSQL = `(event IN ('waf_block', 'rate_limited', 'country_block', 'proxy_route_access_block', 'ip_reputation', 'bot_challenge', 'bot_quarantine') OR (event = 'semantic_anomaly' AND status > 0))`
 
 var (
 	logStatsStoreMu sync.RWMutex
@@ -524,11 +524,15 @@ func (s *wafEventStore) BuildLogsStats(logPath string, rangeHours int, now time.
 			SeriesHourly:    emptySeries,
 		},
 		SecurityBlocks: securityBlockStats{
-			ByFamily24h:     []securityFamilyBucket{},
-			TopBlocks24h:    []securityBlockBucket{},
-			TopPaths24h:     []statsBucket{},
-			TopCountries24h: []statsBucket{},
-			SeriesHourly:    buildSecurityHourlySeries(seriesStart, seriesEnd, map[int64]map[string]int{}),
+			ByFamily24h:       []securityFamilyBucket{},
+			ByFamilyRange:     []securityFamilyBucket{},
+			TopBlocks24h:      []securityBlockBucket{},
+			TopBlocksRange:    []securityBlockBucket{},
+			TopPaths24h:       []statsBucket{},
+			TopPathsRange:     []statsBucket{},
+			TopCountries24h:   []statsBucket{},
+			TopCountriesRange: []statsBucket{},
+			SeriesHourly:      buildSecurityHourlySeries(seriesStart, seriesEnd, map[int64]map[string]int{}),
 		},
 	}
 
@@ -540,6 +544,7 @@ func (s *wafEventStore) BuildLogsStats(logPath string, rangeHours int, now time.
 
 	since1hUnix := now.Add(-1 * time.Hour).Unix()
 	since24hUnix := now.Add(-24 * time.Hour).Unix()
+	sinceRangeUnix := now.Add(-time.Duration(rangeHours) * time.Hour).Unix()
 	seriesStartUnix := seriesStart.Unix()
 	seriesEndUnix := seriesEnd.Unix()
 
@@ -590,7 +595,15 @@ func (s *wafEventStore) BuildLogsStats(logPath string, rangeHours int, now time.
 	if err != nil {
 		return logsStatsResp{}, err
 	}
+	base.SecurityBlocks.ByFamilyRange, err = s.querySecurityFamilyBuckets(sinceRangeUnix)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
 	base.SecurityBlocks.TopBlocks24h, err = s.queryTopSecurityBlocks(since24hUnix, statsSecurityTopN)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
+	base.SecurityBlocks.TopBlocksRange, err = s.queryTopSecurityBlocks(sinceRangeUnix, statsSecurityTopN)
 	if err != nil {
 		return logsStatsResp{}, err
 	}
@@ -598,7 +611,15 @@ func (s *wafEventStore) BuildLogsStats(logPath string, rangeHours int, now time.
 	if err != nil {
 		return logsStatsResp{}, err
 	}
+	base.SecurityBlocks.TopPathsRange, err = s.queryTopBucketsForWhere("path", securityBlockWhereSQL, sinceRangeUnix, statsTopN)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
 	base.SecurityBlocks.TopCountries24h, err = s.queryTopBucketsForWhere("country", securityBlockWhereSQL, since24hUnix, statsTopN)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
+	base.SecurityBlocks.TopCountriesRange, err = s.queryTopBucketsForWhere("country", securityBlockWhereSQL, sinceRangeUnix, statsTopN)
 	if err != nil {
 		return logsStatsResp{}, err
 	}

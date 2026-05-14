@@ -18,6 +18,7 @@ type SecurityFamilyKey =
     | "waf"
     | "rate_limit"
     | "country_block"
+    | "route_access"
     | "bot_defense"
     | "semantic"
     | "ip_reputation";
@@ -42,6 +43,7 @@ type SecuritySeriesPoint = {
     waf: number;
     rate_limit: number;
     country_block: number;
+    route_access: number;
     bot_defense: number;
     semantic: number;
     ip_reputation: number;
@@ -52,9 +54,13 @@ type SecurityBlockStats = {
     last_24h: number;
     total_in_scan: number;
     by_family_24h: SecurityFamilyBucket[];
+    by_family_range?: SecurityFamilyBucket[];
     top_blocks_24h: SecurityBlockBucket[];
+    top_blocks_range?: SecurityBlockBucket[];
     top_paths_24h: StatsBucket[];
+    top_paths_range?: StatsBucket[];
     top_countries_24h: StatsBucket[];
+    top_countries_range?: StatsBucket[];
     series_hourly: SecuritySeriesPoint[];
 };
 
@@ -86,6 +92,7 @@ const SECURITY_FAMILIES: Array<{
     { key: "waf", label: "WAF", color: "#ef4444", soft: "#fee2e2", text: "#991b1b" },
     { key: "rate_limit", label: "Rate Limit", color: "#f97316", soft: "#ffedd5", text: "#9a3412" },
     { key: "country_block", label: "Country Block", color: "#0ea5e9", soft: "#e0f2fe", text: "#075985" },
+    { key: "route_access", label: "Route Access", color: "#0f766e", soft: "#ccfbf1", text: "#134e4a" },
     { key: "bot_defense", label: "Bot Defense", color: "#8b5cf6", soft: "#ede9fe", text: "#5b21b6" },
     { key: "semantic", label: "Semantic Security", color: "#10b981", soft: "#d1fae5", text: "#065f46" },
     { key: "ip_reputation", label: "IP Reputation", color: "#64748b", soft: "#e2e8f0", text: "#334155" },
@@ -160,7 +167,11 @@ export default function Status() {
     const running = useMemo(() => (data?.status === "running"), [data]);
     const wafBlock = stats?.waf_block;
     const securityBlocks = stats?.security_blocks;
-    const activeSecurityFamilies = securityBlocks?.by_family_24h?.filter((item) => item.count > 0).length ?? 0;
+    const securityRangeFamilies = securityBlocks?.by_family_range ?? securityBlocks?.by_family_24h ?? [];
+    const securityRangeTopBlocks = securityBlocks?.top_blocks_range ?? securityBlocks?.top_blocks_24h ?? [];
+    const securityRangeTopPaths = securityBlocks?.top_paths_range ?? securityBlocks?.top_paths_24h ?? [];
+    const securityRangeTopCountries = securityBlocks?.top_countries_range ?? securityBlocks?.top_countries_24h ?? [];
+    const activeSecurityFamilies = securityRangeFamilies.filter((item) => item.count > 0).length;
     const dbSizeBytes = toNumber(data?.db_size_bytes);
     const dbRows = toNumber(data?.db_total_rows);
     const dbWAFBlockRows = toNumber(data?.db_waf_block_rows);
@@ -260,10 +271,10 @@ export default function Status() {
                             <Metric label={tx("Blocked (Last 1h)")} value={formatCount(securityBlocks.last_1h)} />
                             <Metric label={tx("Blocked (Last 24h)")} value={formatCount(securityBlocks.last_24h)} />
                             <Metric label={tx("Blocked (In Scan Window)")} value={formatCount(securityBlocks.total_in_scan)} />
-                            <Metric label={tx("Active Controls (24h)")} value={formatCount(activeSecurityFamilies)} />
+                            <Metric label={tx("Active Controls ({hours}h)", { hours: stats.range_hours })} value={formatCount(activeSecurityFamilies)} />
                         </div>
 
-                        <SecurityFamilyStrip items={securityBlocks.by_family_24h ?? []} tx={tx} />
+                        <SecurityFamilyStrip items={securityRangeFamilies} tx={tx} />
 
                         <SecurityStackedBars points={securityBlocks.series_hourly ?? []} locale={locale} tx={tx} />
 
@@ -277,9 +288,9 @@ export default function Status() {
                         ) : null}
 
                         <div className="grid gap-3 lg:grid-cols-3">
-                            <TopSecurityBlocks title={tx("Top Blocks (24h)")} items={securityBlocks.top_blocks_24h ?? []} tx={tx} />
-                            <TopBuckets title={tx("Top Blocked Paths (24h)")} items={securityBlocks.top_paths_24h ?? []} tx={tx} />
-                            <TopBuckets title={tx("Top Blocked Countries (24h)")} items={securityBlocks.top_countries_24h ?? []} tx={tx} />
+                            <TopSecurityBlocks title={tx("Top Blocks ({hours}h)", { hours: stats.range_hours })} items={securityRangeTopBlocks} tx={tx} />
+                            <TopBuckets title={tx("Top Blocked Paths ({hours}h)", { hours: stats.range_hours })} items={securityRangeTopPaths} tx={tx} />
+                            <TopBuckets title={tx("Top Blocked Countries ({hours}h)", { hours: stats.range_hours })} items={securityRangeTopCountries} tx={tx} />
                         </div>
 
                         <div className="grid gap-3 lg:grid-cols-3">
@@ -430,7 +441,7 @@ function SecurityFamilyStrip({
 }) {
     const counts = new Map(items.map((item) => [item.family, item.count]));
     return (
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
             {SECURITY_FAMILIES.map((family) => {
                 const count = counts.get(family.key) ?? 0;
                 return (

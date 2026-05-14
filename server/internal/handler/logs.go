@@ -210,6 +210,7 @@ type securitySeriesPoint struct {
 	WAF          int    `json:"waf"`
 	RateLimit    int    `json:"rate_limit"`
 	CountryBlock int    `json:"country_block"`
+	RouteAccess  int    `json:"route_access"`
 	BotDefense   int    `json:"bot_defense"`
 	Semantic     int    `json:"semantic"`
 	IPReputation int    `json:"ip_reputation"`
@@ -226,14 +227,18 @@ type wafBlockStats struct {
 }
 
 type securityBlockStats struct {
-	Last1h          int                    `json:"last_1h"`
-	Last24h         int                    `json:"last_24h"`
-	TotalInScan     int                    `json:"total_in_scan"`
-	ByFamily24h     []securityFamilyBucket `json:"by_family_24h"`
-	TopBlocks24h    []securityBlockBucket  `json:"top_blocks_24h"`
-	TopPaths24h     []statsBucket          `json:"top_paths_24h"`
-	TopCountries24h []statsBucket          `json:"top_countries_24h"`
-	SeriesHourly    []securitySeriesPoint  `json:"series_hourly"`
+	Last1h            int                    `json:"last_1h"`
+	Last24h           int                    `json:"last_24h"`
+	TotalInScan       int                    `json:"total_in_scan"`
+	ByFamily24h       []securityFamilyBucket `json:"by_family_24h"`
+	ByFamilyRange     []securityFamilyBucket `json:"by_family_range"`
+	TopBlocks24h      []securityBlockBucket  `json:"top_blocks_24h"`
+	TopBlocksRange    []securityBlockBucket  `json:"top_blocks_range"`
+	TopPaths24h       []statsBucket          `json:"top_paths_24h"`
+	TopPathsRange     []statsBucket          `json:"top_paths_range"`
+	TopCountries24h   []statsBucket          `json:"top_countries_24h"`
+	TopCountriesRange []statsBucket          `json:"top_countries_range"`
+	SeriesHourly      []securitySeriesPoint  `json:"series_hourly"`
 }
 
 type logsStatsResp struct {
@@ -593,6 +598,8 @@ func normalizeStatsRuleIDForEvent(event string, fields map[string]any) string {
 		return firstNonEmptyStatsValue(fields["policy_id"], fields["key_by"])
 	case "country_block":
 		return requestmeta.NormalizeCountryFromAny(fields["country"])
+	case "proxy_route_access_block":
+		return firstNonEmptyStatsValue(fields["reason"], fields["selected_route"])
 	case "ip_reputation":
 		return firstNonEmptyStatsValue(fields["host_scope"])
 	case "bot_challenge", "bot_quarantine":
@@ -622,6 +629,8 @@ func securityBlockFamilyForEvent(event string, status int) string {
 		return "rate_limit"
 	case "country_block":
 		return "country_block"
+	case "proxy_route_access_block":
+		return "route_access"
 	case "ip_reputation":
 		return "ip_reputation"
 	case "bot_challenge", "bot_quarantine":
@@ -642,6 +651,8 @@ func securityFamilyLabel(family string) string {
 		return "Rate Limit"
 	case "country_block":
 		return "Country Block"
+	case "route_access":
+		return "Route Access"
 	case "bot_defense":
 		return "Bot Defense"
 	case "semantic":
@@ -654,7 +665,7 @@ func securityFamilyLabel(family string) string {
 }
 
 func orderedSecurityFamilyBuckets(counts map[string]int) []securityFamilyBucket {
-	order := []string{"waf", "rate_limit", "country_block", "bot_defense", "semantic", "ip_reputation"}
+	order := []string{"waf", "rate_limit", "country_block", "route_access", "bot_defense", "semantic", "ip_reputation"}
 	out := make([]securityFamilyBucket, 0, len(order))
 	for _, family := range order {
 		count := counts[family]
@@ -746,11 +757,12 @@ func buildSecurityHourlySeries(start, end time.Time, counts map[int64]map[string
 			WAF:          bucketCounts["waf"],
 			RateLimit:    bucketCounts["rate_limit"],
 			CountryBlock: bucketCounts["country_block"],
+			RouteAccess:  bucketCounts["route_access"],
 			BotDefense:   bucketCounts["bot_defense"],
 			Semantic:     bucketCounts["semantic"],
 			IPReputation: bucketCounts["ip_reputation"],
 		}
-		point.Total = point.WAF + point.RateLimit + point.CountryBlock + point.BotDefense + point.Semantic + point.IPReputation
+		point.Total = point.WAF + point.RateLimit + point.CountryBlock + point.RouteAccess + point.BotDefense + point.Semantic + point.IPReputation
 		out = append(out, point)
 	}
 	return out

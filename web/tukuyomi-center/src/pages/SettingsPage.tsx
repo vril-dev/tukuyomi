@@ -35,7 +35,7 @@ type CenterSettings = {
   storage?: {
     db_driver?: string;
     db_path?: string;
-    db_retention_days?: number;
+    hot_log_retention_days?: number;
     file_retention_days?: number;
   };
   access?: {
@@ -374,7 +374,7 @@ export default function SettingsPage() {
             <SettingItem label={tx("Read only")} value={boolLabel(settings.access?.read_only, tx)} />
             <SettingItem label={tx("DB driver")} value={settings.storage?.db_driver || "-"} />
             <SettingItem label={tx("DB path")} value={settings.storage?.db_path || "-"} />
-            <SettingItem label={tx("DB retention")} value={daysLabel(settings.storage?.db_retention_days, tx)} />
+            <SettingItem label={tx("Hot log retention")} value={daysLabel(settings.storage?.hot_log_retention_days, tx)} />
             <SettingItem label={tx("File retention")} value={daysLabel(settings.storage?.file_retention_days, tx)} />
           </div>
           <h3 className="section-subtitle">{tx("Remote SSH service")}</h3>

@@ -140,7 +140,7 @@ jobs:
           jq '
             .server.listen_addr = ":9090" |
             .storage.db_driver = "sqlite" |
-            .storage.db_retention_days = 30 |
+            .storage.hot_log_retention_days = 30 |
             .admin = (.admin // {}) |
             .admin.session_secret = "ci-session-secret-1-1-0-release"
           ' data/conf/config.json > "${tmp}"

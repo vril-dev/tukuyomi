@@ -155,7 +155,7 @@ func InitializeRuntime() error {
 		config.DBDriver,
 		config.DBPath,
 		config.DBDSN,
-		config.DBRetentionDays,
+		config.HotLogRetentionDays,
 	); err != nil {
 		return fmt.Errorf("initialize center db store: %w", err)
 	}

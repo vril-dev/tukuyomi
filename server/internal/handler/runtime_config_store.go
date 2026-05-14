@@ -195,7 +195,7 @@ func (s *wafEventStore) insertVhostConfigRowsTx(tx *sql.Tx, versionID int64, cfg
 		}
 		if _, err := s.txExec(
 			tx,
-			`INSERT INTO vhosts (version_id, position, name, mode, hostname, listen_port, document_root, max_request_body_bytes, runtime_id, generated_target, linked_upstream_name, app_root, psgi_file, workers, max_requests, include_extlib, enabled, command, args_json, working_dir, run_user, run_group, restart_policy, graceful_stop_sec, persistent_paths_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO vhosts (version_id, position, name, mode, hostname, listen_port, document_root, max_request_body_bytes, php_fpm_pool_settings, runtime_id, generated_target, linked_upstream_name, app_root, psgi_file, workers, max_requests, include_extlib, enabled, command, args_json, working_dir, run_user, run_group, restart_policy, graceful_stop_sec, persistent_paths_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			versionID,
 			i,
 			vhost.Name,
@@ -204,6 +204,7 @@ func (s *wafEventStore) insertVhostConfigRowsTx(tx *sql.Tx, versionID int64, cfg
 			vhost.ListenPort,
 			vhost.DocumentRoot,
 			vhost.MaxRequestBodyBytes,
+			vhost.PHPPoolSettings,
 			vhost.RuntimeID,
 			vhost.GeneratedTarget,
 			vhost.LinkedUpstreamName,
@@ -317,7 +318,7 @@ func parseVhostStringSliceJSON(raw string) ([]string, error) {
 
 func (s *wafEventStore) loadVhostConfigVersion(versionID int64) (VhostConfigFile, error) {
 	rows, err := s.query(
-		`SELECT position, name, mode, hostname, listen_port, document_root, max_request_body_bytes, runtime_id, generated_target, linked_upstream_name, app_root, psgi_file, workers, max_requests, include_extlib, enabled, command, args_json, working_dir, run_user, run_group, restart_policy, graceful_stop_sec, persistent_paths_json
+		`SELECT position, name, mode, hostname, listen_port, document_root, max_request_body_bytes, php_fpm_pool_settings, runtime_id, generated_target, linked_upstream_name, app_root, psgi_file, workers, max_requests, include_extlib, enabled, command, args_json, working_dir, run_user, run_group, restart_policy, graceful_stop_sec, persistent_paths_json
 		   FROM vhosts
 		  WHERE version_id = ?
 		  ORDER BY position`,
@@ -338,7 +339,7 @@ func (s *wafEventStore) loadVhostConfigVersion(versionID int64) (VhostConfigFile
 		var enabled int
 		var argsJSON sql.NullString
 		var persistentPathsJSON sql.NullString
-		if err := rows.Scan(&position, &vhost.Name, &vhost.Mode, &vhost.Hostname, &vhost.ListenPort, &vhost.DocumentRoot, &vhost.MaxRequestBodyBytes, &vhost.RuntimeID, &vhost.GeneratedTarget, &vhost.LinkedUpstreamName, &vhost.AppRoot, &vhost.PSGIFile, &vhost.Workers, &vhost.MaxRequests, &includeExtlib, &enabled, &vhost.Command, &argsJSON, &vhost.WorkingDir, &vhost.RunUser, &vhost.RunGroup, &vhost.RestartPolicy, &vhost.GracefulStopSec, &persistentPathsJSON); err != nil {
+		if err := rows.Scan(&position, &vhost.Name, &vhost.Mode, &vhost.Hostname, &vhost.ListenPort, &vhost.DocumentRoot, &vhost.MaxRequestBodyBytes, &vhost.PHPPoolSettings, &vhost.RuntimeID, &vhost.GeneratedTarget, &vhost.LinkedUpstreamName, &vhost.AppRoot, &vhost.PSGIFile, &vhost.Workers, &vhost.MaxRequests, &includeExtlib, &enabled, &vhost.Command, &argsJSON, &vhost.WorkingDir, &vhost.RunUser, &vhost.RunGroup, &vhost.RestartPolicy, &vhost.GracefulStopSec, &persistentPathsJSON); err != nil {
 			_ = rows.Close()
 			return VhostConfigFile{}, err
 		}

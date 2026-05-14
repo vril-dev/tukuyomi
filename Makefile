@@ -253,9 +253,9 @@ preset-check:
 		exit 1; \
 	fi; \
 	storage_keys="$$(python3 -c 'import json, sys; obj=json.load(open(sys.argv[1], encoding="utf-8")); storage=obj.get("storage"); print("\n".join(sorted(storage.keys())) if isinstance(storage, dict) else "")' "$$preset_dir/config.json")"; \
-	expected_storage_keys=$$'db_driver\ndb_dsn\ndb_path\ndb_retention_days\ndb_sync_interval_sec'; \
+	expected_storage_keys=$$'db_driver\ndb_dsn\ndb_path\ndb_sync_interval_sec\nhot_log_retention_days'; \
 	if [[ "$$storage_keys" != "$$expected_storage_keys" ]]; then \
-		echo "[preset-check][ERROR] $$preset_dir/config.json storage keys must be: db_driver, db_path, db_dsn, db_retention_days, db_sync_interval_sec" >&2; \
+		echo "[preset-check][ERROR] $$preset_dir/config.json storage keys must be: db_driver, db_path, db_dsn, db_sync_interval_sec, hot_log_retention_days" >&2; \
 		exit 1; \
 	fi; \
 	db_driver="$$(python3 -c 'import json, sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["storage"]["db_driver"]).strip().lower())' "$$preset_dir/config.json")"; \
@@ -273,7 +273,7 @@ preset-check:
 		echo "[preset-check][ERROR] $$preset_dir/config.json storage.db_dsn is required for mysql/pgsql" >&2; \
 		exit 1; \
 	fi; \
-	if ! python3 -c 'import json, sys; storage=json.load(open(sys.argv[1], encoding="utf-8"))["storage"]; ok=type(storage["db_retention_days"]) is int and storage["db_retention_days"] >= 0 and type(storage["db_sync_interval_sec"]) is int and storage["db_sync_interval_sec"] >= 0; raise SystemExit(0 if ok else 1)' "$$preset_dir/config.json"; then \
+	if ! python3 -c 'import json, sys; storage=json.load(open(sys.argv[1], encoding="utf-8"))["storage"]; ok=type(storage["hot_log_retention_days"]) is int and storage["hot_log_retention_days"] >= 0 and type(storage["db_sync_interval_sec"]) is int and storage["db_sync_interval_sec"] >= 0; raise SystemExit(0 if ok else 1)' "$$preset_dir/config.json"; then \
 		echo "[preset-check][ERROR] $$preset_dir/config.json storage retention/sync values must be non-negative integers" >&2; \
 		exit 1; \
 	fi; \
@@ -291,6 +291,7 @@ install:
 	INSTALL_CREATE_USER="$(INSTALL_CREATE_USER)" \
 	INSTALL_ENABLE_SYSTEMD="$(INSTALL_ENABLE_SYSTEMD)" \
 	INSTALL_ENABLE_SCHEDULED_TASKS="$(INSTALL_ENABLE_SCHEDULED_TASKS)" \
+	INSTALL_BOOTSTRAP_SCHEDULED_TASK_DEFAULTS="$(INSTALL_BOOTSTRAP_SCHEDULED_TASK_DEFAULTS)" \
 	INSTALL_DB_SEED="$(INSTALL_DB_SEED)" \
 	./scripts/install_tukuyomi.sh
 
@@ -326,7 +327,7 @@ install-smoke: build
 	test -f "$$tmp/opt/tukuyomi/db/tukuyomi.db"; \
 	python3 -c 'import sqlite3, sys; db=sqlite3.connect(sys.argv[1]); assert db.execute("SELECT COUNT(*) FROM admin_users").fetchone()[0] == 1' "$$tmp/opt/tukuyomi/db/tukuyomi.db"; \
 	python3 -c 'import json, sys; assert json.load(open(sys.argv[1], encoding="utf-8"))["runtime"]["process_model"] == "supervised"' "$$tmp/opt/tukuyomi/conf/config.json"; \
-	python3 -c 'import json, sys; path=sys.argv[1]; obj=json.load(open(path, encoding="utf-8")); obj.setdefault("runtime", {})["process_model"]="single"; json.dump(obj, open(path, "w", encoding="utf-8"), indent=2)' "$$tmp/opt/tukuyomi/conf/config.json"; \
+	python3 -c 'import json, sys; path=sys.argv[1]; obj=json.load(open(path, encoding="utf-8")); obj.setdefault("runtime", {})["process_model"]="single"; storage=obj.setdefault("storage", {}); storage["db_retention_days"]=storage.pop("hot_log_retention_days"); json.dump(obj, open(path, "w", encoding="utf-8"), indent=2)' "$$tmp/opt/tukuyomi/conf/config.json"; \
 	TARGET=linux-systemd \
 	INSTALL_ROLE=gateway \
 	DESTDIR="$$tmp" \
@@ -338,6 +339,7 @@ install-smoke: build
 	INSTALL_REFRESH_WAF_ASSETS=0 \
 	./scripts/install_tukuyomi.sh; \
 	python3 -c 'import json, sys; assert json.load(open(sys.argv[1], encoding="utf-8"))["runtime"]["process_model"] == "supervised"' "$$tmp/opt/tukuyomi/conf/config.json"; \
+	python3 -c 'import json, sys; storage=json.load(open(sys.argv[1], encoding="utf-8"))["storage"]; assert "db_retention_days" not in storage; assert storage["hot_log_retention_days"] == 30' "$$tmp/opt/tukuyomi/conf/config.json"; \
 	TARGET=linux-systemd \
 	INSTALL_ROLE=center \
 	DESTDIR="$$tmp" \
@@ -356,6 +358,22 @@ install-smoke: build
 	test -f "$$tmp/opt/tukuyomi/db/tukuyomi-center.db"; \
 	python3 -c 'import sqlite3, sys; db=sqlite3.connect(sys.argv[1]); assert db.execute("SELECT COUNT(*) FROM admin_users").fetchone()[0] == 1' "$$tmp/opt/tukuyomi/db/tukuyomi-center.db"; \
 	python3 -c 'import json, sys; assert json.load(open(sys.argv[1], encoding="utf-8"))["runtime"]["process_model"] == "single"' "$$tmp/opt/tukuyomi/conf/config.center.json"; \
+	python3 -c 'import json, sys; path=sys.argv[1]; obj=json.load(open(path, encoding="utf-8")); storage=obj.setdefault("storage", {}); storage["db_retention_days"]=storage.pop("hot_log_retention_days"); json.dump(obj, open(path, "w", encoding="utf-8"), indent=2)' "$$tmp/opt/tukuyomi/conf/config.center.json"; \
+	TARGET=linux-systemd \
+	INSTALL_ROLE=center \
+	DESTDIR="$$tmp" \
+	PREFIX=/opt/tukuyomi \
+	INSTALL_SKIP_BUILD=1 \
+	INSTALL_ENABLE_BOOT=0 \
+	INSTALL_START=0 \
+	INSTALL_DB_SEED=never \
+	./scripts/install_tukuyomi.sh; \
+	python3 -c 'import json, sys; storage=json.load(open(sys.argv[1], encoding="utf-8"))["storage"]; assert "db_retention_days" not in storage; assert storage["hot_log_retention_days"] == 30' "$$tmp/opt/tukuyomi/conf/config.center.json"; \
+	python3 -c 'import json, sys; path=sys.argv[1]; obj=json.load(open(path, encoding="utf-8")); storage=obj.setdefault("storage", {}); storage["hot_log_retention_days"]=30; storage["db_retention_days"]=31; json.dump(obj, open(path, "w", encoding="utf-8"), indent=2)' "$$tmp/opt/tukuyomi/conf/config.center.json"; \
+	if TARGET=linux-systemd INSTALL_ROLE=center DESTDIR="$$tmp" PREFIX=/opt/tukuyomi INSTALL_SKIP_BUILD=1 INSTALL_ENABLE_BOOT=0 INSTALL_START=0 INSTALL_DB_SEED=never ./scripts/install_tukuyomi.sh >/dev/null 2>&1; then \
+		echo "[install-smoke][ERROR] ambiguous retention keys unexpectedly succeeded" >&2; \
+		exit 1; \
+	fi; \
 	protected_tmp="$$tmp/protected"; \
 	TARGET=linux-systemd \
 	INSTALL_ROLE=center-protected \

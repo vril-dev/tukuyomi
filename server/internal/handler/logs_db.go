@@ -24,6 +24,7 @@ import (
 	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
+	"tukuyomi/internal/config"
 	"tukuyomi/internal/requestmeta"
 )
 
@@ -37,6 +38,8 @@ const (
 
 	maxDBMatchedValueBytes = 2048
 )
+
+const securityBlockWhereSQL = `(event IN ('waf_block', 'rate_limited', 'country_block', 'proxy_route_access_block', 'ip_reputation', 'bot_challenge', 'bot_quarantine') OR (event = 'semantic_anomaly' AND status > 0))`
 
 var (
 	logStatsStoreMu sync.RWMutex
@@ -520,6 +523,17 @@ func (s *wafEventStore) BuildLogsStats(logPath string, rangeHours int, now time.
 			TopCountries24h: []statsBucket{},
 			SeriesHourly:    emptySeries,
 		},
+		SecurityBlocks: securityBlockStats{
+			ByFamily24h:       []securityFamilyBucket{},
+			ByFamilyRange:     []securityFamilyBucket{},
+			TopBlocks24h:      []securityBlockBucket{},
+			TopBlocksRange:    []securityBlockBucket{},
+			TopPaths24h:       []statsBucket{},
+			TopPathsRange:     []statsBucket{},
+			TopCountries24h:   []statsBucket{},
+			TopCountriesRange: []statsBucket{},
+			SeriesHourly:      buildSecurityHourlySeries(seriesStart, seriesEnd, map[int64]map[string]int{}),
+		},
 	}
 
 	syncResult, err := s.syncWAFEvents(logPath)
@@ -530,6 +544,7 @@ func (s *wafEventStore) BuildLogsStats(logPath string, rangeHours int, now time.
 
 	since1hUnix := now.Add(-1 * time.Hour).Unix()
 	since24hUnix := now.Add(-24 * time.Hour).Unix()
+	sinceRangeUnix := now.Add(-time.Duration(rangeHours) * time.Hour).Unix()
 	seriesStartUnix := seriesStart.Unix()
 	seriesEndUnix := seriesEnd.Unix()
 
@@ -563,6 +578,56 @@ func (s *wafEventStore) BuildLogsStats(logPath string, rangeHours int, now time.
 		return logsStatsResp{}, err
 	}
 	base.WAFBlock.SeriesHourly = buildHourlySeries(seriesStart, seriesEnd, seriesCounts)
+
+	base.SecurityBlocks.TotalInScan, err = s.queryCount(`SELECT COUNT(*) FROM waf_events WHERE ` + securityBlockWhereSQL)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
+	base.SecurityBlocks.Last1h, err = s.queryCount(`SELECT COUNT(*) FROM waf_events WHERE `+securityBlockWhereSQL+` AND ts_unix >= ?`, since1hUnix)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
+	base.SecurityBlocks.Last24h, err = s.queryCount(`SELECT COUNT(*) FROM waf_events WHERE `+securityBlockWhereSQL+` AND ts_unix >= ?`, since24hUnix)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
+	base.SecurityBlocks.ByFamily24h, err = s.querySecurityFamilyBuckets(since24hUnix)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
+	base.SecurityBlocks.ByFamilyRange, err = s.querySecurityFamilyBuckets(sinceRangeUnix)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
+	base.SecurityBlocks.TopBlocks24h, err = s.queryTopSecurityBlocks(since24hUnix, statsSecurityTopN)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
+	base.SecurityBlocks.TopBlocksRange, err = s.queryTopSecurityBlocks(sinceRangeUnix, statsSecurityTopN)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
+	base.SecurityBlocks.TopPaths24h, err = s.queryTopBucketsForWhere("path", securityBlockWhereSQL, since24hUnix, statsTopN)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
+	base.SecurityBlocks.TopPathsRange, err = s.queryTopBucketsForWhere("path", securityBlockWhereSQL, sinceRangeUnix, statsTopN)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
+	base.SecurityBlocks.TopCountries24h, err = s.queryTopBucketsForWhere("country", securityBlockWhereSQL, since24hUnix, statsTopN)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
+	base.SecurityBlocks.TopCountriesRange, err = s.queryTopBucketsForWhere("country", securityBlockWhereSQL, sinceRangeUnix, statsTopN)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
+	securitySeriesCounts, err := s.querySecuritySeriesCounts(seriesStartUnix, seriesEndUnix)
+	if err != nil {
+		return logsStatsResp{}, err
+	}
+	base.SecurityBlocks.SeriesHourly = buildSecurityHourlySeries(seriesStart, seriesEnd, securitySeriesCounts)
 
 	oldest, newest, err := s.queryMinMaxTS()
 	if err != nil {
@@ -1085,7 +1150,7 @@ func ingestWAFEventLine(stmt *sql.Stmt, rawLine []byte) error {
 		tsNorm = ts.Format(time.RFC3339Nano)
 	}
 
-	ruleID := normalizeStatsRuleID(m["rule_id"])
+	ruleID := normalizeStatsRuleIDForEvent(event, m)
 	pathKey := normalizeStatsPath(m["path"])
 	country := requestmeta.NormalizeCountryFromAny(m["country"])
 	status := anyToInt(m["status"])
@@ -1135,6 +1200,9 @@ func (s *wafEventStore) loadIngestState(source string) (logIngestState, error) {
 
 func (s *wafEventStore) pruneExpiredWAFEvents(tx *sql.Tx, now time.Time) error {
 	if s == nil || s.retentionDays <= 0 {
+		return nil
+	}
+	if config.LogArchiveEnabled {
 		return nil
 	}
 	cutoffUnix := now.AddDate(0, 0, -s.retentionDays).Unix()
@@ -1411,6 +1479,10 @@ func (s *wafEventStore) queryCount(query string, args ...any) (int, error) {
 }
 
 func (s *wafEventStore) queryTopBuckets(column string, sinceUnix int64, n int) ([]statsBucket, error) {
+	return s.queryTopBucketsForWhere(column, `event = 'waf_block'`, sinceUnix, n)
+}
+
+func (s *wafEventStore) queryTopBucketsForWhere(column string, where string, sinceUnix int64, n int) ([]statsBucket, error) {
 	if n <= 0 {
 		return []statsBucket{}, nil
 	}
@@ -1424,11 +1496,12 @@ func (s *wafEventStore) queryTopBuckets(column string, sinceUnix int64, n int) (
 	q := fmt.Sprintf(
 		`SELECT %s AS bucket_key, COUNT(*) AS cnt
 		   FROM waf_events
-		  WHERE event = 'waf_block' AND ts_unix >= ?
+		  WHERE %s AND ts_unix >= ?
 		  GROUP BY %s
 		  ORDER BY cnt DESC, bucket_key ASC
 		  LIMIT ?`,
 		column,
+		where,
 		column,
 	)
 	rows, err := s.query(q, sinceUnix, n)
@@ -1444,6 +1517,84 @@ func (s *wafEventStore) queryTopBuckets(column string, sinceUnix int64, n int) (
 			return nil, err
 		}
 		out = append(out, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *wafEventStore) querySecurityFamilyBuckets(sinceUnix int64) ([]securityFamilyBucket, error) {
+	rows, err := s.query(
+		`SELECT event, status, COUNT(*) AS cnt
+		   FROM waf_events
+		  WHERE `+securityBlockWhereSQL+` AND ts_unix >= ?
+		  GROUP BY event, status`,
+		sinceUnix,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := map[string]int{}
+	for rows.Next() {
+		var event string
+		var status int
+		var count int
+		if err := rows.Scan(&event, &status, &count); err != nil {
+			return nil, err
+		}
+		family := securityBlockFamilyForEvent(event, status)
+		if family == "" {
+			continue
+		}
+		counts[family] += count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return orderedSecurityFamilyBuckets(counts), nil
+}
+
+func (s *wafEventStore) queryTopSecurityBlocks(sinceUnix int64, n int) ([]securityBlockBucket, error) {
+	if n <= 0 {
+		return []securityBlockBucket{}, nil
+	}
+	rows, err := s.query(
+		`SELECT event, rule_id, COUNT(*) AS cnt
+		   FROM waf_events
+		  WHERE `+securityBlockWhereSQL+` AND ts_unix >= ?
+		  GROUP BY event, rule_id
+		  ORDER BY cnt DESC, event ASC, rule_id ASC
+		  LIMIT ?`,
+		sinceUnix,
+		n,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]securityBlockBucket, 0, n)
+	for rows.Next() {
+		var event string
+		var ruleID string
+		var count int
+		if err := rows.Scan(&event, &ruleID, &count); err != nil {
+			return nil, err
+		}
+		family, eventKey, key, label := buildSecurityBlockLabel(event, ruleID)
+		if family == "" {
+			continue
+		}
+		out = append(out, securityBlockBucket{
+			Family: family,
+			Event:  eventKey,
+			Key:    key,
+			Label:  label,
+			Count:  count,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1483,13 +1634,54 @@ func (s *wafEventStore) querySeriesCounts(startUnix, endUnix int64) (map[int64]i
 	return out, nil
 }
 
+func (s *wafEventStore) querySecuritySeriesCounts(startUnix, endUnix int64) (map[int64]map[string]int, error) {
+	query := `SELECT (ts_unix / 3600) * 3600 AS bucket, event, status, COUNT(*) AS cnt
+		   FROM waf_events
+		  WHERE ` + securityBlockWhereSQL + ` AND ts_unix >= ? AND ts_unix < ?
+		  GROUP BY bucket, event, status`
+	if s != nil && s.dbDriver == logStatsDBDriverMySQL {
+		query = `SELECT FLOOR(ts_unix / 3600) * 3600 AS bucket, event, status, COUNT(*) AS cnt
+		   FROM waf_events
+		  WHERE ` + securityBlockWhereSQL + ` AND ts_unix >= ? AND ts_unix < ?
+		  GROUP BY bucket, event, status`
+	}
+	rows, err := s.query(query, startUnix, endUnix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[int64]map[string]int{}
+	for rows.Next() {
+		var bucket int64
+		var event string
+		var status int
+		var count int
+		if err := rows.Scan(&bucket, &event, &status, &count); err != nil {
+			return nil, err
+		}
+		family := securityBlockFamilyForEvent(event, status)
+		if family == "" {
+			continue
+		}
+		if out[bucket] == nil {
+			out[bucket] = map[string]int{}
+		}
+		out[bucket][family] += count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (s *wafEventStore) queryMinMaxTS() (int64, int64, error) {
 	var minTS sql.NullInt64
 	var maxTS sql.NullInt64
 	if err := s.queryRow(
 		`SELECT MIN(ts_unix), MAX(ts_unix)
 		   FROM waf_events
-		  WHERE event = 'waf_block' AND ts_unix >= 0`,
+		  WHERE ts_unix >= 0`,
 	).Scan(&minTS, &maxTS); err != nil {
 		return 0, 0, err
 	}

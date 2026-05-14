@@ -28,6 +28,8 @@ const (
 	defaultScheduledTaskConfigPath = "conf/scheduled-tasks.json"
 	defaultScheduledTaskRuntimeDir = "data/scheduled-tasks"
 	scheduledTaskConfigBlobKey     = "scheduled_tasks"
+	defaultWAFLogArchiveTaskName   = "tukuyomi-waf-log-archive"
+	defaultScheduledTaskMarkerKey  = "scheduled_task_default:tukuyomi-waf-log-archive"
 )
 
 type scheduledTaskConfigPutBody struct {
@@ -209,6 +211,90 @@ var (
 	scheduledTaskRuntimeMu sync.RWMutex
 	scheduledTaskRt        *scheduledTaskRuntime
 )
+
+type ScheduledTaskDefaultBootstrapResult struct {
+	Added       bool
+	MarkerFound bool
+	TaskFound   bool
+}
+
+func BootstrapDefaultScheduledTasks(configPath string) (ScheduledTaskDefaultBootstrapResult, error) {
+	store := getLogsStatsStore()
+	if store == nil {
+		return ScheduledTaskDefaultBootstrapResult{}, errConfigDBStoreRequired
+	}
+	if _, _, found, err := store.GetConfigBlob(defaultScheduledTaskMarkerKey); err != nil {
+		return ScheduledTaskDefaultBootstrapResult{}, err
+	} else if found {
+		return ScheduledTaskDefaultBootstrapResult{MarkerFound: true}, nil
+	}
+
+	cfg, rec, found, err := store.loadActiveScheduledTaskConfig()
+	if err != nil {
+		return ScheduledTaskDefaultBootstrapResult{}, err
+	}
+	expectedETag := ""
+	if found {
+		expectedETag = rec.ETag
+	} else {
+		configPath = strings.TrimSpace(configPath)
+		if configPath == "" {
+			configPath = defaultScheduledTaskConfigPath
+		}
+		raw, _, err := readFileMaybe(configPath)
+		if err != nil {
+			return ScheduledTaskDefaultBootstrapResult{}, err
+		}
+		rawText := string(raw)
+		if strings.TrimSpace(rawText) == "" {
+			rawText = defaultScheduledTaskConfigRaw
+		}
+		prepared, err := prepareScheduledTaskConfigRaw(rawText, currentPHPRuntimeInventoryConfig())
+		if err != nil {
+			return ScheduledTaskDefaultBootstrapResult{}, err
+		}
+		cfg = prepared.cfg
+	}
+
+	for _, task := range cfg.Tasks {
+		if task.Name == defaultWAFLogArchiveTaskName {
+			if err := markScheduledTaskDefaultBootstrapped(store); err != nil {
+				return ScheduledTaskDefaultBootstrapResult{}, err
+			}
+			return ScheduledTaskDefaultBootstrapResult{TaskFound: true}, nil
+		}
+	}
+
+	cfg.Tasks = append(cfg.Tasks, defaultWAFLogArchiveScheduledTask())
+	prepared, err := prepareScheduledTaskConfigRaw(mustJSON(cfg), currentPHPRuntimeInventoryConfig())
+	if err != nil {
+		return ScheduledTaskDefaultBootstrapResult{}, err
+	}
+	if _, err := store.writeScheduledTaskConfigVersion(expectedETag, prepared.cfg, configVersionSourceImport, "", "scheduled task defaults bootstrap", 0); err != nil {
+		return ScheduledTaskDefaultBootstrapResult{}, err
+	}
+	if err := markScheduledTaskDefaultBootstrapped(store); err != nil {
+		return ScheduledTaskDefaultBootstrapResult{}, err
+	}
+	return ScheduledTaskDefaultBootstrapResult{Added: true}, nil
+}
+
+func markScheduledTaskDefaultBootstrapped(store *wafEventStore) error {
+	now := time.Now().UTC()
+	raw := []byte(`{"defaults":["tukuyomi-waf-log-archive"]}` + "\n")
+	return store.UpsertConfigBlob(defaultScheduledTaskMarkerKey, raw, "", now)
+}
+
+func defaultWAFLogArchiveScheduledTask() ScheduledTaskRecord {
+	return ScheduledTaskRecord{
+		Name:       defaultWAFLogArchiveTaskName,
+		Enabled:    true,
+		Schedule:   "17 3 * * *",
+		Timezone:   "UTC",
+		Command:    "./bin/tukuyomi archive-waf-logs",
+		TimeoutSec: 3600,
+	}
+}
 
 func InitScheduledTaskRuntime(path string, rollbackMax int) error {
 	configPath := strings.TrimSpace(path)

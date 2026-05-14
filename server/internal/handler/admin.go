@@ -549,7 +549,7 @@ func StatusHandler(c *gin.Context) {
 		"db_driver":                                           config.DBDriver,
 		"db_dsn_configured":                                   strings.TrimSpace(config.DBDSN) != "",
 		"db_path":                                             config.DBPath,
-		"db_retention_days":                                   config.DBRetentionDays,
+		"hot_log_retention_days":                              config.HotLogRetentionDays,
 		"db_sync_interval_sec":                                int(config.DBSyncInterval / time.Second),
 		"db_sync_loop_enabled":                                config.DBSyncInterval > 0,
 		"db_total_rows":                                       dbTotalRows,

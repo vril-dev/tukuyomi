@@ -555,6 +555,7 @@ type PHPRuntimeProcessStatus struct {
 	EffectiveGID     int      `json:"effective_gid,omitempty"`
 	ConfigFile       string   `json:"config_file,omitempty"`
 	PoolFiles        []string `json:"pool_files,omitempty"`
+	SlowLogFiles     []string `json:"slowlog_files,omitempty"`
 	GeneratedTargets []string `json:"generated_targets,omitempty"`
 	StartedAt        string   `json:"started_at,omitempty"`
 	StoppedAt        string   `json:"stopped_at,omitempty"`
@@ -644,6 +645,7 @@ func localPHPRuntimeProcessSnapshot() []PHPRuntimeProcessStatus {
 	for _, status := range sup.statuses {
 		cp := status
 		cp.PoolFiles = append([]string(nil), status.PoolFiles...)
+		cp.SlowLogFiles = append([]string(nil), status.SlowLogFiles...)
 		cp.GeneratedTargets = append([]string(nil), status.GeneratedTargets...)
 		out = append(out, cp)
 	}
@@ -993,6 +995,7 @@ func (s *phpRuntimeSupervisor) updateStatusLocked(mat PHPRuntimeMaterializedStat
 	status.ConfiguredGroup = mat.RunGroup
 	status.ConfigFile = mat.ConfigFile
 	status.PoolFiles = append([]string(nil), mat.PoolFiles...)
+	status.SlowLogFiles = append([]string(nil), mat.SlowLogFiles...)
 	status.GeneratedTargets = append([]string(nil), mat.GeneratedTarget...)
 	status.LastAction = action
 	status.LastError = strings.TrimSpace(lastErr)

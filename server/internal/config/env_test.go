@@ -443,6 +443,26 @@ func TestLoadAppConfigFileRejectsInvalid(t *testing.T) {
 	}
 }
 
+func TestLoadAppConfigFileRejectsRemovedDBRetentionKey(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	raw := `{
+		"storage": {
+			"db_driver": "sqlite",
+			"db_retention_days": 30
+		}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := loadAppConfigFile(cfgPath)
+	if err == nil {
+		t.Fatal("expected decode error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown field \"db_retention_days\"") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLoadAppConfigFileRejectsRemovedFileStorageBackend(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.json")
 	raw := `{

@@ -32,7 +32,7 @@ func TestImportStartupConfigStorageKeepsDBWAFRuleAssetsWithoutSeedFiles(t *testi
     "db_driver": "sqlite",
     "db_path": %q,
     "db_dsn": "",
-    "db_retention_days": 30,
+    "hot_log_retention_days": 30,
     "db_sync_interval_sec": 0
   }
 }
@@ -243,7 +243,7 @@ func TestBuildRuntimeConfigBundleExportUsesDBAndRedactsSecrets(t *testing.T) {
     "db_driver": "sqlite",
     "db_path": %q,
     "db_dsn": "",
-    "db_retention_days": 30,
+    "hot_log_retention_days": 30,
     "db_sync_interval_sec": 0
   }
 }
@@ -375,7 +375,7 @@ func saveStartupConfigForTest() func() {
 	oldDBDriver := config.DBDriver
 	oldDBPath := config.DBPath
 	oldDBDSN := config.DBDSN
-	oldDBRetention := config.DBRetentionDays
+	oldHotLogRetention := config.HotLogRetentionDays
 	return func() {
 		config.ConfigFile = oldConfigFile
 		config.ProxyConfigFile = oldProxy
@@ -402,6 +402,6 @@ func saveStartupConfigForTest() func() {
 		config.DBDriver = oldDBDriver
 		config.DBPath = oldDBPath
 		config.DBDSN = oldDBDSN
-		config.DBRetentionDays = oldDBRetention
+		config.HotLogRetentionDays = oldHotLogRetention
 	}
 }

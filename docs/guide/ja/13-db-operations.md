@@ -85,11 +85,16 @@ DB 接続 bootstrap は `data/conf/config.json` の `storage` block で設定し
 | `db_driver` | `sqlite` / `mysql` / `pgsql` のいずれか |
 | `db_path` | SQLite database path |
 | `db_dsn` | MySQL / PostgreSQL の DSN |
-| `db_retention_days` | WAF event retention |
+| `hot_log_retention_days` | DB に hot データとして残す WAF event retention |
 | `db_sync_interval_sec` | periodic な DB-to-runtime reconcile loop の間隔 |
 
 注意:
 
+- `hot_log_retention_days` は旧 `db_retention_days` から名前を変更した設定です。
+  host の `make install` は、保持している `config.json` を新バイナリ実行前に
+  書き換えます。container / cloud manifest や構成管理で生成する入力は、
+  deployment 前に新キーへ更新してください。現在の config validation は旧キーを
+  拒否します。
 - **`storage.backend` は deprecated** です。設定しないでください。
   `storage.backend=file` は config validation で **拒否** されます。
 - `db_driver` / `db_path` / `db_dsn` は、DB を開く前に必ず bootstrap
@@ -190,6 +195,7 @@ import 後の本番起動で **必要な file** は、
 - security / FP tuner / proxy rules audit
 - scheduled task log
 - PHP-FPM runtime log / socket
+- `storage.log_archive.enabled=true` の WAF log archive
 
 これらは **DB 設定ではなく runtime artifact** です。
 
@@ -231,10 +237,27 @@ reconciliation** も実行し、content に変更があったときだけ reload
 
 ## 13.4　Retention / Pruning
 
-`db_retention_days` が効くのは **`waf_events` だけ** です。
+`hot_log_retention_days` が効くのは **DB に hot データとして残す `waf_events`
+行だけ** です。
 
 - `30`（default）: 直近 30 日を保持
 - `0`: pruning を無効化
+
+`storage.log_archive.enabled=true`（default）の場合、期限を過ぎた完了済み
+UTC 日は、DB row を削除する前に archive されます。local backend の path は
+次の形です。
+
+```text
+data/persistent/log-archives/waf/yyyy=<YYYY>/mm=<MM>/dd=<DD>/part-000001.ndjson.gz
+```
+
+S3 では、同じ key layout を `persistent_storage.s3.prefix` 配下に置きます。
+archive job は `tukuyomi-waf-log-archive` という Scheduled Task です。
+`make install` はこの task を `03:17 UTC` で一度だけ追加します。operator が
+後で変更、無効化、削除した場合、以後の install はその判断を維持します。
+
+`storage.log_archive.enabled=false` の場合は、従来どおり DB row を直接 prune
+します。
 
 `config_blobs` は retention では prune **しません**。
 

@@ -141,6 +141,8 @@ type VhostConfig struct {
 	DocumentRoot string `json:"document_root,omitempty"`
 	// MaxRequestBodyBytes limits request bodies before PHP-FPM/PSGI receive them.
 	MaxRequestBodyBytes int64 `json:"max_request_body_bytes,omitempty"`
+	// PHPPoolSettings contains allowlisted PHP-FPM pool directives.
+	PHPPoolSettings string `json:"php_fpm_pool_settings,omitempty"`
 	// Deprecated: accepted only to migrate old configs; ignored at runtime.
 	OverrideFileName   string             `json:"override_file_name,omitempty"`
 	TryFiles           []string           `json:"try_files,omitempty"`
@@ -196,6 +198,15 @@ type VhostBasicAuthUser struct {
 const (
 	defaultVhostMaxRequestBodyBytes int64 = 64 * 1024 * 1024
 	maxVhostMaxRequestBodyBytes     int64 = 2 * 1024 * 1024 * 1024
+
+	defaultVhostSlowRequestTraceDepth = 30
+	maxVhostSlowRequestTimeoutSec     = 86400
+	maxVhostSlowRequestTraceDepth     = 200
+	maxVhostPHPPoolSettingsBytes      = 4096
+	maxVhostPHPPoolSettingsLineBytes  = 512
+	maxVhostPHPPoolMaxChildren        = 1024
+	maxVhostPHPPoolMaxRequests        = 100000
+	maxVhostPHPPoolRLimitFiles        = 1048576
 )
 
 type vhostPreparedConfig struct {
@@ -792,8 +803,11 @@ func validateVhostRawModeFieldSeparation(in VhostConfigFile) error {
 	for i, vhost := range in.Vhosts {
 		field := fmt.Sprintf("vhosts[%d]", i)
 		mode := normalizeVhostMode(vhost.Mode)
+		if err := validateVhostRawPHPPoolSettings(vhost.PHPPoolSettings, mode, field+".php_fpm_pool_settings"); err != nil {
+			return err
+		}
 		if mode == "daemon" {
-			if vhost.Hostname != "" || vhost.ListenPort != 0 || vhost.DocumentRoot != "" || vhost.MaxRequestBodyBytes != 0 || vhost.OverrideFileName != "" || len(vhost.TryFiles) > 0 || len(vhost.RewriteRules) > 0 || len(vhost.AccessRules) > 0 || vhost.BasicAuth != nil || len(vhost.PHPValues) > 0 || len(vhost.PHPAdminValues) > 0 || vhost.PSGIFile != "" || vhost.Workers != 0 || vhost.MaxRequests != 0 || vhost.IncludeExtlib != nil || vhost.RuntimeID != "" || vhost.LinkedUpstreamName != "" {
+			if vhost.Hostname != "" || vhost.ListenPort != 0 || vhost.DocumentRoot != "" || vhost.MaxRequestBodyBytes != 0 || strings.TrimSpace(vhost.PHPPoolSettings) != "" || vhost.OverrideFileName != "" || len(vhost.TryFiles) > 0 || len(vhost.RewriteRules) > 0 || len(vhost.AccessRules) > 0 || vhost.BasicAuth != nil || len(vhost.PHPValues) > 0 || len(vhost.PHPAdminValues) > 0 || vhost.PSGIFile != "" || vhost.Workers != 0 || vhost.MaxRequests != 0 || vhost.IncludeExtlib != nil || vhost.RuntimeID != "" || vhost.LinkedUpstreamName != "" {
 				return fmt.Errorf("%s HTTP/PHP/PSGI listener fields are not allowed when mode=daemon", field)
 			}
 			continue
@@ -819,6 +833,7 @@ func normalizeVhostConfigFile(in VhostConfigFile) VhostConfigFile {
 		if vhost.MaxRequestBodyBytes == 0 {
 			vhost.MaxRequestBodyBytes = defaultVhostMaxRequestBodyBytes
 		}
+		vhost.PHPPoolSettings = normalizeVhostPHPPoolSettings(vhost.PHPPoolSettings)
 		vhost.OverrideFileName = ""
 		vhost.TryFiles = normalizeVhostTryFiles(vhost.TryFiles)
 		vhost.RewriteRules = normalizeVhostRewriteRules(vhost.RewriteRules)
@@ -857,6 +872,7 @@ func normalizeVhostConfigFile(in VhostConfigFile) VhostConfigFile {
 			vhost.ListenPort = 0
 			vhost.DocumentRoot = ""
 			vhost.MaxRequestBodyBytes = 0
+			vhost.PHPPoolSettings = ""
 			vhost.TryFiles = nil
 			vhost.RewriteRules = nil
 			vhost.AccessRules = nil
@@ -1057,6 +1073,12 @@ func validateVhostConfigFileWithInventories(cfg VhostConfigFile, phpInventory PH
 			if err := validateVhostINIOverrides(vhost.PHPAdminValues, field+".php_admin_value"); err != nil {
 				return err
 			}
+			if err := validateVhostPHPPoolSettings(vhost.PHPPoolSettings, field+".php_fpm_pool_settings"); err != nil {
+				return err
+			}
+		}
+		if vhost.Mode != "php-fpm" && vhost.PHPPoolSettings != "" {
+			return fmt.Errorf("%s.php_fpm_pool_settings requires mode=php-fpm", field)
 		}
 		if vhost.Mode == "psgi" {
 			if vhost.RuntimeID == "" {
@@ -1149,7 +1171,7 @@ func validateVhostConfigFileWithInventories(cfg VhostConfigFile, phpInventory PH
 		if vhost.Mode != "daemon" && (vhost.Command != "" || len(vhost.Args) > 0 || vhost.WorkingDir != "" || vhost.RunUser != "" || vhost.RunGroup != "" || vhost.RestartPolicy != "" || vhost.GracefulStopSec != 0 || len(vhost.PersistentPaths) > 0) {
 			return fmt.Errorf("%s command/args/working_dir/run_user/run_group/restart_policy/graceful_stop_sec/persistent_paths require mode=daemon", field)
 		}
-		if vhost.Mode == "daemon" && (vhost.Hostname != "" || vhost.ListenPort != 0 || vhost.DocumentRoot != "" || len(vhost.TryFiles) > 0 || len(vhost.RewriteRules) > 0 || len(vhost.AccessRules) > 0 || vhost.BasicAuth != nil || len(vhost.PHPValues) > 0 || len(vhost.PHPAdminValues) > 0 || vhost.PSGIFile != "" || vhost.Workers != 0 || vhost.MaxRequests != 0 || vhost.IncludeExtlib != nil || vhost.RuntimeID != "" || vhost.LinkedUpstreamName != "") {
+		if vhost.Mode == "daemon" && (vhost.Hostname != "" || vhost.ListenPort != 0 || vhost.DocumentRoot != "" || vhost.PHPPoolSettings != "" || len(vhost.TryFiles) > 0 || len(vhost.RewriteRules) > 0 || len(vhost.AccessRules) > 0 || vhost.BasicAuth != nil || len(vhost.PHPValues) > 0 || len(vhost.PHPAdminValues) > 0 || vhost.PSGIFile != "" || vhost.Workers != 0 || vhost.MaxRequests != 0 || vhost.IncludeExtlib != nil || vhost.RuntimeID != "" || vhost.LinkedUpstreamName != "") {
 			return fmt.Errorf("%s HTTP/PHP/PSGI listener fields are not allowed when mode=daemon", field)
 		}
 	}
@@ -1228,6 +1250,277 @@ func normalizeVhostMode(v string) string {
 		return "static"
 	}
 	return x
+}
+
+type phpFPMPoolSetting struct {
+	Name  string
+	Value string
+}
+
+type phpFPMPoolSettings struct {
+	Directives []phpFPMPoolSetting
+	byName     map[string]string
+}
+
+func (s phpFPMPoolSettings) has(name string) bool {
+	_, ok := s.byName[name]
+	return ok
+}
+
+func (s phpFPMPoolSettings) value(name string) (string, bool) {
+	value, ok := s.byName[name]
+	return value, ok
+}
+
+func (s phpFPMPoolSettings) slowLogEnabled() bool {
+	value, ok := s.value("request_slowlog_timeout")
+	if !ok {
+		return false
+	}
+	seconds, ok := parseVhostPHPPoolDurationSeconds(value)
+	return ok && seconds > 0
+}
+
+var allowedVhostPHPPoolSettings = map[string]struct{}{
+	"pm.max_children":                          {},
+	"pm.max_requests":                          {},
+	"pm.process_idle_timeout":                  {},
+	"request_terminate_timeout":                {},
+	"request_terminate_timeout_track_finished": {},
+	"request_slowlog_timeout":                  {},
+	"request_slowlog_trace_depth":              {},
+	"security.limit_extensions":                {},
+	"catch_workers_output":                     {},
+	"decorate_workers_output":                  {},
+	"rlimit_files":                             {},
+}
+
+func normalizeVhostPHPPoolSettings(in string) string {
+	if strings.TrimSpace(in) == "" {
+		return ""
+	}
+	var out []string
+	in = strings.ReplaceAll(in, "\r\n", "\n")
+	in = strings.ReplaceAll(in, "\r", "\n")
+	for _, line := range strings.Split(in, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if idx := strings.Index(line, "="); idx >= 0 {
+			name := strings.ToLower(strings.TrimSpace(line[:idx]))
+			value := strings.TrimSpace(line[idx+1:])
+			line = name + " = " + value
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+func validateVhostRawPHPPoolSettings(in string, mode string, field string) error {
+	if strings.TrimSpace(in) == "" {
+		return nil
+	}
+	if normalizeVhostMode(mode) != "php-fpm" {
+		return fmt.Errorf("%s requires mode=php-fpm", field)
+	}
+	return nil
+}
+
+func validateVhostPHPPoolSettings(in string, field string) error {
+	_, err := parseVhostPHPPoolSettings(in, field)
+	return err
+}
+
+func parseVhostPHPPoolSettings(in string, field string) (phpFPMPoolSettings, error) {
+	in = normalizeVhostPHPPoolSettings(in)
+	if in == "" {
+		return phpFPMPoolSettings{byName: map[string]string{}}, nil
+	}
+	if len(in) > maxVhostPHPPoolSettingsBytes {
+		return phpFPMPoolSettings{}, fmt.Errorf("%s must be <= %d bytes", field, maxVhostPHPPoolSettingsBytes)
+	}
+	settings := phpFPMPoolSettings{
+		Directives: []phpFPMPoolSetting{},
+		byName:     map[string]string{},
+	}
+	for i, line := range strings.Split(in, "\n") {
+		lineField := fmt.Sprintf("%s line %d", field, i+1)
+		if len(line) > maxVhostPHPPoolSettingsLineBytes {
+			return phpFPMPoolSettings{}, fmt.Errorf("%s must be <= %d bytes", lineField, maxVhostPHPPoolSettingsLineBytes)
+		}
+		idx := strings.Index(line, "=")
+		if idx < 0 {
+			return phpFPMPoolSettings{}, fmt.Errorf("%s must be directive = value", lineField)
+		}
+		name := strings.ToLower(strings.TrimSpace(line[:idx]))
+		value := strings.TrimSpace(line[idx+1:])
+		if name == "" || value == "" {
+			return phpFPMPoolSettings{}, fmt.Errorf("%s must be directive = value", lineField)
+		}
+		if !isValidVhostPHPPoolDirectiveName(name) {
+			return phpFPMPoolSettings{}, fmt.Errorf("%s directive %q is invalid", lineField, name)
+		}
+		if _, ok := allowedVhostPHPPoolSettings[name]; !ok {
+			return phpFPMPoolSettings{}, fmt.Errorf("%s directive %q is not allowed", lineField, name)
+		}
+		if _, exists := settings.byName[name]; exists {
+			return phpFPMPoolSettings{}, fmt.Errorf("%s directive %q is duplicated", lineField, name)
+		}
+		if err := validateVhostPHPPoolSettingValue(name, value, lineField); err != nil {
+			return phpFPMPoolSettings{}, err
+		}
+		settings.Directives = append(settings.Directives, phpFPMPoolSetting{Name: name, Value: value})
+		settings.byName[name] = value
+	}
+	if settings.slowLogEnabled() && !settings.has("request_slowlog_trace_depth") {
+		settings.Directives = append(settings.Directives, phpFPMPoolSetting{
+			Name:  "request_slowlog_trace_depth",
+			Value: strconv.Itoa(defaultVhostSlowRequestTraceDepth),
+		})
+		settings.byName["request_slowlog_trace_depth"] = strconv.Itoa(defaultVhostSlowRequestTraceDepth)
+	}
+	return settings, nil
+}
+
+func isValidVhostPHPPoolDirectiveName(name string) bool {
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '.', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validateVhostPHPPoolSettingValue(name string, value string, field string) error {
+	switch name {
+	case "pm.max_children":
+		return validateVhostPHPPoolInt(value, 1, maxVhostPHPPoolMaxChildren, field)
+	case "pm.max_requests":
+		return validateVhostPHPPoolInt(value, 0, maxVhostPHPPoolMaxRequests, field)
+	case "pm.process_idle_timeout":
+		seconds, ok := parseVhostPHPPoolDurationSeconds(value)
+		if !ok || seconds < 1 || seconds > maxVhostSlowRequestTimeoutSec {
+			return fmt.Errorf("%s must be a duration between 1s and %ds", field, maxVhostSlowRequestTimeoutSec)
+		}
+	case "request_terminate_timeout":
+		seconds, ok := parseVhostPHPPoolDurationSeconds(value)
+		if !ok || seconds < 0 || seconds > maxVhostSlowRequestTimeoutSec {
+			return fmt.Errorf("%s must be a duration between 0s and %ds", field, maxVhostSlowRequestTimeoutSec)
+		}
+	case "request_terminate_timeout_track_finished", "catch_workers_output", "decorate_workers_output":
+		if !isVhostPHPPoolBool(value) {
+			return fmt.Errorf("%s must be a boolean", field)
+		}
+	case "request_slowlog_timeout":
+		seconds, ok := parseVhostPHPPoolDurationSeconds(value)
+		if !ok || seconds < 0 || seconds > maxVhostSlowRequestTimeoutSec {
+			return fmt.Errorf("%s must be a duration between 0s and %ds", field, maxVhostSlowRequestTimeoutSec)
+		}
+	case "request_slowlog_trace_depth":
+		return validateVhostPHPPoolInt(value, 1, maxVhostSlowRequestTraceDepth, field)
+	case "security.limit_extensions":
+		if err := validateVhostPHPPoolSecurityLimitExtensions(value); err != nil {
+			return fmt.Errorf("%s: %w", field, err)
+		}
+	case "rlimit_files":
+		return validateVhostPHPPoolInt(value, 0, maxVhostPHPPoolRLimitFiles, field)
+	default:
+		return fmt.Errorf("%s directive %q is not allowed", field, name)
+	}
+	return nil
+}
+
+func validateVhostPHPPoolInt(value string, min int, max int, field string) error {
+	if value == "" {
+		return fmt.Errorf("%s must be an integer", field)
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return fmt.Errorf("%s must be an integer", field)
+		}
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n < min || n > max {
+		return fmt.Errorf("%s must be between %d and %d", field, min, max)
+	}
+	return nil
+}
+
+func parseVhostPHPPoolDurationSeconds(value string) (int64, bool) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return 0, false
+	}
+	unit := int64(1)
+	last := value[len(value)-1]
+	if last < '0' || last > '9' {
+		switch last {
+		case 's':
+			unit = 1
+		case 'm':
+			unit = 60
+		case 'h':
+			unit = 3600
+		case 'd':
+			unit = 86400
+		default:
+			return 0, false
+		}
+		value = strings.TrimSpace(value[:len(value)-1])
+	}
+	if value == "" {
+		return 0, false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || n > maxVhostSlowRequestTimeoutSec {
+		return 0, false
+	}
+	if n > maxVhostSlowRequestTimeoutSec/unit {
+		return 0, false
+	}
+	return n * unit, true
+}
+
+func isVhostPHPPoolBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "0", "yes", "no", "true", "false", "on", "off":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateVhostPHPPoolSecurityLimitExtensions(value string) error {
+	parts := strings.Fields(value)
+	if len(parts) == 0 || len(parts) > 16 {
+		return fmt.Errorf("must contain 1 to 16 extensions")
+	}
+	for _, part := range parts {
+		if len(part) < 2 || len(part) > 32 || !strings.HasPrefix(part, ".") {
+			return fmt.Errorf("extension %q must start with . and be <= 32 bytes", part)
+		}
+		for _, r := range part[1:] {
+			switch {
+			case r >= 'a' && r <= 'z':
+			case r >= 'A' && r <= 'Z':
+			case r >= '0' && r <= '9':
+			case r == '_', r == '-':
+			default:
+				return fmt.Errorf("extension %q contains an invalid character", part)
+			}
+		}
+	}
+	return nil
 }
 
 func normalizeRuntimeListenHost(value string) string {

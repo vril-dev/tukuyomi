@@ -314,6 +314,56 @@ func TestRunDueScheduledTasksPersistsStatusInDBWhenStoreEnabled(t *testing.T) {
 	}
 }
 
+func TestBootstrapDefaultScheduledTasksAddsArchiveTaskOnce(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "store.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	}()
+
+	result, err := BootstrapDefaultScheduledTasks(filepath.Join(tmp, "conf", "scheduled-tasks.json"))
+	if err != nil {
+		t.Fatalf("BootstrapDefaultScheduledTasks first: %v", err)
+	}
+	if !result.Added {
+		t.Fatalf("first bootstrap result=%+v want Added", result)
+	}
+	store := getLogsStatsStore()
+	cfg, _, found, err := store.loadActiveScheduledTaskConfig()
+	if err != nil || !found {
+		t.Fatalf("load scheduled tasks found=%v err=%v", found, err)
+	}
+	if len(cfg.Tasks) != 1 {
+		t.Fatalf("task count=%d want 1", len(cfg.Tasks))
+	}
+	task := cfg.Tasks[0]
+	if task.Name != defaultWAFLogArchiveTaskName || task.Schedule != "17 3 * * *" || task.Timezone != "UTC" || !task.Enabled {
+		t.Fatalf("default archive task=%+v", task)
+	}
+
+	cfg.Tasks = nil
+	if _, err := store.writeScheduledTaskConfigVersion("", cfg, configVersionSourceApply, "", "simulate operator delete", 0); err != nil {
+		t.Fatalf("simulate operator delete: %v", err)
+	}
+	result, err = BootstrapDefaultScheduledTasks(filepath.Join(tmp, "conf", "scheduled-tasks.json"))
+	if err != nil {
+		t.Fatalf("BootstrapDefaultScheduledTasks second: %v", err)
+	}
+	if !result.MarkerFound || result.Added {
+		t.Fatalf("second bootstrap result=%+v want marker skip", result)
+	}
+	cfg, _, found, err = store.loadActiveScheduledTaskConfig()
+	if err != nil || !found {
+		t.Fatalf("reload scheduled tasks found=%v err=%v", found, err)
+	}
+	if len(cfg.Tasks) != 0 {
+		t.Fatalf("operator-deleted task should not be recreated: %+v", cfg.Tasks)
+	}
+}
+
 func TestPruneScheduledTaskStateRemovesDBRowsWhenDBBacked(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "store.db")

@@ -455,7 +455,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	defer restore()
 	old := struct {
 		dbDriver                      string
-		dbRetentionDays               int
+		hotLogRetentionDays           int
 		fileRetention                 time.Duration
 		adminReadOnly                 bool
 		remoteSSHCenterEnabled        bool
@@ -465,7 +465,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 		remoteSSHMaxSessionsPerDevice int
 	}{
 		dbDriver:                      config.DBDriver,
-		dbRetentionDays:               config.DBRetentionDays,
+		hotLogRetentionDays:           config.HotLogRetentionDays,
 		fileRetention:                 config.FileRetention,
 		adminReadOnly:                 config.AdminReadOnly,
 		remoteSSHCenterEnabled:        config.RemoteSSHCenterEnabled,
@@ -476,7 +476,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	}
 	defer func() {
 		config.DBDriver = old.dbDriver
-		config.DBRetentionDays = old.dbRetentionDays
+		config.HotLogRetentionDays = old.hotLogRetentionDays
 		config.FileRetention = old.fileRetention
 		config.AdminReadOnly = old.adminReadOnly
 		config.RemoteSSHCenterEnabled = old.remoteSSHCenterEnabled
@@ -486,7 +486,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 		config.RemoteSSHMaxSessionsPerDevice = old.remoteSSHMaxSessionsPerDevice
 	}()
 	config.DBDriver = "sqlite"
-	config.DBRetentionDays = 45
+	config.HotLogRetentionDays = 45
 	config.FileRetention = 14 * 24 * time.Hour
 	config.AdminReadOnly = false
 	config.RemoteSSHCenterEnabled = false
@@ -584,7 +584,7 @@ func TestCenterSettingsEndpoint(t *testing.T) {
 	if payload.Runtime.Mode != "center" || payload.Runtime.ListenAddr != "127.0.0.1:19092" || payload.Runtime.APIBasePath != "/center-manage-api" || payload.Runtime.GatewayAPIBasePath != "/center-api" || payload.Runtime.UIBasePath != "/center-ui" {
 		t.Fatalf("runtime settings mismatch: %+v", payload.Runtime)
 	}
-	if payload.Storage.DBDriver != "sqlite" || payload.Storage.DBRetentionDays != 45 || payload.Storage.FileRetentionDays != 14 {
+	if payload.Storage.DBDriver != "sqlite" || payload.Storage.HotLogRetentionDays != 45 || payload.Storage.FileRetentionDays != 14 {
 		t.Fatalf("storage settings mismatch: %+v", payload.Storage)
 	}
 	if payload.Access.ReadOnly {

@@ -19,6 +19,7 @@ type PHPRuntimeMaterializedStatus struct {
 	RuntimeDir      string   `json:"runtime_dir"`
 	ConfigFile      string   `json:"config_file"`
 	PoolFiles       []string `json:"pool_files,omitempty"`
+	SlowLogFiles    []string `json:"slowlog_files,omitempty"`
 	DocumentRoots   []string `json:"document_roots,omitempty"`
 	GeneratedTarget []string `json:"generated_targets,omitempty"`
 }
@@ -31,6 +32,7 @@ type phpRuntimeMaterialization struct {
 	RuntimeDir      string
 	ConfigFile      string
 	PoolFiles       []string
+	SlowLogFiles    []string
 	DocumentRoots   []string
 	GeneratedTarget []string
 	ConfigBody      string
@@ -53,6 +55,7 @@ func PHPRuntimeMaterializationSnapshot() []PHPRuntimeMaterializedStatus {
 	for _, status := range phpRuntimeMaterialized {
 		cp := status
 		cp.PoolFiles = append([]string(nil), status.PoolFiles...)
+		cp.SlowLogFiles = append([]string(nil), status.SlowLogFiles...)
 		cp.DocumentRoots = append([]string(nil), status.DocumentRoots...)
 		cp.GeneratedTarget = append([]string(nil), status.GeneratedTarget...)
 		out = append(out, cp)
@@ -154,6 +157,7 @@ func refreshPHPRuntimeMaterializationWithConfig(inventory PHPRuntimeInventoryFil
 			RuntimeDir:      materialized.RuntimeDir,
 			ConfigFile:      materialized.ConfigFile,
 			PoolFiles:       append([]string(nil), materialized.PoolFiles...),
+			SlowLogFiles:    append([]string(nil), materialized.SlowLogFiles...),
 			DocumentRoots:   append([]string(nil), materialized.DocumentRoots...),
 			GeneratedTarget: append([]string(nil), materialized.GeneratedTarget...),
 		}
@@ -190,6 +194,7 @@ func buildPHPRuntimeMaterializations(inventory PHPRuntimeInventoryFile, vhosts V
 				RuntimeDir:      runtimeDir,
 				ConfigFile:      filepath.Join(runtimeDir, "php-fpm.conf"),
 				PoolFiles:       []string{},
+				SlowLogFiles:    []string{},
 				DocumentRoots:   []string{},
 				GeneratedTarget: []string{},
 				Pools:           map[string]string{},
@@ -197,16 +202,26 @@ func buildPHPRuntimeMaterializations(inventory PHPRuntimeInventoryFile, vhosts V
 		}
 		poolName := vhost.GeneratedTarget
 		poolFile := filepath.Join(mat.RuntimeDir, "pools", poolName+".conf")
+		poolSettings, err := parseVhostPHPPoolSettings(vhost.PHPPoolSettings, "php_fpm_pool_settings")
+		if err != nil {
+			return nil, "", err
+		}
+		slowLogFile := ""
+		if poolSettings.slowLogEnabled() {
+			slowLogFile = filepath.Join(mat.RuntimeDir, "slowlogs", poolName+".slow.log")
+			mat.SlowLogFiles = append(mat.SlowLogFiles, slowLogFile)
+		}
 		mat.PoolFiles = append(mat.PoolFiles, poolFile)
 		mat.GeneratedTarget = append(mat.GeneratedTarget, vhost.GeneratedTarget)
 		if !containsString(mat.DocumentRoots, vhost.DocumentRoot) {
 			mat.DocumentRoots = append(mat.DocumentRoots, vhost.DocumentRoot)
 		}
-		mat.Pools[poolFile] = buildPHPRuntimePoolConfig(vhost, poolName)
+		mat.Pools[poolFile] = buildPHPRuntimePoolConfig(vhost, poolName, slowLogFile, poolSettings)
 		out[vhost.RuntimeID] = mat
 	}
 	for runtimeID, mat := range out {
 		sort.Strings(mat.PoolFiles)
+		sort.Strings(mat.SlowLogFiles)
 		sort.Strings(mat.DocumentRoots)
 		sort.Strings(mat.GeneratedTarget)
 		mat.ConfigBody = buildPHPRuntimeMasterConfig(mat)
@@ -218,6 +233,11 @@ func buildPHPRuntimeMaterializations(inventory PHPRuntimeInventoryFile, vhosts V
 func writePHPRuntimeMaterialization(mat phpRuntimeMaterialization) error {
 	if err := os.MkdirAll(filepath.Join(mat.RuntimeDir, "pools"), 0o755); err != nil {
 		return err
+	}
+	if len(mat.SlowLogFiles) > 0 {
+		if err := os.MkdirAll(filepath.Join(mat.RuntimeDir, "slowlogs"), 0o755); err != nil {
+			return err
+		}
 	}
 	if err := os.WriteFile(mat.ConfigFile, []byte(mat.ConfigBody), 0o644); err != nil {
 		return err
@@ -267,7 +287,7 @@ include = %s
 `, pidPath, errorLogPath, includePath)) + "\n"
 }
 
-func buildPHPRuntimePoolConfig(vhost VhostConfig, poolName string) string {
+func buildPHPRuntimePoolConfig(vhost VhostConfig, poolName string, slowLogFile string, poolSettings phpFPMPoolSettings) string {
 	docroot := absoluteRuntimePath(vhost.DocumentRoot)
 	listenEndpoint := runtimeListenEndpoint(vhost.Hostname, vhost.ListenPort)
 	allowedClients := phpFPMListenAllowedClients(vhost.Hostname)
@@ -275,24 +295,45 @@ func buildPHPRuntimePoolConfig(vhost VhostConfig, poolName string) string {
 [%s]
 listen = %s
 pm = ondemand
-pm.max_children = 4
-pm.process_idle_timeout = 10s
-pm.max_requests = 200
 clear_env = no
-catch_workers_output = yes
-decorate_workers_output = no
 chdir = %s
 `, poolName, listenEndpoint, docroot)) + "\n"
 	var b strings.Builder
 	b.WriteString(base)
+	appendPHPRuntimeDefaultPoolDirective(&b, poolSettings, "pm.max_children", "4")
+	appendPHPRuntimeDefaultPoolDirective(&b, poolSettings, "pm.process_idle_timeout", "10s")
+	appendPHPRuntimeDefaultPoolDirective(&b, poolSettings, "pm.max_requests", "200")
+	appendPHPRuntimeDefaultPoolDirective(&b, poolSettings, "catch_workers_output", "yes")
+	appendPHPRuntimeDefaultPoolDirective(&b, poolSettings, "decorate_workers_output", "no")
 	if allowedClients != "" {
 		b.WriteString("listen.allowed_clients = ")
 		b.WriteString(allowedClients)
 		b.WriteString("\n")
 	}
+	if poolSettings.slowLogEnabled() && strings.TrimSpace(slowLogFile) != "" {
+		b.WriteString("slowlog = ")
+		b.WriteString(absoluteRuntimePath(slowLogFile))
+		b.WriteString("\n")
+	}
+	for _, directive := range poolSettings.Directives {
+		b.WriteString(directive.Name)
+		b.WriteString(" = ")
+		b.WriteString(directive.Value)
+		b.WriteString("\n")
+	}
 	appendPHPRuntimeINIOverrides(&b, "php_value", vhost.PHPValues)
 	appendPHPRuntimeINIOverrides(&b, "php_admin_value", vhost.PHPAdminValues)
 	return b.String()
+}
+
+func appendPHPRuntimeDefaultPoolDirective(b *strings.Builder, poolSettings phpFPMPoolSettings, name string, value string) {
+	if poolSettings.has(name) {
+		return
+	}
+	b.WriteString(name)
+	b.WriteString(" = ")
+	b.WriteString(value)
+	b.WriteString("\n")
 }
 
 func phpFPMListenAllowedClients(host string) string {

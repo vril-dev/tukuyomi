@@ -37,6 +37,10 @@ const (
 	PersistentStorageBackendGCS          = "gcs"
 	DefaultPersistentStorageBackend      = PersistentStorageBackendLocal
 	DefaultPersistentStorageLocalDir     = "data/persistent"
+	DefaultLogArchivePrefix              = "log-archives"
+	DefaultLogArchiveMaxPartBytes        = 256 * 1024 * 1024
+	DefaultLogArchiveMaxPartRows         = 1000000
+	DefaultLogArchiveMaxDaysPerRun       = 31
 	RuntimeProcessModelSingle            = "single"
 	RuntimeProcessModelSupervised        = "supervised"
 	DefaultRuntimeProcessModel           = RuntimeProcessModelSingle
@@ -281,15 +285,24 @@ type appFPTunerConfig struct {
 type appStorageConfig struct {
 	// Deprecated: runtime storage is DB-only. Empty or "db" is accepted;
 	// "file" is rejected during validation.
-	Backend           string `json:"backend,omitempty"`
-	DBDriver          string `json:"db_driver"`
-	DBDSN             string `json:"db_dsn"`
-	DBPath            string `json:"db_path"`
-	DBRetentionDays   int    `json:"db_retention_days"`
-	DBSyncIntervalSec int    `json:"db_sync_interval_sec"`
-	FileRotateBytes   int64  `json:"file_rotate_bytes"`
-	FileMaxBytes      int64  `json:"file_max_bytes"`
-	FileRetentionDays int    `json:"file_retention_days"`
+	Backend             string                     `json:"backend,omitempty"`
+	DBDriver            string                     `json:"db_driver"`
+	DBDSN               string                     `json:"db_dsn"`
+	DBPath              string                     `json:"db_path"`
+	HotLogRetentionDays int                        `json:"hot_log_retention_days"`
+	DBSyncIntervalSec   int                        `json:"db_sync_interval_sec"`
+	FileRotateBytes     int64                      `json:"file_rotate_bytes"`
+	FileMaxBytes        int64                      `json:"file_max_bytes"`
+	FileRetentionDays   int                        `json:"file_retention_days"`
+	LogArchive          appStorageLogArchiveConfig `json:"log_archive"`
+}
+
+type appStorageLogArchiveConfig struct {
+	Enabled       bool   `json:"enabled"`
+	Prefix        string `json:"prefix"`
+	MaxPartBytes  int64  `json:"max_part_bytes"`
+	MaxPartRows   int    `json:"max_part_rows"`
+	MaxDaysPerRun int    `json:"max_days_per_run"`
 }
 
 type appPersistentStorageConfig struct {
@@ -512,15 +525,22 @@ func defaultAppConfigFile() appConfigFile {
 			AuditFile:       "audit/fp-tuner-audit.ndjson",
 		},
 		Storage: appStorageConfig{
-			Backend:           "",
-			DBDriver:          "sqlite",
-			DBDSN:             "",
-			DBPath:            "db/tukuyomi.db",
-			DBRetentionDays:   30,
-			DBSyncIntervalSec: 0,
-			FileRotateBytes:   8 * 1024 * 1024,
-			FileMaxBytes:      256 * 1024 * 1024,
-			FileRetentionDays: 7,
+			Backend:             "",
+			DBDriver:            "sqlite",
+			DBDSN:               "",
+			DBPath:              "db/tukuyomi.db",
+			HotLogRetentionDays: 30,
+			DBSyncIntervalSec:   0,
+			FileRotateBytes:     8 * 1024 * 1024,
+			FileMaxBytes:        256 * 1024 * 1024,
+			FileRetentionDays:   7,
+			LogArchive: appStorageLogArchiveConfig{
+				Enabled:       true,
+				Prefix:        DefaultLogArchivePrefix,
+				MaxPartBytes:  DefaultLogArchiveMaxPartBytes,
+				MaxPartRows:   DefaultLogArchiveMaxPartRows,
+				MaxDaysPerRun: DefaultLogArchiveMaxDaysPerRun,
+			},
 		},
 		Persistent: appPersistentStorageConfig{
 			Backend: DefaultPersistentStorageBackend,
@@ -653,9 +673,26 @@ func normalizeAppConfigFile(cfg *appConfigFile) {
 	cfg.Storage.DBDriver = strings.ToLower(strings.TrimSpace(cfg.Storage.DBDriver))
 	cfg.Storage.DBDSN = strings.TrimSpace(cfg.Storage.DBDSN)
 	cfg.Storage.DBPath = strings.TrimSpace(cfg.Storage.DBPath)
+	normalizeStorageLogArchiveConfig(&cfg.Storage.LogArchive)
 	normalizePersistentStorageConfig(&cfg.Persistent)
 	cfg.Observability.Tracing.ServiceName = strings.TrimSpace(cfg.Observability.Tracing.ServiceName)
 	cfg.Observability.Tracing.OTLPEndpoint = strings.TrimSpace(cfg.Observability.Tracing.OTLPEndpoint)
+}
+
+func normalizeStorageLogArchiveConfig(cfg *appStorageLogArchiveConfig) {
+	cfg.Prefix = strings.Trim(strings.TrimSpace(strings.ReplaceAll(cfg.Prefix, "\\", "/")), "/")
+	if cfg.Prefix == "" {
+		cfg.Prefix = DefaultLogArchivePrefix
+	}
+	if cfg.MaxPartBytes == 0 {
+		cfg.MaxPartBytes = DefaultLogArchiveMaxPartBytes
+	}
+	if cfg.MaxPartRows == 0 {
+		cfg.MaxPartRows = DefaultLogArchiveMaxPartRows
+	}
+	if cfg.MaxDaysPerRun == 0 {
+		cfg.MaxDaysPerRun = DefaultLogArchiveMaxDaysPerRun
+	}
 }
 
 func normalizePersistentStorageConfig(cfg *appPersistentStorageConfig) {
@@ -864,11 +901,14 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	if cfg.Storage.DBDriver != "sqlite" && cfg.Storage.DBDriver != "mysql" && cfg.Storage.DBDriver != "pgsql" {
 		return fmt.Errorf("storage.db_driver must be one of: sqlite, mysql, pgsql")
 	}
-	if cfg.Storage.DBRetentionDays < 0 {
-		return fmt.Errorf("storage.db_retention_days must be >= 0")
+	if cfg.Storage.HotLogRetentionDays < 0 {
+		return fmt.Errorf("storage.hot_log_retention_days must be >= 0")
 	}
 	if cfg.Storage.DBSyncIntervalSec < 0 {
 		return fmt.Errorf("storage.db_sync_interval_sec must be >= 0")
+	}
+	if err := validateStorageLogArchiveConfig(cfg.Storage.LogArchive); err != nil {
+		return err
 	}
 	if cfg.Edge.DeviceAuth.StatusRefreshIntervalSec < 0 || cfg.Edge.DeviceAuth.StatusRefreshIntervalSec > MaxEdgeDeviceStatusRefreshSec {
 		return fmt.Errorf("edge.device_auth.status_refresh_interval_sec must be between 0 and %d", MaxEdgeDeviceStatusRefreshSec)
@@ -905,6 +945,22 @@ func validateAppConfigFile(cfg appConfigFile) error {
 		if cfg.Observability.Tracing.ServiceName == "" {
 			return fmt.Errorf("observability.tracing.service_name is required when enabled=true")
 		}
+	}
+	return nil
+}
+
+func validateStorageLogArchiveConfig(cfg appStorageLogArchiveConfig) error {
+	if err := validatePersistentStoragePrefix("storage.log_archive.prefix", cfg.Prefix); err != nil {
+		return err
+	}
+	if cfg.MaxPartBytes < 1024*1024 || cfg.MaxPartBytes > 16*1024*1024*1024 {
+		return fmt.Errorf("storage.log_archive.max_part_bytes must be between 1048576 and 17179869184")
+	}
+	if cfg.MaxPartRows < 1 || cfg.MaxPartRows > 10000000 {
+		return fmt.Errorf("storage.log_archive.max_part_rows must be between 1 and 10000000")
+	}
+	if cfg.MaxDaysPerRun < 1 || cfg.MaxDaysPerRun > 366 {
+		return fmt.Errorf("storage.log_archive.max_days_per_run must be between 1 and 366")
 	}
 	return nil
 }

@@ -314,7 +314,7 @@ Routing model:
 - `Runtime Apps` publish generated runtime-listener backends in the effective runtime.
 - `Runtime Apps` do not rewrite configured upstream URLs. A configured `primary` remains the URL shown in `Proxy Rules > Upstreams`.
 - `generated_target` is server-owned Runtime App materialization state and is not normal operator input.
-- PHP-FPM/PSGI/static application listener settings belong in `Runtime Apps`; public traffic routing belongs in `Proxy Rules`.
+- PHP-FPM/PSGI/static application listener settings belong in `Runtime Apps`; public traffic routing belongs in `Proxy Rules`. Allowlisted PHP-FPM pool settings, including slow request logging, are also Runtime App settings. Slowlog paths are tukuyomi-managed and should be protected and rotated like other runtime logs.
 
 ### Proxy Engine
 

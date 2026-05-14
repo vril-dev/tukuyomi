@@ -47,6 +47,27 @@ The default path is governed by the effective DB `app_config`:
 
 - `paths.scheduled_task_config_file`
 
+## 12.2.1 Built-in archive task
+
+When `make install` installs a Gateway role with scheduled tasks enabled,
+it bootstraps one built-in task:
+
+```json
+{
+  "name": "tukuyomi-waf-log-archive",
+  "enabled": true,
+  "schedule": "17 3 * * *",
+  "timezone": "UTC",
+  "command": "./bin/tukuyomi archive-waf-logs",
+  "timeout_sec": 3600
+}
+```
+
+This runs once a day at `03:17 UTC` and moves expired WAF/access events
+from hot DB storage to `persistent_storage`. The bootstrap is one-shot:
+if an operator later changes, disables, or deletes the task, future
+installs leave that choice intact.
+
 ## 12.3 Task model
 
 Each task carries **a single cron-style command line**:

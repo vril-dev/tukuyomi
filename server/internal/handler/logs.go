@@ -670,14 +670,9 @@ func orderedSecurityFamilyBuckets(counts map[string]int) []securityFamilyBucket 
 	return out
 }
 
-func buildSecurityBlockLabel(event string, ruleID string, country string) (string, string, string, string) {
+func buildSecurityBlockLabel(event string, ruleID string) (string, string, string, string) {
 	family := securityBlockFamilyForEvent(event, 1)
 	key := strings.TrimSpace(ruleID)
-	if key == "" || key == "UNKNOWN" {
-		if event == "country_block" {
-			key = requestmeta.NormalizeCountryFilter(country)
-		}
-	}
 	if key == "" || key == "UNKNOWN" {
 		key = event
 	}

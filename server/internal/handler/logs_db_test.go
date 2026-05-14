@@ -172,7 +172,7 @@ func TestLogsStatsSQLiteStoreAggregatesAndIngestsIncrementally(t *testing.T) {
 		"event":   "waf_block",
 		"rule_id": 942100,
 		"path":    "/login",
-		"country": "JP",
+		"country": "DE",
 		"status":  403,
 		"req_id":  "req-3",
 	})

@@ -1541,11 +1541,11 @@ func (s *wafEventStore) queryTopSecurityBlocks(sinceUnix int64, n int) ([]securi
 		return []securityBlockBucket{}, nil
 	}
 	rows, err := s.query(
-		`SELECT event, rule_id, country, COUNT(*) AS cnt
+		`SELECT event, rule_id, COUNT(*) AS cnt
 		   FROM waf_events
 		  WHERE `+securityBlockWhereSQL+` AND ts_unix >= ?
-		  GROUP BY event, rule_id, country
-		  ORDER BY cnt DESC, event ASC, rule_id ASC, country ASC
+		  GROUP BY event, rule_id
+		  ORDER BY cnt DESC, event ASC, rule_id ASC
 		  LIMIT ?`,
 		sinceUnix,
 		n,
@@ -1559,12 +1559,11 @@ func (s *wafEventStore) queryTopSecurityBlocks(sinceUnix int64, n int) ([]securi
 	for rows.Next() {
 		var event string
 		var ruleID string
-		var country string
 		var count int
-		if err := rows.Scan(&event, &ruleID, &country, &count); err != nil {
+		if err := rows.Scan(&event, &ruleID, &count); err != nil {
 			return nil, err
 		}
-		family, eventKey, key, label := buildSecurityBlockLabel(event, ruleID, country)
+		family, eventKey, key, label := buildSecurityBlockLabel(event, ruleID)
 		if family == "" {
 			continue
 		}

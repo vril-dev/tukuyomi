@@ -85,7 +85,7 @@ func RunWAFLogArchive(ctx context.Context) (WAFLogArchiveResult, error) {
 	if err := ctx.Err(); err != nil {
 		return WAFLogArchiveResult{}, err
 	}
-	if !config.LogArchiveEnabled || config.DBRetentionDays <= 0 {
+	if !config.LogArchiveEnabled || config.HotLogRetentionDays <= 0 {
 		return WAFLogArchiveResult{}, nil
 	}
 	if err := FlushWAFEventAsync(ctx); err != nil {
@@ -111,7 +111,7 @@ func RunWAFLogArchive(ctx context.Context) (WAFLogArchiveResult, error) {
 	}
 	return store.archiveWAFLogs(ctx, wafLogArchiveOptions{
 		Now:            time.Now().UTC(),
-		RetentionDays:  config.DBRetentionDays,
+		RetentionDays:  config.HotLogRetentionDays,
 		Prefix:         config.LogArchivePrefix,
 		MaxPartBytes:   config.LogArchiveMaxPartBytes,
 		MaxPartRows:    config.LogArchiveMaxPartRows,

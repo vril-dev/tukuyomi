@@ -85,15 +85,15 @@ type settingsListenerAdminRequestMetadataConfig struct {
 }
 
 type settingsListenerAdminStorageConfig struct {
-	Backend           string                                `json:"backend,omitempty"`
-	DBDriver          string                                `json:"db_driver"`
-	DBPath            string                                `json:"db_path"`
-	DBRetentionDays   int                                   `json:"db_retention_days"`
-	DBSyncIntervalSec int                                   `json:"db_sync_interval_sec"`
-	FileRotateBytes   int64                                 `json:"file_rotate_bytes"`
-	FileMaxBytes      int64                                 `json:"file_max_bytes"`
-	FileRetentionDays int                                   `json:"file_retention_days"`
-	LogArchive        settingsListenerAdminLogArchiveConfig `json:"log_archive"`
+	Backend             string                                `json:"backend,omitempty"`
+	DBDriver            string                                `json:"db_driver"`
+	DBPath              string                                `json:"db_path"`
+	HotLogRetentionDays int                                   `json:"hot_log_retention_days"`
+	DBSyncIntervalSec   int                                   `json:"db_sync_interval_sec"`
+	FileRotateBytes     int64                                 `json:"file_rotate_bytes"`
+	FileMaxBytes        int64                                 `json:"file_max_bytes"`
+	FileRetentionDays   int                                   `json:"file_retention_days"`
+	LogArchive          settingsListenerAdminLogArchiveConfig `json:"log_archive"`
 }
 
 type settingsListenerAdminLogArchiveConfig struct {
@@ -351,7 +351,7 @@ type settingsListenerAdminRuntimeStatus struct {
 	RemoteSSHGatewayEmbeddedEnabled    bool                                        `json:"remote_ssh_gateway_embedded_enabled"`
 	StorageDBDriver                    string                                      `json:"storage_db_driver"`
 	StorageDBPath                      string                                      `json:"storage_db_path"`
-	StorageDBRetentionDays             int                                         `json:"storage_db_retention_days"`
+	StorageHotLogRetentionDays         int                                         `json:"storage_hot_log_retention_days"`
 	StorageDBSyncIntervalSec           int                                         `json:"storage_db_sync_interval_sec"`
 	StorageFileRotateBytes             int64                                       `json:"storage_file_rotate_bytes"`
 	StorageFileMaxBytes                int64                                       `json:"storage_file_max_bytes"`
@@ -654,14 +654,14 @@ func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListener
 			},
 		},
 		Storage: settingsListenerAdminStorageConfig{
-			Backend:           "",
-			DBDriver:          cfg.Storage.DBDriver,
-			DBPath:            cfg.Storage.DBPath,
-			DBRetentionDays:   cfg.Storage.DBRetentionDays,
-			DBSyncIntervalSec: cfg.Storage.DBSyncIntervalSec,
-			FileRotateBytes:   cfg.Storage.FileRotateBytes,
-			FileMaxBytes:      cfg.Storage.FileMaxBytes,
-			FileRetentionDays: cfg.Storage.FileRetentionDays,
+			Backend:             "",
+			DBDriver:            cfg.Storage.DBDriver,
+			DBPath:              cfg.Storage.DBPath,
+			HotLogRetentionDays: cfg.Storage.HotLogRetentionDays,
+			DBSyncIntervalSec:   cfg.Storage.DBSyncIntervalSec,
+			FileRotateBytes:     cfg.Storage.FileRotateBytes,
+			FileMaxBytes:        cfg.Storage.FileMaxBytes,
+			FileRetentionDays:   cfg.Storage.FileRetentionDays,
 			LogArchive: settingsListenerAdminLogArchiveConfig{
 				Enabled:       cfg.Storage.LogArchive.Enabled,
 				Prefix:        cfg.Storage.LogArchive.Prefix,
@@ -832,7 +832,7 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 	cfg.Storage.Backend = ""
 	cfg.Storage.DBDriver = next.Storage.DBDriver
 	cfg.Storage.DBPath = next.Storage.DBPath
-	cfg.Storage.DBRetentionDays = next.Storage.DBRetentionDays
+	cfg.Storage.HotLogRetentionDays = next.Storage.HotLogRetentionDays
 	cfg.Storage.DBSyncIntervalSec = next.Storage.DBSyncIntervalSec
 	cfg.Storage.FileRotateBytes = next.Storage.FileRotateBytes
 	cfg.Storage.FileMaxBytes = next.Storage.FileMaxBytes
@@ -989,7 +989,7 @@ func buildSettingsListenerAdminRuntimeStatus() settingsListenerAdminRuntimeStatu
 		RemoteSSHGatewayEmbeddedEnabled:    config.RemoteSSHGatewayEmbeddedEnabled,
 		StorageDBDriver:                    config.DBDriver,
 		StorageDBPath:                      config.DBPath,
-		StorageDBRetentionDays:             config.DBRetentionDays,
+		StorageHotLogRetentionDays:         config.HotLogRetentionDays,
 		StorageDBSyncIntervalSec:           int(config.DBSyncInterval / time.Second),
 		StorageFileRotateBytes:             config.FileRotateBytes,
 		StorageFileMaxBytes:                config.FileMaxBytes,

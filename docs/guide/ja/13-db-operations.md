@@ -85,11 +85,14 @@ DB 接続 bootstrap は `data/conf/config.json` の `storage` block で設定し
 | `db_driver` | `sqlite` / `mysql` / `pgsql` のいずれか |
 | `db_path` | SQLite database path |
 | `db_dsn` | MySQL / PostgreSQL の DSN |
-| `db_retention_days` | DB に hot データとして残す WAF event retention |
+| `hot_log_retention_days` | DB に hot データとして残す WAF event retention |
 | `db_sync_interval_sec` | periodic な DB-to-runtime reconcile loop の間隔 |
 
 注意:
 
+- `hot_log_retention_days` は旧 `db_retention_days` から名前を変更した設定です。
+  現在の config validation は旧キーを拒否します。アップグレード前に
+  `config.json`、preset、deployment 環境変数を更新してください。
 - **`storage.backend` は deprecated** です。設定しないでください。
   `storage.backend=file` は config validation で **拒否** されます。
 - `db_driver` / `db_path` / `db_dsn` は、DB を開く前に必ず bootstrap
@@ -232,7 +235,8 @@ reconciliation** も実行し、content に変更があったときだけ reload
 
 ## 13.4　Retention / Pruning
 
-`db_retention_days` が効くのは **`waf_events` だけ** です。
+`hot_log_retention_days` が効くのは **DB に hot データとして残す `waf_events`
+行だけ** です。
 
 - `30`（default）: 直近 30 日を保持
 - `0`: pruning を無効化

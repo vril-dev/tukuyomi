@@ -542,7 +542,7 @@ const JA_STRINGS: Record<string, string> = {
   "UI base path": "UI base path",
   "DB driver": "DB driver",
   "DB path": "DB path",
-  "DB retention": "DB 保持期間",
+  "Hot log retention": "Hotログ保持期間",
   "File retention": "ファイル保持期間",
   "{count} days": "{count} 日",
   "Read only": "読み取り専用",

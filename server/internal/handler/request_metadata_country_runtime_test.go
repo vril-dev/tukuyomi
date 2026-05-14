@@ -62,7 +62,7 @@ func TestImportAppConfigStorageRejectsMMDBModeWithoutDBAsset(t *testing.T) {
     "db_driver": "sqlite",
     "db_path": "db/tukuyomi.db",
     "db_dsn": "",
-    "db_retention_days": 30,
+    "hot_log_retention_days": 30,
     "db_sync_interval_sec": 0
   },
   "request_metadata": {

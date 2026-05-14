@@ -117,7 +117,7 @@ const JA_STRINGS: Record<string, string> = {
   "Rate Limit Enabled": "レート制限有効",
   "Bot Defense Enabled": "Bot防御有効",
   "Semantic Mode": "セマンティックモード",
-  "DB Retention Days": "DB保持日数",
+  "Hot Log Retention Days": "Hotログ保持日数",
   "DB Rows (Total)": "DB行数（全体）",
   "DB Rows (WAF Block)": "DB行数（WAF block）",
   "DB Size": "DBサイズ",

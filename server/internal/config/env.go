@@ -141,7 +141,7 @@ var (
 	DBDriver                string
 	DBDSN                   string
 	DBPath                  string
-	DBRetentionDays         int
+	HotLogRetentionDays     int
 	DBSyncInterval          time.Duration
 	FileRotateBytes         int64
 	FileMaxBytes            int64
@@ -517,15 +517,15 @@ func applyAppConfig(cfg appConfigFile) {
 	if DBPath == "" {
 		DBPath = "db/tukuyomi.db"
 	}
-	DBRetentionDays = cfg.Storage.DBRetentionDays
-	if override := strings.TrimSpace(os.Getenv("WAF_STORAGE_DB_RETENTION_DAYS")); override != "" {
-		DBRetentionDays = parseIntDefault(override, DBRetentionDays)
+	HotLogRetentionDays = cfg.Storage.HotLogRetentionDays
+	if override := strings.TrimSpace(os.Getenv("WAF_STORAGE_HOT_LOG_RETENTION_DAYS")); override != "" {
+		HotLogRetentionDays = parseIntDefault(override, HotLogRetentionDays)
 	}
-	if DBRetentionDays < 0 {
-		DBRetentionDays = 0
+	if HotLogRetentionDays < 0 {
+		HotLogRetentionDays = 0
 	}
-	if DBRetentionDays > 3650 {
-		DBRetentionDays = 3650
+	if HotLogRetentionDays > 3650 {
+		HotLogRetentionDays = 3650
 	}
 	dbSyncSec := parseDBSyncIntervalSec(strconv.Itoa(cfg.Storage.DBSyncIntervalSec))
 	if override := strings.TrimSpace(os.Getenv("WAF_STORAGE_DB_SYNC_INTERVAL_SEC")); override != "" {

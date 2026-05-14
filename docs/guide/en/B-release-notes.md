@@ -2,14 +2,28 @@
 
 This appendix collects excerpts from the release notes for the latest releases
 — including this book's reference version — polished for book reading. They are
-presented newest-first: **v1.3.0**, **v1.2.0**, then **v1.1.0**. For later
-releases, treat the release notes attached to GitHub Releases tags as the
-authoritative source.
+presented newest-first: the current breaking-change note, **v1.3.0**,
+**v1.2.0**, then **v1.1.0**. For later releases, treat the release notes
+attached to GitHub Releases tags as the authoritative source.
 
 This book is written against **v1.3.0**. Remote SSH first appears as an
 operator-facing chapter in v1.3.0. Center / IoT / Edge enrollment first appears
 in v1.2.0. v1.1.0 is included as the preceding major step (DB-backed runtime
 authority, the admin auth overhaul, and `make install`).
+
+---
+
+# Section B-0 — current breaking-change note
+
+## B0.1 Configuration rename
+
+- `storage.db_retention_days` has been removed.
+- Use `storage.hot_log_retention_days` for the number of hot WAF log days kept
+  in DB before archive/prune runs.
+- `WAF_STORAGE_DB_RETENTION_DAYS` has been removed. Use
+  `WAF_STORAGE_HOT_LOG_RETENTION_DAYS`.
+- Current config validation rejects the old key so deployment manifests fail
+  fast instead of silently running with stale retention settings.
 
 ---
 

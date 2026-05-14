@@ -66,8 +66,12 @@ The DB connection bootstrap is configured in `data/conf/config.json` under
 - `db_driver`: `sqlite`, `mysql`, or `pgsql`
 - `db_path`: SQLite database path
 - `db_dsn`: MySQL or PostgreSQL DSN
-- `db_retention_days`: hot WAF event retention in DB
+- `hot_log_retention_days`: hot WAF event retention in DB
 - `db_sync_interval_sec`: optional periodic DB-to-runtime reconcile loop
+
+`hot_log_retention_days` replaces the old `db_retention_days` name. The old key
+is not accepted by current config validation; update `config.json`, presets, and
+deployment environment before upgrading.
 
 `storage.backend` is deprecated. Leave it unset. `storage.backend=file` is
 rejected during config validation.
@@ -194,7 +198,7 @@ runtimes this is DB-to-memory/runtime reload, not DB-to-file restoration.
 
 ## Retention / Pruning
 
-`db_retention_days` only applies to `waf_events`.
+`hot_log_retention_days` only applies to the hot `waf_events` rows kept in DB.
 
 - `30` (default): keep the last 30 days
 - `0`: disable pruning

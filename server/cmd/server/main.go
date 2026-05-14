@@ -721,11 +721,11 @@ func initRuntimeDBStoreOrFatal(prefix string) {
 		config.DBDriver,
 		config.DBPath,
 		config.DBDSN,
-		config.DBRetentionDays,
+		config.HotLogRetentionDays,
 	); err != nil {
 		log.Fatalf("%s[FATAL] failed to initialize db store: %v", prefix, err)
 	}
-	log.Printf("%s db store enabled (driver=%s path=%s retention_days=%d)", prefix, config.DBDriver, config.DBPath, config.DBRetentionDays)
+	log.Printf("%s db store enabled (driver=%s path=%s hot_log_retention_days=%d)", prefix, config.DBDriver, config.DBPath, config.HotLogRetentionDays)
 }
 
 func shutdownRuntimeAppSupervisors() {

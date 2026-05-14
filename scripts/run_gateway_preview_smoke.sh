@@ -115,7 +115,7 @@ write_minimal_config() {
     "db_driver": "sqlite",
     "db_path": "db/tukuyomi.db",
     "db_dsn": "",
-    "db_retention_days": 30,
+    "hot_log_retention_days": 30,
     "db_sync_interval_sec": 0
   }
 }

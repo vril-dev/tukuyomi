@@ -285,16 +285,16 @@ type appFPTunerConfig struct {
 type appStorageConfig struct {
 	// Deprecated: runtime storage is DB-only. Empty or "db" is accepted;
 	// "file" is rejected during validation.
-	Backend           string                     `json:"backend,omitempty"`
-	DBDriver          string                     `json:"db_driver"`
-	DBDSN             string                     `json:"db_dsn"`
-	DBPath            string                     `json:"db_path"`
-	DBRetentionDays   int                        `json:"db_retention_days"`
-	DBSyncIntervalSec int                        `json:"db_sync_interval_sec"`
-	FileRotateBytes   int64                      `json:"file_rotate_bytes"`
-	FileMaxBytes      int64                      `json:"file_max_bytes"`
-	FileRetentionDays int                        `json:"file_retention_days"`
-	LogArchive        appStorageLogArchiveConfig `json:"log_archive"`
+	Backend             string                     `json:"backend,omitempty"`
+	DBDriver            string                     `json:"db_driver"`
+	DBDSN               string                     `json:"db_dsn"`
+	DBPath              string                     `json:"db_path"`
+	HotLogRetentionDays int                        `json:"hot_log_retention_days"`
+	DBSyncIntervalSec   int                        `json:"db_sync_interval_sec"`
+	FileRotateBytes     int64                      `json:"file_rotate_bytes"`
+	FileMaxBytes        int64                      `json:"file_max_bytes"`
+	FileRetentionDays   int                        `json:"file_retention_days"`
+	LogArchive          appStorageLogArchiveConfig `json:"log_archive"`
 }
 
 type appStorageLogArchiveConfig struct {
@@ -525,15 +525,15 @@ func defaultAppConfigFile() appConfigFile {
 			AuditFile:       "audit/fp-tuner-audit.ndjson",
 		},
 		Storage: appStorageConfig{
-			Backend:           "",
-			DBDriver:          "sqlite",
-			DBDSN:             "",
-			DBPath:            "db/tukuyomi.db",
-			DBRetentionDays:   30,
-			DBSyncIntervalSec: 0,
-			FileRotateBytes:   8 * 1024 * 1024,
-			FileMaxBytes:      256 * 1024 * 1024,
-			FileRetentionDays: 7,
+			Backend:             "",
+			DBDriver:            "sqlite",
+			DBDSN:               "",
+			DBPath:              "db/tukuyomi.db",
+			HotLogRetentionDays: 30,
+			DBSyncIntervalSec:   0,
+			FileRotateBytes:     8 * 1024 * 1024,
+			FileMaxBytes:        256 * 1024 * 1024,
+			FileRetentionDays:   7,
 			LogArchive: appStorageLogArchiveConfig{
 				Enabled:       true,
 				Prefix:        DefaultLogArchivePrefix,
@@ -901,8 +901,8 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	if cfg.Storage.DBDriver != "sqlite" && cfg.Storage.DBDriver != "mysql" && cfg.Storage.DBDriver != "pgsql" {
 		return fmt.Errorf("storage.db_driver must be one of: sqlite, mysql, pgsql")
 	}
-	if cfg.Storage.DBRetentionDays < 0 {
-		return fmt.Errorf("storage.db_retention_days must be >= 0")
+	if cfg.Storage.HotLogRetentionDays < 0 {
+		return fmt.Errorf("storage.hot_log_retention_days must be >= 0")
 	}
 	if cfg.Storage.DBSyncIntervalSec < 0 {
 		return fmt.Errorf("storage.db_sync_interval_sec must be >= 0")

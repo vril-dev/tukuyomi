@@ -241,7 +241,7 @@ export default function Status() {
                 <Metric label={tx("Rate Limit Enabled")} value={String(data.rate_limit_enabled ?? "-")} />
                 <Metric label={tx("Bot Defense Enabled")} value={String(data.bot_defense_enabled ?? "-")} />
                 <Metric label={tx("Semantic Mode")} value={String(data.semantic_mode ?? "-")} />
-                <Metric label={tx("DB Retention Days")} value={String(data.db_retention_days ?? "-")} />
+                <Metric label={tx("Hot Log Retention Days")} value={String(data.hot_log_retention_days ?? "-")} />
                 <Metric label={tx("DB Rows (Total)")} value={dbRows != null ? formatCount(dbRows) : "-"} />
                 <Metric label={tx("DB Rows (WAF Block)")} value={dbWAFBlockRows != null ? formatCount(dbWAFBlockRows) : "-"} />
                 <Metric label={tx("DB Size")} value={dbSizeBytes != null ? formatBytes(dbSizeBytes) : "-"} />

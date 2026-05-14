@@ -32,10 +32,10 @@ type centerSettingsRuntime struct {
 }
 
 type centerSettingsStorage struct {
-	DBDriver          string `json:"db_driver"`
-	DBPath            string `json:"db_path"`
-	DBRetentionDays   int    `json:"db_retention_days"`
-	FileRetentionDays int    `json:"file_retention_days"`
+	DBDriver            string `json:"db_driver"`
+	DBPath              string `json:"db_path"`
+	HotLogRetentionDays int    `json:"hot_log_retention_days"`
+	FileRetentionDays   int    `json:"file_retention_days"`
 }
 
 type centerSettingsAccess struct {
@@ -136,10 +136,10 @@ func buildCenterSettingsResponse(runtimeCfg RuntimeConfig, cfg CenterSettingsCon
 			CenterAPIAllowCIDRs: append([]string(nil), runtimeCfg.CenterAPIAllowCIDRs...),
 		},
 		Storage: centerSettingsStorage{
-			DBDriver:          config.DBDriver,
-			DBPath:            config.DBPath,
-			DBRetentionDays:   config.DBRetentionDays,
-			FileRetentionDays: int(config.FileRetention.Hours() / 24),
+			DBDriver:            config.DBDriver,
+			DBPath:              config.DBPath,
+			HotLogRetentionDays: config.HotLogRetentionDays,
+			FileRetentionDays:   int(config.FileRetention.Hours() / 24),
 		},
 		Access: centerSettingsAccess{
 			ReadOnly: config.AdminReadOnly,

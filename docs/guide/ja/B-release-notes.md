@@ -1,14 +1,29 @@
 # 付録B　リリースノート
 
 本付録には、本書の基準バージョンを含む直近リリースのリリースノート抜粋を、
-書籍向けに整えて収録します。新しい順に **v1.3.0** → **v1.2.0** →
-**v1.1.0** の順で並べています。以後の正式なリリースノートは、GitHub
-Releases のリリースタグを一次情報としてください。
+書籍向けに整えて収録します。新しい順に、現在の破壊的変更メモ → **v1.3.0** →
+**v1.2.0** → **v1.1.0** の順で並べています。以後の正式なリリースノートは、
+GitHub Releases のリリースタグを一次情報としてください。
 
 本書は **v1.3.0 を基準** に書いています。Remote SSH は v1.3.0 で運用者向けの章として追加しました。
 Center / IoT・Edge enrollment が登場するのは v1.2.0 からです。v1.1.0 は、
 その 1 つ前の重要なリリース（DB-backed runtime authority、admin 認証の刷新、
 `make install` の整備）として併載しています。
+
+---
+
+## B.0　現在の破壊的変更メモ
+
+### B.0.1　設定名の変更
+
+- `storage.db_retention_days` は削除しました。
+- DB に hot データとして残す WAF ログ日数は
+  `storage.hot_log_retention_days` で設定します。
+- `WAF_STORAGE_DB_RETENTION_DAYS` は削除しました。
+  `WAF_STORAGE_HOT_LOG_RETENTION_DAYS` を使ってください。
+- host の `make install` は、新バイナリ実行前に保持済み config を書き換えます。
+- 現在の config validation は旧キーを拒否します。古い retention 設定のまま
+  静かに起動しないよう、deployment manifest は fail fast します。
 
 ---
 

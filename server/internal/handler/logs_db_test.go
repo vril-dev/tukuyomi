@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"tukuyomi/internal/config"
+	"tukuyomi/internal/persistentstore"
 )
 
 func TestLogsStatsSQLiteStoreAggregatesAndIngestsIncrementally(t *testing.T) {
@@ -45,6 +48,66 @@ func TestLogsStatsSQLiteStoreAggregatesAndIngestsIncrementally(t *testing.T) {
 			"ts":    now.Add(-5 * time.Minute).Format(time.RFC3339Nano),
 			"event": "waf_hit_allow",
 			"path":  "/allow",
+		},
+		{
+			"ts":        now.Add(-20 * time.Minute).Format(time.RFC3339Nano),
+			"event":     "rate_limited",
+			"policy_id": "default",
+			"path":      "/api",
+			"country":   "JP",
+			"status":    429,
+			"req_id":    "req-rate",
+		},
+		{
+			"ts":      now.Add(-25 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "country_block",
+			"path":    "/",
+			"country": "DE",
+			"status":  403,
+			"req_id":  "req-country",
+		},
+		{
+			"ts":          now.Add(-30 * time.Minute).Format(time.RFC3339Nano),
+			"event":       "bot_challenge",
+			"flow_policy": "login",
+			"path":        "/login",
+			"country":     "US",
+			"status":      403,
+			"req_id":      "req-bot",
+		},
+		{
+			"ts":      now.Add(-35 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "semantic_anomaly",
+			"action":  "block",
+			"path":    "/search",
+			"country": "US",
+			"status":  403,
+			"req_id":  "req-semantic",
+		},
+		{
+			"ts":         now.Add(-40 * time.Minute).Format(time.RFC3339Nano),
+			"event":      "ip_reputation",
+			"host_scope": "default",
+			"path":       "/admin",
+			"country":    "NL",
+			"status":     403,
+			"req_id":     "req-iprep",
+		},
+		{
+			"ts":      now.Add(-45 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "semantic_anomaly",
+			"action":  "log",
+			"path":    "/observe",
+			"country": "JP",
+			"req_id":  "req-semantic-log",
+		},
+		{
+			"ts":      now.Add(-50 * time.Minute).Format(time.RFC3339Nano),
+			"event":   "bot_challenge_dry_run",
+			"path":    "/dry-run",
+			"country": "JP",
+			"status":  403,
+			"req_id":  "req-bot-dry",
 		},
 	}
 
@@ -76,13 +139,40 @@ func TestLogsStatsSQLiteStoreAggregatesAndIngestsIncrementally(t *testing.T) {
 	if first.WAFBlock.Last24h != 2 {
 		t.Fatalf("first last_24h=%d want=2", first.WAFBlock.Last24h)
 	}
+	if first.SecurityBlocks.TotalInScan != 7 {
+		t.Fatalf("first security total_in_scan=%d want=7", first.SecurityBlocks.TotalInScan)
+	}
+	if first.SecurityBlocks.Last1h != 6 {
+		t.Fatalf("first security last_1h=%d want=6", first.SecurityBlocks.Last1h)
+	}
+	if first.SecurityBlocks.Last24h != 7 {
+		t.Fatalf("first security last_24h=%d want=7", first.SecurityBlocks.Last24h)
+	}
+	for family, want := range map[string]int{
+		"waf":           2,
+		"rate_limit":    1,
+		"country_block": 1,
+		"bot_defense":   1,
+		"semantic":      1,
+		"ip_reputation": 1,
+	} {
+		if got := securityFamilyCount(first.SecurityBlocks.ByFamily24h, family); got != want {
+			t.Fatalf("first family %s count=%d want=%d", family, got, want)
+		}
+	}
+	if got := securityTopBlockCount(first.SecurityBlocks.TopBlocks24h, "waf_block (942100)"); got != 1 {
+		t.Fatalf("first top waf_block count=%d want=1", got)
+	}
+	if got := securityTopBlockCount(first.SecurityBlocks.TopBlocks24h, "rate_limited (default)"); got != 1 {
+		t.Fatalf("first top rate_limited count=%d want=1", got)
+	}
 
 	appendNDJSONLine(t, logPath, map[string]any{
 		"ts":      now.Add(-2 * time.Minute).Format(time.RFC3339Nano),
 		"event":   "waf_block",
 		"rule_id": 942100,
 		"path":    "/login",
-		"country": "JP",
+		"country": "DE",
 		"status":  403,
 		"req_id":  "req-3",
 	})
@@ -100,6 +190,129 @@ func TestLogsStatsSQLiteStoreAggregatesAndIngestsIncrementally(t *testing.T) {
 	if second.WAFBlock.Last24h != 3 {
 		t.Fatalf("second last_24h=%d want=3", second.WAFBlock.Last24h)
 	}
+	if second.SecurityBlocks.TotalInScan != 8 {
+		t.Fatalf("second security total_in_scan=%d want=8", second.SecurityBlocks.TotalInScan)
+	}
+	if second.SecurityBlocks.Last1h != 7 {
+		t.Fatalf("second security last_1h=%d want=7", second.SecurityBlocks.Last1h)
+	}
+	if second.SecurityBlocks.Last24h != 8 {
+		t.Fatalf("second security last_24h=%d want=8", second.SecurityBlocks.Last24h)
+	}
+	if got := securityTopBlockCount(second.SecurityBlocks.TopBlocks24h, "waf_block (942100)"); got != 2 {
+		t.Fatalf("second top waf_block count=%d want=2", got)
+	}
+}
+
+func TestLogsStatsSecurityRangeBucketsUseSelectedRange(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	now := time.Now().UTC()
+	entries := []map[string]any{
+		{
+			"ts":      now.Add(-2 * time.Hour).Format(time.RFC3339Nano),
+			"event":   "waf_block",
+			"rule_id": 942100,
+			"path":    "/login",
+			"country": "JP",
+			"status":  403,
+			"req_id":  "req-waf",
+		},
+		{
+			"ts":        now.Add(-48 * time.Hour).Format(time.RFC3339Nano),
+			"event":     "rate_limited",
+			"policy_id": "burst",
+			"path":      "/api",
+			"country":   "BG",
+			"status":    429,
+			"req_id":    "req-rate-old",
+		},
+		{
+			"ts":      now.Add(-48 * time.Hour).Format(time.RFC3339Nano),
+			"event":   "country_block",
+			"path":    "/",
+			"country": "DE",
+			"status":  403,
+			"req_id":  "req-country-old",
+		},
+		{
+			"ts":             now.Add(-48 * time.Hour).Format(time.RFC3339Nano),
+			"event":          "proxy_route_access_block",
+			"path":           "/center-ui",
+			"country":        "JP",
+			"status":         403,
+			"reason":         "allow_miss",
+			"selected_route": "center-ui",
+			"req_id":         "req-route-access-old",
+		},
+	}
+
+	tmp := t.TempDir()
+	logPath := filepath.Join(tmp, "waf-events.ndjson")
+	writeNDJSONFile(t, logPath, entries)
+
+	restoreLogPath := setWAFLogPathForTest(t, logPath)
+	defer restoreLogPath()
+
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStore(true, dbPath, 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+
+	stats := callLogsStats(t, "/tukuyomi-api/logs/stats?hours=72")
+	if stats.SecurityBlocks.Last24h != 1 {
+		t.Fatalf("last_24h=%d want=1", stats.SecurityBlocks.Last24h)
+	}
+	if got := securityFamilyCount(stats.SecurityBlocks.ByFamily24h, "rate_limit"); got != 0 {
+		t.Fatalf("24h rate_limit count=%d want=0", got)
+	}
+	if got := securityFamilyCount(stats.SecurityBlocks.ByFamilyRange, "rate_limit"); got != 1 {
+		t.Fatalf("range rate_limit count=%d want=1", got)
+	}
+	if got := securityFamilyCount(stats.SecurityBlocks.ByFamilyRange, "country_block"); got != 1 {
+		t.Fatalf("range country_block count=%d want=1", got)
+	}
+	if got := securityFamilyCount(stats.SecurityBlocks.ByFamilyRange, "route_access"); got != 1 {
+		t.Fatalf("range route_access count=%d want=1", got)
+	}
+	if got := securityTopBlockCount(stats.SecurityBlocks.TopBlocks24h, "rate_limited (burst)"); got != 0 {
+		t.Fatalf("24h top rate_limited count=%d want=0", got)
+	}
+	if got := securityTopBlockCount(stats.SecurityBlocks.TopBlocksRange, "rate_limited (burst)"); got != 1 {
+		t.Fatalf("range top rate_limited count=%d want=1", got)
+	}
+	if got := securityTopBlockCount(stats.SecurityBlocks.TopBlocksRange, "country_block (DE)"); got != 1 {
+		t.Fatalf("range top country_block count=%d want=1", got)
+	}
+	if got := securityTopBlockCount(stats.SecurityBlocks.TopBlocksRange, "proxy_route_access_block (allow_miss)"); got != 1 {
+		t.Fatalf("range top route_access count=%d want=1", got)
+	}
+}
+
+func readGzipLinesForTest(t *testing.T, path string) []string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open gzip: %v", err)
+	}
+	defer f.Close()
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatalf("new gzip reader: %v", err)
+	}
+	defer gr.Close()
+	body, err := io.ReadAll(gr)
+	if err != nil {
+		t.Fatalf("read gzip: %v", err)
+	}
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return nil
+	}
+	return strings.Split(text, "\n")
 }
 
 func TestLogsStatsSQLiteStoreRetentionPrunesOldEvents(t *testing.T) {
@@ -152,6 +365,74 @@ func TestLogsStatsSQLiteStoreRetentionPrunesOldEvents(t *testing.T) {
 	}
 	if got := anyToString(read.Lines[0]["req_id"]); got != "req-new" {
 		t.Fatalf("req_id=%q want=req-new", got)
+	}
+}
+
+func TestWAFLogArchiveCatchesUpInitialBacklog(t *testing.T) {
+	restoreArchiveEnabled := config.LogArchiveEnabled
+	config.LogArchiveEnabled = true
+	defer func() {
+		config.LogArchiveEnabled = restoreArchiveEnabled
+	}()
+
+	now := time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "tukuyomi.db")
+	if err := InitLogsStatsStore(true, dbPath, 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+	store := getLogsStatsStore()
+
+	var raws [][]byte
+	for i := 0; i < 15; i++ {
+		day := time.Date(2026, 3, 20+i, 12, 0, 0, 0, time.UTC)
+		raws = append(raws, []byte(fmt.Sprintf(`{"ts":%q,"event":"proxy_access","path":"/old-%02d","status":200,"req_id":"old-%02d"}`, day.Format(time.RFC3339Nano), i, i)))
+	}
+	raws = append(raws, []byte(fmt.Sprintf(`{"ts":%q,"event":"proxy_access","path":"/hot","status":200,"req_id":"hot"}`, now.Add(-time.Hour).Format(time.RFC3339Nano))))
+	if err := store.AppendWAFEventLines(raws); err != nil {
+		t.Fatalf("append waf events: %v", err)
+	}
+
+	blobStore, err := persistentstore.NewLocalBlobStore(filepath.Join(tmp, "persistent"))
+	if err != nil {
+		t.Fatalf("NewLocalBlobStore: %v", err)
+	}
+	result, err := store.archiveWAFLogs(context.Background(), wafLogArchiveOptions{
+		Now:            now,
+		RetentionDays:  30,
+		Prefix:         "log-archives",
+		MaxPartBytes:   config.DefaultLogArchiveMaxPartBytes,
+		MaxPartRows:    config.DefaultLogArchiveMaxPartRows,
+		MaxDaysPerRun:  31,
+		StorageBackend: "local",
+		BlobStore:      blobStore,
+	})
+	if err != nil {
+		t.Fatalf("archiveWAFLogs: %v", err)
+	}
+	if result.DaysProcessed != 15 || result.RowsArchived != 15 || result.RowsPruned != 15 {
+		t.Fatalf("result=%+v want 15 processed/archive/prune rows", result)
+	}
+	remaining, err := store.queryCount(`SELECT COUNT(*) FROM waf_events`)
+	if err != nil {
+		t.Fatalf("count remaining: %v", err)
+	}
+	if remaining != 1 {
+		t.Fatalf("remaining rows=%d want 1", remaining)
+	}
+	parts, err := filepath.Glob(filepath.Join(tmp, "persistent", "log-archives", "waf", "yyyy=2026", "mm=03", "dd=20", "part-*.ndjson.gz"))
+	if err != nil {
+		t.Fatalf("glob archive parts: %v", err)
+	}
+	if len(parts) != 1 {
+		t.Fatalf("first day archive parts=%d want 1", len(parts))
+	}
+	lines := readGzipLinesForTest(t, parts[0])
+	if len(lines) != 1 || !strings.Contains(lines[0], `"req_id":"old-00"`) {
+		t.Fatalf("first archive lines=%v", lines)
 	}
 }
 
@@ -607,6 +888,12 @@ func TestLogsDownloadUsesSQLiteStoreForWAF(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
+	if got := w.Header().Get("Content-Type"); got != "application/gzip" {
+		t.Fatalf("content-type=%q want application/gzip", got)
+	}
+	if got := w.Header().Get("Content-Encoding"); got != "" {
+		t.Fatalf("content-encoding=%q want empty", got)
+	}
 
 	gr, err := gzip.NewReader(bytes.NewReader(w.Body.Bytes()))
 	if err != nil {
@@ -1048,6 +1335,24 @@ func callLogsStats(t *testing.T, path string) logsStatsResp {
 		t.Fatalf("decode response: %v", err)
 	}
 	return out
+}
+
+func securityFamilyCount(items []securityFamilyBucket, family string) int {
+	for _, item := range items {
+		if item.Family == family {
+			return item.Count
+		}
+	}
+	return 0
+}
+
+func securityTopBlockCount(items []securityBlockBucket, label string) int {
+	for _, item := range items {
+		if item.Label == label {
+			return item.Count
+		}
+	}
+	return 0
 }
 
 func appendNDJSONLine(t *testing.T, path string, entry map[string]any) {

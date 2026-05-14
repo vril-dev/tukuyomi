@@ -232,6 +232,8 @@ ACME cache data lives in the `acme/` namespace of
 S3 backend or an operator-managed shared mount. Azure Blob Storage and Google
 Cloud Storage backends fail closed until their provider adapters are
 implemented.
+WAF log archives use the `log-archives/waf/` namespace in the same
+`persistent_storage` backend.
 
 Proxy engine selection is part of the same restart-required config surface:
 

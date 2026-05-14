@@ -40,6 +40,8 @@
     "src/lib/proxyRulesEditor.test.ts",
     "src/lib/rateLimitEditor.ts",
     "src/lib/rateLimitEditor.test.ts",
+    "src/lib/runtimeAppsEditor.ts",
+    "src/lib/runtimeAppsEditor.test.ts",
     "src/lib/semanticEditor.ts",
     "src/lib/semanticEditor.test.ts",
     "src/lib/securityAudit.ts",

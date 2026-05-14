@@ -16,7 +16,7 @@ import (
 
 const (
 	appConfigDomain        = "app_config"
-	appConfigSchemaVersion = 1
+	appConfigSchemaVersion = 2
 
 	appConfigValueKindBool   = "bool"
 	appConfigValueKindFloat  = "float"

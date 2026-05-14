@@ -96,7 +96,7 @@ type ListenerAdminConfig = {
   storage: {
     db_driver: string;
     db_path: string;
-    db_retention_days: number;
+    hot_log_retention_days: number;
     db_sync_interval_sec: number;
     file_rotate_bytes: number;
     file_max_bytes: number;
@@ -246,7 +246,7 @@ type ListenerAdminRuntime = {
   edge_device_auth_enabled?: boolean;
   storage_db_driver?: string;
   storage_db_path?: string;
-  storage_db_retention_days?: number;
+  storage_hot_log_retention_days?: number;
   storage_db_sync_interval_sec?: number;
   storage_file_rotate_bytes?: number;
   storage_file_max_bytes?: number;
@@ -367,7 +367,7 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
     storage: {
       db_driver: "sqlite",
       db_path: "db/tukuyomi.db",
-      db_retention_days: 30,
+      hot_log_retention_days: 30,
       db_sync_interval_sec: 0,
       file_rotate_bytes: 8 * 1024 * 1024,
       file_max_bytes: 256 * 1024 * 1024,
@@ -1949,14 +1949,14 @@ export default function SettingsPanel() {
                     />
                   </Field>
                   <NumberField
-                    label={tx("DB Retention Days")}
-                    value={listenerAdminConfig.storage.db_retention_days}
+                    label={tx("Hot Log Retention Days")}
+                    value={listenerAdminConfig.storage.hot_log_retention_days}
                     onChange={(value) =>
                       setListenerAdminConfig((current) => ({
                         ...current,
                         storage: {
                           ...current.storage,
-                          db_retention_days: value,
+                          hot_log_retention_days: value,
                         },
                       }))
                     }

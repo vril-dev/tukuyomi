@@ -162,6 +162,7 @@ Optional:
 - Per-access-rule basic auth
 - `php_value`
 - `php_admin_value`
+- `php_fpm_pool_settings` for allowlisted PHP-FPM pool tuning
 
 ### 10.4.2 Basic flow
 
@@ -192,6 +193,28 @@ Runtime Apps also enforce a web-server style public-file boundary:
   `0` uses the 64 MiB default; the configured upper bound is 2 GiB
 - the request header `Proxy` is stripped before Runtime App backend
   delivery, so PHP-FPM never receives it as `HTTP_PROXY`
+
+For PHP-FPM apps, `php_fpm_pool_settings` accepts one allowlisted PHP-FPM pool
+directive per line. It is not raw PHP-FPM passthrough: tukuyomi rejects
+listener, identity, path, include, and PHP ini override directives that would
+break the generated runtime boundary. For example:
+
+```ini
+pm.max_children = 8
+pm.max_requests = 500
+request_slowlog_timeout = 2s
+request_slowlog_trace_depth = 30
+```
+
+Setting `request_slowlog_timeout` enables the PHP-FPM pool slowlog without
+installing Xdebug. Tukuyomi still generates the `slowlog` path under
+`data/php-fpm/runtime/<runtime_id>/slowlogs/`; operators cannot provide that
+path. The slowlog records a PHP stack trace after the threshold is exceeded. It
+is not a profiler timeline, and it does not apply to PSGI, static, or daemon
+Runtime Apps. Slowlog files can contain local paths and stack frames; protect
+and rotate them like other runtime logs. Disabling slow request logging stops
+emitting the PHP-FPM slowlog directives, but retained diagnostic files are not
+deleted automatically.
 
 The split takes a moment to get used to if you are coming from
 `.htaccess` culture, but tukuyomi's Runtime Apps is built on the
@@ -271,6 +294,8 @@ When at least one `php-fpm` Runtime App is enabled, tukuyomi
   the runtime.
 - Deleting **the last referencing Runtime App** stops the runtime.
 - Runtime state is visible at `/options`.
+- Generated slowlog paths are visible with runtime state when slow request
+  logging is enabled.
 
 You can also drive lifecycle explicitly:
 

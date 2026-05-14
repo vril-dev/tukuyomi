@@ -42,6 +42,7 @@ var (
 	defaultStatsRangeHours = 24
 	maxStatsRangeHours     = 14 * 24
 	statsTopN              = 5
+	statsSecurityTopN      = 8
 	maxLogSearchQueryBytes = 256
 	maxLogSearchTerms      = 8
 )
@@ -189,6 +190,32 @@ type statsSeriesPoint struct {
 	Count       int    `json:"count"`
 }
 
+type securityFamilyBucket struct {
+	Family string `json:"family"`
+	Label  string `json:"label"`
+	Count  int    `json:"count"`
+}
+
+type securityBlockBucket struct {
+	Family string `json:"family"`
+	Event  string `json:"event"`
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Count  int    `json:"count"`
+}
+
+type securitySeriesPoint struct {
+	BucketStart  string `json:"bucket_start"`
+	Total        int    `json:"total"`
+	WAF          int    `json:"waf"`
+	RateLimit    int    `json:"rate_limit"`
+	CountryBlock int    `json:"country_block"`
+	RouteAccess  int    `json:"route_access"`
+	BotDefense   int    `json:"bot_defense"`
+	Semantic     int    `json:"semantic"`
+	IPReputation int    `json:"ip_reputation"`
+}
+
 type wafBlockStats struct {
 	Last1h          int                `json:"last_1h"`
 	Last24h         int                `json:"last_24h"`
@@ -199,13 +226,29 @@ type wafBlockStats struct {
 	SeriesHourly    []statsSeriesPoint `json:"series_hourly"`
 }
 
+type securityBlockStats struct {
+	Last1h            int                    `json:"last_1h"`
+	Last24h           int                    `json:"last_24h"`
+	TotalInScan       int                    `json:"total_in_scan"`
+	ByFamily24h       []securityFamilyBucket `json:"by_family_24h"`
+	ByFamilyRange     []securityFamilyBucket `json:"by_family_range"`
+	TopBlocks24h      []securityBlockBucket  `json:"top_blocks_24h"`
+	TopBlocksRange    []securityBlockBucket  `json:"top_blocks_range"`
+	TopPaths24h       []statsBucket          `json:"top_paths_24h"`
+	TopPathsRange     []statsBucket          `json:"top_paths_range"`
+	TopCountries24h   []statsBucket          `json:"top_countries_24h"`
+	TopCountriesRange []statsBucket          `json:"top_countries_range"`
+	SeriesHourly      []securitySeriesPoint  `json:"series_hourly"`
+}
+
 type logsStatsResp struct {
-	GeneratedAt     string        `json:"generated_at"`
-	ScannedLines    int           `json:"scanned_lines"`
-	RangeHours      int           `json:"range_hours"`
-	OldestScannedTS string        `json:"oldest_scanned_ts,omitempty"`
-	NewestScannedTS string        `json:"newest_scanned_ts,omitempty"`
-	WAFBlock        wafBlockStats `json:"waf_block"`
+	GeneratedAt     string             `json:"generated_at"`
+	ScannedLines    int                `json:"scanned_lines"`
+	RangeHours      int                `json:"range_hours"`
+	OldestScannedTS string             `json:"oldest_scanned_ts,omitempty"`
+	NewestScannedTS string             `json:"newest_scanned_ts,omitempty"`
+	WAFBlock        wafBlockStats      `json:"waf_block"`
+	SecurityBlocks  securityBlockStats `json:"security_blocks"`
 }
 
 func LogsRead(c *gin.Context) {
@@ -358,10 +401,10 @@ func LogsDownload(c *gin.Context) {
 		return
 	}
 
-	c.Header("Content-Type", "application/x-ndjson")
+	c.Header("Content-Type", "application/gzip")
 	filename := fmt.Sprintf("%s-%s.ndjson.gz", src, time.Now().Format("20060102"))
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	c.Header("Content-Encoding", "gzip")
+	c.Header("X-Content-Type-Options", "nosniff")
 
 	gw := gzip.NewWriter(c.Writer)
 	defer gw.Close()
@@ -545,6 +588,112 @@ func normalizeStatsRuleID(raw any) string {
 	return v
 }
 
+func normalizeStatsRuleIDForEvent(event string, fields map[string]any) string {
+	ruleID := normalizeStatsRuleID(fields["rule_id"])
+	if ruleID != "UNKNOWN" {
+		return ruleID
+	}
+	switch strings.TrimSpace(event) {
+	case "rate_limited":
+		return firstNonEmptyStatsValue(fields["policy_id"], fields["key_by"])
+	case "country_block":
+		return requestmeta.NormalizeCountryFromAny(fields["country"])
+	case "proxy_route_access_block":
+		return firstNonEmptyStatsValue(fields["reason"], fields["selected_route"])
+	case "ip_reputation":
+		return firstNonEmptyStatsValue(fields["host_scope"])
+	case "bot_challenge", "bot_quarantine":
+		return firstNonEmptyStatsValue(fields["flow_policy"], fields["action"], fields["mode"])
+	case "semantic_anomaly":
+		return firstNonEmptyStatsValue(fields["action"], fields["provider_attack_family"], fields["path_class"])
+	default:
+		return ruleID
+	}
+}
+
+func firstNonEmptyStatsValue(values ...any) string {
+	for _, value := range values {
+		v := strings.TrimSpace(logFieldString(value))
+		if v != "" && v != "<nil>" {
+			return v
+		}
+	}
+	return "UNKNOWN"
+}
+
+func securityBlockFamilyForEvent(event string, status int) string {
+	switch strings.TrimSpace(event) {
+	case "waf_block":
+		return "waf"
+	case "rate_limited":
+		return "rate_limit"
+	case "country_block":
+		return "country_block"
+	case "proxy_route_access_block":
+		return "route_access"
+	case "ip_reputation":
+		return "ip_reputation"
+	case "bot_challenge", "bot_quarantine":
+		return "bot_defense"
+	case "semantic_anomaly":
+		if status > 0 {
+			return "semantic"
+		}
+	}
+	return ""
+}
+
+func securityFamilyLabel(family string) string {
+	switch family {
+	case "waf":
+		return "WAF"
+	case "rate_limit":
+		return "Rate Limit"
+	case "country_block":
+		return "Country Block"
+	case "route_access":
+		return "Route Access"
+	case "bot_defense":
+		return "Bot Defense"
+	case "semantic":
+		return "Semantic Security"
+	case "ip_reputation":
+		return "IP Reputation"
+	default:
+		return family
+	}
+}
+
+func orderedSecurityFamilyBuckets(counts map[string]int) []securityFamilyBucket {
+	order := []string{"waf", "rate_limit", "country_block", "route_access", "bot_defense", "semantic", "ip_reputation"}
+	out := make([]securityFamilyBucket, 0, len(order))
+	for _, family := range order {
+		count := counts[family]
+		if count == 0 {
+			continue
+		}
+		out = append(out, securityFamilyBucket{
+			Family: family,
+			Label:  securityFamilyLabel(family),
+			Count:  count,
+		})
+	}
+	return out
+}
+
+func buildSecurityBlockLabel(event string, ruleID string) (string, string, string, string) {
+	family := securityBlockFamilyForEvent(event, 1)
+	key := strings.TrimSpace(ruleID)
+	if key == "" || key == "UNKNOWN" {
+		key = event
+	}
+	label := event
+	if key != "" && key != event && key != "UNKNOWN" {
+		label = fmt.Sprintf("%s (%s)", event, key)
+	}
+	return family, event, key, label
+}
+
 func normalizeStatsPath(raw any) string {
 	v := strings.TrimSpace(logFieldString(raw))
 	if v == "" || v == "<nil>" {
@@ -592,6 +741,29 @@ func buildHourlySeries(start, end time.Time, counts map[int64]int) []statsSeries
 			BucketStart: t.Format(time.RFC3339),
 			Count:       counts[t.Unix()],
 		})
+	}
+	return out
+}
+
+func buildSecurityHourlySeries(start, end time.Time, counts map[int64]map[string]int) []securitySeriesPoint {
+	if !start.Before(end) {
+		return []securitySeriesPoint{}
+	}
+	out := make([]securitySeriesPoint, 0, int(end.Sub(start)/time.Hour))
+	for t := start; t.Before(end); t = t.Add(time.Hour) {
+		bucketCounts := counts[t.Unix()]
+		point := securitySeriesPoint{
+			BucketStart:  t.Format(time.RFC3339),
+			WAF:          bucketCounts["waf"],
+			RateLimit:    bucketCounts["rate_limit"],
+			CountryBlock: bucketCounts["country_block"],
+			RouteAccess:  bucketCounts["route_access"],
+			BotDefense:   bucketCounts["bot_defense"],
+			Semantic:     bucketCounts["semantic"],
+			IPReputation: bucketCounts["ip_reputation"],
+		}
+		point.Total = point.WAF + point.RateLimit + point.CountryBlock + point.RouteAccess + point.BotDefense + point.Semantic + point.IPReputation
+		out = append(out, point)
 	}
 	return out
 }

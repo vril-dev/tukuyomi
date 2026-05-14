@@ -24,8 +24,10 @@ const (
 	serverCommandDBImportPreview           serverCommandKind = "db-import-preview"
 	serverCommandDBImportWAFRuleAssets     serverCommandKind = "db-import-waf-rule-assets"
 	serverCommandAdminBootstrap            serverCommandKind = "admin-bootstrap"
+	serverCommandBootstrapScheduledTasks   serverCommandKind = "bootstrap-scheduled-task-defaults"
 	serverCommandPreviewPrintTopology      serverCommandKind = "preview-print-topology"
 	serverCommandRunScheduledTasks         serverCommandKind = "run-scheduled-tasks"
+	serverCommandArchiveWAFLogs            serverCommandKind = "archive-waf-logs"
 	serverCommandUpdateCountryDB           serverCommandKind = "update-country-db"
 	serverCommandBootstrapProtectedGateway serverCommandKind = "bootstrap-center-protected-gateway"
 	serverCommandBootstrapProtectedCenter  serverCommandKind = "bootstrap-center-protected-center"
@@ -93,10 +95,14 @@ func parseServerCommandWithEnv(args []string, env []string) (serverCommand, erro
 		return serverCommand{kind: serverCommandDBImportWAFRuleAssets}, nil
 	case "admin-bootstrap":
 		return serverCommand{kind: serverCommandAdminBootstrap}, nil
+	case "bootstrap-scheduled-task-defaults":
+		return serverCommand{kind: serverCommandBootstrapScheduledTasks}, nil
 	case "preview-print-topology":
 		return serverCommand{kind: serverCommandPreviewPrintTopology}, nil
 	case "run-scheduled-tasks":
 		return serverCommand{kind: serverCommandRunScheduledTasks}, nil
+	case "archive-waf-logs":
+		return serverCommand{kind: serverCommandArchiveWAFLogs}, nil
 	case "update-country-db":
 		return serverCommand{kind: serverCommandUpdateCountryDB}, nil
 	case "bootstrap-center-protected-gateway":

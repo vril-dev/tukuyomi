@@ -33,6 +33,26 @@ The default path wiring is controlled by effective DB `app_config` defaults:
 
 - `paths.scheduled_task_config_file`
 
+## Built-In Defaults
+
+`make install` bootstraps one product-owned default task when the Gateway role
+owns scheduled tasks:
+
+```json
+{
+  "name": "tukuyomi-waf-log-archive",
+  "enabled": true,
+  "schedule": "17 3 * * *",
+  "timezone": "UTC",
+  "command": "./bin/tukuyomi archive-waf-logs",
+  "timeout_sec": 3600
+}
+```
+
+This default archives expired WAF/access events from hot DB storage into
+`persistent_storage`. Bootstrap is one-shot. If an operator changes, disables,
+or deletes the task later, future installs do not recreate or reset it.
+
 ## Task Model
 
 Each task stores a cron-style full command line.

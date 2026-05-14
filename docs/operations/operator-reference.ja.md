@@ -297,7 +297,7 @@ make compose-down
 - `Runtime Apps` は、実効ランタイムに対してランタイムリスナー用の生成バックエンドを公開します
 - `Runtime Apps` は、設定済みアップストリームの URL を書き換えません。設定済みの `primary` は `Proxy Rules > Upstreams` に表示される URL のままです
 - `generated_target` はサーバー所有の Runtime App マテリアライズ状態であり、通常はオペレーター入力ではありません
-- PHP-FPM ／ PSGI ／静的アプリのリスナー設定は `Runtime Apps`、公開トラフィックのルーティングは `Proxy Rules` で管理します
+- PHP-FPM ／ PSGI ／静的アプリのリスナー設定は `Runtime Apps`、公開トラフィックのルーティングは `Proxy Rules` で管理します。allowlist された PHP-FPM pool settings と slow request logging も Runtime App 設定で管理します。slowlog path は tukuyomi が生成し、slowlog はほかの runtime log と同様に保護し、必要に応じてローテーションしてください
 
 ### プロキシエンジン
 

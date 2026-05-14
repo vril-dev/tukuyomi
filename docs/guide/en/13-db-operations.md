@@ -92,11 +92,16 @@ The DB connection bootstrap sits in the `storage` block of
 | `db_driver` | One of `sqlite` / `mysql` / `pgsql`. |
 | `db_path` | SQLite database path. |
 | `db_dsn` | DSN for MySQL / PostgreSQL. |
-| `db_retention_days` | WAF event retention. |
+| `hot_log_retention_days` | Hot WAF event retention in DB. |
 | `db_sync_interval_sec` | Interval of the periodic DB-to-runtime reconciliation loop. |
 
 Notes:
 
+- `hot_log_retention_days` replaces the old `db_retention_days` name.
+  Host `make install` rewrites a preserved `config.json` before running the
+  new binary. For container/cloud manifests and other config-management inputs,
+  update the key before deployment; current config validation rejects the old
+  key.
 - **`storage.backend` is deprecated.** Do not set it.
   `storage.backend=file` is **rejected** in config validation.
 - `db_driver` / `db_path` / `db_dsn` are **always** read from the
@@ -197,6 +202,7 @@ handled separately:
 - security / FP Tuner / proxy-rules audit
 - scheduled-task logs
 - PHP-FPM runtime logs / sockets
+- WAF log archives under `storage.log_archive.enabled=true`
 
 These are **runtime artifacts, not DB-side configuration**.
 
@@ -242,10 +248,27 @@ DB to file**.
 
 ## 13.4 Retention / pruning
 
-`db_retention_days` applies **only to `waf_events`**:
+`hot_log_retention_days` applies **only to hot `waf_events` rows kept in DB**:
 
 - `30` (default): retain the last 30 days.
 - `0`: disable pruning.
+
+With `storage.log_archive.enabled=true` (default), tukuyomi archives
+expired complete UTC days before deleting DB rows. The local backend
+path is:
+
+```text
+data/persistent/log-archives/waf/yyyy=<YYYY>/mm=<MM>/dd=<DD>/part-000001.ndjson.gz
+```
+
+For S3, the same key layout is placed below
+`persistent_storage.s3.prefix`. The archive job is a Scheduled Task
+named `tukuyomi-waf-log-archive`; `make install` adds it once at
+`03:17 UTC`. If an operator changes, disables, or deletes that task,
+later installs leave that choice alone.
+
+With `storage.log_archive.enabled=false`, retention falls back to
+direct DB pruning.
 
 `config_blobs` is **not** pruned by retention.
 

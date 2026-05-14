@@ -166,7 +166,7 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	next.Storage.Backend = "db"
 	next.Storage.DBDriver = "mysql"
 	next.Storage.DBPath = "db/custom.db"
-	next.Storage.DBRetentionDays = 90
+	next.Storage.HotLogRetentionDays = 90
 	next.Storage.DBSyncIntervalSec = 30
 	next.Storage.FileRotateBytes = 1024
 	next.Storage.FileMaxBytes = 4096
@@ -523,14 +523,14 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 			},
 		},
 		Storage: settingsListenerAdminStorageConfig{
-			Backend:           "",
-			DBDriver:          "sqlite",
-			DBPath:            "db/tukuyomi.db",
-			DBRetentionDays:   30,
-			DBSyncIntervalSec: 0,
-			FileRotateBytes:   8 * 1024 * 1024,
-			FileMaxBytes:      256 * 1024 * 1024,
-			FileRetentionDays: 7,
+			Backend:             "",
+			DBDriver:            "sqlite",
+			DBPath:              "db/tukuyomi.db",
+			HotLogRetentionDays: 30,
+			DBSyncIntervalSec:   0,
+			FileRotateBytes:     8 * 1024 * 1024,
+			FileMaxBytes:        256 * 1024 * 1024,
+			FileRetentionDays:   7,
 		},
 		Persistent: settingsListenerAdminPersistentStorageConfig{
 			Backend: config.PersistentStorageBackendLocal,

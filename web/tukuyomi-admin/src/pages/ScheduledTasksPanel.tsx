@@ -310,14 +310,6 @@ export default function ScheduledTasksPanel() {
           {tx("Enter the full command line you would normally put into cron. Stdout and stderr are captured to the task log automatically. Example: date")}
         </div>
 
-        <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-700 space-y-1">
-          <div>{tx("Saving a task does not execute it.")}</div>
-          <div>{tx("Binary deployments need a systemd timer.")}</div>
-          <div>{tx("Docker deployments need the scheduled-task-runner sidecar.")}</div>
-          <div>{tx("gateway-preview-up starts its own preview scheduler sidecar and resets preview DB state unless GATEWAY_PREVIEW_PERSIST=1.")}</div>
-          <div>{tx("Log Directory")}: <code>{runtimePaths.log_dir || "-"}</code></div>
-        </div>
-
         {tasks.length === 0 ? (
           <div className="rounded border border-dashed border-neutral-200 px-3 py-6 text-xs text-neutral-500">
             {tx("No scheduled tasks configured yet.")}
@@ -392,7 +384,7 @@ export default function ScheduledTasksPanel() {
                     <label className="space-y-1 text-xs md:col-span-2">
                       <span>{tx("Command")}</span>
                       <p className="text-xs text-neutral-500">
-                        {tx("Full command line. Use absolute paths for predictable execution. App jobs inside Docker need the app tree mounted into both coraza and scheduled-task-runner.")}
+                        {tx("Full command line. Use absolute paths for predictable execution.")}
                       </p>
                       <input
                         className="w-full"

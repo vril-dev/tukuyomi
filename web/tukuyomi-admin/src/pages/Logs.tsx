@@ -32,6 +32,12 @@ type ReadResponse = {
   has_next?: boolean;
 };
 
+type LoadOptions = {
+  reset?: boolean;
+  dir?: "prev" | "next";
+  cursor?: number;
+};
+
 async function readSecurityAudit(reqID: string, signal?: AbortSignal): Promise<SecurityAuditResponse> {
   const q = new URLSearchParams();
   q.set("req_id", reqID);
@@ -321,13 +327,16 @@ export default function Logs() {
 
   const controllerRef = useRef<AbortController | null>(null);
   const detailControllerRef = useRef<AbortController | null>(null);
+  const pageTopRef = useRef<HTMLDivElement | null>(null);
+
+  const scrollToPageTop = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      pageTopRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+  }, []);
 
   const load = useCallback(
-    async (opts?: {
-      reset?: boolean;
-      dir?: "prev" | "next";
-      cursor?: number;
-    }) => {
+    async (opts?: LoadOptions) => {
       if (controllerRef.current) {
         controllerRef.current.abort("refresh");
       }
@@ -407,6 +416,14 @@ export default function Logs() {
       }
     },
     [fromQuery, searchQuery, tail, toQuery, tx]
+  );
+
+  const loadAndScrollToPageTop = useCallback(
+    async (opts: LoadOptions) => {
+      await load(opts);
+      scrollToPageTop();
+    },
+    [load, scrollToPageTop]
   );
 
   const openRequestDetail = useCallback(
@@ -623,7 +640,7 @@ export default function Logs() {
         </button>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div ref={pageTopRef} className="flex items-center gap-2">
         <button
           disabled={loading || !canPrev || pageEnd == null}
           onClick={() => load({ dir: "next", cursor: pageEnd })}
@@ -731,7 +748,7 @@ export default function Logs() {
         <div className="flex items-center gap-2">
           <button
             disabled={loading || !canPrev || pageEnd == null}
-            onClick={() => load({ dir: "next", cursor: pageEnd })}
+            onClick={() => void loadAndScrollToPageTop({ dir: "next", cursor: pageEnd })}
             className="rounded border px-3 py-1 text-xs"
             title={tx("Previous page")}
           >
@@ -739,7 +756,7 @@ export default function Logs() {
           </button>
           <button
             disabled={loading || !canNext || pageStart == null}
-            onClick={() => load({ dir: "prev", cursor: pageStart })}
+            onClick={() => void loadAndScrollToPageTop({ dir: "prev", cursor: pageStart })}
             className="rounded border px-3 py-1 text-xs"
             title={tx("Next page")}
           >

@@ -149,6 +149,26 @@ func TestNormalizedRuntimeConfigStoresVersionedTypedRows(t *testing.T) {
 	if got := loadedVhost.Vhosts[0].TryFiles[1]; got != "/index.html" {
 		t.Fatalf("try_files[1]=%q", got)
 	}
+	phpVhostCfg := VhostConfigFile{Vhosts: []VhostConfig{{
+		Name:            "php-app",
+		Mode:            "php-fpm",
+		Hostname:        "127.0.0.1",
+		ListenPort:      9402,
+		DocumentRoot:    "data/runtime-sites/php-app/public",
+		RuntimeID:       "php83",
+		GeneratedTarget: "php-app",
+		PHPPoolSettings: "pm.max_children = 8\nrequest_slowlog_timeout = 2s\nrequest_slowlog_trace_depth = 30",
+	}}}
+	if _, err := store.writeVhostConfigVersion("", phpVhostCfg, configVersionSourceImport, "", "php pool settings import", 0); err != nil {
+		t.Fatalf("write php pool settings vhost: %v", err)
+	}
+	loadedPHPVhost, _, found, err := store.loadActiveVhostConfig()
+	if err != nil || !found {
+		t.Fatalf("load active php vhost found=%v err=%v", found, err)
+	}
+	if got := loadedPHPVhost.Vhosts[0].PHPPoolSettings; got != phpVhostCfg.Vhosts[0].PHPPoolSettings {
+		t.Fatalf("loaded php_fpm_pool_settings=%q want %q", got, phpVhostCfg.Vhosts[0].PHPPoolSettings)
+	}
 	daemonCfg := VhostConfigFile{Vhosts: []VhostConfig{{
 		Name:            "mqtt-broker",
 		Mode:            "daemon",
@@ -229,7 +249,7 @@ func TestNormalizedRuntimeConfigStoresVersionedTypedRows(t *testing.T) {
 	for table, want := range map[string]int{
 		"sites":                      3,
 		"site_hosts":                 3,
-		"vhosts":                     2,
+		"vhosts":                     3,
 		"vhost_try_files":            2,
 		"scheduled_tasks":            1,
 		"scheduled_task_env":         1,

@@ -86,6 +86,129 @@ func TestValidateVhostConfigRawAcceptsKnownRuntimeWithoutSupportToggle(t *testin
 	}
 }
 
+func TestValidateVhostConfigRawAcceptsPHPPoolSettings(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	inventory := PHPRuntimeInventoryFile{
+		Runtimes: []PHPRuntimeRecord{
+			{
+				RuntimeID:  "php82",
+				BinaryPath: "data/php-fpm/binaries/php82/php-fpm",
+				Modules:    []string{"mbstring", "redis"},
+				Source:     "bundled",
+				Available:  true,
+			},
+		},
+	}
+	raw := `{
+  "vhosts": [
+    {
+      "name": "app",
+      "mode": "php-fpm",
+      "hostname": "app.example.com",
+      "listen_port": 9081,
+      "document_root": "apps/app/public",
+      "generated_target": "app-php",
+      "runtime_id": "php82",
+      "php_fpm_pool_settings": "# tuning\npm.max_children = 8\nrequest_slowlog_timeout = 2s"
+    }
+  ]
+}`
+	cfg, err := ValidateVhostConfigRawWithInventory(raw, inventory)
+	if err != nil {
+		t.Fatalf("ValidateVhostConfigRawWithInventory: %v", err)
+	}
+	want := "pm.max_children = 8\nrequest_slowlog_timeout = 2s"
+	if got := cfg.Vhosts[0].PHPPoolSettings; got != want {
+		t.Fatalf("php_fpm_pool_settings=%q want %q", got, want)
+	}
+}
+
+func TestValidateVhostConfigRawRejectsPHPPoolSettingsOutsidePHPFPM(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	raw := `{
+  "vhosts": [
+    {
+      "name": "docs",
+      "mode": "static",
+      "hostname": "127.0.0.1",
+      "listen_port": 9081,
+      "document_root": "apps/docs/public",
+      "generated_target": "docs-static",
+      "php_fpm_pool_settings": "pm.max_children = 8"
+    }
+  ]
+}`
+	if _, err := ValidateVhostConfigRawWithInventory(raw, PHPRuntimeInventoryFile{}); err == nil {
+		t.Fatal("expected php_fpm_pool_settings mode validation error")
+	} else if !strings.Contains(err.Error(), "php_fpm_pool_settings requires mode=php-fpm") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateVhostConfigRawRejectsInvalidPHPPoolSettings(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	inventory := PHPRuntimeInventoryFile{
+		Runtimes: []PHPRuntimeRecord{
+			{RuntimeID: "php82", BinaryPath: "data/php-fpm/binaries/php82/php-fpm", Available: true},
+		},
+	}
+	raw := `{
+  "vhosts": [
+    {
+      "name": "app",
+      "mode": "php-fpm",
+      "hostname": "app.example.com",
+      "listen_port": 9081,
+      "document_root": "apps/app/public",
+      "generated_target": "app-php",
+      "runtime_id": "php82",
+      "php_fpm_pool_settings": "pm.max_children = 0"
+    }
+  ]
+}`
+	if _, err := ValidateVhostConfigRawWithInventory(raw, inventory); err == nil {
+		t.Fatal("expected php_fpm_pool_settings value validation error")
+	} else if !strings.Contains(err.Error(), "php_fpm_pool_settings line 1 must be between 1") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateVhostConfigRawRejectsDangerousPHPPoolSetting(t *testing.T) {
+	restore := resetPHPFoundationRuntimesForTest(t)
+	defer restore()
+
+	inventory := PHPRuntimeInventoryFile{
+		Runtimes: []PHPRuntimeRecord{
+			{RuntimeID: "php82", BinaryPath: "data/php-fpm/binaries/php82/php-fpm", Available: true},
+		},
+	}
+	raw := `{
+  "vhosts": [
+    {
+      "name": "app",
+      "mode": "php-fpm",
+      "hostname": "app.example.com",
+      "listen_port": 9081,
+      "document_root": "apps/app/public",
+      "generated_target": "app-php",
+      "runtime_id": "php82",
+      "php_fpm_pool_settings": "listen = 0.0.0.0:9000"
+    }
+  ]
+}`
+	if _, err := ValidateVhostConfigRawWithInventory(raw, inventory); err == nil {
+		t.Fatal("expected dangerous php_fpm_pool_settings validation error")
+	} else if !strings.Contains(err.Error(), "directive \"listen\" is not allowed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateVhostConfigRawRejectsUnavailablePHPRuntime(t *testing.T) {
 	restore := resetPHPFoundationRuntimesForTest(t)
 	defer restore()

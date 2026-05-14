@@ -43,7 +43,6 @@ export default function Login({
         <div className="login-card-header">
           <p className="eyebrow">TUKUYOMI</p>
           <h1>{tx("Admin Sign In")}</h1>
-          <p>{tx("Sign in with your admin user to create a browser session.")}</p>
         </div>
 
         <form className="login-form" onSubmit={onSubmit}>

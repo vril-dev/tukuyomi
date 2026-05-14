@@ -215,7 +215,7 @@ join_dest() {
   fi
 }
 
-migrate_config_process_model() {
+migrate_preserved_config() {
   local dst="$1"
   local mode="$2"
   local process_model="$3"
@@ -231,24 +231,42 @@ with open(src, encoding="utf-8") as fh:
     data = json.load(fh)
 if not isinstance(data, dict):
     raise SystemExit("config root must be a JSON object")
+
+changes = []
+
 runtime = data.setdefault("runtime", {})
 if not isinstance(runtime, dict):
     runtime = {}
     data["runtime"] = runtime
-if runtime.get("process_model") == process_model:
+if runtime.get("process_model") != process_model:
+    runtime["process_model"] = process_model
+    changes.append(f"runtime.process_model={process_model}")
+
+storage = data.get("storage")
+if storage is not None and not isinstance(storage, dict):
+    raise SystemExit("storage must be a JSON object")
+if isinstance(storage, dict) and "db_retention_days" in storage:
+    old_value = storage["db_retention_days"]
+    if "hot_log_retention_days" in storage and storage["hot_log_retention_days"] != old_value:
+        raise SystemExit("storage.db_retention_days and storage.hot_log_retention_days differ; remove the old key or choose one value")
+    storage["hot_log_retention_days"] = old_value
+    del storage["db_retention_days"]
+    changes.append("storage.hot_log_retention_days")
+
+if not changes:
     raise SystemExit(0)
-runtime["process_model"] = process_model
+
 with open(dst, "w", encoding="utf-8") as fh:
     json.dump(data, fh, indent=2)
     fh.write("\n")
-print("changed")
+print(", ".join(changes))
 PY
   )"; then
     rm -f "${tmp}"
     return 1
   fi
-  if [[ "${changed}" == "changed" ]]; then
-    log "update existing config runtime.process_model=${process_model}"
+  if [[ -n "${changed}" ]]; then
+    log "update existing config ${changed}"
     run_priv install -m "${mode}" "${tmp}" "${dst}" || {
       rm -f "${tmp}"
       return 1
@@ -267,7 +285,7 @@ install_config_preserve() {
   local tmp
   if [[ -e "${dst}" ]] && ! is_enabled "${overwrite}"; then
     log "preserve existing ${dst}"
-    migrate_config_process_model "${dst}" "${mode}" "${process_model}"
+    migrate_preserved_config "${dst}" "${mode}" "${process_model}"
     return
   fi
   tmp="$(mktemp)"

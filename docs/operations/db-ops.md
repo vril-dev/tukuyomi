@@ -69,9 +69,10 @@ The DB connection bootstrap is configured in `data/conf/config.json` under
 - `hot_log_retention_days`: hot WAF event retention in DB
 - `db_sync_interval_sec`: optional periodic DB-to-runtime reconcile loop
 
-`hot_log_retention_days` replaces the old `db_retention_days` name. The old key
-is not accepted by current config validation; update `config.json`, presets, and
-deployment environment before upgrading.
+`hot_log_retention_days` replaces the old `db_retention_days` name. Host
+`make install` rewrites a preserved `config.json` before running the new binary.
+For container/cloud manifests and other config-management inputs, update the
+key before deployment; current config validation rejects the old key.
 
 `storage.backend` is deprecated. Leave it unset. `storage.backend=file` is
 rejected during config validation.

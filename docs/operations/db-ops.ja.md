@@ -49,8 +49,9 @@ DB 接続のブートストラップは、`data/conf/config.json` の `storage` 
 - `db_sync_interval_sec`: DB からランタイムへの定期的な再同期ループ間隔
 
 `hot_log_retention_days` は旧 `db_retention_days` から名前を変更した設定です。
-現在の設定検証では旧キーを受け付けません。アップグレード前に `config.json`、
-preset、deployment 環境変数を更新してください。
+host の `make install` は、保持している `config.json` を新バイナリ実行前に
+書き換えます。container / cloud manifest や構成管理で生成する入力は、
+deployment 前に新キーへ更新してください。現在の設定検証では旧キーを拒否します。
 
 `storage.backend` は非推奨です。設定しないでください。
 `storage.backend=file` は設定検証で拒否されます。

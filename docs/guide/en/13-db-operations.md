@@ -98,8 +98,10 @@ The DB connection bootstrap sits in the `storage` block of
 Notes:
 
 - `hot_log_retention_days` replaces the old `db_retention_days` name.
-  Current config validation rejects the old key; update `config.json`,
-  presets, and deployment environment before upgrading.
+  Host `make install` rewrites a preserved `config.json` before running the
+  new binary. For container/cloud manifests and other config-management inputs,
+  update the key before deployment; current config validation rejects the old
+  key.
 - **`storage.backend` is deprecated.** Do not set it.
   `storage.backend=file` is **rejected** in config validation.
 - `db_driver` / `db_path` / `db_dsn` are **always** read from the

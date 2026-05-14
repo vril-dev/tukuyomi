@@ -22,6 +22,7 @@ authority, the admin auth overhaul, and `make install`).
   in DB before archive/prune runs.
 - `WAF_STORAGE_DB_RETENTION_DAYS` has been removed. Use
   `WAF_STORAGE_HOT_LOG_RETENTION_DAYS`.
+- Host `make install` rewrites preserved configs before invoking the new binary.
 - Current config validation rejects the old key so deployment manifests fail
   fast instead of silently running with stale retention settings.
 

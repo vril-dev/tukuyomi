@@ -21,6 +21,7 @@ Center / IoT・Edge enrollment が登場するのは v1.2.0 からです。v1.1.
   `storage.hot_log_retention_days` で設定します。
 - `WAF_STORAGE_DB_RETENTION_DAYS` は削除しました。
   `WAF_STORAGE_HOT_LOG_RETENTION_DAYS` を使ってください。
+- host の `make install` は、新バイナリ実行前に保持済み config を書き換えます。
 - 現在の config validation は旧キーを拒否します。古い retention 設定のまま
   静かに起動しないよう、deployment manifest は fail fast します。
 

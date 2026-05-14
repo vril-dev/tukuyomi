@@ -91,8 +91,10 @@ DB 接続 bootstrap は `data/conf/config.json` の `storage` block で設定し
 注意:
 
 - `hot_log_retention_days` は旧 `db_retention_days` から名前を変更した設定です。
-  現在の config validation は旧キーを拒否します。アップグレード前に
-  `config.json`、preset、deployment 環境変数を更新してください。
+  host の `make install` は、保持している `config.json` を新バイナリ実行前に
+  書き換えます。container / cloud manifest や構成管理で生成する入力は、
+  deployment 前に新キーへ更新してください。現在の config validation は旧キーを
+  拒否します。
 - **`storage.backend` は deprecated** です。設定しないでください。
   `storage.backend=file` は config validation で **拒否** されます。
 - `db_driver` / `db_path` / `db_dsn` は、DB を開く前に必ず bootstrap

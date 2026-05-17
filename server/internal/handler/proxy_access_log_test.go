@@ -242,6 +242,28 @@ func TestEmitProxyAccessLogMinimalSkipsExpandedFields(t *testing.T) {
 	}
 }
 
+func TestEmitProxyAccessLogCanceledRequestWithoutResponseUses499(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initConfigDBStoreForTest(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.local/favicon.ico", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(rec)
+	ginCtx.Request = req
+
+	emitProxyAccessLog(ginCtx.Request, ginCtx.Writer, "req-canceled", "198.51.100.10", "JP")
+
+	evt := findLastProxyLogEvent(t, readProxyLogEvents(t), "proxy_access")
+	if got := intValue(evt["status"]); got != proxyStatusClientClosedRequest {
+		t.Fatalf("proxy_access status=%d want=%d", got, proxyStatusClientClosedRequest)
+	}
+	if got := anyToString(evt["path"]); got != "/favicon.ico" {
+		t.Fatalf("proxy_access path=%q want=/favicon.ico", got)
+	}
+}
+
 func TestEmitProxyAccessLogOffSkipsAccessEvent(t *testing.T) {
 	initConfigDBStoreForTest(t)
 

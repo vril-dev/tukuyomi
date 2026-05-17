@@ -380,7 +380,7 @@ func (s *nativeHTTP1Server) serveHTTP2Conn(ctx context.Context, conn net.Conn) {
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqCtx, _ := withNewProxyRequestContextState(r.Context())
-		baseHandler.ServeHTTP(w, r.WithContext(reqCtx))
+		baseHandler.ServeHTTP(newProxyObservedResponseWriter(w, reqCtx), r.WithContext(reqCtx))
 	})
 	baseConfig := &http.Server{
 		Handler:           handler,

@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net"
@@ -18,6 +19,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/proxyaccesslog"
+
+	"golang.org/x/net/http2"
 )
 
 func boolValue(v any) bool {
@@ -137,6 +140,65 @@ func TestProxyHandlerEmitsAccessLogWithBodyByteCounts(t *testing.T) {
 	}
 	if got := anyToString(evt["country_source"]); got != "header" {
 		t.Fatalf("proxy_access country_source=%q want=header", got)
+	}
+}
+
+func TestProxyHandlerHTTP2AccessLogUsesActualResponseStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initConfigDBStoreForTest(t)
+
+	const responseBody = "missing"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(responseBody))
+	}))
+	defer upstream.Close()
+
+	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
+	raw := `{
+  "upstreams": [
+    { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
+  ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}}
+}`
+	if err := os.WriteFile(proxyCfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write proxy config: %v", err)
+	}
+	importProxyRuntimeDBForTest(t, raw)
+	if err := InitProxyRuntime(proxyCfgPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+
+	r := gin.New()
+	r.NoRoute(ProxyHandler)
+	cert := nativeHTTP1TestCertificate(t)
+	srv, addr := nativeHTTP1StartConfiguredTLSHTTP2Server(t, &nativeHTTP1Server{Handler: r}, &tls.Config{Certificates: []tls.Certificate{cert}})
+	defer srv.Close()
+
+	tr := &http2.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	req, err := http.NewRequest(http.MethodGet, "https://"+addr+"/robots.txt", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	res, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if got := res.StatusCode; got != http.StatusNotFound {
+		t.Fatalf("status=%d want=%d body=%q", got, http.StatusNotFound, string(body))
+	}
+
+	evt := findLastProxyLogEvent(t, readProxyLogEvents(t), "proxy_access")
+	if got := anyToString(evt["path"]); got != "/robots.txt" {
+		t.Fatalf("proxy_access path=%q want=/robots.txt", got)
+	}
+	if got := intValue(evt["status"]); got != http.StatusNotFound {
+		t.Fatalf("proxy_access status=%d want=%d", got, http.StatusNotFound)
+	}
+	if got := intValue(evt["response_body_bytes"]); got != len(responseBody) {
+		t.Fatalf("proxy_access response_body_bytes=%d want=%d", got, len(responseBody))
 	}
 }
 

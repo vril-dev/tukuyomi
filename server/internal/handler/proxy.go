@@ -1,12 +1,16 @@
 package handler
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -195,26 +199,161 @@ func withProxySelectedUpstream(ctx context.Context, upstream string) context.Con
 	return context.WithValue(ctx, ctxKeySelectedUpstream, upstream)
 }
 
+var errProxyResponseObserverUnsupported = errors.New("response capability is not supported")
+
+type proxyObservedResponseWriter struct {
+	http.ResponseWriter
+	ctx         context.Context
+	status      int
+	size        int64
+	wroteHeader bool
+}
+
+func newProxyObservedResponseWriter(w http.ResponseWriter, ctx context.Context) *proxyObservedResponseWriter {
+	return &proxyObservedResponseWriter{ResponseWriter: w, ctx: ctx}
+}
+
+func (w *proxyObservedResponseWriter) Unwrap() http.ResponseWriter {
+	if w == nil {
+		return nil
+	}
+	return w.ResponseWriter
+}
+
+func (w *proxyObservedResponseWriter) Status() int {
+	if w == nil {
+		return 0
+	}
+	return w.status
+}
+
+func (w *proxyObservedResponseWriter) Size() int {
+	if w == nil || w.size <= 0 {
+		return 0
+	}
+	if w.size > int64(math.MaxInt) {
+		return math.MaxInt
+	}
+	return int(w.size)
+}
+
+func (w *proxyObservedResponseWriter) WriteHeader(statusCode int) {
+	if statusCode < 100 || statusCode > 999 {
+		statusCode = http.StatusInternalServerError
+	}
+	if !isProxyInformationalResponse(statusCode) && !w.wroteHeader {
+		w.status = statusCode
+		w.wroteHeader = true
+	}
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *proxyObservedResponseWriter) Write(p []byte) (int, error) {
+	if !w.wroteHeader {
+		w.status = http.StatusOK
+		w.wroteHeader = true
+	}
+	n, err := w.ResponseWriter.Write(p)
+	w.size += int64(n)
+	return n, err
+}
+
+func (w *proxyObservedResponseWriter) ReadFrom(r io.Reader) (int64, error) {
+	if !w.wroteHeader {
+		w.status = http.StatusOK
+		w.wroteHeader = true
+	}
+	if rf, ok := w.ResponseWriter.(io.ReaderFrom); ok {
+		n, err := rf.ReadFrom(r)
+		w.size += n
+		return n, err
+	}
+	n, err := io.Copy(w.ResponseWriter, r)
+	w.size += n
+	return n, err
+}
+
+func (w *proxyObservedResponseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (w *proxyObservedResponseWriter) Push(target string, opts *http.PushOptions) error {
+	if p, ok := w.ResponseWriter.(http.Pusher); ok {
+		return p.Push(target, opts)
+	}
+	return http.ErrNotSupported
+}
+
+func (w *proxyObservedResponseWriter) CloseNotify() <-chan bool {
+	if cn, ok := w.ResponseWriter.(http.CloseNotifier); ok {
+		return cn.CloseNotify()
+	}
+	ch := make(chan bool, 1)
+	if w.ctx != nil {
+		go func() {
+			<-w.ctx.Done()
+			ch <- true
+		}()
+	}
+	return ch
+}
+
+func (w *proxyObservedResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := w.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, errProxyResponseObserverUnsupported
+}
+
 func proxyResponseBytes(w http.ResponseWriter) int64 {
 	if w == nil {
 		return 0
 	}
-	if sizeWriter, ok := w.(interface{ Size() int }); ok {
-		if size := sizeWriter.Size(); size > 0 {
-			return int64(size)
+	var out int64
+	for depth := 0; w != nil && depth < 8; depth++ {
+		if sizeWriter, ok := w.(interface{ Size() int }); ok {
+			if size := sizeWriter.Size(); size >= 0 {
+				out = int64(size)
+			}
 		}
+		unwrapper, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		next := unwrapper.Unwrap()
+		if next == nil || next == w {
+			break
+		}
+		w = next
 	}
-	return 0
+	return out
 }
 
 func proxyResponseStatus(w http.ResponseWriter, fallback int) int {
 	if w == nil {
 		return fallback
 	}
-	if statusWriter, ok := w.(interface{ Status() int }); ok {
-		if status := statusWriter.Status(); status > 0 {
-			return status
+	status := 0
+	for depth := 0; w != nil && depth < 8; depth++ {
+		if statusWriter, ok := w.(interface{ Status() int }); ok {
+			if current := statusWriter.Status(); current > 0 {
+				status = current
+			}
 		}
+		unwrapper, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		next := unwrapper.Unwrap()
+		if next == nil || next == w {
+			break
+		}
+		w = next
+	}
+	if status > 0 {
+		return status
 	}
 	return fallback
 }

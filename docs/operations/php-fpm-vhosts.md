@@ -123,6 +123,10 @@ Optional controls:
 - `max_request_body_bytes`
 - `php_fpm_pool_settings` for allowlisted PHP-FPM pool tuning
 
+If `try_files` is omitted, Tukuyomi does not fall back to `index.php`.
+Missing static paths return `404`. Configure `/index.php?$query_string`
+explicitly for front-controller applications.
+
 Typical flow:
 
 1. Open `/runtime-apps`.

@@ -802,6 +802,53 @@ func TestServeProxyPSGIDoesNotFallbackForHiddenPath(t *testing.T) {
 	}
 }
 
+func TestServeProxyPSGIDoesNotFallbackWithoutTryFiles(t *testing.T) {
+	tmp := t.TempDir()
+	docroot := filepath.Join(tmp, "static")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(docroot): %v", err)
+	}
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("psgi fallback reached"))
+	}))
+	defer server.Close()
+	target, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("Parse(server.URL): %v", err)
+	}
+	port, err := strconv.Atoi(target.Port())
+	if err != nil {
+		t.Fatalf("Atoi(port): %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/favicon.ico", nil)
+	resp, err := buildDirectVhostResponse(req, proxyRouteDecision{
+		Target:        &url.URL{Scheme: "psgi", Host: target.Host},
+		RewrittenPath: req.URL.Path,
+	}, VhostConfig{
+		Name:                "psgi-app",
+		Mode:                "psgi",
+		Hostname:            target.Hostname(),
+		ListenPort:          port,
+		DocumentRoot:        docroot,
+		MaxRequestBodyBytes: defaultVhostMaxRequestBodyBytes,
+	})
+	if err != nil {
+		t.Fatalf("buildDirectVhostResponse: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want=%d body=%q", resp.StatusCode, http.StatusNotFound, body)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("psgi fallback hits=%d want 0", got)
+	}
+}
+
 func TestServeProxyStaticVhostAllowsWellKnownPaths(t *testing.T) {
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
@@ -1002,7 +1049,8 @@ func TestServeProxyRunsFastCGITryFilesAndStaticAssets(t *testing.T) {
       "document_root": "` + filepath.ToSlash(docroot) + `",
       "generated_target": "app-php",
       "linked_upstream_name": "app",
-      "runtime_id": "php82"
+      "runtime_id": "php82",
+      "try_files": ["$uri", "$uri/", "/index.php?$query_string"]
     }
   ]
 }`
@@ -1066,6 +1114,88 @@ func TestServeProxyRunsFastCGITryFilesAndStaticAssets(t *testing.T) {
 	body := phpRec.Body.String()
 	if !strings.Contains(body, "script=/index.php") || !strings.Contains(body, "uri=/users?id=7") || !strings.Contains(body, "query=id=7") {
 		t.Fatalf("unexpected php body=%q", body)
+	}
+}
+
+func TestServeProxyDoesNotFallbackToPHPIndexWithoutTryFiles(t *testing.T) {
+	restore := resetPHPProxyFoundationForTest(t)
+	defer restore()
+
+	tmp := t.TempDir()
+	docroot := filepath.Join(tmp, "php-app", "public")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(docroot): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docroot, "index.php"), []byte("<?php echo 'index';"), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.php): %v", err)
+	}
+
+	listener, address := startTestFastCGIServer(t, "tcp", "127.0.0.1:0")
+	defer listener.Close()
+	_, portText, _ := net.SplitHostPort(address)
+	port, _ := strconv.Atoi(portText)
+
+	inventoryPath := filepath.Join(tmp, "inventory.json")
+	vhostPath := filepath.Join(tmp, "vhosts.json")
+	proxyPath := filepath.Join(tmp, "proxy.json")
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	vhosts := `{
+  "vhosts": [
+    {
+      "name": "app",
+      "mode": "php-fpm",
+      "hostname": "127.0.0.1",
+      "listen_port": ` + strconv.Itoa(port) + `,
+      "document_root": "` + filepath.ToSlash(docroot) + `",
+      "generated_target": "app-php",
+      "linked_upstream_name": "app",
+      "runtime_id": "php82"
+    }
+  ]
+}`
+	if err := os.WriteFile(vhostPath, []byte(vhosts), 0o600); err != nil {
+		t.Fatalf("write vhosts: %v", err)
+	}
+	proxyRaw := `{
+  "upstreams": [
+    { "name": "app", "url": "fcgi://127.0.0.1:` + strconv.Itoa(port) + `", "weight": 1, "enabled": true }
+  ],
+  "default_route": {
+    "action": {
+      "upstream": "app"
+    }
+  }
+}`
+	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o600); err != nil {
+		t.Fatalf("write proxy: %v", err)
+	}
+	writeTestPHPRuntimeArtifact(t, inventoryPath, "php82", testPHPRuntimeArtifactOptions{
+		DisplayName: "PHP 8.2",
+		Version:     "PHP 8.2.99 (fpm-fcgi)",
+		Modules:     []string{"mbstring"},
+	})
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+	if err := InitVhostRuntime(vhostPath, 2); err != nil {
+		t.Fatalf("InitVhostRuntime: %v", err)
+	}
+	if err := InitProxyRuntime(proxyPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/favicon.ico", nil)
+	decision, err := resolveProxyRouteDecision(req, currentProxyConfig(), proxyRuntimeHealth())
+	if err != nil {
+		t.Fatalf("resolveProxyRouteDecision: %v", err)
+	}
+	req = req.WithContext(withProxyRouteDecision(req.Context(), decision))
+	rec := httptest.NewRecorder()
+	ServeProxy(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want=%d body=%q", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
 }
 

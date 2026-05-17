@@ -234,14 +234,7 @@ func effectiveVhostTryFiles(vhost VhostConfig) []string {
 	if len(vhost.TryFiles) > 0 {
 		return append([]string(nil), vhost.TryFiles...)
 	}
-	switch normalizeVhostMode(vhost.Mode) {
-	case "php-fpm":
-		return []string{"$uri", "$uri/", "/index.php?$query_string"}
-	case "psgi":
-		return []string{"$uri", "$uri/", "@psgi"}
-	default:
-		return []string{"$uri", "$uri/", "/index.html"}
-	}
+	return []string{"$uri", "$uri/"}
 }
 
 func expandVhostTryFilesEntry(entry string, requestPath string, rawQuery string) (string, string) {

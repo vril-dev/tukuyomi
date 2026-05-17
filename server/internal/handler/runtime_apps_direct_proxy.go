@@ -889,6 +889,9 @@ func writeDirectProxyResponse(w http.ResponseWriter, r *http.Request, resp *http
 	if cacheStatus != "" {
 		dst.Set(proxyResponseCacheHeader, cacheStatus)
 	}
+	if r != nil {
+		recordProxyResponseStatus(r.Context(), resp.StatusCode)
+	}
 	w.WriteHeader(resp.StatusCode)
 	if r != nil && r.Method == http.MethodHead {
 		return nil

@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"tukuyomi/internal/adminauth"
 	"tukuyomi/internal/cacheconf"
 )
@@ -1118,6 +1120,8 @@ func TestServeProxyRunsFastCGITryFilesAndStaticAssets(t *testing.T) {
 }
 
 func TestServeProxyDoesNotFallbackToPHPIndexWithoutTryFiles(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
 	restore := resetPHPProxyFoundationForTest(t)
 	defer restore()
 
@@ -1196,6 +1200,28 @@ func TestServeProxyDoesNotFallbackToPHPIndexWithoutTryFiles(t *testing.T) {
 	ServeProxy(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status=%d want=%d body=%q", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+
+	initConfigDBStoreForTest(t)
+	router := gin.New()
+	router.NoRoute(ProxyHandler)
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/favicon.ico")
+	if err != nil {
+		t.Fatalf("http get direct runtime app: %v", err)
+	}
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("http status=%d want=%d", res.StatusCode, http.StatusNotFound)
+	}
+	evt := findLastProxyLogEvent(t, readProxyLogEvents(t), "proxy_access")
+	if got := anyToString(evt["path"]); got != "/favicon.ico" {
+		t.Fatalf("proxy_access path=%q want=/favicon.ico", got)
+	}
+	if got := intValue(evt["status"]); got != http.StatusNotFound {
+		t.Fatalf("proxy_access status=%d want=%d", got, http.StatusNotFound)
 	}
 }
 

@@ -201,6 +201,8 @@ func withProxySelectedUpstream(ctx context.Context, upstream string) context.Con
 
 var errProxyResponseObserverUnsupported = errors.New("response capability is not supported")
 
+const proxyStatusClientClosedRequest = 499
+
 type proxyObservedResponseWriter struct {
 	http.ResponseWriter
 	ctx         context.Context
@@ -235,6 +237,10 @@ func (w *proxyObservedResponseWriter) Size() int {
 		return math.MaxInt
 	}
 	return int(w.size)
+}
+
+func (w *proxyObservedResponseWriter) Written() bool {
+	return w != nil && w.wroteHeader
 }
 
 func (w *proxyObservedResponseWriter) WriteHeader(statusCode int) {
@@ -358,6 +364,26 @@ func proxyResponseStatus(w http.ResponseWriter, fallback int) int {
 	return fallback
 }
 
+func proxyResponseWritten(w http.ResponseWriter) bool {
+	for depth := 0; w != nil && depth < 8; depth++ {
+		if writtenWriter, ok := w.(interface{ Written() bool }); ok {
+			if writtenWriter.Written() {
+				return true
+			}
+		}
+		unwrapper, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		next := unwrapper.Unwrap()
+		if next == nil || next == w {
+			break
+		}
+		w = next
+	}
+	return false
+}
+
 func appendProxyTransferLogFields(evt map[string]any, req *http.Request, w http.ResponseWriter) {
 	if evt == nil {
 		return
@@ -413,7 +439,7 @@ func emitProxyAccessLog(req *http.Request, w http.ResponseWriter, reqID, clientI
 		"country":  country,
 		"method":   req.Method,
 		"path":     req.URL.Path,
-		"status":   proxyResponseStatus(w, http.StatusOK),
+		"status":   proxyAccessLogStatus(req, w),
 	}
 	if mode == proxyaccesslog.ModeMinimal {
 		emitProxyAccessLogEvent(evt)
@@ -423,6 +449,20 @@ func emitProxyAccessLog(req *http.Request, w http.ResponseWriter, reqID, clientI
 	appendProxyRequestContextLogFields(evt, req)
 	appendProxyTransferLogFields(evt, req, w)
 	emitProxyAccessLogEvent(evt)
+}
+
+func proxyAccessLogStatus(req *http.Request, w http.ResponseWriter) int {
+	if req != nil && req.Context().Err() != nil && !proxyResponseWritten(w) {
+		return proxyStatusClientClosedRequest
+	}
+	status := proxyResponseStatus(w, 0)
+	if status > 0 {
+		return status
+	}
+	if req != nil && req.Context().Err() != nil {
+		return proxyStatusClientClosedRequest
+	}
+	return http.StatusOK
 }
 
 func onProxyResponse(res *http.Response) error {

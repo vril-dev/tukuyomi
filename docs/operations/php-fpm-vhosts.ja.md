@@ -122,6 +122,10 @@ PHP-FPM Runtime App の必須項目は次のとおりです。
 - `max_request_body_bytes`
 - allowlist された PHP-FPM pool tuning 用 `php_fpm_pool_settings`
 
+`try_files` を省略した場合、Tukuyomi は `index.php` へフォールバックしません。
+存在しない静的 path は `404` を返します。front controller 型のアプリでは
+`/index.php?$query_string` を明示的に設定してください。
+
 基本手順:
 
 1. `/runtime-apps` を開く

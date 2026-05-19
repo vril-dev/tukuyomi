@@ -64,6 +64,9 @@ type proxyRequestContextState struct {
 	RouteSelection         proxyRouteTransportSelection
 	HasRouteSelection      bool
 	SelectedUpstream       string
+	ResponseStatus         int
+	ResponseWritten        bool
+	ResponseBytes          int64
 }
 
 type proxyRequestBodyCounter struct {
@@ -199,6 +202,39 @@ func withProxySelectedUpstream(ctx context.Context, upstream string) context.Con
 	return context.WithValue(ctx, ctxKeySelectedUpstream, upstream)
 }
 
+func recordProxyResponseStatus(ctx context.Context, statusCode int) {
+	if statusCode < 100 || statusCode > 999 {
+		statusCode = http.StatusInternalServerError
+	}
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok && !isProxyInformationalResponse(statusCode) && !state.ResponseWritten {
+		state.ResponseStatus = statusCode
+		state.ResponseWritten = true
+	}
+}
+
+func recordProxyResponseBytes(ctx context.Context, n int64) {
+	if n <= 0 {
+		return
+	}
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok {
+		state.ResponseBytes += n
+	}
+}
+
+func proxyContextResponseStatus(ctx context.Context) int {
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok && state.ResponseStatus > 0 {
+		return state.ResponseStatus
+	}
+	return 0
+}
+
+func proxyContextResponseBytes(ctx context.Context) int64 {
+	if state, ok := proxyRequestContextStateFromContext(ctx); ok && state.ResponseBytes > 0 {
+		return state.ResponseBytes
+	}
+	return 0
+}
+
 var errProxyResponseObserverUnsupported = errors.New("response capability is not supported")
 
 const proxyStatusClientClosedRequest = 499
@@ -250,6 +286,7 @@ func (w *proxyObservedResponseWriter) WriteHeader(statusCode int) {
 	if !isProxyInformationalResponse(statusCode) && !w.wroteHeader {
 		w.status = statusCode
 		w.wroteHeader = true
+		recordProxyResponseStatus(w.ctx, statusCode)
 	}
 	w.ResponseWriter.WriteHeader(statusCode)
 }
@@ -258,9 +295,11 @@ func (w *proxyObservedResponseWriter) Write(p []byte) (int, error) {
 	if !w.wroteHeader {
 		w.status = http.StatusOK
 		w.wroteHeader = true
+		recordProxyResponseStatus(w.ctx, http.StatusOK)
 	}
 	n, err := w.ResponseWriter.Write(p)
 	w.size += int64(n)
+	recordProxyResponseBytes(w.ctx, int64(n))
 	return n, err
 }
 
@@ -268,14 +307,17 @@ func (w *proxyObservedResponseWriter) ReadFrom(r io.Reader) (int64, error) {
 	if !w.wroteHeader {
 		w.status = http.StatusOK
 		w.wroteHeader = true
+		recordProxyResponseStatus(w.ctx, http.StatusOK)
 	}
 	if rf, ok := w.ResponseWriter.(io.ReaderFrom); ok {
 		n, err := rf.ReadFrom(r)
 		w.size += n
+		recordProxyResponseBytes(w.ctx, n)
 		return n, err
 	}
 	n, err := io.Copy(w.ResponseWriter, r)
 	w.size += n
+	recordProxyResponseBytes(w.ctx, n)
 	return n, err
 }
 
@@ -389,6 +431,12 @@ func appendProxyTransferLogFields(evt map[string]any, req *http.Request, w http.
 		return
 	}
 	evt["request_body_bytes"] = proxyRequestBodyBytes(req)
+	if req != nil {
+		if stateBytes := proxyContextResponseBytes(req.Context()); stateBytes > 0 {
+			evt["response_body_bytes"] = stateBytes
+			return
+		}
+	}
 	evt["response_body_bytes"] = proxyResponseBytes(w)
 }
 
@@ -454,6 +502,11 @@ func emitProxyAccessLog(req *http.Request, w http.ResponseWriter, reqID, clientI
 func proxyAccessLogStatus(req *http.Request, w http.ResponseWriter) int {
 	if req != nil && req.Context().Err() != nil && !proxyResponseWritten(w) {
 		return proxyStatusClientClosedRequest
+	}
+	if req != nil {
+		if status := proxyContextResponseStatus(req.Context()); status > 0 {
+			return status
+		}
 	}
 	status := proxyResponseStatus(w, 0)
 	if status > 0 {

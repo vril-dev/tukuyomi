@@ -164,6 +164,11 @@ Optional:
 - `php_admin_value`
 - `php_fpm_pool_settings` for allowlisted PHP-FPM pool tuning
 
+When `try_files` is empty, Tukuyomi only serves the requested path or
+directory index. Missing paths return `404`; they do not implicitly fall
+through to `index.php`. Add `/index.php?$query_string` explicitly when the
+application is a front-controller framework such as Laravel.
+
 ### 10.4.2 Basic flow
 
 1. Open `/runtime-apps`.

@@ -155,6 +155,11 @@ load 時に `/options` から消えます**。
 - `php_admin_value`
 - allowlist された PHP-FPM pool tuning 用 `php_fpm_pool_settings`
 
+`try_files` が空の場合、Tukuyomi は要求された path または directory
+index だけを返します。存在しない path は `404` になり、暗黙的に
+`index.php` へフォールバックしません。Laravel のような front controller
+型のアプリでは、必要に応じて `/index.php?$query_string` を明示的に追加します。
+
 ### 10.4.2　基本フロー
 
 1. `/runtime-apps` を開く

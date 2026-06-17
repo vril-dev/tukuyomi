@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const latestSchemaMigrationVersionForTest = 43
+const latestSchemaMigrationVersionForTest = 44
 
 func TestMigrateLogsStatsStoreWithBackendSQLiteCreatesSchemaAndRecordsMigrations(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tukuyomi.db")

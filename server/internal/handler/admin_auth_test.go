@@ -414,6 +414,187 @@ func TestAdminAuthManagementAccountAndPasswordFlow(t *testing.T) {
 	loginAdminForTest(t, r, "admin2", "new secure password")
 }
 
+func TestAdminAuthMFASetupLoginAndRecoveryCodeFlow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	restore := saveAdminAuthConfig()
+	defer restore()
+
+	config.APIBasePath = "/tukuyomi-api"
+	config.APIAuthDisable = false
+	config.AdminSessionSecret = "session-secret-123456"
+	config.AdminSessionTTL = time.Hour
+	allowAdminGuardsForTest(t)
+
+	store := initConfigDBStoreForTest(t)
+	passwordHash, err := adminauth.HashPassword("correct horse battery staple")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := store.createAdminUser("admin", "admin@example.test", adminauth.AdminRoleOwner, passwordHash, false, time.Now().UTC()); err != nil {
+		t.Fatalf("create admin user: %v", err)
+	}
+
+	r := gin.New()
+	registerAdminAuthManagementRoutesForTest(r)
+	sessionCookie, csrfCookie := loginAdminForTest(t, r, "admin", "correct horse battery staple")
+
+	setupBody, _ := json.Marshal(map[string]string{
+		"current_password": "correct horse battery staple",
+	})
+	setupReq := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/mfa/setup", bytes.NewReader(setupBody))
+	setupReq.Header.Set("Content-Type", "application/json")
+	setupReq.Header.Set(adminauth.CSRFHeaderName, csrfCookie.Value)
+	setupReq.AddCookie(sessionCookie)
+	setupReq.AddCookie(csrfCookie)
+	setupRes := httptest.NewRecorder()
+	r.ServeHTTP(setupRes, setupReq)
+	if setupRes.Code != http.StatusCreated {
+		t.Fatalf("mfa setup status=%d want=%d body=%s", setupRes.Code, http.StatusCreated, setupRes.Body.String())
+	}
+	var setup adminMFASetupResponse
+	if err := json.Unmarshal(setupRes.Body.Bytes(), &setup); err != nil {
+		t.Fatalf("decode mfa setup: %v", err)
+	}
+	if setup.SetupID == "" || setup.Secret == "" || !strings.HasPrefix(setup.OtpauthURI, "otpauth://totp/") {
+		t.Fatalf("invalid mfa setup response: %+v", setup)
+	}
+
+	code, _, err := adminauth.TOTPCode(setup.Secret, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("TOTPCode: %v", err)
+	}
+	enableBody, _ := json.Marshal(map[string]string{
+		"setup_id": setup.SetupID,
+		"code":     code,
+	})
+	enableReq := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/mfa/enable", bytes.NewReader(enableBody))
+	enableReq.Header.Set("Content-Type", "application/json")
+	enableReq.Header.Set(adminauth.CSRFHeaderName, csrfCookie.Value)
+	enableReq.AddCookie(sessionCookie)
+	enableReq.AddCookie(csrfCookie)
+	enableRes := httptest.NewRecorder()
+	r.ServeHTTP(enableRes, enableReq)
+	if enableRes.Code != http.StatusOK {
+		t.Fatalf("mfa enable status=%d want=%d body=%s", enableRes.Code, http.StatusOK, enableRes.Body.String())
+	}
+	var enabled adminMFAEnableResponse
+	if err := json.Unmarshal(enableRes.Body.Bytes(), &enabled); err != nil {
+		t.Fatalf("decode mfa enable: %v", err)
+	}
+	if !enabled.Enabled || len(enabled.RecoveryCodes) != adminMFARecoveryCodeCount {
+		t.Fatalf("mfa enabled response=%+v", enabled)
+	}
+
+	duplicateEnableReq := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/mfa/enable", bytes.NewReader(enableBody))
+	duplicateEnableReq.Header.Set("Content-Type", "application/json")
+	duplicateEnableReq.Header.Set(adminauth.CSRFHeaderName, csrfCookie.Value)
+	duplicateEnableReq.AddCookie(sessionCookie)
+	duplicateEnableReq.AddCookie(csrfCookie)
+	duplicateEnableRes := httptest.NewRecorder()
+	r.ServeHTTP(duplicateEnableRes, duplicateEnableReq)
+	if duplicateEnableRes.Code != http.StatusConflict {
+		t.Fatalf("duplicate mfa enable status=%d want=%d body=%s", duplicateEnableRes.Code, http.StatusConflict, duplicateEnableRes.Body.String())
+	}
+
+	resetupReq := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/mfa/setup", bytes.NewReader(setupBody))
+	resetupReq.Header.Set("Content-Type", "application/json")
+	resetupReq.Header.Set(adminauth.CSRFHeaderName, csrfCookie.Value)
+	resetupReq.AddCookie(sessionCookie)
+	resetupReq.AddCookie(csrfCookie)
+	resetupRes := httptest.NewRecorder()
+	r.ServeHTTP(resetupRes, resetupReq)
+	if resetupRes.Code != http.StatusConflict {
+		t.Fatalf("mfa setup while enabled status=%d want=%d body=%s", resetupRes.Code, http.StatusConflict, resetupRes.Body.String())
+	}
+
+	loginBody, _ := json.Marshal(map[string]string{
+		"identifier": "admin",
+		"password":   "correct horse battery staple",
+	})
+	loginReq := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/login", bytes.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRes := httptest.NewRecorder()
+	r.ServeHTTP(loginRes, loginReq)
+	if loginRes.Code != http.StatusOK {
+		t.Fatalf("mfa login status=%d want=%d body=%s", loginRes.Code, http.StatusOK, loginRes.Body.String())
+	}
+	var challenge struct {
+		Authenticated  bool   `json:"authenticated"`
+		MFARequired    bool   `json:"mfa_required"`
+		ChallengeToken string `json:"challenge_token"`
+	}
+	if err := json.Unmarshal(loginRes.Body.Bytes(), &challenge); err != nil {
+		t.Fatalf("decode mfa login challenge: %v", err)
+	}
+	if challenge.Authenticated || !challenge.MFARequired || challenge.ChallengeToken == "" {
+		t.Fatalf("unexpected mfa challenge response=%+v body=%s", challenge, loginRes.Body.String())
+	}
+	if cookie := findCookie(loginRes.Result().Cookies(), adminauth.SessionCookieName); cookie != nil && cookie.Value != "" {
+		t.Fatalf("mfa challenge response issued a non-empty session cookie: %+v", cookie)
+	}
+
+	verifyCode, _, err := adminauth.TOTPCode(setup.Secret, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("TOTPCode verify: %v", err)
+	}
+	verifyBody, _ := json.Marshal(map[string]string{
+		"challenge_token": challenge.ChallengeToken,
+		"code":            verifyCode,
+	})
+	verifyReq := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/mfa/verify", bytes.NewReader(verifyBody))
+	verifyReq.Header.Set("Content-Type", "application/json")
+	verifyRes := httptest.NewRecorder()
+	r.ServeHTTP(verifyRes, verifyReq)
+	if verifyRes.Code != http.StatusOK {
+		t.Fatalf("mfa verify status=%d want=%d body=%s", verifyRes.Code, http.StatusOK, verifyRes.Body.String())
+	}
+	if findCookie(verifyRes.Result().Cookies(), adminauth.SessionCookieName) == nil {
+		t.Fatalf("mfa verify response did not issue a session cookie")
+	}
+
+	loginRes = httptest.NewRecorder()
+	loginReq = httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/login", bytes.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(loginRes, loginReq)
+	if loginRes.Code != http.StatusOK {
+		t.Fatalf("second mfa login status=%d want=%d body=%s", loginRes.Code, http.StatusOK, loginRes.Body.String())
+	}
+	if err := json.Unmarshal(loginRes.Body.Bytes(), &challenge); err != nil {
+		t.Fatalf("decode second mfa login challenge: %v", err)
+	}
+	verifyBody, _ = json.Marshal(map[string]string{
+		"challenge_token": challenge.ChallengeToken,
+		"code":            enabled.RecoveryCodes[0],
+	})
+	verifyReq = httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/mfa/verify", bytes.NewReader(verifyBody))
+	verifyReq.Header.Set("Content-Type", "application/json")
+	verifyRes = httptest.NewRecorder()
+	r.ServeHTTP(verifyRes, verifyReq)
+	if verifyRes.Code != http.StatusOK {
+		t.Fatalf("mfa recovery verify status=%d want=%d body=%s", verifyRes.Code, http.StatusOK, verifyRes.Body.String())
+	}
+
+	loginRes = httptest.NewRecorder()
+	loginReq = httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/login", bytes.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(loginRes, loginReq)
+	if err := json.Unmarshal(loginRes.Body.Bytes(), &challenge); err != nil {
+		t.Fatalf("decode third mfa login challenge: %v", err)
+	}
+	verifyBody, _ = json.Marshal(map[string]string{
+		"challenge_token": challenge.ChallengeToken,
+		"code":            enabled.RecoveryCodes[0],
+	})
+	verifyReq = httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/mfa/verify", bytes.NewReader(verifyBody))
+	verifyReq.Header.Set("Content-Type", "application/json")
+	verifyRes = httptest.NewRecorder()
+	r.ServeHTTP(verifyRes, verifyReq)
+	if verifyRes.Code != http.StatusUnauthorized {
+		t.Fatalf("reused recovery code status=%d want=%d body=%s", verifyRes.Code, http.StatusUnauthorized, verifyRes.Body.String())
+	}
+}
+
 func TestAdminAuthManagementAPITokenFlow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -672,6 +853,11 @@ func registerAdminAuthManagementRoutesForTest(r *gin.Engine) {
 	api.GET("/auth/account", GetAdminAccount)
 	api.PUT("/auth/account", PutAdminAccount)
 	api.PUT("/auth/password", PutAdminPassword)
+	api.GET("/auth/mfa", GetAdminMFA)
+	api.POST("/auth/mfa/setup", PostAdminMFASetup)
+	api.POST("/auth/mfa/enable", PostAdminMFAEnable)
+	api.POST("/auth/mfa/recovery-codes/regenerate", PostAdminMFARecoveryCodesRegenerate)
+	api.POST("/auth/mfa/disable", PostAdminMFADisable)
 	api.GET("/auth/api-tokens", GetAdminAPITokens)
 	api.POST("/auth/api-tokens", PostAdminAPIToken)
 	api.POST("/auth/api-tokens/:token_id/revoke", PostAdminAPITokenRevoke)

@@ -7,10 +7,17 @@ export type AdminSessionState = {
   must_change_password?: boolean;
 };
 
+export type AdminLoginResult = AdminSessionState & {
+  mfa_required?: boolean;
+  challenge_token?: string;
+};
+
 export type AuthContextValue = {
   session: AdminSessionState;
+  initialized: boolean;
   loading: boolean;
-  login: (identifier: string, password: string) => Promise<void>;
+  login: (identifier: string, password: string) => Promise<AdminLoginResult>;
+  verifyMFA: (challengeToken: string, code: string) => Promise<AdminLoginResult>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };

@@ -4,10 +4,12 @@ import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 
 export default function Login() {
-  const { login, loading } = useAuth();
+  const { login, verifyMFA, loading } = useAuth();
   const { tx } = useI18n();
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  const [mfaCode, setMFACode] = useState("");
+  const [mfaChallenge, setMFAChallenge] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -15,12 +17,29 @@ export default function Login() {
     setError(null);
 
     try {
-      await login(identifier, password);
+      if (mfaChallenge) {
+        await verifyMFA(mfaChallenge, mfaCode);
+        setMFACode("");
+        setMFAChallenge("");
+        return;
+      }
+      const result = await login(identifier, password);
       setPassword("");
+      if (result.mfa_required && result.challenge_token) {
+        setMFAChallenge(result.challenge_token);
+        setMFACode("");
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message || tx("Login failed"));
     }
+  }
+
+  function resetPasswordStep() {
+    setMFAChallenge("");
+    setMFACode("");
+    setPassword("");
+    setError(null);
   }
 
   return (
@@ -34,33 +53,58 @@ export default function Login() {
         </div>
 
         <form className="space-y-4" onSubmit={onSubmit}>
-          <label className="block space-y-2">
-            <span className="text-xs font-medium text-neutral-700">
-              {tx("Username or email")}
-            </span>
-            <input
-              type="text"
-              className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-neutral-900/10"
-              value={identifier}
-              onChange={(event) => setIdentifier(event.target.value)}
-              autoComplete="username"
-              placeholder={tx("admin username or email")}
-            />
-          </label>
+          {mfaChallenge ? (
+            <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-700">
+              {tx("Enter the 6-digit code from your authenticator app or a recovery code.")}
+            </div>
+          ) : null}
 
-          <label className="block space-y-2">
-            <span className="text-xs font-medium text-neutral-700">
-              {tx("Password")}
-            </span>
-            <input
-              type="password"
-              className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-neutral-900/10"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
-              placeholder={tx("admin password")}
-            />
-          </label>
+          {!mfaChallenge ? (
+            <>
+              <label className="block space-y-2">
+                <span className="text-xs font-medium text-neutral-700">
+                  {tx("Username or email")}
+                </span>
+                <input
+                  type="text"
+                  className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-neutral-900/10"
+                  value={identifier}
+                  onChange={(event) => setIdentifier(event.target.value)}
+                  autoComplete="username"
+                  placeholder={tx("admin username or email")}
+                />
+              </label>
+
+              <label className="block space-y-2">
+                <span className="text-xs font-medium text-neutral-700">
+                  {tx("Password")}
+                </span>
+                <input
+                  type="password"
+                  className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-neutral-900/10"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  autoComplete="current-password"
+                  placeholder={tx("admin password")}
+                />
+              </label>
+            </>
+          ) : (
+            <label className="block space-y-2">
+              <span className="text-xs font-medium text-neutral-700">
+                {tx("Authentication code")}
+              </span>
+              <input
+                type="text"
+                inputMode="numeric"
+                className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-neutral-900/10"
+                value={mfaCode}
+                onChange={(event) => setMFACode(event.target.value)}
+                autoComplete="one-time-code"
+                placeholder={tx("6-digit code or recovery code")}
+              />
+            </label>
+          )}
 
           {error ? (
             <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800">
@@ -71,12 +115,25 @@ export default function Login() {
           <button
             type="submit"
             disabled={
-              loading || identifier.trim() === "" || password.trim() === ""
+              loading ||
+              (mfaChallenge
+                ? mfaCode.trim() === ""
+                : identifier.trim() === "" || password.trim() === "")
             }
             className="w-full rounded-md bg-neutral-950 px-4 py-2.5 text-xs font-medium text-white disabled:opacity-50"
           >
-            {loading ? tx("Signing in...") : tx("Sign In")}
+            {loading ? tx("Signing in...") : mfaChallenge ? tx("Verify") : tx("Sign In")}
           </button>
+          {mfaChallenge ? (
+            <button
+              type="button"
+              className="w-full rounded-md border border-neutral-300 bg-white px-4 py-2.5 text-xs text-neutral-800"
+              onClick={resetPasswordStep}
+              disabled={loading}
+            >
+              {tx("Back to password")}
+            </button>
+          ) : null}
         </form>
       </div>
     </div>

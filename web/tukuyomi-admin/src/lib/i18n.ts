@@ -93,6 +93,12 @@ const JA_STRINGS: Record<string, string> = {
   "Login failed": "ログインに失敗しました",
   "Signing in...": "ログイン中...",
   "Sign In": "ログイン",
+  "Enter the 6-digit code from your authenticator app or a recovery code.":
+    "認証アプリの6桁コード、またはリカバリーコードを入力してください。",
+  "Authentication code": "認証コード",
+  "6-digit code or recovery code": "6桁コードまたはリカバリーコード",
+  Verify: "確認",
+  "Back to password": "パスワード入力へ戻る",
   Error: "Error",
   "Loading status...": "ステータスを読み込んでいます...",
   Running: "稼働中",
@@ -712,7 +718,7 @@ const JA_STRINGS: Record<string, string> = {
   Rollback: "ロールバック",
   "No visible diff.": "表示できる差分はありません。",
   "Copy summary": "Copy summary",
-  Cancel: "Cancel",
+  Cancel: "キャンセル",
   "Saved. This browser now sends the configured operator identity on /tukuyomi-api requests.":
     "保存しました。このブラウザは今後、設定した operator identity を /tukuyomi-api へのリクエストに付けます。",
   "Operator identity cleared.": "operator identity をクリアしました。",
@@ -775,6 +781,44 @@ const JA_STRINGS: Record<string, string> = {
     "パスワードを変更しました。再度サインインしてください。",
   "Admin password changed. Sign in again.":
     "admin パスワードを変更しました。再度サインインしてください。",
+  "Two-step verification": "2段階認証",
+  "Recovery codes": "リカバリーコード",
+  "Enabled at": "有効化日時",
+  "Required to start two-step verification setup.":
+    "2段階認証の設定開始に必要です。",
+  "Enter your current password to enable two-step verification.":
+    "2段階認証を有効化するには現在のパスワードを入力してください。",
+  "Preparing two-step verification setup...": "2段階認証の設定を準備しています...",
+  "Scan the QR code, then enter the authentication code.":
+    "QRコードを読み取り、認証コードを入力してください。",
+  "Start two-step verification setup first.":
+    "先に2段階認証の設定を開始してください。",
+  "Enter the authentication code.": "認証コードを入力してください。",
+  "Enabling two-step verification...": "2段階認証を有効化しています...",
+  "Two-step verification enabled. Save these recovery codes now.":
+    "2段階認証を有効化しました。リカバリーコードを今すぐ保存してください。",
+  "Enter your current password and authentication code.":
+    "現在のパスワードと認証コードを入力してください。",
+  "Regenerating recovery codes...": "リカバリーコードを再生成しています...",
+  "Recovery codes regenerated. Save these recovery codes now.":
+    "リカバリーコードを再生成しました。今すぐ保存してください。",
+  "Disable two-step verification?": "2段階認証を無効化しますか？",
+  "Disabling two-step verification...": "2段階認証を無効化しています...",
+  "Two-step verification disabled.": "2段階認証を無効化しました。",
+  "Authenticator QR code": "認証アプリ用QRコード",
+  "QR code unavailable": "QRコードを表示できません",
+  "Setup key": "セットアップキー",
+  "Scan the QR code with an authenticator app. If scanning fails, enter this setup key manually.":
+    "認証アプリでQRコードを読み取ってください。読み取れない場合は、このセットアップキーを手入力します。",
+  "Enter the 6-digit code from the authenticator app.":
+    "認証アプリに表示された6桁コードを入力してください。",
+  "Enable two-step verification": "2段階認証を有効化",
+  "Start setup": "設定を開始",
+  "Authentication code or recovery code": "認証コードまたはリカバリーコード",
+  "Regenerate recovery codes": "リカバリーコードを再生成",
+  "Disable two-step verification": "2段階認証を無効化",
+  "Save these recovery codes now. They are shown only once.":
+    "リカバリーコードを今すぐ保存してください。表示されるのはこの一度だけです。",
   "Personal Access Tokens": "Personal Access Token",
   Label: "ラベル",
   "Token label is required.": "トークンのラベルを入力してください。",

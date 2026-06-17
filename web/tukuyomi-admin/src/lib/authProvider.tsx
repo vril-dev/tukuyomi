@@ -17,6 +17,7 @@ import {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<AdminSessionState>(defaultSession);
+  const [initialized, setInitialized] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
@@ -35,6 +36,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setSession(defaultSession);
     } finally {
+      setInitialized(true);
       setLoading(false);
     }
   }, []);
@@ -46,6 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onAuthRequired = () => {
       setSession(defaultSession);
+      setInitialized(true);
       setLoading(false);
     };
 
@@ -112,8 +115,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ session, loading, login, verifyMFA, logout, refresh }),
-    [session, loading, login, verifyMFA, logout, refresh],
+    () => ({ session, initialized, loading, login, verifyMFA, logout, refresh }),
+    [session, initialized, loading, login, verifyMFA, logout, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

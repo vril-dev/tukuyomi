@@ -14,6 +14,7 @@ export type AdminLoginResult = AdminSessionState & {
 
 export type AuthContextValue = {
   session: AdminSessionState;
+  initialized: boolean;
   loading: boolean;
   login: (identifier: string, password: string) => Promise<AdminLoginResult>;
   verifyMFA: (challengeToken: string, code: string) => Promise<AdminLoginResult>;

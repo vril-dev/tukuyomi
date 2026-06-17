@@ -178,6 +178,9 @@ routing runs.
 - Keep a dedicated `admin.session_secret` server-side.
 - CLI and automation use per-user personal access tokens.
 - The embedded admin UI uses username/password login and DB-backed session cookies.
+- Operators can enable local TOTP two-step verification from **User > Two-step verification**.
+  The QR code is generated in the browser from an `otpauth://` URI; no external MFA service is contacted.
+- Save recovery codes when they are shown. Once two-step verification is enabled, password login creates only a short-lived MFA challenge, and the browser session cookie is issued after a valid authenticator code or unused recovery code.
 - `Settings` is `Save config only`: listener/runtime/storage changes need restart.
 
 ### Host Network Hardening (L3/L4 Basics)

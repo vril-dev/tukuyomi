@@ -57,6 +57,9 @@ func registerAdminAuthRoutesAtWithCookieNames(r *gin.Engine, apiBasePath string,
 	api.POST("/auth/login", func(c *gin.Context) {
 		postAdminLogin(c, cookieNames, allowDisabled)
 	})
+	api.POST("/auth/mfa/verify", func(c *gin.Context) {
+		postAdminMFAVerify(c, cookieNames)
+	})
 	api.POST("/auth/logout", func(c *gin.Context) {
 		postAdminLogout(c, cookieNames, allowDisabled)
 	})
@@ -233,29 +236,41 @@ func postAdminPasswordLoginWithCookieNames(c *gin.Context, req adminLoginRequest
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
+	mfaEnabled, err := store.adminMFAEnabled(principal.UserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load admin mfa status"})
+		return
+	}
+	if mfaEnabled {
+		challengeToken, expiresAt, err := store.createAdminMFAChallenge(principal.UserID, c.ClientIP(), c.Request.UserAgent(), now)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to issue admin mfa challenge"})
+			return
+		}
+		clearAdminAuthCookiesWithNames(c, cookieNames)
+		c.JSON(http.StatusOK, gin.H{
+			"ok":                true,
+			"authenticated":     false,
+			"mode":              "mfa_required",
+			"mfa_required":      true,
+			"challenge_token":   challengeToken,
+			"expires_at":        expiresAt.Format(time.RFC3339),
+			"csrf_cookie_name":  cookieNames.CSRF,
+			"csrf_header_name":  adminauth.CSRFHeaderName,
+			"session_cookie":    cookieNames.Session,
+			"same_origin_only":  true,
+			"cookie_secure_now": requestIsHTTPS(c),
+		})
+		return
+	}
 	sessionToken, csrfToken, expiresAt, sessionID, err := store.createAdminSession(principal, config.AdminSessionTTL, now)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to issue admin session"})
 		return
 	}
-	principal.CredentialID = strconv.FormatInt(sessionID, 10)
+	principal.CredentialID = formatAdminCredentialID(sessionID)
 	adminauth.SetCookiesWithNames(c.Writer, cookieNames, sessionToken, csrfToken, expiresAt, requestIsHTTPS(c))
-	c.JSON(http.StatusOK, gin.H{
-		"ok":                   true,
-		"authenticated":        true,
-		"mode":                 "session",
-		"expires_at":           expiresAt.Format(time.RFC3339),
-		"csrf_cookie_name":     cookieNames.CSRF,
-		"csrf_header_name":     adminauth.CSRFHeaderName,
-		"session_cookie":       cookieNames.Session,
-		"must_change_password": principal.MustChangePassword,
-		"user": gin.H{
-			"user_id":              principal.UserID,
-			"username":             principal.Username,
-			"role":                 principal.Role,
-			"must_change_password": principal.MustChangePassword,
-		},
-	})
+	c.JSON(http.StatusOK, adminLoginSessionResponse(principal, expiresAt, cookieNames, c, nil))
 }
 
 func adminLoginIdentifier(req adminLoginRequest) string {
@@ -295,6 +310,38 @@ func adminSessionResponseWithCookieNames(session adminSessionRecord, csrfToken s
 		resp["csrf_token_present"] = true
 	}
 	return resp
+}
+
+func adminLoginSessionResponse(principal adminauth.Principal, expiresAt time.Time, cookieNames adminauth.CookieNames, c *gin.Context, extra gin.H) gin.H {
+	cookieNames = cookieNames.Normalized()
+	resp := gin.H{
+		"ok":                   true,
+		"authenticated":        true,
+		"mode":                 "session",
+		"expires_at":           expiresAt.Format(time.RFC3339),
+		"csrf_cookie_name":     cookieNames.CSRF,
+		"csrf_header_name":     adminauth.CSRFHeaderName,
+		"session_cookie":       cookieNames.Session,
+		"session_ttl_secs":     int(time.Until(expiresAt).Seconds()),
+		"same_origin_only":     true,
+		"cookie_secure_now":    requestIsHTTPS(c),
+		"csrf_token_present":   true,
+		"must_change_password": principal.MustChangePassword,
+		"user": gin.H{
+			"user_id":              principal.UserID,
+			"username":             principal.Username,
+			"role":                 principal.Role,
+			"must_change_password": principal.MustChangePassword,
+		},
+	}
+	for key, value := range extra {
+		resp[key] = value
+	}
+	return resp
+}
+
+func formatAdminCredentialID(id int64) string {
+	return strconv.FormatInt(id, 10)
 }
 
 func clearAdminAuthCookies(c *gin.Context) {

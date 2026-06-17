@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import {
   AuthContext,
   defaultSession,
+  type AdminLoginResult,
   type AdminSessionState,
   type AuthContextValue,
 } from "@/lib/auth";
@@ -16,6 +17,7 @@ import {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<AdminSessionState>(defaultSession);
+  const [initialized, setInitialized] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
@@ -34,6 +36,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setSession(defaultSession);
     } finally {
+      setInitialized(true);
       setLoading(false);
     }
   }, []);
@@ -45,6 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onAuthRequired = () => {
       setSession(defaultSession);
+      setInitialized(true);
       setLoading(false);
     };
 
@@ -57,9 +61,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (identifier: string, password: string) => {
     setLoading(true);
     try {
-      const next = await apiPostJson<AdminSessionState>("/auth/login", {
+      const next = await apiPostJson<AdminLoginResult>("/auth/login", {
         identifier,
         password,
+      });
+      if (next.mfa_required) {
+        setSession(defaultSession);
+        return next;
+      }
+      setSession({
+        authenticated: !!next.authenticated,
+        mode: next.mode || "session",
+        expires_at: next.expires_at,
+        must_change_password: next.must_change_password === true,
+      });
+      return next;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const verifyMFA = useCallback(async (challengeToken: string, code: string) => {
+    setLoading(true);
+    try {
+      const next = await apiPostJson<AdminLoginResult>("/auth/mfa/verify", {
+        challenge_token: challengeToken,
+        code,
       });
       setSession({
         authenticated: !!next.authenticated,
@@ -67,6 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         expires_at: next.expires_at,
         must_change_password: next.must_change_password === true,
       });
+      return next;
     } finally {
       setLoading(false);
     }
@@ -87,8 +115,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ session, loading, login, logout, refresh }),
-    [session, loading, login, logout, refresh],
+    () => ({ session, initialized, loading, login, verifyMFA, logout, refresh }),
+    [session, initialized, loading, login, verifyMFA, logout, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

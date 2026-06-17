@@ -30,11 +30,11 @@ const RuntimeAppsPanel = lazy(() => import('./pages/RuntimeAppsPanel'));
 const ScheduledTasksPanel = lazy(() => import('./pages/ScheduledTasksPanel'));
 
 function ProtectedLayout() {
-  const { loading, session } = useAuth();
+  const { initialized, session } = useAuth();
   const { tx } = useI18n();
   const location = useLocation();
 
-  if (loading) {
+  if (!initialized) {
     return <div className="min-h-screen flex items-center justify-center text-neutral-500">{tx("Checking admin session...")}</div>;
   }
   if (!session.authenticated) {
@@ -48,12 +48,12 @@ function ProtectedLayout() {
 }
 
 function LoginRoute() {
-  const { loading, session } = useAuth();
+  const { initialized, session } = useAuth();
   const { tx } = useI18n();
   const location = useLocation();
   const from = loginReturnPath(location.state);
 
-  if (loading) {
+  if (!initialized) {
     return <div className="min-h-screen flex items-center justify-center text-neutral-500">{tx("Checking admin session...")}</div>;
   }
   if (session.authenticated) {

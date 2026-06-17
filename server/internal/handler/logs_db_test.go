@@ -682,7 +682,7 @@ func TestLogsReadUsesSQLiteStoreFreeTextSearch(t *testing.T) {
 func TestLogsReadUsesSQLiteStoreTimeRangePagination(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	base := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	base := time.Now().UTC().Truncate(time.Second)
 	entries := []map[string]any{
 		{
 			"ts":      base.Add(-2 * time.Hour).Format(time.RFC3339Nano),

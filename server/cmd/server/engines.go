@@ -99,6 +99,7 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 			config.APIBasePath + "/settings/listener-admin",
 			config.APIBasePath + "/auth/account",
 			config.APIBasePath + "/auth/password",
+			config.APIBasePath + "/auth/mfa",
 			config.APIBasePath + "/auth/api-tokens",
 		}
 		endpoints = append(endpoints, proxyRuleAdminEndpoints(config.APIBasePath)...)
@@ -122,6 +123,10 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 			config.APIBasePath+"/scheduled-tasks/validate",
 			config.APIBasePath+"/scheduled-tasks/rollback",
 			config.APIBasePath+"/settings/listener-admin/validate",
+			config.APIBasePath+"/auth/mfa/setup",
+			config.APIBasePath+"/auth/mfa/enable",
+			config.APIBasePath+"/auth/mfa/recovery-codes/regenerate",
+			config.APIBasePath+"/auth/mfa/disable",
 			config.APIBasePath+"/auth/api-tokens/:token_id/revoke",
 			config.APIBasePath+"/request-country-db/upload",
 			config.APIBasePath+"/rules:validate",
@@ -256,6 +261,11 @@ func registerAdminAPIRoutes(r *gin.Engine) {
 	api.GET("/auth/account", handler.GetAdminAccount)
 	api.PUT("/auth/account", adminMutate, handler.PutAdminAccount)
 	api.PUT("/auth/password", adminMutate, handler.PutAdminPassword)
+	api.GET("/auth/mfa", handler.GetAdminMFA)
+	api.POST("/auth/mfa/setup", adminMutate, handler.PostAdminMFASetup)
+	api.POST("/auth/mfa/enable", adminMutate, handler.PostAdminMFAEnable)
+	api.POST("/auth/mfa/recovery-codes/regenerate", adminMutate, handler.PostAdminMFARecoveryCodesRegenerate)
+	api.POST("/auth/mfa/disable", adminMutate, handler.PostAdminMFADisable)
 	api.GET("/auth/api-tokens", handler.GetAdminAPITokens)
 	api.POST("/auth/api-tokens", adminMutate, handler.PostAdminAPIToken)
 	api.POST("/auth/api-tokens/:token_id/revoke", adminMutate, handler.PostAdminAPITokenRevoke)

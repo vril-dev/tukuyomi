@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import QRCode from "qrcode";
 
 import { apiGetJson, apiPostJson, apiPutJson } from "@/lib/api";
 import { useAdminRuntime } from "@/lib/adminRuntime";
@@ -32,6 +33,23 @@ type AdminAPITokenListResponse = {
 type AdminAPITokenCreateResponse = {
   token: string;
   record: AdminAPIToken;
+};
+
+type AdminMFAStatus = {
+  enabled: boolean;
+  enabled_at?: string;
+  recovery_codes_remaining: number;
+};
+
+type AdminMFASetup = {
+  setup_id: string;
+  secret: string;
+  otpauth_uri: string;
+  expires_at: string;
+};
+
+type AdminMFAEnableResponse = AdminMFAStatus & {
+  recovery_codes?: string[];
 };
 
 type FormFeedback = {
@@ -69,13 +87,19 @@ export default function UserPanel() {
   const [loading, setLoading] = useState(true);
   const [accountSaving, setAccountSaving] = useState(false);
   const [passwordSaving, setPasswordSaving] = useState(false);
+  const [mfaSaving, setMFASaving] = useState(false);
   const [tokenSaving, setTokenSaving] = useState(false);
   const [account, setAccount] = useState<AdminAccount | null>(null);
+  const [mfaStatus, setMFAStatus] = useState<AdminMFAStatus | null>(null);
+  const [mfaSetup, setMFASetup] = useState<AdminMFASetup | null>(null);
+  const [mfaQRCode, setMFAQRCode] = useState("");
+  const [mfaRecoveryCodes, setMFARecoveryCodes] = useState<string[]>([]);
   const [apiTokens, setAPITokens] = useState<AdminAPIToken[]>([]);
   const [createdToken, setCreatedToken] = useState("");
   const [loadError, setLoadError] = useState("");
   const [accountFeedback, setAccountFeedback] = useState<FormFeedback | null>(null);
   const [passwordFeedback, setPasswordFeedback] = useState<FormFeedback | null>(null);
+  const [mfaFeedback, setMFAFeedback] = useState<FormFeedback | null>(null);
   const [tokenFeedback, setTokenFeedback] = useState<FormFeedback | null>(null);
   const [accountForm, setAccountForm] = useState({
     username: "",
@@ -85,6 +109,10 @@ export default function UserPanel() {
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
     newPassword: "",
+  });
+  const [mfaForm, setMFAForm] = useState({
+    currentPassword: "",
+    code: "",
   });
   const [tokenForm, setTokenForm] = useState({
     label: "",
@@ -97,8 +125,9 @@ export default function UserPanel() {
     setLoading(true);
     setLoadError("");
     try {
-      const [accountData, tokenData] = await Promise.all([
+      const [accountData, mfaData, tokenData] = await Promise.all([
         apiGetJson<AdminAccount>("/auth/account"),
+        apiGetJson<AdminMFAStatus>("/auth/mfa"),
         apiGetJson<AdminAPITokenListResponse>("/auth/api-tokens"),
       ]);
       setAccount(accountData);
@@ -108,6 +137,7 @@ export default function UserPanel() {
         email: accountData.email || "",
         currentPassword: "",
       }));
+      setMFAStatus(mfaData);
       setAPITokens(Array.isArray(tokenData.tokens) ? tokenData.tokens : []);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -121,10 +151,37 @@ export default function UserPanel() {
     void loadUserSecurity();
   }, [loadUserSecurity]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!mfaSetup?.otpauth_uri) {
+      setMFAQRCode("");
+      return;
+    }
+    QRCode.toDataURL(mfaSetup.otpauth_uri, {
+      width: 192,
+      margin: 1,
+      errorCorrectionLevel: "M",
+    })
+      .then((dataURL) => {
+        if (!cancelled) {
+          setMFAQRCode(dataURL);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setMFAQRCode("");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mfaSetup?.otpauth_uri]);
+
   function clearFeedback() {
     setCreatedToken("");
     setAccountFeedback(null);
     setPasswordFeedback(null);
+    setMFAFeedback(null);
     setTokenFeedback(null);
   }
 
@@ -196,6 +253,119 @@ export default function UserPanel() {
       setFormError(setPasswordFeedback, message);
     } finally {
       setPasswordSaving(false);
+    }
+  }
+
+  async function onStartMFASetup(e: FormEvent) {
+    e.preventDefault();
+    clearFeedback();
+    setMFARecoveryCodes([]);
+    if (!mfaForm.currentPassword) {
+      setFormError(setMFAFeedback, tx("Enter your current password to enable two-step verification."));
+      return;
+    }
+    setMFAFeedback({ tone: "info", message: tx("Preparing two-step verification setup...") });
+    setMFASaving(true);
+    try {
+      const setup = await apiPostJson<AdminMFASetup>("/auth/mfa/setup", {
+        current_password: mfaForm.currentPassword,
+      });
+      setMFASetup(setup);
+      setMFAForm((current) => ({ ...current, code: "" }));
+      setFormNotice(setMFAFeedback, tx("Scan the QR code, then enter the authentication code."));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setFormError(setMFAFeedback, message);
+    } finally {
+      setMFASaving(false);
+    }
+  }
+
+  async function onEnableMFA(e: FormEvent) {
+    e.preventDefault();
+    clearFeedback();
+    if (!mfaSetup) {
+      setFormError(setMFAFeedback, tx("Start two-step verification setup first."));
+      return;
+    }
+    if (!mfaForm.code.trim()) {
+      setFormError(setMFAFeedback, tx("Enter the authentication code."));
+      return;
+    }
+    setMFAFeedback({ tone: "info", message: tx("Enabling two-step verification...") });
+    setMFASaving(true);
+    try {
+      const next = await apiPostJson<AdminMFAEnableResponse>("/auth/mfa/enable", {
+        setup_id: mfaSetup.setup_id,
+        code: mfaForm.code,
+      });
+      setMFAStatus(next);
+      setMFASetup(null);
+      setMFAQRCode("");
+      setMFARecoveryCodes(Array.isArray(next.recovery_codes) ? next.recovery_codes : []);
+      setMFAForm({ currentPassword: "", code: "" });
+      setFormNotice(setMFAFeedback, tx("Two-step verification enabled. Save these recovery codes now."));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setFormError(setMFAFeedback, message);
+    } finally {
+      setMFASaving(false);
+    }
+  }
+
+  async function onRegenerateMFARecoveryCodes() {
+    clearFeedback();
+    setMFARecoveryCodes([]);
+    if (!mfaForm.currentPassword || !mfaForm.code.trim()) {
+      setFormError(setMFAFeedback, tx("Enter your current password and authentication code."));
+      return;
+    }
+    setMFAFeedback({ tone: "info", message: tx("Regenerating recovery codes...") });
+    setMFASaving(true);
+    try {
+      const next = await apiPostJson<AdminMFAEnableResponse>("/auth/mfa/recovery-codes/regenerate", {
+        current_password: mfaForm.currentPassword,
+        code: mfaForm.code,
+      });
+      setMFAStatus(next);
+      setMFARecoveryCodes(Array.isArray(next.recovery_codes) ? next.recovery_codes : []);
+      setMFAForm({ currentPassword: "", code: "" });
+      setFormNotice(setMFAFeedback, tx("Recovery codes regenerated. Save these recovery codes now."));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setFormError(setMFAFeedback, message);
+    } finally {
+      setMFASaving(false);
+    }
+  }
+
+  async function onDisableMFA() {
+    clearFeedback();
+    setMFARecoveryCodes([]);
+    if (!mfaForm.currentPassword || !mfaForm.code.trim()) {
+      setFormError(setMFAFeedback, tx("Enter your current password and authentication code."));
+      return;
+    }
+    if (!window.confirm(tx("Disable two-step verification?"))) {
+      return;
+    }
+    setMFAFeedback({ tone: "info", message: tx("Disabling two-step verification...") });
+    setMFASaving(true);
+    try {
+      const next = await apiPostJson<AdminMFAStatus>("/auth/mfa/disable", {
+        current_password: mfaForm.currentPassword,
+        code: mfaForm.code,
+      });
+      setMFAStatus(next);
+      setMFASetup(null);
+      setMFAQRCode("");
+      setMFAForm({ currentPassword: "", code: "" });
+      setFormNotice(setMFAFeedback, tx("Two-step verification disabled."));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setFormError(setMFAFeedback, message);
+    } finally {
+      setMFASaving(false);
     }
   }
 
@@ -404,6 +574,159 @@ export default function UserPanel() {
           </div>
           <FormMessage feedback={passwordFeedback} />
         </form>
+      </section>
+
+      <section className="rounded-lg border border-neutral-200 bg-white p-4 space-y-3">
+        <div className="text-sm font-medium">{tx("Two-step verification")}</div>
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs">
+            <div className="text-neutral-500">{tx("Status")}</div>
+            <div className="mt-1">{mfaStatus?.enabled ? tx("enabled") : tx("disabled")}</div>
+          </div>
+          <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs">
+            <div className="text-neutral-500">{tx("Recovery codes")}</div>
+            <div className="mt-1">{mfaStatus?.recovery_codes_remaining ?? 0}</div>
+          </div>
+          <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs">
+            <div className="text-neutral-500">{tx("Enabled at")}</div>
+            <div className="mt-1">{formatAdminTokenTime(mfaStatus?.enabled_at)}</div>
+          </div>
+        </div>
+
+        {!mfaStatus?.enabled ? (
+          <form onSubmit={mfaSetup ? onEnableMFA : onStartMFASetup} className="space-y-3">
+            {!mfaSetup ? (
+              <div className="grid gap-3 md:grid-cols-2">
+                <UserField label={tx("Current password")} hint={tx("Required to start two-step verification setup.")}>
+                  <input
+                    type="password"
+                    value={mfaForm.currentPassword}
+                    onChange={(e) =>
+                      setMFAForm((current) => ({
+                        ...current,
+                        currentPassword: e.target.value,
+                      }))
+                    }
+                    className="w-full rounded border border-neutral-200 bg-white"
+                    autoComplete="current-password"
+                    disabled={readOnly || mfaSaving}
+                  />
+                </UserField>
+              </div>
+            ) : (
+              <div className="grid gap-4 lg:grid-cols-[220px_1fr]">
+                <div className="rounded border border-neutral-200 bg-white p-3">
+                  {mfaQRCode ? (
+                    <img src={mfaQRCode} alt={tx("Authenticator QR code")} className="mx-auto h-48 w-48" />
+                  ) : (
+                    <div className="flex h-48 items-center justify-center text-xs text-neutral-500">
+                      {tx("QR code unavailable")}
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-3">
+                  <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs">
+                    <div className="text-neutral-500">{tx("Setup key")}</div>
+                    <div className="mt-1 break-all font-mono">{mfaSetup.secret}</div>
+                    <div className="mt-2 text-neutral-500">
+                      {tx("Scan the QR code with an authenticator app. If scanning fails, enter this setup key manually.")}
+                    </div>
+                  </div>
+                  <UserField label={tx("Authentication code")} hint={tx("Enter the 6-digit code from the authenticator app.")}>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={mfaForm.code}
+                      onChange={(e) =>
+                        setMFAForm((current) => ({
+                          ...current,
+                          code: e.target.value,
+                        }))
+                      }
+                      className="w-full rounded border border-neutral-200 bg-white"
+                      autoComplete="one-time-code"
+                      disabled={readOnly || mfaSaving}
+                    />
+                  </UserField>
+                </div>
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="submit" disabled={readOnly || mfaSaving}>
+                {mfaSaving ? tx("Saving...") : mfaSetup ? tx("Enable two-step verification") : tx("Start setup")}
+              </button>
+              {mfaSetup ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMFASetup(null);
+                    setMFAQRCode("");
+                    setMFAForm({ currentPassword: "", code: "" });
+                    setMFARecoveryCodes([]);
+                    setMFAFeedback(null);
+                  }}
+                  disabled={mfaSaving}
+                >
+                  {tx("Cancel")}
+                </button>
+              ) : null}
+            </div>
+            <FormMessage feedback={mfaFeedback} />
+          </form>
+        ) : (
+          <div className="space-y-3">
+            <div className="grid gap-3 md:grid-cols-2">
+              <UserField label={tx("Current password")}>
+                <input
+                  type="password"
+                  value={mfaForm.currentPassword}
+                  onChange={(e) =>
+                    setMFAForm((current) => ({
+                      ...current,
+                      currentPassword: e.target.value,
+                    }))
+                  }
+                  className="w-full rounded border border-neutral-200 bg-white"
+                  autoComplete="current-password"
+                  disabled={readOnly || mfaSaving}
+                />
+              </UserField>
+              <UserField label={tx("Authentication code or recovery code")}>
+                <input
+                  type="text"
+                  value={mfaForm.code}
+                  onChange={(e) =>
+                    setMFAForm((current) => ({
+                      ...current,
+                      code: e.target.value,
+                    }))
+                  }
+                  className="w-full rounded border border-neutral-200 bg-white"
+                  autoComplete="one-time-code"
+                  disabled={readOnly || mfaSaving}
+                />
+              </UserField>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => void onRegenerateMFARecoveryCodes()} disabled={readOnly || mfaSaving}>
+                {mfaSaving ? tx("Saving...") : tx("Regenerate recovery codes")}
+              </button>
+              <button type="button" onClick={() => void onDisableMFA()} disabled={readOnly || mfaSaving}>
+                {tx("Disable two-step verification")}
+              </button>
+            </div>
+            <FormMessage feedback={mfaFeedback} />
+          </div>
+        )}
+
+        {mfaRecoveryCodes.length > 0 ? (
+          <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3">
+            <div className="text-xs text-amber-950">{tx("Save these recovery codes now. They are shown only once.")}</div>
+            <pre className="whitespace-pre-wrap rounded border border-amber-200 bg-white p-3 font-mono text-xs">
+              {mfaRecoveryCodes.join("\n")}
+            </pre>
+          </div>
+        ) : null}
       </section>
 
       <section className="rounded-lg border border-neutral-200 bg-white p-4">

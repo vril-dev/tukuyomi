@@ -387,6 +387,190 @@ func TestCenterAuthIgnoresGlobalAuthDisable(t *testing.T) {
 	}
 }
 
+func TestCenterMFAUsesManagementAPIAndCenterCookies(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restore := configureCenterAuthTest(t)
+	defer restore()
+
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", config.DBPath, "", 32); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer handler.InitLogsStatsStore(false, "", 0)
+
+	t.Setenv(handler.AdminBootstrapUsernameEnv, "center-admin")
+	t.Setenv(handler.AdminBootstrapPasswordEnv, "center-admin-password")
+	if created, err := handler.EnsureAdminBootstrapOwnerFromEnv(); err != nil {
+		t.Fatalf("EnsureAdminBootstrapOwnerFromEnv: %v", err)
+	} else if !created {
+		t.Fatal("bootstrap admin was not created")
+	}
+	if err := handler.InitAdminGuards(); err != nil {
+		t.Fatalf("InitAdminGuards: %v", err)
+	}
+
+	engine, err := NewEngine(RuntimeConfig{
+		APIBasePath:        "/center-manage-api",
+		GatewayAPIBasePath: "/center-api",
+		UIBasePath:         "/center-ui",
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	cookies, csrfCookie := loginCenterAtForTest(t, engine, "/center-manage-api")
+	cookieNames := adminauth.CenterCookieNames()
+
+	status := performRequestWithCookies(engine, http.MethodGet, "/center-manage-api/auth/mfa", "", nil, cookies)
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"enabled":false`) {
+		t.Fatalf("mfa status code=%d body=%s", status.Code, status.Body.String())
+	}
+	deviceAPIStatus := performRequestWithCookies(engine, http.MethodGet, "/center-api/auth/mfa", "", nil, cookies)
+	if deviceAPIStatus.Code == http.StatusOK {
+		t.Fatalf("gateway/device api unexpectedly exposes management MFA endpoint: %s", deviceAPIStatus.Body.String())
+	}
+
+	setup := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-manage-api/auth/mfa/setup",
+		`{"current_password":"center-admin-password"}`,
+		map[string]string{
+			"Content-Type":           "application/json",
+			adminauth.CSRFHeaderName: csrfCookie.Value,
+		},
+		cookies,
+	)
+	if setup.Code != http.StatusCreated {
+		t.Fatalf("mfa setup code=%d body=%s", setup.Code, setup.Body.String())
+	}
+	var setupResp struct {
+		SetupID    string `json:"setup_id"`
+		Secret     string `json:"secret"`
+		OtpauthURI string `json:"otpauth_uri"`
+	}
+	if err := json.Unmarshal(setup.Body.Bytes(), &setupResp); err != nil {
+		t.Fatalf("decode mfa setup: %v", err)
+	}
+	if setupResp.SetupID == "" || setupResp.Secret == "" || !strings.HasPrefix(setupResp.OtpauthURI, "otpauth://totp/") {
+		t.Fatalf("invalid mfa setup response: %+v", setupResp)
+	}
+	code, _, err := adminauth.TOTPCode(setupResp.Secret, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("TOTPCode: %v", err)
+	}
+	enableBody, _ := json.Marshal(map[string]string{
+		"setup_id": setupResp.SetupID,
+		"code":     code,
+	})
+	enable := performRequestWithCookies(
+		engine,
+		http.MethodPost,
+		"/center-manage-api/auth/mfa/enable",
+		string(enableBody),
+		map[string]string{
+			"Content-Type":           "application/json",
+			adminauth.CSRFHeaderName: csrfCookie.Value,
+		},
+		cookies,
+	)
+	if enable.Code != http.StatusOK {
+		t.Fatalf("mfa enable code=%d body=%s", enable.Code, enable.Body.String())
+	}
+	var enableResp struct {
+		Enabled       bool     `json:"enabled"`
+		RecoveryCodes []string `json:"recovery_codes"`
+	}
+	if err := json.Unmarshal(enable.Body.Bytes(), &enableResp); err != nil {
+		t.Fatalf("decode mfa enable: %v", err)
+	}
+	if !enableResp.Enabled || len(enableResp.RecoveryCodes) == 0 {
+		t.Fatalf("mfa enable response=%+v", enableResp)
+	}
+
+	loginBody := `{"identifier":"center-admin","password":"center-admin-password"}`
+	login := performRequest(engine, http.MethodPost, "/center-manage-api/auth/login", loginBody, map[string]string{
+		"Content-Type": "application/json",
+	})
+	if login.Code != http.StatusOK {
+		t.Fatalf("mfa login code=%d body=%s", login.Code, login.Body.String())
+	}
+	var challenge struct {
+		Authenticated  bool   `json:"authenticated"`
+		MFARequired    bool   `json:"mfa_required"`
+		ChallengeToken string `json:"challenge_token"`
+	}
+	if err := json.Unmarshal(login.Body.Bytes(), &challenge); err != nil {
+		t.Fatalf("decode mfa challenge: %v", err)
+	}
+	if challenge.Authenticated || !challenge.MFARequired || challenge.ChallengeToken == "" {
+		t.Fatalf("unexpected mfa challenge response=%+v body=%s", challenge, login.Body.String())
+	}
+	if cookie := cookieByNameForTest(login.Result().Cookies(), cookieNames.Session); cookie != nil && cookie.Value != "" {
+		t.Fatalf("mfa challenge issued a non-empty center session cookie: %+v", cookie)
+	}
+
+	verifyCode, _, err := adminauth.TOTPCode(setupResp.Secret, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("TOTPCode verify: %v", err)
+	}
+	verifyBody, _ := json.Marshal(map[string]string{
+		"challenge_token": challenge.ChallengeToken,
+		"code":            verifyCode,
+	})
+	verify := performRequest(engine, http.MethodPost, "/center-manage-api/auth/mfa/verify", string(verifyBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if verify.Code != http.StatusOK {
+		t.Fatalf("mfa verify code=%d body=%s", verify.Code, verify.Body.String())
+	}
+	verifyCookies := verify.Result().Cookies()
+	if cookieByNameForTest(verifyCookies, cookieNames.Session) == nil || cookieByNameForTest(verifyCookies, cookieNames.CSRF) == nil {
+		t.Fatalf("mfa verify did not issue center cookies %q/%q: %v", cookieNames.Session, cookieNames.CSRF, verifyCookies)
+	}
+	if cookieByNameForTest(verifyCookies, adminauth.SessionCookieName) != nil || cookieByNameForTest(verifyCookies, adminauth.CSRFCookieName) != nil {
+		t.Fatalf("mfa verify must not issue gateway admin cookies: %v", verifyCookies)
+	}
+
+	login = performRequest(engine, http.MethodPost, "/center-manage-api/auth/login", loginBody, map[string]string{
+		"Content-Type": "application/json",
+	})
+	if login.Code != http.StatusOK {
+		t.Fatalf("recovery login code=%d body=%s", login.Code, login.Body.String())
+	}
+	if err := json.Unmarshal(login.Body.Bytes(), &challenge); err != nil {
+		t.Fatalf("decode recovery challenge: %v", err)
+	}
+	recoveryBody, _ := json.Marshal(map[string]string{
+		"challenge_token": challenge.ChallengeToken,
+		"code":            enableResp.RecoveryCodes[0],
+	})
+	recovery := performRequest(engine, http.MethodPost, "/center-manage-api/auth/mfa/verify", string(recoveryBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if recovery.Code != http.StatusOK {
+		t.Fatalf("recovery verify code=%d body=%s", recovery.Code, recovery.Body.String())
+	}
+
+	login = performRequest(engine, http.MethodPost, "/center-manage-api/auth/login", loginBody, map[string]string{
+		"Content-Type": "application/json",
+	})
+	if login.Code != http.StatusOK {
+		t.Fatalf("reused recovery login code=%d body=%s", login.Code, login.Body.String())
+	}
+	if err := json.Unmarshal(login.Body.Bytes(), &challenge); err != nil {
+		t.Fatalf("decode reused recovery challenge: %v", err)
+	}
+	reusedBody, _ := json.Marshal(map[string]string{
+		"challenge_token": challenge.ChallengeToken,
+		"code":            enableResp.RecoveryCodes[0],
+	})
+	reused := performRequest(engine, http.MethodPost, "/center-manage-api/auth/mfa/verify", string(reusedBody), map[string]string{
+		"Content-Type": "application/json",
+	})
+	if reused.Code != http.StatusUnauthorized {
+		t.Fatalf("reused recovery code=%d want=%d body=%s", reused.Code, http.StatusUnauthorized, reused.Body.String())
+	}
+}
+
 func TestBootstrapApprovedDeviceCreatesApprovedDeviceAndRejectsTrustChange(t *testing.T) {
 	restore := configureCenterAuthTest(t)
 	defer restore()

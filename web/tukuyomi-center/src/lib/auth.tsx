@@ -18,11 +18,18 @@ export type CenterSessionState = {
   user?: CenterSessionUser;
 };
 
+export type CenterLoginResult = CenterSessionState & {
+  mfa_required?: boolean;
+  challenge_token?: string;
+};
+
 type AuthContextValue = {
   session: CenterSessionState;
   loading: boolean;
+  actionLoading: boolean;
   sessionError: string;
-  login: (identifier: string, password: string) => Promise<void>;
+  login: (identifier: string, password: string) => Promise<CenterLoginResult>;
+  verifyMFA: (challengeToken: string, code: string) => Promise<CenterLoginResult>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -51,6 +58,7 @@ function sessionErrorMessage(error: unknown) {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<CenterSessionState>(defaultSession);
   const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
   const [sessionError, setSessionError] = useState("");
 
   const refresh = useCallback(async () => {
@@ -99,21 +107,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [sessionError, refresh]);
 
   const login = useCallback(async (identifier: string, password: string) => {
-    setLoading(true);
+    setActionLoading(true);
     try {
-      const next = await apiPostJson<CenterSessionState>("/auth/login", {
+      const next = await apiPostJson<CenterLoginResult>("/auth/login", {
         identifier,
         password,
       });
+      if (next.mfa_required) {
+        setSession(defaultSession);
+        setSessionError("");
+        return next;
+      }
       setSession(normalizeSession(next));
       setSessionError("");
+      return next;
     } finally {
-      setLoading(false);
+      setActionLoading(false);
+    }
+  }, []);
+
+  const verifyMFA = useCallback(async (challengeToken: string, code: string) => {
+    setActionLoading(true);
+    try {
+      const next = await apiPostJson<CenterLoginResult>("/auth/mfa/verify", {
+        challenge_token: challengeToken,
+        code,
+      });
+      setSession(normalizeSession(next));
+      setSessionError("");
+      return next;
+    } finally {
+      setActionLoading(false);
     }
   }, []);
 
   const logout = useCallback(async () => {
-    setLoading(true);
+    setActionLoading(true);
     try {
       await apiPostJson("/auth/logout", {});
     } catch (error) {
@@ -122,13 +151,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     } finally {
       setSession(defaultSession);
-      setLoading(false);
+      setActionLoading(false);
     }
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ session, loading, sessionError, login, logout, refresh }),
-    [session, loading, sessionError, login, logout, refresh],
+    () => ({ session, loading, actionLoading, sessionError, login, verifyMFA, logout, refresh }),
+    [session, loading, actionLoading, sessionError, login, verifyMFA, logout, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

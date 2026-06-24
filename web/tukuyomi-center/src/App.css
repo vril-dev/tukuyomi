@@ -1948,7 +1948,7 @@ button.danger {
   margin: 0;
 }
 
-.user-page .grid {
+.user-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
@@ -2072,6 +2072,85 @@ button.danger {
   font-weight: 400;
 }
 
+.mfa-qr-box {
+  display: flex;
+  min-height: 220px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mfa-qr-box img {
+  width: 192px;
+  height: 192px;
+}
+
+.mfa-setup-grid {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.mfa-setup-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.mfa-setup-key {
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--soft);
+  font-size: 12px;
+}
+
+.mfa-setup-key span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+}
+
+.mfa-setup-key strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-weight: 400;
+}
+
+.mfa-setup-key p {
+  margin: 10px 0 0;
+  color: var(--muted);
+}
+
+.mfa-recovery-codes {
+  margin-top: 14px;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+  padding: 12px;
+  background: #fffbeb;
+}
+
+.mfa-recovery-codes p {
+  margin: 0 0 8px;
+  color: #92400e;
+  font-size: 12px;
+}
+
+.mfa-recovery-codes pre {
+  margin: 0;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  padding: 10px;
+  background: #fff;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+
 .form-footer {
   display: flex;
   flex-wrap: wrap;
@@ -2112,7 +2191,11 @@ button.danger {
     grid-column: auto;
   }
 
-  .user-page .grid {
+  .user-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mfa-setup-grid {
     grid-template-columns: 1fr;
   }
 

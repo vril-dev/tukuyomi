@@ -10,7 +10,7 @@ export default function Login({
   noticeKey: string;
   clearNotice: () => void;
 }) {
-  const { login, verifyMFA, loading } = useAuth();
+  const { login, verifyMFA, actionLoading } = useAuth();
   const { tx } = useI18n();
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
@@ -116,12 +116,12 @@ export default function Login({
           <button
             type="submit"
             className="login-submit"
-            disabled={loading || (mfaChallenge ? !mfaCode.trim() : !identifier.trim() || !password.trim())}
+            disabled={actionLoading || (mfaChallenge ? !mfaCode.trim() : !identifier.trim() || !password.trim())}
           >
-            {loading ? tx("Signing in...") : mfaChallenge ? tx("Verify") : tx("Sign In")}
+            {actionLoading ? tx("Signing in...") : mfaChallenge ? tx("Verify") : tx("Sign In")}
           </button>
           {mfaChallenge ? (
-            <button type="button" className="secondary-btn" onClick={resetPasswordStep} disabled={loading}>
+            <button type="button" className="secondary-btn" onClick={resetPasswordStep} disabled={actionLoading}>
               {tx("Back to password")}
             </button>
           ) : null}

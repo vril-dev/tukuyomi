@@ -18,11 +18,17 @@ export type CenterSessionState = {
   user?: CenterSessionUser;
 };
 
+export type CenterLoginResult = CenterSessionState & {
+  mfa_required?: boolean;
+  challenge_token?: string;
+};
+
 type AuthContextValue = {
   session: CenterSessionState;
   loading: boolean;
   sessionError: string;
-  login: (identifier: string, password: string) => Promise<void>;
+  login: (identifier: string, password: string) => Promise<CenterLoginResult>;
+  verifyMFA: (challengeToken: string, code: string) => Promise<CenterLoginResult>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -101,12 +107,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (identifier: string, password: string) => {
     setLoading(true);
     try {
-      const next = await apiPostJson<CenterSessionState>("/auth/login", {
+      const next = await apiPostJson<CenterLoginResult>("/auth/login", {
         identifier,
         password,
       });
+      if (next.mfa_required) {
+        setSession(defaultSession);
+        setSessionError("");
+        return next;
+      }
       setSession(normalizeSession(next));
       setSessionError("");
+      return next;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const verifyMFA = useCallback(async (challengeToken: string, code: string) => {
+    setLoading(true);
+    try {
+      const next = await apiPostJson<CenterLoginResult>("/auth/mfa/verify", {
+        challenge_token: challengeToken,
+        code,
+      });
+      setSession(normalizeSession(next));
+      setSessionError("");
+      return next;
     } finally {
       setLoading(false);
     }
@@ -127,8 +154,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ session, loading, sessionError, login, logout, refresh }),
-    [session, loading, sessionError, login, logout, refresh],
+    () => ({ session, loading, sessionError, login, verifyMFA, logout, refresh }),
+    [session, loading, sessionError, login, verifyMFA, logout, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

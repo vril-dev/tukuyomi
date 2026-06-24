@@ -197,11 +197,12 @@ run it, prepare an existing bucket and set
 
 - `admin.session_secret` is **server-side only**.
 - CLI / automation use **per-user personal access tokens**.
-- The admin UI uses username / password login plus a DB-backed session
-  cookie.
-- Operators can enable local TOTP two-step verification from
-  **User > Two-step verification**. The QR code is generated in the
-  browser from an `otpauth://` URI; no external MFA service is contacted.
+- Gateway and Center admin UIs use username / password login plus a
+  DB-backed session cookie.
+- Operators can enable local TOTP two-step verification from each admin
+  UI's **User > Two-step verification** section. The QR code is generated
+  in the browser from an `otpauth://` URI; no external MFA service is
+  contacted.
 - Save the one-time recovery codes when two-step verification is enabled
   or regenerated. After MFA is enabled, password login only creates a
   short-lived challenge; the browser session cookie is issued after a

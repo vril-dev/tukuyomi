@@ -17,6 +17,7 @@
     "@tailwindcss/vite": "4.1.11",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "qrcode": "^1.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.8.0",
@@ -24,6 +25,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.2.0",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",

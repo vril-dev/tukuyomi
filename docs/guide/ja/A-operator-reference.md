@@ -188,10 +188,11 @@ MinIO integration test は通常回帰では skip されます。実行する場
 
 - `admin.session_secret` は **server-side 専用** で保持
 - CLI / automation は user ごとの **personal access token** を使う
-- 管理 UI は username / password login と DB-backed session cookie を使う
-- operator は **User > 2段階認証** から、認証アプリの TOTP による
-  2段階認証を有効化できる。QR コードは `otpauth://` URI からブラウザー内で
-  生成され、外部 MFA サービスとは通信しない
+- Gateway と Center の管理 UI は username / password login と
+  DB-backed session cookie を使う
+- operator は各管理 UI の **User > 2段階認証** から、認証アプリの TOTP
+  による 2段階認証を有効化できる。QR コードは `otpauth://` URI から
+  ブラウザー内で生成され、外部 MFA サービスとは通信しない
 - 2段階認証の有効化時または再生成時に表示されるリカバリーコードは、
   その場で保存する。有効化後は password login だけでは短時間の
   MFA challenge までしか発行せず、認証コードまたは未使用のリカバリーコードが

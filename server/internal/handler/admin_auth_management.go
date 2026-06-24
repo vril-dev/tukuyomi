@@ -945,7 +945,7 @@ func adminMFAStatusResponseForRecord(status adminMFAStatusRecord) adminMFAStatus
 }
 
 const (
-	adminMFAIssuer            = "Tukuyomi Gateway"
+	adminMFAIssuer            = "Tukuyomi"
 	adminMFASetupTTL          = 10 * time.Minute
 	adminMFAChallengeTTL      = 5 * time.Minute
 	adminMFARecoveryCodeCount = 10

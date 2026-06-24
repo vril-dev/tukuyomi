@@ -126,7 +126,7 @@ function formatSessionTime(value: string | undefined, locale: string) {
 export default function Layout() {
   const { locale, setLocale, tx } = useI18n();
   const { pathname } = useLocation();
-  const { logout, session, loading } = useAuth();
+  const { logout, session, actionLoading } = useAuth();
   const navItems = [...navGroups.flatMap((group) => group.items), ...utilityNavItems];
   const selectedDeviceRoute = selectedDeviceRouteFromPath(pathname);
   const selectedDeviceMenuItems = selectedDeviceRoute ? deviceMenuItems(selectedDeviceRoute.deviceID) : [];
@@ -235,8 +235,8 @@ export default function Layout() {
                 </span>
               ) : null}
             </div>
-            <button type="button" className="app-pill app-pill-action" disabled={loading} onClick={() => void logout()}>
-              {loading ? "..." : tx("Logout")}
+            <button type="button" className="app-pill app-pill-action" disabled={actionLoading} onClick={() => void logout()}>
+              {actionLoading ? "..." : tx("Logout")}
             </button>
           </div>
         </header>

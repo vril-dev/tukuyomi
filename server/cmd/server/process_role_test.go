@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseServerCommandRoles(t *testing.T) {
 	t.Parallel()
@@ -30,6 +33,7 @@ func TestParseServerCommandRoles(t *testing.T) {
 		},
 		{name: "db migrate", args: []string{"tukuyomi", "db-migrate"}, want: serverCommandDBMigrate},
 		{name: "admin bootstrap", args: []string{"tukuyomi", "admin-bootstrap"}, want: serverCommandAdminBootstrap},
+		{name: "admin mfa", args: []string{"tukuyomi", "admin-mfa", "disable", "--username", "admin", "--reason", "lost authenticator"}, want: serverCommandAdminMFA},
 		{name: "scheduled task defaults", args: []string{"tukuyomi", "bootstrap-scheduled-task-defaults"}, want: serverCommandBootstrapScheduledTasks},
 		{name: "scheduled tasks", args: []string{"tukuyomi", "run-scheduled-tasks"}, want: serverCommandRunScheduledTasks},
 		{name: "archive waf logs", args: []string{"tukuyomi", "archive-waf-logs"}, want: serverCommandArchiveWAFLogs},
@@ -80,5 +84,35 @@ func TestParseServerCommandRejectsUnknown(t *testing.T) {
 	}
 	if _, err := parseServerCommandWithEnv([]string{"tukuyomi", "db-migrate"}, []string{serverInternalProcessRoleEnv + "=" + internalProcessRoleWorker}); err == nil {
 		t.Fatal("expected internal role plus command to be rejected")
+	}
+}
+
+func TestParseAdminMFACommandConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseAdminMFACommandConfig([]string{"disable", "--username", "admin", "--reason", "lost authenticator"})
+	if err != nil {
+		t.Fatalf("parseAdminMFACommandConfig: %v", err)
+	}
+	if cfg.Action != "disable" || cfg.Username != "admin" || cfg.Email != "" || cfg.Reason != "lost authenticator" {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+
+	rejects := [][]string{
+		{},
+		{"rotate", "--username", "admin", "--reason", "x"},
+		{"disable", "--username", "admin"},
+		{"disable", "--username", "admin", "--email", "admin@example.test", "--reason", "x"},
+		{"disable", "--reason", "x"},
+		{"disable", "--email", "admin@example.test", "--reason", "x", "extra"},
+	}
+	for _, args := range rejects {
+		args := args
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			t.Parallel()
+			if _, err := parseAdminMFACommandConfig(args); err == nil {
+				t.Fatalf("expected args %v to be rejected", args)
+			}
+		})
 	}
 }

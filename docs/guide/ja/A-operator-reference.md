@@ -197,6 +197,12 @@ MinIO integration test は通常回帰では skip されます。実行する場
   その場で保存する。有効化後は password login だけでは短時間の
   MFA challenge までしか発行せず、認証コードまたは未使用のリカバリーコードが
   通った後にブラウザーセッションクッキーを発行する
+- 認証アプリとすべてのリカバリーコードを失った場合は、シェルアクセスで
+  対象ユーザーの MFA だけを無効化できる:
+  `WAF_CONFIG_FILE=conf/config.json ./bin/tukuyomi admin-mfa disable --username admin --reason "lost authenticator"`。
+  Center の場合は、`WAF_CONFIG_FILE` に `conf/config.center.json` など
+  Center 側の bootstrap config を指定する。このコマンドは
+  `admin_auth_audit` へ記録し、パスワードは変更しない
 - `Settings` は `Save config only`。listener / runtime / storage 系は
   **restart が必要**
 

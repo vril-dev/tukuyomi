@@ -181,6 +181,10 @@ routing runs.
 - Operators can enable local TOTP two-step verification from each admin UI's **User > Two-step verification** section.
   The QR code is generated in the browser from an `otpauth://` URI; no external MFA service is contacted.
 - Save recovery codes when they are shown. Once two-step verification is enabled, password login creates only a short-lived MFA challenge, and the browser session cookie is issued after a valid authenticator code or unused recovery code.
+- If the authenticator app and all recovery codes are lost, shell access can disable MFA for one user:
+  `WAF_CONFIG_FILE=conf/config.json ./bin/tukuyomi admin-mfa disable --username admin --reason "lost authenticator"`.
+  For Center, select the Center bootstrap config, for example `conf/config.center.json`.
+  The command writes an `admin_auth_audit` row and does not change the password.
 - `Settings` is `Save config only`: listener/runtime/storage changes need restart.
 
 ### Host Network Hardening (L3/L4 Basics)

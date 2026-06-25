@@ -207,6 +207,12 @@ run it, prepare an existing bucket and set
   or regenerated. After MFA is enabled, password login only creates a
   short-lived challenge; the browser session cookie is issued after a
   valid authenticator code or unused recovery code.
+- If the authenticator app and all recovery codes are lost, a shell
+  operator can disable MFA for one user:
+  `WAF_CONFIG_FILE=conf/config.json ./bin/tukuyomi admin-mfa disable --username admin --reason "lost authenticator"`.
+  For Center, point `WAF_CONFIG_FILE` at the Center bootstrap config,
+  for example `conf/config.center.json`. The command writes an
+  `admin_auth_audit` row and does not change the password.
 - `Settings` is `Save config only`. **Listener / runtime / storage
   changes require a restart.**
 

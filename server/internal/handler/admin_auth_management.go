@@ -747,6 +747,9 @@ func postAdminMFAVerify(c *gin.Context, cookieNames adminauth.CookieNames) {
 	}
 	principal.CredentialID = formatAdminCredentialID(sessionID)
 	adminauth.SetCookiesWithNames(c.Writer, cookieNames, sessionToken, csrfToken, expiresAt, requestIsHTTPS(c))
+	recordAdminAuthAuditBestEffort(store, adminAuthAuditEventMFAVerified, adminUserRecord{UserID: principal.UserID, Username: principal.Username}, string(adminauth.AuthKindSession), principal.CredentialID, true, c.ClientIP(), c.Request.UserAgent(), map[string]any{
+		"proof_kind": proofKind,
+	}, now)
 	c.JSON(http.StatusOK, adminLoginSessionResponse(principal, expiresAt, cookieNames, c, gin.H{
 		"mfa_verified": true,
 		"mfa_method":   proofKind,
@@ -813,6 +816,7 @@ func PostAdminMFASetup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create mfa setup"})
 		return
 	}
+	recordAdminAuthAuditBestEffort(store, adminAuthAuditEventMFASetupCreated, user, string(principal.AuthKind), principal.CredentialID, true, c.ClientIP(), c.Request.UserAgent(), nil, time.Now().UTC())
 	c.JSON(http.StatusCreated, adminMFASetupResponse{
 		SetupID:    setup.SetupID,
 		Secret:     setup.Secret,
@@ -856,6 +860,9 @@ func PostAdminMFAEnable(c *gin.Context) {
 		adminMFAStatusResponse: adminMFAStatusResponseForRecord(status),
 		RecoveryCodes:          recoveryCodes,
 	}
+	recordAdminAuthAuditBestEffort(store, adminAuthAuditEventMFAEnabled, adminUserRecord{UserID: principal.UserID, Username: principal.Username}, string(principal.AuthKind), principal.CredentialID, true, c.ClientIP(), c.Request.UserAgent(), map[string]any{
+		"recovery_codes": len(recoveryCodes),
+	}, time.Now().UTC())
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -874,7 +881,8 @@ func PostAdminMFARecoveryCodesRegenerate(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "admin auth store is unavailable"})
 		return
 	}
-	if !verifyAdminMFASensitiveMutation(c, store, principal.UserID, req.CurrentPassword, req.Code) {
+	proofKind, ok := verifyAdminMFASensitiveMutation(c, store, principal.UserID, req.CurrentPassword, req.Code)
+	if !ok {
 		return
 	}
 	codes, err := store.regenerateAdminMFARecoveryCodes(principal.UserID, time.Now().UTC())
@@ -887,6 +895,10 @@ func PostAdminMFARecoveryCodesRegenerate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load admin mfa status"})
 		return
 	}
+	recordAdminAuthAuditBestEffort(store, adminAuthAuditEventMFARecoveryCodesRegenerated, adminUserRecord{UserID: principal.UserID, Username: principal.Username}, string(principal.AuthKind), principal.CredentialID, true, c.ClientIP(), c.Request.UserAgent(), map[string]any{
+		"proof_kind":     proofKind,
+		"recovery_codes": len(codes),
+	}, time.Now().UTC())
 	c.JSON(http.StatusOK, adminMFAEnableResponse{
 		adminMFAStatusResponse: adminMFAStatusResponseForRecord(status),
 		RecoveryCodes:          codes,
@@ -908,32 +920,37 @@ func PostAdminMFADisable(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "admin auth store is unavailable"})
 		return
 	}
-	if !verifyAdminMFASensitiveMutation(c, store, principal.UserID, req.CurrentPassword, req.Code) {
+	proofKind, ok := verifyAdminMFASensitiveMutation(c, store, principal.UserID, req.CurrentPassword, req.Code)
+	if !ok {
 		return
 	}
 	if err := store.disableAdminMFA(principal.UserID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to disable mfa"})
 		return
 	}
+	recordAdminAuthAuditBestEffort(store, adminAuthAuditEventMFADisabled, adminUserRecord{UserID: principal.UserID, Username: principal.Username}, string(principal.AuthKind), principal.CredentialID, true, c.ClientIP(), c.Request.UserAgent(), map[string]any{
+		"proof_kind": proofKind,
+	}, time.Now().UTC())
 	c.JSON(http.StatusOK, adminMFAStatusResponse{Enabled: false})
 }
 
-func verifyAdminMFASensitiveMutation(c *gin.Context, store *wafEventStore, userID int64, currentPassword string, code string) bool {
+func verifyAdminMFASensitiveMutation(c *gin.Context, store *wafEventStore, userID int64, currentPassword string, code string) (string, bool) {
 	if _, ok, err := store.verifyAdminCurrentPassword(userID, currentPassword); err != nil {
 		writeAdminCurrentPasswordCheckError(c, err)
-		return false
+		return "", false
 	} else if !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": errAdminAuthCurrentPassword.Error()})
-		return false
+		return "", false
 	}
 	if proofKind, ok, err := store.verifyAdminMFACode(userID, code, time.Now().UTC()); err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": adminMFAErrorMessage(err)})
-		return false
+		return "", false
 	} else if !ok || strings.TrimSpace(proofKind) == "" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "mfa code is invalid"})
-		return false
+		return "", false
+	} else {
+		return proofKind, true
 	}
-	return true
 }
 
 func adminMFAStatusResponseForRecord(status adminMFAStatusRecord) adminMFAStatusResponse {

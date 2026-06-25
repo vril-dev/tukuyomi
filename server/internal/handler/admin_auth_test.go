@@ -459,6 +459,9 @@ func TestAdminAuthMFASetupLoginAndRecoveryCodeFlow(t *testing.T) {
 	if setup.SetupID == "" || setup.Secret == "" || !strings.HasPrefix(setup.OtpauthURI, "otpauth://totp/") {
 		t.Fatalf("invalid mfa setup response: %+v", setup)
 	}
+	if got := countAdminAuthAuditForTest(t, store, adminAuthAuditEventMFASetupCreated); got != 1 {
+		t.Fatalf("mfa setup audit count=%d want 1", got)
+	}
 
 	code, _, err := adminauth.TOTPCode(setup.Secret, time.Now().UTC())
 	if err != nil {
@@ -484,6 +487,9 @@ func TestAdminAuthMFASetupLoginAndRecoveryCodeFlow(t *testing.T) {
 	}
 	if !enabled.Enabled || len(enabled.RecoveryCodes) != adminMFARecoveryCodeCount {
 		t.Fatalf("mfa enabled response=%+v", enabled)
+	}
+	if got := countAdminAuthAuditForTest(t, store, adminAuthAuditEventMFAEnabled); got != 1 {
+		t.Fatalf("mfa enabled audit count=%d want 1", got)
 	}
 
 	duplicateEnableReq := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/mfa/enable", bytes.NewReader(enableBody))
@@ -552,6 +558,9 @@ func TestAdminAuthMFASetupLoginAndRecoveryCodeFlow(t *testing.T) {
 	if findCookie(verifyRes.Result().Cookies(), adminauth.SessionCookieName) == nil {
 		t.Fatalf("mfa verify response did not issue a session cookie")
 	}
+	if got := countAdminAuthAuditForTest(t, store, adminAuthAuditEventMFAVerified); got != 1 {
+		t.Fatalf("mfa verify audit count=%d want 1", got)
+	}
 
 	loginRes = httptest.NewRecorder()
 	loginReq = httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/login", bytes.NewReader(loginBody))
@@ -574,6 +583,9 @@ func TestAdminAuthMFASetupLoginAndRecoveryCodeFlow(t *testing.T) {
 	if verifyRes.Code != http.StatusOK {
 		t.Fatalf("mfa recovery verify status=%d want=%d body=%s", verifyRes.Code, http.StatusOK, verifyRes.Body.String())
 	}
+	if got := countAdminAuthAuditForTest(t, store, adminAuthAuditEventMFAVerified); got != 2 {
+		t.Fatalf("mfa verify audit count after recovery=%d want 2", got)
+	}
 
 	loginRes = httptest.NewRecorder()
 	loginReq = httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/login", bytes.NewReader(loginBody))
@@ -592,6 +604,65 @@ func TestAdminAuthMFASetupLoginAndRecoveryCodeFlow(t *testing.T) {
 	r.ServeHTTP(verifyRes, verifyReq)
 	if verifyRes.Code != http.StatusUnauthorized {
 		t.Fatalf("reused recovery code status=%d want=%d body=%s", verifyRes.Code, http.StatusUnauthorized, verifyRes.Body.String())
+	}
+}
+
+func TestAdminMFAEmergencyDisableClearsMFAAndAudits(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	restore := saveAdminAuthConfig()
+	defer restore()
+
+	config.AdminSessionSecret = "session-secret-123456"
+	store := initConfigDBStoreForTest(t)
+	now := time.Now().UTC()
+	passwordHash, err := adminauth.HashPassword("correct horse battery staple")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	user, err := store.createAdminUser("admin", "admin@example.test", adminauth.AdminRoleOwner, passwordHash, false, now)
+	if err != nil {
+		t.Fatalf("create admin user: %v", err)
+	}
+	setup, err := store.createAdminMFASetup(user, now)
+	if err != nil {
+		t.Fatalf("create mfa setup: %v", err)
+	}
+	code, _, err := adminauth.TOTPCode(setup.Secret, now)
+	if err != nil {
+		t.Fatalf("TOTPCode: %v", err)
+	}
+	if _, err := store.enableAdminMFAFromSetup(user.UserID, setup.SetupID, code, now); err != nil {
+		t.Fatalf("enable mfa: %v", err)
+	}
+	status, err := store.loadAdminMFAStatus(user.UserID, now)
+	if err != nil {
+		t.Fatalf("load mfa status: %v", err)
+	}
+	if !status.Enabled || status.RecoveryCodesRemaining == 0 {
+		t.Fatalf("mfa should be enabled before emergency disable: %+v", status)
+	}
+
+	result, err := DisableAdminMFAForUser(AdminMFAEmergencyDisableRequest{
+		Username: "admin",
+		Reason:   "lost authenticator",
+		Now:      now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("DisableAdminMFAForUser: %v", err)
+	}
+	if result.UserID != user.UserID || result.Username != user.Username || !result.WasEnabled {
+		t.Fatalf("unexpected disable result: %+v", result)
+	}
+	status, err = store.loadAdminMFAStatus(user.UserID, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("load mfa status after disable: %v", err)
+	}
+	if status.Enabled || status.RecoveryCodesRemaining != 0 {
+		t.Fatalf("mfa should be disabled: %+v", status)
+	}
+	if got := countAdminAuthAuditForTest(t, store, adminAuthAuditEventMFAEmergencyDisabled); got != 1 {
+		t.Fatalf("emergency audit count=%d want 1", got)
 	}
 }
 
@@ -882,6 +953,15 @@ func loginAdminForTest(t *testing.T, r *gin.Engine, identifier string, password 
 		t.Fatalf("expected session and csrf cookies, got=%v", loginRes.Result().Cookies())
 	}
 	return sessionCookie, csrfCookie
+}
+
+func countAdminAuthAuditForTest(t *testing.T, store *wafEventStore, eventType string) int {
+	t.Helper()
+	var count int
+	if err := store.queryRow(`SELECT COUNT(*) FROM admin_auth_audit WHERE event_type = ?`, eventType).Scan(&count); err != nil {
+		t.Fatalf("count admin auth audit: %v", err)
+	}
+	return count
 }
 
 func saveAdminAuthConfig() func() {

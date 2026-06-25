@@ -51,6 +51,8 @@ func runMain(args []string) {
 		runDBImportWAFRuleAssetsCommand()
 	case serverCommandAdminBootstrap:
 		runAdminBootstrapCommand()
+	case serverCommandAdminMFA:
+		runAdminMFACommand(cmd.args)
 	case serverCommandBootstrapScheduledTasks:
 		runBootstrapScheduledTaskDefaultsCommand()
 	case serverCommandPreviewPrintTopology:

@@ -1,0 +1,33 @@
+version: 2
+
+# Update proposals target the default branch; merges remain manual.
+updates:
+  - package-ecosystem: gomod
+    directory: /server
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:30"
+      timezone: Asia/Tokyo
+
+  - package-ecosystem: docker
+    directories:
+      - /server
+      - /build
+      - /docs/build
+      - /examples/api-gateway/api
+      - /examples/nextjs/app
+      - /testenv/release-binary/protected-api
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:30"
+      timezone: Asia/Tokyo
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:30"
+      timezone: Asia/Tokyo

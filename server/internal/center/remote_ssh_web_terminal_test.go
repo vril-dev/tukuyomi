@@ -1,15 +1,18 @@
 package center
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	"tukuyomi/internal/adminauth"
 )
@@ -133,4 +136,160 @@ func TestRemoteSSHWebTerminalAcceptClearsHTTPServerReadDeadline(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("server websocket handler did not finish")
 	}
+}
+
+func TestRemoteSSHWebTerminalAcceptOriginAndProtocol(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := acceptRemoteSSHWebTerminal(w, r)
+		if err == nil {
+			defer conn.CloseNow()
+			_, _, _ = conn.Read(r.Context())
+		}
+	}))
+	defer srv.Close()
+	for _, tc := range []struct {
+		name   string
+		origin string
+		accept bool
+	}{
+		{name: "same origin", origin: srv.URL, accept: true},
+		{name: "cross origin", origin: "https://untrusted.example"},
+		{name: "malformed origin", origin: "://invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			conn, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"), &websocket.DialOptions{
+				HTTPHeader:      http.Header{"Origin": []string{tc.origin}},
+				Subprotocols:    []string{remoteSSHWebTerminalSubprotocol},
+				CompressionMode: websocket.CompressionContextTakeover,
+			})
+			if conn != nil {
+				defer conn.CloseNow()
+			}
+			if !tc.accept {
+				if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
+					t.Fatalf("unauthorized origin: response=%v error=%v", resp, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("accept same origin: %v", err)
+			}
+			if conn.Subprotocol() != remoteSSHWebTerminalSubprotocol {
+				t.Fatalf("subprotocol=%q", conn.Subprotocol())
+			}
+			if got := resp.Header.Get("Sec-WebSocket-Extensions"); got != "" {
+				t.Fatalf("compression must remain disabled, negotiated extensions=%q", got)
+			}
+		})
+	}
+}
+
+func TestRemoteSSHWebTerminalReadInputLimit(t *testing.T) {
+	// Preserve the existing 32 KiB message limit across WebSocket implementations.
+	const readLimit = 32 * 1024
+	minimalInput, err := json.Marshal(remoteSSHWebTerminalMessage{Type: "input", Data: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range []int{readLimit, readLimit + 1} {
+		t.Run(fmt.Sprintf("%d bytes", size), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			conn, done, stdin := startRemoteSSHWebTerminalInputForTest(t, ctx)
+			input := strings.Repeat("x", size-len(minimalInput)+1)
+			payload, err := json.Marshal(remoteSSHWebTerminalMessage{Type: "input", Data: input})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(payload) != size {
+				t.Fatalf("payload length=%d want %d", len(payload), size)
+			}
+			if err := conn.Write(ctx, websocket.MessageText, payload); err != nil {
+				t.Fatalf("write input: %v", err)
+			}
+			if size <= readLimit {
+				if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"close"}`)); err != nil {
+					t.Fatalf("close input: %v", err)
+				}
+			} else {
+				_, _, err := conn.Read(ctx)
+				if websocket.CloseStatus(err) != websocket.StatusMessageTooBig {
+					t.Fatalf("oversized message close status=%v error=%v", websocket.CloseStatus(err), err)
+				}
+			}
+			select {
+			case err := <-done:
+				if size <= readLimit {
+					if err != nil || stdin.String() != input {
+						t.Fatalf("input at limit: forwarded=%d bytes error=%v", stdin.Len(), err)
+					}
+				} else if err == nil || stdin.Len() != 0 {
+					t.Fatalf("oversized input: forwarded=%d bytes error=%v", stdin.Len(), err)
+				}
+			case <-ctx.Done():
+				t.Fatal("input reader did not finish")
+			}
+		})
+	}
+}
+
+func TestRemoteSSHWebTerminalReadInputStops(t *testing.T) {
+	for _, stop := range []string{"cancel", "close", "disconnect"} {
+		t.Run(stop, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			conn, done, _ := startRemoteSSHWebTerminalInputForTest(t, ctx)
+			if stop == "cancel" {
+				cancel()
+			} else if stop == "close" {
+				if err := conn.Close(websocket.StatusNormalClosure, "closed"); err != nil {
+					t.Fatalf("close websocket: %v", err)
+				}
+			} else if err := conn.CloseNow(); err != nil {
+				t.Fatalf("disconnect websocket: %v", err)
+			}
+			select {
+			case err := <-done:
+				if stop == "cancel" && !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancelled input error=%v", err)
+				}
+				if stop == "close" && websocket.CloseStatus(err) != websocket.StatusNormalClosure {
+					t.Fatalf("closed input error=%v", err)
+				}
+				if stop == "disconnect" && err == nil {
+					t.Fatal("abrupt disconnect must return a read error")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("input reader remained blocked")
+			}
+		})
+	}
+}
+
+func startRemoteSSHWebTerminalInputForTest(t *testing.T, ctx context.Context) (*websocket.Conn, <-chan error, *bytes.Buffer) {
+	t.Helper()
+	done := make(chan error, 1)
+	stdin := new(bytes.Buffer)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := acceptRemoteSSHWebTerminal(w, r)
+		if err != nil {
+			done <- err
+			return
+		}
+		defer conn.CloseNow()
+		remoteSSHWebTerminalReadInput(ctx, conn, nil, stdin, nil, done)
+	}))
+	t.Cleanup(srv.Close)
+	dialCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(dialCtx, "ws"+strings.TrimPrefix(srv.URL, "http"), &websocket.DialOptions{
+		Subprotocols: []string{remoteSSHWebTerminalSubprotocol},
+	})
+	if err != nil {
+		t.Fatalf("dial input websocket: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.CloseNow() })
+	return conn, done, stdin
 }

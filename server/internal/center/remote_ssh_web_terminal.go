@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/ssh"
-	"nhooyr.io/websocket"
 
 	"tukuyomi/internal/adminauth"
 	"tukuyomi/internal/config"

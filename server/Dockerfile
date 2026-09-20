@@ -1,4 +1,4 @@
-FROM golang:1.26.4-alpine AS builder
+FROM golang:1.26.8-alpine3.24 AS builder
 
 ARG VERSION
 
@@ -13,7 +13,7 @@ COPY . .
 RUN go build -ldflags "-X tukuyomi/internal/buildinfo.Version=${VERSION}" -o server /app/cmd/server
 RUN CGO_ENABLED=0 go install github.com/maxmind/geoipupdate/v7/cmd/geoipupdate@v7.1.1
 
-FROM alpine:3.19
+FROM alpine:3.24.2
 
 WORKDIR /app
 

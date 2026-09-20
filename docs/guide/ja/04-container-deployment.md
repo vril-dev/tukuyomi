@@ -218,6 +218,14 @@ WAF / CRS の import material は `/app/data/tmp` 配下に stage され、DB
 `tukuyomi` は `conf/config.json` を DB 接続 bootstrap として使い、その後の
 operator-managed な app / proxy 設定はすべて normalized DB table から読みます。
 
+4.6.2 節の deployment image には、開発用の管理ユーザーは含まれません。
+DB に管理ユーザーがいない初回起動時は、platform の runtime secret injection
+を使い、`TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` と
+`TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` を設定してください。
+`TUKUYOMI_ADMIN_BOOTSTRAP_EMAIL` は任意です。これらの設定で初期 owner を
+作成します。既存 DB の管理ユーザーは上書きしません。owner の認証情報は
+image build 時には渡さず、runtime にだけ供給してください。
+
 典型的な本番パターンは次のとおりです。
 
 - `conf/config.json` は、`storage.db_driver` / `storage.db_path` /
@@ -233,6 +241,9 @@ operator-managed な app / proxy 設定はすべて normalized DB table から�
 - runtime env injection は主に次だけに絞る
   - `WAF_CONFIG_FILE`
   - `WAF_PROXY_AUDIT_FILE`
+  - 初期 owner 用の `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` /
+    `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD`、任意の
+    `TUKUYOMI_ADMIN_BOOTSTRAP_EMAIL`
   - `persistent_storage.backend=s3` の場合の `AWS_ACCESS_KEY_ID` /
     `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` / `AWS_REGION` /
     `AWS_DEFAULT_REGION`

@@ -187,6 +187,12 @@ WAF／CRS のインポート素材は `/app/data/tmp` 配下にステージン�
 
 `tukuyomi` は `conf/config.json` を DB 接続のブートストラップに使用し、その後のオペレーター管理のアプリケーション／プロキシ設定は正規化済み DB テーブルから読み込みます。
 
+[Dockerfile.example](Dockerfile.example) でビルドした配備用イメージには、開発用の管理ユーザーは含まれません。
+DB に管理ユーザーがいない初回起動時は、プラットフォームのシークレット注入機能を使い、
+`TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` と `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` を実行時に設定してください。
+`TUKUYOMI_ADMIN_BOOTSTRAP_EMAIL` は任意です。これらの設定で初期オーナーを作成します。
+既存 DB の管理ユーザーは上書きしません。オーナーの認証情報はイメージのビルド時には渡さず、実行時にだけ供給してください。
+
 典型的な本番パターン:
 
 - `conf/config.json` は `storage.db_driver`、`storage.db_path`、`storage.db_dsn` 用に、シークレットマネージャー／構成管理から生成
@@ -196,6 +202,7 @@ WAF／CRS のインポート素材は `/app/data/tmp` 配下にステージン�
 - 主に必要なランタイム env 注入は次のものだけです
   - `WAF_CONFIG_FILE`
   - `WAF_PROXY_AUDIT_FILE`
+  - 初期オーナー用の `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME`、`TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD`、任意の `TUKUYOMI_ADMIN_BOOTSTRAP_EMAIL`
   - `persistent_storage.backend=s3` の場合のみ `AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`、`AWS_SESSION_TOKEN`、`AWS_REGION` ／ `AWS_DEFAULT_REGION`
   - `security_audit.key_source=env` を使う場合のセキュリティ監査鍵のオーバーライド
 - 埋め込みの `Settings` 画面は DB `app_config` を編集します。リスナー／ランタイム／ストレージポリシー／オブザーバビリティ系の変更を反映するには、コンテナを再作成または再起動してください

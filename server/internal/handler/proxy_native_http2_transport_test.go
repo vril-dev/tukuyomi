@@ -361,6 +361,154 @@ func TestNativeHTTP2RapidResetBurstClosesSession(t *testing.T) {
 	}
 }
 
+func TestNativeHTTP2StreamCloseKeepsTerminalState(t *testing.T) {
+	for _, closeSession := range []bool{false, true} {
+		for _, closeRemote := range []bool{false, true} {
+			name := "session=" + strconv.FormatBool(closeSession) + "/remote=" + strconv.FormatBool(closeRemote)
+			t.Run(name, func(t *testing.T) {
+				conn, peer := net.Pipe()
+				defer conn.Close()
+				defer peer.Close()
+				s := newNativeHTTP2Session(nil, nativeHTTP2ConnKey{}, conn)
+				req := httptest.NewRequest(http.MethodGet, "http://backend.example/", nil)
+				st, ok, err := s.tryOpenStream(req)
+				if err != nil || !ok {
+					t.Fatalf("tryOpenStream: ok=%v err=%v", ok, err)
+				}
+				closeErr := errors.New("upstream reset")
+				if closeSession {
+					s.closeWithError(closeErr)
+				} else {
+					s.releaseStream(st, closeErr)
+				}
+				// END_STREAM completion can arrive after a reset or connection failure.
+				if closeRemote {
+					st.markRemoteClosed()
+				} else {
+					st.markLocalClosed()
+				}
+				st.mu.Lock()
+				state := st.state
+				st.mu.Unlock()
+				if state != nativeHTTP2StreamClosed {
+					t.Fatalf("late END_STREAM reopened stream state: %d", state)
+				}
+				if !errors.Is(st.terminalError(), closeErr) {
+					t.Fatalf("terminal error=%v want %v", st.terminalError(), closeErr)
+				}
+				select {
+				case <-st.done:
+				default:
+					t.Fatal("closed stream did not notify waiters")
+				}
+			})
+		}
+	}
+}
+
+func TestNativeHTTP2ConcurrentStreamReleaseAndLocalClose(t *testing.T) {
+	conn, peer := net.Pipe()
+	defer conn.Close()
+	defer peer.Close()
+	s := newNativeHTTP2Session(nil, nativeHTTP2ConnKey{}, conn)
+	for range 64 {
+		openStream := func() *nativeHTTP2Stream {
+			req := httptest.NewRequest(http.MethodGet, "http://backend.example/", nil)
+			st, ok, err := s.tryOpenStream(req)
+			if err != nil || !ok {
+				t.Fatalf("tryOpenStream: ok=%v err=%v", ok, err)
+			}
+			return st
+		}
+		st, other := openStream(), openStream()
+		if n, err := s.reserveSendWindow(context.Background(), st, 17); n != 17 || err != nil {
+			t.Fatalf("reserveSendWindow: n=%d err=%v", n, err)
+		}
+		connWindow, streamWindow := s.connSendWindow, st.sendWindow
+		start, finished := make(chan struct{}), make(chan struct{}, 3)
+		closeErr := errors.New("upstream reset")
+		for _, fn := range []func(){
+			st.markLocalClosed,
+			func() { s.releaseStream(st, closeErr) },
+			func() { s.releaseStream(st, closeErr) },
+		} {
+			go func() {
+				<-start
+				fn()
+				finished <- struct{}{}
+			}()
+		}
+		close(start)
+		for range 3 {
+			select {
+			case <-finished:
+			case <-time.After(2 * time.Second):
+				t.Fatal("stream release deadlocked")
+			}
+		}
+		if s.activeStreams != 1 || len(s.streams) != 1 || s.streams[other.id] != other {
+			t.Fatalf("release affected another stream: active=%d streams=%d", s.activeStreams, len(s.streams))
+		}
+		if _, err := s.reserveSendWindow(context.Background(), st, 1); !errors.Is(err, errNativeHTTP2StreamClosed) {
+			t.Fatalf("released stream reserved send window: %v", err)
+		}
+		if s.connSendWindow != connWindow || st.sendWindow != streamWindow {
+			t.Fatal("stream release changed flow-control accounting")
+		}
+		if st.state != nativeHTTP2StreamClosed || !errors.Is(st.terminalError(), closeErr) {
+			t.Fatalf("release state=%d error=%v", st.state, st.terminalError())
+		}
+		s.releaseStream(other, nil)
+	}
+}
+
+func TestNativeHTTP2ConcurrentDrainAndSessionClose(t *testing.T) {
+	for range 64 {
+		conn, peer := net.Pipe()
+		s := newNativeHTTP2Session(nil, nativeHTTP2ConnKey{}, conn)
+		req := httptest.NewRequest(http.MethodGet, "http://backend.example/", nil)
+		st, ok, err := s.tryOpenStream(req)
+		if err != nil || !ok {
+			_ = conn.Close()
+			_ = peer.Close()
+			t.Fatalf("tryOpenStream: ok=%v err=%v", ok, err)
+		}
+		s.registered = true
+		s.remoteMaxStreams = 0
+		start, finished := make(chan struct{}), make(chan struct{}, 2)
+		for _, fn := range []func(){
+			func() { s.releaseStream(st, nil) },
+			func() { s.closeWithError(io.ErrUnexpectedEOF) },
+		} {
+			go func() {
+				<-start
+				fn()
+				finished <- struct{}{}
+			}()
+		}
+		close(start)
+		for range 2 {
+			select {
+			case <-finished:
+			case <-time.After(2 * time.Second):
+				_ = conn.Close()
+				_ = peer.Close()
+				t.Fatal("draining stream and session close deadlocked")
+			}
+		}
+		_ = conn.Close()
+		_ = peer.Close()
+		if !s.closed || s.activeStreams != 0 || len(s.streams) != 0 {
+			t.Fatalf("session close left streams: closed=%v active=%d streams=%d", s.closed, s.activeStreams, len(s.streams))
+		}
+		select {
+		case <-st.done:
+		default:
+			t.Fatal("draining stream did not close")
+		}
+	}
+}
+
 func TestNativeHTTP2RequestHeaderListSizeRejectsBeforeStreamID(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

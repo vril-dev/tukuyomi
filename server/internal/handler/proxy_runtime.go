@@ -149,8 +149,8 @@ func proxyDiscoveryStatesInitial(cfg ProxyRulesConfig) map[string]proxyDiscovery
 	return proxydiscovery.StatesInitial(proxyDiscoveryUpstreams(cfg), proxyDNSLookupProvider)
 }
 
-func refreshProxyDiscoveryStates(cfg ProxyRulesConfig, prev map[string]proxyDiscoveryRuntimeState, now time.Time, force bool) map[string]proxyDiscoveryRuntimeState {
-	return proxydiscovery.RefreshStates(proxyDiscoveryUpstreams(cfg), prev, now, force, proxyDNSLookupProvider)
+func refreshProxyDiscoveryStates(cfg ProxyRulesConfig, prev map[string]proxyDiscoveryRuntimeState, now time.Time, force bool, lookup proxyDNSLookup) map[string]proxyDiscoveryRuntimeState {
+	return proxydiscovery.RefreshStates(proxyDiscoveryUpstreams(cfg), prev, now, force, lookup)
 }
 
 func resolveProxyDiscoveryUpstream(upstream ProxyUpstream, prev proxyDiscoveryRuntimeState, now time.Time) proxyDiscoveryRuntimeState {
@@ -405,11 +405,14 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 	}
 	transport, err := newDynamicProxyTransport(prepared.effectiveCfg, health)
 	if err != nil {
+		health.Close()
 		return fmt.Errorf("build proxy transport: %w", err)
 	}
 	flushInterval := time.Duration(prepared.effectiveCfg.FlushIntervalMS) * time.Millisecond
 	engine, err := newProxyEngine(transport, config.ProxyEngineMode, flushInterval)
 	if err != nil {
+		health.Close()
+		closeIdleProxyRoundTripper(transport)
 		return err
 	}
 
@@ -431,8 +434,12 @@ func InitProxyRuntime(configPath string, rollbackMax int) error {
 	proxyaccesslog.SetRuntimeMode(prepared.effectiveCfg.AccessLogMode)
 
 	proxyRuntimeMu.Lock()
+	previous := proxyRt
 	proxyRt = rt
 	proxyRuntimeMu.Unlock()
+	if previous != nil {
+		previous.health.Close()
+	}
 
 	emitProxyConfigApplied("proxy transport initialized", prepared.effectiveCfg)
 	emitProxyTLSInsecureWarning(prepared.effectiveCfg)
@@ -3382,6 +3389,41 @@ type proxyBackendState struct {
 	LastLatencyMS          int64
 }
 
+type monitorDNSLookup struct {
+	ctx      context.Context
+	delegate proxyDNSLookup
+}
+
+func (l monitorDNSLookup) lookupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(l.ctx, cancel)
+	if l.ctx.Err() != nil {
+		cancel()
+	}
+	return ctx, func() {
+		stop()
+		cancel()
+	}
+}
+
+func (l monitorDNSLookup) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	ctx, cancel := l.lookupContext(ctx)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return l.delegate.LookupIPAddr(ctx, host)
+}
+
+func (l monitorDNSLookup) LookupSRV(ctx context.Context, service, proto, name string) (string, []*net.SRV, error) {
+	ctx, cancel := l.lookupContext(ctx)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return "", nil, err
+	}
+	return l.delegate.LookupSRV(ctx, service, proto, name)
+}
+
 type upstreamHealthMonitor struct {
 	mu        sync.RWMutex
 	cfg       ProxyRulesConfig
@@ -3390,6 +3432,12 @@ type upstreamHealthMonitor struct {
 	discovery map[string]proxyDiscoveryRuntimeState
 	metrics   *proxyTransportMetrics
 	wakeCh    chan struct{}
+	stopCh    <-chan struct{}
+	ctx       context.Context
+	cancel    context.CancelFunc
+	lookup    proxyDNSLookup
+	workers   sync.WaitGroup
+	closed    bool
 	running   bool
 	rrCursor  uint64
 }
@@ -3401,10 +3449,15 @@ func newUpstreamHealthMonitor(initial ProxyRulesConfig) (*upstreamHealthMonitor,
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	m := &upstreamHealthMonitor{
 		cfg:       cfg,
 		metrics:   newProxyTransportMetrics(),
 		wakeCh:    make(chan struct{}, 1),
+		stopCh:    ctx.Done(),
+		ctx:       ctx,
+		cancel:    cancel,
+		lookup:    monitorDNSLookup{ctx: ctx, delegate: proxyDNSLookupProvider},
 		status:    upstreamHealthStatus{Status: "disabled"},
 		backends:  backends,
 		discovery: discovery,
@@ -3413,9 +3466,26 @@ func newUpstreamHealthMonitor(initial ProxyRulesConfig) (*upstreamHealthMonitor,
 	m.applyConfigLocked(cfg)
 	if m.status.Enabled || proxyConfigHasDiscovery(cfg) {
 		m.running = true
+		m.workers.Add(1)
 		go m.run()
 	}
 	return m, nil
+}
+
+// Close cancels monitoring and waits for in-flight lookups and probes to exit.
+func (m *upstreamHealthMonitor) Close() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	if !m.closed {
+		m.closed = true
+		if m.cancel != nil {
+			m.cancel()
+		}
+	}
+	m.mu.Unlock()
+	m.workers.Wait()
 }
 
 func (m *upstreamHealthMonitor) Snapshot() upstreamHealthStatus {
@@ -3463,6 +3533,12 @@ func (m *upstreamHealthMonitor) Update(next ProxyRulesConfig) error {
 	}
 	next = normalizeProxyRulesConfig(next)
 	m.mu.RLock()
+	if m.closed {
+		m.mu.RUnlock()
+		return fmt.Errorf("upstream health monitor is closed")
+	}
+	m.workers.Add(1)
+	defer m.workers.Done()
 	prevDiscovery := copyProxyDiscoveryStates(m.discovery)
 	prevBackends := make([]*proxyBackendState, 0, len(m.backends))
 	for _, backend := range m.backends {
@@ -3474,12 +3550,19 @@ func (m *upstreamHealthMonitor) Update(next ProxyRulesConfig) error {
 		prevBackends = append(prevBackends, &cp)
 	}
 	m.mu.RUnlock()
-	nextDiscovery := refreshProxyDiscoveryStates(next, prevDiscovery, time.Now().UTC(), true)
+	nextDiscovery := refreshProxyDiscoveryStates(next, prevDiscovery, time.Now().UTC(), true, m.lookup)
+	if m.ctx.Err() != nil {
+		return fmt.Errorf("upstream health monitor is closed")
+	}
 	nextBackends, err := buildProxyBackendStatesWithDiscovery(next, prevBackends, nextDiscovery)
 	if err != nil {
 		return err
 	}
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return fmt.Errorf("upstream health monitor is closed")
+	}
 	m.cfg = next
 	prevLiveBackends := m.backends
 	m.backends = nextBackends
@@ -3493,6 +3576,7 @@ func (m *upstreamHealthMonitor) Update(next ProxyRulesConfig) error {
 	shouldStart := !m.running && (m.status.Enabled || proxyConfigHasDiscovery(next))
 	if shouldStart {
 		m.running = true
+		m.workers.Add(1)
 	}
 	m.mu.Unlock()
 	if shouldStart {
@@ -3672,7 +3756,13 @@ func (m *upstreamHealthMonitor) RecordPassiveSuccess(key string, statusCode int)
 }
 
 func (m *upstreamHealthMonitor) run() {
+	defer m.workers.Done()
 	for {
+		select {
+		case <-m.stopCh:
+			return
+		default:
+		}
 		cfg := m.currentConfig()
 		discoveryWait := m.refreshDiscoveryIfDue(false)
 		healthEnabled := proxyHealthCheckEnabled(cfg)
@@ -3683,6 +3773,11 @@ func (m *upstreamHealthMonitor) run() {
 		if healthEnabled {
 			backends := m.backendsSnapshot()
 			for _, backend := range backends {
+				select {
+				case <-m.stopCh:
+					return
+				default:
+				}
 				if backend == nil || !backend.Enabled {
 					continue
 				}
@@ -3690,7 +3785,7 @@ func (m *upstreamHealthMonitor) run() {
 					continue
 				}
 				checkedAt := time.Now().UTC()
-				statusCode, latencyMS, err := checkProxyBackendHealth(cfg, backend.Target, backend.TransportProfile)
+				statusCode, latencyMS, err := checkProxyBackendHealthContext(m.ctx, cfg, backend.Target, backend.TransportProfile)
 				m.recordResult(backend.Key, checkedAt, statusCode, latencyMS, err)
 			}
 		}
@@ -3714,7 +3809,10 @@ func (m *upstreamHealthMonitor) refreshDiscoveryIfDue(force bool) time.Duration 
 	m.mu.RLock()
 	prev := copyProxyDiscoveryStates(m.discovery)
 	m.mu.RUnlock()
-	next := refreshProxyDiscoveryStates(cfg, prev, now, force)
+	next := refreshProxyDiscoveryStates(cfg, prev, now, force, m.lookup)
+	if m.ctx.Err() != nil {
+		return 0
+	}
 	wait := proxyDiscoveryNextRefreshDelay(next, now)
 	if !force && proxyDiscoveryStatesEqual(prev, next) {
 		return wait
@@ -3782,6 +3880,10 @@ func (m *upstreamHealthMonitor) applyConfigLocked(cfg ProxyRulesConfig) {
 
 func (m *upstreamHealthMonitor) recordResult(key string, checkedAt time.Time, statusCode int, latencyMS int64, err error) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return
+	}
 	for _, backend := range m.backends {
 		if backend.Key != key {
 			continue
@@ -3811,7 +3913,6 @@ func (m *upstreamHealthMonitor) recordResult(key string, checkedAt time.Time, st
 		break
 	}
 	m.refreshStatusLocked()
-	m.mu.Unlock()
 }
 
 func (m *upstreamHealthMonitor) backendsSnapshot() []*proxyBackendState {
@@ -3995,7 +4096,10 @@ func (m *upstreamHealthMonitor) awaitWake() {
 	if m == nil {
 		return
 	}
-	<-m.wakeCh
+	select {
+	case <-m.wakeCh:
+	case <-m.stopCh:
+	}
 }
 
 func (m *upstreamHealthMonitor) waitOrWake(wait time.Duration) {
@@ -4007,6 +4111,7 @@ func (m *upstreamHealthMonitor) waitOrWake(wait time.Duration) {
 	select {
 	case <-timer.C:
 	case <-m.wakeCh:
+	case <-m.stopCh:
 	}
 }
 
@@ -4130,11 +4235,15 @@ func proxyHealthEndpoint(cfg ProxyRulesConfig, target *url.URL) (string, error) 
 }
 
 func checkProxyBackendHealth(cfg ProxyRulesConfig, target *url.URL, profile proxyTransportProfile) (statusCode int, latencyMS int64, err error) {
+	return checkProxyBackendHealthContext(context.Background(), cfg, target, profile)
+}
+
+func checkProxyBackendHealthContext(parent context.Context, cfg ProxyRulesConfig, target *url.URL, profile proxyTransportProfile) (statusCode int, latencyMS int64, err error) {
 	endpoint, err := proxyHealthEndpoint(cfg, target)
 	if err != nil {
 		return 0, 0, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), proxyHealthCheckTimeout(cfg))
+	ctx, cancel := context.WithTimeout(parent, proxyHealthCheckTimeout(cfg))
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)

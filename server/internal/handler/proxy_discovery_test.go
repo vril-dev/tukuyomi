@@ -7,10 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 type fakeProxyDNSLookup struct {
+	mu     sync.RWMutex
 	ips    []net.IPAddr
 	srv    []*net.SRV
 	ipErr  error
@@ -18,6 +21,8 @@ type fakeProxyDNSLookup struct {
 }
 
 func (f *fakeProxyDNSLookup) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	if f.ipErr != nil {
 		return nil, f.ipErr
 	}
@@ -25,13 +30,15 @@ func (f *fakeProxyDNSLookup) LookupIPAddr(ctx context.Context, host string) ([]n
 }
 
 func (f *fakeProxyDNSLookup) LookupSRV(ctx context.Context, service string, proto string, name string) (string, []*net.SRV, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	if f.srvErr != nil {
 		return "", nil, f.srvErr
 	}
 	return "", append([]*net.SRV(nil), f.srv...), nil
 }
 
-func withFakeProxyDNSLookup(t *testing.T, lookup *fakeProxyDNSLookup) {
+func withFakeProxyDNSLookup(t *testing.T, lookup proxyDNSLookup) {
 	t.Helper()
 	prev := proxyDNSLookupProvider
 	proxyDNSLookupProvider = lookup
@@ -72,6 +79,7 @@ func TestProxyDiscoveryDNSMaterializesAddressTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUpstreamHealthMonitor: %v", err)
 	}
+	t.Cleanup(health.Close)
 	status := health.Snapshot()
 	if len(status.Backends) != 2 {
 		t.Fatalf("backends=%#v", status.Backends)
@@ -122,6 +130,7 @@ func TestProxyDiscoverySRVMaterializesServiceTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUpstreamHealthMonitor: %v", err)
 	}
+	t.Cleanup(health.Close)
 	status := health.Snapshot()
 	urls := make([]string, 0, len(status.Backends))
 	for _, backend := range status.Backends {
@@ -161,8 +170,11 @@ func TestProxyDiscoveryKeepsLastGoodTargetsOnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUpstreamHealthMonitor: %v", err)
 	}
+	t.Cleanup(health.Close)
+	lookup.mu.Lock()
 	lookup.ipErr = errors.New("dns down")
 	lookup.ips = nil
+	lookup.mu.Unlock()
 	if err := health.Update(cfg); err != nil {
 		t.Fatalf("health.Update: %v", err)
 	}
@@ -203,6 +215,7 @@ func TestProxyDiscoveryInitialFailureHasNoTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUpstreamHealthMonitor: %v", err)
 	}
+	t.Cleanup(health.Close)
 	if got := len(health.Snapshot().Backends); got != 0 {
 		t.Fatalf("backends=%d want 0", got)
 	}
@@ -252,4 +265,135 @@ func TestProxyDiscoveryValidationRejectsUnsafeConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUpstreamHealthMonitorCloseCancelsProbe(t *testing.T) {
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+		close(cancelled)
+	}))
+	t.Cleanup(srv.Close)
+	monitor := newUpstreamHealthMonitorForTest(t, ProxyRulesConfig{
+		Upstreams:           []ProxyUpstream{{Name: "app", URL: srv.URL, Enabled: true}},
+		HealthCheckPath:     "/healthz",
+		HealthCheckTimeout:  60,
+		HealthCheckInterval: 60,
+	})
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("health probe did not start")
+	}
+	closed := make(chan struct{})
+	go func() {
+		monitor.Close()
+		close(closed)
+	}()
+	select {
+	case <-monitor.stopCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not signal shutdown")
+	}
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not join the health monitor")
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not cancel the health probe")
+	}
+	status := monitor.Snapshot()
+	if status.LastError != "" || status.ConsecutiveFailures != 0 {
+		t.Fatalf("shutdown recorded a health failure: %+v", status)
+	}
+	if len(status.Backends) != 1 || status.Backends[0].LastError != "" || status.Backends[0].ConsecutiveFailures != 0 {
+		t.Fatalf("shutdown recorded a backend failure: %+v", status.Backends)
+	}
+	monitor.Close()
+}
+
+type blockingProxyDNSLookup struct {
+	defaultProxyDNSLookup
+	started   chan struct{}
+	cancelled chan struct{}
+	release   chan struct{}
+}
+
+func (f *blockingProxyDNSLookup) LookupIPAddr(ctx context.Context, _ string) ([]net.IPAddr, error) {
+	close(f.started)
+	<-ctx.Done()
+	close(f.cancelled)
+	<-f.release
+	return nil, ctx.Err()
+}
+
+func TestUpstreamHealthMonitorCloseWaitsForUpdate(t *testing.T) {
+	lookup := &blockingProxyDNSLookup{started: make(chan struct{}), cancelled: make(chan struct{}), release: make(chan struct{})}
+	withFakeProxyDNSLookup(t, lookup)
+	monitor := newUpstreamHealthMonitorForTest(t, ProxyRulesConfig{
+		Upstreams: []ProxyUpstream{{Name: "app", URL: "http://127.0.0.1:8080", Enabled: true}},
+	})
+	var releaseOnce sync.Once
+	releaseLookup := func() { releaseOnce.Do(func() { close(lookup.release) }) }
+	t.Cleanup(releaseLookup)
+	updated := make(chan error, 1)
+	go func() {
+		updated <- monitor.Update(ProxyRulesConfig{
+			Upstreams: []ProxyUpstream{{
+				Name: "app", Enabled: true,
+				Discovery: ProxyDiscoveryConfig{
+					Type: "dns", Hostname: "app.example.test", Scheme: "http", Port: 8080,
+					TimeoutMS: 5000, RefreshIntervalSec: 60,
+				},
+			}},
+		})
+	}()
+	select {
+	case <-lookup.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("discovery update did not start")
+	}
+	closed := make(chan struct{})
+	go func() {
+		monitor.Close()
+		close(closed)
+	}()
+	select {
+	case <-monitor.stopCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not signal shutdown")
+	}
+	select {
+	case <-lookup.cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not cancel the discovery lookup")
+	}
+	select {
+	case <-closed:
+		t.Fatal("Close returned before the in-flight update finished")
+	default:
+	}
+	releaseLookup()
+	select {
+	case err := <-updated:
+		if err == nil {
+			t.Fatal("Update must reject publication after Close")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Update did not finish")
+	}
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not join the update")
+	}
+	if err := monitor.Update(ProxyRulesConfig{}); err == nil {
+		t.Fatal("closed monitor accepted another update")
+	}
+	monitor.Close()
 }

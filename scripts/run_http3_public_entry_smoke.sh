@@ -48,9 +48,9 @@ wait_for_http_code() {
   local url="$2"
   local extra_args="${3:-}"
   local code=""
-  local i
+  local _
 
-  for i in $(seq 1 "${HTTP3_SMOKE_WAIT_SECONDS}"); do
+  for _ in $(seq 1 "${HTTP3_SMOKE_WAIT_SECONDS}"); do
     # shellcheck disable=SC2086
     code="$(curl -sS ${extra_args} -o /dev/null -w "%{http_code}" "${url}" 2>/dev/null || true)"
     if [[ "${code}" == "${expected_code}" ]]; then
@@ -88,7 +88,9 @@ cleanup() {
   if [[ -n "${RUNTIME_ROOT}" ]]; then
     rm -rf "${RUNTIME_ROOT}" >/dev/null 2>&1 || true
   fi
-  [[ -n "${ADMIN_COOKIE_JAR}" ]] && rm -f "${ADMIN_COOKIE_JAR}" >/dev/null 2>&1 || true
+  if [[ -n "${ADMIN_COOKIE_JAR}" ]]; then
+    rm -f "${ADMIN_COOKIE_JAR}" >/dev/null 2>&1 || true
+  fi
 }
 trap 'cleanup "$?"' EXIT
 
@@ -212,11 +214,20 @@ jq -n \
     default_route: {
       name: "default",
       enabled: true,
-      action: { upstream: $upstream }
+      action: { upstream: "http3-smoke" }
     },
     force_http2: true,
     disable_compression: false
   }' > "${RUNTIME_DIR}/conf/proxy.json"
+
+log "importing isolated runtime configuration without development admins"
+jq '.domains.admin_users = {users: []}' \
+  "${ROOT_DIR}/seeds/conf/config-bundle.json" > "${RUNTIME_ROOT}/config-bundle.json"
+(
+  cd "${RUNTIME_DIR}"
+  WAF_DB_IMPORT_SEED_BUNDLE_FILE="${RUNTIME_ROOT}/config-bundle.json" \
+  WAF_CONFIG_FILE="conf/config.json" ./bin/tukuyomi db-import
+)
 
 log "starting local proxy echo upstream on 127.0.0.1:${HTTP3_SMOKE_UPSTREAM_PORT}"
 python3 "${ROOT_DIR}/scripts/proxy_echo_server.py" "${HTTP3_SMOKE_UPSTREAM_PORT}" >"${UPSTREAM_LOG}" 2>&1 &
@@ -229,6 +240,7 @@ log "starting binary with built-in TLS + HTTP/3"
 (
   cd "${RUNTIME_DIR}"
   set -a
+  # shellcheck source=/dev/null
   source "${ENV_FILE}"
   set +a
   TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${HTTP3_SMOKE_ADMIN_USERNAME}" \

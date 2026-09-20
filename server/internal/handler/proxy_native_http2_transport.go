@@ -1495,10 +1495,11 @@ func (s *nativeHTTP2Session) releaseStream(st *nativeHTTP2Stream, err error) {
 	if st == nil {
 		return
 	}
+	var closeDrainedSession bool
 	st.closeOnce.Do(func() {
-		var closeDrainedSession bool
 		responseQueued := st.responseQueuedForCaller()
 		st.setTerminalError(err)
+		st.markClosed()
 		s.mu.Lock()
 		if _, ok := s.streams[st.id]; ok {
 			delete(s.streams, st.id)
@@ -1506,7 +1507,6 @@ func (s *nativeHTTP2Session) releaseStream(st *nativeHTTP2Stream, err error) {
 				s.activeStreams--
 			}
 		}
-		st.state = nativeHTTP2StreamClosed
 		closeDrainedSession = s.registered && !s.closed && s.activeStreams == 0 && s.remoteMaxStreams == 0
 		s.notifyWindowLocked()
 		s.mu.Unlock()
@@ -1520,10 +1520,11 @@ func (s *nativeHTTP2Session) releaseStream(st *nativeHTTP2Stream, err error) {
 		if s.transport != nil {
 			s.transport.signalWaiter(s.key)
 		}
-		if closeDrainedSession {
-			s.closeWithError(fmt.Errorf("native http2 upstream disabled concurrent streams"))
-		}
 	})
+	// Session shutdown also waits for stream cleanup through closeOnce.
+	if closeDrainedSession {
+		s.closeWithError(fmt.Errorf("native http2 upstream disabled concurrent streams"))
+	}
 }
 
 func (s *nativeHTTP2Session) closeWithError(err error) {
@@ -1558,7 +1559,10 @@ func (s *nativeHTTP2Session) closeWithError(err error) {
 				default:
 				}
 			}
-			st.closeOnce.Do(func() { close(st.done) })
+			st.closeOnce.Do(func() {
+				st.markClosed()
+				close(st.done)
+			})
 		}
 		if s.transport != nil {
 			if registered {
@@ -1619,9 +1623,10 @@ type nativeHTTP2Stream struct {
 	id      uint32
 	req     *http.Request
 
+	sendWindow int64 // guarded by session.mu
+
 	mu              sync.Mutex
 	state           nativeHTTP2StreamState
-	sendWindow      int64
 	recvLength      int64
 	expectedLength  int64
 	localClosed     bool
@@ -1725,23 +1730,35 @@ func (st *nativeHTTP2Stream) queueResponse(resp *http.Response) {
 
 func (st *nativeHTTP2Stream) markLocalClosed() {
 	st.mu.Lock()
+	defer st.mu.Unlock()
 	st.localClosed = true
+	if st.state == nativeHTTP2StreamClosed || st.state == nativeHTTP2StreamReset {
+		return
+	}
 	if st.remoteClosed {
 		st.state = nativeHTTP2StreamClosed
 	} else {
 		st.state = nativeHTTP2StreamHalfClosedLocal
 	}
-	st.mu.Unlock()
 }
 
 func (st *nativeHTTP2Stream) markRemoteClosed() {
 	st.mu.Lock()
+	defer st.mu.Unlock()
 	st.remoteClosed = true
+	if st.state == nativeHTTP2StreamClosed || st.state == nativeHTTP2StreamReset {
+		return
+	}
 	if st.localClosed {
 		st.state = nativeHTTP2StreamClosed
 	} else {
 		st.state = nativeHTTP2StreamHalfClosedRemote
 	}
+}
+
+func (st *nativeHTTP2Stream) markClosed() {
+	st.mu.Lock()
+	st.state = nativeHTTP2StreamClosed
 	st.mu.Unlock()
 }
 

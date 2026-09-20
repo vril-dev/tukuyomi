@@ -138,7 +138,9 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 		}
 	}
 	runtimeAppsShutdown := func() {}
+	stopEdgeRefresh := func() {}
 	fatalf := func(format string, args ...any) {
+		stopEdgeRefresh()
 		runtimeAppsShutdown()
 		log.Fatalf(format, args...)
 	}
@@ -350,11 +352,12 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 			fatalf("[WORKER][ACTIVATION][FATAL] storage sync loop activation setup failed: %v", err)
 		}
 	}
-	if err := runAfterWorkerActivation("edge device status refresh loop", func() {
-		handler.StartEdgeDeviceStatusRefreshLoop(config.EdgeDeviceStatusRefreshInterval)
-	}); err != nil {
+	edgeRefreshGate, err := currentWorkerActivationGate()
+	if err != nil {
 		fatalf("[WORKER][ACTIVATION][FATAL] edge status refresh loop activation setup failed: %v", err)
 	}
+	stopEdgeRefresh = startEdgeDeviceStatusRefreshAfterActivation(edgeRefreshGate, config.EdgeDeviceStatusRefreshInterval)
+	defer stopEdgeRefresh()
 	if !handler.DBStorageActive() {
 		cacheConfPath := strings.TrimSpace(config.CacheRulesFile)
 		if cacheConfPath == "" {

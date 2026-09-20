@@ -92,10 +92,10 @@ cat > "${RUNTIME_CONF_DIR}/config.json" <<'EOF'
 EOF
 : > "${RUNTIME_CONF_DIR}/crs-disabled.conf"
 
-STAGE_ROOT="$(mktemp -d "${STAGE_PARENT}/crs.XXXXXX")"
+STAGE_ROOT="$(mktemp -d "${STAGE_PARENT}/waf-import.XXXXXX")"
 
-echo "[release-binary-setup] staging CRS import tree"
-DEST_DIR="${STAGE_ROOT}/rules/crs" "${ROOT_DIR}/scripts/install_crs.sh"
+echo "[release-binary-setup] staging WAF rule assets"
+"${ROOT_DIR}/scripts/stage_waf_rule_assets.sh" "${STAGE_ROOT}"
 
 echo "[release-binary-setup] seeding runtime DB rule assets"
 (

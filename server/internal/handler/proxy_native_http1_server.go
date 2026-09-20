@@ -167,13 +167,17 @@ func (s *nativeHTTP1Server) serve(ln net.Listener, tlsConfig *tls.Config, allowH
 			return err
 		}
 		tempDelay = 0
-		if s.isClosing() {
+		s.mu.Lock()
+		if s.closing {
+			s.mu.Unlock()
 			s.rejectedConnections.Add(1)
 			_ = conn.Close()
 			continue
 		}
-		s.acceptedConnections.Add(1)
+		// Register accepted work before Shutdown can start waiting for it.
 		s.wg.Add(1)
+		s.mu.Unlock()
+		s.acceptedConnections.Add(1)
 		go s.serveConn(baseCtx, conn, tlsConfig, allowHTTP2)
 	}
 }

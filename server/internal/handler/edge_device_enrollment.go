@@ -620,22 +620,37 @@ func PostEdgeDeviceEnrollment(c *gin.Context) {
 	c.JSON(http.StatusAccepted, status)
 }
 
-func StartEdgeDeviceStatusRefreshLoop(interval time.Duration) {
-	if interval <= 0 || !config.EdgeEnabled || !config.EdgeDeviceAuthEnabled {
-		return
+// StartEdgeDeviceStatusRefreshLoop returns a channel closed after cancellation
+// has stopped the loop and its current refresh. Callers must wait before teardown.
+func StartEdgeDeviceStatusRefreshLoop(ctx context.Context, interval time.Duration) <-chan struct{} {
+	done := make(chan struct{})
+	if ctx.Err() != nil || interval <= 0 || !config.EdgeEnabled || !config.EdgeDeviceAuthEnabled {
+		close(done)
+		return done
 	}
 	trigger := make(chan struct{}, 1)
 	edgeDeviceStatusRefreshTriggerMu.Lock()
 	edgeDeviceStatusRefreshTrigger = trigger
 	edgeDeviceStatusRefreshTriggerMu.Unlock()
 	go func() {
+		defer close(done)
+		defer func() {
+			edgeDeviceStatusRefreshTriggerMu.Lock()
+			if edgeDeviceStatusRefreshTrigger == trigger {
+				edgeDeviceStatusRefreshTrigger = nil
+			}
+			edgeDeviceStatusRefreshTriggerMu.Unlock()
+		}()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		log.Printf("[EDGE][DEVICE] center status refresh loop enabled interval=%s", interval)
 		lastError := ""
 		lastStatus := ""
 		refresh := func() {
-			status, attempted, err := autoRefreshEdgeDeviceCenterStatus(context.Background())
+			if ctx.Err() != nil {
+				return
+			}
+			status, attempted, err := autoRefreshEdgeDeviceCenterStatus(ctx)
 			if !attempted {
 				return
 			}
@@ -656,6 +671,8 @@ func StartEdgeDeviceStatusRefreshLoop(interval time.Duration) {
 		refresh()
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case <-ticker.C:
 				refresh()
 			case <-trigger:
@@ -663,6 +680,7 @@ func StartEdgeDeviceStatusRefreshLoop(interval time.Duration) {
 			}
 		}
 	}()
+	return done
 }
 
 func TriggerEdgeDeviceStatusRefresh() {

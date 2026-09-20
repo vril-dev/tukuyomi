@@ -38,9 +38,9 @@ wait_for_http_code() {
   local expected_code="$1"
   local url="$2"
   local code=""
-  local i
+  local _
 
-  for i in $(seq 1 "${CONTAINER_DEPLOYMENT_WAIT_SECONDS}"); do
+  for _ in $(seq 1 "${CONTAINER_DEPLOYMENT_WAIT_SECONDS}"); do
     code="$(curl -sS -o /dev/null -w "%{http_code}" "${url}" 2>/dev/null || true)"
     if [[ "${code}" == "${expected_code}" ]]; then
       return 0
@@ -49,6 +49,20 @@ wait_for_http_code() {
   done
 
   return 1
+}
+
+expect_admin_login() {
+  local expected_code="$1"
+  local username="$2"
+  local password="$3"
+  local code
+
+  code="$(jq -n --arg username "${username}" --arg password "${password}" \
+    '{username: $username, password: $password}' | \
+    curl -sS -o /dev/null -w "%{http_code}" -c "${BUILD_CONTEXT}/admin-cookies" \
+      -H 'Content-Type: application/json' --data-binary @- \
+      "http://127.0.0.1:${CONTAINER_DEPLOYMENT_RUNTIME_PORT}/tukuyomi-api/auth/login")"
+  [[ "${code}" == "${expected_code}" ]] || fail "admin login returned ${code}, expected ${expected_code}"
 }
 
 cleanup() {
@@ -74,8 +88,13 @@ trap 'cleanup "$?"' EXIT
 need_cmd curl
 need_cmd docker
 need_cmd jq
+need_cmd python3
 need_cmd rsync
 need_cmd install
+
+if [[ "${CONTAINER_DEPLOYMENT_ADMIN_USERNAME}" == "admin" && "${CONTAINER_DEPLOYMENT_ADMIN_PASSWORD}" == "dev-only-change-this-password-please" ]]; then
+  fail "smoke credentials must differ from the development seed credentials"
+fi
 
 BUILD_CONTEXT="$(mktemp -d "${ROOT_DIR}/.tmp-container-deployment-context.XXXXXX")"
 log "staging container build context at ${BUILD_CONTEXT}"
@@ -118,14 +137,34 @@ docker run -d --rm \
   python:3.12-alpine \
   python /app/scripts/proxy_echo_server.py "${CONTAINER_DEPLOYMENT_UPSTREAM_PORT}" >/dev/null
 
-log "starting deployment container on 127.0.0.1:${CONTAINER_DEPLOYMENT_RUNTIME_PORT}"
-docker run -d --rm \
+log "checking deployment image has no seeded admin users"
+docker create --rm \
   --name "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}" \
   --network "${CONTAINER_DEPLOYMENT_NETWORK}" \
   -p "127.0.0.1:${CONTAINER_DEPLOYMENT_RUNTIME_PORT}:9090" \
   -e "TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME=${CONTAINER_DEPLOYMENT_ADMIN_USERNAME}" \
   -e "TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD=${CONTAINER_DEPLOYMENT_ADMIN_PASSWORD}" \
   "${CONTAINER_DEPLOYMENT_IMAGE_NAME}" >/dev/null
+
+docker cp "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}:/app/seeds/conf/config-bundle.json" "${BUILD_CONTEXT}/image-config-bundle.json"
+jq -e '.domains.admin_users.users == []' "${BUILD_CONTEXT}/image-config-bundle.json" >/dev/null
+install -d -m 700 "${BUILD_CONTEXT}/image-db"
+docker cp "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}:/app/db/." "${BUILD_CONTEXT}/image-db/"
+python3 - "${BUILD_CONTEXT}/image-db/tukuyomi.db" <<'PY'
+import sqlite3
+import sys
+
+db = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
+try:
+    count = db.execute("SELECT COUNT(*) FROM admin_users").fetchone()[0]
+    if count != 0:
+        raise SystemExit("deployment image contains pre-created admin users")
+finally:
+    db.close()
+PY
+
+log "starting deployment container on 127.0.0.1:${CONTAINER_DEPLOYMENT_RUNTIME_PORT}"
+docker start "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}" >/dev/null
 
 if ! wait_for_http_code "200" "http://127.0.0.1:${CONTAINER_DEPLOYMENT_RUNTIME_PORT}/healthz"; then
   fail "deployment container did not become healthy in time"
@@ -142,6 +181,20 @@ if docker exec "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}" sh -lc 'find /app/conf -
   fail "deployment image still contains *.bak config files"
 fi
 
+log "checking runtime owner bootstrap and development credential rejection"
+expect_admin_login "200" "${CONTAINER_DEPLOYMENT_ADMIN_USERNAME}" "${CONTAINER_DEPLOYMENT_ADMIN_PASSWORD}"
+expect_admin_login "401" "admin" "dev-only-change-this-password-please"
+replacement_password="container-deployment-smoke-replacement-password"
+if [[ "${replacement_password}" == "${CONTAINER_DEPLOYMENT_ADMIN_PASSWORD}" ]]; then
+  replacement_password="${replacement_password}-2"
+fi
+docker exec \
+  -e "TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME=${CONTAINER_DEPLOYMENT_ADMIN_USERNAME}" \
+  -e "TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD=${replacement_password}" \
+  "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}" /app/tukuyomi admin-bootstrap >/dev/null
+expect_admin_login "200" "${CONTAINER_DEPLOYMENT_ADMIN_USERNAME}" "${CONTAINER_DEPLOYMENT_ADMIN_PASSWORD}"
+expect_admin_login "401" "${CONTAINER_DEPLOYMENT_ADMIN_USERNAME}" "${replacement_password}"
+
 log "running admin + proxy-rules smoke through deployment container"
 (
   cd "${ROOT_DIR}"
@@ -157,6 +210,10 @@ log "running admin + proxy-rules smoke through deployment container"
   ./scripts/ci_proxy_admin_smoke.sh
 )
 
-docker exec "${CONTAINER_DEPLOYMENT_CONTAINER_NAME}" test -f /app/audit/proxy-rules-audit.ndjson
+log "checking persisted proxy apply and rollback audit entries"
+expect_admin_login "200" "${CONTAINER_DEPLOYMENT_ADMIN_USERNAME}" "${CONTAINER_DEPLOYMENT_ADMIN_PASSWORD}"
+curl -fsS -b "${BUILD_CONTEXT}/admin-cookies" \
+  "http://127.0.0.1:${CONTAINER_DEPLOYMENT_RUNTIME_PORT}/tukuyomi-api/proxy-rules/audit" | \
+  jq -e 'any(.entries[]; .event == "proxy_rules_apply") and any(.entries[]; .event == "proxy_rules_rollback")' >/dev/null
 
 log "OK container deployment smoke passed"

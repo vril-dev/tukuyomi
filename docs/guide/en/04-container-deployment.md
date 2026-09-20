@@ -223,6 +223,15 @@ from the DB**, not from a mounted rules directory.
 operator-managed app / proxy configuration is read from normalized DB
 tables.
 
+The deployment image from §4.6.2 contains no development admin account.
+For the first start with a DB that has no admin users, supply
+`TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` and `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD`
+through your platform's runtime secret injection.
+`TUKUYOMI_ADMIN_BOOTSTRAP_EMAIL` is optional. These settings create the
+initial owner; they do not overwrite admin users already stored in an
+existing DB. Build the image without owner credentials and supply them
+only at runtime.
+
 Typical production pattern:
 
 - Render `conf/config.json` from a secret manager / config management
@@ -240,6 +249,9 @@ Typical production pattern:
 - Limit runtime env injection mostly to:
   - `WAF_CONFIG_FILE`
   - `WAF_PROXY_AUDIT_FILE`
+  - `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` /
+    `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` and optional
+    `TUKUYOMI_ADMIN_BOOTSTRAP_EMAIL` for the initial owner
   - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
     `AWS_SESSION_TOKEN` / `AWS_REGION` / `AWS_DEFAULT_REGION` when
     `persistent_storage.backend=s3`

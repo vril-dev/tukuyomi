@@ -212,6 +212,14 @@ mounted rules directory.
 `tukuyomi` uses `conf/config.json` for DB connection bootstrap, then reads
 operator-managed app/proxy config from normalized DB tables.
 
+The deployment image built from [Dockerfile.example](Dockerfile.example) contains
+no development admin account. For the first start with a DB that has no admin
+users, supply `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME` and
+`TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` through your platform's runtime secret
+injection. `TUKUYOMI_ADMIN_BOOTSTRAP_EMAIL` is optional. These settings create the
+initial owner; they do not overwrite admin users already stored in an existing
+DB. Build the image without owner credentials and supply them only at runtime.
+
 Typical production pattern:
 
 - render `conf/config.json` from your secret manager or config-management layer for `storage.db_driver`, `storage.db_path`, and `storage.db_dsn`
@@ -221,6 +229,7 @@ Typical production pattern:
 - use runtime env injection only for:
   - `WAF_CONFIG_FILE`
   - `WAF_PROXY_AUDIT_FILE`
+  - `TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME`, `TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD`, and optional `TUKUYOMI_ADMIN_BOOTSTRAP_EMAIL` for the initial owner
   - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, and `AWS_REGION` / `AWS_DEFAULT_REGION` only when `persistent_storage.backend=s3`
   - security-audit key env overrides when `security_audit.key_source=env`
 - the embedded `Settings` page edits DB `app_config`; recreate/restart the container to apply listener/runtime/storage policy/observability updates

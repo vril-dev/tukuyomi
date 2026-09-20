@@ -133,6 +133,7 @@ func newUpstreamHealthMonitorForTest(t *testing.T, cfg ProxyRulesConfig) *upstre
 	if err != nil {
 		t.Fatalf("newUpstreamHealthMonitor: %v", err)
 	}
+	t.Cleanup(tracker.Close)
 	return tracker
 }
 

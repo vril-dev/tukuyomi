@@ -1776,12 +1776,6 @@ func TestEdgeDeviceStatusRefreshLoopWakesAfterEnrollment(t *testing.T) {
 		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
 	}
 	defer InitLogsStatsStore(false, "", 0)
-	defer func() {
-		edgeDeviceStatusRefreshTriggerMu.Lock()
-		edgeDeviceStatusRefreshTrigger = nil
-		edgeDeviceStatusRefreshTriggerMu.Unlock()
-	}()
-
 	statusSeen := make(chan struct{}, 1)
 	snapshotSeen := make(chan struct{}, 1)
 	var capturedPublicKey ed25519.PublicKey
@@ -1825,7 +1819,12 @@ func TestEdgeDeviceStatusRefreshLoopWakesAfterEnrollment(t *testing.T) {
 	}))
 	defer center.Close()
 
-	StartEdgeDeviceStatusRefreshLoop(time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := StartEdgeDeviceStatusRefreshLoop(ctx, time.Hour)
+	defer func() {
+		cancel()
+		<-done
+	}()
 
 	router := gin.New()
 	router.POST("/edge/device-auth/enroll", PostEdgeDeviceEnrollment)
@@ -1856,6 +1855,95 @@ func TestEdgeDeviceStatusRefreshLoopWakesAfterEnrollment(t *testing.T) {
 		default:
 			time.Sleep(10 * time.Millisecond)
 		}
+	}
+}
+
+func TestEdgeDeviceStatusRefreshLoopCancelsInFlightRequest(t *testing.T) {
+	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)
+	defer restoreEdgeRuntime()
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", filepath.Join(t.TempDir(), "edge-cancel.db"), "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer InitLogsStatsStore(false, "", 0)
+
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req edgeDeviceStatusWireRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode status: %v", err)
+			return
+		}
+		close(requestStarted)
+		<-r.Context().Done()
+		close(requestCanceled)
+	}))
+	defer center.Close()
+	identity, err := newEdgeDeviceIdentity("edge-cancel", "default")
+	if err != nil {
+		t.Fatalf("newEdgeDeviceIdentity: %v", err)
+	}
+	identity.CenterURL = center.URL
+	if err := upsertEdgeDeviceIdentity(getLogsStatsStore(), identity); err != nil {
+		t.Fatalf("upsertEdgeDeviceIdentity: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := StartEdgeDeviceStatusRefreshLoop(ctx, time.Hour)
+	defer func() {
+		cancel()
+		<-done
+	}()
+	select {
+	case <-requestStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("refresh did not start a Center request")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("refresh loop did not stop after cancellation")
+	}
+	select {
+	case <-requestCanceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight Center request was not canceled")
+	}
+	edgeDeviceStatusRefreshTriggerMu.RLock()
+	trigger := edgeDeviceStatusRefreshTrigger
+	edgeDeviceStatusRefreshTriggerMu.RUnlock()
+	if trigger != nil {
+		t.Fatal("stopped refresh loop retained its trigger")
+	}
+	TriggerEdgeDeviceStatusRefresh()
+}
+
+func TestEdgeDeviceStatusRefreshLoopStopPreservesReplacementTrigger(t *testing.T) {
+	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)
+	defer restoreEdgeRuntime()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := StartEdgeDeviceStatusRefreshLoop(ctx, time.Hour)
+	defer func() {
+		cancel()
+		<-done
+	}()
+	replacementCtx, cancelReplacement := context.WithCancel(context.Background())
+	replacementDone := StartEdgeDeviceStatusRefreshLoop(replacementCtx, time.Hour)
+	defer func() {
+		cancelReplacement()
+		<-replacementDone
+	}()
+	edgeDeviceStatusRefreshTriggerMu.RLock()
+	replacementTrigger := edgeDeviceStatusRefreshTrigger
+	edgeDeviceStatusRefreshTriggerMu.RUnlock()
+	cancel()
+	<-done
+	edgeDeviceStatusRefreshTriggerMu.RLock()
+	trigger := edgeDeviceStatusRefreshTrigger
+	edgeDeviceStatusRefreshTriggerMu.RUnlock()
+	if trigger != replacementTrigger || trigger == nil {
+		t.Fatal("stopping the old loop removed the replacement trigger")
 	}
 }
 

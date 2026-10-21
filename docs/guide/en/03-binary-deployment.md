@@ -31,7 +31,7 @@ afterwards".
 
 First, build the tukuyomi binary on the build host or your workstation.
 
-You need `make`, Go toolchain 1.26.8 or newer, and Node.js 24 LTS + npm 11+
+You need `make`, Go toolchain 1.26.10 or newer, and Node.js 24 LTS + npm 11+
 for the Gateway / Center UI build. When local Node.js 24 LTS + npm 11+ is not
 available, the default `tools/npm-node24.sh` wrapper uses Docker image
 `node:24-alpine`. On a minimal VPS, that means Docker must not only be
@@ -47,7 +47,7 @@ sudo usermod -aG docker "$USER"
 
 The `docker` group change requires a new login session. After logging in again,
 confirm that `docker ps` works. If the distribution Go package is too old,
-install Go 1.26.8 or newer from the official Go tarball.
+install Go 1.26.10 or newer from the official Go tarball.
 
 ```bash
 make setup
@@ -570,9 +570,14 @@ PHP-FPM bundle notes:
 - `data/php-fpm/runtime/` is not copy material. It is generated from
   Runtime App definitions after `tukuyomi` starts.
 - Docker is required only at `php-fpm-build` time. Once the bundle is
-  in place, running `tukuyomi` does not need Docker.
+  in place, running `tukuyomi` does not need Docker. Each build pulls
+  the current official PHP base image (`docker build --pull`), so the
+  build host needs access to the container registry (Docker Hub by
+  default).
 - Security updates for PHP / base image library / PECL extensions
-  require rebuilding and replacing the bundle.
+  require rebuilding and replacing the bundle. After a rebuild, confirm
+  the PHP version in `detected_version` of
+  `data/php-fpm/binaries/<runtime_id>/runtime.json`.
 
 ## 3.8 Environment file
 

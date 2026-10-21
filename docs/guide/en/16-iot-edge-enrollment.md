@@ -131,7 +131,9 @@ per-domain `etag`/`raw` entries.
 `Runtime` uses the Gateway-reported platform target to match runtime
 artifacts. Center can build a PHP-FPM or PSGI runtime artifact for that
 target, store it as a compressed artifact, and assign it to the
-Gateway. Existing compatible artifacts can also be assigned directly.
+Gateway. Each build pulls the current official base image, so the
+Center host needs access to the container registry (Docker Hub by
+default). Existing compatible artifacts can also be assigned directly.
 
 Runtime changes are not applied by the Center HTTP request itself.
 They become **pending runtime requests**. The Gateway receives those

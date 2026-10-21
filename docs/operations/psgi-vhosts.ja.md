@@ -66,3 +66,4 @@ OpenID 時代の互換モジュール、`IPC::Run` です。
 
 - PSGI リスナーは、`hostname` と `listen_port` の組で識別します。
 - Starman worker は Runtime App ごとにメモリを消費します。Movable Type では、トラフィック量が必要とするまでは worker 数を小さく明示してください。
+- Docker が必要なのはランタイムバンドルのビルド時だけです。ビルドのたびに公式 Perl ベースイメージの最新版を取得する（`docker build --pull`）ため、ビルドするホストからコンテナーレジストリ（既定では Docker Hub）へ接続できる必要があります。

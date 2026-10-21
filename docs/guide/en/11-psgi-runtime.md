@@ -119,6 +119,12 @@ The build produces these artifacts under
 - `runtime.json`
 - `modules.json`
 
+Docker is required only at build time. Each build pulls the current
+official Perl base image (`docker build --pull`), so the build host
+needs access to the container registry (Docker Hub by default). Rebuild
+and replace the bundle to pick up security updates for Perl / base
+image library.
+
 ### 11.4.1 Major modules included in the bundled runtime
 
 The bundled runtime ships with the major optional modules used by

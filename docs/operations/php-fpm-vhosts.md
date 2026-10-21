@@ -88,8 +88,8 @@ Notes:
 
 - `php-fpm-copy` defaults to `/opt/tukuyomi`; override with `DEST=/srv/tukuyomi` when needed
 - `php-fpm-prune` uses the same default destination and checks staged Runtime App references in `vhosts.json` plus the runtime pid before deleting the staged bundle
-- Docker is required only while building the runtime bundle; runtime execution does not depend on Docker once the bundle is staged
-- PHP, base image library, and PECL extension security updates are operator-managed, so rebuild and restage the bundle when those updates are needed
+- Docker is required only while building the runtime bundle; runtime execution does not depend on Docker once the bundle is staged. Each build pulls the current official PHP base image (`docker build --pull`), so the build host needs access to the container registry (Docker Hub by default)
+- PHP, base image library, and PECL extension security updates are operator-managed, so rebuild and restage the bundle when those updates are needed, then confirm the PHP version in `detected_version` of `data/php-fpm/binaries/<runtime_id>/runtime.json`
 - the bundled runtime includes the major DB extensions needed for SQLite, MySQL/MariaDB, and PostgreSQL
   - `sqlite3`, `pdo_sqlite`
   - `mysqli`, `pdo_mysql`, `mysqlnd`

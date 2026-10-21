@@ -83,14 +83,15 @@ flatten_arch_lib_dir() {
   done < <(find "${from_dir}" -maxdepth 1 \( -type f -o -type l \) | sort)
 }
 
-rm -rf "${runtime_dir}"
-mkdir -p "${rootfs_dir}"
-
 docker build \
+  --pull \
   --build-arg "PERL_VERSION=${VER}" \
   -f "${DOCKERFILE}" \
   -t "${image_tag}" \
   "${BUILD_CONTEXT}"
+
+rm -rf "${runtime_dir}"
+mkdir -p "${rootfs_dir}"
 
 container_name="$(docker create "${image_tag}")"
 docker export "${container_name}" | tar -C "${rootfs_dir}" -xf -

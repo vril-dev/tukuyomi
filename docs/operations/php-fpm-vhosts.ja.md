@@ -88,8 +88,8 @@ sudo make php-fpm-prune RUNTIME=php83
 
 - `php-fpm-copy` の既定配置先は `/opt/tukuyomi` です。別の配置先にする場合は、`DEST=/srv/tukuyomi` のように指定します
 - `php-fpm-prune` も既定配置先は `/opt/tukuyomi` です。配置済み `vhosts.json` 内の Runtime App 参照と実行中 pid を確認してから削除します
-- Docker が必要なのはランタイムバンドルのビルド時だけです。バンドル配置後の実行時には Docker に依存しません
-- PHP、ベースイメージのライブラリ、PECL 拡張のセキュリティ更新は運用者が管理します。必要に応じてバンドルを再ビルドし、再配置します
+- Docker が必要なのはランタイムバンドルのビルド時だけです。バンドル配置後の実行時には Docker に依存しません。ビルドのたびに公式 PHP ベースイメージの最新版を取得する（`docker build --pull`）ため、ビルドするホストからコンテナーレジストリ（既定では Docker Hub）へ接続できる必要があります
+- PHP、ベースイメージのライブラリ、PECL 拡張のセキュリティ更新は運用者が管理します。必要に応じてバンドルを再ビルドし、再配置します。再ビルド後は `data/php-fpm/binaries/<runtime_id>/runtime.json` の `detected_version` で PHP のバージョンを確認します
 - 同梱ランタイムには、SQLite / MySQL(MariaDB) / PostgreSQL の主要 DB 用拡張を標準で含めます
   - `sqlite3`, `pdo_sqlite`
   - `mysqli`, `pdo_mysql`, `mysqlnd`

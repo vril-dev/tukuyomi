@@ -511,21 +511,10 @@ func (t *nativeHTTP1Transport) handshakeTLS(ctx context.Context, raw net.Conn, h
 	return conn, nil
 }
 
-func nativeHTTP1CloseOnContextDone(ctx context.Context, conn net.Conn) func() {
-	done := make(chan struct{})
-	var once sync.Once
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = conn.Close()
-		case <-done:
-		}
-	}()
-	return func() {
-		once.Do(func() {
-			close(done)
-		})
-	}
+func nativeHTTP1CloseOnContextDone(ctx context.Context, conn net.Conn) func() bool {
+	return context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+	})
 }
 
 func nativeHTTP1WriteRequest(w io.Writer, req *http.Request) error {
@@ -983,7 +972,7 @@ func nativeHTTP1ParseSmallDecimal(raw []byte) (int, bool) {
 	return n, true
 }
 
-func nativeHTTP1ResponseBody(t *nativeHTTP1Transport, resp *http.Response, pc *nativeHTTP1PooledConn, stopContextWatch func()) io.ReadCloser {
+func nativeHTTP1ResponseBody(t *nativeHTTP1Transport, resp *http.Response, pc *nativeHTTP1PooledConn, stopContextWatch func() bool) io.ReadCloser {
 	if resp == nil || resp.Request == nil || resp.Request.Method == http.MethodHead || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified {
 		return &nativeHTTP1Body{
 			reader:           bytes.NewReader(nil),
@@ -1033,7 +1022,7 @@ type nativeHTTP1Body struct {
 	reader           io.Reader
 	transport        *nativeHTTP1Transport
 	pc               *nativeHTTP1PooledConn
-	stopContextWatch func()
+	stopContextWatch func() bool
 	reusable         bool
 	exhausted        bool
 	once             sync.Once
@@ -1061,11 +1050,12 @@ func (b *nativeHTTP1Body) Close() error {
 
 func (b *nativeHTTP1Body) release() {
 	b.once.Do(func() {
-		if b.stopContextWatch != nil {
-			b.stopContextWatch()
+		reusable := b.reusable && b.exhausted
+		if b.stopContextWatch != nil && !b.stopContextWatch() {
+			reusable = false
 		}
 		if b.transport != nil {
-			b.transport.releaseConn(b.pc, b.reusable && b.exhausted)
+			b.transport.releaseConn(b.pc, reusable)
 			return
 		}
 	})
@@ -1075,7 +1065,7 @@ type nativeHTTP1UpgradeBody struct {
 	transport        *nativeHTTP1Transport
 	pc               *nativeHTTP1PooledConn
 	br               *bufio.Reader
-	stopContextWatch func()
+	stopContextWatch func() bool
 	once             sync.Once
 }
 

@@ -3,6 +3,7 @@ package handler
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"errors"
 	"io"
@@ -148,6 +149,153 @@ func TestNativeHTTP1TransportReusesDrainedConnection(t *testing.T) {
 	}
 	if got := newConns.Load(); got != 1 {
 		t.Fatalf("new connections=%d want 1", got)
+	}
+}
+
+func TestNativeHTTP1TransportKeepsReleasedConnectionWhenRequestContextEnds(t *testing.T) {
+	var newConns atomic.Int64
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Length", "2")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	upstream.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	upstream.Start()
+	defer upstream.Close()
+
+	rt, err := buildProxyNativeHTTP1Transport(normalizeProxyRulesConfig(ProxyRulesConfig{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 10,
+		MaxConnsPerHost:     10,
+	}), proxyTransportProfile{})
+	if err != nil {
+		t.Fatalf("buildProxyNativeHTTP1Transport: %v", err)
+	}
+	defer rt.CloseIdleConnections()
+
+	// The server cancels the request context when the proxy handler returns,
+	// right after the response body is released. A non-replayable POST fails
+	// if that cancel closes the pooled connection the next request takes.
+	for i := 0; i < 200; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstream.URL+"/reuse", io.NopCloser(strings.NewReader("payload")))
+		if err != nil {
+			cancel()
+			t.Fatalf("NewRequest: %v", err)
+		}
+		req.ContentLength = int64(len("payload"))
+		req.GetBody = nil
+		resp, err := rt.RoundTrip(req)
+		if err != nil {
+			cancel()
+			t.Fatalf("RoundTrip %d: %v", i, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			cancel()
+			t.Fatalf("read body %d: %v", i, err)
+		}
+		if err := resp.Body.Close(); err != nil {
+			cancel()
+			t.Fatalf("close body %d: %v", i, err)
+		}
+		cancel()
+		if string(body) != "ok" {
+			t.Fatalf("body %d=%q want ok", i, string(body))
+		}
+	}
+	if got := newConns.Load(); got != 1 {
+		t.Fatalf("new connections=%d want 1", got)
+	}
+}
+
+func TestNativeHTTP1TransportDoesNotPoolConnectionClosedByRequestContext(t *testing.T) {
+	var newConns atomic.Int64
+	closedConns := make(chan struct{}, 4)
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if r.URL.Path == "/empty" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Length", "2")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	upstream.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			newConns.Add(1)
+		case http.StateClosed:
+			select {
+			case closedConns <- struct{}{}:
+			default:
+			}
+		}
+	}
+	upstream.Start()
+	defer upstream.Close()
+
+	rt, err := buildProxyNativeHTTP1Transport(normalizeProxyRulesConfig(ProxyRulesConfig{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 10,
+		MaxConnsPerHost:     10,
+	}), proxyTransportProfile{})
+	if err != nil {
+		t.Fatalf("buildProxyNativeHTTP1Transport: %v", err)
+	}
+	defer rt.CloseIdleConnections()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstream.URL+"/empty", nil)
+	if err != nil {
+		cancel()
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		cancel()
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if got := resp.StatusCode; got != http.StatusNoContent {
+		cancel()
+		t.Fatalf("status=%d want=204", got)
+	}
+	// The request context ends before the empty body is closed, so the
+	// connection is closed and must not return to the idle pool.
+	cancel()
+	select {
+	case <-closedConns:
+	case <-time.After(5 * time.Second):
+		t.Fatal("connection was not closed after the request context ended")
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close body: %v", err)
+	}
+
+	next, err := http.NewRequest(http.MethodPost, upstream.URL+"/next", io.NopCloser(strings.NewReader("payload")))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	next.ContentLength = int64(len("payload"))
+	next.GetBody = nil
+	resp, err = rt.RoundTrip(next)
+	if err != nil {
+		t.Fatalf("RoundTrip after context close: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	_ = resp.Body.Close()
+	if string(body) != "ok" {
+		t.Fatalf("body=%q want ok", string(body))
+	}
+	if got := newConns.Load(); got != 2 {
+		t.Fatalf("new connections=%d want 2", got)
 	}
 }
 

@@ -138,6 +138,13 @@ SecRule REQUEST_URI "@beginsWith /api/legacy/"
 で path を絞り、対象 rule を 1 件だけ外す形にすれば、全体の感度は変えずに
 当該 path だけ通せます。
 
+`REQUEST_URI` に入るのは path と query string だけです（例:
+`/api/legacy/run?x=1`）。1.6.2 からは、request target に絶対 URL を書いた
+HTTP/1.1 の request（`GET http://example.com/api/legacy/ HTTP/1.1`）や
+HTTP/3 の request でも同じ形になるため、`@beginsWith /...` の条件はどの
+protocol でも同じ request に一致します。host 名で絞りたいときは
+`REQUEST_HEADERS:Host` を使います。
+
 ### 7.4.3　最終手段としての広い bypass
 
 どうしても上の 2 種類で対応できない場合のみ、広い path の bypass を使います。

@@ -191,7 +191,7 @@ func TestHTTP3RequestBodyIsInspectedAndForwardedWhole(t *testing.T) {
 	if err := os.MkdirAll(stageRoot, 0o755); err != nil {
 		t.Fatalf("mkdir stage: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(stageRoot, config.DefaultBaseRuleAssetPath), []byte("SecRuleEngine On\nSecRule ARGS \"@rx (?i)<script>\" \"id:100001,phase:2,deny,status:403,log\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(stageRoot, config.DefaultBaseRuleAssetPath), []byte("SecRuleEngine On\nSecRule ARGS \"@rx (?i)<script>\" \"id:100001,phase:2,deny,status:403,log\"\nSecRule REQUEST_URI \"@beginsWith /admin\" \"id:100002,phase:1,deny,status:403,log\"\n"), 0o644); err != nil {
 		t.Fatalf("write base rule: %v", err)
 	}
 	t.Setenv("WAF_RULE_ASSET_FS_ROOT", stageRoot)
@@ -307,6 +307,18 @@ func TestHTTP3RequestBodyIsInspectedAndForwardedWhole(t *testing.T) {
 		if resp.StatusCode != http.StatusOK || resp.Header.Get("X-Forwarded-Body-Bytes") != strconv.Itoa(len(large)) {
 			t.Fatalf("knownLength=%t status=%d forwarded=%q want %d", knownLength, resp.StatusCode, resp.Header.Get("X-Forwarded-Body-Bytes"), len(large))
 		}
+	}
+
+	// REQUEST_URI rules anchored at "/" must match over HTTP/3 as well, even
+	// when the HTTP/3 server sets the scheme and host on the request URL.
+	resp, err := client.Get("https://" + addr + "/admin/users?a=1")
+	if err != nil {
+		t.Fatalf("http3 GET: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("http3 REQUEST_URI prefix rule status=%d want=403", resp.StatusCode)
 	}
 }
 

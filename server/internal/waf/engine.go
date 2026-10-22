@@ -155,7 +155,10 @@ func (e corazaEngine) inspect(req *http.Request, body []byte) (Decision, request
 		tx.Close()
 	}()
 
-	tx.ProcessURI(req.URL.String(), req.Method, req.Proto)
+	// Unlike Coraza's http middleware, pass only the path and query: absolute-form
+	// HTTP/1 targets and HTTP/3 request URLs carry a scheme and host, which would
+	// keep REQUEST_URI rules anchored at "/" from matching.
+	tx.ProcessURI(req.URL.RequestURI(), req.Method, req.Proto)
 	addCorazaRequestHeaders(tx, req)
 
 	var errs []error

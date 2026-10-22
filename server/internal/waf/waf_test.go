@@ -218,6 +218,62 @@ SecRule &REQUEST_HEADERS:Content-Length "@eq 0" "id:100002,phase:1,deny,status:4
 	}
 }
 
+func TestCorazaEngineInspectsRequestURIWithoutSchemeAndHost(t *testing.T) {
+	dir := t.TempDir()
+	rulePath := filepath.Join(dir, "test.conf")
+	mustWrite(t, rulePath, `
+SecRuleEngine On
+SecRule REQUEST_URI "@beginsWith /admin" "id:100001,phase:1,deny,status:403,log,msg:'admin prefix'"
+SecRule REQUEST_URI "@streq /exact/a%2Fb?q=1" "id:100002,phase:1,deny,status:403,log,msg:'exact uri'"
+SecRule REQUEST_URI "@streq *" "id:100003,phase:1,deny,status:403,log,msg:'asterisk form'"
+SecRule REQUEST_METHOD "@streq CONNECT" "id:100004,phase:1,deny,status:403,log,msg:'connect uri',chain"
+SecRule REQUEST_URI "@streq /"
+SecRule REQUEST_URI "@beginsWith /api/legacy/" "id:100005,phase:1,pass,nolog,ctl:ruleRemoveById=100006"
+SecRule ARGS "@contains attack" "id:100006,phase:2,deny,status:403,log,msg:'attack arg'"
+`)
+
+	w, err := buildWAF([]string{rulePath})
+	if err != nil {
+		t.Fatalf("buildWAF() error = %v", err)
+	}
+
+	// quic-go v0.60 and later set the scheme and host on every HTTP/3 request URL.
+	http3Request := httptest.NewRequest(http.MethodGet, "/admin/users?a=1", nil)
+	http3Request.URL.Scheme = "https"
+	http3Request.URL.Host = "example.local"
+
+	tests := []struct {
+		name   string
+		req    *http.Request
+		ruleID int
+	}{
+		{name: "origin-form", req: httptest.NewRequest(http.MethodGet, "/admin/users?a=1", nil), ruleID: 100001},
+		{name: "http absolute-form", req: httptest.NewRequest(http.MethodGet, "http://example.local/admin/users?a=1", nil), ruleID: 100001},
+		{name: "https absolute-form", req: httptest.NewRequest(http.MethodGet, "https://example.local/admin/users?a=1", nil), ruleID: 100001},
+		{name: "http3 request URL", req: http3Request, ruleID: 100001},
+		{name: "encoded slash and query kept", req: httptest.NewRequest(http.MethodGet, "https://example.local/exact/a%2Fb?q=1", nil), ruleID: 100002},
+		{name: "asterisk-form", req: httptest.NewRequest(http.MethodOptions, "*", nil), ruleID: 100003},
+		{name: "connect authority-form", req: httptest.NewRequest(http.MethodConnect, "example.local:443", nil), ruleID: 100004},
+		{name: "prefix exclusion on absolute-form", req: httptest.NewRequest(http.MethodGet, "https://example.local/api/legacy/run?x=attack", nil), ruleID: 0},
+		{name: "outside the exclusion", req: httptest.NewRequest(http.MethodGet, "https://example.local/api/other?x=attack", nil), ruleID: 100006},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision, err := corazaEngine{w: w}.InspectRequest(tt.req)
+			if err != nil {
+				t.Fatalf("InspectRequest() error = %v", err)
+			}
+			got := 0
+			if decision.Interruption != nil {
+				got = decision.Interruption.RuleID
+			}
+			if got != tt.ruleID {
+				t.Fatalf("interruption rule=%d want=%d (url=%q)", got, tt.ruleID, tt.req.URL.String())
+			}
+		})
+	}
+}
+
 func TestEngineSelectionRejectsCorazaExtraRulesForNonCorazaMode(t *testing.T) {
 	oldMode := config.WAFEngineMode
 	config.WAFEngineMode = "mod_security"

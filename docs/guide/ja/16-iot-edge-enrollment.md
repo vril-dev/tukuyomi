@@ -116,7 +116,7 @@ Gateway は更新後のステータスが `approved` 以外であれば、プロ
 
 ![Center の Runtime 画面](../../images/ui-samples/27-center-runtime.png)
 
-`Runtime` では、Gateway から報告されたプラットフォームターゲットに対応するランタイム配布物を管理します。Center は、そのターゲット向けに PHP-FPM または PSGI のランタイム配布物をビルドし、圧縮済み artifact として保存したうえで Gateway に割り当てることができます。
+`Runtime` では、Gateway から報告されたプラットフォームターゲットに対応するランタイム配布物を管理します。Center は、そのターゲット向けに PHP-FPM または PSGI のランタイム配布物をビルドし、圧縮済み artifact として保存したうえで Gateway に割り当てることができます。ビルドのたびに公式ベースイメージの最新版を取得するため、Center のホストからコンテナーレジストリ（既定では Docker Hub）へ接続できる必要があります。
 同じプラットフォームターゲット向けの artifact がすでに作成済みであれば、再ビルドせずに既存の artifact を選択して割り当てることもできます。
 
 Runtime の変更は、Center UI/API の操作だけでは Gateway に即時反映されません。Center には **pending runtime requests** として登録され、Gateway が署名付きステータスのポーリングで取得したタイミングで処理されます。

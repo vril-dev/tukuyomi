@@ -16,7 +16,7 @@ Build on a workstation or build host:
 Prerequisites:
 
 - `make`
-- Go toolchain 1.26.8 or newer
+- Go toolchain 1.26.10 or newer
 - Node.js 24 LTS + npm 11+ for Gateway / Center UI builds, or Docker
 
 When local Node.js 24 LTS + npm 11+ is unavailable, the default
@@ -34,7 +34,7 @@ sudo usermod -aG docker "$USER"
 ```
 
 After logging in again, confirm that `docker ps` works. If the distribution Go
-package is too old, install Go 1.26.8 or newer from the official Go tarball.
+package is too old, install Go 1.26.10 or newer from the official Go tarball.
 
 ```bash
 make setup
@@ -441,8 +441,8 @@ Notes:
 - after staging, refresh Options Runtime Inventory or restart `tukuyomi` when needed
 - remove an unneeded staged runtime bundle with `sudo make php-fpm-prune RUNTIME=php85`; it checks DB Runtime App references and the runtime pid before deleting `binaries/<runtime_id>` and `runtime/<runtime_id>`
 - `data/php-fpm/runtime/` is not copied; `tukuyomi` generates it later from Runtime App definitions
-- Docker is needed only for `php-fpm-build`; runtime execution does not depend on Docker after the bundle is staged
-- PHP, base image libraries, and PECL extension security updates remain operator-managed: rebuild and restage the bundle when you need those updates
+- Docker is needed only for `php-fpm-build`; runtime execution does not depend on Docker after the bundle is staged. Each build pulls the current official PHP base image (`docker build --pull`), so the build host needs access to the container registry (Docker Hub by default)
+- PHP, base image libraries, and PECL extension security updates remain operator-managed: rebuild and restage the bundle when you need those updates, then confirm the PHP version in `detected_version` of `data/php-fpm/binaries/<runtime_id>/runtime.json`
 
 ## Environment File
 

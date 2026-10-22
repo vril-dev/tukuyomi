@@ -68,3 +68,4 @@ Movable Type still owns `mt-config.cgi`; set `ImageDriver GD` or
 
 - PSGI listeners are identified by the configured `hostname` and `listen_port` pair.
 - Starman workers consume memory per Runtime App. Keep the worker count explicit and small for Movable Type unless traffic requires otherwise.
+- Docker is required only while building the runtime bundle. Each build pulls the current official Perl base image (`docker build --pull`), so the build host needs access to the container registry (Docker Hub by default).

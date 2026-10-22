@@ -113,6 +113,12 @@ build によって、次の成果物が `data/psgi/binaries/<runtime_id>/` 配�
 - `runtime.json`
 - `modules.json`
 
+Docker が必要なのは build 時だけです。build のたびに公式 Perl base image の
+最新版を取得する（`docker build --pull`）ため、build host から container
+registry（既定では Docker Hub）へ接続できる必要があります。Perl / base image
+library の security update は、bundle を rebuild して再配置すると取り込まれ
+ます。
+
 ### 11.4.1　bundled runtime に含まれる主要モジュール
 
 bundled runtime には、Movable Type 向けの主要 optional module を含めて

@@ -126,9 +126,14 @@ If you delete `data/php-fpm/binaries/<runtime_id>/`, the runtime
   `/opt/tukuyomi`. Confirm the Runtime App references in the staged
   `vhosts.json` and the running PIDs before deleting.
 - **Docker is required only at runtime-bundle build time.** Once the
-  bundle is in place, the runtime does not need Docker.
+  bundle is in place, the runtime does not need Docker. Each build
+  pulls the current official PHP base image (`docker build --pull`), so
+  the build host needs access to the container registry (Docker Hub by
+  default).
 - Operators rebuild and replace the bundle to pick up security
-  updates for PHP / base image library / PECL extensions.
+  updates for PHP / base image library / PECL extensions. After a
+  rebuild, confirm the PHP version in `detected_version` of
+  `data/php-fpm/binaries/<runtime_id>/runtime.json`.
 - The bundled runtime ships with the major DB extensions:
   - `sqlite3`, `pdo_sqlite`
   - `mysqli`, `pdo_mysql`, `mysqlnd`

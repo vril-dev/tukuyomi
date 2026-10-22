@@ -16,7 +16,7 @@
 事前に必要なもの:
 
 - `make`
-- Go toolchain 1.26.8 以上
+- Go toolchain 1.26.10 以上
 - Gateway ／ Center UI をビルドするための Node.js 24 LTS + npm 11+、または Docker
 
 Node.js 24 LTS + npm 11+ がローカルに無い場合、既定の `tools/npm-node24.sh` は
@@ -34,7 +34,7 @@ sudo usermod -aG docker "$USER"
 
 いったんログアウトして再ログインした後、`docker ps` が通ることを確認してください。
 Go はディストリビューションのパッケージが古い場合があるため、Go 公式 tarball から
-1.26.8 以上を入れてください。
+1.26.10 以上を入れてください。
 
 ```bash
 make setup
@@ -360,8 +360,8 @@ make php-fpm-copy RUNTIME=php85 DEST="$HOME/tukuyomi"
 - 配置後は、Options の Runtime Inventory で Refresh するか、必要に応じて `tukuyomi` を再起動してください
 - 不要になったステージング済みランタイムバンドルは、`sudo make php-fpm-prune RUNTIME=php85` で削除できます。DB の Runtime App 参照と実行中の pid を確認してから、`binaries/<runtime_id>` と `runtime/<runtime_id>` を削除します
 - `data/php-fpm/runtime/` はコピー対象ではなく、`tukuyomi` 起動後に Runtime App 定義から生成されます
-- Docker が必要なのは `php-fpm-build` のビルド時のみです。バンドル配置後の `tukuyomi` 実行時には Docker は不要です
-- PHP ／ベースイメージライブラリ ／ PECL 拡張のセキュリティ更新は、バンドルを再ビルドしたうえで再配置する必要があります
+- Docker が必要なのは `php-fpm-build` のビルド時のみです。バンドル配置後の `tukuyomi` 実行時には Docker は不要です。ビルドのたびに公式 PHP ベースイメージの最新版を取得する（`docker build --pull`）ため、ビルドするホストからコンテナーレジストリ（既定では Docker Hub）へ接続できる必要があります
+- PHP ／ベースイメージライブラリ ／ PECL 拡張のセキュリティ更新は、バンドルを再ビルドしたうえで再配置する必要があります。再ビルド後は `data/php-fpm/binaries/<runtime_id>/runtime.json` の `detected_version` で PHP のバージョンを確認してください
 
 ## env ファイル
 

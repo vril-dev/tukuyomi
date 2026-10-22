@@ -117,9 +117,13 @@ load 時に `/options` から消えます**。
 - `php-fpm-prune` も既定配備先は `/opt/tukuyomi`。staged `vhosts.json` 内の
   Runtime App 参照と実行中 pid を確認してから削除すること。
 - **Docker が必要なのは runtime bundle の build 時だけ**。bundle 配置後の
-  実行時には Docker は不要。
+  実行時には Docker は不要。build のたびに公式 PHP base image の最新版を
+  取得する（`docker build --pull`）ため、build host から container
+  registry（既定では Docker Hub）へ接続できる必要がある。
 - PHP / base image library / PECL extension の security update は、operator
-  が bundle を rebuild / 再配置して取り込む。
+  が bundle を rebuild / 再配置して取り込む。rebuild 後は
+  `data/php-fpm/binaries/<runtime_id>/runtime.json` の `detected_version` で
+  PHP のバージョンを確認する。
 - 同梱 runtime には、SQLite / MySQL(MariaDB) / PostgreSQL の主要 DB 用
   extension を標準で含める:
   - `sqlite3`, `pdo_sqlite`

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/waf"
 )
 
 func TestNativeHTTP1ServerRoundTripAndKeepAlive(t *testing.T) {
@@ -147,6 +148,51 @@ func TestNativeHTTP1ServerBodyInspectionBlockKeepsConnectionUsable(t *testing.T)
 	}
 	if bodies := recorder.snapshot(); len(bodies) != 1 || bodies[0] != "" {
 		t.Fatalf("upstream bodies=%d, want only the GET", len(bodies))
+	}
+}
+
+func TestNativeHTTP1ServerInspectsAbsoluteFormRequestURI(t *testing.T) {
+	r, _ := startBodyInspectionProxyForTest(t, 1024, config.WAFRequestBodyOversizeInspectPrefix)
+	if _, _, err := getLogsStatsStore().writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{{
+		Path: config.DefaultBaseRuleAssetPath,
+		Kind: wafRuleAssetKindBase,
+		Raw:  []byte("SecRuleEngine On\nSecRule REQUEST_URI \"@beginsWith /admin\" \"id:100001,phase:1,deny,status:403,log\"\n"),
+	}}, configVersionSourceImport, "", "test waf asset import", 0); err != nil {
+		t.Fatalf("write waf rule assets: %v", err)
+	}
+	if err := waf.ReloadBaseWAF(); err != nil {
+		t.Fatalf("reload waf: %v", err)
+	}
+	srv, addr := nativeHTTP1StartTestServer(t, r)
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+	br := bufio.NewReader(conn)
+
+	for _, tc := range []struct {
+		target string
+		status int
+	}{
+		{target: "http://example.com/admin/users", status: http.StatusForbidden},
+		{target: "/admin/users", status: http.StatusForbidden},
+		{target: "http://example.com/public", status: http.StatusOK},
+	} {
+		if _, err := io.WriteString(conn, "GET "+tc.target+" HTTP/1.1\r\nHost: example.com\r\n\r\n"); err != nil {
+			t.Fatalf("write %s: %v", tc.target, err)
+		}
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			t.Fatalf("ReadResponse %s: %v", tc.target, err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != tc.status {
+			t.Fatalf("%s status=%d want=%d", tc.target, resp.StatusCode, tc.status)
+		}
 	}
 }
 

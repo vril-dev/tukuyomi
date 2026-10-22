@@ -145,6 +145,13 @@ SecRule REQUEST_URI "@beginsWith /api/legacy/"
 With `@beginsWith` narrowing the path and a single rule id removed,
 the overall sensitivity does not change — only that path passes.
 
+`REQUEST_URI` holds only the path and query string, such as
+`/api/legacy/run?x=1`. Since 1.6.2 this also holds for HTTP/1.1 requests
+that send an absolute URL as the request target
+(`GET http://example.com/api/legacy/ HTTP/1.1`) and for HTTP/3 requests,
+so a `@beginsWith /...` condition matches the same requests on every
+protocol. To narrow by host name, use `REQUEST_HEADERS:Host`.
+
 ### 7.4.3 Wider bypass as a last resort
 
 When neither of the above can absorb the case, fall back to a wider

@@ -22,5 +22,6 @@ data/scheduled-tasks/*
 !data/scheduled-tasks/README.md
 examples/*/data/logs
 examples/*/data/rules/crs
+testenv/release-binary/runtime
 web/tukuyomi-admin/node_modules
 web/tukuyomi-center/node_modules

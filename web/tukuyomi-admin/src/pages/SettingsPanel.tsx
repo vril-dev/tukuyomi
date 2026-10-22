@@ -2670,264 +2670,274 @@ export default function SettingsPanel() {
                       </section>
                     </div>
 
-                    <section className="rounded border border-neutral-200 bg-neutral-50 p-4 space-y-3">
-                      <div className="text-sm font-medium">
-                        {tx("CRS, Rollback, and FP Tuner")}
-                      </div>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <Field label={tx("WAF Engine")}>
-                          <select
-                            value={
-                              listenerAdminConfig.waf.engine.mode || "coraza"
-                            }
-                            onChange={(event) => {
-                              const nextMode = event.target.value;
-                              setListenerAdminConfig((current) => ({
-                                ...current,
-                                waf: {
-                                  ...current.waf,
-                                  engine: {
-                                    ...current.waf.engine,
-                                    mode: nextMode,
+                    <div className="space-y-4">
+                      <section className="rounded border border-neutral-200 bg-neutral-50 p-4 space-y-3">
+                        <div className="text-sm font-medium">
+                          {tx("Request Body Inspection")}
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <Field label={tx("Mode")}>
+                            <select
+                              value={listenerAdminConfig.waf.request_body.mode}
+                              onChange={(event) => {
+                                const nextMode = event.target.value;
+                                setListenerAdminConfig((current) => ({
+                                  ...current,
+                                  waf: {
+                                    ...current.waf,
+                                    request_body: {
+                                      ...current.waf.request_body,
+                                      mode: nextMode,
+                                    },
                                   },
-                                },
-                              }));
-                            }}
-                            disabled={readOnly || configSaving}
-                            className="w-full rounded border border-neutral-300 bg-white text-neutral-900 disabled:bg-neutral-100 disabled:text-neutral-500"
-                          >
-                            {wafEngineModes.map((engine) => (
-                              <option key={engine.mode} value={engine.mode} disabled={!engine.available}>
-                                {engine.label || engine.mode}
-                                {engine.available ? "" : ` (${tx("unavailable")})`}
-                              </option>
-                            ))}
-                          </select>
-                          <p className="mt-1 text-[11px] text-neutral-500">
-                            {tx(
-                              "Select a registered WAF engine. Unavailable engines are shown for planning but cannot be saved in this build.",
-                            )}
-                          </p>
-                          {!selectedWAFEngine?.available && selectedWAFEngine?.reason ? (
-                            <p className="mt-1 text-[11px] text-amber-700">
-                              {tx("Unavailable")}: {selectedWAFEngine.reason}
-                            </p>
-                          ) : null}
-                        </Field>
-                        <Field label={tx("Request Body Inspection")}>
-                          <select
-                            value={listenerAdminConfig.waf.request_body.mode}
-                            onChange={(event) => {
-                              const nextMode = event.target.value;
-                              setListenerAdminConfig((current) => ({
-                                ...current,
-                                waf: {
-                                  ...current.waf,
-                                  request_body: {
-                                    ...current.waf.request_body,
-                                    mode: nextMode,
-                                  },
-                                },
-                              }));
-                            }}
-                            disabled={readOnly || configSaving}
-                            className="w-full rounded border border-neutral-300 bg-white text-neutral-900 disabled:bg-neutral-100 disabled:text-neutral-500"
-                          >
-                            <option value="enforce">{tx("Inspect and block")}</option>
-                            <option value="detect">{tx("Detect only")}</option>
-                            <option value="off">{tx("Do not inspect")}</option>
-                          </select>
-                          <p className="mt-1 text-[11px] text-neutral-500">
-                            {tx(
-                              "Inspects form, multipart, JSON, and XML request bodies. Detect only logs body-based blocks without stopping requests; use it, a bypass entry, or rule exclusions for false positives before turning inspection off.",
-                            )}
-                          </p>
-                          {listenerAdminConfig.waf.request_body.mode === "off" ? (
-                            <p className="mt-1 text-[11px] text-amber-700">
+                                }));
+                              }}
+                              disabled={readOnly || configSaving}
+                              className="w-full rounded border border-neutral-300 bg-white text-neutral-900 disabled:bg-neutral-100 disabled:text-neutral-500"
+                            >
+                              <option value="enforce">{tx("Inspect and block")}</option>
+                              <option value="detect">{tx("Detect only")}</option>
+                              <option value="off">{tx("Do not inspect")}</option>
+                            </select>
+                            <p className="mt-1 text-[11px] text-neutral-500">
                               {tx(
-                                "Request bodies are not inspected. Attacks in forms, JSON, XML, and uploads reach upstreams unchecked.",
+                                "Inspects form, multipart, JSON, and XML request bodies. Detect only logs body-based blocks without stopping requests; use it, a bypass entry, or rule exclusions for false positives before turning inspection off.",
                               )}
                             </p>
-                          ) : null}
-                        </Field>
-                        <NumberField
-                          label={tx("Body Inspection Limit (bytes)")}
-                          value={
-                            listenerAdminConfig.waf.request_body.inspect_limit_bytes
-                          }
-                          onChange={(value) =>
-                            setListenerAdminConfig((current) => ({
-                              ...current,
-                              waf: {
-                                ...current.waf,
-                                request_body: {
-                                  ...current.waf.request_body,
-                                  inspect_limit_bytes: value,
-                                },
-                              },
-                            }))
-                          }
-                        />
-                        <Field label={tx("Oversized Request Bodies")}>
-                          <select
-                            value={listenerAdminConfig.waf.request_body.oversize_action}
-                            onChange={(event) => {
-                              const nextAction = event.target.value;
+                            {listenerAdminConfig.waf.request_body.mode === "off" ? (
+                              <p className="mt-1 text-[11px] text-amber-700">
+                                {tx(
+                                  "Request bodies are not inspected. Attacks in forms, JSON, XML, and uploads reach upstreams unchecked.",
+                                )}
+                              </p>
+                            ) : null}
+                          </Field>
+                          <NumberField
+                            label={tx("Body Inspection Limit (bytes)")}
+                            value={
+                              listenerAdminConfig.waf.request_body.inspect_limit_bytes
+                            }
+                            onChange={(value) =>
                               setListenerAdminConfig((current) => ({
                                 ...current,
                                 waf: {
                                   ...current.waf,
                                   request_body: {
                                     ...current.waf.request_body,
-                                    oversize_action: nextAction,
+                                    inspect_limit_bytes: value,
                                   },
                                 },
-                              }));
-                            }}
-                            disabled={readOnly || configSaving}
-                            className="w-full rounded border border-neutral-300 bg-white text-neutral-900 disabled:bg-neutral-100 disabled:text-neutral-500"
-                          >
-                            <option value="inspect_prefix">{tx("Inspect the first part and pass")}</option>
-                            <option value="reject">{tx("Reject with 413")}</option>
-                          </select>
-                          <p className="mt-1 text-[11px] text-neutral-500">
-                            {tx(
-                              "Bodies larger than the limit are inspected up to the limit. Rejecting them also stops large uploads.",
-                            )}
-                          </p>
-                        </Field>
-                        <NumberField
-                          label={tx("Proxy Rollback History Size")}
-                          value={
-                            listenerAdminConfig.proxy.rollback_history_size
-                          }
-                          onChange={(value) =>
-                            setListenerAdminConfig((current) => ({
-                              ...current,
-                              proxy: {
-                                ...current.proxy,
-                                rollback_history_size: value,
-                              },
-                            }))
-                          }
-                        />
-                        <label className="flex items-center gap-2 text-xs text-neutral-700">
-                          <input
-                            type="checkbox"
-                            checked={listenerAdminConfig.crs.enable}
-                            onChange={(e) =>
+                              }))
+                            }
+                          />
+                          <Field label={tx("Oversized Request Bodies")}>
+                            <select
+                              value={listenerAdminConfig.waf.request_body.oversize_action}
+                              onChange={(event) => {
+                                const nextAction = event.target.value;
+                                setListenerAdminConfig((current) => ({
+                                  ...current,
+                                  waf: {
+                                    ...current.waf,
+                                    request_body: {
+                                      ...current.waf.request_body,
+                                      oversize_action: nextAction,
+                                    },
+                                  },
+                                }));
+                              }}
+                              disabled={readOnly || configSaving}
+                              className="w-full rounded border border-neutral-300 bg-white text-neutral-900 disabled:bg-neutral-100 disabled:text-neutral-500"
+                            >
+                              <option value="inspect_prefix">{tx("Inspect prefix, then pass")}</option>
+                              <option value="reject">{tx("Reject (413)")}</option>
+                            </select>
+                            <p className="mt-1 text-[11px] text-neutral-500">
+                              {tx(
+                                "Bodies larger than the limit are inspected up to the limit. Rejecting them also stops large uploads.",
+                              )}
+                            </p>
+                          </Field>
+                        </div>
+                      </section>
+
+                      <section className="rounded border border-neutral-200 bg-neutral-50 p-4 space-y-3">
+                        <div className="text-sm font-medium">
+                          {tx("CRS, Rollback, and FP Tuner")}
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <Field label={tx("WAF Engine")}>
+                            <select
+                              value={
+                                listenerAdminConfig.waf.engine.mode || "coraza"
+                              }
+                              onChange={(event) => {
+                                const nextMode = event.target.value;
+                                setListenerAdminConfig((current) => ({
+                                  ...current,
+                                  waf: {
+                                    ...current.waf,
+                                    engine: {
+                                      ...current.waf.engine,
+                                      mode: nextMode,
+                                    },
+                                  },
+                                }));
+                              }}
+                              disabled={readOnly || configSaving}
+                              className="w-full rounded border border-neutral-300 bg-white text-neutral-900 disabled:bg-neutral-100 disabled:text-neutral-500"
+                            >
+                              {wafEngineModes.map((engine) => (
+                                <option key={engine.mode} value={engine.mode} disabled={!engine.available}>
+                                  {engine.label || engine.mode}
+                                  {engine.available ? "" : ` (${tx("unavailable")})`}
+                                </option>
+                              ))}
+                            </select>
+                            <p className="mt-1 text-[11px] text-neutral-500">
+                              {tx(
+                                "Select a registered WAF engine. Unavailable engines are shown for planning but cannot be saved in this build.",
+                              )}
+                            </p>
+                            {!selectedWAFEngine?.available && selectedWAFEngine?.reason ? (
+                              <p className="mt-1 text-[11px] text-amber-700">
+                                {tx("Unavailable")}: {selectedWAFEngine.reason}
+                              </p>
+                            ) : null}
+                          </Field>
+                          <NumberField
+                            label={tx("Proxy Rollback History Size")}
+                            value={
+                              listenerAdminConfig.proxy.rollback_history_size
+                            }
+                            onChange={(value) =>
                               setListenerAdminConfig((current) => ({
                                 ...current,
-                                crs: {
-                                  ...current.crs,
-                                  enable: e.target.checked,
+                                proxy: {
+                                  ...current.proxy,
+                                  rollback_history_size: value,
                                 },
                               }))
                             }
                           />
-                          {tx("Enable CRS by default")}
-                        </label>
-                        <Field label={tx("FP Tuner Endpoint")}>
-                          <input
-                            value={listenerAdminConfig.fp_tuner.endpoint}
-                            onChange={(e) =>
+                          <label className="flex items-center gap-2 text-xs text-neutral-700">
+                            <input
+                              type="checkbox"
+                              checked={listenerAdminConfig.crs.enable}
+                              onChange={(e) =>
+                                setListenerAdminConfig((current) => ({
+                                  ...current,
+                                  crs: {
+                                    ...current.crs,
+                                    enable: e.target.checked,
+                                  },
+                                }))
+                              }
+                            />
+                            {tx("Enable CRS by default")}
+                          </label>
+                          <Field label={tx("FP Tuner Endpoint")}>
+                            <input
+                              value={listenerAdminConfig.fp_tuner.endpoint}
+                              onChange={(e) =>
+                                setListenerAdminConfig((current) => ({
+                                  ...current,
+                                  fp_tuner: {
+                                    ...current.fp_tuner,
+                                    endpoint: e.target.value,
+                                  },
+                                }))
+                              }
+                              className="w-full rounded border border-neutral-200 bg-white"
+                            />
+                          </Field>
+                          <Field label={tx("FP Tuner Model")}>
+                            <input
+                              value={listenerAdminConfig.fp_tuner.model}
+                              onChange={(e) =>
+                                setListenerAdminConfig((current) => ({
+                                  ...current,
+                                  fp_tuner: {
+                                    ...current.fp_tuner,
+                                    model: e.target.value,
+                                  },
+                                }))
+                              }
+                              className="w-full rounded border border-neutral-200 bg-white"
+                            />
+                          </Field>
+                          <NumberField
+                            label={tx("FP Tuner Timeout Seconds")}
+                            value={listenerAdminConfig.fp_tuner.timeout_sec}
+                            onChange={(value) =>
                               setListenerAdminConfig((current) => ({
                                 ...current,
                                 fp_tuner: {
                                   ...current.fp_tuner,
-                                  endpoint: e.target.value,
+                                  timeout_sec: value,
                                 },
                               }))
                             }
-                            className="w-full rounded border border-neutral-200 bg-white"
                           />
-                        </Field>
-                        <Field label={tx("FP Tuner Model")}>
-                          <input
-                            value={listenerAdminConfig.fp_tuner.model}
-                            onChange={(e) =>
+                          <Field label={tx("FP Tuner Audit File")}>
+                            <input
+                              value={listenerAdminConfig.fp_tuner.audit_file}
+                              onChange={(e) =>
+                                setListenerAdminConfig((current) => ({
+                                  ...current,
+                                  fp_tuner: {
+                                    ...current.fp_tuner,
+                                    audit_file: e.target.value,
+                                  },
+                                }))
+                              }
+                              className="w-full rounded border border-neutral-200 bg-white"
+                            />
+                          </Field>
+                          <NumberField
+                            label={tx("FP Tuner Approval TTL Seconds")}
+                            value={listenerAdminConfig.fp_tuner.approval_ttl_sec}
+                            onChange={(value) =>
                               setListenerAdminConfig((current) => ({
                                 ...current,
                                 fp_tuner: {
                                   ...current.fp_tuner,
-                                  model: e.target.value,
-                                },
-                              }))
-                            }
-                            className="w-full rounded border border-neutral-200 bg-white"
-                          />
-                        </Field>
-                        <NumberField
-                          label={tx("FP Tuner Timeout Seconds")}
-                          value={listenerAdminConfig.fp_tuner.timeout_sec}
-                          onChange={(value) =>
-                            setListenerAdminConfig((current) => ({
-                              ...current,
-                              fp_tuner: {
-                                ...current.fp_tuner,
-                                timeout_sec: value,
-                              },
-                            }))
-                          }
-                        />
-                        <Field label={tx("FP Tuner Audit File")}>
-                          <input
-                            value={listenerAdminConfig.fp_tuner.audit_file}
-                            onChange={(e) =>
-                              setListenerAdminConfig((current) => ({
-                                ...current,
-                                fp_tuner: {
-                                  ...current.fp_tuner,
-                                  audit_file: e.target.value,
-                                },
-                              }))
-                            }
-                            className="w-full rounded border border-neutral-200 bg-white"
-                          />
-                        </Field>
-                        <NumberField
-                          label={tx("FP Tuner Approval TTL Seconds")}
-                          value={listenerAdminConfig.fp_tuner.approval_ttl_sec}
-                          onChange={(value) =>
-                            setListenerAdminConfig((current) => ({
-                              ...current,
-                              fp_tuner: {
-                                ...current.fp_tuner,
-                                approval_ttl_sec: value,
-                              },
-                            }))
-                          }
-                        />
-                        <label className="flex items-center gap-2 text-xs text-neutral-700">
-                          <input
-                            type="checkbox"
-                            checked={
-                              listenerAdminConfig.fp_tuner.require_approval
-                            }
-                            onChange={(e) =>
-                              setListenerAdminConfig((current) => ({
-                                ...current,
-                                fp_tuner: {
-                                  ...current.fp_tuner,
-                                  require_approval: e.target.checked,
+                                  approval_ttl_sec: value,
                                 },
                               }))
                             }
                           />
-                          {tx("Require FP Tuner approval")}
-                        </label>
-                      </div>
-                      <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                        {tx(
-                          "FP Tuner API key is currently {state}. Manage the literal key outside this panel.",
-                          {
-                            state: secretStatus.fp_tuner_api_key_configured
-                              ? tx("configured")
-                              : tx("not configured"),
-                          },
-                        )}
-                      </div>
-                    </section>
+                          <label className="flex items-center gap-2 text-xs text-neutral-700">
+                            <input
+                              type="checkbox"
+                              checked={
+                                listenerAdminConfig.fp_tuner.require_approval
+                              }
+                              onChange={(e) =>
+                                setListenerAdminConfig((current) => ({
+                                  ...current,
+                                  fp_tuner: {
+                                    ...current.fp_tuner,
+                                    require_approval: e.target.checked,
+                                  },
+                                }))
+                              }
+                            />
+                            {tx("Require FP Tuner approval")}
+                          </label>
+                        </div>
+                        <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                          {tx(
+                            "FP Tuner API key is currently {state}. Manage the literal key outside this panel.",
+                            {
+                              state: secretStatus.fp_tuner_api_key_configured
+                                ? tx("configured")
+                                : tx("not configured"),
+                            },
+                          )}
+                        </div>
+                      </section>
+                    </div>
                   </div>
                 </div>
               ) : null}

@@ -59,8 +59,8 @@ const JA_STRINGS: Record<string, string> = {
   "Global limit": "全体の上限",
   "Base rules (WAF stays on)": "基本ルール（WAF は有効のまま）",
   "Oversized Request Bodies": "上限を超えるリクエストボディ",
-  "Inspect the first part and pass": "先頭だけ検査して通す",
-  "Reject with 413": "413 で拒否する",
+  "Inspect prefix, then pass": "先頭だけ検査して通す",
+  "Reject (413)": "413 で拒否する",
   "Bodies larger than the limit are inspected up to the limit. Rejecting them also stops large uploads.":
     "上限を超えるボディは上限まで検査します。拒否にすると、大きなアップロードも止まります。",
   Operations: "Operations",

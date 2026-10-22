@@ -106,6 +106,7 @@ func buildWAFWithRoot(files []string, root fs.FS) (coraza.WAF, error) {
 		cfg = cfg.WithDirectivesFromFile(file)
 		log.Printf("[WAF] Loaded rules from: %s", file)
 	}
+	cfg = cfg.WithDirectives(builtinRequestBodyDirectives)
 
 	return coraza.NewWAF(cfg)
 }
@@ -116,7 +117,8 @@ func buildWAFWithDirectives(raw []byte) (coraza.WAF, error) {
 		WithErrorCallback(func(m types.MatchedRule) {
 			log.Printf("[WAF] Blocked: URI=%s, MSG=%s", m.URI(), m.MatchedDatas())
 		}).
-		WithDirectives(string(raw))
+		WithDirectives(string(raw)).
+		WithDirectives(builtinRequestBodyDirectives)
 
 	return coraza.NewWAF(cfg)
 }

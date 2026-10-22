@@ -149,6 +149,27 @@ SecRule REQUEST_URI "@beginsWith /api/legacy/"
 
 緩い穴を入れたまま忘れることのないよう、運用フロー全体で期限管理を回します。
 
+### 7.4.4　request body による誤検知
+
+1.6.0 から、form、multipart、JSON、XML の request body を検査します
+（`waf.request_body`、付録 A）。これまで body の値を見ていなかった CRS rule が
+働き始めるため、upgrade 後は新しい誤検知が出る前提で構えてください。
+
+- **body が原因の遮断を見分ける。** block event の `matched_variable` が body の
+  引数（`ARGS_POST:comment` や `json.` で始まる key など）を指します。body の
+  判定で決まった event には `request_body_reason` が付きます。
+- **まず狭く調整する。** `extra_rule` や `ctl:ruleRemoveById` の手法はそのまま
+  使えます。rule 全体ではなく、body の引数を対象にします。
+- **path 単位で絞る。** bypass entry に `"request_body": "skip"` を指定すると、
+  その path（大きな upload を受ける endpoint など）だけ body の検査を止め、
+  URL、header、cookie の検査は続けます。`"request_body_inspect_limit_bytes"`
+  で、その path の検査の上限だけを変えることもできます。
+- **調査中は `detect` を使う。** `waf.request_body.mode = detect` にすると、
+  body が原因の遮断は止めずに `waf_block_dry_run` event として残ります。
+  全 host に効くため、ほかの一時回避と同じく期限を切ってください。
+- **`off` は最終手段。** 1.6.0 より前の状態に戻り、form、JSON、XML、
+  upload に含まれる攻撃は検査されずに upstream へ届きます。
+
 ## 7.5　ステップ 4: CRS 設定の見直し
 
 個別の path だけでなく、**CRS 全体の感度** を見直すべき場面もあります。

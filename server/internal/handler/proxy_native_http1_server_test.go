@@ -7,10 +7,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"tukuyomi/internal/config"
 )
 
 func TestNativeHTTP1ServerRoundTripAndKeepAlive(t *testing.T) {
@@ -98,6 +101,119 @@ func TestNativeHTTP1ServerDrainsUnreadSmallRequestBodyBeforeKeepAlive(t *testing
 	}
 	if got := srv.keepAliveReuses.Load(); got != 1 {
 		t.Fatalf("keepAliveReuses=%d want 1", got)
+	}
+}
+
+func TestNativeHTTP1ServerBodyInspectionBlockKeepsConnectionUsable(t *testing.T) {
+	r, recorder := startBodyInspectionProxyForTest(t, 1024, config.WAFRequestBodyOversizeInspectPrefix)
+	srv, addr := nativeHTTP1StartTestServer(t, r)
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+	br := bufio.NewReader(conn)
+
+	attack := "q=%3Cscript%3E&pad=" + strings.Repeat("a", 4096)
+	if _, err := io.WriteString(conn, "POST /form HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: "+strconv.Itoa(len(attack))+"\r\n\r\n"+attack); err != nil {
+		t.Fatalf("write attack request: %v", err)
+	}
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("ReadResponse attack: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("attack status=%d want=403", resp.StatusCode)
+	}
+
+	if _, err := io.WriteString(conn, "GET /next HTTP/1.1\r\nHost: example.com\r\n\r\n"); err != nil {
+		t.Fatalf("write next request: %v", err)
+	}
+	resp, err = http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("ReadResponse next: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("next status=%d want=200", resp.StatusCode)
+	}
+	if got := srv.keepAliveReuses.Load(); got != 1 {
+		t.Fatalf("keepAliveReuses=%d want 1", got)
+	}
+	if bodies := recorder.snapshot(); len(bodies) != 1 || bodies[0] != "" {
+		t.Fatalf("upstream bodies=%d, want only the GET", len(bodies))
+	}
+}
+
+func TestNativeHTTP1ServerBodyInspectionExpectContinue(t *testing.T) {
+	r, recorder := startBodyInspectionProxyForTest(t, 1024, config.WAFRequestBodyOversizeReject)
+	srv, addr := nativeHTTP1StartTestServer(t, r)
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+	br := bufio.NewReader(conn)
+
+	body := "name=alice"
+	if _, err := io.WriteString(conn, "POST /form HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/x-www-form-urlencoded\r\nExpect: 100-continue\r\nContent-Length: "+strconv.Itoa(len(body))+"\r\n\r\n"); err != nil {
+		t.Fatalf("write headers: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	line, err := br.ReadString('\n')
+	if err != nil || !strings.HasPrefix(line, "HTTP/1.1 100") {
+		t.Fatalf("interim line=%q err=%v, want 100 Continue before the body is sent", line, err)
+	}
+	if blank, err := br.ReadString('\n'); err != nil || blank != "\r\n" {
+		t.Fatalf("interim terminator=%q err=%v", blank, err)
+	}
+	if _, err := io.WriteString(conn, body); err != nil {
+		t.Fatalf("write body: %v", err)
+	}
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("ReadResponse: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want=200", resp.StatusCode)
+	}
+	if bodies := recorder.snapshot(); len(bodies) != 1 || bodies[0] != body {
+		t.Fatalf("upstream bodies=%q", bodies)
+	}
+
+	conn2, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn2.Close()
+	br2 := bufio.NewReader(conn2)
+	if _, err := io.WriteString(conn2, "POST /form HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/x-www-form-urlencoded\r\nExpect: 100-continue\r\nContent-Length: 4096\r\n\r\n"); err != nil {
+		t.Fatalf("write oversize headers: %v", err)
+	}
+	_ = conn2.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err = http.ReadResponse(br2, nil)
+	if err != nil {
+		t.Fatalf("ReadResponse oversize: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversize status=%d want=413 without 100 Continue", resp.StatusCode)
+	}
+	if _, err := br2.ReadByte(); err == nil {
+		t.Fatal("connection stayed open after rejecting an unsent Expect body")
+	}
+	if got := len(recorder.snapshot()); got != 1 {
+		t.Fatalf("oversize request reached upstream: %d bodies", got)
 	}
 }
 

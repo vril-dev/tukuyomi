@@ -45,6 +45,24 @@ const JA_STRINGS: Record<string, string> = {
   "Select a registered WAF engine. Unavailable engines are shown for planning but cannot be saved in this build.":
     "登録済みの WAF engine を選択します。利用不可の engine は計画用に表示されますが、この build では保存できません。",
   "CRS, Rollback, and FP Tuner": "CRS、ロールバック、FP Tuner",
+  "Request Body Inspection": "リクエストボディの検査",
+  "Current Request Body Inspection": "現在のリクエストボディの検査",
+  "Inspect and block": "検査して遮断",
+  "Detect only": "検知のみ",
+  "Do not inspect": "検査しない",
+  "Inspects form, multipart, JSON, and XML request bodies. Detect only logs body-based blocks without stopping requests; use it, a bypass entry, or rule exclusions for false positives before turning inspection off.":
+    "フォーム、multipart、JSON、XML のリクエストボディを検査します。「検知のみ」はボディが原因の遮断をログに残すだけで、リクエストは止めません。誤検知には、検査をオフにする前に「検知のみ」、bypass の設定、ルールの除外を使ってください。",
+  "Request bodies are not inspected. Attacks in forms, JSON, XML, and uploads reach upstreams unchecked.":
+    "リクエストボディを検査していません。フォーム、JSON、XML、アップロードに含まれる攻撃は、検査されずに upstream へ届きます。",
+  "Body Inspection Limit (bytes)": "ボディ検査の上限（バイト）",
+  "Use global setting": "全体の設定に従う",
+  "Global limit": "全体の上限",
+  "Base rules (WAF stays on)": "基本ルール（WAF は有効のまま）",
+  "Oversized Request Bodies": "上限を超えるリクエストボディ",
+  "Inspect the first part and pass": "先頭だけ検査して通す",
+  "Reject with 413": "413 で拒否する",
+  "Bodies larger than the limit are inspected up to the limit. Rejecting them also stops large uploads.":
+    "上限を超えるボディは上限まで検査します。拒否にすると、大きなアップロードも止まります。",
   Operations: "Operations",
   Coraza: "Coraza",
   "Request Controls": "リクエスト制御",

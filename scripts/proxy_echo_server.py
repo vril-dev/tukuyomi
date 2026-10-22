@@ -14,8 +14,35 @@ class Handler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self._respond(send_body=False)
 
+    def do_POST(self):
+        self._drain_body()
+        self._respond()
+
+    def do_PUT(self):
+        self._drain_body()
+        self._respond()
+
+    def do_PATCH(self):
+        self._drain_body()
+        self._respond()
+
+    def do_DELETE(self):
+        self._drain_body()
+        self._respond()
+
+    def do_OPTIONS(self):
+        self._respond()
+
     def log_message(self, _format, *_args):
         return
+
+    def _drain_body(self):
+        remaining = int(self.headers.get("Content-Length") or 0)
+        while remaining > 0:
+            chunk = self.rfile.read(min(remaining, 65536))
+            if not chunk:
+                break
+            remaining -= len(chunk)
 
     def _respond(self, send_body=True):
         payload = {

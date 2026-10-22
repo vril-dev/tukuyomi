@@ -162,6 +162,11 @@ type ListenerAdminConfig = {
     engine: {
       mode: string;
     };
+    request_body: {
+      mode: string;
+      inspect_limit_bytes: number;
+      oversize_action: string;
+    };
   };
   edge: {
     enabled: boolean;
@@ -242,6 +247,9 @@ type ListenerAdminRuntime = {
   proxy_engine_mode?: string;
   waf_engine_mode?: string;
   waf_engine_modes?: EngineCapability[];
+  waf_request_body_mode?: string;
+  waf_request_body_inspect_limit_bytes?: number;
+  waf_request_body_oversize_action?: string;
   edge_enabled?: boolean;
   edge_device_auth_enabled?: boolean;
   storage_db_driver?: string;
@@ -433,6 +441,11 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
       engine: {
         mode: "coraza",
       },
+      request_body: {
+        mode: "enforce",
+        inspect_limit_bytes: 16384,
+        oversize_action: "inspect_prefix",
+      },
     },
     edge: {
       enabled: false,
@@ -595,6 +608,10 @@ function normalizeListenerAdminConfig(
       engine: {
         ...base.waf.engine,
         ...value.waf?.engine,
+      },
+      request_body: {
+        ...base.waf.request_body,
+        ...value.waf?.request_body,
       },
     },
     edge: {
@@ -2697,6 +2714,88 @@ export default function SettingsPanel() {
                             </p>
                           ) : null}
                         </Field>
+                        <Field label={tx("Request Body Inspection")}>
+                          <select
+                            value={listenerAdminConfig.waf.request_body.mode}
+                            onChange={(event) => {
+                              const nextMode = event.target.value;
+                              setListenerAdminConfig((current) => ({
+                                ...current,
+                                waf: {
+                                  ...current.waf,
+                                  request_body: {
+                                    ...current.waf.request_body,
+                                    mode: nextMode,
+                                  },
+                                },
+                              }));
+                            }}
+                            disabled={readOnly || configSaving}
+                            className="w-full rounded border border-neutral-300 bg-white text-neutral-900 disabled:bg-neutral-100 disabled:text-neutral-500"
+                          >
+                            <option value="enforce">{tx("Inspect and block")}</option>
+                            <option value="detect">{tx("Detect only")}</option>
+                            <option value="off">{tx("Do not inspect")}</option>
+                          </select>
+                          <p className="mt-1 text-[11px] text-neutral-500">
+                            {tx(
+                              "Inspects form, multipart, JSON, and XML request bodies. Detect only logs body-based blocks without stopping requests; use it, a bypass entry, or rule exclusions for false positives before turning inspection off.",
+                            )}
+                          </p>
+                          {listenerAdminConfig.waf.request_body.mode === "off" ? (
+                            <p className="mt-1 text-[11px] text-amber-700">
+                              {tx(
+                                "Request bodies are not inspected. Attacks in forms, JSON, XML, and uploads reach upstreams unchecked.",
+                              )}
+                            </p>
+                          ) : null}
+                        </Field>
+                        <NumberField
+                          label={tx("Body Inspection Limit (bytes)")}
+                          value={
+                            listenerAdminConfig.waf.request_body.inspect_limit_bytes
+                          }
+                          onChange={(value) =>
+                            setListenerAdminConfig((current) => ({
+                              ...current,
+                              waf: {
+                                ...current.waf,
+                                request_body: {
+                                  ...current.waf.request_body,
+                                  inspect_limit_bytes: value,
+                                },
+                              },
+                            }))
+                          }
+                        />
+                        <Field label={tx("Oversized Request Bodies")}>
+                          <select
+                            value={listenerAdminConfig.waf.request_body.oversize_action}
+                            onChange={(event) => {
+                              const nextAction = event.target.value;
+                              setListenerAdminConfig((current) => ({
+                                ...current,
+                                waf: {
+                                  ...current.waf,
+                                  request_body: {
+                                    ...current.waf.request_body,
+                                    oversize_action: nextAction,
+                                  },
+                                },
+                              }));
+                            }}
+                            disabled={readOnly || configSaving}
+                            className="w-full rounded border border-neutral-300 bg-white text-neutral-900 disabled:bg-neutral-100 disabled:text-neutral-500"
+                          >
+                            <option value="inspect_prefix">{tx("Inspect the first part and pass")}</option>
+                            <option value="reject">{tx("Reject with 413")}</option>
+                          </select>
+                          <p className="mt-1 text-[11px] text-neutral-500">
+                            {tx(
+                              "Bodies larger than the limit are inspected up to the limit. Rejecting them also stops large uploads.",
+                            )}
+                          </p>
+                        </Field>
                         <NumberField
                           label={tx("Proxy Rollback History Size")}
                           value={
@@ -2926,6 +3025,10 @@ export default function SettingsPanel() {
                   <RuntimeMetric
                     label={tx("Current WAF Engine")}
                     value={runtime.waf_engine_mode}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Request Body Inspection")}
+                    value={runtime.waf_request_body_mode}
                   />
                   <RuntimeMetric
                     label={tx("Current External Mode")}

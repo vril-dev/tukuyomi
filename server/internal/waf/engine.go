@@ -28,6 +28,7 @@ type Decision struct {
 	RuleIDs      []string
 	Matches      []Match
 	Interruption *Interruption
+	RequestBody  RequestBodyResult
 }
 
 type Interruption struct {
@@ -58,7 +59,8 @@ type MatchData struct {
 }
 
 type corazaEngine struct {
-	w coraza.WAF
+	w            coraza.WAF
+	bodyOverride *RequestBodyOverride
 }
 
 func (e corazaEngine) Name() string {
@@ -74,6 +76,79 @@ func (e corazaEngine) InspectRequest(req *http.Request) (Decision, error) {
 		return decision, errors.New("request is nil")
 	}
 
+	policy := currentRequestBodyPolicy()
+	if e.bodyOverride != nil {
+		policy = policy.withOverride(*e.bodyOverride)
+	}
+	var errs []error
+	sample, err := readInspectionBody(req, policy)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("body read: %w", err))
+	}
+	if sample.Oversize && policy.OversizeAction == config.WAFRequestBodyOversizeReject && policy.Mode == config.WAFRequestBodyModeEnforce {
+		decision.RequestBody = RequestBodyResult{Oversize: true, Truncated: sample.Truncated, Reason: requestBodyReasonOversize}
+		decision.Interruption = &Interruption{RuleID: requestBodyRuleOversize, Status: http.StatusRequestEntityTooLarge}
+		return decision, errors.Join(errs...)
+	}
+
+	decision, signals, err := e.inspect(req, sample.Data)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	decision.RequestBody = RequestBodyResult{
+		Inspected: len(sample.Data) > 0,
+		Bytes:     len(sample.Data),
+		Truncated: sample.Truncated,
+		Oversize:  sample.Oversize,
+	}
+	if policy.Mode == config.WAFRequestBodyModeOff {
+		return decision, errors.Join(errs...)
+	}
+
+	if decision.Interruption != nil {
+		if policy.Mode == config.WAFRequestBodyModeDetect && decision.RequestBody.Inspected {
+			withoutBody, _, err := e.inspect(req, nil)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("detect re-run: %w", err))
+			}
+			if withoutBody.Interruption == nil {
+				decision.RequestBody.Reason = requestBodyReasonRule
+				decision.RequestBody.DryRun = decision.Interruption
+				decision.Interruption = nil
+			}
+		}
+		return decision, errors.Join(errs...)
+	}
+
+	var blocked *Interruption
+	switch {
+	case signals.ArgumentsLimit:
+		decision.RequestBody.Reason = requestBodyReasonArgumentsLimit
+		blocked = &Interruption{RuleID: requestBodyRuleArgumentsLimit, Status: http.StatusBadRequest}
+	case signals.BodyError && decision.RequestBody.Inspected && !sample.Truncated:
+		decision.RequestBody.Reason = requestBodyReasonParseError
+		blocked = &Interruption{RuleID: requestBodyRuleBodyError, Status: http.StatusBadRequest}
+	case signals.MultipartStrict && decision.RequestBody.Inspected && !sample.Truncated:
+		decision.RequestBody.Reason = requestBodyReasonParseError
+		blocked = &Interruption{RuleID: requestBodyRuleMultipartStrict, Status: http.StatusBadRequest}
+	case sample.Oversize && policy.OversizeAction == config.WAFRequestBodyOversizeReject:
+		decision.RequestBody.Reason = requestBodyReasonOversize
+		blocked = &Interruption{RuleID: requestBodyRuleOversize, Status: http.StatusRequestEntityTooLarge}
+	}
+	if blocked != nil {
+		if policy.Mode == config.WAFRequestBodyModeDetect {
+			decision.RequestBody.DryRun = blocked
+		} else {
+			decision.Interruption = blocked
+		}
+	}
+	return decision, errors.Join(errs...)
+}
+
+// inspect runs one Coraza transaction. body is written to the transaction only
+// when it is non-empty.
+func (e corazaEngine) inspect(req *http.Request, body []byte) (Decision, requestBodySignals, error) {
+	decision := Decision{Engine: e.Name()}
 	tx := e.w.NewTransaction()
 	defer func() {
 		tx.ProcessLogging()
@@ -84,14 +159,19 @@ func (e corazaEngine) InspectRequest(req *http.Request) (Decision, error) {
 	addCorazaRequestHeaders(tx, req)
 
 	var errs []error
-	_ = tx.ProcessRequestHeaders()
+	if it := tx.ProcessRequestHeaders(); it == nil && len(body) > 0 {
+		if _, _, err := tx.WriteRequestBody(body); err != nil {
+			errs = append(errs, fmt.Errorf("body write: %w", err))
+		}
+	}
 	if _, err := tx.ProcessRequestBody(); err != nil {
 		errs = append(errs, fmt.Errorf("body: %w", err))
 	}
 
-	decision.Matches = convertCorazaMatches(tx.MatchedRules())
-	decision.Hit = len(decision.Matches) > 0
-	decision.RuleIDs = uniqueRuleIDs(decision.Matches)
+	matches, signals := splitRequestBodySignals(convertCorazaMatches(tx.MatchedRules()))
+	decision.Matches = matches
+	decision.Hit = len(matches) > 0
+	decision.RuleIDs = uniqueRuleIDs(matches)
 	if it := tx.Interruption(); it != nil {
 		decision.Interruption = &Interruption{
 			RuleID: it.RuleID,
@@ -99,7 +179,7 @@ func (e corazaEngine) InspectRequest(req *http.Request) (Decision, error) {
 		}
 	}
 
-	return decision, errors.Join(errs...)
+	return decision, signals, errors.Join(errs...)
 }
 
 func addCorazaRequestHeaders(tx corazaTypes.Transaction, req *http.Request) {

@@ -159,6 +159,33 @@ path bypass. Always do the following:
 The whole operations process should keep these expiries on the radar,
 so loose holes do not silently age.
 
+### 7.4.4 False positives from request bodies
+
+Since 1.6.0, form, multipart, JSON and XML request bodies are inspected
+(`waf.request_body`, Appendix A). Body inspection brings CRS rules into
+play that never saw these values before, so expect new false positives
+after the upgrade.
+
+- **Identify body-caused blocks.** The `matched_variable` of the block
+  event points at body arguments (for example `ARGS_POST:comment` or a
+  `json.` key), and events decided by the body policy carry
+  `request_body_reason`.
+- **Tune narrowly first.** The same `extra_rule` and
+  `ctl:ruleRemoveById` techniques apply; target the body argument
+  rather than the whole rule.
+- **Narrow by path.** A bypass entry with `"request_body": "skip"`
+  stops body inspection for one path (for example a large upload
+  endpoint) while the WAF keeps checking its URL, headers and
+  cookies. `"request_body_inspect_limit_bytes"` raises or lowers the
+  limit for one path.
+- **Use `detect` while you investigate.** `waf.request_body.mode =
+  detect` keeps body-caused blocks as `waf_block_dry_run` events
+  without stopping requests. It applies to every host, so give it an
+  expiry like any other temporary workaround.
+- **Treat `off` as the last resort.** It returns body inspection to
+  the pre-1.6.0 state, where attacks in forms, JSON, XML and uploads
+  reach the upstream unchecked.
+
 ## 7.5 Step 4: review CRS settings
 
 Sometimes the right answer is at the **CRS-wide sensitivity level**

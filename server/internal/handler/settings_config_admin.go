@@ -177,8 +177,15 @@ type settingsListenerAdminWAFEngineConfig struct {
 	Mode string `json:"mode"`
 }
 
+type settingsListenerAdminWAFRequestBodyConfig struct {
+	Mode              string `json:"mode"`
+	InspectLimitBytes int64  `json:"inspect_limit_bytes"`
+	OversizeAction    string `json:"oversize_action"`
+}
+
 type settingsListenerAdminWAFConfig struct {
-	Engine settingsListenerAdminWAFEngineConfig `json:"engine"`
+	Engine      settingsListenerAdminWAFEngineConfig       `json:"engine"`
+	RequestBody *settingsListenerAdminWAFRequestBodyConfig `json:"request_body,omitempty"`
 }
 
 type settingsListenerAdminEdgeDeviceAuthConfig struct {
@@ -343,6 +350,9 @@ type settingsListenerAdminRuntimeStatus struct {
 	ProxyEngineMode                    string                                      `json:"proxy_engine_mode"`
 	WAFEngineMode                      string                                      `json:"waf_engine_mode"`
 	WAFEngineModes                     []wafengine.Capability                      `json:"waf_engine_modes"`
+	WAFRequestBodyMode                 string                                      `json:"waf_request_body_mode"`
+	WAFRequestBodyInspectLimitBytes    int64                                       `json:"waf_request_body_inspect_limit_bytes"`
+	WAFRequestBodyOversizeAction       string                                      `json:"waf_request_body_oversize_action"`
 	EdgeEnabled                        bool                                        `json:"edge_enabled"`
 	EdgeDeviceAuthEnabled              bool                                        `json:"edge_device_auth_enabled"`
 	EdgeDeviceStatusRefreshIntervalSec int                                         `json:"edge_device_status_refresh_interval_sec"`
@@ -730,6 +740,11 @@ func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListener
 			Engine: settingsListenerAdminWAFEngineConfig{
 				Mode: cfg.WAF.Engine.Mode,
 			},
+			RequestBody: &settingsListenerAdminWAFRequestBodyConfig{
+				Mode:              cfg.WAF.RequestBody.Mode,
+				InspectLimitBytes: cfg.WAF.RequestBody.InspectLimitBytes,
+				OversizeAction:    cfg.WAF.RequestBody.OversizeAction,
+			},
 		},
 		Edge: settingsListenerAdminEdgeConfig{
 			Enabled:               cfg.Edge.Enabled,
@@ -890,6 +905,11 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 	cfg.Proxy.RollbackHistorySize = next.Proxy.RollbackHistorySize
 	cfg.Proxy.Engine.Mode = next.Proxy.Engine.Mode
 	cfg.WAF.Engine.Mode = next.WAF.Engine.Mode
+	if next.WAF.RequestBody != nil {
+		cfg.WAF.RequestBody.Mode = next.WAF.RequestBody.Mode
+		cfg.WAF.RequestBody.InspectLimitBytes = next.WAF.RequestBody.InspectLimitBytes
+		cfg.WAF.RequestBody.OversizeAction = next.WAF.RequestBody.OversizeAction
+	}
 	cfg.Edge.Enabled = next.Edge.Enabled
 	cfg.Edge.RequireDeviceApproval = next.Edge.RequireDeviceApproval
 	cfg.Edge.DeviceAuth.Enabled = next.Edge.DeviceAuth.Enabled
@@ -981,6 +1001,9 @@ func buildSettingsListenerAdminRuntimeStatus() settingsListenerAdminRuntimeStatu
 		ProxyEngineMode:                    normalizeProxyEngineMode(config.ProxyEngineMode),
 		WAFEngineMode:                      normalizeSettingsWAFEngineMode(config.WAFEngineMode),
 		WAFEngineModes:                     wafengine.Capabilities(),
+		WAFRequestBodyMode:                 config.WAFRequestBodyMode,
+		WAFRequestBodyInspectLimitBytes:    config.WAFRequestBodyInspectLimitBytes,
+		WAFRequestBodyOversizeAction:       config.WAFRequestBodyOversizeAction,
 		EdgeEnabled:                        config.EdgeEnabled,
 		EdgeDeviceAuthEnabled:              config.EdgeDeviceAuthEnabled,
 		EdgeDeviceStatusRefreshIntervalSec: int(config.EdgeDeviceStatusRefreshInterval / time.Second),

@@ -114,8 +114,8 @@ func (s *wafEventStore) insertBypassRulesConfigTx(tx *sql.Tx, versionID int64, f
 			return err
 		}
 		for i, entry := range scoped.scope.Entries {
-			if _, err := s.txExec(tx, `INSERT INTO bypass_entries (version_id, scope_type, host, position, path, extra_rule) VALUES (?, ?, ?, ?, ?, ?)`,
-				versionID, scoped.ref.Type, scoped.ref.Host, i, entry.Path, entry.ExtraRule); err != nil {
+			if _, err := s.txExec(tx, `INSERT INTO bypass_entries (version_id, scope_type, host, position, path, extra_rule, request_body, request_body_inspect_limit_bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				versionID, scoped.ref.Type, scoped.ref.Host, i, entry.Path, entry.ExtraRule, entry.RequestBody, entry.RequestBodyInspectLimitBytes); err != nil {
 				return err
 			}
 		}
@@ -130,14 +130,14 @@ func (s *wafEventStore) loadBypassRulesConfigVersion(versionID int64) (bypasscon
 	}
 	out := bypassconf.File{Hosts: map[string]bypassconf.Scope{}}
 	for _, ref := range refs {
-		rows, err := s.query(`SELECT path, extra_rule FROM bypass_entries WHERE version_id = ? AND scope_type = ? AND host = ? ORDER BY position`, versionID, ref.Type, ref.Host)
+		rows, err := s.query(`SELECT path, extra_rule, request_body, request_body_inspect_limit_bytes FROM bypass_entries WHERE version_id = ? AND scope_type = ? AND host = ? ORDER BY position`, versionID, ref.Type, ref.Host)
 		if err != nil {
 			return bypassconf.File{}, err
 		}
 		scope := bypassconf.Scope{}
 		for rows.Next() {
 			var entry bypassconf.Entry
-			if err := rows.Scan(&entry.Path, &entry.ExtraRule); err != nil {
+			if err := rows.Scan(&entry.Path, &entry.ExtraRule, &entry.RequestBody, &entry.RequestBodyInspectLimitBytes); err != nil {
 				_ = rows.Close()
 				return bypassconf.File{}, err
 			}

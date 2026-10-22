@@ -359,6 +359,21 @@ routing model:
   engine が Coraza でなければ隠す。`Security > Request Controls` は
   Tukuyomi request policy なので表示維持
 
+request body の検査（1.6.0 から。再起動後に反映）:
+
+```json
+{ "waf": { "request_body": { "mode": "enforce", "inspect_limit_bytes": 16384, "oversize_action": "inspect_prefix" } } }
+```
+
+- `mode`: `enforce`（既定）は検査して遮断、`detect` は body が原因の遮断を
+  止めずに `waf_block_dry_run` として記録、`off` は 1.6.0 より前と同じく
+  body を検査しない
+- form、multipart、JSON、XML の body を `inspect_limit_bytes`（1 KiB〜
+  1 MiB）まで検査し、残りはそのまま流す。`oversize_action: reject` なら
+  代わりに `413` を返す
+- `enforce` では、解析できない body と 1000 個を超える引数にも `400` を返す
+- rule ID `1090200`〜`1090299` は tukuyomi 用に予約
+
 ### A.3.3　Runtime Backend Operations
 
 - normalized `upstream_runtime` DB domain が direct upstream / DNS discovery
@@ -528,6 +543,10 @@ endpoint 群:
   `extra_rule` 名で参照されたときだけ load
 - host scope の優先順は exact `host:port` → bare `host` → `default`。
   host-specific scope は default を merge **せず置き換え**
+- 1.6.0 から、`"request_body": "skip"` でその path の body 検査を止め、
+  `"request_body_inspect_limit_bytes"` で検査の上限を上書きできる
+  （1 KiB〜1 MiB、`skip` とは併用不可）。これらを指定した entry では WAF は
+  有効のまま。`extra_rule` も body の指定もない entry だけが完全 bypass
 
 ### A.5.2　Country Block
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  bypassEntryHasRequestBodyOptions,
   countBypassEntries,
   parseBypassRulesEditor,
   parseBypassRulesEditorDocument,
@@ -150,4 +151,48 @@ test("serializeBypassRulesEditor rejects duplicate normalized host scopes", () =
       }),
     /duplicate host scope: example\.com/,
   );
+});
+
+test("bypass editor round-trips request body options", () => {
+  const parsed = parseBypassRulesEditorDocument(`{
+    "default": {
+      "entries": [
+        { "path": "/upload/", "request_body": "SKIP" },
+        { "path": "/api/", "request_body_inspect_limit_bytes": 65536 },
+        { "path": "/assets/" }
+      ]
+    }
+  }`);
+  const entries = parsed.state.defaultEntries;
+  assert.equal(entries[0]?.requestBody, "skip");
+  assert.equal(entries[1]?.requestBodyInspectLimit, "65536");
+  assert.equal(entries[2]?.requestBody, "inherit");
+  assert.equal(bypassEntryHasRequestBodyOptions(entries[0]!), true);
+  assert.equal(bypassEntryHasRequestBodyOptions(entries[1]!), true);
+  assert.equal(bypassEntryHasRequestBodyOptions(entries[2]!), false);
+
+  const out = JSON.parse(
+    serializeBypassRulesEditor(parsed.base, parsed.state, parsed.defaultEntryBases, parsed.hostBases, parsed.hostEntryBases),
+  );
+  assert.deepEqual(out.default.entries, [
+    { path: "/upload/", request_body: "skip" },
+    { path: "/api/", request_body_inspect_limit_bytes: 65536 },
+    { path: "/assets/" },
+  ]);
+});
+
+test("bypass editor drops limits that cannot be saved", () => {
+  const parsed = parseBypassRulesEditorDocument(`{
+    "default": { "entries": [
+      { "path": "/a/", "request_body_inspect_limit_bytes": 4096 },
+      { "path": "/b/" }
+    ] }
+  }`);
+  const state = parsed.state;
+  state.defaultEntries[0] = { ...state.defaultEntries[0]!, requestBody: "skip" };
+  state.defaultEntries[1] = { ...state.defaultEntries[1]!, requestBodyInspectLimit: "12kb" };
+  const out = JSON.parse(
+    serializeBypassRulesEditor(parsed.base, state, parsed.defaultEntryBases, parsed.hostBases, parsed.hostEntryBases),
+  );
+  assert.deepEqual(out.default.entries, [{ path: "/a/", request_body: "skip" }, { path: "/b/" }]);
 });

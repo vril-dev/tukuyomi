@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
+	"tukuyomi/internal/config"
 	"tukuyomi/internal/policyhost"
 )
 
@@ -85,20 +86,33 @@ func Match(reqHost, reqPath string, tls bool) MatchResult {
 
 	matchedEntries := scopedEntries(cfg, reqHost, tls)
 	bypassHit := false
+	extraRule := ""
+	var requestBody *RequestBodyOptions
 	for _, e := range matchedEntries {
 		if !pathMatches(p, e.Path) {
 			continue
 		}
-		if e.ExtraRule != "" {
-			return MatchResult{Action: ACTION_RULE, ExtraRule: e.ExtraRule}
+		if requestBody == nil && e.hasRequestBodyOptions() {
+			requestBody = &RequestBodyOptions{
+				Skip:              e.RequestBody == RequestBodySkip,
+				InspectLimitBytes: e.RequestBodyInspectLimitBytes,
+			}
 		}
-		bypassHit = true
+		if extraRule == "" && e.ExtraRule != "" {
+			extraRule = e.ExtraRule
+		}
+		if e.ExtraRule == "" && !e.hasRequestBodyOptions() {
+			bypassHit = true
+		}
+	}
+	if extraRule != "" {
+		return MatchResult{Action: ACTION_RULE, ExtraRule: extraRule, RequestBody: requestBody}
 	}
 	if bypassHit {
 		return MatchResult{Action: ACTION_BYPASS}
 	}
 
-	return MatchResult{Action: ACTION_NONE}
+	return MatchResult{Action: ACTION_NONE, RequestBody: requestBody}
 }
 
 func pathMatches(reqPath, rulePath string) bool {
@@ -221,8 +235,7 @@ func parseJSON(raw string) (File, error) {
 	if len(file.Entries) > 0 {
 		next.Default.Entries = make([]Entry, 0, len(file.Entries))
 		for i, entry := range file.Entries {
-			entry.Path = normalize(entry.Path)
-			entry.ExtraRule = strings.TrimSpace(entry.ExtraRule)
+			entry = normalizeEntry(entry)
 			if err := validateEntry(entry, fmt.Sprintf("entries[%d]", i)); err != nil {
 				return File{}, err
 			}
@@ -256,12 +269,35 @@ func parseJSON(raw string) (File, error) {
 	return next, nil
 }
 
+func normalizeEntry(e Entry) Entry {
+	e.Path = normalize(e.Path)
+	e.ExtraRule = strings.TrimSpace(e.ExtraRule)
+	e.RequestBody = strings.ToLower(strings.TrimSpace(e.RequestBody))
+	if e.RequestBody == "inherit" {
+		e.RequestBody = ""
+	}
+	return e
+}
+
 func validateEntry(e Entry, field string) error {
 	if !strings.HasPrefix(e.Path, "/") {
 		return fmt.Errorf("%s: path must start with '/'", field)
 	}
 	if e.ExtraRule != "" && !strings.HasSuffix(strings.ToLower(e.ExtraRule), ".conf") {
 		return fmt.Errorf("%s: extra rule must be .conf file", field)
+	}
+	switch e.RequestBody {
+	case "", RequestBodySkip:
+	default:
+		return fmt.Errorf("%s: request_body must be inherit or skip", field)
+	}
+	if e.RequestBodyInspectLimitBytes != 0 {
+		if e.RequestBody == RequestBodySkip {
+			return fmt.Errorf("%s: request_body_inspect_limit_bytes cannot be set with request_body=skip", field)
+		}
+		if e.RequestBodyInspectLimitBytes < config.MinWAFRequestBodyInspectLimit || e.RequestBodyInspectLimitBytes > config.MaxWAFRequestBodyInspectLimit {
+			return fmt.Errorf("%s: request_body_inspect_limit_bytes must be between %d and %d", field, config.MinWAFRequestBodyInspectLimit, config.MaxWAFRequestBodyInspectLimit)
+		}
 	}
 	return nil
 }
@@ -284,8 +320,7 @@ func normalizeEntries(entries []Entry, field string) ([]Entry, error) {
 	}
 	out := make([]Entry, 0, len(entries))
 	for i, entry := range entries {
-		entry.Path = normalize(entry.Path)
-		entry.ExtraRule = strings.TrimSpace(entry.ExtraRule)
+		entry = normalizeEntry(entry)
 		if err := validateEntry(entry, fmt.Sprintf("%s[%d]", field, i)); err != nil {
 			return nil, err
 		}

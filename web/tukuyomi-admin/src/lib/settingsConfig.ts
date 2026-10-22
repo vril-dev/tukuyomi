@@ -51,6 +51,11 @@ type DriftConfig = {
     engine: {
       mode: string;
     };
+    request_body?: {
+      mode: string;
+      inspect_limit_bytes: number;
+      oversize_action: string;
+    };
   };
 };
 
@@ -86,6 +91,9 @@ type DriftRuntime = {
   tracing_otlp_endpoint?: string;
   proxy_engine_mode?: string;
   waf_engine_mode?: string;
+  waf_request_body_mode?: string;
+  waf_request_body_inspect_limit_bytes?: number;
+  waf_request_body_oversize_action?: string;
 };
 
 export function computeSettingsRuntimeDrift(
@@ -127,5 +135,8 @@ export function computeSettingsRuntimeDrift(
   if ((runtime.tracing_service_name ?? "") !== config.observability.tracing.service_name) drift.push(label("Tracing Service Name"));
   if ((runtime.tracing_otlp_endpoint ?? "") !== config.observability.tracing.otlp_endpoint) drift.push(label("OTLP Endpoint"));
   if ((runtime.waf_engine_mode ?? "coraza") !== (config.waf.engine.mode || "coraza")) drift.push(label("WAF Engine"));
+  if ((runtime.waf_request_body_mode ?? "enforce") !== (config.waf.request_body?.mode || "enforce")) drift.push(label("Request Body Inspection"));
+  if ((runtime.waf_request_body_inspect_limit_bytes ?? 16384) !== (config.waf.request_body?.inspect_limit_bytes || 16384)) drift.push(label("Body Inspection Limit (bytes)"));
+  if ((runtime.waf_request_body_oversize_action ?? "inspect_prefix") !== (config.waf.request_body?.oversize_action || "inspect_prefix")) drift.push(label("Oversized Request Bodies"));
   return drift;
 }

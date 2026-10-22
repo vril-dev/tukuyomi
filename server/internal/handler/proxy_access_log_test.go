@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -13,12 +14,16 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"tukuyomi/internal/bypassconf"
+	"tukuyomi/internal/config"
 	"tukuyomi/internal/proxyaccesslog"
+	"tukuyomi/internal/waf"
 
 	"golang.org/x/net/http2"
 )
@@ -776,4 +781,252 @@ func findLastProxyLogEvent(t *testing.T, events []map[string]any, want string) m
 	}
 	t.Fatalf("missing log event %q in %#v", want, events)
 	return nil
+}
+
+type bodyInspectionUpstreamRecorder struct {
+	mu     sync.Mutex
+	bodies []string
+}
+
+func (r *bodyInspectionUpstreamRecorder) add(body string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.bodies = append(r.bodies, body)
+}
+
+func (r *bodyInspectionUpstreamRecorder) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.bodies...)
+}
+
+// startBodyInspectionProxyForTest wires ProxyHandler to an upstream that
+// records request bodies, with a base WAF rule that blocks <script> in ARGS.
+func startBodyInspectionProxyForTest(t *testing.T, inspectLimit int64, oversizeAction string) (*gin.Engine, *bodyInspectionUpstreamRecorder) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	store := initConfigDBStoreForTest(t)
+	restoreRules := saveRulesFileConfigForTest()
+	t.Cleanup(restoreRules)
+	prevMode, prevLimit, prevOversize := config.WAFRequestBodyMode, config.WAFRequestBodyInspectLimitBytes, config.WAFRequestBodyOversizeAction
+	t.Cleanup(func() {
+		config.WAFRequestBodyMode, config.WAFRequestBodyInspectLimitBytes, config.WAFRequestBodyOversizeAction = prevMode, prevLimit, prevOversize
+	})
+	config.WAFRequestBodyMode = config.WAFRequestBodyModeEnforce
+	config.WAFRequestBodyInspectLimitBytes = inspectLimit
+	config.WAFRequestBodyOversizeAction = oversizeAction
+	config.RulesFile = config.DefaultBaseRuleAssetPath
+	config.CRSEnable = false
+
+	writeBaseRule := func(raw string) {
+		t.Helper()
+		if _, _, err := store.writeWAFRuleAssetsVersion("", []wafRuleAssetVersion{{
+			Path: config.DefaultBaseRuleAssetPath,
+			Kind: wafRuleAssetKindBase,
+			Raw:  []byte(raw),
+		}}, configVersionSourceImport, "", "test waf asset import", 0); err != nil {
+			t.Fatalf("write waf rule assets: %v", err)
+		}
+		if err := waf.ReloadBaseWAF(); err != nil {
+			t.Fatalf("reload waf: %v", err)
+		}
+	}
+	writeBaseRule("SecRuleEngine On\nSecRule ARGS \"@rx (?i)<script>\" \"id:100001,phase:2,deny,status:403,log\"\n")
+	t.Cleanup(func() { writeBaseRule("SecRuleEngine On\n") })
+
+	recorder := &bodyInspectionUpstreamRecorder{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read upstream body: %v", err)
+		}
+		recorder.add(string(body))
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
+	raw := `{
+  "upstreams": [
+    { "name": "primary", "url": ` + strconv.Quote(upstream.URL) + `, "weight": 1, "enabled": true }
+  ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}}
+}`
+	if err := os.WriteFile(proxyCfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write proxy config: %v", err)
+	}
+	importProxyRuntimeDBForTest(t, raw)
+	if err := InitProxyRuntime(proxyCfgPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+
+	r := gin.New()
+	r.NoRoute(ProxyHandler)
+	return r, recorder
+}
+
+func TestProxyHandlerInspectsRequestBodyAndForwardsItOnce(t *testing.T) {
+	r, recorder := startBodyInspectionProxyForTest(t, 1024, config.WAFRequestBodyOversizeInspectPrefix)
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	post := func(body string) int {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/form", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do request: %v", err)
+		}
+		_ = res.Body.Close()
+		return res.StatusCode
+	}
+
+	if status := post("q=%3Cscript%3E"); status != http.StatusForbidden {
+		t.Fatalf("body attack status=%d want=403", status)
+	}
+	large := "name=alice&pad=" + strings.Repeat("a", 4096)
+	if status := post(large); status != http.StatusOK {
+		t.Fatalf("large benign body status=%d want=200", status)
+	}
+	if bodies := recorder.snapshot(); len(bodies) != 1 || bodies[0] != large {
+		t.Fatalf("upstream received %d bodies, want only the benign body", len(bodies))
+	}
+	evt := findLastProxyLogEvent(t, readProxyLogEvents(t), "proxy_access")
+	if got := intValue(evt["request_body_bytes"]); got != len(large) {
+		t.Fatalf("proxy_access request_body_bytes=%d want=%d", got, len(large))
+	}
+}
+
+func TestProxyHandlerAppliesBypassRequestBodyOptions(t *testing.T) {
+	r, recorder := startBodyInspectionProxyForTest(t, 1024, config.WAFRequestBodyOversizeInspectPrefix)
+	prevBypass := bypassconf.GetFile()
+	t.Cleanup(func() { bypassconf.SetFile(prevBypass) })
+	bypassconf.SetFile(bypassconf.File{Default: bypassconf.Scope{Entries: []bypassconf.Entry{
+		{Path: "/upload/", RequestBody: bypassconf.RequestBodySkip},
+		{Path: "/api/", RequestBodyInspectLimitBytes: 8192},
+	}}})
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	post := func(path, body string) int {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do request: %v", err)
+		}
+		_ = res.Body.Close()
+		return res.StatusCode
+	}
+
+	attack := "q=%3Cscript%3E"
+	if status := post("/upload/file", attack); status != http.StatusOK {
+		t.Fatalf("skip path status=%d want=200", status)
+	}
+	if status := post("/form", attack); status != http.StatusForbidden {
+		t.Fatalf("default path status=%d want=403", status)
+	}
+	late := "pad=" + strings.Repeat("a", 2048) + "&q=%3Cscript%3E"
+	if status := post("/api/items", late); status != http.StatusForbidden {
+		t.Fatalf("raised-limit path status=%d want=403", status)
+	}
+	if status := post("/form", late); status != http.StatusOK {
+		t.Fatalf("payload beyond the global limit status=%d want=200", status)
+	}
+	if bodies := recorder.snapshot(); len(bodies) != 2 || bodies[0] != attack || bodies[1] != late {
+		t.Fatalf("upstream bodies=%d, want the skipped upload and the beyond-limit form", len(bodies))
+	}
+}
+
+func TestProxyHandlerHTTP2InspectsRequestBody(t *testing.T) {
+	r, recorder := startBodyInspectionProxyForTest(t, 1024, config.WAFRequestBodyOversizeInspectPrefix)
+	cert := nativeHTTP1TestCertificate(t)
+	srv, addr := nativeHTTP1StartConfiguredTLSHTTP2Server(t, &nativeHTTP1Server{Handler: r}, &tls.Config{Certificates: []tls.Certificate{cert}})
+	defer srv.Close()
+	tr := &http2.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+
+	post := func(body string) int {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, "https://"+addr+"/form", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		res, err := tr.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("RoundTrip: %v", err)
+		}
+		_, _ = io.Copy(io.Discard, res.Body)
+		_ = res.Body.Close()
+		return res.StatusCode
+	}
+
+	if status := post("q=%3Cscript%3E&pad=" + strings.Repeat("a", 4096)); status != http.StatusForbidden {
+		t.Fatalf("HTTP/2 body attack status=%d want=403", status)
+	}
+	large := "name=alice&pad=" + strings.Repeat("a", 4096)
+	if status := post(large); status != http.StatusOK {
+		t.Fatalf("HTTP/2 benign body status=%d want=200", status)
+	}
+	if bodies := recorder.snapshot(); len(bodies) != 1 || bodies[0] != large {
+		t.Fatalf("upstream received %d bodies, want only the benign body", len(bodies))
+	}
+}
+
+func TestMaybeBufferProxyRequestBodyRejectsOversizedBodies(t *testing.T) {
+	initConfigDBStoreForTest(t)
+	proxyCfgPath := filepath.Join(t.TempDir(), "proxy.json")
+	raw := `{
+  "upstreams": [
+    { "name": "primary", "url": "http://127.0.0.1:9", "weight": 1, "enabled": true }
+  ],
+  "default_route": {"name":"fallback","action":{"upstream":"primary"}},
+  "buffer_request_body": true
+}`
+	if err := os.WriteFile(proxyCfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write proxy config: %v", err)
+	}
+	importProxyRuntimeDBForTest(t, raw)
+	if err := InitProxyRuntime(proxyCfgPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+
+	declared := httptest.NewRequest(http.MethodPost, "http://example.test/", strings.NewReader("small"))
+	declared.ContentLength = maxBufferedProxyRequestBodyBytes + 1
+	if err := maybeBufferProxyRequestBody(declared); !errors.Is(err, errBufferedProxyRequestBodyTooLarge) {
+		t.Fatalf("declared oversize err=%v", err)
+	}
+
+	streamed := httptest.NewRequest(http.MethodPost, "http://example.test/", io.LimitReader(zeroReader{}, maxBufferedProxyRequestBodyBytes+1))
+	streamed.ContentLength = -1
+	err := maybeBufferProxyRequestBody(streamed)
+	if !errors.Is(err, errBufferedProxyRequestBodyTooLarge) {
+		t.Fatalf("streamed oversize err=%v", err)
+	}
+	if got := bufferedProxyRequestBodyErrorStatus(err); got != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d want=413", got)
+	}
+
+	ok := httptest.NewRequest(http.MethodPost, "http://example.test/", strings.NewReader("payload"))
+	if err := maybeBufferProxyRequestBody(ok); err != nil || ok.GetBody == nil || ok.ContentLength != int64(len("payload")) {
+		t.Fatalf("within limit: err=%v getBody=%v length=%d", err, ok.GetBody != nil, ok.ContentLength)
+	}
+	if got := bufferedProxyRequestBodyErrorStatus(io.ErrUnexpectedEOF); got != http.StatusBadRequest {
+		t.Fatalf("status=%d want=400", got)
+	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
 }

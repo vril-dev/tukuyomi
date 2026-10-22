@@ -18,6 +18,7 @@ import {
 import { useAdminRuntime } from "@/lib/adminRuntime";
 import { apiGetJson, apiPostJson, apiPutJson } from "@/lib/api";
 import {
+  bypassEntryHasRequestBodyOptions,
   countBypassEntries,
   createEmptyBypassEntry,
   createEmptyBypassHostScope,
@@ -538,11 +539,13 @@ function BypassEntriesTable({
   return (
     <div className="app-table-shell">
       <div className="app-table-scroll-shell overflow-auto">
-        <table className="app-table min-w-[760px] w-full text-xs">
+        <table className="app-table min-w-[1040px] w-full text-xs">
           <thead className="app-table-head">
             <tr>
               <th className="p-2 text-left border-b">{tx("Path")}</th>
               <th className="p-2 text-left border-b w-[320px]">{tx("Extra rule reference")}</th>
+              <th className="p-2 text-left border-b w-40">{tx("Request Body Inspection")}</th>
+              <th className="p-2 text-left border-b w-44">{tx("Body Inspection Limit (bytes)")}</th>
               <th className="p-2 text-center border-b w-28">{tx("Action")}</th>
             </tr>
           </thead>
@@ -563,8 +566,35 @@ function BypassEntriesTable({
                     tx={tx}
                     options={extraRuleAssets}
                     value={entry.extraRule}
+                    emptyLabel={bypassEntryHasRequestBodyOptions(entry) ? tx("Base rules (WAF stays on)") : tx("Full bypass")}
                     disabled={readOnly || !corazaExtraRulesAvailable}
                     onChange={(value) => onChange(index, { ...entry, extraRule: value })}
+                  />
+                </td>
+                <td className="p-1.5 border-b">
+                  <select
+                    className={inputClass}
+                    value={entry.requestBody ?? "inherit"}
+                    disabled={readOnly}
+                    onChange={(event) =>
+                      onChange(index, {
+                        ...entry,
+                        requestBody: event.target.value === "skip" ? "skip" : "inherit",
+                      })
+                    }
+                  >
+                    <option value="inherit">{tx("Use global setting")}</option>
+                    <option value="skip">{tx("Do not inspect")}</option>
+                  </select>
+                </td>
+                <td className="p-1.5 border-b">
+                  <input
+                    className={inputClass}
+                    value={entry.requestBody === "skip" ? "" : entry.requestBodyInspectLimit ?? ""}
+                    onChange={(event) => onChange(index, { ...entry, requestBodyInspectLimit: event.target.value })}
+                    placeholder={tx("Global limit")}
+                    inputMode="numeric"
+                    disabled={readOnly || entry.requestBody === "skip"}
                   />
                 </td>
                 <td className="p-1.5 border-b text-center">
@@ -584,12 +614,13 @@ function BypassEntriesTable({
 function ExtraRuleSelect({
   value,
   options,
+  emptyLabel,
   disabled = false,
   onChange,
-  tx,
 }: {
   value: string;
   options: string[];
+  emptyLabel: string;
   disabled?: boolean;
   onChange: (value: string) => void;
   tx: (key: string, vars?: Record<string, string | number>) => string;
@@ -597,7 +628,7 @@ function ExtraRuleSelect({
   const hasCurrent = !value || options.includes(value);
   return (
     <select className={inputClass} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
-      <option value="">{tx("Full bypass")}</option>
+      <option value="">{emptyLabel}</option>
       {!hasCurrent ? <option value={value}>{value}</option> : null}
       {options.map((path) => (
         <option key={path} value={path}>{path}</option>

@@ -19,6 +19,16 @@ const (
 	DefaultProxyEngineMode               = ProxyEngineModeTukuyomiProxy
 	WAFEngineModeCoraza                  = wafengine.ModeCoraza
 	DefaultWAFEngineMode                 = wafengine.DefaultMode
+	WAFRequestBodyModeEnforce            = "enforce"
+	WAFRequestBodyModeDetect             = "detect"
+	WAFRequestBodyModeOff                = "off"
+	DefaultWAFRequestBodyMode            = WAFRequestBodyModeEnforce
+	WAFRequestBodyOversizeInspectPrefix  = "inspect_prefix"
+	WAFRequestBodyOversizeReject         = "reject"
+	DefaultWAFRequestBodyOversizeAction  = WAFRequestBodyOversizeInspectPrefix
+	DefaultWAFRequestBodyInspectLimit    = 16 * 1024
+	MinWAFRequestBodyInspectLimit        = 1024
+	MaxWAFRequestBodyInspectLimit        = 1024 * 1024
 	DefaultEdgeDeviceStatusRefreshSec    = 30
 	MaxEdgeDeviceStatusRefreshSec        = 3600
 	DefaultRemoteSSHMaxTTLSec            = 900
@@ -205,11 +215,18 @@ type appProxyEngineConfig struct {
 }
 
 type appWAFConfig struct {
-	Engine appWAFEngineConfig `json:"engine"`
+	Engine      appWAFEngineConfig      `json:"engine"`
+	RequestBody appWAFRequestBodyConfig `json:"request_body"`
 }
 
 type appWAFEngineConfig struct {
 	Mode string `json:"mode"`
+}
+
+type appWAFRequestBodyConfig struct {
+	Mode              string `json:"mode"`
+	InspectLimitBytes int64  `json:"inspect_limit_bytes"`
+	OversizeAction    string `json:"oversize_action"`
 }
 
 type appEdgeConfig struct {
@@ -471,6 +488,11 @@ func defaultAppConfigFile() appConfigFile {
 			Engine: appWAFEngineConfig{
 				Mode: DefaultWAFEngineMode,
 			},
+			RequestBody: appWAFRequestBodyConfig{
+				Mode:              DefaultWAFRequestBodyMode,
+				InspectLimitBytes: DefaultWAFRequestBodyInspectLimit,
+				OversizeAction:    DefaultWAFRequestBodyOversizeAction,
+			},
 		},
 		Edge: appEdgeConfig{
 			Enabled:               false,
@@ -623,6 +645,7 @@ func normalizeAppConfigFile(cfg *appConfigFile) {
 	cfg.FPTuner.Model = strings.TrimSpace(cfg.FPTuner.Model)
 	cfg.Proxy.Engine.Mode = normalizeAppProxyEngineMode(cfg.Proxy.Engine.Mode)
 	cfg.WAF.Engine.Mode = normalizeAppWAFEngineMode(cfg.WAF.Engine.Mode)
+	normalizeAppWAFRequestBodyConfig(&cfg.WAF.RequestBody)
 	normalizeAppRemoteSSHConfig(&cfg.RemoteSSH)
 	cfg.SecurityAudit.CaptureMode = strings.ToLower(strings.TrimSpace(cfg.SecurityAudit.CaptureMode))
 	cfg.SecurityAudit.KeySource = strings.ToLower(strings.TrimSpace(cfg.SecurityAudit.KeySource))
@@ -841,6 +864,19 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	}
 	if err := wafengine.ValidateConfiguredMode(cfg.WAF.Engine.Mode); err != nil {
 		return fmt.Errorf("waf.engine.mode: %w", err)
+	}
+	switch cfg.WAF.RequestBody.Mode {
+	case WAFRequestBodyModeEnforce, WAFRequestBodyModeDetect, WAFRequestBodyModeOff:
+	default:
+		return fmt.Errorf("waf.request_body.mode must be one of: %s, %s, %s", WAFRequestBodyModeEnforce, WAFRequestBodyModeDetect, WAFRequestBodyModeOff)
+	}
+	if cfg.WAF.RequestBody.InspectLimitBytes < MinWAFRequestBodyInspectLimit || cfg.WAF.RequestBody.InspectLimitBytes > MaxWAFRequestBodyInspectLimit {
+		return fmt.Errorf("waf.request_body.inspect_limit_bytes must be between %d and %d", MinWAFRequestBodyInspectLimit, MaxWAFRequestBodyInspectLimit)
+	}
+	switch cfg.WAF.RequestBody.OversizeAction {
+	case WAFRequestBodyOversizeInspectPrefix, WAFRequestBodyOversizeReject:
+	default:
+		return fmt.Errorf("waf.request_body.oversize_action must be one of: %s, %s", WAFRequestBodyOversizeInspectPrefix, WAFRequestBodyOversizeReject)
 	}
 	switch cfg.SecurityAudit.CaptureMode {
 	case "", "off", "enforced_only", "security_events", "all_security_findings":
@@ -1185,6 +1221,20 @@ func normalizeAppProxyEngineMode(mode string) string {
 
 func normalizeAppWAFEngineMode(mode string) string {
 	return wafengine.Normalize(mode)
+}
+
+func normalizeAppWAFRequestBodyConfig(cfg *appWAFRequestBodyConfig) {
+	cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode))
+	if cfg.Mode == "" {
+		cfg.Mode = DefaultWAFRequestBodyMode
+	}
+	if cfg.InspectLimitBytes == 0 {
+		cfg.InspectLimitBytes = DefaultWAFRequestBodyInspectLimit
+	}
+	cfg.OversizeAction = strings.ToLower(strings.TrimSpace(cfg.OversizeAction))
+	if cfg.OversizeAction == "" {
+		cfg.OversizeAction = DefaultWAFRequestBodyOversizeAction
+	}
 }
 
 func normalizeRuntimeProcessModel(mode string) string {

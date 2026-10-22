@@ -456,6 +456,9 @@ proxy engine 設定は、現在 DB `app_config` 上で `tukuyomi_proxy` 固定�
 - `waf.engine.mode` は現在、`coraza` engine だけを受け付けます。`mod_security`
   は将来 adapter 用の既知 mode ですが、adapter が compile されるまでは
   fail-closed で拒否されます。
+- request body は既定で検査します（`waf.request_body.mode = enforce`、
+  1 request あたり最大 16 KiB）。benchmark には body の多い traffic も含め、
+  誤検知への対処は第7章を参照してください。
 
 ## 3.6　public/admin listener 分離
 

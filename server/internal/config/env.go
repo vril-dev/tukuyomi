@@ -31,6 +31,9 @@ var (
 	ProxyAuditFile                         string
 	ProxyEngineMode                        string
 	WAFEngineMode                          string
+	WAFRequestBodyMode                     string
+	WAFRequestBodyInspectLimitBytes        int64
+	WAFRequestBodyOversizeAction           string
 	EdgeEnabled                            bool
 	EdgeDeviceAuthEnabled                  bool
 	EdgeRequireDeviceApproval              bool
@@ -253,6 +256,9 @@ func applyAppConfig(cfg appConfigFile) {
 	ProxyAuditFile = strings.TrimSpace(cfg.Proxy.AuditFile)
 	ProxyEngineMode = normalizeAppProxyEngineMode(cfg.Proxy.Engine.Mode)
 	WAFEngineMode = normalizeAppWAFEngineMode(cfg.WAF.Engine.Mode)
+	WAFRequestBodyMode = cfg.WAF.RequestBody.Mode
+	WAFRequestBodyInspectLimitBytes = cfg.WAF.RequestBody.InspectLimitBytes
+	WAFRequestBodyOversizeAction = cfg.WAF.RequestBody.OversizeAction
 	EdgeEnabled = cfg.Edge.Enabled
 	EdgeDeviceAuthEnabled = cfg.Edge.Enabled && cfg.Edge.DeviceAuth.Enabled
 	EdgeRequireDeviceApproval = cfg.Edge.Enabled && cfg.Edge.RequireDeviceApproval

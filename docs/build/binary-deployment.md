@@ -368,6 +368,7 @@ Proxy engine selection is a restart-required DB `app_config` setting:
 - Upgrade/WebSocket handshake requests stay inside `tukuyomi_proxy`; WebSocket frame payloads after `101 Switching Protocols` are tunnel data
 - benchmark your real workload before production rollout
 - `waf.engine.mode` currently accepts only the available `coraza` engine; `mod_security` is recognized as an unavailable future adapter and is rejected fail-closed until an adapter is compiled in
+- request bodies are inspected by default (`waf.request_body.mode=enforce`, up to 16 KiB per request); include body-heavy traffic in the benchmark
 
 ## Split Public/Admin Listeners
 

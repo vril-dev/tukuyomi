@@ -369,6 +369,32 @@ adapters can be registered without pretending an unsupported engine is live.
 - The left navigation treats `Security > Coraza` as engine-specific and hides it when the active WAF engine is not Coraza. `Security > Request Controls` remains visible because those controls are Tukuyomi request policy, not Coraza rule authoring.
 - `Bypass Rules` are request controls. Their `extra_rule` references are Coraza-backed DB-managed `.conf` snippets and are unavailable when the active WAF engine is not Coraza; full bypass entries still apply.
 
+### WAF Request Body Inspection
+
+DB `app_config` controls how request bodies reach the WAF under `waf.request_body`. Changes apply after a restart.
+
+```json
+{
+  "waf": {
+    "request_body": {
+      "mode": "enforce",
+      "inspect_limit_bytes": 16384,
+      "oversize_action": "inspect_prefix"
+    }
+  }
+}
+```
+
+- `mode`: `enforce` (default) inspects bodies and blocks. `detect` records body-caused blocks as `waf_block_dry_run` events with action `would_block` and lets the request through. `off` does not inspect bodies and restores the behavior of releases before 1.6.0.
+- Inspected content types: `application/x-www-form-urlencoded`, `multipart/form-data`, JSON (`application/json`, `*+json`) and XML (`application/xml`, `text/xml`, `*+xml`). The first `Content-Type` header decides. Other bodies, such as `application/octet-stream` or `text/plain`, are forwarded without body inspection.
+- `inspect_limit_bytes` (1024 to 1048576, default 16384): at most this many bytes are read and inspected. The rest of the body streams to the upstream unchanged, so memory per request stays bounded. Inspection cost grows with the inspected size: with CRS, plain text costs roughly 4 ms of CPU per KiB, so raise the limit only where the extra CPU per request is acceptable.
+- `oversize_action`: `inspect_prefix` (default) inspects the first `inspect_limit_bytes` and forwards the whole body. `reject` answers `413` without forwarding.
+- In multipart uploads, field names, field values and filenames are inspected; file contents are not matched by CRS argument rules. A field placed after a large file beyond the limit is not inspected.
+- With `enforce`, tukuyomi also answers `400` for bodies the WAF cannot parse (unless tukuyomi truncated them at the limit) and for requests with more than 1000 arguments in the query or body, because Coraza drops arguments beyond `SecArgumentsLimit`. With `detect` these are recorded as dry-run events; with `off` they do not apply.
+- Rule IDs `1090200` to `1090299` are reserved for rules that tukuyomi appends after the configured rule assets. Do not use them in custom rules.
+- Runtime visibility: `waf_request_body_mode`, `waf_request_body_inspect_limit_bytes` and `waf_request_body_oversize_action` in `/tukuyomi-api/status`. Block and dry-run events decided by the body policy carry `request_body_reason` (`rule`, `oversize`, `parse_error` or `arguments_limit`).
+- `buffer_request_body` in the proxy config buffers at most 64 MiB and answers `413` beyond that.
+
 ### Runtime Backend Operations
 
 - The normalized `upstream_runtime` DB domain stores opt-in runtime overrides for backend keys materialized from direct upstreams and DNS discovery; `data/conf/upstream-runtime.json` is only an empty-DB seed/export path.
@@ -632,6 +658,19 @@ Main endpoint groups:
 
 Managed `extra_rule` bodies are stored in DB `override_rules` and edited from `Rules` > Advanced > `Bypass snippets`. There is no `conf/rules` filesystem fallback. They are not added to the base WAF rule set at startup; they are loaded only when a bypass entry references their logical `extra_rule` name.
 Host scope precedence is exact `host:port`, then bare `host`, then `default`. Host-specific entries replace the default scope; they do not merge with it.
+
+Since 1.6.0, an entry can also change request body inspection for its path without turning the WAF off:
+
+```json
+{ "path": "/upload/", "request_body": "skip" }
+{ "path": "/api/", "request_body_inspect_limit_bytes": 65536 }
+```
+
+- `request_body`: `skip` turns off body inspection for the path. Omit it, or use `inherit`, to follow `waf.request_body`.
+- `request_body_inspect_limit_bytes`: overrides `waf.request_body.inspect_limit_bytes` for the path (1024 to 1048576). It cannot be combined with `skip`.
+- An entry with either option keeps the WAF on with the base rules, or with its `extra_rule`. Only an entry with neither `extra_rule` nor a request body option is a full bypass.
+- When several entries match, the first matching entry with request body options decides them. A matching `extra_rule` still takes precedence over a full bypass.
+- Releases before 1.6.0 reject bypass files that contain these fields.
 
 ### Country Block
 

@@ -153,3 +153,58 @@ test("computeSettingsRuntimeDrift includes S3 persistent storage placement", () 
     "Persistent Storage S3 Path Style",
   ]);
 });
+
+test("computeSettingsRuntimeDrift reports request body policy mismatches", () => {
+  const config = {
+    server: { listen_addr: ":9090", graceful_shutdown_timeout_sec: 30, proxy_protocol: { enabled: false, trusted_cidrs: [] }, tls: { enabled: false } },
+    admin: { api_base_path: "/tukuyomi-api", ui_base_path: "/tukuyomi-ui", listen_addr: "", proxy_protocol: { enabled: false, trusted_cidrs: [] }, read_only: false },
+    runtime: { gomaxprocs: 0, memory_limit_mb: 0 },
+    storage: { db_driver: "sqlite", db_path: "db/tukuyomi.db" },
+    persistent_storage: { backend: "local", local: { base_dir: "data/persistent" } },
+    observability: { tracing: { enabled: false, service_name: "tukuyomi", otlp_endpoint: "" } },
+    proxy: { engine: { mode: "tukuyomi_proxy" } },
+    waf: { engine: { mode: "coraza" }, request_body: { mode: "detect", inspect_limit_bytes: 65536, oversize_action: "reject" } },
+  };
+  const runtime = {
+    listen_addr: ":9090",
+    server_graceful_shutdown_timeout_sec: 30,
+    server_proxy_protocol_enabled: false,
+    server_proxy_protocol_trusted_cidrs: [],
+    api_base_path: "/tukuyomi-api",
+    ui_base_path: "/tukuyomi-ui",
+    admin_listen_addr: "",
+    admin_proxy_protocol_enabled: false,
+    admin_proxy_protocol_trusted_cidrs: [],
+    server_tls_enabled: false,
+    admin_read_only: false,
+    runtime_gomaxprocs: 0,
+    runtime_memory_limit_mb: 0,
+    storage_db_driver: "sqlite",
+    storage_db_path: "db/tukuyomi.db",
+    persistent_storage_backend: "local",
+    persistent_storage_local_base_dir: "data/persistent",
+    tracing_enabled: false,
+    tracing_service_name: "tukuyomi",
+    tracing_otlp_endpoint: "",
+    proxy_engine_mode: "tukuyomi_proxy",
+    waf_engine_mode: "coraza",
+    waf_request_body_mode: "enforce",
+    waf_request_body_inspect_limit_bytes: 16384,
+    waf_request_body_oversize_action: "inspect_prefix",
+  };
+
+  assert.deepEqual(computeSettingsRuntimeDrift(config, runtime), [
+    "Request Body Inspection",
+    "Body Inspection Limit (bytes)",
+    "Oversized Request Bodies",
+  ]);
+  assert.deepEqual(
+    computeSettingsRuntimeDrift({ ...config, waf: { engine: { mode: "coraza" } } }, {
+      ...runtime,
+      waf_request_body_mode: undefined,
+      waf_request_body_inspect_limit_bytes: undefined,
+      waf_request_body_oversize_action: undefined,
+    }),
+    [],
+  );
+});

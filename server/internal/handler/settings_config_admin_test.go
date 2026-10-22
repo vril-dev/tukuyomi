@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -297,6 +298,9 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	if saved.WAF.Engine.Mode != config.WAFEngineModeCoraza {
 		t.Fatalf("saved waf.engine.mode=%q want=%q", saved.WAF.Engine.Mode, config.WAFEngineModeCoraza)
 	}
+	if saved.WAF.RequestBody.Mode != config.DefaultWAFRequestBodyMode || saved.WAF.RequestBody.InspectLimitBytes != config.DefaultWAFRequestBodyInspectLimit || saved.WAF.RequestBody.OversizeAction != config.DefaultWAFRequestBodyOversizeAction {
+		t.Fatalf("omitted waf.request_body changed: %+v", saved.WAF.RequestBody)
+	}
 	if !saved.Edge.Enabled {
 		t.Fatal("expected edge.enabled=true after save")
 	}
@@ -466,6 +470,71 @@ func initSettingsDBStoreForTest(t *testing.T) {
 	})
 	if _, _, _, err := loadAppConfigStorage(true); err != nil {
 		t.Fatalf("seed app_config storage: %v", err)
+	}
+}
+
+func TestPutSettingsListenerAdminSavesRequestBodyPolicy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cfgPath := writeSettingsConfigFixture(t)
+	restore := saveConfigFilePathForTest(t, cfgPath)
+	defer restore()
+	initSettingsDBStoreForTest(t)
+
+	put := func(requestBody *settingsListenerAdminWAFRequestBodyConfig) *httptest.ResponseRecorder {
+		t.Helper()
+		_, etag, _, err := loadSettingsAppConfig()
+		if err != nil {
+			t.Fatalf("read settings: %v", err)
+		}
+		next := createEmptySettingsTestConfig()
+		next.WAF.RequestBody = requestBody
+		raw, _ := json.Marshal(settingsListenerAdminPutBody{Config: next})
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/tukuyomi-api/settings/listener-admin", bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("If-Match", etag)
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = req
+		PutSettingsListenerAdmin(c)
+		return rec
+	}
+
+	rec := put(&settingsListenerAdminWAFRequestBodyConfig{
+		Mode:              config.WAFRequestBodyModeDetect,
+		InspectLimitBytes: 65536,
+		OversizeAction:    config.WAFRequestBodyOversizeReject,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	saved, err := loadSettingsAppConfigOnly()
+	if err != nil {
+		t.Fatalf("reload saved config: %v", err)
+	}
+	if saved.WAF.RequestBody.Mode != config.WAFRequestBodyModeDetect || saved.WAF.RequestBody.InspectLimitBytes != 65536 || saved.WAF.RequestBody.OversizeAction != config.WAFRequestBodyOversizeReject {
+		t.Fatalf("saved waf.request_body=%+v", saved.WAF.RequestBody)
+	}
+
+	rec = put(nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("omitted request_body status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	saved, err = loadSettingsAppConfigOnly()
+	if err != nil {
+		t.Fatalf("reload saved config: %v", err)
+	}
+	if saved.WAF.RequestBody.Mode != config.WAFRequestBodyModeDetect || saved.WAF.RequestBody.InspectLimitBytes != 65536 {
+		t.Fatalf("omitted request_body must keep saved values, got %+v", saved.WAF.RequestBody)
+	}
+
+	rec = put(&settingsListenerAdminWAFRequestBodyConfig{
+		Mode:              config.WAFRequestBodyModeEnforce,
+		InspectLimitBytes: config.MaxWAFRequestBodyInspectLimit + 1,
+		OversizeAction:    config.WAFRequestBodyOversizeInspectPrefix,
+	})
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "waf.request_body.inspect_limit_bytes") {
+		t.Fatalf("oversized limit status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

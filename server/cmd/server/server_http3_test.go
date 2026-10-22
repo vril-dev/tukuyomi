@@ -7,6 +7,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +17,9 @@ import (
 	"github.com/quic-go/quic-go/http3"
 
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/handler"
 	"tukuyomi/internal/serverruntime"
+	"tukuyomi/internal/waf"
 )
 
 func TestServerHTTP3AltSvcHeader(t *testing.T) {
@@ -162,6 +167,161 @@ func TestHTTP3ServerStartsAndAdvertisesAltSvc(t *testing.T) {
 	if http3Resp.StatusCode != http.StatusOK || string(http3Body) != "ok" {
 		t.Fatalf("unexpected http3 response: status=%d body=%q", http3Resp.StatusCode, string(http3Body))
 	}
+}
+
+func TestHTTP3RequestBodyIsInspectedAndForwardedWhole(t *testing.T) {
+	restore := setServerTLSGlobalsForTest(t)
+	defer restore()
+	serverruntime.ResetHTTP3Status()
+
+	prevRulesFile, prevCRSEnable := config.RulesFile, config.CRSEnable
+	prevMode, prevLimit, prevOversize := config.WAFRequestBodyMode, config.WAFRequestBodyInspectLimitBytes, config.WAFRequestBodyOversizeAction
+	defer func() {
+		config.RulesFile, config.CRSEnable = prevRulesFile, prevCRSEnable
+		config.WAFRequestBodyMode, config.WAFRequestBodyInspectLimitBytes, config.WAFRequestBodyOversizeAction = prevMode, prevLimit, prevOversize
+	}()
+	config.RulesFile = config.DefaultBaseRuleAssetPath
+	config.CRSEnable = false
+	config.WAFRequestBodyMode = config.WAFRequestBodyModeEnforce
+	config.WAFRequestBodyInspectLimitBytes = 1024
+	config.WAFRequestBodyOversizeAction = config.WAFRequestBodyOversizeInspectPrefix
+
+	tmp := t.TempDir()
+	stageRoot := filepath.Join(tmp, "stage")
+	if err := os.MkdirAll(stageRoot, 0o755); err != nil {
+		t.Fatalf("mkdir stage: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stageRoot, config.DefaultBaseRuleAssetPath), []byte("SecRuleEngine On\nSecRule ARGS \"@rx (?i)<script>\" \"id:100001,phase:2,deny,status:403,log\"\n"), 0o644); err != nil {
+		t.Fatalf("write base rule: %v", err)
+	}
+	t.Setenv("WAF_RULE_ASSET_FS_ROOT", stageRoot)
+	if err := handler.InitLogsStatsStoreWithBackend("db", "sqlite", filepath.Join(tmp, "tukuyomi.db"), "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	defer func() { _ = handler.InitLogsStatsStore(false, "", 0) }()
+	if err := handler.ImportWAFRuleAssetsStorage(); err != nil {
+		t.Fatalf("import waf rule assets: %v", err)
+	}
+	if err := waf.ReloadBaseWAF(); err != nil {
+		t.Fatalf("reload waf: %v", err)
+	}
+	engine := waf.GetBaseEngine()
+	if engine == nil {
+		t.Fatal("expected base WAF engine")
+	}
+
+	certFile, keyFile := writeServerTLSFiles(t, []string{"127.0.0.1", "localhost"})
+	tlsConfig, err := config.BuildServerTLSConfig(certFile, keyFile, "tls1.2")
+	if err != nil {
+		t.Fatalf("BuildServerTLSConfig: %v", err)
+	}
+	config.ServerTLSEnabled = true
+	config.ServerHTTP3Enabled = true
+	config.ServerHTTP3AltSvcMaxAgeSec = 86400
+	config.ServerMaxHeaderBytes = 1 << 20
+	config.ServerIdleTimeout = 30 * time.Second
+
+	appHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		decision, err := engine.InspectRequest(r)
+		if err != nil {
+			t.Errorf("InspectRequest: %v", err)
+		}
+		if it := decision.Interruption; it != nil {
+			w.WriteHeader(it.Status)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read forwarded body: %v", err)
+		}
+		w.Header().Set("X-Forwarded-Body-Bytes", strconv.Itoa(len(body)))
+		w.WriteHeader(http.StatusOK)
+	})
+	// Another test may take the reserved UDP port before the listener binds,
+	// so retry with a fresh port on a bind conflict.
+	var addr string
+	var http3Lifecycle *managedServerLifecycle
+	for attempt := 1; ; attempt++ {
+		addr = net.JoinHostPort("127.0.0.1", reserveLocalUDPPort(t))
+		config.ListenAddr = addr
+		http3Srv, _, err := buildManagedServerHTTP3ServerForAddr(addr, tlsConfig, appHandler)
+		if err != nil {
+			t.Fatalf("buildManagedServerHTTP3ServerForAddr: %v", err)
+		}
+		http3Lifecycle = newManagedServerLifecycle(2 * time.Second)
+		err = runHTTP3Server(http3Lifecycle, nil, http3Srv)
+		if err == nil {
+			break
+		}
+		if attempt >= 5 || !strings.Contains(err.Error(), "address already in use") {
+			t.Fatalf("runHTTP3Server: %v", err)
+		}
+	}
+	defer func() {
+		if err := http3Lifecycle.shutdown(); err != nil {
+			t.Fatalf("http3 shutdown: %v", err)
+		}
+	}()
+
+	transport := &http3.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	defer transport.Close()
+	client := &http.Client{Timeout: 5 * time.Second, Transport: transport}
+	post := func(body string, knownLength bool) *http.Response {
+		t.Helper()
+		newRequest := func() *http.Request {
+			var reader io.Reader = strings.NewReader(body)
+			if !knownLength {
+				reader = io.MultiReader(strings.NewReader(body))
+			}
+			req, err := http.NewRequest(http.MethodPost, "https://"+addr+"/form", reader)
+			if err != nil {
+				t.Fatalf("NewRequest: %v", err)
+			}
+			if !knownLength {
+				req.ContentLength = -1
+			}
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			return req
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			resp, err := client.Do(newRequest())
+			if err == nil {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				_ = resp.Body.Close()
+				return resp
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("http3 request failed: %v", err)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	if resp := post("q=%3Cscript%3E&pad="+strings.Repeat("a", 4096), true); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("http3 body attack status=%d want=403", resp.StatusCode)
+	}
+	large := "name=alice&pad=" + strings.Repeat("a", 4096)
+	for _, knownLength := range []bool{true, false} {
+		resp := post(large, knownLength)
+		if resp.StatusCode != http.StatusOK || resp.Header.Get("X-Forwarded-Body-Bytes") != strconv.Itoa(len(large)) {
+			t.Fatalf("knownLength=%t status=%d forwarded=%q want %d", knownLength, resp.StatusCode, resp.Header.Get("X-Forwarded-Body-Bytes"), len(large))
+		}
+	}
+}
+
+func reserveLocalUDPPort(t *testing.T) string {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("ListenPacket: %v", err)
+	}
+	defer conn.Close()
+	_, port, err := net.SplitHostPort(conn.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("SplitHostPort: %v", err)
+	}
+	return port
 }
 
 func reserveLocalPort(t *testing.T) string {

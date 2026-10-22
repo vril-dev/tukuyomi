@@ -1,8 +1,12 @@
 import { serializePolicyHostKey } from "./policyHost.js";
 
+export type BypassRequestBodyMode = "inherit" | "skip";
+
 export type BypassEntryDraft = {
   path: string;
   extraRule: string;
+  requestBody?: BypassRequestBodyMode;
+  requestBodyInspectLimit?: string;
 };
 
 export type BypassHostScopeDraft = {
@@ -29,7 +33,15 @@ export function createEmptyBypassEntry(seed = 1): BypassEntryDraft {
   return {
     path: `/path-${seed}/`,
     extraRule: "",
+    requestBody: "inherit",
+    requestBodyInspectLimit: "",
   };
+}
+
+// An entry with request body options keeps the WAF on; only entries without
+// an extra rule and without body options are full bypasses.
+export function bypassEntryHasRequestBodyOptions(entry: BypassEntryDraft): boolean {
+  return entry.requestBody === "skip" || parseInspectLimit(entry.requestBodyInspectLimit ?? "") !== null;
 }
 
 export function createEmptyBypassHostScope(seed = 1): BypassHostScopeDraft {
@@ -168,6 +180,8 @@ function parseLegacyBypassEntries(raw: string): BypassEntryDraft[] {
     out.push({
       path: normalizeBypassPath(parts[0] ?? ""),
       extraRule: parts[1]?.trim() ?? "",
+      requestBody: "inherit",
+      requestBodyInspectLimit: "",
     });
   }
   return out.filter((entry) => entry.path);
@@ -229,6 +243,11 @@ function readEntryDrafts(value: unknown): { entryBases: JSONRecord[]; entries: B
       entry: {
         path: normalizeBypassPath(readString(entry.path, fallback.path)),
         extraRule: readString(entry.extra_rule, "").trim(),
+        requestBody: (readString(entry.request_body, "").trim().toLowerCase() === "skip" ? "skip" : "inherit") as BypassRequestBodyMode,
+        requestBodyInspectLimit:
+          typeof entry.request_body_inspect_limit_bytes === "number" && entry.request_body_inspect_limit_bytes > 0
+            ? String(entry.request_body_inspect_limit_bytes)
+            : "",
       },
     };
   });
@@ -253,9 +272,30 @@ function writeEntryDrafts(entries: BypassEntryDraft[], entryBases?: JSONRecord[]
       } else {
         delete out.extra_rule;
       }
+      const inspectLimit = parseInspectLimit(entry.requestBodyInspectLimit ?? "");
+      if (entry.requestBody === "skip") {
+        out.request_body = "skip";
+        delete out.request_body_inspect_limit_bytes;
+      } else {
+        delete out.request_body;
+        if (inspectLimit !== null) {
+          out.request_body_inspect_limit_bytes = inspectLimit;
+        } else {
+          delete out.request_body_inspect_limit_bytes;
+        }
+      }
       return out;
     })
     .filter((entry): entry is JSONRecord => entry !== null);
+}
+
+function parseInspectLimit(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^[0-9]+$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function countSerializedEntries(entries: BypassEntryDraft[]): number {

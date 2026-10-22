@@ -378,6 +378,22 @@ Routing model:
   `Security > Request Controls` is Tukuyomi request policy and stays
   visible.
 
+Request body inspection (since 1.6.0, applied after a restart):
+
+```json
+{ "waf": { "request_body": { "mode": "enforce", "inspect_limit_bytes": 16384, "oversize_action": "inspect_prefix" } } }
+```
+
+- `mode`: `enforce` (default) inspects and blocks, `detect` records
+  body-caused blocks as `waf_block_dry_run` without stopping requests,
+  `off` skips body inspection as releases before 1.6.0 did.
+- Form, multipart, JSON and XML bodies are inspected up to
+  `inspect_limit_bytes` (1 KiB to 1 MiB); the rest streams through.
+  `oversize_action: reject` answers `413` instead.
+- `enforce` also answers `400` for unparseable bodies and for more than
+  1000 arguments.
+- Rule IDs `1090200` to `1090299` are reserved for tukuyomi.
+
 ### A.3.3 Runtime backend operations
 
 - The normalized `upstream_runtime` DB domain holds **opt-in runtime
@@ -559,6 +575,11 @@ groups:
 - Host scope precedence: exact `host:port` → bare `host` →
   `default`. **A host-specific scope replaces `default` rather than
   merging with it.**
+- Since 1.6.0, `"request_body": "skip"` turns off body inspection for
+  the path, and `"request_body_inspect_limit_bytes"` overrides the
+  inspection limit (1 KiB to 1 MiB, not with `skip`). Entries with
+  these options keep the WAF on; only entries with neither
+  `extra_rule` nor body options are full bypasses.
 
 ### A.5.2 Country block
 

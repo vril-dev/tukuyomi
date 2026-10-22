@@ -275,6 +275,7 @@ function roleFromLine(line: LogLine, policyFamily: PolicyFamily | null): Request
       return "informational";
     case "bot_challenge_dry_run":
     case "bot_quarantine_dry_run":
+    case "waf_block_dry_run":
       return "dry_run";
     case "semantic_anomaly": {
       const action = actionName(line);
@@ -314,6 +315,7 @@ function policyFamilyFromLine(line: LogLine): PolicyFamily | null {
     case "rate_limited":
       return "rate_limit";
     case "waf_block":
+    case "waf_block_dry_run":
       return "waf";
     default:
       return null;

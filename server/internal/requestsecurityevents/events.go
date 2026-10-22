@@ -25,6 +25,7 @@ const (
 	TypeRateLimited          = "rate_limited"
 	TypeRateLimitPromotion   = "rate_limit_quarantine_promoted"
 	TypeWAFBlock             = "waf_block"
+	TypeWAFBlockDryRun       = "waf_block_dry_run"
 
 	ActionAllow             = "allow"
 	ActionObserve           = "observe"
@@ -34,6 +35,7 @@ const (
 	ActionAllowWithFindings = "allow_with_findings"
 	ActionWouldChallenge    = "would_challenge"
 	ActionWouldQuarantine   = "would_quarantine"
+	ActionWouldBlock        = "would_block"
 )
 
 type Event struct {

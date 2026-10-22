@@ -408,3 +408,52 @@ func TestValidateAppServerPublicListenersConfig(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateAppWAFRequestBodyConfig(t *testing.T) {
+	t.Run("defaults inspect bodies", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+
+		if err := validateAppConfigFile(cfg); err != nil {
+			t.Fatalf("validateAppConfigFile() error = %v", err)
+		}
+		if cfg.WAF.RequestBody.Mode != WAFRequestBodyModeEnforce || cfg.WAF.RequestBody.InspectLimitBytes != 16*1024 || cfg.WAF.RequestBody.OversizeAction != WAFRequestBodyOversizeInspectPrefix {
+			t.Fatalf("defaults=%+v", cfg.WAF.RequestBody)
+		}
+	})
+
+	t.Run("normalizes empty and mixed-case values", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		cfg.WAF.RequestBody = appWAFRequestBodyConfig{Mode: " DETECT ", OversizeAction: ""}
+
+		normalizeAppConfigFile(&cfg)
+		if err := validateAppConfigFile(cfg); err != nil {
+			t.Fatalf("validateAppConfigFile() error = %v", err)
+		}
+		if cfg.WAF.RequestBody.Mode != WAFRequestBodyModeDetect || cfg.WAF.RequestBody.InspectLimitBytes != DefaultWAFRequestBodyInspectLimit || cfg.WAF.RequestBody.OversizeAction != DefaultWAFRequestBodyOversizeAction {
+			t.Fatalf("normalized=%+v", cfg.WAF.RequestBody)
+		}
+	})
+
+	cases := []struct {
+		name   string
+		mutate func(*appWAFRequestBodyConfig)
+		want   string
+	}{
+		{"rejects unknown mode", func(c *appWAFRequestBodyConfig) { c.Mode = "block" }, "waf.request_body.mode must be one of: enforce, detect, off"},
+		{"rejects limit below minimum", func(c *appWAFRequestBodyConfig) { c.InspectLimitBytes = MinWAFRequestBodyInspectLimit - 1 }, "waf.request_body.inspect_limit_bytes must be between 1024 and 1048576"},
+		{"rejects limit above maximum", func(c *appWAFRequestBodyConfig) { c.InspectLimitBytes = MaxWAFRequestBodyInspectLimit + 1 }, "waf.request_body.inspect_limit_bytes must be between 1024 and 1048576"},
+		{"rejects negative limit", func(c *appWAFRequestBodyConfig) { c.InspectLimitBytes = -1 }, "waf.request_body.inspect_limit_bytes must be between 1024 and 1048576"},
+		{"rejects unknown oversize action", func(c *appWAFRequestBodyConfig) { c.OversizeAction = "drop" }, "waf.request_body.oversize_action must be one of: inspect_prefix, reject"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := defaultAppConfigFile()
+			tc.mutate(&cfg.WAF.RequestBody)
+
+			err := validateAppConfigFile(cfg)
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("error=%v want %q", err, tc.want)
+			}
+		})
+	}
+}

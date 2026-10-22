@@ -3001,14 +3001,26 @@ func buildProxyTLSClientConfigForProfile(profile proxyTransportTLSConfig) (*tls.
 	return tlsCfg, nil
 }
 
+// maxBufferedProxyRequestBodyBytes bounds buffer_request_body with the same
+// default as Runtime App request bodies.
+const maxBufferedProxyRequestBodyBytes = defaultVhostMaxRequestBodyBytes
+
+var errBufferedProxyRequestBodyTooLarge = errors.New("buffered proxy request body exceeds limit")
+
 func maybeBufferProxyRequestBody(req *http.Request) error {
 	cfg := currentProxyConfig()
 	if !cfg.BufferRequestBody || req == nil || req.Body == nil {
 		return nil
 	}
-	body, err := io.ReadAll(req.Body)
+	if req.ContentLength > maxBufferedProxyRequestBodyBytes {
+		return fmt.Errorf("%w: content_length=%d limit=%d", errBufferedProxyRequestBodyTooLarge, req.ContentLength, maxBufferedProxyRequestBodyBytes)
+	}
+	body, err := io.ReadAll(io.LimitReader(req.Body, maxBufferedProxyRequestBodyBytes+1))
 	if err != nil {
 		return err
+	}
+	if int64(len(body)) > maxBufferedProxyRequestBodyBytes {
+		return fmt.Errorf("%w: limit=%d", errBufferedProxyRequestBodyTooLarge, maxBufferedProxyRequestBodyBytes)
 	}
 	_ = req.Body.Close()
 	req.Body = io.NopCloser(bytes.NewReader(body))
@@ -3017,6 +3029,13 @@ func maybeBufferProxyRequestBody(req *http.Request) error {
 	}
 	req.ContentLength = int64(len(body))
 	return nil
+}
+
+func bufferedProxyRequestBodyErrorStatus(err error) int {
+	if errors.Is(err, errBufferedProxyRequestBodyTooLarge) {
+		return http.StatusRequestEntityTooLarge
+	}
+	return http.StatusBadRequest
 }
 
 func maybeBufferProxyResponseBody(res *http.Response) error {

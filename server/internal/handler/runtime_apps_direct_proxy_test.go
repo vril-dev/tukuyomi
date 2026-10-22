@@ -24,6 +24,8 @@ import (
 
 	"tukuyomi/internal/adminauth"
 	"tukuyomi/internal/cacheconf"
+	"tukuyomi/internal/config"
+	"tukuyomi/internal/waf"
 )
 
 func TestWriteDirectProxyResponsePreservesContextRequestID(t *testing.T) {
@@ -1307,6 +1309,82 @@ func TestRuntimeAppPSGIRequestBodyLimitReturns413(t *testing.T) {
 	}
 	if got := hits.Load(); got != 0 {
 		t.Fatalf("psgi hits=%d want 0", got)
+	}
+}
+
+func TestRuntimeAppReceivesFullBodyAfterWAFInspection(t *testing.T) {
+	startBodyInspectionProxyForTest(t, 1024, config.WAFRequestBodyOversizeInspectPrefix)
+	engine := waf.GetBaseEngine()
+	if engine == nil {
+		t.Fatal("expected base WAF engine")
+	}
+	body := "name=alice&pad=" + strings.Repeat("a", 4096)
+	newInspectedRequest := func(target string) *http.Request {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req = attachProxyRequestBodyCounter(req)
+		decision, err := engine.InspectRequest(req)
+		if err != nil {
+			t.Fatalf("InspectRequest: %v", err)
+		}
+		if decision.Interruption != nil || !decision.RequestBody.Truncated {
+			t.Fatalf("decision=%+v body=%+v, want truncated inspection without block", decision.Interruption, decision.RequestBody)
+		}
+		return req
+	}
+
+	var received atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ := io.ReadAll(r.Body)
+		received.Store(string(got))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	target, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("Parse(server.URL): %v", err)
+	}
+	port, err := strconv.Atoi(target.Port())
+	if err != nil {
+		t.Fatalf("Atoi(port): %v", err)
+	}
+	docroot := t.TempDir()
+
+	req := newInspectedRequest("http://app.example.com/submit")
+	resp, err := buildDirectVhostResponse(req, proxyRouteDecision{
+		Target:        &url.URL{Scheme: "psgi", Host: target.Host},
+		RewrittenPath: req.URL.Path,
+	}, VhostConfig{
+		Name:                "psgi-app",
+		Mode:                "psgi",
+		Hostname:            target.Hostname(),
+		ListenPort:          port,
+		DocumentRoot:        docroot,
+		TryFiles:            []string{"@psgi"},
+		MaxRequestBodyBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("buildDirectVhostResponse: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("psgi status=%d", resp.StatusCode)
+	}
+	if got, _ := received.Load().(string); got != body {
+		t.Fatalf("psgi received %d bytes, want %d", len(got), len(body))
+	}
+	if got := proxyRequestBodyBytes(req); got != int64(len(body)) {
+		t.Fatalf("counted %d bytes, want %d", got, len(body))
+	}
+
+	req = newInspectedRequest("http://app.example.com/index.php")
+	params, fcgiBody, err := buildFastCGIRequest(req, VhostConfig{Name: "php-app", Mode: "php-fpm", DocumentRoot: docroot, MaxRequestBodyBytes: 1 << 20}, vhostResolvedRequest{RequestPath: "/index.php"})
+	if err != nil {
+		t.Fatalf("buildFastCGIRequest: %v", err)
+	}
+	if string(fcgiBody) != body || params["CONTENT_LENGTH"] != strconv.Itoa(len(body)) {
+		t.Fatalf("fastcgi body=%d bytes CONTENT_LENGTH=%q, want %d", len(fcgiBody), params["CONTENT_LENGTH"], len(body))
 	}
 }
 

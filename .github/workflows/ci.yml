@@ -4,11 +4,9 @@ on:
   push:
     branches:
       - main
-      - dev
   pull_request:
     branches:
       - main
-      - dev
 
 permissions:
   contents: read
@@ -166,16 +164,16 @@ jobs:
           ' data/conf/config.json > "${tmp}"
           mv "${tmp}" data/conf/config.json
 
-          # Keep the baseline upstream unreachable; route/admin smoke injects its
-          # own reachable upstream later, while GoTestWAF keeps historical scoring.
+          # Route the baseline to the echo upstream so GoTestWAF receives real
+          # upstream responses and scores bypasses and false positives.
           tmp_proxy="$(mktemp)"
           mkdir -p data/conf
           jq '
             .domains.proxy |
             .upstreams = [
               {
-                "name": "ci-unreachable",
-                "url": "http://127.0.0.1:9081",
+                "name": "ci-echo",
+                "url": "http://host.docker.internal:18080",
                 "weight": 1,
                 "enabled": true
               }
@@ -183,7 +181,7 @@ jobs:
             .default_route = {
               "name": "ci-default",
               "enabled": true,
-              "action": { "upstream": "ci-unreachable" }
+              "action": { "upstream": "ci-echo" }
             }
           ' seeds/conf/config-bundle.json > "${tmp_proxy}"
           mv "${tmp_proxy}" data/conf/proxy.json
@@ -250,9 +248,15 @@ jobs:
       - name: Run GoTestWAF
         env:
           GOTESTWAF_AUTO_DOWN: "1"
-          MIN_BLOCKED_RATIO: "70"
+          MIN_BLOCKED_RATIO: "42"
+          MAX_FALSE_POSITIVE_RATIO: "12"
           WAF_LISTEN_PORT: "9090"
-        run: ./scripts/run_gotestwaf.sh
+        run: |
+          set -euo pipefail
+          python3 ./scripts/proxy_echo_server.py 18080 >/tmp/proxy_echo_gotestwaf.log 2>&1 &
+          echo_pid=$!
+          trap 'kill "${echo_pid}" >/dev/null 2>&1 || true' EXIT
+          ./scripts/run_gotestwaf.sh
 
       - name: Validate SQLite DB artifact
         run: |

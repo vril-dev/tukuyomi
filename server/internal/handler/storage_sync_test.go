@@ -50,6 +50,51 @@ func TestImportPolicyJSONStorage_SeedsBypassDBFromFile(t *testing.T) {
 	}
 }
 
+func TestImportPolicyJSONStorage_PersistsBypassRequestBodyOptions(t *testing.T) {
+	restore := saveBypassAndCRSConfigForTest()
+	defer restore()
+
+	tmp := t.TempDir()
+	bypassPath := filepath.Join(tmp, "waf-bypass.json")
+	fileRaw := `{
+  "default": {"entries": [
+    {"path": "/upload/", "request_body": "skip"},
+    {"path": "/api/", "request_body_inspect_limit_bytes": 65536}
+  ]},
+  "hosts": {"example.com": {"entries": [{"path": "/admin/", "request_body": "skip"}]}}
+}`
+	if err := os.WriteFile(bypassPath, []byte(fileRaw), 0o644); err != nil {
+		t.Fatalf("write bypass file: %v", err)
+	}
+	config.BypassFile = bypassPath
+
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", filepath.Join(tmp, "tukuyomi.db"), "", 30); err != nil {
+		t.Fatalf("init sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = InitLogsStatsStore(false, "", 0)
+	})
+	if err := importPolicyJSONStorage(bypassConfigBlobKey, config.BypassFile, normalizeBypassPolicyRaw, "bypass rules seed import"); err != nil {
+		t.Fatalf("import bypass storage: %v", err)
+	}
+
+	store := getLogsStatsStore()
+	gotRaw, _, found, err := store.loadActivePolicyJSONConfig(mustPolicyJSONSpec(bypassConfigBlobKey))
+	if err != nil || !found {
+		t.Fatalf("load bypass rows found=%v err=%v", found, err)
+	}
+	got, err := bypassconf.Parse(string(gotRaw))
+	if err != nil {
+		t.Fatalf("stored bypass rows invalid: %v", err)
+	}
+	if e := got.Default.Entries; len(e) != 2 || e[0].RequestBody != bypassconf.RequestBodySkip || e[1].RequestBodyInspectLimitBytes != 65536 {
+		t.Fatalf("default entries = %+v", e)
+	}
+	if e := got.Hosts["example.com"].Entries; len(e) != 1 || e[0].Path != "/admin/" || e[0].RequestBody != bypassconf.RequestBodySkip {
+		t.Fatalf("host entries = %+v", e)
+	}
+}
+
 func TestImportProxyRulesStorage_SeedsBuiltInMinimalConfigWhenDefaultProxyFileMissing(t *testing.T) {
 	oldProxyPath := config.ProxyConfigFile
 	defer func() {

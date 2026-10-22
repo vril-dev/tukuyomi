@@ -62,7 +62,11 @@ cleanup() {
   fi
 
   if [[ "${status}" -ne 0 && -n "${BUNDLE_DIR}" ]]; then
-    echo "[release-binary-smoke][ERROR] extracted bundle retained at ${BUNDLE_DIR}" >&2
+    if [[ "${RELEASE_BINARY_SMOKE_KEEP_EXTRACTED}" == "1" ]]; then
+      echo "[release-binary-smoke][ERROR] extracted bundle retained at ${BUNDLE_DIR}" >&2
+    else
+      echo "[release-binary-smoke][ERROR] extracted bundle removed; rerun with RELEASE_BINARY_SMOKE_KEEP_EXTRACTED=1 to inspect it" >&2
+    fi
   fi
 }
 trap 'cleanup "$?"' EXIT

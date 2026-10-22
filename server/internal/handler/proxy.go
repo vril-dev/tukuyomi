@@ -70,17 +70,32 @@ type proxyRequestContextState struct {
 }
 
 type proxyRequestBodyCounter struct {
-	rc    io.ReadCloser
-	bytes int64
+	rc     io.ReadCloser
+	bytes  int64
+	replay []byte
 }
 
 func (c *proxyRequestBodyCounter) Read(p []byte) (int, error) {
 	if c == nil || c.rc == nil {
 		return 0, io.EOF
 	}
+	if len(c.replay) > 0 {
+		n := copy(p, c.replay)
+		c.replay = c.replay[n:]
+		return n, nil
+	}
 	n, err := c.rc.Read(p)
 	c.bytes += int64(n)
 	return n, err
+}
+
+// ReplayRequestBodyPrefix serves bytes that the WAF already read and counted
+// again before the unread remainder, without counting them twice.
+func (c *proxyRequestBodyCounter) ReplayRequestBodyPrefix(prefix []byte) {
+	if c == nil || len(prefix) == 0 {
+		return
+	}
+	c.replay = append(append([]byte(nil), prefix...), c.replay...)
 }
 
 func (c *proxyRequestBodyCounter) Close() error {
@@ -767,7 +782,8 @@ func ensureProxyRequestID(c *proxyServeContext) string {
 
 func selectWAFEngine(reqHost, reqPath string, tls bool) waf.Engine {
 	wafEngine := waf.GetBaseEngine()
-	switch mr := bypassconf.Match(reqHost, reqPath, tls); mr.Action {
+	mr := bypassconf.Match(reqHost, reqPath, tls)
+	switch mr.Action {
 	case bypassconf.ACTION_BYPASS:
 		return nil
 	case bypassconf.ACTION_RULE:
@@ -775,13 +791,23 @@ func selectWAFEngine(reqHost, reqPath string, tls bool) waf.Engine {
 		ruleWAF, err := waf.GetEngineForExtraRule(mr.ExtraRule)
 		if err != nil {
 			log.Printf("[BYPASS][RULE][WARN] %v (fallback=default-rules)", err)
-			return wafEngine
+			return withBypassRequestBodyOptions(wafEngine, mr.RequestBody)
 		}
 
-		return ruleWAF
+		return withBypassRequestBodyOptions(ruleWAF, mr.RequestBody)
 	default:
-		return wafEngine
+		return withBypassRequestBodyOptions(wafEngine, mr.RequestBody)
 	}
+}
+
+func withBypassRequestBodyOptions(engine waf.Engine, opts *bypassconf.RequestBodyOptions) waf.Engine {
+	if engine == nil || opts == nil {
+		return engine
+	}
+	return waf.WithRequestBodyOverride(engine, waf.RequestBodyOverride{
+		Skip:              opts.Skip,
+		InspectLimitBytes: opts.InspectLimitBytes,
+	})
 }
 
 func setWAFContext(c *proxyServeContext, reqID, clientIP, country, countrySource string, wafHit bool, ruleIDs string) {
@@ -1096,7 +1122,7 @@ func serveProxyRequest(c *proxyServeContext) {
 	wafEngine := selectWAFEngine(c.Request.Host, reqPath, c.Request.TLS != nil)
 	if wafEngine == nil {
 		if err := maybeBufferProxyRequestBody(c.Request); err != nil {
-			c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
+			c.JSON(bufferedProxyRequestBodyErrorStatus(err), map[string]any{"error": err.Error()})
 			return
 		}
 		if !ensureProxyRouteTransportSelection(c, routeClassification, reqID, clientIP, country) {
@@ -1123,6 +1149,9 @@ func serveProxyRequest(c *proxyServeContext) {
 		securityEvt.Attributes = map[string]any{
 			"rule_id":          it.RuleID,
 			"matched_rule_ids": unique(ruleIDs),
+		}
+		if wafDecision.RequestBody.Reason != "" {
+			securityEvt.Attributes["request_body_reason"] = wafDecision.RequestBody.Reason
 		}
 		if havePrimaryMatch {
 			if primaryMatch.Variable != "" {
@@ -1152,6 +1181,9 @@ func serveProxyRequest(c *proxyServeContext) {
 			"rule_id":        it.RuleID,
 			"status":         it.Status,
 		}
+		if wafDecision.RequestBody.Reason != "" {
+			evt["request_body_reason"] = wafDecision.RequestBody.Reason
+		}
 		if havePrimaryMatch {
 			if primaryMatch.Variable != "" {
 				evt["matched_variable"] = primaryMatch.Variable
@@ -1165,9 +1197,56 @@ func serveProxyRequest(c *proxyServeContext) {
 		c.AbortWithStatus(it.Status)
 		return
 	}
+	if it := wafDecision.RequestBody.DryRun; it != nil {
+		primaryMatch, havePrimaryMatch := wafmatch.SelectPrimary(wafDecision.Matches, it.RuleID, maxDBMatchedValueBytes)
+		securityEvt := requestSecurityCtx.newSecurityEvent(c.Request, "waf", "waf", requestSecurityEventTypeWAFBlockDryRun, requestSecurityEventActionWouldBlock)
+		securityEvt.Phase = "waf"
+		securityEvt.DryRun = true
+		securityEvt.Status = it.Status
+		securityEvt.Attributes = map[string]any{
+			"rule_id":             it.RuleID,
+			"matched_rule_ids":    unique(ruleIDs),
+			"request_body_reason": wafDecision.RequestBody.Reason,
+		}
+		if havePrimaryMatch {
+			if primaryMatch.Variable != "" {
+				securityEvt.Attributes["matched_variable"] = primaryMatch.Variable
+			}
+			if primaryMatch.Value != "" {
+				securityEvt.Attributes["matched_value"] = primaryMatch.Value
+			}
+		}
+		requestSecurityCtx.publishSecurityEvent(securityEvt)
+		evt := map[string]any{
+			"ts":                  time.Now().UTC().Format(time.RFC3339Nano),
+			"service":             "coraza",
+			"level":               "WARN",
+			"event":               "waf_block_dry_run",
+			"req_id":              reqID,
+			"trace_id":            observability.TraceIDFromContext(c.Request.Context()),
+			"ip":                  clientIP,
+			"country":             country,
+			"country_source":      countrySource,
+			"path":                c.Request.URL.Path,
+			"rule_id":             it.RuleID,
+			"status":              it.Status,
+			"dry_run":             true,
+			"request_body_reason": wafDecision.RequestBody.Reason,
+		}
+		if havePrimaryMatch {
+			if primaryMatch.Variable != "" {
+				evt["matched_variable"] = primaryMatch.Variable
+			}
+			if primaryMatch.Value != "" {
+				evt["matched_value"] = primaryMatch.Value
+			}
+		}
+		appendProxyRouteLogFields(evt, c.Request)
+		emitJSONLogAndAppendEvent(evt)
+	}
 
 	if err := maybeBufferProxyRequestBody(c.Request); err != nil {
-		c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
+		c.JSON(bufferedProxyRequestBodyErrorStatus(err), map[string]any{"error": err.Error()})
 		return
 	}
 	if !ensureProxyRouteTransportSelection(c, routeClassification, reqID, clientIP, country) {

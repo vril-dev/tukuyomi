@@ -55,6 +55,15 @@ SecRule ARGS:q "@rx (?i)(<script|union([[:space:]]+all)?[[:space:]]+select|bench
   "id:100001,phase:2,deny,status:403,log,msg:'suspicious search query'"
 ```
 
+### Request Body False Positives
+
+Since 1.6.0, form, multipart, JSON and XML request bodies are inspected (`waf.request_body`). When a block comes from a body argument, the event's `matched_variable` points at it (for example `ARGS_POST:comment` or a `json.` key), and events decided by the body policy carry `request_body_reason`.
+
+1. Tune the rule for that argument first, with `extra_rule` or `ctl:ruleRemoveTargetById`.
+2. For a path whose body must not be inspected, such as a large upload endpoint, add a bypass entry with `"request_body": "skip"`. The WAF keeps checking the URL, headers and cookies of that path.
+3. While investigating, `waf.request_body.mode = detect` records body-caused blocks as `waf_block_dry_run` events without stopping requests. It applies to every host, so give it an expiry.
+4. `waf.request_body.mode = off` returns to the behavior before 1.6.0 and is the last resort.
+
 ## 4. Review CRS Settings
 
 1. Check the Paranoia Level through the DB-backed CRS setup asset imported from `rules/crs/crs-setup.conf`.

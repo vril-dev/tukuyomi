@@ -484,6 +484,9 @@ Proxy engine selection is a restart-required DB `app_config` setting:
   `mod_security` is a known mode reserved for a future adapter; it
   fails closed in config validation until that adapter is compiled
   in.
+- Request bodies are inspected by default (`waf.request_body.mode =
+  enforce`, up to 16 KiB per request). Include body-heavy traffic in
+  the benchmark and see Chapter 7 for false-positive handling.
 
 ## 3.6 Public/admin listener split
 

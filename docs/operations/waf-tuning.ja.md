@@ -55,6 +55,15 @@ SecRule ARGS:q "@rx (?i)(<script|union([[:space:]]+all)?[[:space:]]+select|bench
   "id:100001,phase:2,deny,status:403,log,msg:'suspicious search query'"
 ```
 
+### リクエストボディによる誤検知
+
+1.6.0 から、フォーム、multipart、JSON、XML のリクエストボディを検査します（`waf.request_body`）。ボディの引数が原因の遮断では、イベントの `matched_variable` がその引数（`ARGS_POST:comment` や `json.` で始まるキーなど）を指します。ボディの判定で決まったイベントには `request_body_reason` が付きます。
+
+1. まず、その引数を対象に `extra_rule` や `ctl:ruleRemoveTargetById` でルールを調整します
+2. 大きなアップロードを受けるエンドポイントなど、ボディを検査しないパスには、`"request_body": "skip"` を指定したバイパスエントリを追加します。そのパスの URL、ヘッダー、Cookie の検査は続きます
+3. 調査中は `waf.request_body.mode = detect` にすると、ボディが原因の遮断を止めずに `waf_block_dry_run` イベントとして記録します。全ホストに効くため、期限を決めて使ってください
+4. `waf.request_body.mode = off` は 1.6.0 より前の動作に戻すもので、最終手段です
+
 ## 4. CRS設定の見直し
 
 1. `rules/crs/crs-setup.conf` から取り込まれた DB 管理の CRS setup 設定で、Paranoia Level を確認する。

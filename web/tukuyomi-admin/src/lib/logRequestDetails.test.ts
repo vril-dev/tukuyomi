@@ -158,6 +158,26 @@ test("summarizeRequestEvents reports dry-run findings without enforced status", 
   assert.equal(summary.explanation.primaryReasonText, "bot defense (dry-run, non-enforcing)");
 });
 
+test("summarizeRequestEvents reports waf body dry-run blocks without enforcing", () => {
+  const summary = summarizeRequestEvents("req-waf-dry", [
+    {
+      ts: "2026-04-01T00:01:00Z",
+      event: "waf_block_dry_run",
+      rule_id: 949110,
+      status: 403,
+      dry_run: true,
+      request_body_reason: "rule",
+    },
+  ]);
+
+  assert.equal(summary.explanation.decision, "allowed_with_findings");
+  assert.equal(summary.explanation.primaryReason?.policyFamily, "waf");
+  assert.equal(summary.explanation.primaryReason?.role, "dry_run");
+  assert.equal(summary.explanation.primaryReason?.enforced, false);
+  assert.deepEqual(summary.explanation.dryRunPolicies, ["waf"]);
+  assert.equal(summary.explanation.httpStatus, null);
+});
+
 test("summarizeRequestEvents ignores informational events for primary reason selection", () => {
   const summary = summarizeRequestEvents("req-mixed", [
     {

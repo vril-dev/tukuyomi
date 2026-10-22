@@ -350,6 +350,32 @@ DB `app_config` の `waf.engine.mode` は、プロセス全体の WAF エンジ�
 - 左ナビゲーションは `Security > Coraza` をエンジン固有として扱い、有効な WAF エンジンが Coraza ではない場合は表示しません。`Security > Request Controls` は Tukuyomi のリクエストポリシーであるため、表示は維持されます
 - `Bypass Rules` はリクエスト制御です。ただし `extra_rule` の参照は Coraza 由来で DB マネージドな `.conf` スニペットであるため、有効な WAF エンジンが Coraza ではない場合は利用できません。フルバイパスのエントリは引き続き適用されます
 
+### WAF のリクエストボディ検査
+
+DB `app_config` の `waf.request_body` で、リクエストボディを WAF に渡す方法を設定します。変更は再起動後に反映されます。
+
+```json
+{
+  "waf": {
+    "request_body": {
+      "mode": "enforce",
+      "inspect_limit_bytes": 16384,
+      "oversize_action": "inspect_prefix"
+    }
+  }
+}
+```
+
+- `mode`: `enforce`（既定）はボディを検査して遮断します。`detect` は、ボディが原因の遮断をアクション `would_block` の `waf_block_dry_run` イベントとして記録し、リクエストは通します。`off` はボディを検査せず、1.6.0 より前のリリースと同じ動作に戻します
+- 検査する Content-Type は `application/x-www-form-urlencoded`、`multipart/form-data`、JSON（`application/json`、`*+json`）、XML（`application/xml`、`text/xml`、`*+xml`）です。判定には最初の `Content-Type` ヘッダーを使います。`application/octet-stream` や `text/plain` などのボディは、検査せずに転送します
+- `inspect_limit_bytes`（1024〜1048576、既定 16384）: 読み込んで検査するのは最大でこのバイト数までです。残りのボディはそのまま upstream へ流すため、リクエストごとのメモリー使用量は上限内に収まります。検査の負荷は検査するサイズに比例して増えます。CRS を使う場合、平文で 1 KiB あたりおよそ 4 ms の CPU を使うため、上限を上げるのは 1 リクエストあたりの CPU の増加を許容できる場合に限ってください
+- `oversize_action`: `inspect_prefix`（既定）は先頭の `inspect_limit_bytes` だけを検査し、ボディ全体を転送します。`reject` は転送せずに `413` を返します
+- multipart のアップロードでは、フィールド名、フィールドの値、ファイル名を検査します。ファイルの中身は CRS の引数ルールの照合対象になりません。上限を超える大きなファイルの後ろに置かれたフィールドは検査されません
+- `enforce` では、WAF が解析できないボディ（tukuyomi が上限で切ったものを除く）と、クエリまたはボディの引数が 1000 個を超えるリクエストにも `400` を返します。Coraza は `SecArgumentsLimit` を超えた引数を捨てるためです。`detect` ではドライランのイベントとして記録し、`off` では適用しません
+- ルール ID `1090200`〜`1090299` は、tukuyomi が設定済みのルールアセットの後ろに追加するルール用に予約しています。カスタムルールでは使わないでください
+- ランタイムでの可視化は、`/tukuyomi-api/status` の `waf_request_body_mode`、`waf_request_body_inspect_limit_bytes`、`waf_request_body_oversize_action` で確認できます。ボディの判定で決まった遮断とドライランのイベントには、`request_body_reason`（`rule`、`oversize`、`parse_error`、`arguments_limit`）が付きます
+- プロキシ設定の `buffer_request_body` は最大 64 MiB までバッファーし、それを超えると `413` を返します
+
 ### ランタイムでのバックエンド操作
 
 - 正規化済みの `upstream_runtime` DB ドメインが、直接アップストリーム ／ DNS ディスカバリからマテリアライズされたバックエンドキー単位で、オプトインのランタイムオーバーライドを保持します。`data/conf/upstream-runtime.json` は空 DB 向けのシード／エクスポートパスです
@@ -601,6 +627,19 @@ curl -sS \
 
 マネージドな `extra_rule` の本体は DB `override_rules` に保存し、`Rules` > Advanced > `Bypass snippets` で編集します。`conf/rules` ディレクトリへのフォールバックはありません。起動時のベース WAF ルールセットには含めず、バイパスエントリから論理的な `extra_rule` 名で参照されたときのみロードします。
 ホストスコープの優先順序は、完全一致の `host:port`、次にホスト名のみ、最後に `default` です。ホスト固有のスコープは default をマージせず置き換えます。
+
+1.6.0 から、エントリでそのパスのリクエストボディ検査を変更できます。WAF は無効になりません。
+
+```json
+{ "path": "/upload/", "request_body": "skip" }
+{ "path": "/api/", "request_body_inspect_limit_bytes": 65536 }
+```
+
+- `request_body`: `skip` にすると、そのパスではボディを検査しません。省略するか `inherit` にすると、`waf.request_body` の設定に従います
+- `request_body_inspect_limit_bytes`: そのパスについて `waf.request_body.inspect_limit_bytes` を上書きします（1024〜1048576）。`skip` とは併用できません
+- どちらかを指定したエントリは、ベースルール（`extra_rule` があればそのルール）で WAF を有効のまま使います。`extra_rule` もボディの指定もないエントリだけが完全バイパスです
+- 複数のエントリが一致した場合は、ボディの指定を持つ最初のエントリが採用されます。一致した `extra_rule` が完全バイパスより優先される点は変わりません
+- 1.6.0 より前のリリースは、これらのフィールドを含むバイパスファイルを拒否します
 
 ### 国別ブロック
 

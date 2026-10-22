@@ -37,6 +37,7 @@ const (
 	requestSecurityEventTypeRateLimited          = requestsecurityevents.TypeRateLimited
 	requestSecurityEventTypeRateLimitPromotion   = requestsecurityevents.TypeRateLimitPromotion
 	requestSecurityEventTypeWAFBlock             = requestsecurityevents.TypeWAFBlock
+	requestSecurityEventTypeWAFBlockDryRun       = requestsecurityevents.TypeWAFBlockDryRun
 	requestSecurityEventActionAllow              = requestsecurityevents.ActionAllow
 	requestSecurityEventActionObserve            = requestsecurityevents.ActionObserve
 	requestSecurityEventActionBlock              = requestsecurityevents.ActionBlock
@@ -45,6 +46,7 @@ const (
 	requestSecurityEventActionAllowWithFindings  = requestsecurityevents.ActionAllowWithFindings
 	requestSecurityEventActionWouldChallenge     = requestsecurityevents.ActionWouldChallenge
 	requestSecurityEventActionWouldQuarantine    = requestsecurityevents.ActionWouldQuarantine
+	requestSecurityEventActionWouldBlock         = requestsecurityevents.ActionWouldBlock
 )
 
 type requestSecurityEvent = requestsecurityevents.Event

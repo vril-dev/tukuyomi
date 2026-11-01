@@ -63,7 +63,7 @@ RUN set -eux; \
     cp "${binpath}/geoipupdate" /out/geoipupdate
 
 
-FROM --platform=$BUILDPLATFORM alpine:3.24.2 AS package
+FROM --platform=$BUILDPLATFORM alpine:3.24.3 AS package
 
 ARG TARGETOS
 ARG TARGETARCH

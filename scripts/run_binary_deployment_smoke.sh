@@ -206,7 +206,7 @@ log "starting staged binary from systemd-style working directory"
   set +a
   TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${BINARY_DEPLOYMENT_ADMIN_USERNAME}" \
   TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${BINARY_DEPLOYMENT_ADMIN_PASSWORD}" \
-  ./bin/tukuyomi >"${SERVER_LOG}" 2>&1
+  exec ./bin/tukuyomi >"${SERVER_LOG}" 2>&1
 ) &
 SERVER_PID="$!"
 

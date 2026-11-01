@@ -245,7 +245,7 @@ log "starting binary with built-in TLS + HTTP/3"
   set +a
   TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${HTTP3_SMOKE_ADMIN_USERNAME}" \
   TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${HTTP3_SMOKE_ADMIN_PASSWORD}" \
-  ./bin/tukuyomi >"${SERVER_LOG}" 2>&1
+  exec ./bin/tukuyomi >"${SERVER_LOG}" 2>&1
 ) &
 SERVER_PID="$!"
 

@@ -209,7 +209,7 @@ run_read_only_prerequisite_smoke() {
     cd "${RUNTIME_DIR}"
     TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${CONTAINER_PLATFORM_SMOKE_ADMIN_USERNAME}" \
     TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${CONTAINER_PLATFORM_SMOKE_ADMIN_PASSWORD}" \
-    WAF_CONFIG_FILE="conf/config.json" ./bin/tukuyomi >"${SERVER_LOG}" 2>&1
+    WAF_CONFIG_FILE="conf/config.json" exec ./bin/tukuyomi >"${SERVER_LOG}" 2>&1
   ) &
   SERVER_PID="$!"
 

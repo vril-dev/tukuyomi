@@ -480,6 +480,10 @@ run_preview_smoke() {
 
   PREVIEW_WORKSPACE="$(mktemp -d "${ROOT_DIR}/.tmp-scheduled-tasks-preview-smoke.XXXXXX")"
   stage_compose_workspace "${PREVIEW_WORKSPACE}"
+  log "removing development admins from the preview seed bundle"
+  jq '.domains.admin_users = {users: []}' \
+    "${PREVIEW_WORKSPACE}/seeds/conf/config-bundle.json" > "${PREVIEW_WORKSPACE}/seeds/conf/config-bundle.json.tmp"
+  mv "${PREVIEW_WORKSPACE}/seeds/conf/config-bundle.json.tmp" "${PREVIEW_WORKSPACE}/seeds/conf/config-bundle.json"
   db_path="$(resolve_db_path "${PREVIEW_WORKSPACE}/data/conf/config.json" "${PREVIEW_WORKSPACE}/data" 1)"
   task_log="${PREVIEW_WORKSPACE}/data/scheduled-tasks/logs/scheduled-task-preview-smoke.log"
   write_smoke_logger "${PREVIEW_WORKSPACE}/data/scheduled-tasks/bin/scheduled-task-smoke-logger"

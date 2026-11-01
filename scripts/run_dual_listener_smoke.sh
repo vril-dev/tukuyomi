@@ -152,6 +152,15 @@ WAF_STAGE_ROOT="$(mktemp -d "${RUNTIME_DIR}/tmp/waf-import.XXXXXX")"
 rm -rf "${WAF_STAGE_ROOT}"
 WAF_STAGE_ROOT=""
 
+log "importing isolated runtime configuration without development admins"
+jq '.domains.admin_users = {users: []}' \
+  "${ROOT_DIR}/seeds/conf/config-bundle.json" > "${RUNTIME_ROOT}/config-bundle.json"
+(
+  cd "${RUNTIME_DIR}"
+  WAF_DB_IMPORT_SEED_BUNDLE_FILE="${RUNTIME_ROOT}/config-bundle.json" \
+  WAF_CONFIG_FILE="conf/config.json" ./bin/tukuyomi db-import
+)
+
 log "starting local proxy echo upstream on 127.0.0.1:${DUAL_LISTENER_SMOKE_UPSTREAM_PORT}"
 python3 "${ROOT_DIR}/scripts/proxy_echo_server.py" "${DUAL_LISTENER_SMOKE_UPSTREAM_PORT}" >"${UPSTREAM_LOG}" 2>&1 &
 UPSTREAM_PID="$!"
@@ -205,7 +214,23 @@ log "running admin + proxy-rules smoke through split listeners"
 )
 
 if [[ ! -f "${RUNTIME_DIR}/audit/proxy-rules-audit.ndjson" ]]; then
-  fail "expected staged runtime to create audit/proxy-rules-audit.ndjson"
+  proxy_history_count="$(python3 - "${RUNTIME_DIR}/db/tukuyomi.db" <<'PY'
+import sqlite3
+import sys
+
+path = sys.argv[1]
+conn = sqlite3.connect(path)
+try:
+    cur = conn.cursor()
+    cur.execute("select count(*) from config_versions where domain = 'proxy'")
+    print(cur.fetchone()[0])
+finally:
+    conn.close()
+PY
+)"
+  if [[ "${proxy_history_count}" -lt 2 ]]; then
+    fail "expected staged runtime to create file audit or DB proxy config history"
+  fi
 fi
 
 log "OK dual-listener smoke passed"

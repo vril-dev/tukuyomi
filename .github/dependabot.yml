@@ -10,6 +10,16 @@ updates:
       time: "09:30"
       timezone: Asia/Tokyo
 
+  - package-ecosystem: npm
+    directories:
+      - /web/tukuyomi-admin
+      - /web/tukuyomi-center
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:30"
+      timezone: Asia/Tokyo
+
   - package-ecosystem: docker
     directories:
       - /server

@@ -19,7 +19,7 @@ require (
 	github.com/klauspost/compress v1.20.3
 	github.com/maxmind/mmdbwriter v1.2.0
 	github.com/oschwald/maxminddb-golang v1.13.1
-	github.com/pires/go-proxyproto v0.12.0
+	github.com/pires/go-proxyproto v0.16.0
 	github.com/quic-go/quic-go v0.64.1
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.47.0

@@ -148,6 +148,16 @@ stage_read_only_runtime() {
     WAF_RULE_ASSET_FS_ROOT="${stage_root}" WAF_CONFIG_FILE="conf/config.json" ./bin/tukuyomi db-import-waf-rule-assets
   )
   rm -rf "${stage_root}"
+
+  log "importing isolated runtime configuration without development admins"
+  jq '.domains.admin_users = {users: []}' \
+    "${ROOT_DIR}/seeds/conf/config-bundle.json" > "${RUNTIME_ROOT}/config-bundle.json"
+  (
+    cd "${RUNTIME_DIR}"
+    WAF_DB_IMPORT_SEED_BUNDLE_FILE="${RUNTIME_ROOT}/config-bundle.json" \
+    WAF_CONFIG_FILE="conf/config.json" ./bin/tukuyomi db-import
+    WAF_CONFIG_FILE="conf/config.json" ./bin/tukuyomi bootstrap-scheduled-task-defaults
+  )
 }
 
 admin_login() {
@@ -209,7 +219,7 @@ run_read_only_prerequisite_smoke() {
     cd "${RUNTIME_DIR}"
     TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${CONTAINER_PLATFORM_SMOKE_ADMIN_USERNAME}" \
     TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${CONTAINER_PLATFORM_SMOKE_ADMIN_PASSWORD}" \
-    WAF_CONFIG_FILE="conf/config.json" ./bin/tukuyomi >"${SERVER_LOG}" 2>&1
+    WAF_CONFIG_FILE="conf/config.json" exec ./bin/tukuyomi >"${SERVER_LOG}" 2>&1
   ) &
   SERVER_PID="$!"
 

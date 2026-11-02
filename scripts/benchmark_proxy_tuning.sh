@@ -889,7 +889,7 @@ start_proxy_runtime() {
         WAF_STORAGE_DB_PATH="${runtime_db_path}" \
         TUKUYOMI_ADMIN_BOOTSTRAP_USERNAME="${WAF_ADMIN_USERNAME}" \
         TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD="${WAF_ADMIN_PASSWORD}" \
-        TUKUYOMI_PPROF_ADDR="${pprof_env}" "${server_bin}"
+        TUKUYOMI_PPROF_ADDR="${pprof_env}" exec "${server_bin}"
       ) >"${server_log_file}" 2>&1 &
       server_pid="$!"
       ;;

@@ -10,7 +10,7 @@ require (
 	github.com/corazawaf/coraza/v3 v3.8.1
 	github.com/creack/pty v1.1.24
 	github.com/fsnotify/fsnotify v1.10.1
-	github.com/gin-contrib/cors v1.7.9
+	github.com/gin-contrib/cors v1.7.11
 	github.com/gin-gonic/gin v1.12.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-sql-driver/mysql v1.10.1

@@ -1,4 +1,4 @@
-FROM golang:1.26.11-alpine3.24 AS builder
+FROM golang:1.27.0-alpine3.24 AS builder
 
 ARG VERSION
 

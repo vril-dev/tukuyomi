@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -2211,6 +2212,92 @@ func TestCurrentEdgeProxyGateStateSkipsStoreWhenApprovalGateIsOff(t *testing.T) 
 	config.EdgeRequireDeviceApproval = true
 	if gate := currentEdgeProxyGateState(); !gate.Locked || gate.Reason != edgeProxyLockReasonStoreError {
 		t.Fatalf("approval gate on store error=%+v want locked with %q", gate, edgeProxyLockReasonStoreError)
+	}
+}
+
+func TestEdgeDeviceUploadBodyHashMatchesCenterVector(t *testing.T) {
+	// Center computes the same value in center.deviceUploadBodyHash, and its
+	// tests check the same vector.
+	got := edgeDeviceUploadBodyHash("/v1/device-config-snapshot", strings.Repeat("ab", 32))
+	const want = "f066826cc5728195f6273622772b37dc38ea5fc800c7f6a10da4e92449b806c0"
+	if got != want {
+		t.Fatalf("edgeDeviceUploadBodyHash=%s want %s", got, want)
+	}
+}
+
+func TestEdgeDeviceUploadsSendSignedHeaders(t *testing.T) {
+	identity := newEdgeDeviceIdentityForTest(t)
+	publicKey := publicKeyFromEdgeIdentityForTest(t, identity)
+	type captured struct {
+		path   string
+		header http.Header
+		body   []byte
+	}
+	captures := make(chan captured, 1)
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read upload: %v", err)
+		}
+		captures <- captured{path: r.URL.Path, header: r.Header.Clone(), body: body}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer center.Close()
+
+	ctx := context.Background()
+	uploads := []struct {
+		endpoint string
+		send     func(url string) error
+	}{
+		{endpoint: "/v1/device-config-snapshot", send: func(url string) error {
+			_, _, err := sendEdgeDeviceConfigSnapshot(ctx, identity, url, edgeDeviceConfigSnapshotWireRequest{DeviceID: identity.DeviceID})
+			return err
+		}},
+		{endpoint: "/v1/rule-artifact-bundle", send: func(url string) error {
+			_, _, err := sendEdgeRuleArtifactBundle(ctx, identity, url, edgeRuleArtifactBundleWireRequest{DeviceID: identity.DeviceID})
+			return err
+		}},
+		{endpoint: "/v1/app-deploy-baseline-upload", send: func(url string) error {
+			_, _, err := sendEdgeAppDeployBaselineUpload(ctx, identity, url, edgeAppDeployBaselineUploadWireRequest{DeviceID: identity.DeviceID})
+			return err
+		}},
+		{endpoint: "/v1/daemon-log-archive-upload", send: func(url string) error {
+			_, _, err := sendEdgeDaemonLogArchiveUpload(ctx, identity, url, edgeDaemonLogArchiveUploadWireRequest{DeviceID: identity.DeviceID})
+			return err
+		}},
+	}
+	for _, upload := range uploads {
+		t.Run(upload.endpoint, func(t *testing.T) {
+			if err := upload.send(center.URL + upload.endpoint); err != nil {
+				t.Fatalf("send: %v", err)
+			}
+			got := <-captures
+			if got.path != upload.endpoint {
+				t.Fatalf("path=%q want %q", got.path, upload.endpoint)
+			}
+			if got.header.Get("X-Tukuyomi-Device-ID") != identity.DeviceID ||
+				got.header.Get("X-Tukuyomi-Key-ID") != identity.KeyID ||
+				got.header.Get("X-Tukuyomi-Public-Key-Fingerprint-SHA256") != identity.PublicKeyFingerprintSHA256 {
+				t.Fatalf("identity headers=%v", got.header)
+			}
+			contentSum := sha256.Sum256(got.body)
+			contentHash := hex.EncodeToString(contentSum[:])
+			if got.header.Get("X-Tukuyomi-Content-SHA256") != contentHash {
+				t.Fatalf("content hash header=%q want hash of the sent body %q", got.header.Get("X-Tukuyomi-Content-SHA256"), contentHash)
+			}
+			bodyHash := got.header.Get("X-Tukuyomi-Body-Hash")
+			if bodyHash != edgeDeviceUploadBodyHash(upload.endpoint, contentHash) {
+				t.Fatalf("body hash header=%q is not bound to %s", bodyHash, upload.endpoint)
+			}
+			signature, err := base64.StdEncoding.DecodeString(got.header.Get("X-Tukuyomi-Signature"))
+			if err != nil {
+				t.Fatalf("decode signature: %v", err)
+			}
+			message := edgeEnrollmentSignedMessage(identity.DeviceID, identity.KeyID, got.header.Get("X-Tukuyomi-Timestamp"), got.header.Get("X-Tukuyomi-Nonce"), bodyHash)
+			if !ed25519.Verify(publicKey, []byte(message), signature) {
+				t.Fatal("upload header signature does not verify with the device key")
+			}
+		})
 	}
 }
 

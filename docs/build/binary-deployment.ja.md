@@ -110,6 +110,7 @@ make install TARGET=linux-systemd INSTALL_ROLE=center-protected
 - `INSTALL_CENTER_API_BASE_PATH` は Center UI が使う管理 API path です。既定値は `/center-manage-api` です。`INSTALL_CENTER_GATEWAY_API_BASE_PATH` は Gateway/device 向けに公開する API path で、既定値は `/center-api` です
 - `center-protected` では、`/center-ui` と `/center-manage-api` の管理用 route を Proxy Rules の `access.allow_cidrs` で制限します。remote Gateway がポーリングする `/center-api/v1` の Gateway/device API route は開けたままにします
 - Center を直接公開する場合の送信元 IP allowlist は 3 種類あります。`TUKUYOMI_CENTER_CLIENT_ALLOW_CIDRS` は Center UI client、`TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS` は管理 API、`TUKUYOMI_CENTER_API_ALLOW_CIDRS` は Gateway/device API に適用します。client と Gateway/device は空欄なら任意の送信元を許可し、管理 API は既定で loopback と private/local CIDR を許可します
+- `TUKUYOMI_CENTER_REQUIRE_SIGNED_DEVICE_UPLOAD_HEADERS=true` にすると、Center はリクエストヘッダーで署名されていないデバイスのアップロードを拒否します。1.6.7 より前の Gateway はこのヘッダーを送らないため、すべての Gateway を 1.6.7 以降にしてから有効にしてください。既定値は `false` です
 - `PREFIX` が実行ユーザーのホーム配下にある場合、`INSTALL_CREATE_USER=auto` は実行ユーザーをそのままランタイムユーザーとし、`useradd` は実行しません
 - ホーム配下にインストールしたランタイムツリーは、その login ユーザーとプライマリグループの所有になります
 - `/opt/tukuyomi` などのシステムパスの場合、既定では `tukuyomi` システムユーザー／グループを作成または再利用します

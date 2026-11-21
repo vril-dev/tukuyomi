@@ -146,6 +146,14 @@ baseline adoption が読み取る採用元は、Gateway ローカルの相対パ
 
 この機能は Center 側の `TUKUYOMI_CENTER_EXPERIMENTAL_APP_DEPLOY_ENABLED` で保護されています。中核となる Gateway / Center 登録経路を変えずに、運用画面から試験機能だけを外せるようにするためです。
 
+### 16.3.4　署名付きのアップロードと更新の順番
+
+設定スナップショット、ルールの artifact、アプリ配布の baseline、daemon のログアーカイブは、Gateway から Center への大きなアップロードです。1.6.7 から Gateway は、これらに **JSON の本文だけでなくリクエストヘッダーでも署名** します。Center は、**本文を読む前に** デバイスとその承認を確かめられます。Gateway と Center の間にリバースプロキシを置く場合は、`X-Tukuyomi-*` のリクエストヘッダーを変更せずに通してください。`center-protected` のルートは、そのまま通します。
+
+1.6.7 より前の Gateway は、本文にだけ署名します。Center は既定でこのアップロードも受け付けて警告をログに出すので、Center と Gateway はどちらから更新してもかまいません。すべての Gateway を 1.6.7 以降にしたら、Center に `TUKUYOMI_CENTER_REQUIRE_SIGNED_DEVICE_UPLOAD_HEADERS=true` を設定し、署名の無いアップロードを読まずに拒否するようにしてください。
+
+Center は、これらのアップロードを同時に読む数も制限します。上限を超えたスナップショット、ルール、ログのアップロードには `503` を返し、Gateway は後のステータス更新で送り直します。baseline のアップロードは、代わりに短い待ち行列で待たせます。待てなかったものは、その採用の依頼が失敗になるので、依頼し直してください。
+
 ## 16.4　Preview URL
 
 fleet preview で Gateway 設定と Center token / approval 状態を再起動後も

@@ -148,6 +148,10 @@ Behavior:
   `TUKUYOMI_CENTER_API_ALLOW_CIDRS` for the Gateway/device API. Empty client
   and Gateway/device lists allow any source. The management API defaults to
   loopback plus private/local CIDRs.
+- `TUKUYOMI_CENTER_REQUIRE_SIGNED_DEVICE_UPLOAD_HEADERS=true` makes Center
+  reject device uploads that are not signed in request headers. Gateways older
+  than 1.6.7 do not send those headers, so turn it on after every Gateway runs
+  1.6.7 or later. The default is `false`.
 - when `PREFIX` is under the invoking user's home directory,
   `INSTALL_CREATE_USER=auto` uses that user as the runtime user and skips
   `useradd`

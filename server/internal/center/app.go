@@ -45,6 +45,8 @@ const (
 	ManageAPIAllowCIDRsEnv   = "TUKUYOMI_CENTER_MANAGE_API_ALLOW_CIDRS"
 	CenterAPIAllowCIDRsEnv   = "TUKUYOMI_CENTER_API_ALLOW_CIDRS"
 	ExperimentalAppDeployEnv = "TUKUYOMI_CENTER_EXPERIMENTAL_APP_DEPLOY_ENABLED"
+
+	RequireSignedDeviceUploadHeadersEnv = "TUKUYOMI_CENTER_REQUIRE_SIGNED_DEVICE_UPLOAD_HEADERS"
 )
 
 var centerAdminAuthCookieNames = adminauth.CenterCookieNames()
@@ -62,6 +64,9 @@ type RuntimeConfig struct {
 	ManageAPIAllowCIDRs          []string
 	CenterAPIAllowCIDRs          []string
 	ExperimentalAppDeployEnabled bool
+	// RequireSignedDeviceUploadHeaders rejects device uploads from Gateways
+	// that do not sign the upload in headers (Gateways older than 1.6.7).
+	RequireSignedDeviceUploadHeaders bool
 }
 
 func RuntimeConfigFromEnv() (RuntimeConfig, error) {
@@ -73,16 +78,21 @@ func RuntimeConfigFromEnv() (RuntimeConfig, error) {
 	if err != nil {
 		return RuntimeConfig{}, err
 	}
+	requireSignedDeviceUploadHeaders, err := parseCenterBoolEnv(RequireSignedDeviceUploadHeadersEnv, false)
+	if err != nil {
+		return RuntimeConfig{}, err
+	}
 	cfg := RuntimeConfig{
-		ListenAddr:                   strings.TrimSpace(os.Getenv(ListenAddrEnv)),
-		APIBasePath:                  strings.TrimSpace(os.Getenv(APIBasePathEnv)),
-		GatewayAPIBasePath:           strings.TrimSpace(os.Getenv(GatewayAPIBasePathEnv)),
-		UIBasePath:                   strings.TrimSpace(os.Getenv(UIBasePathEnv)),
-		TLSEnabled:                   tlsEnabled,
-		TLSCertFile:                  strings.TrimSpace(os.Getenv(TLSCertFileEnv)),
-		TLSKeyFile:                   strings.TrimSpace(os.Getenv(TLSKeyFileEnv)),
-		TLSMinVersion:                normalizeCenterTLSMinVersion(os.Getenv(TLSMinVersionEnv)),
-		ExperimentalAppDeployEnabled: experimentalAppDeployEnabled,
+		ListenAddr:                       strings.TrimSpace(os.Getenv(ListenAddrEnv)),
+		APIBasePath:                      strings.TrimSpace(os.Getenv(APIBasePathEnv)),
+		GatewayAPIBasePath:               strings.TrimSpace(os.Getenv(GatewayAPIBasePathEnv)),
+		UIBasePath:                       strings.TrimSpace(os.Getenv(UIBasePathEnv)),
+		TLSEnabled:                       tlsEnabled,
+		TLSCertFile:                      strings.TrimSpace(os.Getenv(TLSCertFileEnv)),
+		TLSKeyFile:                       strings.TrimSpace(os.Getenv(TLSKeyFileEnv)),
+		TLSMinVersion:                    normalizeCenterTLSMinVersion(os.Getenv(TLSMinVersionEnv)),
+		ExperimentalAppDeployEnabled:     experimentalAppDeployEnabled,
+		RequireSignedDeviceUploadHeaders: requireSignedDeviceUploadHeaders,
 	}
 	if err := validateCenterTLSMinVersion(cfg.TLSMinVersion); err != nil {
 		return RuntimeConfig{}, fmt.Errorf("%s %w", TLSMinVersionEnv, err)

@@ -3668,7 +3668,7 @@ func uploadEdgeAppDeployBaseline(ctx context.Context, identity edgeDeviceIdentit
 	if err != nil {
 		return edgeDownloadedAppDeployPackage{}, "", err
 	}
-	httpStatus, respBody, err := sendEdgeAppDeployBaselineUpload(ctx, uploadURL, wireReq)
+	httpStatus, respBody, err := sendEdgeAppDeployBaselineUpload(ctx, identity, uploadURL, wireReq)
 	if err != nil {
 		return edgeDownloadedAppDeployPackage{}, "", err
 	}
@@ -5710,7 +5710,7 @@ func sendEdgeDeviceStatus(ctx context.Context, statusURL string, wireReq edgeDev
 	return res.StatusCode, resBody, nil
 }
 
-func sendEdgeDeviceConfigSnapshot(ctx context.Context, snapshotURL string, wireReq edgeDeviceConfigSnapshotWireRequest) (int, []byte, error) {
+func sendEdgeDeviceConfigSnapshot(ctx context.Context, identity edgeDeviceIdentityRecord, snapshotURL string, wireReq edgeDeviceConfigSnapshotWireRequest) (int, []byte, error) {
 	body, err := json.Marshal(wireReq)
 	if err != nil {
 		return 0, nil, err
@@ -5722,6 +5722,15 @@ func sendEdgeDeviceConfigSnapshot(ctx context.Context, snapshotURL string, wireR
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	headers, err := signedEdgeDeviceUploadHeaders(identity, "/v1/device-config-snapshot", body)
+	if err != nil {
+		return 0, nil, err
+	}
+	for name, values := range headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
 	client, err := edgeCenterHTTPClient()
 	if err != nil {
 		return 0, nil, err
@@ -5738,7 +5747,7 @@ func sendEdgeDeviceConfigSnapshot(ctx context.Context, snapshotURL string, wireR
 	return res.StatusCode, resBody, nil
 }
 
-func sendEdgeRuleArtifactBundle(ctx context.Context, bundleURL string, wireReq edgeRuleArtifactBundleWireRequest) (int, []byte, error) {
+func sendEdgeRuleArtifactBundle(ctx context.Context, identity edgeDeviceIdentityRecord, bundleURL string, wireReq edgeRuleArtifactBundleWireRequest) (int, []byte, error) {
 	body, err := json.Marshal(wireReq)
 	if err != nil {
 		return 0, nil, err
@@ -5750,6 +5759,15 @@ func sendEdgeRuleArtifactBundle(ctx context.Context, bundleURL string, wireReq e
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	headers, err := signedEdgeDeviceUploadHeaders(identity, "/v1/rule-artifact-bundle", body)
+	if err != nil {
+		return 0, nil, err
+	}
+	for name, values := range headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
 	client, err := edgeCenterHTTPClient()
 	if err != nil {
 		return 0, nil, err
@@ -5902,7 +5920,7 @@ func sendEdgeAppDeployPackageDownload(ctx context.Context, downloadURL string, w
 	return res.StatusCode, resBody, nil
 }
 
-func sendEdgeAppDeployBaselineUpload(ctx context.Context, uploadURL string, wireReq edgeAppDeployBaselineUploadWireRequest) (int, []byte, error) {
+func sendEdgeAppDeployBaselineUpload(ctx context.Context, identity edgeDeviceIdentityRecord, uploadURL string, wireReq edgeAppDeployBaselineUploadWireRequest) (int, []byte, error) {
 	body, err := json.Marshal(wireReq)
 	if err != nil {
 		return 0, nil, err
@@ -5917,6 +5935,15 @@ func sendEdgeAppDeployBaselineUpload(ctx context.Context, uploadURL string, wire
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	headers, err := signedEdgeDeviceUploadHeaders(identity, "/v1/app-deploy-baseline-upload", body)
+	if err != nil {
+		return 0, nil, err
+	}
+	for name, values := range headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
 	client, err := edgeCenterHTTPClient()
 	if err != nil {
 		return 0, nil, err
@@ -5933,7 +5960,7 @@ func sendEdgeAppDeployBaselineUpload(ctx context.Context, uploadURL string, wire
 	return res.StatusCode, resBody, nil
 }
 
-func sendEdgeDaemonLogArchiveUpload(ctx context.Context, uploadURL string, wireReq edgeDaemonLogArchiveUploadWireRequest) (int, []byte, error) {
+func sendEdgeDaemonLogArchiveUpload(ctx context.Context, identity edgeDeviceIdentityRecord, uploadURL string, wireReq edgeDaemonLogArchiveUploadWireRequest) (int, []byte, error) {
 	body, err := json.Marshal(wireReq)
 	if err != nil {
 		return 0, nil, err
@@ -5948,6 +5975,15 @@ func sendEdgeDaemonLogArchiveUpload(ctx context.Context, uploadURL string, wireR
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	headers, err := signedEdgeDeviceUploadHeaders(identity, "/v1/daemon-log-archive-upload", body)
+	if err != nil {
+		return 0, nil, err
+	}
+	for name, values := range headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
 	client, err := edgeCenterHTTPClient()
 	if err != nil {
 		return 0, nil, err
@@ -6000,7 +6036,7 @@ func pushEdgeRuleArtifactBundle(ctx context.Context, identity *edgeDeviceIdentit
 		identity.RuleArtifactError = clampEdgeText(err.Error(), 2048)
 		return false
 	}
-	centerHTTPStatus, centerBody, err := sendEdgeRuleArtifactBundle(ctx, bundleURL, wireReq)
+	centerHTTPStatus, centerBody, err := sendEdgeRuleArtifactBundle(ctx, *identity, bundleURL, wireReq)
 	if err != nil {
 		identity.RuleArtifactError = clampEdgeText(err.Error(), 2048)
 		return false
@@ -6077,7 +6113,7 @@ func pushEdgeConfigSnapshot(ctx context.Context, identity *edgeDeviceIdentityRec
 		identity.ConfigSnapshotError = clampEdgeText(err.Error(), 2048)
 		return
 	}
-	centerHTTPStatus, centerBody, err := sendEdgeDeviceConfigSnapshot(ctx, snapshotURL, wireReq)
+	centerHTTPStatus, centerBody, err := sendEdgeDeviceConfigSnapshot(ctx, *identity, snapshotURL, wireReq)
 	if err != nil {
 		identity.ConfigSnapshotError = clampEdgeText(err.Error(), 2048)
 		return
@@ -6131,7 +6167,7 @@ func pushEdgeDaemonLogArchives(ctx context.Context, identity *edgeDeviceIdentity
 			log.Printf("[EDGE][DAEMON_LOG][WARN] sign archive %s: %v", archive.Path, err)
 			continue
 		}
-		status, respBody, err := sendEdgeDaemonLogArchiveUpload(ctx, uploadURL, wireReq)
+		status, respBody, err := sendEdgeDaemonLogArchiveUpload(ctx, *identity, uploadURL, wireReq)
 		if err != nil {
 			log.Printf("[EDGE][DAEMON_LOG][WARN] upload archive %s: %v", archive.Path, err)
 			return
@@ -7164,6 +7200,40 @@ func signedEdgeRemoteSSHGatewayStreamHeaders(identity edgeDeviceIdentityRecord, 
 
 func edgeRemoteSSHGatewayStreamBodyHash(sessionID string, hostKeyFingerprint string, hostPublicKey string) string {
 	sum := sha256.Sum256([]byte("remote-ssh-gateway-stream\n" + strings.TrimSpace(sessionID) + "\n" + strings.ToLower(strings.TrimSpace(hostKeyFingerprint)) + "\n" + strings.TrimSpace(hostPublicKey)))
+	return hex.EncodeToString(sum[:])
+}
+
+// signedEdgeDeviceUploadHeaders signs an upload in headers, as the Remote SSH
+// Gateway stream does, so Center can check the device before it reads the
+// body. The JSON body keeps its own signature.
+func signedEdgeDeviceUploadHeaders(identity edgeDeviceIdentityRecord, endpoint string, body []byte) (http.Header, error) {
+	privateKey, _, err := parseEdgeDevicePrivateKey(identity.PrivateKeyPEM)
+	if err != nil {
+		return nil, err
+	}
+	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	nonce, err := randomEdgeIdentifier("nonce")
+	if err != nil {
+		return nil, err
+	}
+	contentSum := sha256.Sum256(body)
+	contentHash := hex.EncodeToString(contentSum[:])
+	bodyHash := edgeDeviceUploadBodyHash(endpoint, contentHash)
+	signature := ed25519.Sign(privateKey, []byte(edgeEnrollmentSignedMessage(identity.DeviceID, identity.KeyID, timestamp, nonce, bodyHash)))
+	headers := http.Header{}
+	headers.Set("X-Tukuyomi-Device-ID", identity.DeviceID)
+	headers.Set("X-Tukuyomi-Key-ID", identity.KeyID)
+	headers.Set("X-Tukuyomi-Public-Key-Fingerprint-SHA256", identity.PublicKeyFingerprintSHA256)
+	headers.Set("X-Tukuyomi-Timestamp", timestamp)
+	headers.Set("X-Tukuyomi-Nonce", nonce)
+	headers.Set("X-Tukuyomi-Content-SHA256", contentHash)
+	headers.Set("X-Tukuyomi-Body-Hash", bodyHash)
+	headers.Set("X-Tukuyomi-Signature", base64.StdEncoding.EncodeToString(signature))
+	return headers, nil
+}
+
+func edgeDeviceUploadBodyHash(endpoint string, contentSHA256 string) string {
+	sum := sha256.Sum256([]byte("device-upload\n" + strings.TrimSpace(endpoint) + "\n" + strings.ToLower(strings.TrimSpace(contentSHA256))))
 	return hex.EncodeToString(sum[:])
 }
 

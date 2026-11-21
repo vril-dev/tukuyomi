@@ -278,6 +278,33 @@ config` export. The Status export is a seed/restore `config-bundle.json`
 artifact, while the Center snapshot is a signed fleet-status payload with
 device identity, revision metadata, and per-domain `etag`/`raw` entries.
 
+## Signed Device Uploads
+
+Gateway signs four uploads to Center in request headers as well as in the JSON
+body: `/v1/device-config-snapshot`, `/v1/rule-artifact-bundle`,
+`/v1/app-deploy-baseline-upload`, and `/v1/daemon-log-archive-upload`. Center
+checks the headers, the device approval, and the signature before it reads the
+body, and then checks that the body matches the signed content hash. The
+headers are `X-Tukuyomi-Device-ID`, `X-Tukuyomi-Key-ID`,
+`X-Tukuyomi-Public-Key-Fingerprint-SHA256`, `X-Tukuyomi-Timestamp`,
+`X-Tukuyomi-Nonce`, `X-Tukuyomi-Content-SHA256`, `X-Tukuyomi-Body-Hash`, and
+`X-Tukuyomi-Signature`. A reverse proxy between Gateway and Center must pass
+them unchanged; the bundled `center-protected` Gateway route does.
+
+Gateways older than 1.6.7 sign only the JSON body. Center accepts their
+uploads by default and logs a warning at most once a minute. After every
+Gateway runs 1.6.7 or later, set
+`TUKUYOMI_CENTER_REQUIRE_SIGNED_DEVICE_UPLOAD_HEADERS=true` on Center so it
+rejects uploads without the headers before reading the body.
+
+Center reads at most four configuration snapshot or rule artifact uploads and
+one daemon log archive upload at the same time. Other uploads of those kinds
+get `503` with `Retry-After`; Gateway keeps them pending and sends them again
+on a later status refresh. Center reads one app deployment baseline upload at a
+time, and up to eight more wait for up to five minutes. A baseline upload that
+cannot wait gets `503`, which fails that adopt request, so request the adoption
+again.
+
 ## Troubleshooting
 
 - `connect: connection refused` with `localhost:9092`: Gateway is trying to

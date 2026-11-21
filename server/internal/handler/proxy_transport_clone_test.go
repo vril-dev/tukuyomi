@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -160,5 +161,57 @@ func TestPrepareTukuyomiProxyRequestDoesNotMutateSourceRequest(t *testing.T) {
 	}
 	if got := out.Header.Get("X-Remove"); got != "" {
 		t.Fatalf("outbound X-Remove=%q want empty", got)
+	}
+}
+
+func TestPrepareTukuyomiProxyRequestKeepsProxyHeadersListedInConnection(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://proxy.local/original", nil)
+	req.Host = "proxy.local"
+	req.Header.Set("Connection", "X-Forwarded-For, X-Forwarded-Host, X-Forwarded-Proto, X-Route, X-Hop")
+	req.Header.Set("X-Forwarded-For", "198.51.100.7")
+	req.Header.Set("X-Hop", "drop-me")
+
+	classification := proxyRouteClassification{
+		Source:        proxyRouteResolutionRoute,
+		OriginalHost:  "proxy.local",
+		RewrittenPath: "/original",
+		RequestHeaderOps: ProxyRouteHeaderOperations{
+			Set: map[string]string{"X-Route": "yes"},
+		},
+	}
+	selection := proxyRouteTransportSelection{
+		SelectedUpstream: "primary",
+		HealthKey:        "primary",
+		Target:           mustURL("http://backend.local/base"),
+	}
+	ctx := withProxyRouteClassification(req.Context(), classification)
+	ctx = withProxyRouteTransportSelection(ctx, selection)
+	req = req.WithContext(ctx)
+
+	out, _, err := prepareTukuyomiProxyRequest(req)
+	if err != nil {
+		t.Fatalf("prepareTukuyomiProxyRequest: %v", err)
+	}
+	clientIP, _, err := net.SplitHostPort(req.RemoteAddr)
+	if err != nil {
+		t.Fatalf("SplitHostPort(%q): %v", req.RemoteAddr, err)
+	}
+	if got := out.Header.Get("X-Forwarded-For"); got != clientIP {
+		t.Fatalf("outbound X-Forwarded-For=%q want %q", got, clientIP)
+	}
+	if got := out.Header.Get("X-Forwarded-Host"); got != "proxy.local" {
+		t.Fatalf("outbound X-Forwarded-Host=%q want proxy.local", got)
+	}
+	if got := out.Header.Get("X-Forwarded-Proto"); got != "http" {
+		t.Fatalf("outbound X-Forwarded-Proto=%q want http", got)
+	}
+	if got := out.Header.Get("X-Route"); got != "yes" {
+		t.Fatalf("outbound X-Route=%q want yes", got)
+	}
+	if got := out.Header.Get("X-Hop"); got != "" {
+		t.Fatalf("outbound X-Hop=%q want removed", got)
+	}
+	if got := out.Header.Get("Connection"); got != "" {
+		t.Fatalf("outbound Connection=%q want removed", got)
 	}
 }

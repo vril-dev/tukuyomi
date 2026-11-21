@@ -138,8 +138,8 @@ func prepareTukuyomiProxyRequest(r *http.Request) (*http.Request, string, error)
 	if outReq.Body == nil {
 		outReq.Body = http.NoBody
 	}
-	outReq = rewriteTukuyomiProxyRequest(r, outReq)
 	removeProxyHopByHopHeaders(outReq.Header)
+	outReq = rewriteTukuyomiProxyRequest(r, outReq)
 	if proxyHeaderValuesContainToken(r.Header.Values("Te"), "trailers") {
 		outReq.Header.Set("Te", "trailers")
 	}

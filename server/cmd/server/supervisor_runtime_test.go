@@ -7,8 +7,10 @@ import (
 	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -424,6 +426,139 @@ func TestSupervisorRuntimeReplaceActivatesCandidateThenDrainsPrevious(t *testing
 	if candidateWorker.stopped {
 		t.Fatal("candidate should remain active")
 	}
+}
+
+func TestSupervisorRuntimeReplaceActiveWhileRunningKeepsSupervisor(t *testing.T) {
+	previousWorker := startDrainableWorkerProcessForTest(t)
+	candidateWorker := newFakeSupervisorWorker(202)
+	var startedMu sync.Mutex
+	var started []string
+	runtime := &supervisorRuntime{
+		executable:     "/tmp/tukuyomi-current",
+		readyTimeout:   time.Second,
+		stopTimeout:    10 * time.Second,
+		rollbackWindow: 2 * time.Minute,
+		stateStore:     newSupervisorWorkerStateStore(filepath.Join(t.TempDir(), "worker_runtime_state.json")),
+		enableReplace:  true,
+		startWorker: func(_ context.Context, executable string, _ *supervisorListenerSet, _ time.Duration) (supervisorWorker, workerReadyMessage, error) {
+			startedMu.Lock()
+			started = append(started, executable)
+			startedMu.Unlock()
+			return candidateWorker, workerReadyMessage{
+				Protocol: workerReadinessProtocol,
+				PID:      candidateWorker.ProcessID(),
+			}, nil
+		},
+	}
+	active := &supervisorWorkerGeneration{
+		id:         1,
+		executable: "/tmp/tukuyomi-current",
+		worker:     previousWorker,
+		activated:  time.Now().Add(-5 * time.Second),
+	}
+	sigCh := make(chan os.Signal, 1)
+	runErr := make(chan error, 1)
+	go func() { runErr <- runtime.Run(active, sigCh) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.activeGeneration() != active {
+		if time.Now().After(deadline) {
+			t.Fatal("Run did not publish the active worker")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	replaceErr := make(chan error, 1)
+	go func() {
+		_, err := runtime.ReplaceActive(context.Background(), "/tmp/tukuyomi-next")
+		replaceErr <- err
+	}()
+	select {
+	case err := <-replaceErr:
+		if err != nil {
+			t.Fatalf("ReplaceActive: %v", err)
+		}
+	case err := <-runErr:
+		t.Fatalf("Run returned during replacement: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("ReplaceActive did not finish before the drain timeout")
+	}
+	select {
+	case err := <-runErr:
+		t.Fatalf("Run returned after replacement: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if got := runtime.activeGeneration(); got == nil || got.worker != candidateWorker {
+		t.Fatalf("active generation=%+v want replacement worker", got)
+	}
+	startedMu.Lock()
+	gotStarted := append([]string(nil), started...)
+	startedMu.Unlock()
+	if len(gotStarted) != 1 || gotStarted[0] != "/tmp/tukuyomi-next" {
+		t.Fatalf("started executables=%v want only the replacement", gotStarted)
+	}
+
+	sigCh <- syscall.SIGTERM
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run after SIGTERM: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not stop after SIGTERM")
+	}
+	if !candidateWorker.drained {
+		t.Fatal("SIGTERM did not drain the replacement worker")
+	}
+}
+
+func TestManagedWorkerProcessExitIsVisibleAfterAnotherReceiverTakesIt(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start worker: %v", err)
+	}
+	worker := &managedWorkerProcess{cmd: cmd, waitCh: make(chan error, 1)}
+	worker.watchExit()
+	select {
+	case err := <-worker.Wait():
+		if err != nil {
+			t.Fatalf("first exit receiver err=%v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not exit")
+	}
+
+	for name, call := range map[string]func() error{
+		"Drain": func() error { return worker.Drain(10 * time.Second) },
+		"Stop":  func() error { return worker.Stop(10 * time.Second) },
+	} {
+		started := time.Now()
+		if err := call(); err != nil {
+			t.Fatalf("%s after the exit was received elsewhere: %v", name, err)
+		}
+		if elapsed := time.Since(started); elapsed > 2*time.Second {
+			t.Fatalf("%s waited %s after the worker had exited", name, elapsed)
+		}
+	}
+}
+
+func startDrainableWorkerProcessForTest(t *testing.T) *managedWorkerProcess {
+	t.Helper()
+	drainReader, drainWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("drain pipe: %v", err)
+	}
+	cmd := exec.Command("sh", "-c", "read x <&3; exit 0")
+	cmd.ExtraFiles = []*os.File{drainReader}
+	if err := cmd.Start(); err != nil {
+		_ = drainReader.Close()
+		_ = drainWriter.Close()
+		t.Fatalf("start worker: %v", err)
+	}
+	_ = drainReader.Close()
+	worker := &managedWorkerProcess{cmd: cmd, waitCh: make(chan error, 1), drainWriter: drainWriter}
+	worker.watchExit()
+	t.Cleanup(func() { _ = worker.Stop(time.Second) })
+	return worker
 }
 
 func TestSupervisorRuntimeReplaceKeepsActiveWhenCandidateFails(t *testing.T) {

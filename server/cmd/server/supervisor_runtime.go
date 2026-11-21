@@ -308,6 +308,7 @@ func (r *supervisorRuntime) ReplaceWithExecutable(ctx context.Context, active *s
 		active.id,
 		active.worker.ProcessID(),
 	)
+	r.setActive(candidate)
 	if err := active.worker.Drain(r.stopTimeout); err != nil {
 		if stateErr := r.recordWorkerActivationFailure("replace_drain_previous", candidate, active, err, started); stateErr != nil {
 			return candidate, fmt.Errorf("drain previous worker: %w; record activation failure: %v", err, stateErr)
@@ -858,9 +859,7 @@ func startWorkerCandidate(ctx context.Context, executable string, listeners *sup
 		activationWriter: activationWriter,
 		drainWriter:      drainWriter,
 	}
-	go func() {
-		worker.waitCh <- cmd.Wait()
-	}()
+	worker.watchExit()
 
 	readyCtx, cancel := context.WithTimeout(ctx, readyTimeout)
 	defer cancel()
@@ -985,6 +984,16 @@ func waitForWorkerReady(ctx context.Context, readyReader io.Reader, waitCh <-cha
 type workerReadyResult struct {
 	msg workerReadyMessage
 	err error
+}
+
+// watchExit reports the worker exit once on waitCh and then closes it, so
+// every later receiver (Run, Drain, Stop) sees the exit instead of blocking.
+func (w *managedWorkerProcess) watchExit() {
+	go func() {
+		err := w.cmd.Wait()
+		w.waitCh <- err
+		close(w.waitCh)
+	}()
 }
 
 func (w *managedWorkerProcess) Wait() <-chan error {

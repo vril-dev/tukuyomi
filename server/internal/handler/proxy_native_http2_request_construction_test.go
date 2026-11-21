@@ -3,6 +3,7 @@ package handler
 import (
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -52,6 +53,41 @@ func TestNativeHTTP2RequestConstruction(t *testing.T) {
 		}
 		if fields["te"] != "trailers" {
 			t.Fatalf("te=%q want trailers", fields["te"])
+		}
+	})
+
+	t.Run("native HTTP/1 inbound request uses its Host as authority", func(t *testing.T) {
+		rawURL, captures := nativeHTTP2CaptureRequestServerURL(t)
+		rt, err := buildProxyNativeHTTP2Transport(normalizeProxyRulesConfig(ProxyRulesConfig{}), proxyTransportProfile{}, proxyHTTP2ModeH2C)
+		if err != nil {
+			t.Fatalf("buildProxyNativeHTTP2Transport: %v", err)
+		}
+		defer rt.CloseIdleConnections()
+
+		inbound := nativeHTTP1BuildRequestFromString(t, "GET /api/items?q=1 HTTP/1.1\r\nHost: app.example\r\nX-Custom: ok\r\n\r\n")
+		upstreamURL, err := url.Parse(rawURL + "api/items?q=1")
+		if err != nil {
+			t.Fatalf("parse upstream URL: %v", err)
+		}
+		outReq := inbound.Clone(inbound.Context())
+		outReq.URL = upstreamURL
+		outReq.RequestURI = ""
+
+		resp, err := rt.RoundTrip(outReq)
+		if err != nil {
+			t.Fatalf("RoundTrip: %v", err)
+		}
+		_ = resp.Body.Close()
+
+		fields := nativeHTTP2FieldMap((<-captures).Fields)
+		if fields[":authority"] != "app.example" {
+			t.Fatalf(":authority=%q want inbound Host", fields[":authority"])
+		}
+		if _, ok := fields["host"]; ok {
+			t.Fatalf("host field=%q want only :authority", fields["host"])
+		}
+		if fields["x-custom"] != "ok" {
+			t.Fatalf("x-custom=%q want ok", fields["x-custom"])
 		}
 	})
 

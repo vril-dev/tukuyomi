@@ -35,6 +35,26 @@ func TestNormalizePattern(t *testing.T) {
 			t.Fatalf("NormalizePattern() = %q want %q", got, "[2001:db8::1]:8443")
 		}
 	})
+
+	t.Run("trailing dot", func(t *testing.T) {
+		got, err := NormalizePattern("Example.COM.")
+		if err != nil {
+			t.Fatalf("NormalizePattern() error = %v", err)
+		}
+		if got != "example.com" {
+			t.Fatalf("NormalizePattern() = %q want %q", got, "example.com")
+		}
+	})
+
+	t.Run("trailing dot and port", func(t *testing.T) {
+		got, err := NormalizePattern("example.com.:8080")
+		if err != nil {
+			t.Fatalf("NormalizePattern() error = %v", err)
+		}
+		if got != "example.com:8080" {
+			t.Fatalf("NormalizePattern() = %q want %q", got, "example.com:8080")
+		}
+	})
 }
 
 func TestNormalizePatternInvalid(t *testing.T) {
@@ -43,6 +63,8 @@ func TestNormalizePatternInvalid(t *testing.T) {
 		"*.example.com",
 		"example.com/path",
 		"example.com:99999",
+		"example.com:abc",
+		".",
 	}
 	for _, tc := range cases {
 		t.Run(tc, func(t *testing.T) {
@@ -84,6 +106,54 @@ func TestCandidates(t *testing.T) {
 			tls:  true,
 			want: []string{"example.com:443", "example.com"},
 		},
+		{
+			name: "upper case",
+			host: "Example.COM",
+			tls:  true,
+			want: []string{"example.com:443", "example.com"},
+		},
+		{
+			name: "ipv6 host and port",
+			host: "[2001:db8::1]:8443",
+			tls:  true,
+			want: []string{"[2001:db8::1]:8443", "2001:db8::1"},
+		},
+		{
+			name: "trailing dot",
+			host: "example.com.",
+			tls:  true,
+			want: []string{"example.com:443", "example.com"},
+		},
+		{
+			name: "trailing dot and port",
+			host: "example.com.:8080",
+			tls:  false,
+			want: []string{"example.com:8080", "example.com"},
+		},
+		{
+			name: "non numeric port is ignored like route matching",
+			host: "example.com:abc",
+			tls:  true,
+			want: []string{"example.com:443", "example.com"},
+		},
+		{
+			name: "out of range port is ignored like route matching",
+			host: "example.com:99999",
+			tls:  false,
+			want: []string{"example.com:80", "example.com"},
+		},
+		{
+			name: "userinfo is ignored like route matching",
+			host: "user@example.com",
+			tls:  true,
+			want: []string{"example.com:443", "example.com"},
+		},
+		{
+			name: "path suffix is ignored like route matching",
+			host: "example.com/x",
+			tls:  true,
+			want: []string{"example.com:443", "example.com"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -91,5 +161,13 @@ func TestCandidates(t *testing.T) {
 				t.Fatalf("Candidates() = %v want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCandidatesEmptyHost(t *testing.T) {
+	for _, host := range []string{"", "  ", ".", ":8080"} {
+		if got := Candidates(host, true); got != nil {
+			t.Fatalf("Candidates(%q) = %v want nil", host, got)
+		}
 	}
 }

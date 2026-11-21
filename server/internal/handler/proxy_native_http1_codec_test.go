@@ -66,6 +66,24 @@ func TestNativeHTTP1BuildRequest(t *testing.T) {
 		}
 	})
 
+	t.Run("host moves from header to request host", func(t *testing.T) {
+		for _, raw := range []string{
+			"GET /x HTTP/1.1\r\nHost: example.com:8080\r\nX-Custom: ok\r\n\r\n",
+			"GET http://example.com:8080/x HTTP/1.1\r\nHost: example.com:8080\r\nX-Custom: ok\r\n\r\n",
+		} {
+			req := nativeHTTP1BuildRequestFromString(t, raw)
+			if req.Host != "example.com:8080" {
+				t.Fatalf("Host=%q want example.com:8080", req.Host)
+			}
+			if values, ok := req.Header["Host"]; ok {
+				t.Fatalf("Header[Host]=%v want removed", values)
+			}
+			if got := req.Header.Get("X-Custom"); got != "ok" {
+				t.Fatalf("X-Custom=%q want ok", got)
+			}
+		}
+	})
+
 	t.Run("chunked with trailers and expect", func(t *testing.T) {
 		req := nativeHTTP1BuildRequestFromString(t, "POST /chunk HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\nExpect: 100-continue\r\n\r\n5\r\nhello\r\n0\r\nX-Trailer: ok\r\n\r\n")
 		body, err := io.ReadAll(req.Body)

@@ -121,6 +121,36 @@ func TestMatchPrefersHostPortOverHostAndDefault(t *testing.T) {
 	}
 }
 
+func TestMatchUsesHostScopeForHostSpellingsThatRouteToTheHost(t *testing.T) {
+	mu.Lock()
+	fileState = File{
+		Default: Scope{
+			Entries: []Entry{{Path: "/shared/"}},
+		},
+		Hosts: map[string]Scope{
+			"admin.example.com": {},
+		},
+	}
+	mu.Unlock()
+
+	for _, host := range []string{
+		"admin.example.com",
+		"ADMIN.example.com",
+		"admin.example.com.",
+		"admin.example.com:abc",
+		"admin.example.com:99999",
+		"user@admin.example.com",
+		"admin.example.com/x",
+	} {
+		if got := Match(host, "/shared/test", true); got.Action != ACTION_NONE {
+			t.Fatalf("Match(%q) = %+v want host scope without bypass", host, got)
+		}
+	}
+	if got := Match("other.example.com", "/shared/test", true); got.Action != ACTION_BYPASS {
+		t.Fatalf("other host match = %+v want default bypass", got)
+	}
+}
+
 func TestMatchTreatsHTTPDefaultPortAsEquivalent(t *testing.T) {
 	mu.Lock()
 	fileState = File{

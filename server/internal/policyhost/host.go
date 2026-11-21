@@ -23,7 +23,7 @@ func NormalizePattern(raw string) (string, error) {
 	if err != nil || parsed.Hostname() == "" {
 		return "", fmt.Errorf("host must be a valid host or host:port")
 	}
-	normalizedHost := strings.Trim(strings.ToLower(parsed.Hostname()), "[]")
+	normalizedHost := strings.TrimSuffix(strings.Trim(strings.ToLower(parsed.Hostname()), "[]"), ".")
 	if normalizedHost == "" {
 		return "", fmt.Errorf("host is required")
 	}
@@ -38,8 +38,8 @@ func NormalizePattern(raw string) (string, error) {
 }
 
 func Candidates(raw string, tls bool) []string {
-	normalized, err := NormalizePattern(raw)
-	if err != nil || normalized == "" {
+	normalized, ok := normalizeRequestHost(raw)
+	if !ok {
 		return nil
 	}
 	host, port, hasPort := splitHostPort(normalized)
@@ -55,6 +55,35 @@ func Candidates(raw string, tls bool) []string {
 	}
 	out = append(out, host)
 	return unique(out)
+}
+
+// normalizeRequestHost reads a request Host value the same way proxy route
+// matching does (normalizeProxyRequestHost in internal/handler), so a request
+// that reaches a host's route also uses that host's policy scope. A port that
+// is not a valid number is ignored, as route matching ignores ports.
+func normalizeRequestHost(raw string) (string, bool) {
+	value := strings.TrimSpace(strings.ToLower(raw))
+	if value == "" {
+		return "", false
+	}
+	host := strings.Trim(value, "[]")
+	port := ""
+	if parsed, err := url.Parse("http://" + value); err == nil && parsed.Hostname() != "" {
+		host = parsed.Hostname()
+		port = parsed.Port()
+	} else if h, _, err := net.SplitHostPort(value); err == nil {
+		host = strings.Trim(h, "[]")
+	}
+	host = strings.TrimSuffix(host, ".")
+	if host == "" {
+		return "", false
+	}
+	if port != "" {
+		if _, err := validatePort(port); err == nil {
+			return net.JoinHostPort(host, port), true
+		}
+	}
+	return host, true
 }
 
 func splitHostPort(normalized string) (string, string, bool) {

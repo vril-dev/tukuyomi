@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1087,6 +1088,107 @@ func TestApplyEdgeRuntimeInstallRejectsHashMismatch(t *testing.T) {
 	if _, err := os.Stat(bundleDir); !os.IsNotExist(err) {
 		t.Fatalf("bundle dir stat err=%v, want not exist", err)
 	}
+}
+
+func TestApplyEdgeRuntimeInstallKeepsRunningPHPRuntimeWhenDownloadFails(t *testing.T) {
+	restore := resetPHPProxyFoundationForTest(t)
+	defer restore()
+	restoreAssignments := resetEdgeRuntimeAssignmentStateForTest(t)
+	defer restoreAssignments()
+
+	tmp := t.TempDir()
+	inventoryPath := filepath.Join(tmp, "inventory.json")
+	vhostPath := filepath.Join(tmp, "vhosts.json")
+	proxyPath := filepath.Join(tmp, "proxy.json")
+	docroot := filepath.Join(tmp, "apps", "app", "public")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(docroot): %v", err)
+	}
+	port := closedLocalTCPPort(t)
+	listenAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	vhosts := `{
+  "vhosts": [
+    {
+      "name": "app",
+      "mode": "php-fpm",
+      "hostname": "127.0.0.1",
+      "listen_port": ` + strconv.Itoa(port) + `,
+      "document_root": "` + filepath.ToSlash(docroot) + `",
+      "runtime_id": "php83",
+      "generated_target": "app-php",
+      "linked_upstream_name": "app"
+    }
+  ]
+}`
+	proxyRaw := mustJSON(normalizeProxyRulesConfig(ProxyRulesConfig{
+		Upstreams: []ProxyUpstream{
+			{Name: "app", URL: "http://127.0.0.1:8081", Weight: 1, Enabled: true},
+			{Name: "primary", URL: "http://127.0.0.1:8080", Weight: 1, Enabled: true},
+		},
+	}))
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	if err := os.WriteFile(vhostPath, []byte(vhosts), 0o600); err != nil {
+		t.Fatalf("write vhosts: %v", err)
+	}
+	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o600); err != nil {
+		t.Fatalf("write proxy: %v", err)
+	}
+	writeTestPHPRuntimeArtifact(t, inventoryPath, "php83", testPHPRuntimeArtifactOptions{
+		DisplayName: "PHP 8.3",
+		Version:     "PHP 8.3.99 (fpm-fcgi)",
+		RunUser:     strconv.Itoa(os.Geteuid()),
+		RunGroup:    strconv.Itoa(os.Getegid()),
+		BinaryBody:  fakePHPRuntimeSupervisorBinaryBody(),
+	})
+	initConfigDBStoreForTest(t)
+	inventoryCfg := importPHPRuntimeInventoryDBForTest(t, defaultPHPRuntimeInventoryRaw, inventoryPath)
+	importVhostRuntimeDBForTest(t, vhosts, inventoryCfg)
+	importProxyRuntimeDBForTest(t, proxyRaw)
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+	if err := InitVhostRuntime(vhostPath, 2); err != nil {
+		t.Fatalf("InitVhostRuntime: %v", err)
+	}
+	if err := InitProxyRuntime(proxyPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+	if err := InitPHPRuntimeSupervisor(); err != nil {
+		t.Fatalf("InitPHPRuntimeSupervisor: %v", err)
+	}
+	waitForTCPState(t, listenAddr, true)
+	defer func() {
+		_ = StopPHPRuntimeProcess("php83")
+		waitForTCPState(t, listenAddr, false)
+	}()
+	before := PHPRuntimeProcessSnapshot()
+	if len(before) != 1 || !before[0].Running || before[0].PID <= 0 {
+		t.Fatalf("runtime before install=%+v, want one running process", before)
+	}
+
+	artifact := buildGatewayRuntimeArtifactForTest(t, "php83")
+	identity := newEdgeDeviceIdentityForTest(t)
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(artifact.Compressed)
+	}))
+	defer center.Close()
+	identity.CenterURL = center.URL
+	assignment := assignmentForRuntimeArtifactForTest(artifact)
+	assignment.ArtifactHash = strings.Repeat("a", 64)
+
+	applyEdgePHPRuntimeInstall(context.Background(), identity, assignment, "php83")
+
+	status := edgeRuntimeApplyStatusSnapshot()[edgeRuntimeAssignmentKey("php-fpm", "php83")]
+	if status.ApplyState != "failed" || !strings.Contains(status.ApplyError, "hash mismatch") {
+		t.Fatalf("apply status=%+v, want failed hash mismatch", status)
+	}
+	after := PHPRuntimeProcessSnapshot()
+	if len(after) != 1 || !after[0].Running || after[0].PID != before[0].PID {
+		t.Fatalf("runtime after failed download=%+v, want the same process still running (pid %d)", after, before[0].PID)
+	}
+	waitForTCPState(t, listenAddr, true)
 }
 
 func TestInstallEdgePHPRuntimeArtifactRejectsTargetMismatch(t *testing.T) {

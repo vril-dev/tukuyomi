@@ -4405,6 +4405,13 @@ func applyEdgePHPRuntimeInstall(ctx context.Context, identity edgeDeviceIdentity
 	}
 	setEdgeRuntimeApplyStatus(status)
 
+	artifact, err := downloadEdgeRuntimeArtifact(ctx, identity, assignment)
+	if err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
 	wasRunning := edgePHPRuntimeRunningState()[runtimeID]
 	if wasRunning {
 		status.ApplyState = "stopping"
@@ -4415,13 +4422,6 @@ func applyEdgePHPRuntimeInstall(ctx context.Context, identity edgeDeviceIdentity
 			setEdgeRuntimeApplyStatus(status)
 			return
 		}
-	}
-	artifact, err := downloadEdgeRuntimeArtifact(ctx, identity, assignment)
-	if err != nil {
-		status.ApplyState = "failed"
-		status.ApplyError = err.Error()
-		setEdgeRuntimeApplyStatus(status)
-		return
 	}
 	if err := installEdgePHPRuntimeArtifact(artifact.Compressed, artifact.Parsed, assignment); err != nil {
 		status.ApplyState = "failed"
@@ -4594,6 +4594,13 @@ func applyEdgePSGIRuntimeInstall(ctx context.Context, identity edgeDeviceIdentit
 	}
 	setEdgeRuntimeApplyStatus(status)
 
+	artifact, err := downloadEdgeRuntimeArtifact(ctx, identity, assignment)
+	if err != nil {
+		status.ApplyState = "failed"
+		status.ApplyError = err.Error()
+		setEdgeRuntimeApplyStatus(status)
+		return
+	}
 	runningProcesses := runningEdgePSGIProcessIDs(runtimeID)
 	if len(runningProcesses) > 0 {
 		status.ApplyState = "stopping"
@@ -4606,13 +4613,6 @@ func applyEdgePSGIRuntimeInstall(ctx context.Context, identity edgeDeviceIdentit
 				return
 			}
 		}
-	}
-	artifact, err := downloadEdgeRuntimeArtifact(ctx, identity, assignment)
-	if err != nil {
-		status.ApplyState = "failed"
-		status.ApplyError = err.Error()
-		setEdgeRuntimeApplyStatus(status)
-		return
 	}
 	if err := installEdgePSGIRuntimeArtifact(artifact.Compressed, artifact.Parsed, assignment); err != nil {
 		status.ApplyState = "failed"

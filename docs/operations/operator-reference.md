@@ -181,6 +181,11 @@ routing runs.
 - Operators can enable local TOTP two-step verification from each admin UI's **User > Two-step verification** section.
   The QR code is generated in the browser from an `otpauth://` URI; no external MFA service is contacted.
 - Save recovery codes when they are shown. Once two-step verification is enabled, password login creates only a short-lived MFA challenge, and the browser session cookie is issued after a valid authenticator code or unused recovery code.
+- One MFA challenge accepts at most 5 code checks; after that, sign in with the password again.
+  After 10 consecutive wrong authenticator codes for one user, counted across challenges and the code checks for disabling MFA or regenerating recovery codes, authenticator codes are refused for 15 minutes with `429` and `Retry-After`, and one `mfa_locked` row is written to `admin_auth_audit`.
+  Unused recovery codes are still accepted during the lock, and a successful code resets the count.
+  The limits are kept in the database and apply whether or not `admin.rate_limit` is enabled.
+- Anyone who knows the password can trigger the lock. Treat an `mfa_locked` row as a sign that someone else knows the password, and change it.
 - If the authenticator app and all recovery codes are lost, shell access can disable MFA for one user:
   `WAF_CONFIG_FILE=conf/config.json ./bin/tukuyomi admin-mfa disable --username admin --reason "lost authenticator"`.
   For Center, select the Center bootstrap config, for example `conf/config.center.json`.
@@ -713,7 +718,7 @@ Key ideas:
 - `admin.external_mode`: `deny_external`, `api_only_external`, `full_external`
 - `admin.trusted_cidrs` controls trusted peers
 - `admin.trust_forwarded_for=true` is honored only when the direct peer is already trusted
-- `admin.rate_limit` adds a dedicated admin throttle
+- `admin.rate_limit` adds a dedicated admin throttle. Buckets are keyed by the connecting address only (the client address when PROXY protocol is enabled), so clients behind one HTTP proxy, and API tokens used from one address, share a bucket. It is disabled by default; the MFA attempt limits do not depend on it
 
 ### Observability
 

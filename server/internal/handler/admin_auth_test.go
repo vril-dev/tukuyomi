@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1017,4 +1018,333 @@ func findCookie(cookies []*http.Cookie, name string) *http.Cookie {
 		}
 	}
 	return nil
+}
+
+func TestAdminMFAVerifyEndsChallengeAfterFiveCodeChecks(t *testing.T) {
+	r, store, user, secret, _ := setupAdminMFAUserForTest(t)
+
+	challenge := postAdminMFALoginForTest(t, r)
+	for i := 0; i < adminMFAChallengeMaxAttempts; i++ {
+		res := postAdminMFAVerifyForTest(r, challenge, wrongAdminTOTPCodeForTest(t, secret))
+		if res.Code != http.StatusUnauthorized {
+			t.Fatalf("wrong code %d status=%d want=%d body=%s", i+1, res.Code, http.StatusUnauthorized, res.Body.String())
+		}
+	}
+	res := postAdminMFAVerifyForTest(r, challenge, currentAdminTOTPCodeForTest(t, secret))
+	if res.Code != http.StatusForbidden || !strings.Contains(res.Body.String(), "mfa challenge is invalid or expired") {
+		t.Fatalf("correct code after %d checks status=%d body=%s want 403 invalid or expired", adminMFAChallengeMaxAttempts, res.Code, res.Body.String())
+	}
+
+	res = postAdminMFAVerifyForTest(r, postAdminMFALoginForTest(t, r), currentAdminTOTPCodeForTest(t, secret))
+	if res.Code != http.StatusOK {
+		t.Fatalf("new challenge status=%d want=%d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if failed, lockedUntil := adminMFALockStateForTest(t, store, user.UserID); failed != 0 || lockedUntil != 0 {
+		t.Fatalf("after success failed_attempts=%d locked_until_unix=%d want 0 0", failed, lockedUntil)
+	}
+}
+
+func TestAdminMFAVerifyLocksAuthenticatorCodesAcrossChallenges(t *testing.T) {
+	r, store, user, secret, recoveryCodes := setupAdminMFAUserForTest(t)
+
+	failAdminMFAUntilLockedForTest(t, r, secret)
+	if got := countAdminAuthAuditForTest(t, store, adminAuthAuditEventMFALocked); got != 1 {
+		t.Fatalf("mfa_locked audit count=%d want 1", got)
+	}
+
+	challenge := postAdminMFALoginForTest(t, r)
+	res := postAdminMFAVerifyForTest(r, challenge, currentAdminTOTPCodeForTest(t, secret))
+	if res.Code != http.StatusTooManyRequests {
+		t.Fatalf("correct code while locked status=%d want=%d body=%s", res.Code, http.StatusTooManyRequests, res.Body.String())
+	}
+	if got := countAdminAuthAuditForTest(t, store, adminAuthAuditEventMFALocked); got != 1 {
+		t.Fatalf("mfa_locked audit count while locked=%d want 1", got)
+	}
+
+	res = postAdminMFAVerifyForTest(r, challenge, recoveryCodes[0])
+	if res.Code != http.StatusOK {
+		t.Fatalf("recovery code while locked status=%d want=%d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if failed, lockedUntil := adminMFALockStateForTest(t, store, user.UserID); failed != 0 || lockedUntil != 0 {
+		t.Fatalf("after recovery code failed_attempts=%d locked_until_unix=%d want 0 0", failed, lockedUntil)
+	}
+
+	failAdminMFAUntilLockedForTest(t, r, secret)
+	if _, err := store.exec(`UPDATE admin_mfa_totp SET locked_until_unix = ? WHERE user_id = ?`, time.Now().UTC().Unix()-1, user.UserID); err != nil {
+		t.Fatalf("end lock: %v", err)
+	}
+	res = postAdminMFAVerifyForTest(r, postAdminMFALoginForTest(t, r), currentAdminTOTPCodeForTest(t, secret))
+	if res.Code != http.StatusOK {
+		t.Fatalf("correct code after the lock ended status=%d want=%d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+}
+
+func TestAdminMFAVerifyParallelWrongCodesStopAtTheUserLimit(t *testing.T) {
+	r, store, user, secret, _ := setupAdminMFAUserForTest(t)
+
+	const challenges = 6
+	tokens := make([]string, 0, challenges)
+	for i := 0; i < challenges; i++ {
+		tokens = append(tokens, postAdminMFALoginForTest(t, r))
+	}
+	wrong := wrongAdminTOTPCodeForTest(t, secret)
+	codes := make(chan int, challenges*adminMFAChallengeMaxAttempts)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, token := range tokens {
+		for i := 0; i < adminMFAChallengeMaxAttempts; i++ {
+			wg.Add(1)
+			go func(token string) {
+				defer wg.Done()
+				<-start
+				codes <- postAdminMFAVerifyForTest(r, token, wrong).Code
+			}(token)
+		}
+	}
+	close(start)
+	wg.Wait()
+	close(codes)
+
+	counts := map[int]int{}
+	for code := range codes {
+		counts[code]++
+	}
+	if counts[http.StatusUnauthorized] > adminMFAMaxFailedAttempts-1 {
+		t.Fatalf("checked wrong codes=%d want at most %d (statuses=%v)", counts[http.StatusUnauthorized], adminMFAMaxFailedAttempts-1, counts)
+	}
+	if counts[http.StatusUnauthorized]+counts[http.StatusTooManyRequests] != challenges*adminMFAChallengeMaxAttempts {
+		t.Fatalf("unexpected statuses=%v", counts)
+	}
+	if got := countAdminAuthAuditForTest(t, store, adminAuthAuditEventMFALocked); got != 1 {
+		t.Fatalf("mfa_locked audit count=%d want 1", got)
+	}
+	if _, lockedUntil := adminMFALockStateForTest(t, store, user.UserID); lockedUntil <= time.Now().UTC().Unix() {
+		t.Fatalf("locked_until_unix=%d want a lock in the future", lockedUntil)
+	}
+}
+
+func TestAdminMFADisableWithWrongCodesCountsTowardTheLock(t *testing.T) {
+	r, store, user, secret, _ := setupAdminMFAUserForTest(t)
+	sessionCookie, csrfCookie := postAdminMFALoginWithCodeForTest(t, r, secret)
+
+	wrong := wrongAdminTOTPCodeForTest(t, secret)
+	var res *httptest.ResponseRecorder
+	for i := 0; i < adminMFAMaxFailedAttempts; i++ {
+		body, _ := json.Marshal(map[string]string{
+			"current_password": "correct horse battery staple",
+			"code":             wrong,
+		})
+		req := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/mfa/disable", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(adminauth.CSRFHeaderName, csrfCookie.Value)
+		req.AddCookie(sessionCookie)
+		req.AddCookie(csrfCookie)
+		res = httptest.NewRecorder()
+		r.ServeHTTP(res, req)
+		if i < adminMFAMaxFailedAttempts-1 && res.Code != http.StatusForbidden {
+			t.Fatalf("wrong disable code %d status=%d want=%d body=%s", i+1, res.Code, http.StatusForbidden, res.Body.String())
+		}
+	}
+	if res.Code != http.StatusTooManyRequests || res.Header().Get("Retry-After") == "" {
+		t.Fatalf("last wrong disable code status=%d retry-after=%q want 429 with Retry-After body=%s", res.Code, res.Header().Get("Retry-After"), res.Body.String())
+	}
+	if got := countAdminAuthAuditForTest(t, store, adminAuthAuditEventMFALocked); got != 1 {
+		t.Fatalf("mfa_locked audit count=%d want 1", got)
+	}
+	if enabled, err := store.adminMFAEnabled(user.UserID); err != nil || !enabled {
+		t.Fatalf("mfa enabled=%v err=%v want still enabled", enabled, err)
+	}
+	verify := postAdminMFAVerifyForTest(r, postAdminMFALoginForTest(t, r), currentAdminTOTPCodeForTest(t, secret))
+	if verify.Code != http.StatusTooManyRequests {
+		t.Fatalf("login verify after disable failures status=%d want=%d body=%s", verify.Code, http.StatusTooManyRequests, verify.Body.String())
+	}
+}
+
+func TestAdminMFAEmergencyDisableAndEnableAgainClearTheLock(t *testing.T) {
+	r, store, user, secret, _ := setupAdminMFAUserForTest(t)
+	failAdminMFAUntilLockedForTest(t, r, secret)
+
+	if _, err := DisableAdminMFAForUser(AdminMFAEmergencyDisableRequest{Username: user.Username, Reason: "locked out"}); err != nil {
+		t.Fatalf("DisableAdminMFAForUser: %v", err)
+	}
+	now := time.Now().UTC()
+	setup, err := store.createAdminMFASetup(user, now)
+	if err != nil {
+		t.Fatalf("create mfa setup: %v", err)
+	}
+	code, _, err := adminauth.TOTPCode(setup.Secret, now)
+	if err != nil {
+		t.Fatalf("TOTPCode: %v", err)
+	}
+	if _, err := store.enableAdminMFAFromSetup(user.UserID, setup.SetupID, code, now); err != nil {
+		t.Fatalf("enable mfa again: %v", err)
+	}
+	if failed, lockedUntil := adminMFALockStateForTest(t, store, user.UserID); failed != 0 || lockedUntil != 0 {
+		t.Fatalf("after enabling again failed_attempts=%d locked_until_unix=%d want 0 0", failed, lockedUntil)
+	}
+	res := postAdminMFAVerifyForTest(r, postAdminMFALoginForTest(t, r), currentAdminTOTPCodeForTest(t, setup.Secret))
+	if res.Code != http.StatusOK {
+		t.Fatalf("verify after enabling again status=%d want=%d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+}
+
+func TestUpsertAdminMFATOTPStatementResetsAttemptLimits(t *testing.T) {
+	for _, driver := range []string{logStatsDBDriverSQLite, logStatsDBDriverMySQL, logStatsDBDriverPostgres} {
+		stmt := (&wafEventStore{dbDriver: driver}).upsertAdminMFATOTPStatement()
+		if !strings.Contains(stmt, "failed_attempts = 0") || !strings.Contains(stmt, "locked_until_unix = 0") {
+			t.Fatalf("driver %s upsert does not reset the attempt limits:\n%s", driver, stmt)
+		}
+	}
+}
+
+// setupAdminMFAUserForTest creates an owner with MFA enabled and the admin
+// rate limiter disabled, so only the MFA attempt limits apply.
+func setupAdminMFAUserForTest(t *testing.T) (*gin.Engine, *wafEventStore, adminUserRecord, string, []string) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	restore := saveAdminAuthConfig()
+	t.Cleanup(restore)
+	config.APIBasePath = "/tukuyomi-api"
+	config.APIAuthDisable = false
+	config.AdminSessionSecret = "session-secret-123456"
+	config.AdminSessionTTL = time.Hour
+	allowAdminGuardsForTest(t)
+
+	store := initConfigDBStoreForTest(t)
+	now := time.Now().UTC()
+	passwordHash, err := adminauth.HashPassword("correct horse battery staple")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	user, err := store.createAdminUser("admin", "admin@example.test", adminauth.AdminRoleOwner, passwordHash, false, now)
+	if err != nil {
+		t.Fatalf("create admin user: %v", err)
+	}
+	setup, err := store.createAdminMFASetup(user, now)
+	if err != nil {
+		t.Fatalf("create mfa setup: %v", err)
+	}
+	code, _, err := adminauth.TOTPCode(setup.Secret, now)
+	if err != nil {
+		t.Fatalf("TOTPCode: %v", err)
+	}
+	recoveryCodes, err := store.enableAdminMFAFromSetup(user.UserID, setup.SetupID, code, now)
+	if err != nil {
+		t.Fatalf("enable mfa: %v", err)
+	}
+	r := gin.New()
+	registerAdminAuthManagementRoutesForTest(r)
+	return r, store, user, setup.Secret, recoveryCodes
+}
+
+func postAdminMFALoginForTest(t *testing.T, r *gin.Engine) string {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{
+		"identifier": "admin",
+		"password":   "correct horse battery staple",
+	})
+	req := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, req)
+	var challenge struct {
+		MFARequired    bool   `json:"mfa_required"`
+		ChallengeToken string `json:"challenge_token"`
+	}
+	if res.Code != http.StatusOK || json.Unmarshal(res.Body.Bytes(), &challenge) != nil || !challenge.MFARequired || challenge.ChallengeToken == "" {
+		t.Fatalf("mfa login status=%d body=%s want an mfa challenge", res.Code, res.Body.String())
+	}
+	return challenge.ChallengeToken
+}
+
+func postAdminMFAVerifyForTest(r *gin.Engine, challengeToken string, code string) *httptest.ResponseRecorder {
+	body, _ := json.Marshal(map[string]string{
+		"challenge_token": challengeToken,
+		"code":            code,
+	})
+	req := httptest.NewRequest(http.MethodPost, config.APIBasePath+"/auth/mfa/verify", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, req)
+	return res
+}
+
+func postAdminMFALoginWithCodeForTest(t *testing.T, r *gin.Engine, secret string) (*http.Cookie, *http.Cookie) {
+	t.Helper()
+	res := postAdminMFAVerifyForTest(r, postAdminMFALoginForTest(t, r), currentAdminTOTPCodeForTest(t, secret))
+	if res.Code != http.StatusOK {
+		t.Fatalf("mfa verify status=%d want=%d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	sessionCookie := findCookie(res.Result().Cookies(), adminauth.SessionCookieName)
+	csrfCookie := findCookie(res.Result().Cookies(), adminauth.CSRFCookieName)
+	if sessionCookie == nil || csrfCookie == nil {
+		t.Fatalf("expected session and csrf cookies, got=%v", res.Result().Cookies())
+	}
+	return sessionCookie, csrfCookie
+}
+
+// failAdminMFAUntilLockedForTest sends wrong codes over two challenges until
+// the user limit is reached and checks that the last one starts the lock.
+func failAdminMFAUntilLockedForTest(t *testing.T, r *gin.Engine, secret string) {
+	t.Helper()
+	wrong := wrongAdminTOTPCodeForTest(t, secret)
+	var challenge string
+	for i := 0; i < adminMFAMaxFailedAttempts; i++ {
+		if i%adminMFAChallengeMaxAttempts == 0 {
+			challenge = postAdminMFALoginForTest(t, r)
+		}
+		res := postAdminMFAVerifyForTest(r, challenge, wrong)
+		if i < adminMFAMaxFailedAttempts-1 {
+			if res.Code != http.StatusUnauthorized {
+				t.Fatalf("wrong code %d status=%d want=%d body=%s", i+1, res.Code, http.StatusUnauthorized, res.Body.String())
+			}
+			continue
+		}
+		retryAfter, err := strconv.Atoi(res.Header().Get("Retry-After"))
+		if res.Code != http.StatusTooManyRequests || err != nil || retryAfter < 1 || retryAfter > int(adminMFALockDuration/time.Second) {
+			t.Fatalf("wrong code %d status=%d retry-after=%q body=%s want 429 within the lock", i+1, res.Code, res.Header().Get("Retry-After"), res.Body.String())
+		}
+		if !strings.Contains(res.Body.String(), "too many failed mfa attempts") {
+			t.Fatalf("lock body=%s", res.Body.String())
+		}
+	}
+}
+
+func currentAdminTOTPCodeForTest(t *testing.T, secret string) string {
+	t.Helper()
+	code, _, err := adminauth.TOTPCode(secret, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("TOTPCode: %v", err)
+	}
+	return code
+}
+
+// wrongAdminTOTPCodeForTest returns a six-digit code that does not match any
+// step the server could accept around now.
+func wrongAdminTOTPCodeForTest(t *testing.T, secret string) string {
+	t.Helper()
+	now := time.Now().UTC()
+	valid := map[string]bool{}
+	for step := -2; step <= 2; step++ {
+		code, _, err := adminauth.TOTPCode(secret, now.Add(time.Duration(step)*time.Duration(adminauth.TOTPPeriodSeconds)*time.Second))
+		if err != nil {
+			t.Fatalf("TOTPCode: %v", err)
+		}
+		valid[code] = true
+	}
+	for candidate := 0; ; candidate++ {
+		code := strconv.Itoa(1000000 + candidate)[1:]
+		if !valid[code] {
+			return code
+		}
+	}
+}
+
+func adminMFALockStateForTest(t *testing.T, store *wafEventStore, userID int64) (int64, int64) {
+	t.Helper()
+	var failed, lockedUntil int64
+	if err := store.queryRow(`SELECT failed_attempts, locked_until_unix FROM admin_mfa_totp WHERE user_id = ?`, userID).Scan(&failed, &lockedUntil); err != nil {
+		t.Fatalf("load mfa lock state: %v", err)
+	}
+	return failed, lockedUntil
 }

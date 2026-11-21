@@ -49,3 +49,42 @@ func TestResolveClientIPUsesRemoteAddrWhenProxyProtocolAlreadyRewroteConnection(
 		t.Fatalf("client ip=%s want=198.51.100.10", ip)
 	}
 }
+
+func TestRateLimitSharesBucketAcrossAuthorizationValues(t *testing.T) {
+	prevEnabled := config.AdminRateLimitEnabled
+	prevRPS := config.AdminRateLimitRPS
+	prevBurst := config.AdminRateLimitBurst
+	prevStatus := config.AdminRateLimitStatusCode
+	prevRetryAfter := config.AdminRateLimitRetryAfter
+	defer func() {
+		config.AdminRateLimitEnabled = prevEnabled
+		config.AdminRateLimitRPS = prevRPS
+		config.AdminRateLimitBurst = prevBurst
+		config.AdminRateLimitStatusCode = prevStatus
+		config.AdminRateLimitRetryAfter = prevRetryAfter
+	}()
+	config.AdminRateLimitEnabled = true
+	config.AdminRateLimitRPS = 1
+	config.AdminRateLimitBurst = 1
+	config.AdminRateLimitStatusCode = 429
+	config.AdminRateLimitRetryAfter = 1
+
+	limiter := newRateLimiter()
+	for i, authorization := range []string{"Bearer first", "Bearer second", ""} {
+		req := httptest.NewRequest("POST", "/tukuyomi-api/auth/mfa/verify", nil)
+		req.RemoteAddr = "203.0.113.10:12345"
+		if authorization != "" {
+			req.Header.Set("Authorization", authorization)
+		}
+		decision := limiter.Evaluate(req)
+		if wantAllowed := i == 0; decision.Allowed != wantAllowed {
+			t.Fatalf("request %d with Authorization %q allowed=%v want %v", i+1, authorization, decision.Allowed, wantAllowed)
+		}
+	}
+
+	other := httptest.NewRequest("POST", "/tukuyomi-api/auth/mfa/verify", nil)
+	other.RemoteAddr = "203.0.113.11:12345"
+	if !limiter.Evaluate(other).Allowed {
+		t.Fatal("another peer address should have its own bucket")
+	}
+}

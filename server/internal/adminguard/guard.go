@@ -1,8 +1,6 @@
 package adminguard
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"net/http"
@@ -318,16 +316,14 @@ func (r *rateLimiter) pruneLocked(cutoff time.Time) {
 	}
 }
 
+// rateLimitKey keys the admin bucket by the TCP peer only. Request headers
+// are chosen by the client, so a header in the key would give a client a new
+// bucket for every value it sends.
 func rateLimitKey(r *http.Request) string {
 	if r == nil {
 		return "unknown"
 	}
-	parts := []string{remoteIP(r)}
-	if authorization := strings.TrimSpace(r.Header.Get("Authorization")); authorization != "" {
-		sum := sha256.Sum256([]byte(authorization))
-		parts = append(parts, hex.EncodeToString(sum[:8]))
-	}
-	return strings.Join(parts, "|")
+	return remoteIP(r)
 }
 
 func remoteIP(r *http.Request) string {

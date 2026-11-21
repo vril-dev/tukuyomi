@@ -207,6 +207,18 @@ run it, prepare an existing bucket and set
   or regenerated. After MFA is enabled, password login only creates a
   short-lived challenge; the browser session cookie is issued after a
   valid authenticator code or unused recovery code.
+- One MFA challenge accepts at most 5 code checks; after that, sign in
+  with the password again. After 10 consecutive wrong authenticator codes
+  for one user, counted across challenges and the code checks for
+  disabling MFA or regenerating recovery codes, authenticator codes are
+  refused for 15 minutes with `429` and `Retry-After`, and one
+  `mfa_locked` row is written to `admin_auth_audit`. Unused recovery codes
+  are still accepted during the lock, and a successful code resets the
+  count. The limits are kept in the database and apply whether or not
+  `admin.rate_limit` is enabled.
+- Anyone who knows the password can trigger the lock. Treat an
+  `mfa_locked` row as a sign that someone else knows the password, and
+  change it.
 - If the authenticator app and all recovery codes are lost, a shell
   operator can disable MFA for one user:
   `WAF_CONFIG_FILE=conf/config.json ./bin/tukuyomi admin-mfa disable --username admin --reason "lost authenticator"`.
@@ -628,7 +640,10 @@ groups:
 - `admin.trust_forwarded_for=true` only applies when the direct
   peer is trusted.
 - `admin.rate_limit` adds throttling specifically for the admin
-  surface.
+  surface. Buckets are keyed by the connecting address only (the client
+  address when PROXY protocol is enabled), so clients behind one HTTP
+  proxy, and API tokens used from one address, share a bucket. It is
+  disabled by default; the MFA attempt limits do not depend on it.
 
 ### A.5.7 Observability
 

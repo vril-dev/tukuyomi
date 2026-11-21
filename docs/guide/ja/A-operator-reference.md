@@ -197,6 +197,15 @@ MinIO integration test は通常回帰では skip されます。実行する場
   その場で保存する。有効化後は password login だけでは短時間の
   MFA challenge までしか発行せず、認証コードまたは未使用のリカバリーコードが
   通った後にブラウザーセッションクッキーを発行する
+- 1 つの MFA challenge で確認するコードは 5 回まで。超えたら password
+  login からやり直す。同じ user で認証アプリのコードを連続 10 回間違えると、
+  15 分間は認証コードを受け付けず、`429` と `Retry-After` を返す。回数は、
+  複数の challenge と、MFA の無効化やリカバリーコードの再生成でのコード確認を
+  合わせて数える。このとき `admin_auth_audit` に `mfa_locked` を 1 件記録する。
+  ロックの間も未使用のリカバリーコードは使え、コードが通ると回数は 0 に戻る。
+  上限は DB で数えるため、`admin.rate_limit` の有効・無効にかかわらず働く
+- このロックは、パスワードを知っている人なら誰でも起こせる。`mfa_locked` が
+  記録されたら、パスワードが第三者に知られたものとして変更する
 - 認証アプリとすべてのリカバリーコードを失った場合は、シェルアクセスで
   対象ユーザーの MFA だけを無効化できる:
   `WAF_CONFIG_FILE=conf/config.json ./bin/tukuyomi admin-mfa disable --username admin --reason "lost authenticator"`。
@@ -590,7 +599,11 @@ endpoint 群:
   `full_external`
 - `admin.trusted_cidrs` で trusted peer を定義
 - `admin.trust_forwarded_for=true` は direct peer が trusted のときだけ有効
-- `admin.rate_limit` で管理面専用 throttle を追加
+- `admin.rate_limit` で管理面専用 throttle を追加。bucket は接続元の
+  アドレスだけで分ける（PROXY protocol 有効時は client のアドレス）。
+  同じ HTTP proxy の後ろの client や、同じアドレスから使う API token は
+  1 つの bucket を共有する。既定は無効で、MFA の試行回数の上限は
+  この設定に依存しない
 
 ### A.5.7　Observability
 

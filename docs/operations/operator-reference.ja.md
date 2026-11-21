@@ -168,6 +168,11 @@ TLS 証明書の選択は TLS ハンドシェイク時点で完了するため�
 - Gateway と Center の管理 UI は、ユーザー名／パスワードでのサインインと、DB ベースのセッションクッキーを使用します
 - operator は各管理 UI の **User > 2段階認証** から、認証アプリの TOTP による 2段階認証を有効化できます。QR コードは `otpauth://` URI からブラウザー内で生成され、外部 MFA サービスとは通信しません。
 - リカバリーコードは表示された時点で保存してください。2段階認証の有効化後は、パスワードでのサインインは短時間の MFA チャレンジだけを作成し、認証コードまたは未使用のリカバリーコードが通った後にブラウザーセッションクッキーを発行します。
+- 1 つの MFA チャレンジで確認するコードは 5 回までです。超えた場合は、パスワードからサインインし直してください。
+  同じユーザーで認証アプリのコードを連続 10 回間違えると、15 分間は認証コードを受け付けず、`429` と `Retry-After` を返します。回数は、複数のチャレンジと、MFA の無効化やリカバリーコードの再生成でのコード確認を合わせて数えます。このとき `admin_auth_audit` に `mfa_locked` を 1 件記録します。
+  ロックの間も、未使用のリカバリーコードは使えます。コードが通ると回数は 0 に戻ります。
+  これらの上限は DB で数えるため、`admin.rate_limit` の有効・無効にかかわらず働きます。
+- このロックは、パスワードを知っている人なら誰でも起こせます。`mfa_locked` が記録されたら、パスワードが第三者に知られたものとして変更してください。
 - 認証アプリとすべてのリカバリーコードを失った場合は、シェルアクセスで対象ユーザーの MFA だけを無効化できます:
   `WAF_CONFIG_FILE=conf/config.json ./bin/tukuyomi admin-mfa disable --username admin --reason "lost authenticator"`。
   Center の場合は `conf/config.center.json` など、Center 側の bootstrap config を指定してください。
@@ -682,7 +687,7 @@ curl -sS \
 - `admin.external_mode`: `deny_external`、`api_only_external`、`full_external`
 - `admin.trusted_cidrs` で信頼ピアを定義します
 - `admin.trust_forwarded_for=true` は、直接ピアが信頼対象である場合のみ有効です
-- `admin.rate_limit` で管理面専用のスロットルを追加できます
+- `admin.rate_limit` で管理面専用のスロットルを追加できます。バケットは接続元のアドレスだけで分けます（PROXY protocol を有効にした場合はクライアントのアドレス）。同じ HTTP プロキシの後ろのクライアントや、同じアドレスから使う API トークンは、1 つのバケットを共有します。既定では無効で、MFA の試行回数の上限はこの設定に依存しません
 
 ### オブザーバビリティ
 

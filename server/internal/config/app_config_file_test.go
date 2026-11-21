@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -453,6 +455,62 @@ func TestValidateAppWAFRequestBodyConfig(t *testing.T) {
 			err := validateAppConfigFile(cfg)
 			if err == nil || err.Error() != tc.want {
 				t.Fatalf("error=%v want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestAppForwardedClientIPConfig(t *testing.T) {
+	t.Run("defaults to off with X-Forwarded-For", func(t *testing.T) {
+		cfg := defaultAppConfigFile()
+		if cfg.Server.ForwardedClientIP.Enabled || cfg.Server.ForwardedClientIP.Header != "X-Forwarded-For" || len(cfg.Server.ForwardedClientIP.TrustedCIDRs) != 0 {
+			t.Fatalf("default forwarded_client_ip=%+v", cfg.Server.ForwardedClientIP)
+		}
+		if err := validateAppConfigFile(cfg); err != nil {
+			t.Fatalf("default config: %v", err)
+		}
+	})
+
+	t.Run("loads and applies the block", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		raw := `{"server":{"forwarded_client_ip":{"enabled":true,"header":" x-real-ip ","trusted_cidrs":[" 10.0.0.0/8 "]}}}`
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		cfg, err := loadAppConfigFile(path)
+		if err != nil {
+			t.Fatalf("loadAppConfigFile: %v", err)
+		}
+		got := cfg.Server.ForwardedClientIP
+		if !got.Enabled || got.Header != "X-Real-IP" || len(got.TrustedCIDRs) != 1 || got.TrustedCIDRs[0] != "10.0.0.0/8" {
+			t.Fatalf("forwarded_client_ip=%+v", got)
+		}
+		prevEnabled, prevHeader, prevCIDRs := ServerForwardedClientIPEnabled, ServerForwardedClientIPHeader, ServerForwardedClientIPTrustedCIDRs
+		defer func() {
+			ServerForwardedClientIPEnabled, ServerForwardedClientIPHeader, ServerForwardedClientIPTrustedCIDRs = prevEnabled, prevHeader, prevCIDRs
+		}()
+		applyAppConfig(cfg)
+		if !ServerForwardedClientIPEnabled || ServerForwardedClientIPHeader != "X-Real-IP" || len(ServerForwardedClientIPTrustedCIDRs) != 1 {
+			t.Fatalf("runtime enabled=%v header=%q cidrs=%v", ServerForwardedClientIPEnabled, ServerForwardedClientIPHeader, ServerForwardedClientIPTrustedCIDRs)
+		}
+	})
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*appForwardedClientIPConfig)
+		want   string
+	}{
+		{name: "enabled without trust list", mutate: func(c *appForwardedClientIPConfig) { c.Enabled = true }, want: "server.forwarded_client_ip.trusted_cidrs is required when enabled=true"},
+		{name: "invalid CIDR", mutate: func(c *appForwardedClientIPConfig) { c.TrustedCIDRs = []string{"10.0.0.0/33"} }, want: "server.forwarded_client_ip.trusted_cidrs[0] invalid CIDR"},
+		{name: "unsupported header", mutate: func(c *appForwardedClientIPConfig) { c.Header = "Forwarded" }, want: "server.forwarded_client_ip.header must be one of: X-Forwarded-For, X-Real-IP"},
+	} {
+		t.Run("rejects "+tc.name, func(t *testing.T) {
+			cfg := defaultAppConfigFile()
+			tc.mutate(&cfg.Server.ForwardedClientIP)
+			normalizeAppConfigFile(&cfg)
+			err := validateAppConfigFile(cfg)
+			if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+				t.Fatalf("error=%v want prefix %q", err, tc.want)
 			}
 		})
 	}

@@ -538,6 +538,55 @@ func TestPutSettingsListenerAdminSavesRequestBodyPolicy(t *testing.T) {
 	}
 }
 
+func TestPutSettingsListenerAdminSavesForwardedClientIP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cfgPath := writeSettingsConfigFixture(t)
+	restore := saveConfigFilePathForTest(t, cfgPath)
+	defer restore()
+	initSettingsDBStoreForTest(t)
+
+	put := func(forwarded settingsListenerAdminForwardedIPConfig) *httptest.ResponseRecorder {
+		t.Helper()
+		_, etag, _, err := loadSettingsAppConfig()
+		if err != nil {
+			t.Fatalf("read settings: %v", err)
+		}
+		next := createEmptySettingsTestConfig()
+		next.Server.ForwardedClientIP = forwarded
+		raw, _ := json.Marshal(settingsListenerAdminPutBody{Config: next})
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/tukuyomi-api/settings/listener-admin", bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("If-Match", etag)
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = req
+		PutSettingsListenerAdmin(c)
+		return rec
+	}
+
+	rec := put(settingsListenerAdminForwardedIPConfig{Enabled: true, Header: "x-real-ip", TrustedCIDRs: []string{" 10.0.0.0/16 "}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	saved, err := loadSettingsAppConfigOnly()
+	if err != nil {
+		t.Fatalf("reload saved config: %v", err)
+	}
+	got := saved.Server.ForwardedClientIP
+	if !got.Enabled || got.Header != "X-Real-IP" || len(got.TrustedCIDRs) != 1 || got.TrustedCIDRs[0] != "10.0.0.0/16" {
+		t.Fatalf("saved server.forwarded_client_ip=%+v", got)
+	}
+	if view := buildSettingsListenerAdminConfig(saved).Server.ForwardedClientIP; !view.Enabled || view.Header != "X-Real-IP" || len(view.TrustedCIDRs) != 1 {
+		t.Fatalf("settings view forwarded_client_ip=%+v", view)
+	}
+
+	rec = put(settingsListenerAdminForwardedIPConfig{Enabled: true, Header: "X-Forwarded-For"})
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "server.forwarded_client_ip.trusted_cidrs is required") {
+		t.Fatalf("enabled without CIDRs status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 	return settingsListenerAdminConfig{
 		Server: settingsListenerAdminServerConfig{

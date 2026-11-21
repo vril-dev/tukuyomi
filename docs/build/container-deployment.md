@@ -69,6 +69,7 @@ Operational constraints:
 - keep the writable runtime paths shared between `coraza` and
   `scheduled-task-runner`
 - expose only the `coraza` container to the platform ingress or load balancer
+- when the ingress or load balancer forwards HTTP without PROXY protocol (for example an ALB), set `server.forwarded_client_ip` with its address range so that rate limits and bot defense see each client; see "Client Address Behind Proxies" in the operator reference
 
 ## Split Public/Admin Listeners
 

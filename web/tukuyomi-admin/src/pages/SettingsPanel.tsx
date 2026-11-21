@@ -44,6 +44,11 @@ type ListenerAdminConfig = {
       enabled: boolean;
       trusted_cidrs: string[];
     };
+    forwarded_client_ip: {
+      enabled: boolean;
+      header: string;
+      trusted_cidrs: string[];
+    };
     tls: {
       enabled: boolean;
       cert_file: string;
@@ -224,6 +229,9 @@ type ListenerAdminRuntime = {
   server_http3_alt_svc?: string;
   server_proxy_protocol_enabled?: boolean;
   server_proxy_protocol_trusted_cidrs?: string[];
+  server_forwarded_client_ip_enabled?: boolean;
+  server_forwarded_client_ip_header?: string;
+  server_forwarded_client_ip_trusted_cidrs?: string[];
   admin_external_mode?: string;
   admin_trusted_cidrs?: string[];
   admin_trust_forwarded_for?: boolean;
@@ -321,6 +329,11 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
       queued_proxy_request_timeout_ms: 100,
       proxy_protocol: {
         enabled: false,
+        trusted_cidrs: [],
+      },
+      forwarded_client_ip: {
+        enabled: false,
+        header: "X-Forwarded-For",
         trusted_cidrs: [],
       },
       tls: {
@@ -514,6 +527,15 @@ function normalizeListenerAdminConfig(
           value.server?.proxy_protocol?.trusted_cidrs,
         )
           ? [...value.server.proxy_protocol.trusted_cidrs]
+          : [],
+      },
+      forwarded_client_ip: {
+        ...base.server.forwarded_client_ip,
+        ...value.server?.forwarded_client_ip,
+        trusted_cidrs: Array.isArray(
+          value.server?.forwarded_client_ip?.trusted_cidrs,
+        )
+          ? [...value.server.forwarded_client_ip.trusted_cidrs]
           : [],
       },
       tls: {
@@ -1247,6 +1269,76 @@ export default function SettingsPanel() {
                   <div className="mt-1 text-xs text-neutral-500">
                     {tx(
                       "Trusted peers may supply HAProxy PROXY headers. The public HTTP redirect listener follows this same trust list.",
+                    )}
+                  </div>
+                </Field>
+
+                <label className="flex items-center gap-2 text-xs text-neutral-700">
+                  <input
+                    type="checkbox"
+                    checked={listenerAdminConfig.server.forwarded_client_ip.enabled}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          forwarded_client_ip: {
+                            ...current.server.forwarded_client_ip,
+                            enabled: e.target.checked,
+                          },
+                        },
+                      }))
+                    }
+                  />
+                  {tx("Use the client address from trusted proxies")}
+                </label>
+
+                <Field label={tx("Forwarded Client IP Header")}>
+                  <select
+                    value={listenerAdminConfig.server.forwarded_client_ip.header || "X-Forwarded-For"}
+                    onChange={(e) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          forwarded_client_ip: {
+                            ...current.server.forwarded_client_ip,
+                            header: e.target.value === "X-Real-IP" ? "X-Real-IP" : "X-Forwarded-For",
+                          },
+                        },
+                      }))
+                    }
+                    className="w-full rounded border border-neutral-200 bg-white"
+                  >
+                    <option value="X-Forwarded-For">X-Forwarded-For</option>
+                    <option value="X-Real-IP">X-Real-IP</option>
+                  </select>
+                </Field>
+
+                <Field label={tx("Trusted Proxy CIDRs (one per line)")}>
+                  <ParsedTextArea
+                    value={listenerAdminConfig.server.forwarded_client_ip.trusted_cidrs}
+                    onValueChange={(next) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: {
+                          ...current.server,
+                          forwarded_client_ip: {
+                            ...current.server.forwarded_client_ip,
+                            trusted_cidrs: next,
+                          },
+                        },
+                      }))
+                    }
+                    serialize={stringListToMultiline}
+                    parse={multilineToStringList}
+                    equals={stringListEqual}
+                    className="w-full rounded border border-neutral-200 bg-white"
+                    rows={4}
+                  />
+                  <div className="mt-1 text-xs text-neutral-500">
+                    {tx(
+                      "Requests from these proxies name the client in the selected header, read from the right, and may set X-Country-Code. Headers from other peers are ignored. Route source access still uses the connection address.",
                     )}
                   </div>
                 </Field>
@@ -2983,6 +3075,10 @@ export default function SettingsPanel() {
                   <RuntimeMetric
                     label={tx("Current Public PROXY Protocol")}
                     value={String(runtime.server_proxy_protocol_enabled ?? "-")}
+                  />
+                  <RuntimeMetric
+                    label={tx("Current Forwarded Client IP")}
+                    value={String(runtime.server_forwarded_client_ip_enabled ?? "-")}
                   />
                   <RuntimeMetric
                     label={tx("Current Admin PROXY Protocol")}

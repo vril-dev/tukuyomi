@@ -41,6 +41,12 @@ type settingsListenerAdminProxyProtocolConfig struct {
 	TrustedCIDRs []string `json:"trusted_cidrs"`
 }
 
+type settingsListenerAdminForwardedIPConfig struct {
+	Enabled      bool     `json:"enabled"`
+	Header       string   `json:"header"`
+	TrustedCIDRs []string `json:"trusted_cidrs"`
+}
+
 type settingsListenerAdminPublicListenerConfig struct {
 	Name         string `json:"name"`
 	ListenAddr   string `json:"listen_addr"`
@@ -66,6 +72,7 @@ type settingsListenerAdminServerConfig struct {
 	MaxQueuedProxyRequests      int                                         `json:"max_queued_proxy_requests"`
 	QueuedProxyRequestTimeoutMS int                                         `json:"queued_proxy_request_timeout_ms"`
 	ProxyProtocol               settingsListenerAdminProxyProtocolConfig    `json:"proxy_protocol"`
+	ForwardedClientIP           settingsListenerAdminForwardedIPConfig      `json:"forwarded_client_ip"`
 	TLS                         settingsListenerAdminServerTLSConfig        `json:"tls"`
 	HTTP2                       settingsListenerAdminServerHTTP2Config      `json:"http2"`
 	HTTP3                       settingsListenerAdminServerHTTP3Config      `json:"http3"`
@@ -327,6 +334,9 @@ type settingsListenerAdminRuntimeStatus struct {
 	ServerHTTP3AltSvc                  string                                      `json:"server_http3_alt_svc"`
 	ServerProxyProtocolEnabled         bool                                        `json:"server_proxy_protocol_enabled"`
 	ServerProxyProtocolTrustedCIDRs    []string                                    `json:"server_proxy_protocol_trusted_cidrs"`
+	ServerForwardedClientIPEnabled     bool                                        `json:"server_forwarded_client_ip_enabled"`
+	ServerForwardedClientIPHeader      string                                      `json:"server_forwarded_client_ip_header"`
+	ServerForwardedClientIPCIDRs       []string                                    `json:"server_forwarded_client_ip_trusted_cidrs"`
 	AdminExternalMode                  string                                      `json:"admin_external_mode"`
 	AdminTrustedCIDRs                  []string                                    `json:"admin_trusted_cidrs"`
 	AdminTrustForwardedFor             bool                                        `json:"admin_trust_forwarded_for"`
@@ -614,6 +624,11 @@ func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListener
 				Enabled:      cfg.Server.ProxyProtocol.Enabled,
 				TrustedCIDRs: append([]string(nil), cfg.Server.ProxyProtocol.TrustedCIDRs...),
 			},
+			ForwardedClientIP: settingsListenerAdminForwardedIPConfig{
+				Enabled:      cfg.Server.ForwardedClientIP.Enabled,
+				Header:       cfg.Server.ForwardedClientIP.Header,
+				TrustedCIDRs: append([]string(nil), cfg.Server.ForwardedClientIP.TrustedCIDRs...),
+			},
 			TLS: settingsListenerAdminServerTLSConfig{
 				Enabled:          cfg.Server.TLS.Enabled,
 				CertFile:         cfg.Server.TLS.CertFile,
@@ -815,6 +830,9 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 	cfg.Server.QueuedProxyRequestTimeoutMS = next.Server.QueuedProxyRequestTimeoutMS
 	cfg.Server.ProxyProtocol.Enabled = next.Server.ProxyProtocol.Enabled
 	cfg.Server.ProxyProtocol.TrustedCIDRs = append([]string(nil), next.Server.ProxyProtocol.TrustedCIDRs...)
+	cfg.Server.ForwardedClientIP.Enabled = next.Server.ForwardedClientIP.Enabled
+	cfg.Server.ForwardedClientIP.Header = next.Server.ForwardedClientIP.Header
+	cfg.Server.ForwardedClientIP.TrustedCIDRs = append([]string(nil), next.Server.ForwardedClientIP.TrustedCIDRs...)
 	cfg.Server.TLS.Enabled = next.Server.TLS.Enabled
 	cfg.Server.TLS.CertFile = next.Server.TLS.CertFile
 	cfg.Server.TLS.KeyFile = next.Server.TLS.KeyFile
@@ -978,6 +996,9 @@ func buildSettingsListenerAdminRuntimeStatus() settingsListenerAdminRuntimeStatu
 		ServerHTTP3AltSvc:                  serverHTTP3Status.AltSvc,
 		ServerProxyProtocolEnabled:         config.ServerProxyProtocolEnabled,
 		ServerProxyProtocolTrustedCIDRs:    append([]string(nil), config.ServerProxyProtocolTrustedCIDRs...),
+		ServerForwardedClientIPEnabled:     config.ServerForwardedClientIPEnabled,
+		ServerForwardedClientIPHeader:      config.ServerForwardedClientIPHeader,
+		ServerForwardedClientIPCIDRs:       append([]string(nil), config.ServerForwardedClientIPTrustedCIDRs...),
 		AdminExternalMode:                  config.AdminExternalMode,
 		AdminTrustedCIDRs:                  append([]string(nil), config.AdminTrustedCIDRs...),
 		AdminTrustForwardedFor:             config.AdminTrustForwardedFor,

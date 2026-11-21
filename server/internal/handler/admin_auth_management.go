@@ -27,6 +27,7 @@ const (
 	adminAuthAuditEventMFARecoveryCodesRegenerated = "mfa_recovery_codes_regenerated"
 	adminAuthAuditEventMFADisabled                 = "mfa_disabled"
 	adminAuthAuditEventMFAEmergencyDisabled        = "mfa_emergency_disabled"
+	adminAuthAuditEventMFALocked                   = "mfa_locked"
 
 	adminMFAEmergencyActor = "cli"
 	maxAdminMFAReasonBytes = 512
@@ -760,6 +761,12 @@ func postAdminMFAVerify(c *gin.Context, cookieNames adminauth.CookieNames) {
 	}
 	now := time.Now().UTC()
 	principal, proofKind, ok, err := store.verifyAdminMFAChallenge(req.ChallengeToken, req.Code, now)
+	var lockErr *adminMFALockedError
+	if errors.As(err, &lockErr) {
+		clearAdminAuthCookiesWithNames(c, cookieNames)
+		writeAdminMFALocked(c, store, lockErr, string(adminauth.AuthKindSession), "", now)
+		return
+	}
 	if err != nil {
 		clearAdminAuthCookiesWithNames(c, cookieNames)
 		c.JSON(http.StatusForbidden, gin.H{"error": adminMFAErrorMessage(err)})
@@ -911,7 +918,7 @@ func PostAdminMFARecoveryCodesRegenerate(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "admin auth store is unavailable"})
 		return
 	}
-	proofKind, ok := verifyAdminMFASensitiveMutation(c, store, principal.UserID, req.CurrentPassword, req.Code)
+	proofKind, ok := verifyAdminMFASensitiveMutation(c, store, principal, req.CurrentPassword, req.Code)
 	if !ok {
 		return
 	}
@@ -950,7 +957,7 @@ func PostAdminMFADisable(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "admin auth store is unavailable"})
 		return
 	}
-	proofKind, ok := verifyAdminMFASensitiveMutation(c, store, principal.UserID, req.CurrentPassword, req.Code)
+	proofKind, ok := verifyAdminMFASensitiveMutation(c, store, principal, req.CurrentPassword, req.Code)
 	if !ok {
 		return
 	}
@@ -964,7 +971,8 @@ func PostAdminMFADisable(c *gin.Context) {
 	c.JSON(http.StatusOK, adminMFAStatusResponse{Enabled: false})
 }
 
-func verifyAdminMFASensitiveMutation(c *gin.Context, store *wafEventStore, userID int64, currentPassword string, code string) (string, bool) {
+func verifyAdminMFASensitiveMutation(c *gin.Context, store *wafEventStore, principal adminauth.Principal, currentPassword string, code string) (string, bool) {
+	userID := principal.UserID
 	if _, ok, err := store.verifyAdminCurrentPassword(userID, currentPassword); err != nil {
 		writeAdminCurrentPasswordCheckError(c, err)
 		return "", false
@@ -972,7 +980,14 @@ func verifyAdminMFASensitiveMutation(c *gin.Context, store *wafEventStore, userI
 		c.JSON(http.StatusForbidden, gin.H{"error": errAdminAuthCurrentPassword.Error()})
 		return "", false
 	}
-	if proofKind, ok, err := store.verifyAdminMFACode(userID, code, time.Now().UTC()); err != nil {
+	now := time.Now().UTC()
+	if proofKind, ok, err := store.verifyAdminMFACode(userID, code, now); err != nil {
+		var lockErr *adminMFALockedError
+		if errors.As(err, &lockErr) {
+			lockErr.User = adminUserRecord{UserID: principal.UserID, Username: principal.Username}
+			writeAdminMFALocked(c, store, lockErr, string(principal.AuthKind), principal.CredentialID, now)
+			return "", false
+		}
 		c.JSON(http.StatusForbidden, gin.H{"error": adminMFAErrorMessage(err)})
 		return "", false
 	} else if !ok || strings.TrimSpace(proofKind) == "" {
@@ -981,6 +996,23 @@ func verifyAdminMFASensitiveMutation(c *gin.Context, store *wafEventStore, userI
 	} else {
 		return proofKind, true
 	}
+}
+
+// writeAdminMFALocked answers a locked user with 429 and Retry-After, as the
+// admin rate limiter does, and records the start of the lock.
+func writeAdminMFALocked(c *gin.Context, store *wafEventStore, lockErr *adminMFALockedError, authKind string, credentialID string, now time.Time) {
+	if lockErr.Started {
+		recordAdminAuthAuditBestEffort(store, adminAuthAuditEventMFALocked, lockErr.User, authKind, credentialID, false, c.ClientIP(), c.Request.UserAgent(), map[string]any{
+			"failed_attempts": adminMFAMaxFailedAttempts,
+			"lock_seconds":    int(adminMFALockDuration / time.Second),
+		}, now)
+	}
+	retryAfter := int((lockErr.Until.Sub(now) + time.Second - 1) / time.Second)
+	if retryAfter < 1 {
+		retryAfter = 1
+	}
+	c.Header("Retry-After", strconv.Itoa(retryAfter))
+	c.JSON(http.StatusTooManyRequests, gin.H{"error": adminMFAErrorMessage(lockErr)})
 }
 
 func adminMFAStatusResponseForRecord(status adminMFAStatusRecord) adminMFAStatusResponse {
@@ -996,6 +1028,15 @@ const (
 	adminMFASetupTTL          = 10 * time.Minute
 	adminMFAChallengeTTL      = 5 * time.Minute
 	adminMFARecoveryCodeCount = 10
+
+	// adminMFAChallengeMaxAttempts limits the code checks for one login
+	// challenge. adminMFAMaxFailedAttempts limits consecutive failed
+	// authenticator codes for one user across challenges and the
+	// session-side checks; reaching it locks authenticator codes for
+	// adminMFALockDuration. Recovery codes stay accepted during a lock.
+	adminMFAChallengeMaxAttempts = 5
+	adminMFAMaxFailedAttempts    = 10
+	adminMFALockDuration         = 15 * time.Minute
 )
 
 var (
@@ -1004,7 +1045,24 @@ var (
 	errAdminMFAChallengeInvalid = errors.New("invalid mfa challenge")
 	errAdminMFASetupInvalid     = errors.New("invalid mfa setup")
 	errAdminMFACodeInvalid      = errors.New("invalid mfa code")
+	errAdminMFALocked           = errors.New("too many failed mfa attempts")
 )
+
+// adminMFALockedError reports that authenticator codes are locked for a user
+// until Until. Started is true for the call that started the lock.
+type adminMFALockedError struct {
+	User    adminUserRecord
+	Until   time.Time
+	Started bool
+}
+
+func (e *adminMFALockedError) Error() string {
+	return errAdminMFALocked.Error()
+}
+
+func (e *adminMFALockedError) Unwrap() error {
+	return errAdminMFALocked
+}
 
 type adminMFAStatusRecord struct {
 	Enabled                bool
@@ -1234,7 +1292,14 @@ func (s *wafEventStore) verifyAdminMFAChallenge(token string, code string, now t
 	if err != nil || !ok {
 		return adminauth.Principal{}, "", ok, err
 	}
+	if err := s.reserveAdminMFAChallengeAttempt(challenge.ChallengeID); err != nil {
+		return adminauth.Principal{}, "", false, err
+	}
 	proofKind, ok, err := s.verifyAdminMFACode(challenge.User.UserID, code, now)
+	var lockErr *adminMFALockedError
+	if errors.As(err, &lockErr) {
+		lockErr.User = challenge.User
+	}
 	if err != nil || !ok {
 		return adminauth.Principal{}, "", ok, err
 	}
@@ -1371,14 +1436,142 @@ func (s *wafEventStore) loadAdminMFAChallenge(token string, now time.Time) (admi
 	return rec, true, nil
 }
 
+// verifyAdminMFACode checks an authenticator code or a recovery code. Every
+// authenticator-shaped check holds a per-user attempt first, so parallel
+// requests cannot check more than adminMFAMaxFailedAttempts codes before the
+// lock starts. Recovery codes are 80-bit random values and are checked
+// without the per-user count, so a locked user can still sign in with one.
 func (s *wafEventStore) verifyAdminMFACode(userID int64, code string, now time.Time) (string, bool, error) {
+	if _, err := adminauth.NormalizeRecoveryCode(code); err == nil {
+		ok, err := s.consumeAdminMFARecoveryCode(userID, code, now)
+		if err != nil || !ok {
+			return "", ok, err
+		}
+		if err := s.resetAdminMFAFailedAttempts(userID, now); err != nil {
+			return "", false, err
+		}
+		return "recovery_code", true, nil
+	}
+	reserved, err := s.reserveAdminMFAUserAttempt(userID, now)
+	if err != nil || !reserved {
+		return "", false, err
+	}
 	if proofKind, ok, err := s.verifyAdminMFATOTP(userID, code, now); err != nil || ok {
 		return proofKind, ok, err
 	}
-	if ok, err := s.consumeAdminMFARecoveryCode(userID, code, now); err != nil || ok {
-		return "recovery_code", ok, err
+	return "", false, s.lockAdminMFAUserAtLimit(userID, now)
+}
+
+func (s *wafEventStore) reserveAdminMFAChallengeAttempt(challengeID int64) error {
+	res, err := s.exec(
+		`UPDATE admin_mfa_challenges
+		    SET attempt_count = attempt_count + 1
+		  WHERE challenge_id = ? AND consumed_at_unix IS NULL AND attempt_count < ?`,
+		challengeID,
+		adminMFAChallengeMaxAttempts,
+	)
+	if err != nil {
+		return err
 	}
-	return "", false, nil
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return errAdminMFAChallengeInvalid
+	}
+	return nil
+}
+
+// reserveAdminMFAUserAttempt counts one authenticator code check for the
+// user. It returns an *adminMFALockedError while the user is locked, and
+// starts the lock when the count has reached the limit without one (for
+// example after a crash between a failed check and the lock). It returns
+// false without an error when the user has no authenticator or when a
+// concurrent success changed the count; the code is then treated as wrong
+// without a check.
+func (s *wafEventStore) reserveAdminMFAUserAttempt(userID int64, now time.Time) (bool, error) {
+	res, err := s.exec(
+		`UPDATE admin_mfa_totp
+		    SET failed_attempts = failed_attempts + 1
+		  WHERE user_id = ? AND locked_until_unix <= ? AND failed_attempts < ?`,
+		userID,
+		now.Unix(),
+		adminMFAMaxFailedAttempts,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if affected == 1 {
+		return true, nil
+	}
+	var failedAttempts, lockedUntilUnix int64
+	if err := s.queryRow(`SELECT failed_attempts, locked_until_unix FROM admin_mfa_totp WHERE user_id = ?`, userID).Scan(&failedAttempts, &lockedUntilUnix); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if lockedUntilUnix > now.Unix() {
+		return false, &adminMFALockedError{Until: time.Unix(lockedUntilUnix, 0).UTC()}
+	}
+	if failedAttempts >= adminMFAMaxFailedAttempts {
+		return false, s.lockAdminMFAUserAtLimit(userID, now)
+	}
+	return false, nil
+}
+
+// lockAdminMFAUserAtLimit starts the lock when the user's count has reached
+// the limit and no lock is active. Only the call that starts the lock gets
+// Started=true. It returns nil when the count is below the limit.
+func (s *wafEventStore) lockAdminMFAUserAtLimit(userID int64, now time.Time) error {
+	until := now.Add(adminMFALockDuration).UTC()
+	res, err := s.exec(
+		`UPDATE admin_mfa_totp
+		    SET locked_until_unix = ?, failed_attempts = 0
+		  WHERE user_id = ? AND failed_attempts >= ? AND locked_until_unix <= ?`,
+		until.Unix(),
+		userID,
+		adminMFAMaxFailedAttempts,
+		now.Unix(),
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 1 {
+		return &adminMFALockedError{Until: until, Started: true}
+	}
+	var lockedUntilUnix int64
+	if err := s.queryRow(`SELECT locked_until_unix FROM admin_mfa_totp WHERE user_id = ?`, userID).Scan(&lockedUntilUnix); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if lockedUntilUnix > now.Unix() {
+		return &adminMFALockedError{Until: time.Unix(lockedUntilUnix, 0).UTC()}
+	}
+	return nil
+}
+
+func (s *wafEventStore) resetAdminMFAFailedAttempts(userID int64, now time.Time) error {
+	_, err := s.exec(
+		`UPDATE admin_mfa_totp
+		    SET failed_attempts = 0, locked_until_unix = 0, updated_at_unix = ?, updated_at = ?
+		  WHERE user_id = ?`,
+		now.Unix(),
+		now.Format(time.RFC3339Nano),
+		userID,
+	)
+	return err
 }
 
 func (s *wafEventStore) verifyAdminMFATOTP(userID int64, code string, now time.Time) (string, bool, error) {
@@ -1404,7 +1597,7 @@ func (s *wafEventStore) verifyAdminMFATOTP(userID int64, code string, now time.T
 	}
 	res, err := s.exec(
 		`UPDATE admin_mfa_totp
-		    SET last_used_counter = ?, updated_at_unix = ?, updated_at = ?
+		    SET last_used_counter = ?, failed_attempts = 0, locked_until_unix = 0, updated_at_unix = ?, updated_at = ?
 		  WHERE user_id = ? AND (last_used_counter IS NULL OR last_used_counter < ?)`,
 		counter,
 		now.Unix(),
@@ -1483,6 +1676,8 @@ func (s *wafEventStore) upsertAdminMFATOTPStatement() string {
 			issuer = VALUES(issuer),
 			account_name = VALUES(account_name),
 			last_used_counter = NULL,
+			failed_attempts = 0,
+			locked_until_unix = 0,
 			enabled_at_unix = VALUES(enabled_at_unix),
 			enabled_at = VALUES(enabled_at),
 			updated_at_unix = VALUES(updated_at_unix),
@@ -1497,6 +1692,8 @@ func (s *wafEventStore) upsertAdminMFATOTPStatement() string {
 			issuer = EXCLUDED.issuer,
 			account_name = EXCLUDED.account_name,
 			last_used_counter = NULL,
+			failed_attempts = 0,
+			locked_until_unix = 0,
 			enabled_at_unix = EXCLUDED.enabled_at_unix,
 			enabled_at = EXCLUDED.enabled_at,
 			updated_at_unix = EXCLUDED.updated_at_unix,
@@ -1511,6 +1708,8 @@ func (s *wafEventStore) upsertAdminMFATOTPStatement() string {
 			issuer = excluded.issuer,
 			account_name = excluded.account_name,
 			last_used_counter = NULL,
+			failed_attempts = 0,
+			locked_until_unix = 0,
 			enabled_at_unix = excluded.enabled_at_unix,
 			enabled_at = excluded.enabled_at,
 			updated_at_unix = excluded.updated_at_unix,
@@ -1709,6 +1908,8 @@ func adminMFAErrorMessage(err error) string {
 		return "admin mfa is already enabled"
 	case errors.Is(err, errAdminMFAChallengeInvalid):
 		return "mfa challenge is invalid or expired"
+	case errors.Is(err, errAdminMFALocked):
+		return "too many failed mfa attempts; try again later"
 	case errors.Is(err, errAdminMFASetupInvalid):
 		return "mfa setup is invalid or expired"
 	case errors.Is(err, errAdminMFACodeInvalid), errors.Is(err, adminauth.ErrInvalidTOTPCode), errors.Is(err, adminauth.ErrInvalidRecoveryCode):

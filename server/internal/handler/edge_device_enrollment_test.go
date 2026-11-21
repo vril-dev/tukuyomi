@@ -11,6 +11,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -355,6 +357,106 @@ func TestPostEdgeDeviceEnrollmentFallsBackWhenRootReturnsNonCenter200(t *testing
 	if !strings.Contains(rec.Body.String(), `"enrollment_status":"pending"`) ||
 		!strings.Contains(rec.Body.String(), `"center_url":`+quoteJSON(center.URL+"/center-api")) {
 		t.Fatalf("unexpected enrollment response: %s", rec.Body.String())
+	}
+}
+
+func TestPostEdgeDeviceEnrollmentKeepsEnteredCenterURLWhenAllCandidatesFail(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)
+	defer restoreEdgeRuntime()
+
+	dbPath := filepath.Join(t.TempDir(), "edge-device-enroll-all-fail.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer InitLogsStatsStore(false, "", 0)
+
+	var calls int32
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("<!doctype html><title>bad gateway</title>"))
+	}))
+	defer center.Close()
+
+	router := gin.New()
+	router.POST("/edge/device-auth/enroll", PostEdgeDeviceEnrollment)
+
+	body := `{"center_url":` + quoteJSON(center.URL) + `,"enrollment_token":"tky_enroll_test","device_id":"edge-device-1","key_id":"default"}`
+	rec := performEdgeDeviceRequest(router, http.MethodPost, "/edge/device-auth/enroll", body)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("enroll code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("center calls=%d want root and protected candidates", got)
+	}
+	identity, found, err := loadEdgeDeviceIdentity(getLogsStatsStore())
+	if err != nil || !found {
+		t.Fatalf("loadEdgeDeviceIdentity found=%v err=%v", found, err)
+	}
+	if identity.CenterURL != center.URL {
+		t.Fatalf("center_url=%q want entered %q", identity.CenterURL, center.URL)
+	}
+}
+
+func TestEdgeDeviceStatusRefreshKeepsCenterURLUntilACandidateAccepts(t *testing.T) {
+	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)
+	defer restoreEdgeRuntime()
+
+	dbPath := filepath.Join(t.TempDir(), "edge-device-refresh-center-url.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer InitLogsStatsStore(false, "", 0)
+
+	var centerDown atomic.Bool
+	centerDown.Store(true)
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if centerDown.Load() {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte("<!doctype html><title>bad gateway</title>"))
+			return
+		}
+		switch r.URL.Path {
+		case "/center-api/v1/device-status":
+			_, _ = w.Write([]byte(`{"status":"pending"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer center.Close()
+
+	store := getLogsStatsStore()
+	identity := newEdgeDeviceIdentityForTest(t)
+	identity.EnrollmentStatus = edgeEnrollmentStatusApproved
+	identity.CenterURL = center.URL
+	if err := upsertEdgeDeviceIdentity(store, identity); err != nil {
+		t.Fatalf("upsertEdgeDeviceIdentity: %v", err)
+	}
+
+	if _, err := refreshEdgeDeviceCenterStatus(context.Background()); err == nil {
+		t.Fatal("refresh succeeded while every Center candidate failed")
+	}
+	stored, found, err := loadEdgeDeviceIdentity(store)
+	if err != nil || !found {
+		t.Fatalf("loadEdgeDeviceIdentity found=%v err=%v", found, err)
+	}
+	if stored.CenterURL != center.URL {
+		t.Fatalf("center_url after failed refresh=%q want %q", stored.CenterURL, center.URL)
+	}
+
+	centerDown.Store(false)
+	if _, err := refreshEdgeDeviceCenterStatus(context.Background()); err != nil {
+		t.Fatalf("refresh through protected candidate: %v", err)
+	}
+	stored, found, err = loadEdgeDeviceIdentity(store)
+	if err != nil || !found {
+		t.Fatalf("loadEdgeDeviceIdentity found=%v err=%v", found, err)
+	}
+	if want := center.URL + "/center-api"; stored.CenterURL != want {
+		t.Fatalf("center_url after accepted refresh=%q want %q", stored.CenterURL, want)
 	}
 }
 
@@ -987,6 +1089,107 @@ func TestApplyEdgeRuntimeInstallRejectsHashMismatch(t *testing.T) {
 	if _, err := os.Stat(bundleDir); !os.IsNotExist(err) {
 		t.Fatalf("bundle dir stat err=%v, want not exist", err)
 	}
+}
+
+func TestApplyEdgeRuntimeInstallKeepsRunningPHPRuntimeWhenDownloadFails(t *testing.T) {
+	restore := resetPHPProxyFoundationForTest(t)
+	defer restore()
+	restoreAssignments := resetEdgeRuntimeAssignmentStateForTest(t)
+	defer restoreAssignments()
+
+	tmp := t.TempDir()
+	inventoryPath := filepath.Join(tmp, "inventory.json")
+	vhostPath := filepath.Join(tmp, "vhosts.json")
+	proxyPath := filepath.Join(tmp, "proxy.json")
+	docroot := filepath.Join(tmp, "apps", "app", "public")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(docroot): %v", err)
+	}
+	port := closedLocalTCPPort(t)
+	listenAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	vhosts := `{
+  "vhosts": [
+    {
+      "name": "app",
+      "mode": "php-fpm",
+      "hostname": "127.0.0.1",
+      "listen_port": ` + strconv.Itoa(port) + `,
+      "document_root": "` + filepath.ToSlash(docroot) + `",
+      "runtime_id": "php83",
+      "generated_target": "app-php",
+      "linked_upstream_name": "app"
+    }
+  ]
+}`
+	proxyRaw := mustJSON(normalizeProxyRulesConfig(ProxyRulesConfig{
+		Upstreams: []ProxyUpstream{
+			{Name: "app", URL: "http://127.0.0.1:8081", Weight: 1, Enabled: true},
+			{Name: "primary", URL: "http://127.0.0.1:8080", Weight: 1, Enabled: true},
+		},
+	}))
+	if err := os.WriteFile(inventoryPath, []byte(defaultPHPRuntimeInventoryRaw), 0o600); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+	if err := os.WriteFile(vhostPath, []byte(vhosts), 0o600); err != nil {
+		t.Fatalf("write vhosts: %v", err)
+	}
+	if err := os.WriteFile(proxyPath, []byte(proxyRaw), 0o600); err != nil {
+		t.Fatalf("write proxy: %v", err)
+	}
+	writeTestPHPRuntimeArtifact(t, inventoryPath, "php83", testPHPRuntimeArtifactOptions{
+		DisplayName: "PHP 8.3",
+		Version:     "PHP 8.3.99 (fpm-fcgi)",
+		RunUser:     strconv.Itoa(os.Geteuid()),
+		RunGroup:    strconv.Itoa(os.Getegid()),
+		BinaryBody:  fakePHPRuntimeSupervisorBinaryBody(),
+	})
+	initConfigDBStoreForTest(t)
+	inventoryCfg := importPHPRuntimeInventoryDBForTest(t, defaultPHPRuntimeInventoryRaw, inventoryPath)
+	importVhostRuntimeDBForTest(t, vhosts, inventoryCfg)
+	importProxyRuntimeDBForTest(t, proxyRaw)
+	if err := InitPHPRuntimeInventoryRuntime(inventoryPath, 2); err != nil {
+		t.Fatalf("InitPHPRuntimeInventoryRuntime: %v", err)
+	}
+	if err := InitVhostRuntime(vhostPath, 2); err != nil {
+		t.Fatalf("InitVhostRuntime: %v", err)
+	}
+	if err := InitProxyRuntime(proxyPath, 2); err != nil {
+		t.Fatalf("InitProxyRuntime: %v", err)
+	}
+	if err := InitPHPRuntimeSupervisor(); err != nil {
+		t.Fatalf("InitPHPRuntimeSupervisor: %v", err)
+	}
+	waitForTCPState(t, listenAddr, true)
+	defer func() {
+		_ = StopPHPRuntimeProcess("php83")
+		waitForTCPState(t, listenAddr, false)
+	}()
+	before := PHPRuntimeProcessSnapshot()
+	if len(before) != 1 || !before[0].Running || before[0].PID <= 0 {
+		t.Fatalf("runtime before install=%+v, want one running process", before)
+	}
+
+	artifact := buildGatewayRuntimeArtifactForTest(t, "php83")
+	identity := newEdgeDeviceIdentityForTest(t)
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(artifact.Compressed)
+	}))
+	defer center.Close()
+	identity.CenterURL = center.URL
+	assignment := assignmentForRuntimeArtifactForTest(artifact)
+	assignment.ArtifactHash = strings.Repeat("a", 64)
+
+	applyEdgePHPRuntimeInstall(context.Background(), identity, assignment, "php83")
+
+	status := edgeRuntimeApplyStatusSnapshot()[edgeRuntimeAssignmentKey("php-fpm", "php83")]
+	if status.ApplyState != "failed" || !strings.Contains(status.ApplyError, "hash mismatch") {
+		t.Fatalf("apply status=%+v, want failed hash mismatch", status)
+	}
+	after := PHPRuntimeProcessSnapshot()
+	if len(after) != 1 || !after[0].Running || after[0].PID != before[0].PID {
+		t.Fatalf("runtime after failed download=%+v, want the same process still running (pid %d)", after, before[0].PID)
+	}
+	waitForTCPState(t, listenAddr, true)
 }
 
 func TestInstallEdgePHPRuntimeArtifactRejectsTargetMismatch(t *testing.T) {
@@ -2009,6 +2212,92 @@ func TestCurrentEdgeProxyGateStateSkipsStoreWhenApprovalGateIsOff(t *testing.T) 
 	config.EdgeRequireDeviceApproval = true
 	if gate := currentEdgeProxyGateState(); !gate.Locked || gate.Reason != edgeProxyLockReasonStoreError {
 		t.Fatalf("approval gate on store error=%+v want locked with %q", gate, edgeProxyLockReasonStoreError)
+	}
+}
+
+func TestEdgeDeviceUploadBodyHashMatchesCenterVector(t *testing.T) {
+	// Center computes the same value in center.deviceUploadBodyHash, and its
+	// tests check the same vector.
+	got := edgeDeviceUploadBodyHash("/v1/device-config-snapshot", strings.Repeat("ab", 32))
+	const want = "f066826cc5728195f6273622772b37dc38ea5fc800c7f6a10da4e92449b806c0"
+	if got != want {
+		t.Fatalf("edgeDeviceUploadBodyHash=%s want %s", got, want)
+	}
+}
+
+func TestEdgeDeviceUploadsSendSignedHeaders(t *testing.T) {
+	identity := newEdgeDeviceIdentityForTest(t)
+	publicKey := publicKeyFromEdgeIdentityForTest(t, identity)
+	type captured struct {
+		path   string
+		header http.Header
+		body   []byte
+	}
+	captures := make(chan captured, 1)
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read upload: %v", err)
+		}
+		captures <- captured{path: r.URL.Path, header: r.Header.Clone(), body: body}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer center.Close()
+
+	ctx := context.Background()
+	uploads := []struct {
+		endpoint string
+		send     func(url string) error
+	}{
+		{endpoint: "/v1/device-config-snapshot", send: func(url string) error {
+			_, _, err := sendEdgeDeviceConfigSnapshot(ctx, identity, url, edgeDeviceConfigSnapshotWireRequest{DeviceID: identity.DeviceID})
+			return err
+		}},
+		{endpoint: "/v1/rule-artifact-bundle", send: func(url string) error {
+			_, _, err := sendEdgeRuleArtifactBundle(ctx, identity, url, edgeRuleArtifactBundleWireRequest{DeviceID: identity.DeviceID})
+			return err
+		}},
+		{endpoint: "/v1/app-deploy-baseline-upload", send: func(url string) error {
+			_, _, err := sendEdgeAppDeployBaselineUpload(ctx, identity, url, edgeAppDeployBaselineUploadWireRequest{DeviceID: identity.DeviceID})
+			return err
+		}},
+		{endpoint: "/v1/daemon-log-archive-upload", send: func(url string) error {
+			_, _, err := sendEdgeDaemonLogArchiveUpload(ctx, identity, url, edgeDaemonLogArchiveUploadWireRequest{DeviceID: identity.DeviceID})
+			return err
+		}},
+	}
+	for _, upload := range uploads {
+		t.Run(upload.endpoint, func(t *testing.T) {
+			if err := upload.send(center.URL + upload.endpoint); err != nil {
+				t.Fatalf("send: %v", err)
+			}
+			got := <-captures
+			if got.path != upload.endpoint {
+				t.Fatalf("path=%q want %q", got.path, upload.endpoint)
+			}
+			if got.header.Get("X-Tukuyomi-Device-ID") != identity.DeviceID ||
+				got.header.Get("X-Tukuyomi-Key-ID") != identity.KeyID ||
+				got.header.Get("X-Tukuyomi-Public-Key-Fingerprint-SHA256") != identity.PublicKeyFingerprintSHA256 {
+				t.Fatalf("identity headers=%v", got.header)
+			}
+			contentSum := sha256.Sum256(got.body)
+			contentHash := hex.EncodeToString(contentSum[:])
+			if got.header.Get("X-Tukuyomi-Content-SHA256") != contentHash {
+				t.Fatalf("content hash header=%q want hash of the sent body %q", got.header.Get("X-Tukuyomi-Content-SHA256"), contentHash)
+			}
+			bodyHash := got.header.Get("X-Tukuyomi-Body-Hash")
+			if bodyHash != edgeDeviceUploadBodyHash(upload.endpoint, contentHash) {
+				t.Fatalf("body hash header=%q is not bound to %s", bodyHash, upload.endpoint)
+			}
+			signature, err := base64.StdEncoding.DecodeString(got.header.Get("X-Tukuyomi-Signature"))
+			if err != nil {
+				t.Fatalf("decode signature: %v", err)
+			}
+			message := edgeEnrollmentSignedMessage(identity.DeviceID, identity.KeyID, got.header.Get("X-Tukuyomi-Timestamp"), got.header.Get("X-Tukuyomi-Nonce"), bodyHash)
+			if !ed25519.Verify(publicKey, []byte(message), signature) {
+				t.Fatal("upload header signature does not verify with the device key")
+			}
+		})
 	}
 }
 

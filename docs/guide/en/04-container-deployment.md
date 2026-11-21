@@ -71,6 +71,10 @@ Operational conditions:
 - `coraza` and `scheduled-task-runner` share the same writable runtime
   paths.
 - Only `coraza` is exposed through the platform ingress / load balancer.
+- When the ingress / load balancer forwards HTTP without PROXY protocol
+  (an ALB, for example), set `server.forwarded_client_ip` with its
+  address range so rate limits and bot defense see each client
+  (A.5.13).
 
 ## 4.3 Public/admin listener split (containers)
 

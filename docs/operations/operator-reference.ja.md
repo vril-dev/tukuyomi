@@ -168,6 +168,11 @@ TLS 証明書の選択は TLS ハンドシェイク時点で完了するため�
 - Gateway と Center の管理 UI は、ユーザー名／パスワードでのサインインと、DB ベースのセッションクッキーを使用します
 - operator は各管理 UI の **User > 2段階認証** から、認証アプリの TOTP による 2段階認証を有効化できます。QR コードは `otpauth://` URI からブラウザー内で生成され、外部 MFA サービスとは通信しません。
 - リカバリーコードは表示された時点で保存してください。2段階認証の有効化後は、パスワードでのサインインは短時間の MFA チャレンジだけを作成し、認証コードまたは未使用のリカバリーコードが通った後にブラウザーセッションクッキーを発行します。
+- 1 つの MFA チャレンジで確認するコードは 5 回までです。超えた場合は、パスワードからサインインし直してください。
+  同じユーザーで認証アプリのコードを連続 10 回間違えると、15 分間は認証コードを受け付けず、`429` と `Retry-After` を返します。回数は、複数のチャレンジと、MFA の無効化やリカバリーコードの再生成でのコード確認を合わせて数えます。このとき `admin_auth_audit` に `mfa_locked` を 1 件記録します。
+  ロックの間も、未使用のリカバリーコードは使えます。コードが通ると回数は 0 に戻ります。
+  これらの上限は DB で数えるため、`admin.rate_limit` の有効・無効にかかわらず働きます。
+- このロックは、パスワードを知っている人なら誰でも起こせます。`mfa_locked` が記録されたら、パスワードが第三者に知られたものとして変更してください。
 - 認証アプリとすべてのリカバリーコードを失った場合は、シェルアクセスで対象ユーザーの MFA だけを無効化できます:
   `WAF_CONFIG_FILE=conf/config.json ./bin/tukuyomi admin-mfa disable --username admin --reason "lost authenticator"`。
   Center の場合は `conf/config.center.json` など、Center 側の bootstrap config を指定してください。
@@ -641,6 +646,26 @@ curl -sS \
 - 複数のエントリが一致した場合は、ボディの指定を持つ最初のエントリが採用されます。一致した `extra_rule` が完全バイパスより優先される点は変わりません
 - 1.6.0 より前のリリースは、これらのフィールドを含むバイパスファイルを拒否します
 
+### プロキシの後ろでのクライアントアドレス
+
+`server.forwarded_client_ip` は、公開側のリクエストでレート制限、IP レピュテーション、ボット防御、セマンティック検査、`client_ip` のハッシュポリシー、ログ、国の解決が使うアドレスを決めます。
+
+- 既定は無効です。クライアントのアドレスは接続元、`server.proxy_protocol` を有効にした場合は PROXY protocol の送信元です。クライアントが送った `X-Forwarded-For`、`X-Real-IP`、`X-Country-Code` は使わず、届いたときは 1 分に 1 回まで警告をログに出します。
+- PROXY protocol を送らない HTTP のロードバランサやリバースプロキシの後ろに置く場合は、`enabled: true` にし、プロキシのアドレスを `trusted_cidrs` に並べてください。設定しないと、すべてのクライアントがプロキシのアドレスになります。レート制限を全員で共有し、プロキシがプライベートアドレスの場合は ボット防御の対象からも外れます。
+- ヘッダーを読むのは、接続元が `trusted_cidrs` に入るリクエストだけです。`header` で読むヘッダーを 1 つ選びます（`X-Forwarded-For`（既定）か `X-Real-IP`）。もう一方のヘッダーは使いません。`X-Forwarded-For` は右から読み、信頼するアドレスは飛ばして、最初にそれ以外のアドレスが現れたところをクライアントとします。ヘッダーが無い場合や IP アドレスでない値がある場合は、プロキシのアドレスになります。
+- 信頼するプロキシは、`X-Forwarded-For` にクライアントのアドレスを書き足すか上書きしてください。`X-Real-IP` を選んだ場合は上書きしてください。クライアントが送ったヘッダーをそのまま通すプロキシでは、クライアントが自分のアドレスを選べてしまいます。
+- 国の `header` モードの `X-Country-Code` も、信頼するプロキシからのものだけを使います。プロキシ側でこのヘッダーを設定または上書きしてください。それ以外のリクエストは `UNKNOWN` になります。
+- ルートの `access.allow_cidrs` / `access.deny_cidrs` は、引き続き接続元を使います。
+- リスナーの設定なので、変更には再起動が必要です。
+
+```json
+"forwarded_client_ip": {
+  "enabled": true,
+  "header": "X-Forwarded-For",
+  "trusted_cidrs": ["10.0.0.0/16"]
+}
+```
+
 ### 国別ブロック
 
 `paths.country_block_file` の既定は `conf/country-block.json` です。
@@ -649,7 +674,7 @@ curl -sS \
 - 値は ISO-3166 alpha-2 の国コードと `UNKNOWN`
 - マッチした場合は WAF より前で `403`
 - 国の解決は `request_metadata_resolvers` が担当します
-- `header` モードは `X-Country-Code` を使用します
+- `header` モードは、`server.forwarded_client_ip` で信頼するプロキシから届いた `X-Country-Code` だけを使用します。それ以外のリクエストは `UNKNOWN` になります
 - `mmdb` モードは、DB マネージドな国別 MMDB アセットをランタイムへロードして解決します
 - ホストスコープの優先順序は、完全一致の `host:port`、次にホスト名のみ、最後に `default`
 
@@ -681,8 +706,8 @@ curl -sS \
 
 - `admin.external_mode`: `deny_external`、`api_only_external`、`full_external`
 - `admin.trusted_cidrs` で信頼ピアを定義します
-- `admin.trust_forwarded_for=true` は、直接ピアが信頼対象である場合のみ有効です
-- `admin.rate_limit` で管理面専用のスロットルを追加できます
+- `admin.trust_forwarded_for=true` は、直接ピアが信頼対象である場合のみ有効です。`admin.trusted_cidrs` を信頼するプロキシとして、公開側と同じく `X-Forwarded-For` を右から読みます。`X-Real-IP` は使わないので、プロキシは `X-Forwarded-For` に書き足すか上書きしてください
+- `admin.rate_limit` で管理面専用のスロットルを追加できます。バケットは接続元のアドレスだけで分けます（PROXY protocol を有効にした場合はクライアントのアドレス）。同じ HTTP プロキシの後ろのクライアントや、同じアドレスから使う API トークンは、1 つのバケットを共有します。既定では無効で、MFA の試行回数の上限はこの設定に依存しません
 
 ### オブザーバビリティ
 

@@ -1,8 +1,6 @@
 package adminguard
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"net/http"
@@ -15,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"tukuyomi/internal/config"
+	"tukuyomi/internal/requestmeta"
 )
 
 const (
@@ -318,16 +317,14 @@ func (r *rateLimiter) pruneLocked(cutoff time.Time) {
 	}
 }
 
+// rateLimitKey keys the admin bucket by the TCP peer only. Request headers
+// are chosen by the client, so a header in the key would give a client a new
+// bucket for every value it sends.
 func rateLimitKey(r *http.Request) string {
 	if r == nil {
 		return "unknown"
 	}
-	parts := []string{remoteIP(r)}
-	if authorization := strings.TrimSpace(r.Header.Get("Authorization")); authorization != "" {
-		sum := sha256.Sum256([]byte(authorization))
-		parts = append(parts, hex.EncodeToString(sum[:8]))
-	}
-	return strings.Join(parts, "|")
+	return remoteIP(r)
 }
 
 func remoteIP(r *http.Request) string {
@@ -363,36 +360,33 @@ func trustedCIDRsSnapshot() []netip.Prefix {
 	return append([]netip.Prefix(nil), access.trustedCIDRs...)
 }
 
+// resolveClientIP returns the admin client address. With
+// admin.trust_forwarded_for, a peer inside admin.trusted_cidrs may name the
+// client in X-Forwarded-For, read from the right as on the public listeners.
 func resolveClientIP(r *http.Request, trustForwarded bool, trustedCIDRs []netip.Prefix) (netip.Addr, bool) {
-	if r == nil {
-		return netip.Addr{}, false
+	trust := requestmeta.TrustedProxies{}
+	if trustForwarded {
+		trust = requestmeta.TrustedProxies{Header: requestmeta.HeaderXForwardedFor, Prefixes: trustedCIDRs}
 	}
-	host := r.RemoteAddr
-	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		host = h
-	}
-	sourceIP, ok := parseIPLiteral(host)
-	if !ok {
-		return netip.Addr{}, false
-	}
-	if trustForwarded && isTrustedIP(trustedCIDRs, sourceIP) {
-		if ip, ok := parseXForwardedForIP(r.Header.Get("X-Forwarded-For")); ok {
-			return ip, true
-		}
-		if ip, ok := parseIPLiteral(r.Header.Get("X-Real-IP")); ok {
-			return ip, true
-		}
-	}
-	return sourceIP, true
+	ip, _, ok := requestmeta.ClientAddr(r, trust)
+	return ip, ok
 }
 
-func parseXForwardedForIP(raw string) (netip.Addr, bool) {
-	for _, part := range strings.Split(raw, ",") {
-		if ip, ok := parseIPLiteral(part); ok {
-			return ip, true
-		}
+// ClientIP returns the admin client address as admin access control sees
+// it, or the peer as it is when it cannot be parsed.
+func ClientIP(r *http.Request) string {
+	trustForwarded := false
+	var trustedCIDRs []netip.Prefix
+	if access := currentAccessControl(); access != nil {
+		access.mu.RLock()
+		trustForwarded = access.trustForwardedFor
+		trustedCIDRs = append([]netip.Prefix(nil), access.trustedCIDRs...)
+		access.mu.RUnlock()
 	}
-	return netip.Addr{}, false
+	if ip, ok := resolveClientIP(r, trustForwarded, trustedCIDRs); ok {
+		return ip.String()
+	}
+	return remoteIP(r)
 }
 
 func parseIPLiteral(raw string) (netip.Addr, bool) {

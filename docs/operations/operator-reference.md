@@ -181,6 +181,11 @@ routing runs.
 - Operators can enable local TOTP two-step verification from each admin UI's **User > Two-step verification** section.
   The QR code is generated in the browser from an `otpauth://` URI; no external MFA service is contacted.
 - Save recovery codes when they are shown. Once two-step verification is enabled, password login creates only a short-lived MFA challenge, and the browser session cookie is issued after a valid authenticator code or unused recovery code.
+- One MFA challenge accepts at most 5 code checks; after that, sign in with the password again.
+  After 10 consecutive wrong authenticator codes for one user, counted across challenges and the code checks for disabling MFA or regenerating recovery codes, authenticator codes are refused for 15 minutes with `429` and `Retry-After`, and one `mfa_locked` row is written to `admin_auth_audit`.
+  Unused recovery codes are still accepted during the lock, and a successful code resets the count.
+  The limits are kept in the database and apply whether or not `admin.rate_limit` is enabled.
+- Anyone who knows the password can trigger the lock. Treat an `mfa_locked` row as a sign that someone else knows the password, and change it.
 - If the authenticator app and all recovery codes are lost, shell access can disable MFA for one user:
   `WAF_CONFIG_FILE=conf/config.json ./bin/tukuyomi admin-mfa disable --username admin --reason "lost authenticator"`.
   For Center, select the Center bootstrap config, for example `conf/config.center.json`.
@@ -672,6 +677,26 @@ Since 1.6.0, an entry can also change request body inspection for its path witho
 - When several entries match, the first matching entry with request body options decides them. A matching `extra_rule` still takes precedence over a full bypass.
 - Releases before 1.6.0 reject bypass files that contain these fields.
 
+### Client Address Behind Proxies
+
+`server.forwarded_client_ip` decides which address rate limits, IP reputation, bot defense, semantic checks, the `client_ip` hash policy, logs and country lookup use for a public request.
+
+- Off by default: the client address is the connection source, or the PROXY protocol source when `server.proxy_protocol` is enabled. `X-Forwarded-For`, `X-Real-IP` and `X-Country-Code` from clients are ignored, and a warning is logged at most once a minute when they arrive.
+- Behind an HTTP load balancer or reverse proxy that does not send PROXY protocol, set `enabled: true` and list the proxy addresses in `trusted_cidrs`. Without this, every client has the proxy's address: rate limits are shared by all clients, and bot defense exempts them when the proxy has a private address.
+- Only requests whose connection comes from `trusted_cidrs` are read. `header` selects the one header to read, `X-Forwarded-For` (default) or `X-Real-IP`; the other header is ignored. `X-Forwarded-For` is read from the right: trusted entries are skipped, and the first other entry is the client. A missing header or an entry that is not an IP address gives the proxy's address.
+- The trusted proxy must append the client address to `X-Forwarded-For` or overwrite it, or overwrite `X-Real-IP` when that header is selected. A proxy that passes the client's header through unchanged lets clients choose their address.
+- `X-Country-Code` in `header` country mode is used only from trusted proxies, so the proxy must set or overwrite it. Other requests resolve to `UNKNOWN`.
+- Route `access.allow_cidrs` / `access.deny_cidrs` keep using the connection source.
+- Listener settings need a restart.
+
+```json
+"forwarded_client_ip": {
+  "enabled": true,
+  "header": "X-Forwarded-For",
+  "trusted_cidrs": ["10.0.0.0/16"]
+}
+```
+
 ### Country Block
 
 `paths.country_block_file` defaults to `conf/country-block.json`.
@@ -680,7 +705,7 @@ Since 1.6.0, an entry can also change request body inspection for its path witho
 - allowed values remain ISO-3166 alpha-2 country codes plus `UNKNOWN`
 - matched countries are blocked with `403` before WAF inspection
 - country resolution is now handled by `request_metadata_resolvers`
-- `header` mode trusts `X-Country-Code`
+- `header` mode uses `X-Country-Code` only from a trusted proxy in `server.forwarded_client_ip`; other requests resolve to `UNKNOWN`
 - `mmdb` mode resolves from the DB-managed country MMDB asset loaded into runtime
 - host scope precedence is exact `host:port`, then bare `host`, then `default`
 
@@ -712,8 +737,8 @@ Key ideas:
 
 - `admin.external_mode`: `deny_external`, `api_only_external`, `full_external`
 - `admin.trusted_cidrs` controls trusted peers
-- `admin.trust_forwarded_for=true` is honored only when the direct peer is already trusted
-- `admin.rate_limit` adds a dedicated admin throttle
+- `admin.trust_forwarded_for=true` is honored only when the direct peer is already trusted. `X-Forwarded-For` is read from the right as for public requests, with `admin.trusted_cidrs` as the trusted proxies; `X-Real-IP` is not used, so the proxy must append to or overwrite `X-Forwarded-For`
+- `admin.rate_limit` adds a dedicated admin throttle. Buckets are keyed by the connecting address only (the client address when PROXY protocol is enabled), so clients behind one HTTP proxy, and API tokens used from one address, share a bucket. It is disabled by default; the MFA attempt limits do not depend on it
 
 ### Observability
 

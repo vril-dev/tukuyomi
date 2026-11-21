@@ -207,6 +207,18 @@ run it, prepare an existing bucket and set
   or regenerated. After MFA is enabled, password login only creates a
   short-lived challenge; the browser session cookie is issued after a
   valid authenticator code or unused recovery code.
+- One MFA challenge accepts at most 5 code checks; after that, sign in
+  with the password again. After 10 consecutive wrong authenticator codes
+  for one user, counted across challenges and the code checks for
+  disabling MFA or regenerating recovery codes, authenticator codes are
+  refused for 15 minutes with `429` and `Retry-After`, and one
+  `mfa_locked` row is written to `admin_auth_audit`. Unused recovery codes
+  are still accepted during the lock, and a successful code resets the
+  count. The limits are kept in the database and apply whether or not
+  `admin.rate_limit` is enabled.
+- Anyone who knows the password can trigger the lock. Treat an
+  `mfa_locked` row as a sign that someone else knows the password, and
+  change it.
 - If the authenticator app and all recovery codes are lost, a shell
   operator can disable MFA for one user:
   `WAF_CONFIG_FILE=conf/config.json ./bin/tukuyomi admin-mfa disable --username admin --reason "lost authenticator"`.
@@ -591,7 +603,9 @@ groups:
 - A match returns `403` **before WAF**.
 - Country resolution is the responsibility of
   `request_metadata_resolvers`.
-- `header` mode: `X-Country-Code`.
+- `header` mode: `X-Country-Code`, used only from a trusted proxy in
+  `server.forwarded_client_ip` (A.5.13); other requests are
+  `UNKNOWN`.
 - `mmdb` mode: load a DB-managed country MMDB asset into the runtime.
 - Host scope precedence: exact `host:port` → bare `host` →
   `default`.
@@ -626,9 +640,15 @@ groups:
   `full_external`.
 - Define trusted peers via `admin.trusted_cidrs`.
 - `admin.trust_forwarded_for=true` only applies when the direct
-  peer is trusted.
+  peer is trusted. `X-Forwarded-For` is then read from the right with
+  `admin.trusted_cidrs` as the trusted proxies, as in A.5.13.
+  `X-Real-IP` is not used, so the proxy must append to or overwrite
+  `X-Forwarded-For`.
 - `admin.rate_limit` adds throttling specifically for the admin
-  surface.
+  surface. Buckets are keyed by the connecting address only (the client
+  address when PROXY protocol is enabled), so clients behind one HTTP
+  proxy, and API tokens used from one address, share a bucket. It is
+  disabled by default; the MFA attempt limits do not depend on it.
 
 ### A.5.7 Observability
 
@@ -693,6 +713,34 @@ Major features:
   `rules/crs/rules/*.conf`.
 - A successful save triggers a WAF hot reload. A reload failure
   triggers an **auto rollback**.
+
+### A.5.13 Client address behind proxies
+
+`server.forwarded_client_ip` decides the client address that rate
+limits, IP reputation, bot defense, semantic checks, the `client_ip`
+hash policy, logs and country lookup see.
+
+- **Off by default.** The client address is the connection source, or
+  the PROXY protocol source with `server.proxy_protocol`. Client-sent
+  `X-Forwarded-For`, `X-Real-IP` and `X-Country-Code` are ignored, and
+  a warning is logged at most once a minute.
+- **Behind an HTTP load balancer** that does not send PROXY protocol,
+  set `enabled: true` and list the proxy addresses in `trusted_cidrs`.
+  Otherwise every client has the proxy's address: rate limits are
+  shared by everyone, and bot defense exempts a private proxy address.
+- Only connections from `trusted_cidrs` are read, and only the one
+  `header` chosen (`X-Forwarded-For` by default, or `X-Real-IP`).
+  `X-Forwarded-For` is read from the right: trusted entries are
+  skipped and the first other entry is the client. A missing header or
+  a non-IP entry gives the proxy's address.
+- The trusted proxy must append the client to `X-Forwarded-For` or
+  overwrite it (overwrite `X-Real-IP` when that is selected). A proxy
+  that passes the client's header through lets clients choose their
+  address.
+- `X-Country-Code` is used only from trusted proxies, so the proxy must
+  set or overwrite it.
+- Route `access.*` CIDRs keep using the connection source.
+- A listener setting: **restart required**.
 
 ## A.6 Logs and cache
 

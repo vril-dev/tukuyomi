@@ -211,6 +211,27 @@ The feature is guarded by
 it can be removed from the operator surface without changing the core
 Gateway / Center enrollment path.
 
+### 16.3.4 Signed uploads and the upgrade order
+
+Configuration snapshots, rule artifacts, app deployment baselines, and
+daemon log archives are the large uploads from a Gateway to Center. From
+1.6.7, the Gateway signs each of them **in request headers as well as in the
+JSON body**, so Center can check the device and its approval **before it
+reads the body**. A reverse proxy between Gateway and Center must pass the
+`X-Tukuyomi-*` request headers unchanged; the `center-protected` route does.
+
+Gateways older than 1.6.7 sign only the body. Center still accepts their
+uploads by default and logs a warning, so Center and Gateways can be
+upgraded in any order. Once every Gateway runs 1.6.7 or later, set
+`TUKUYOMI_CENTER_REQUIRE_SIGNED_DEVICE_UPLOAD_HEADERS=true` on Center to
+reject unsigned uploads without reading them.
+
+Center also limits how many of these uploads it reads at the same time.
+A snapshot, rule artifact, or log upload over the limit gets `503`, and the
+Gateway sends it again on a later status refresh. Baseline uploads wait in a
+short queue instead; one that cannot wait fails its adopt request, which then
+has to be requested again.
+
 ## 16.4 Preview URLs
 
 To preserve Gateway settings and Center token / approval state across

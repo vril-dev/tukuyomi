@@ -125,17 +125,26 @@ type proxyRuleValidateRequest struct {
 
 func registerDeviceEnrollmentRoutes(r *gin.Engine, runtimeCfg RuntimeConfig) {
 	centerExperimentalAppDeployDeviceAPI.Store(runtimeCfg.ExperimentalAppDeployEnabled)
+	deviceUploadLimit := middleware.ConcurrencyGuardMiddleware(middleware.NewConcurrencyGuard(MaxConcurrentDeviceUploadBodies, "device_upload"))
 	r.POST("/v1/enroll", postDeviceEnrollment)
 	r.POST("/v1/device-status", postDeviceStatus)
-	r.POST("/v1/device-config-snapshot", postDeviceConfigSnapshot)
-	r.POST("/v1/rule-artifact-bundle", postRuleArtifactBundle)
+	requireSignedUploads := runtimeCfg.RequireSignedDeviceUploadHeaders
+	r.POST("/v1/device-config-snapshot", deviceUploadSignatureMiddleware("/v1/device-config-snapshot", requireSignedUploads), deviceUploadLimit, postDeviceConfigSnapshot)
+	r.POST("/v1/rule-artifact-bundle", deviceUploadSignatureMiddleware("/v1/rule-artifact-bundle", requireSignedUploads), deviceUploadLimit, postRuleArtifactBundle)
 	r.POST("/v1/runtime-artifact-download", postRuntimeArtifactDownload)
 	r.POST("/v1/proxy-rules-bundle-download", postProxyRulesBundleDownload)
 	r.POST("/v1/waf-rule-artifact-download", postWAFRuleArtifactDownload)
 	if runtimeCfg.ExperimentalAppDeployEnabled {
+		baselineUploadLimit := middleware.ConcurrencyGuardMiddleware(middleware.NewQueuedConcurrencyGuard(
+			MaxConcurrentAppDeployBaselineUploadBodies,
+			MaxQueuedAppDeployBaselineUploads,
+			AppDeployBaselineUploadQueueTimeout,
+			"app_deploy_baseline_upload",
+		))
+		daemonLogUploadLimit := middleware.ConcurrencyGuardMiddleware(middleware.NewConcurrencyGuard(MaxConcurrentDaemonLogArchiveUploadBodies, "daemon_log_upload"))
 		r.POST("/v1/app-deploy-package-download", postAppDeployPackageDownload)
-		r.POST("/v1/app-deploy-baseline-upload", postAppDeployBaselineUpload)
-		r.POST("/v1/daemon-log-archive-upload", postDaemonLogArchiveUpload)
+		r.POST("/v1/app-deploy-baseline-upload", deviceUploadSignatureMiddleware("/v1/app-deploy-baseline-upload", requireSignedUploads), baselineUploadLimit, postAppDeployBaselineUpload)
+		r.POST("/v1/daemon-log-archive-upload", deviceUploadSignatureMiddleware("/v1/daemon-log-archive-upload", requireSignedUploads), daemonLogUploadLimit, postDaemonLogArchiveUpload)
 	}
 	r.GET("/v1/remote-ssh/signing-key", getPublicRemoteSSHSigningKey)
 	r.GET("/v1/remote-ssh/gateway-stream", getRemoteSSHGatewayStream)
@@ -424,6 +433,10 @@ func postDeviceConfigSnapshot(c *gin.Context) {
 		return
 	}
 	req = normalizedReq
+	if !deviceUploadSignerMatches(c, req.DeviceID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "device upload signer mismatch"})
+		return
+	}
 	record, err := LookupDeviceStatus(c.Request.Context(), req.DeviceID, req.KeyID, req.PublicKeyFingerprintSHA256)
 	if err != nil {
 		switch {
@@ -491,6 +504,10 @@ func postRuleArtifactBundle(c *gin.Context) {
 		return
 	}
 	req = normalizedReq
+	if !deviceUploadSignerMatches(c, req.DeviceID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "device upload signer mismatch"})
+		return
+	}
 	record, err := LookupDeviceStatus(c.Request.Context(), req.DeviceID, req.KeyID, req.PublicKeyFingerprintSHA256)
 	if err != nil {
 		switch {
@@ -827,6 +844,10 @@ func postAppDeployBaselineUpload(c *gin.Context) {
 		return
 	}
 	req = normalizedReq
+	if !deviceUploadSignerMatches(c, req.DeviceID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "device upload signer mismatch"})
+		return
+	}
 	record, err := LookupDeviceStatus(c.Request.Context(), req.DeviceID, req.KeyID, req.PublicKeyFingerprintSHA256)
 	if err != nil {
 		switch {
@@ -907,6 +928,10 @@ func postDaemonLogArchiveUpload(c *gin.Context) {
 		return
 	}
 	req = normalizedReq
+	if !deviceUploadSignerMatches(c, req.DeviceID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "device upload signer mismatch"})
+		return
+	}
 	record, err := LookupDeviceStatus(c.Request.Context(), req.DeviceID, req.KeyID, req.PublicKeyFingerprintSHA256)
 	if err != nil {
 		switch {

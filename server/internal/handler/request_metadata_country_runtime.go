@@ -6,8 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"net"
 	"net/http"
+	"net/netip"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -707,4 +712,84 @@ func reloadRequestCountryRuntime(mode string) error {
 		StoreUnavailableError: errConfigDBStoreRequired.Error(),
 		RefreshInterval:       requestCountryRefreshInterval,
 	})
+}
+
+var (
+	clientIPRuntimeMu      sync.RWMutex
+	clientIPTrustedProxies requestmeta.TrustedProxies
+
+	// lastIgnoredForwardedHeaderWarning holds the UnixNano time of the last
+	// warning. It is atomic because the check runs on every public request
+	// that carries a forwarded header.
+	lastIgnoredForwardedHeaderWarning atomic.Int64
+)
+
+// InitClientIPRuntime reads server.forwarded_client_ip once at startup, so
+// the request path only reads the parsed prefixes.
+func InitClientIPRuntime() error {
+	trust, err := clientIPTrustedProxiesFromConfig()
+	if err != nil {
+		return err
+	}
+	clientIPRuntimeMu.Lock()
+	clientIPTrustedProxies = trust
+	clientIPRuntimeMu.Unlock()
+	return nil
+}
+
+func clientIPTrustedProxiesFromConfig() (requestmeta.TrustedProxies, error) {
+	if !config.ServerForwardedClientIPEnabled {
+		return requestmeta.TrustedProxies{}, nil
+	}
+	header := requestmeta.NormalizeForwardedHeader(config.ServerForwardedClientIPHeader)
+	if header == "" {
+		return requestmeta.TrustedProxies{}, fmt.Errorf("server.forwarded_client_ip.header must be one of: %s, %s", requestmeta.HeaderXForwardedFor, requestmeta.HeaderXRealIP)
+	}
+	prefixes := make([]netip.Prefix, 0, len(config.ServerForwardedClientIPTrustedCIDRs))
+	for i, raw := range config.ServerForwardedClientIPTrustedCIDRs {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(raw))
+		if err != nil {
+			return requestmeta.TrustedProxies{}, fmt.Errorf("server.forwarded_client_ip.trusted_cidrs[%d] invalid CIDR: %w", i, err)
+		}
+		prefixes = append(prefixes, prefix.Masked())
+	}
+	if len(prefixes) == 0 {
+		return requestmeta.TrustedProxies{}, fmt.Errorf("server.forwarded_client_ip.trusted_cidrs is required when enabled=true")
+	}
+	return requestmeta.TrustedProxies{Header: header, Prefixes: prefixes}, nil
+}
+
+func currentClientIPTrustedProxies() requestmeta.TrustedProxies {
+	clientIPRuntimeMu.RLock()
+	defer clientIPRuntimeMu.RUnlock()
+	return clientIPTrustedProxies
+}
+
+// resolveProxyClientIP returns the client address of a public request and
+// whether its peer is a trusted proxy.
+func resolveProxyClientIP(req *http.Request) (string, bool) {
+	trust := currentClientIPTrustedProxies()
+	if !trust.Enabled() {
+		logIgnoredForwardedHeaders(req)
+	}
+	return requestmeta.ClientIPFromRequest(req, trust)
+}
+
+// logIgnoredForwardedHeaders tells an operator behind a proxy that the
+// forwarded headers are not used, at most once a minute. It logs the peer,
+// not the header values, which the client controls.
+func logIgnoredForwardedHeaders(req *http.Request) {
+	if req == nil || (req.Header.Get(requestmeta.HeaderXForwardedFor) == "" && req.Header.Get(requestmeta.HeaderXRealIP) == "") {
+		return
+	}
+	now := time.Now().UnixNano()
+	last := lastIgnoredForwardedHeaderWarning.Load()
+	if now-last < int64(time.Minute) || !lastIgnoredForwardedHeaderWarning.CompareAndSwap(last, now) {
+		return
+	}
+	peer := strings.TrimSpace(req.RemoteAddr)
+	if host, _, err := net.SplitHostPort(peer); err == nil {
+		peer = host
+	}
+	log.Printf("[PROXY][CLIENT_IP][WARN] ignored X-Forwarded-For / X-Real-IP from %s; when tukuyomi runs behind a proxy, add its address to server.forwarded_client_ip.trusted_cidrs", peer)
 }

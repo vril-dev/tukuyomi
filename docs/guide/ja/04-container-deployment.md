@@ -69,6 +69,9 @@ client -> ALB / ingress / platform ingress -> coraza
 - rollout 時に revision を **重ねない**
 - `coraza` と `scheduled-task-runner` は同じ writable runtime path を共有する
 - platform の ingress / load balancer に出すのは `coraza` だけ
+- ingress / load balancer が PROXY protocol を使わずに HTTP で転送する場合
+  （ALB など）は、`server.forwarded_client_ip` にそのアドレス範囲を設定し、
+  rate limit や bot defense が client ごとに働くようにする（A.5.13）
 
 ## 4.3　public/admin listener 分離（コンテナ版）
 

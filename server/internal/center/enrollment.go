@@ -36,6 +36,18 @@ const (
 	MaxAppDeployBaselineUploadBodyBytes  = appdeploybundle.MaxCompressedBytes*2 + 64*1024
 	MaxDaemonLogArchiveUploadBodyBytes   = MaxDaemonLogArchiveBytes*2 + 64*1024
 	enrollmentFreshness                  = 10 * time.Minute
+
+	// Cap how many device upload bodies Center reads at the same time. A
+	// rejected config snapshot, rule artifact or daemon log upload stays
+	// pending on the Gateway and is sent again on a later status refresh. A
+	// rejected app deploy baseline upload fails the adopt request, so baseline
+	// uploads wait in a queue instead (the Gateway request timeout is 10
+	// minutes).
+	MaxConcurrentDeviceUploadBodies            = 4
+	MaxConcurrentDaemonLogArchiveUploadBodies  = 1
+	MaxConcurrentAppDeployBaselineUploadBodies = 1
+	MaxQueuedAppDeployBaselineUploads          = 8
+	AppDeployBaselineUploadQueueTimeout        = 5 * time.Minute
 )
 
 var (

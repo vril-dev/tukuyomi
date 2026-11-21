@@ -183,6 +183,20 @@ Center は登録済みデバイスごとに最新のスナップショットを�
 
 この Center snapshot は、Gateway Status の `Download config` で取得するファイルとは別物です。Status export は seed／restore 用の `config-bundle.json` artifact で、Center snapshot はデバイス identity、revision metadata、domain ごとの `etag`／`raw` を持つ署名付き fleet status payload です。
 
+## 署名付きのデバイスアップロード
+
+Gateway は、Center への次の 4 つのアップロードについて、JSON の本文に加えてリクエストヘッダーでも署名します: `/v1/device-config-snapshot`、`/v1/rule-artifact-bundle`、`/v1/app-deploy-baseline-upload`、`/v1/daemon-log-archive-upload`。
+Center は、本文を読む前にヘッダー、デバイスの承認、署名を確かめ、その後で本文が署名済みのコンテンツハッシュと一致することを確かめます。
+ヘッダーは `X-Tukuyomi-Device-ID`、`X-Tukuyomi-Key-ID`、`X-Tukuyomi-Public-Key-Fingerprint-SHA256`、`X-Tukuyomi-Timestamp`、`X-Tukuyomi-Nonce`、`X-Tukuyomi-Content-SHA256`、`X-Tukuyomi-Body-Hash`、`X-Tukuyomi-Signature` です。
+Gateway と Center の間にリバースプロキシを置く場合は、これらのヘッダーを変更せずに通してください。同梱の `center-protected` の Gateway のルートは、そのまま通します。
+
+1.6.7 より前の Gateway は、JSON の本文だけに署名します。Center は既定でこのアップロードも受け付け、1 分に 1 回まで警告をログに出します。
+すべての Gateway を 1.6.7 以降にした後で、Center に `TUKUYOMI_CENTER_REQUIRE_SIGNED_DEVICE_UPLOAD_HEADERS=true` を設定すると、ヘッダーの無いアップロードを本文を読む前に拒否します。
+
+Center が同時に読むアップロードは、設定スナップショットとルールの artifact を合わせて 4 件まで、daemon のログアーカイブは 1 件までです。
+それを超えたこれらのアップロードには `Retry-After` 付きの `503` を返します。Gateway はそのアップロードを未送信のまま残し、後のステータス更新で送り直します。
+アプリ配布の baseline は同時に 1 件だけ読み、ほかに 8 件まで最長 5 分待たせます。待てなかった baseline のアップロードには `503` を返し、その adoption request は失敗になるので、adoption を依頼し直してください。
+
 ## トラブルシューティング
 
 - `localhost:9092` で `connect: connection refused`: Gateway がコンテナ内で自分自身へ接続しようとしています。`host.docker.internal:9092` または到達可能な Center のアドレスを使用してください

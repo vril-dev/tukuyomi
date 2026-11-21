@@ -90,6 +90,7 @@ type appServerConfig struct {
 	MaxQueuedProxyRequests      int                             `json:"max_queued_proxy_requests"`
 	QueuedProxyRequestTimeoutMS int                             `json:"queued_proxy_request_timeout_ms"`
 	ProxyProtocol               appListenerProxyProtocolConfig  `json:"proxy_protocol"`
+	ForwardedClientIP           appForwardedClientIPConfig      `json:"forwarded_client_ip"`
 	TLS                         appServerTLSConfig              `json:"tls"`
 	HTTP2                       appServerHTTP2Config            `json:"http2"`
 	HTTP3                       appServerHTTP3Config            `json:"http3"`
@@ -147,6 +148,15 @@ type appRequestMetaCountryConfig struct {
 
 type appListenerProxyProtocolConfig struct {
 	Enabled      bool     `json:"enabled"`
+	TrustedCIDRs []string `json:"trusted_cidrs"`
+}
+
+// appForwardedClientIPConfig names the proxies in front of the public
+// listeners whose forwarded header gives the client address, and the one
+// header they write.
+type appForwardedClientIPConfig struct {
+	Enabled      bool     `json:"enabled"`
+	Header       string   `json:"header"`
 	TrustedCIDRs []string `json:"trusted_cidrs"`
 }
 
@@ -389,6 +399,11 @@ func defaultAppConfigFile() appConfigFile {
 			QueuedProxyRequestTimeoutMS: 100,
 			ProxyProtocol: appListenerProxyProtocolConfig{
 				Enabled:      false,
+				TrustedCIDRs: nil,
+			},
+			ForwardedClientIP: appForwardedClientIPConfig{
+				Enabled:      false,
+				Header:       forwardedClientIPHeaderXForwardedFor,
 				TrustedCIDRs: nil,
 			},
 			TLS: appServerTLSConfig{
@@ -636,6 +651,10 @@ func normalizeAppConfigFile(cfg *appConfigFile) {
 	for i := range cfg.Server.ProxyProtocol.TrustedCIDRs {
 		cfg.Server.ProxyProtocol.TrustedCIDRs[i] = strings.TrimSpace(cfg.Server.ProxyProtocol.TrustedCIDRs[i])
 	}
+	cfg.Server.ForwardedClientIP.Header = normalizeForwardedClientIPHeader(cfg.Server.ForwardedClientIP.Header)
+	for i := range cfg.Server.ForwardedClientIP.TrustedCIDRs {
+		cfg.Server.ForwardedClientIP.TrustedCIDRs[i] = strings.TrimSpace(cfg.Server.ForwardedClientIP.TrustedCIDRs[i])
+	}
 	for i := range cfg.Admin.ProxyProtocol.TrustedCIDRs {
 		cfg.Admin.ProxyProtocol.TrustedCIDRs[i] = strings.TrimSpace(cfg.Admin.ProxyProtocol.TrustedCIDRs[i])
 	}
@@ -787,6 +806,9 @@ func validateAppConfigFile(cfg appConfigFile) error {
 		}
 	}
 	if err := validateAppListenerProxyProtocolConfig("server.proxy_protocol", cfg.Server.ProxyProtocol); err != nil {
+		return err
+	}
+	if err := validateAppForwardedClientIPConfig("server.forwarded_client_ip", cfg.Server.ForwardedClientIP); err != nil {
 		return err
 	}
 	if err := validateAppServerPublicListenersConfig(cfg); err != nil {
@@ -1286,6 +1308,38 @@ func validateAppListenerProxyProtocolConfig(field string, cfg appListenerProxyPr
 		}
 	}
 	return nil
+}
+
+const (
+	forwardedClientIPHeaderXForwardedFor = "X-Forwarded-For"
+	forwardedClientIPHeaderXRealIP       = "X-Real-IP"
+)
+
+// normalizeForwardedClientIPHeader returns the canonical spelling of a
+// supported header, X-Forwarded-For for an empty value, and the trimmed
+// value otherwise so that validation can name it.
+func normalizeForwardedClientIPHeader(raw string) string {
+	value := strings.TrimSpace(raw)
+	switch strings.ToLower(value) {
+	case "", "x-forwarded-for":
+		return forwardedClientIPHeaderXForwardedFor
+	case "x-real-ip":
+		return forwardedClientIPHeaderXRealIP
+	default:
+		return value
+	}
+}
+
+func validateAppForwardedClientIPConfig(field string, cfg appForwardedClientIPConfig) error {
+	switch cfg.Header {
+	case forwardedClientIPHeaderXForwardedFor, forwardedClientIPHeaderXRealIP:
+	default:
+		return fmt.Errorf("%s.header must be one of: %s, %s", field, forwardedClientIPHeaderXForwardedFor, forwardedClientIPHeaderXRealIP)
+	}
+	return validateAppListenerProxyProtocolConfig(field, appListenerProxyProtocolConfig{
+		Enabled:      cfg.Enabled,
+		TrustedCIDRs: cfg.TrustedCIDRs,
+	})
 }
 
 func validateAppAdminProxyProtocolConfig(cfg appConfigFile) error {

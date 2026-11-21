@@ -92,7 +92,9 @@ func TestAppendAndReadAdminAuditLatest(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Tukuyomi-Actor", "alice@example.com")
+	req.RemoteAddr = "198.51.100.30:4000"
 	req.Header.Set("X-Real-IP", "203.0.113.7")
+	req.Header.Set("X-Forwarded-For", "203.0.113.8")
 	c.Request = req
 
 	for i := 1; i <= 3; i += 1 {
@@ -120,8 +122,8 @@ func TestAppendAndReadAdminAuditLatest(t *testing.T) {
 	if entries[0].Actor != "alice@example.com" {
 		t.Fatalf("actor=%q", entries[0].Actor)
 	}
-	if entries[0].IP != "203.0.113.7" {
-		t.Fatalf("ip=%q", entries[0].IP)
+	if entries[0].IP != "198.51.100.30" {
+		t.Fatalf("ip=%q want the peer; forwarded headers from an untrusted peer are ignored", entries[0].IP)
 	}
 }
 

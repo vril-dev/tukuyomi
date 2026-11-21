@@ -20,7 +20,6 @@ import (
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/crsselection"
 	"tukuyomi/internal/overloadstate"
-	"tukuyomi/internal/requestmeta"
 	"tukuyomi/internal/serverruntime"
 	"tukuyomi/internal/waf"
 )
@@ -86,7 +85,7 @@ func newAdminAuditInfo(c *gin.Context, event string) adminAuditInfo {
 	actor := adminAuditActor(c)
 	ip := ""
 	if c != nil {
-		ip = requestmeta.ClientIPFromHeaders(c.GetHeader("X-Real-IP"), c.GetHeader("X-Forwarded-For"), c.ClientIP())
+		ip = adminguard.ClientIP(c.Request)
 	}
 	return adminaudit.NewInfo(event, actor, ip)
 }
@@ -400,6 +399,9 @@ func StatusHandler(c *gin.Context) {
 		"public_listener_tls_enabled":                         config.ServerTLSEnabled,
 		"public_listener_proxy_protocol_enabled":              config.ServerProxyProtocolEnabled,
 		"public_listener_proxy_protocol_trusted_cidrs":        config.ServerProxyProtocolTrustedCIDRs,
+		"forwarded_client_ip_enabled":                         config.ServerForwardedClientIPEnabled,
+		"forwarded_client_ip_header":                          config.ServerForwardedClientIPHeader,
+		"forwarded_client_ip_trusted_cidrs":                   config.ServerForwardedClientIPTrustedCIDRs,
 		"admin_listener_enabled":                              adminListenerEnabled,
 		"admin_listener_addr":                                 config.AdminListenAddr,
 		"admin_listener_transport":                            "http",

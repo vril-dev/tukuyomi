@@ -566,7 +566,8 @@ endpoint 群:
 - 値は ISO-3166 alpha-2 country code と `UNKNOWN`
 - match すると WAF 前に `403`
 - country 解決は `request_metadata_resolvers` 担当
-- `header` mode: `X-Country-Code`
+- `header` mode: `X-Country-Code`。`server.forwarded_client_ip` で
+  信頼する proxy から届いたものだけを使い（A.5.13）、それ以外は `UNKNOWN`
 - `mmdb` mode: DB-managed な country MMDB asset を runtime に load して解決
 - host scope 優先順は exact `host:port` → bare `host` → `default`
 
@@ -598,7 +599,10 @@ endpoint 群:
 - `admin.external_mode`: `deny_external` / `api_only_external` /
   `full_external`
 - `admin.trusted_cidrs` で trusted peer を定義
-- `admin.trust_forwarded_for=true` は direct peer が trusted のときだけ有効
+- `admin.trust_forwarded_for=true` は direct peer が trusted のときだけ有効。
+  このとき `admin.trusted_cidrs` を信頼する proxy として、A.5.13 と同じく
+  `X-Forwarded-For` を右から読む。`X-Real-IP` は使わないので、proxy は
+  `X-Forwarded-For` に書き足すか上書きする
 - `admin.rate_limit` で管理面専用 throttle を追加。bucket は接続元の
   アドレスだけで分ける（PROXY protocol 有効時は client のアドレス）。
   同じ HTTP proxy の後ろの client や、同じアドレスから使う API token は
@@ -663,6 +667,33 @@ endpoint 群:
   なまま、live WAF load set から外れる
 - logical `rules/crs/rules/*.conf` 名の DB-backed CRS asset を toggle
 - save 成功時は WAF hot reload。reload failure 時は **auto rollback**
+
+### A.5.13　Client Address Behind Proxies
+
+`server.forwarded_client_ip` は、rate limit、IP reputation、bot defense、
+semantic、`client_ip` hash policy、ログ、country 解決が使う client の
+アドレスを決める。
+
+- **既定は無効**。client のアドレスは接続元、`server.proxy_protocol` を
+  有効にした場合は PROXY protocol の送信元。client が送った
+  `X-Forwarded-For`、`X-Real-IP`、`X-Country-Code` は使わず、届いたときは
+  1 分に 1 回まで警告をログに出す
+- PROXY protocol を送らない **HTTP の load balancer の後ろ**では、
+  `enabled: true` にして proxy のアドレスを `trusted_cidrs` に並べる。
+  設定しないと全 client が proxy のアドレスになり、rate limit を全員で
+  共有し、proxy がプライベートアドレスなら bot defense の対象からも外れる
+- 読むのは接続元が `trusted_cidrs` に入るものだけで、読むヘッダーは
+  `header` で選んだ 1 つ（既定 `X-Forwarded-For`、または `X-Real-IP`）。
+  `X-Forwarded-For` は右から読み、信頼するアドレスを飛ばして最初に現れた
+  それ以外のアドレスを client とする。ヘッダーが無い場合や IP でない値が
+  ある場合は proxy のアドレス
+- 信頼する proxy は、`X-Forwarded-For` に client のアドレスを書き足すか
+  上書きする（`X-Real-IP` を選んだ場合は上書きする）。client が送った
+  ヘッダーをそのまま通す proxy では、client が自分のアドレスを選べる
+- `X-Country-Code` も信頼する proxy からだけ使うので、proxy 側で設定または
+  上書きする
+- route の `access.*` の CIDR は引き続き接続元を使う
+- listener の設定なので **restart が必要**
 
 ## A.6　Logs と Cache
 

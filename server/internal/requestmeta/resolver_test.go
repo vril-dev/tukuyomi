@@ -24,6 +24,7 @@ func TestRunResolversResolvesCountryFromHeader(t *testing.T) {
 	req.Header.Set("X-Country-Code", "jp")
 
 	ctx := NewResolverContext("10.0.0.1")
+	ctx.PeerTrusted = true
 	if err := RunResolvers(req, NewDefaultResolvers(func() string { return "header" }, nil), ctx); err != nil {
 		t.Fatalf("RunResolvers() error: %v", err)
 	}
@@ -32,6 +33,19 @@ func TestRunResolversResolvesCountryFromHeader(t *testing.T) {
 	}
 	if ctx.CountrySource != CountrySourceHeader {
 		t.Fatalf("countrySource=%q want=%q", ctx.CountrySource, CountrySourceHeader)
+	}
+}
+
+func TestRunResolversIgnoresCountryHeaderFromUntrustedPeer(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/demo", nil)
+	req.Header.Set("X-Country-Code", "jp")
+
+	ctx := NewResolverContext("203.0.113.9")
+	if err := RunResolvers(req, NewDefaultResolvers(func() string { return "header" }, nil), ctx); err != nil {
+		t.Fatalf("RunResolvers() error: %v", err)
+	}
+	if ctx.Country != "UNKNOWN" || ctx.CountrySource != CountrySourceUnknown {
+		t.Fatalf("country=%q source=%q want UNKNOWN from an untrusted peer", ctx.Country, ctx.CountrySource)
 	}
 }
 

@@ -580,8 +580,8 @@ func proxyRouteSelectionValue(req *http.Request, policy string, key string) stri
 		if req == nil {
 			return ""
 		}
-		if forwarded := strings.TrimSpace(req.Header.Get("X-Forwarded-For")); forwarded != "" {
-			return strings.TrimSpace(strings.Split(forwarded, ",")[0])
+		if clientIP := proxyContextClientIP(req.Context()); clientIP != "" {
+			return clientIP
 		}
 		return requestRemoteIP(req)
 	case "header":

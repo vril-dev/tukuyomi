@@ -208,3 +208,52 @@ test("computeSettingsRuntimeDrift reports request body policy mismatches", () =>
     [],
   );
 });
+
+test("computeSettingsRuntimeDrift reports forwarded client IP changes", () => {
+  const config = {
+    server: {
+      listen_addr: ":9090",
+      graceful_shutdown_timeout_sec: 30,
+      proxy_protocol: { enabled: false, trusted_cidrs: [] },
+      forwarded_client_ip: { enabled: true, header: "X-Real-IP", trusted_cidrs: ["10.0.0.0/8"] },
+      tls: { enabled: false },
+    },
+    admin: { api_base_path: "/tukuyomi-api", ui_base_path: "/tukuyomi-ui", listen_addr: "", proxy_protocol: { enabled: false, trusted_cidrs: [] }, read_only: false },
+    runtime: { gomaxprocs: 0, memory_limit_mb: 0 },
+    storage: { db_driver: "sqlite", db_path: "db/tukuyomi.db" },
+    observability: { tracing: { enabled: false, service_name: "tukuyomi", otlp_endpoint: "" } },
+    proxy: { engine: { mode: "tukuyomi_proxy" } },
+    waf: { engine: { mode: "coraza" } },
+  };
+  const runtime = {
+    listen_addr: ":9090",
+    server_graceful_shutdown_timeout_sec: 30,
+    server_proxy_protocol_enabled: false,
+    server_proxy_protocol_trusted_cidrs: [],
+    server_forwarded_client_ip_enabled: false,
+    server_forwarded_client_ip_header: "X-Forwarded-For",
+    server_forwarded_client_ip_trusted_cidrs: [],
+    api_base_path: "/tukuyomi-api",
+    ui_base_path: "/tukuyomi-ui",
+    admin_listen_addr: "",
+    admin_proxy_protocol_enabled: false,
+    admin_proxy_protocol_trusted_cidrs: [],
+    server_tls_enabled: false,
+    admin_read_only: false,
+    runtime_gomaxprocs: 0,
+    runtime_memory_limit_mb: 0,
+    storage_db_driver: "sqlite",
+    storage_db_path: "db/tukuyomi.db",
+    tracing_enabled: false,
+    tracing_service_name: "tukuyomi",
+    tracing_otlp_endpoint: "",
+    proxy_engine_mode: "tukuyomi_proxy",
+    waf_engine_mode: "coraza",
+  };
+
+  assert.deepEqual(computeSettingsRuntimeDrift(config, runtime), [
+    "Forwarded Client IP",
+    "Forwarded Client IP Header",
+    "Forwarded Client IP Trusted CIDRs",
+  ]);
+});

@@ -4,6 +4,7 @@ type DriftConfig = {
     public_listeners?: unknown[];
     graceful_shutdown_timeout_sec: number;
     proxy_protocol: { enabled: boolean; trusted_cidrs: string[] };
+    forwarded_client_ip?: { enabled: boolean; header: string; trusted_cidrs: string[] };
     tls: { enabled: boolean };
     http2?: { enabled: boolean };
   };
@@ -68,6 +69,9 @@ type DriftRuntime = {
   admin_listen_addr?: string;
   server_proxy_protocol_enabled?: boolean;
   server_proxy_protocol_trusted_cidrs?: string[];
+  server_forwarded_client_ip_enabled?: boolean;
+  server_forwarded_client_ip_header?: string;
+  server_forwarded_client_ip_trusted_cidrs?: string[];
   server_tls_enabled?: boolean;
   server_http2_enabled?: boolean;
   server_graceful_shutdown_timeout_sec?: number;
@@ -108,6 +112,9 @@ export function computeSettingsRuntimeDrift(
   if ((runtime.server_graceful_shutdown_timeout_sec ?? 30) !== config.server.graceful_shutdown_timeout_sec) drift.push(label("Graceful Shutdown Timeout"));
   if ((runtime.server_proxy_protocol_enabled ?? false) !== config.server.proxy_protocol.enabled) drift.push(label("Public PROXY Protocol"));
   if (JSON.stringify(runtime.server_proxy_protocol_trusted_cidrs ?? []) !== JSON.stringify(config.server.proxy_protocol.trusted_cidrs)) drift.push(label("Public PROXY Protocol Trusted CIDRs"));
+  if ((runtime.server_forwarded_client_ip_enabled ?? false) !== (config.server.forwarded_client_ip?.enabled ?? false)) drift.push(label("Forwarded Client IP"));
+  if ((runtime.server_forwarded_client_ip_header ?? "X-Forwarded-For") !== (config.server.forwarded_client_ip?.header || "X-Forwarded-For")) drift.push(label("Forwarded Client IP Header"));
+  if (JSON.stringify(runtime.server_forwarded_client_ip_trusted_cidrs ?? []) !== JSON.stringify(config.server.forwarded_client_ip?.trusted_cidrs ?? [])) drift.push(label("Forwarded Client IP Trusted CIDRs"));
   if ((runtime.api_base_path ?? "") !== config.admin.api_base_path) drift.push(label("API Base Path"));
   if ((runtime.ui_base_path ?? "") !== config.admin.ui_base_path) drift.push(label("UI Base Path"));
   if ((runtime.admin_listen_addr ?? "") !== config.admin.listen_addr) drift.push(label("Admin Listen Address"));

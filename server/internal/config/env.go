@@ -80,6 +80,9 @@ var (
 	ServerQueuedProxyRequestTimeout        time.Duration
 	ServerProxyProtocolEnabled             bool
 	ServerProxyProtocolTrustedCIDRs        []string
+	ServerForwardedClientIPEnabled         bool
+	ServerForwardedClientIPHeader          string
+	ServerForwardedClientIPTrustedCIDRs    []string
 	ServerTLSEnabled                       bool
 	ServerTLSCertFile                      string
 	ServerTLSKeyFile                       string
@@ -361,6 +364,9 @@ func applyAppConfig(cfg appConfigFile) {
 	ServerQueuedProxyRequestTimeout = time.Duration(parseServerQueueTimeoutMS(strconv.Itoa(cfg.Server.QueuedProxyRequestTimeoutMS))) * time.Millisecond
 	ServerProxyProtocolEnabled = cfg.Server.ProxyProtocol.Enabled
 	ServerProxyProtocolTrustedCIDRs = append([]string(nil), cfg.Server.ProxyProtocol.TrustedCIDRs...)
+	ServerForwardedClientIPEnabled = cfg.Server.ForwardedClientIP.Enabled
+	ServerForwardedClientIPHeader = cfg.Server.ForwardedClientIP.Header
+	ServerForwardedClientIPTrustedCIDRs = append([]string(nil), cfg.Server.ForwardedClientIP.TrustedCIDRs...)
 	ServerTLSEnabled = cfg.Server.TLS.Enabled
 	ServerTLSCertFile = strings.TrimSpace(cfg.Server.TLS.CertFile)
 	ServerTLSKeyFile = strings.TrimSpace(cfg.Server.TLS.KeyFile)

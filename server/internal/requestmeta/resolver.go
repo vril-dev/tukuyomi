@@ -15,6 +15,9 @@ type ResolverContext struct {
 	ClientIP      string
 	Country       string
 	CountrySource string
+	// PeerTrusted is true when the request came from a trusted proxy. Only
+	// such a request may set the country with X-Country-Code.
+	PeerTrusted bool
 }
 
 type ModeGetter func() string
@@ -72,6 +75,9 @@ func (r *headerCountryResolver) Resolve(req *http.Request, ctx *ResolverContext)
 		return nil
 	}
 	if mode := normalizedMode(r.modeGetter); mode != "" && mode != "header" {
+		return nil
+	}
+	if !ctx.PeerTrusted {
 		return nil
 	}
 	raw := strings.TrimSpace(req.Header.Get("X-Country-Code"))

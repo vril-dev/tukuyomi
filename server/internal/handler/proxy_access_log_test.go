@@ -50,6 +50,7 @@ func (w testProxyStatusWriter) Size() int {
 func TestProxyHandlerEmitsAccessLogWithBodyByteCounts(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	initConfigDBStoreForTest(t)
+	trustForwardedClientIPForTest(t, "X-Forwarded-For", "127.0.0.0/8", "::1/128")
 
 	var observedUpstreamName string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -511,6 +512,7 @@ func TestProxyHandlerDisabledEmitUpstreamNameHeaderStripsSpoofedHeader(t *testin
 func TestProxyHandlerCountryBlockLogOmitsSelectedTargetFields(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	initConfigDBStoreForTest(t)
+	trustForwardedClientIPForTest(t, "X-Forwarded-For", "127.0.0.0/8", "::1/128")
 
 	prevCountry := GetCountryBlockFile()
 	t.Cleanup(func() {

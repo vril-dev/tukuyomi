@@ -121,6 +121,9 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 	if err := handler.InitRequestCountryRuntime(); err != nil {
 		log.Fatalf("[FATAL] failed to initialize request country runtime: %v", err)
 	}
+	if err := handler.InitClientIPRuntime(); err != nil {
+		log.Fatalf("[FATAL] failed to initialize client IP runtime: %v", err)
+	}
 	if err := handler.InitPHPRuntimeInventoryRuntime(config.PHPRuntimeInventoryFile, config.ProxyRollbackMax); err != nil {
 		log.Fatalf("[FATAL] failed to initialize php runtime inventory: %v", err)
 	}

@@ -319,6 +319,7 @@ export default function Status() {
                 <Metric label={tx("Admin Listener")} value={String(data.admin_listener_addr ?? "-")} />
                 <Metric label={tx("Admin Listener Transport")} value={String(data.admin_listener_transport ?? "-")} />
                 <Metric label={tx("Public PROXY Protocol")} value={String(data.public_listener_proxy_protocol_enabled ?? "-")} />
+                <Metric label={tx("Forwarded Client IP")} value={String(data.forwarded_client_ip_enabled ?? "-")} />
                 <Metric label={tx("Admin PROXY Protocol")} value={String(data.admin_listener_proxy_protocol_enabled ?? "-")} />
                 <Metric label={tx("Public TLS Enabled")} value={String(data.public_listener_tls_enabled ?? data.server_tls_enabled ?? "-")} />
                 <Metric label={tx("Public HTTP/2 Advertised")} value={String(data.server_http2_advertised ?? "-")} />

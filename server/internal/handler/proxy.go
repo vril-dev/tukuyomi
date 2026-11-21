@@ -880,8 +880,9 @@ func serveProxyRequest(c *proxyServeContext) {
 		return
 	}
 	reqID := ensureProxyRequestID(c)
-	clientIP := requestmeta.ClientIPFromHTTP(c.Request)
+	clientIP, peerTrusted := resolveProxyClientIP(c.Request)
 	requestMetadataCtx := requestmeta.NewResolverContext(clientIP)
+	requestMetadataCtx.PeerTrusted = peerTrusted
 	if err := requestmeta.RunResolvers(c.Request, newRequestMetadataResolvers(), requestMetadataCtx); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return

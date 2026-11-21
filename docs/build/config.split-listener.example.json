@@ -6,6 +6,11 @@
       "enabled": false,
       "trusted_cidrs": []
     },
+    "forwarded_client_ip": {
+      "enabled": false,
+      "header": "X-Forwarded-For",
+      "trusted_cidrs": []
+    },
     "tls": {
       "enabled": true,
       "cert_file": "conf/tls/fullchain.pem",

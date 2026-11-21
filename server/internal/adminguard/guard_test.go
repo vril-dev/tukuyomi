@@ -88,3 +88,40 @@ func TestRateLimitSharesBucketAcrossAuthorizationValues(t *testing.T) {
 		t.Fatal("another peer address should have its own bucket")
 	}
 }
+
+func TestAccessControlForwardedForFromAppendingProxyCannotClaimTrustedCIDR(t *testing.T) {
+	prevMode := config.AdminExternalMode
+	prevCIDRs := append([]string(nil), config.AdminTrustedCIDRs...)
+	prevForwarded := config.AdminTrustForwardedFor
+	defer func() {
+		config.AdminExternalMode = prevMode
+		config.AdminTrustedCIDRs = prevCIDRs
+		config.AdminTrustForwardedFor = prevForwarded
+	}()
+	config.AdminExternalMode = "api_only_external"
+	config.AdminTrustedCIDRs = []string{"10.0.0.0/8"}
+	config.AdminTrustForwardedFor = true
+
+	access, err := newAccessControl()
+	if err != nil {
+		t.Fatalf("newAccessControl: %v", err)
+	}
+	for _, tc := range []struct {
+		name    string
+		headers map[string]string
+		wantUI  bool
+	}{
+		{name: "spoofed leftmost entry", headers: map[string]string{"X-Forwarded-For": "10.0.0.5, 203.0.113.9"}},
+		{name: "spoofed X-Real-IP is ignored", headers: map[string]string{"X-Forwarded-For": "203.0.113.9", "X-Real-IP": "10.0.0.6"}},
+		{name: "internal client through the proxy", headers: map[string]string{"X-Forwarded-For": "10.0.0.5"}, wantUI: true},
+	} {
+		req := httptest.NewRequest("GET", "/tukuyomi-ui", nil)
+		req.RemoteAddr = "10.0.0.2:4000"
+		for name, value := range tc.headers {
+			req.Header.Set(name, value)
+		}
+		if got := access.allowsEndpoint(req, endpointUI); got != tc.wantUI {
+			t.Fatalf("%s: admin UI allowed=%v want %v", tc.name, got, tc.wantUI)
+		}
+	}
+}

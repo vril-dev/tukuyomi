@@ -102,6 +102,7 @@ func nativeHTTP1BuildRequest(br *bufio.Reader, maxHeaderBytes int, remoteAddr ne
 	} else if hasContentLength && contentLength > 0 {
 		body = io.NopCloser(&io.LimitedReader{R: br, N: contentLength})
 	}
+	delete(header, "Host")
 	req := &http.Request{
 		Method:           method,
 		URL:              u,

@@ -6551,6 +6551,9 @@ func applyEdgeProxyGateStatus(status *edgeDeviceAuthStatusResponse) {
 }
 
 func currentEdgeProxyGateState() edgeProxyGateState {
+	if !config.EdgeEnabled || !config.EdgeRequireDeviceApproval {
+		return edgeProxyGateState{}
+	}
 	status, err := currentEdgeDeviceAuthStatus()
 	if err != nil {
 		return edgeProxyGateState{Locked: true, Reason: edgeProxyLockReasonStoreError}

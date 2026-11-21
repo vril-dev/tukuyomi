@@ -1947,6 +1947,71 @@ func TestEdgeDeviceStatusRefreshLoopStopPreservesReplacementTrigger(t *testing.T
 	}
 }
 
+func TestCurrentEdgeProxyGateStateSkipsStoreWhenApprovalGateIsOff(t *testing.T) {
+	restoreEdgeRuntime := setEdgeRuntimeForTest(false, false)
+	defer restoreEdgeRuntime()
+
+	dbPath := filepath.Join(t.TempDir(), "edge-gate-off.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer InitLogsStatsStore(false, "", 0)
+	store := getLogsStatsStore()
+	if store == nil {
+		t.Fatal("logs stats store is nil")
+	}
+
+	cases := []struct {
+		name            string
+		edgeEnabled     bool
+		requireApproval bool
+	}{
+		{name: "edge disabled", edgeEnabled: false, requireApproval: false},
+		{name: "edge disabled with approval flag", edgeEnabled: false, requireApproval: true},
+		{name: "edge enabled without approval", edgeEnabled: true, requireApproval: false},
+	}
+
+	store.mu.Lock()
+	for _, tc := range cases {
+		config.EdgeEnabled = tc.edgeEnabled
+		config.EdgeDeviceAuthEnabled = tc.edgeEnabled
+		config.EdgeRequireDeviceApproval = tc.requireApproval
+		done := make(chan edgeProxyGateState, 1)
+		go func() { done <- currentEdgeProxyGateState() }()
+		select {
+		case gate := <-done:
+			if gate.Locked {
+				store.mu.Unlock()
+				t.Fatalf("%s: gate locked: %+v", tc.name, gate)
+			}
+		case <-time.After(2 * time.Second):
+			store.mu.Unlock()
+			<-done
+			t.Fatalf("%s: gate waited for the store lock", tc.name)
+		}
+	}
+	store.mu.Unlock()
+
+	if err := store.db.Close(); err != nil {
+		t.Fatalf("close store db: %v", err)
+	}
+	for _, tc := range cases {
+		config.EdgeEnabled = tc.edgeEnabled
+		config.EdgeDeviceAuthEnabled = tc.edgeEnabled
+		config.EdgeRequireDeviceApproval = tc.requireApproval
+		if gate := currentEdgeProxyGateState(); gate.Locked {
+			t.Fatalf("%s: gate locked on store error: %+v", tc.name, gate)
+		}
+	}
+
+	config.EdgeEnabled = true
+	config.EdgeDeviceAuthEnabled = true
+	config.EdgeRequireDeviceApproval = true
+	if gate := currentEdgeProxyGateState(); !gate.Locked || gate.Reason != edgeProxyLockReasonStoreError {
+		t.Fatalf("approval gate on store error=%+v want locked with %q", gate, edgeProxyLockReasonStoreError)
+	}
+}
+
 func TestPostEdgeDeviceEnrollmentRequiresEnabledRuntime(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreEdgeRuntime := setEdgeRuntimeForTest(false, false)

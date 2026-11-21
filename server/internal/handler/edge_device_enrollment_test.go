@@ -358,6 +358,106 @@ func TestPostEdgeDeviceEnrollmentFallsBackWhenRootReturnsNonCenter200(t *testing
 	}
 }
 
+func TestPostEdgeDeviceEnrollmentKeepsEnteredCenterURLWhenAllCandidatesFail(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)
+	defer restoreEdgeRuntime()
+
+	dbPath := filepath.Join(t.TempDir(), "edge-device-enroll-all-fail.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer InitLogsStatsStore(false, "", 0)
+
+	var calls int32
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("<!doctype html><title>bad gateway</title>"))
+	}))
+	defer center.Close()
+
+	router := gin.New()
+	router.POST("/edge/device-auth/enroll", PostEdgeDeviceEnrollment)
+
+	body := `{"center_url":` + quoteJSON(center.URL) + `,"enrollment_token":"tky_enroll_test","device_id":"edge-device-1","key_id":"default"}`
+	rec := performEdgeDeviceRequest(router, http.MethodPost, "/edge/device-auth/enroll", body)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("enroll code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("center calls=%d want root and protected candidates", got)
+	}
+	identity, found, err := loadEdgeDeviceIdentity(getLogsStatsStore())
+	if err != nil || !found {
+		t.Fatalf("loadEdgeDeviceIdentity found=%v err=%v", found, err)
+	}
+	if identity.CenterURL != center.URL {
+		t.Fatalf("center_url=%q want entered %q", identity.CenterURL, center.URL)
+	}
+}
+
+func TestEdgeDeviceStatusRefreshKeepsCenterURLUntilACandidateAccepts(t *testing.T) {
+	restoreEdgeRuntime := setEdgeRuntimeForTest(true, true)
+	defer restoreEdgeRuntime()
+
+	dbPath := filepath.Join(t.TempDir(), "edge-device-refresh-center-url.db")
+	if err := InitLogsStatsStoreWithBackend("db", "sqlite", dbPath, "", 30); err != nil {
+		t.Fatalf("InitLogsStatsStoreWithBackend: %v", err)
+	}
+	defer InitLogsStatsStore(false, "", 0)
+
+	var centerDown atomic.Bool
+	centerDown.Store(true)
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if centerDown.Load() {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte("<!doctype html><title>bad gateway</title>"))
+			return
+		}
+		switch r.URL.Path {
+		case "/center-api/v1/device-status":
+			_, _ = w.Write([]byte(`{"status":"pending"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer center.Close()
+
+	store := getLogsStatsStore()
+	identity := newEdgeDeviceIdentityForTest(t)
+	identity.EnrollmentStatus = edgeEnrollmentStatusApproved
+	identity.CenterURL = center.URL
+	if err := upsertEdgeDeviceIdentity(store, identity); err != nil {
+		t.Fatalf("upsertEdgeDeviceIdentity: %v", err)
+	}
+
+	if _, err := refreshEdgeDeviceCenterStatus(context.Background()); err == nil {
+		t.Fatal("refresh succeeded while every Center candidate failed")
+	}
+	stored, found, err := loadEdgeDeviceIdentity(store)
+	if err != nil || !found {
+		t.Fatalf("loadEdgeDeviceIdentity found=%v err=%v", found, err)
+	}
+	if stored.CenterURL != center.URL {
+		t.Fatalf("center_url after failed refresh=%q want %q", stored.CenterURL, center.URL)
+	}
+
+	centerDown.Store(false)
+	if _, err := refreshEdgeDeviceCenterStatus(context.Background()); err != nil {
+		t.Fatalf("refresh through protected candidate: %v", err)
+	}
+	stored, found, err = loadEdgeDeviceIdentity(store)
+	if err != nil || !found {
+		t.Fatalf("loadEdgeDeviceIdentity found=%v err=%v", found, err)
+	}
+	if want := center.URL + "/center-api"; stored.CenterURL != want {
+		t.Fatalf("center_url after accepted refresh=%q want %q", stored.CenterURL, want)
+	}
+}
+
 func TestBootstrapCenterProtectedGatewayEnablesEdgeAndApprovesIdentity(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "gateway.db")

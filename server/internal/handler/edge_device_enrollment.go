@@ -776,10 +776,13 @@ func enrollEdgeDevice(ctx context.Context, req edgeDeviceEnrollmentRequest) (edg
 	centerEnrollmentAccepted := false
 	for i, candidate := range enrollCandidates {
 		centerStatus, centerBody, err = sendEdgeDeviceEnrollment(ctx, candidate.EndpointURL, token, wireReq)
-		centerBaseURL = candidate.BaseURL
 		if err == nil && centerStatus >= 200 && centerStatus < 300 {
 			centerEnrollmentAccepted = validCenterEnrollmentResponse(centerBody)
-			if centerEnrollmentAccepted || i == len(enrollCandidates)-1 {
+			if centerEnrollmentAccepted {
+				centerBaseURL = candidate.BaseURL
+				break
+			}
+			if i == len(enrollCandidates)-1 {
 				break
 			}
 			continue
@@ -787,6 +790,9 @@ func enrollEdgeDevice(ctx context.Context, req edgeDeviceEnrollmentRequest) (edg
 		if i == len(enrollCandidates)-1 || !shouldTryCenterDeviceAPIBaseFallback(centerStatus, centerBody, err) {
 			break
 		}
+	}
+	if !centerEnrollmentAccepted {
+		centerBaseURL = enrollCandidates[0].BaseURL
 	}
 	now := time.Now().UTC().Unix()
 	identity.CenterURL = centerBaseURL
@@ -860,10 +866,12 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 	var centerHTTPStatus int
 	var centerBody []byte
 	var centerBaseURL string
+	centerStatusAccepted := false
 	for i, candidate := range statusCandidates {
 		centerHTTPStatus, centerBody, err = sendEdgeDeviceStatus(ctx, candidate.EndpointURL, wireReq)
-		centerBaseURL = candidate.BaseURL
 		if err == nil && centerHTTPStatus >= 200 && centerHTTPStatus < 300 && json.Valid(centerBody) {
+			centerBaseURL = candidate.BaseURL
+			centerStatusAccepted = true
 			break
 		}
 		if i == len(statusCandidates)-1 || !shouldTryCenterDeviceAPIBaseFallback(centerHTTPStatus, centerBody, err) {
@@ -873,7 +881,7 @@ func refreshEdgeDeviceCenterStatus(ctx context.Context) (edgeDeviceAuthStatusRes
 	now := time.Now().UTC().Unix()
 	identity.UpdatedAtUnix = now
 	identity.CenterStatusCheckedAtUnix = now
-	if strings.TrimSpace(centerBaseURL) != "" {
+	if centerStatusAccepted && strings.TrimSpace(centerBaseURL) != "" {
 		identity.CenterURL = centerBaseURL
 	}
 	if err != nil {

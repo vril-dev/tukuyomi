@@ -60,8 +60,8 @@ can read it from cover to cover.
 ### Part IV — WAF and request security
 
 - **Chapter 7. Tuning WAF false positives** — Capturing evidence, scoping
-  impact, narrow mitigations (`override_rules` / managed bypass), CRS review,
-  validation, change management. (source: docs/operations/waf-tuning.md)
+  impact, narrow mitigations (managed bypass), CRS review, validation,
+  change management. (source: docs/operations/waf-tuning.md)
 - **Chapter 8. FP Tuner API and AI integration** — Propose / Apply contract,
   simulate vs. real apply, related env, OpenAI- / Claude Messages-compatible
   command providers. (source: docs/operations/fp-tuner-api.md)
@@ -89,7 +89,7 @@ can read it from cover to cover.
 - **Chapter 13. DB operations (SQLite / MySQL / PostgreSQL)** — Driver
   selection, what is stored (`waf_events`, versioned runtime config,
   `config_blobs`, `schema_migrations`), retention / pruning, backup, SQLite
-  vacuum, recovery. (source: docs/operations/db-ops.md)
+  vacuum, recovery, updating the OWASP CRS. (source: docs/operations/db-ops.md)
 - **Chapter 14. Listener topology and reuse-port** — The current decision and
   why it is parked, host / runtime matrix, Docker published-port policy,
   benchmark / smoke gate shape, reopen checklist.

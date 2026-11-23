@@ -123,7 +123,7 @@ make install TARGET=linux-systemd INSTALL_ROLE=center-protected
 - DB マイグレーション後、ホストインストールは導入対象 role ごとの DB に初期 owner bootstrap を実行します。bootstrap password が未指定、または開発用プレースホルダーのままの場合は、ランダムな初期パスワードを生成してインストールログの最後に 1 回だけ表示します。既存の管理ユーザーはリセットしません
 - `INSTALL_DB_SEED=auto` は SQLite DB がまだ存在しない初回のみ `db-import` を実行します
 - 初回 DB シードでは `primary` という既定アップストリームが作成されます。プロキシにトラフィックを流す前に、実際のバックエンドエンドポイントへ調整してください
-- 既存 DB がある状態での再実行時は、DB マイグレーションと WAF／CRS アセットのリフレッシュを行います
+- 既存 DB がある状態での再実行時は、DB マイグレーションを行い、WAF／CRS アセットを再インポートします。再インポートでは、UI で編集したルールを含め、すべての WAF ルールアセットが置き換わります。導入済みの環境では、現在のアセットを保持するために `INSTALL_REFRESH_WAF_ASSETS=0` を指定できます（初回のインストールにはアセットが無く、インポートしないと起動できません）。CRS のバージョンを指定するには `CRS_VERSION=<tag>` を指定します。[OWASP CRS の更新](#owasp-crs-の更新) を参照してください
 - MySQL ／ PostgreSQL の空 DB を初期投入する場合は `INSTALL_DB_SEED=always` を明示してください
 - スケジュールタスク用タイマーは既定で有効化します。このホストでスケジュールタスクを実行しない場合は `INSTALL_ENABLE_SCHEDULED_TASKS=0` を指定してください
 - スモーク／パッケージステージング用に `DESTDIR=<tmp> INSTALL_ENABLE_SYSTEMD=0` が利用できます
@@ -225,7 +225,7 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
 - 公開リリースバンドルには `conf/config.json` と、空 DB 向けランタイムシードである `seeds/conf/config-bundle.json` が同梱されます
 - `conf/proxy.json` やポリシー JSON など設定済みファイルが存在しない場合、`make db-import` は `seeds/conf/config-bundle.json` を読み込み、その後ビルトインの互換デフォルトへフォールバックします
 - 既定のベース WAF ルールシードは、`make crs-install` が `seeds/waf/rules/tukuyomi.conf` から一時ステージングして DB へインポートします
-- CRS ファイルは DB `waf_rule_assets` 向けの一時インポート素材であり、`make crs-install` が `data/tmp` でステージングとクリーンアップを行います
+- CRS ファイルは DB `waf_rule_assets` 向けの一時インポート素材であり、`make crs-install` が既定のバージョンの CRS をダウンロードして `data/tmp` にステージングし、インポート後に削除します。別のバージョンを使う場合は [OWASP CRS の更新](#owasp-crs-の更新) を参照してください
 - config bundle 内の sites、scheduled tasks、upstream runtime、policy、cache rules、WAF bypass、PHP-FPM/PSGI マニフェストは、DB ブートストラップ後は DB のシード／エクスポート用アーティファクトです
 - 本番では `storage.db_driver`、`storage.db_path`、`storage.db_dsn` 用の `config.json` を、シークレットマネージャー／構成管理から生成・マウントしてください
 - 初回起動前に `make db-migrate`、`make crs-install` の順で WAF ルールアセットをインストール／インポートし、その後に残りのシード素材用として `make db-import` を実行します。`db-import` は WAF ルールアセットを再インポートしません
@@ -234,7 +234,7 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
 - `GEOIPUPDATE_BIN` を使うと、同梱アップデータのパスをオーバーライドできます
 - マネージド国別データベース更新の公式ラッパーは `./scripts/update_country_db.sh` です
 - マネージド GeoIP 国別 DB、`GeoIP.conf`、更新ステータスは DB を正として保持します。`data/geoip` フォールバックディレクトリは配備しません
-- マネージドなバイパスのオーバーライドルールは DB `override_rules` です。`conf/rules` フォールバックディレクトリは配備しません
+- マネージドなバイパスのオーバーライドルール（`extra_rule` の本体）は、DB `waf_rule_assets` の種別 `bypass_extra_rule` として保存されます。`conf/rules` フォールバックディレクトリは配備しません。WAF ルールアセットを再インポートすると置き換わります
 - WAF ／アクセスイベントは DB `waf_events` へ直接書き込みます。`paths.log_file` は古い `waf-events.ndjson` を明示的に取り込む場合のみ使用するレガシーインポート元です
 - `extra_rule` の値は、DB マネージドなオーバーライドルールへの論理的な互換参照として残ります
 
@@ -499,6 +499,148 @@ sudo systemctl restart tukuyomi.service
 `SIGTERM`、`SIGINT`、`SIGHUP` のいずれもグレースフルシャットダウンを開始します。
 Upgrade ／ WebSocket のような長期接続もトラッキングし、`server.graceful_shutdown_timeout_sec` まで待機したうえで、タイムアウト後に強制クローズします。
 HTTP/3 UDP ソケットのハンドオフには対応しますが、既存の QUIC 接続はプロセス入れ替えをまたいで維持されません。
+
+## OWASP CRS の更新
+
+OWASP CRS はバイナリには含まれません。ステージング用スクリプトがダウンロードし、稼働中のサービスは DB `waf_rule_assets` から読み込みます。導入済みの環境で別の CRS バージョンへ移る場合や、同じバージョンを入れ直す場合は、その環境の DB へ WAF ルールアセットをもう一度インポートします。
+
+- 既定のバージョンは `v4.23.0` です
+- `make install` は `CRS_VERSION=<tag>` でバージョンを指定します。`scripts/stage_waf_rule_assets.sh <stage-root> [crs-version]` と `scripts/install_crs.sh [crs-version]` は引数で指定します
+- `make crs-install` と `make crs-ensure` は、常に既定のバージョンをステージングします
+- ステージングは GitHub から CRS のアーカイブをダウンロードします。実行するホストには `curl`、`tar`、外向きの HTTPS が必要です
+
+### インポートで置き換わるものと残るもの
+
+インポート（`tukuyomi db-import-waf-rule-assets`。`make crs-install`、`make crs-ensure`、`make install`、[Dockerfile.example](Dockerfile.example) のイメージビルドがすべて実行します）は、既存の内容とマージしません。ステージングしたファイルだけから、**すべて**の WAF ルールアセットを新しく作り直して有効にします。対象は、ベースルールのシード `tukuyomi.conf`、CRS のルールとデータ、`crs-setup.conf` です。CRS のバージョンが同じでも同様です。
+
+ステージングしたファイルで置き換わるもの:
+
+- `Rules` 画面で編集したベースルール（FP Tuner が書き込んだ除外を含みます）。`tukuyomi.conf` はシードの内容に戻り、`Rules` 画面で無効にしていた場合も有効に戻ります
+- `Rules` 画面で追加したベースルールファイル（有効／無効の状態と順序を含みます）
+- バイパススニペット（`Rules` > Advanced > `Bypass snippets`）。種別 `bypass_extra_rule` のルールアセットとして保存されています
+- `crs-setup.conf` への追記。ステージング時に `WAF_RULE_SEED_CRS_SETUP_OVERRIDE=<file>` を指定すると、そのファイルの内容が `crs-setup.conf` の末尾に追記されます。前回と同じファイルを指定し直してください
+
+残るもの:
+
+- CRS ルールセットの選択。無効にした CRS ルールファイル名の一覧（DB `crs_disabled_rules`）は、インポート後も残ります。新しいバージョンで増えたファイルは有効で始まり、名前が消えた、または変わったものは反映されません。更新後に `Rules` 画面で確かめてください
+- バイパスのエントリ。ただしスニペットは消えます。インポートの直後から、スニペットが無くなったパスはデフォルトのルールで検査され、ログに `[BYPASS][RULE][WARN] ... (fallback=default-rules)` が出ます
+- プロキシ、サイト、TLS、管理の設定、管理ユーザー、WAF イベント
+
+インポートしたベースルールと CRS は、サービスを再起動した後に使われます。
+
+ルールアセットの旧版は DB に残りますが、管理 UI と API から参照・復元する手段はありません。そのため、UI や API からインポートを元に戻すことはできません。先に DB をバックアップしてください。
+
+### `make install` の場合
+
+`make install` は `INSTALL_REFRESH_WAF_ASSETS` の既定値が `1` のため、実行のたびにこのインポートを行います。バイナリの更新のためにインストーラーを再実行すると、ローカルで編集したルールも置き換わります。
+
+```bash
+# 現在の WAF ルールアセットを保持する（ルールアセットがすでにある導入済みの環境のみ）
+make install TARGET=linux-systemd INSTALL_REFRESH_WAF_ASSETS=0
+
+# CRS のバージョンを明示する
+make install TARGET=linux-systemd CRS_VERSION=<crs-version>
+```
+
+- `INSTALL_REFRESH_WAF_ASSETS=0` は導入済みの環境でだけ使います。初回のインストールではルールアセットがまだ無く、サービスを起動できません
+- 既定では、インストーラーは最後に稼働中のサービスを再起動するため、インポートしたルールが読み込まれます
+- `INSTALL_ROLE=center` は WAF ルールアセットをインポートしません
+- インストーラーが `sudo` で権限を昇格する場合、`sudo` は既定で環境変数を引き継がないため、`WAF_RULE_SEED_CRS_SETUP_OVERRIDE` のファイルはステージング用スクリプトに届きません。インストーラーを root で実行するか、次の手順を使ってください
+
+### ローカルでルールを編集していない場合
+
+導入済みのツリー（既定では `/opt/tukuyomi`）には、`install_crs.sh`、`stage_waf_rule_assets.sh`、`seeds/waf/` がありません。展開したリリース tarball の `scripts/` と `seeds/waf/rules/` を使い、そのディレクトリで次のコマンドを実行してください。
+
+最初に DB をバックアップします。SQLite の場合は、`storage.db_path` のファイル（既定では配備ルート配下の `db/tukuyomi.db`）をオンラインでバックアップします。`sqlite3` コマンドラインツールが必要です。`umask 077` により、コピーは他のユーザーから読めなくなります。
+
+```bash
+sudo -u tukuyomi sh -c 'umask 077; sqlite3 /opt/tukuyomi/db/tukuyomi.db ".backup /opt/tukuyomi/db/tukuyomi.db.bak.$(date +%Y%m%d%H%M%S)"'
+```
+
+または、サービスを止めてから `tukuyomi.db` を、存在する場合は `tukuyomi.db-wal` と `tukuyomi.db-shm` とあわせてコピーします。MySQL ／ PostgreSQL では通常のダンプを使います。
+
+続けて、ステージング、インポート、再起動を行います。インポートは、インストーラーと同じく、ランタイムユーザーとして配備ルートで実行します。途中で失敗したら後の手順に進まないよう `&&` でつないであり、サブシェルにより `cd` が後続に影響しないようにしています。
+
+```bash
+ROOT=/opt/tukuyomi
+STAGE="$ROOT/data/tmp/waf-rule-assets"
+
+sudo rm -rf "$STAGE" &&
+sudo install -d -m 755 "$STAGE" &&
+sudo ./scripts/stage_waf_rule_assets.sh "$STAGE" <crs-version> &&
+sudo chown -R tukuyomi:tukuyomi "$STAGE" &&
+(cd "$ROOT" && sudo -H -u tukuyomi env \
+  WAF_CONFIG_FILE=conf/config.json \
+  WAF_RULE_ASSET_FS_ROOT=data/tmp/waf-rule-assets \
+  ./bin/tukuyomi db-import-waf-rule-assets) &&
+sudo rm -rf "$STAGE" &&
+sudo systemctl restart tukuyomi
+```
+
+途中で失敗するとステージング用ディレクトリが残ります。次回の実行では、先頭の行が削除します。
+
+`WAF_RULE_SEED_CRS_SETUP_OVERRIDE` のファイルを引き継ぐ場合は、ステージングの行を `sudo env WAF_RULE_SEED_CRS_SETUP_OVERRIDE=<file> ./scripts/stage_waf_rule_assets.sh "$STAGE" <crs-version>` として実行します。`sudo` の前に置いた変数は、スクリプトには届きません。
+
+配備ルートがログインユーザーのホームディレクトリ配下にある場合、ランタイムユーザーはそのユーザー自身です。ステージングとインポートのコマンドから `sudo` と `chown` を外せます。サービスの再起動には、引き続き `sudo` が必要です。
+
+### ローカルでルールを編集している場合
+
+UI で直したルール（`tukuyomi.conf` の編集、FP Tuner の除外、追加したベースルールファイル、バイパススニペット）は DB にしかないため、インポートで置き換わります。インポートの前に、`GET <admin.api_base_path>/rules`（既定は `/tukuyomi-api/rules`）のレスポンスを、内容ごと保存してください。`files` 配列に、各ファイルの `path`、`kind`、`raw`、`enabled` が順序つきで入っています。管理 UI にサインインしたブラウザーで URL を開いて JSON を保存します。管理 API は `admin:read` を持つ個人アクセストークン（管理 UI の `User` ページの Personal access tokens で作成します）でも呼べますが、トークンを他の人から見えるコマンドラインに載せないでください。
+
+インポートの後で、`Rules` 画面から、または `PUT <admin.api_base_path>/rules`（`{path, kind, raw}`。ベースルールでは `enabled` も）で、ルールを入れ直します。ベースルールファイルの順序は `PUT .../rules:order` で戻します。バイパススニペットを先に戻してください。バイパスのエントリが参照するスニペットが無い間は、そのエントリを含むバイパス設定を UI や API から保存できないためです。そのあと、サービスを再起動します。
+
+保存したベースルールは、新しいリリースのシード `tukuyomi.conf` を上書きします。先に、保存したファイルをそのシードと比べ、シードに変更があれば手で取り込んでください。`PUT .../rules` はインポートした CRS に対して各ファイルを検証するため、新しいバージョンで読み込めないルールは拒否されます。
+
+### コンテナーの場合
+
+- DB が、[Dockerfile.example](Dockerfile.example) のようにビルド時にイメージへベイクした SQLite ファイルである場合は、イメージを再ビルドしてコンテナーを入れ替えます。イメージのビルドは既定の CRS バージョンをステージングします。別のバージョンに固定するには、`stage_waf_rule_assets.sh` の行にバージョンを 2 番目の引数として追加します。コンテナーを入れ替えると、ルール以外の DB の内容（管理ユーザー、設定、イベント）も消えます。
+- DB がイメージの外（ボリューム、MySQL、PostgreSQL）にある場合は、新しいイメージで 1 回だけインポートしてから、コンテナーを作り直します。リリース tarball のスクリプトでホスト上にステージングし、ステージング用ディレクトリを読み取り専用でマウントした使い捨てコンテナーを起動します。コンテナーはサービスと同じ `conf/config.json` と DB への接続を持たせ、`WAF_RULE_ASSET_FS_ROOT` にそのディレクトリを指定して `db-import-waf-rule-assets` を実行します。
+
+  ```bash
+  STAGE="$(mktemp -d)" &&
+  ./scripts/stage_waf_rule_assets.sh "$STAGE" <crs-version> &&
+  chmod -R a+rX "$STAGE" &&
+  docker run --rm \
+    -v "$STAGE:/waf-rule-assets:ro" \
+    -e WAF_RULE_ASSET_FS_ROOT=/waf-rule-assets \
+    -e WAF_CONFIG_FILE=/app/conf/config.json \
+    <サービスと同じ -v / -e / network のオプション> \
+    <image> /app/tukuyomi db-import-waf-rule-assets &&
+  rm -rf "$STAGE"
+  ```
+
+  バイナリは、`Dockerfile.example` から作ったイメージでは `/app/tukuyomi`、リポジトリの `server/Dockerfile` のイメージでは `/app/server` です。
+- 同じ DB を共有するレプリカは、再起動したときに、インポートしたルールを読み込みます。
+
+### 開発ツリーの場合
+
+開発ツリーでは、次を実行してからプロセスを再起動します。
+
+```bash
+make crs-install
+```
+
+別のバージョンを使う場合は、手でステージングし、`data` 作業ディレクトリからインポートします。
+
+```bash
+./scripts/stage_waf_rule_assets.sh data/tmp/waf-rule-assets <crs-version> &&
+WAF_RULE_ASSET_FS_ROOT=tmp/waf-rule-assets make db-import-waf-rule-assets &&
+rm -rf data/tmp/waf-rule-assets
+```
+
+`make db-import-waf-rule-assets` が行うのは、`WAF_RULE_ASSET_FS_ROOT` 配下にステージング済みのファイルのインポートだけです。CRS のダウンロードはしないため、ステージングされていないと失敗します。
+
+### Center がルールを割り当てる Gateway の場合
+
+Gateway 上でインポートせず、Center でルールバンドルを更新して、もう一度割り当ててください。割り当ての後で Gateway のルールが変わると、その割り当ては適用されず、`local WAF rules changed after assignment` で `blocked` になります。Gateway が新しいルールを Center へ送った後に、割り当て直してください。
+
+### 有効なバージョンの確認
+
+`Rules` 画面で、`crs-setup.conf` の先頭にある `OWASP CRS ver.` の行を確認します。これは DB に保存された内容なので、再起動の後に確認してください。ログの `[WAF] Reloaded base rules (N files)` はファイル数を数えるだけで、CRS のバージョンは分かりません。
+
+### ロールバック
+
+管理 UI と API から、ルールアセットの旧版を復元することはできません。インポート前に取ったバックアップから DB を復元するか（サービスを止めて復元し、起動します。バックアップより後の設定変更と WAF イベントも失われます。`.backup` で取ったファイルを戻すときは、先に `tukuyomi.db-wal` と `tukuyomi.db-shm` を削除してください。残っていると、古い WAL がその上に適用されることがあります。サービスを止めて取ったコピーは、3 つのファイルをそろえて戻します）、前の CRS バージョンを上の手順でもう一度インポートします。後者でもローカルで編集したルールは同じように置き換わります。
 
 ## 補足
 

@@ -154,8 +154,8 @@ docker build -f server/Dockerfile -t tukuyomi:local server
 ### 4.6.2　deployment 用の Dockerfile を使う
 
 `docs/build/Dockerfile.example` には、UI の build から Go の build、runtime
-config の copy、CRS の install までを image build 内で完結させる構成が用意
-されています。
+config の copy、CRS の install（既定のバージョン）までを image build 内で完結
+させる構成が用意されています。
 
 ```bash
 docker build -f docs/build/Dockerfile.example -t tukuyomi:deploy .
@@ -236,8 +236,8 @@ image build 時には渡さず、runtime にだけ供給してください。
 - `seeds/conf/config-bundle.json` は空 DB 向けの同梱 seed として mount または bake する
   （`conf/proxy.json` や各種 policy file がある場合はそちらが優先される）
 - 初回起動前に `make db-migrate` → `make crs-install` の順で WAF rule asset を
-  install / import し、その後で残りの seed material 用に `make db-import` を
-  実行する。`db-import` は WAF rule asset を再 import しない
+  install / import し、その後で残りの seed material 用に
+  `make db-import` を実行する。`db-import` は WAF rule asset を再 import しない
 - `conf/sites.json` / `conf/scheduled-tasks.json` / `conf/upstream-runtime.json`
   は、空 DB の seed / export file として扱う。bootstrap 後の正は normalized
   DB row
@@ -290,8 +290,9 @@ server-side に閉じ込める値は次のとおりです。
   はその trusted source へ再露出される。起動時の warning だけに頼らない
 - base WAF と CRS asset は import 後 DB `waf_rule_assets`。image-baked file は
   seed material であり runtime authority ではない
-- managed bypass override rule は DB `override_rules`。`extra_rule` の値は
-  logical compatibility reference として残る
+- managed bypass override rule は DB `waf_rule_assets` の種別
+  `bypass_extra_rule` として保存され、WAF rule asset を再 import すると置き換わる。
+  `extra_rule` の値は logical compatibility reference として残る
 
 ## 4.10　Platform 別の対応
 
@@ -446,6 +447,8 @@ client -> ALB / nginx / ingress -> tukuyomi container -> app container/service
 - 埋め込み Gateway / Center UI は image build 時に生成され、runtime では build
   しません。
 - `scripts/install_crs.sh` は image build 時でも startup 時でも実行できます。
+  1 番目の引数で別の tag を渡さない限り、既定のバージョンの CRS を install します。
+  稼働中の配備の CRS を更新する方法は第13章 13.8 節にあります。
 - runtime で policy file を変更したい場合は `/app/conf` を mount してください。
   WAF/CRS asset は `/app/data/tmp` staging から DB へ import します。
 - repository 同梱の `docker-compose.yml` には、`scheduled-tasks` profile 配下

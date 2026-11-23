@@ -301,6 +301,8 @@ make compose-up
 
 管理 UI は `http://localhost:${CORAZA_PORT:-9090}/tukuyomi-ui` で開きます。
 
+`make crs-install` は、既定のバージョンの OWASP CRS を stage し、DB `waf_rule_assets` へ import します。import のたびに、UI で編集した rule を含め、すべての WAF rule asset が置き換わります。別のバージョンの選び方と、すでに使っている環境の更新は第13章 13.8 節を参照してください。
+
 ### A.2.2　よく使う Make ターゲット
 
 ```bash
@@ -566,8 +568,9 @@ endpoint 群:
 }
 ```
 
-- managed な `extra_rule` body は **DB `override_rules`** に保存し、
-  `Rules > Advanced > Bypass snippets` で編集
+- managed な `extra_rule` body は **DB `waf_rule_assets`** に種別
+  `bypass_extra_rule` として保存し、`Rules > Advanced > Bypass snippets` で
+  編集。WAF rule asset を import すると置き換わる
 - `conf/rules` filesystem fallback は **無し**
 - 起動時の base WAF rule set には混ぜず、bypass entry から logical
   `extra_rule` 名で参照されたときだけ load

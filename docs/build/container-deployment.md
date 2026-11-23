@@ -164,7 +164,7 @@ Build:
 docker build -f docs/build/Dockerfile.example -t tukuyomi:deploy .
 ```
 
-This path builds the Gateway and Center UI in-image, builds the Go binary, copies runtime config, and installs CRS during the image build.
+This path builds the Gateway and Center UI in-image, builds the Go binary, copies runtime config, and installs CRS (the default version) during the image build. To pin another CRS version, add it as the second argument of the `stage_waf_rule_assets.sh` line in the Dockerfile. To update an existing deployment, see [Updating the OWASP CRS](binary-deployment.md#updating-the-owasp-crs).
 
 ## Deployment Artifact Render
 
@@ -206,7 +206,10 @@ path is cache data, not runtime authority.
 
 WAF/CRS import material is staged under `/app/data/tmp` and imported into DB
 `waf_rule_assets`. Runtime loads active WAF/CRS assets from DB, not from a
-mounted rules directory.
+mounted rules directory. Importing again replaces every WAF rule asset in the
+DB, including rules edited in the UI; see
+[Updating the OWASP CRS](binary-deployment.md#updating-the-owasp-crs) before
+changing the CRS version of a running deployment.
 
 ## Config and Secrets
 
@@ -276,7 +279,7 @@ Keep these server-side:
 - if you override to `full_external` on a non-loopback listener, treat front-side allowlists/auth as mandatory
 - widening `admin.trusted_cidrs` to public or catch-all networks also re-exposes the embedded admin UI/API to those sources and only triggers a warning
 - base WAF and CRS assets are DB `waf_rule_assets` after import; image-baked files are seed material, not runtime authority
-- managed bypass override rules are DB `override_rules`; `extra_rule` values remain logical compatibility references
+- managed bypass override rules are DB `waf_rule_assets` of kind `bypass_extra_rule`, and re-importing WAF rule assets replaces them; `extra_rule` values remain logical compatibility references
 
 ## Platform Mapping
 
@@ -433,7 +436,7 @@ If `tukuyomi` itself is the direct public entrypoint and built-in HTTP/3 is enab
 ## Notes
 
 - the embedded Gateway and Center UI are produced during image build, not at runtime
-- `scripts/install_crs.sh` can be run at image build time or startup time depending on your policy
+- `scripts/install_crs.sh` can be run at image build time or startup time depending on your policy; it installs the default CRS version unless you pass another tag as its first argument
 - for mutable runtime policy files, mount `/app/conf`; WAF/CRS assets are imported from `/app/data/tmp` staging into DB
 - the repository `docker-compose.yml` now provides a real scheduler sidecar service named `scheduled-task-runner` behind the `scheduled-tasks` profile
 - the current sidecar model is explicit: a shell loop runs the image's proxy binary with `run-scheduled-tasks`, then sleeps until the next minute boundary

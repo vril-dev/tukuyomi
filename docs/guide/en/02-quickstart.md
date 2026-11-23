@@ -46,6 +46,11 @@ make db-migrate
 make crs-install
 ```
 
+`make crs-install` stages the default OWASP CRS version. Choosing
+another version and updating an installation that is already in use are
+covered in Chapter 13 §13.8; note that every import replaces all WAF rule
+assets in the DB.
+
 ## 2.3 Apply a preset
 
 Common starter configurations are bundled as **presets**. To bring up a

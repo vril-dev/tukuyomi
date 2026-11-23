@@ -72,7 +72,7 @@ authoritative runtime state **in the database**:
 - WAF / CRS rule assets (`waf_rule_assets`)
 - Proxy routes and transport configuration (`proxy_*`)
 - Runtime Apps vhost configuration (`vhosts` / `vhost_*`)
-- Managed bypass (`override_rules`)
+- Managed bypass snippets (`waf_rule_assets`, kind `bypass_extra_rule`)
 - PHP-FPM / PSGI runtime inventory (`php_runtime_*` / `psgi_runtime_*`)
 - Global / listener / admin / storage / paths blocks (`app_config_*`)
 
@@ -149,8 +149,8 @@ Concretely, the configuration material is split as follows:
   admin, storage policy, paths, and so on.
 - DB `proxy_*`: live proxy transport / routing configuration.
 - DB `vhosts` / `vhost_*`: live Runtime Apps configuration.
-- DB `waf_rule_assets`: base WAF and CRS rule / data assets.
-- DB `override_rules`: managed bypass rule bodies.
+- DB `waf_rule_assets`: base WAF and CRS rule / data assets, and managed
+  bypass rule bodies (kind `bypass_extra_rule`).
 - DB `php_runtime_*` / `psgi_runtime_*`: PHP-FPM / PSGI runtime inventory.
 - `seeds/conf/config-bundle.json`: bundled production seed for an empty DB.
 - `data/conf/proxy.json`, `sites.json`, `upstream-runtime.json`,

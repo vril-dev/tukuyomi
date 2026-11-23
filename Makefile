@@ -96,9 +96,10 @@ help:
 	@echo "  make setup                      Prepare local dev baseline (.env + DB migration + DB config/rule assets)"
 	@echo "  make env-init                   Create .env from .env.example if missing"
 	@echo "  make crs-install                Run db-migrate, install OWASP CRS seed files, and import WAF rule assets into DB"
-	@echo "  make crs-ensure                 Run db-migrate, install CRS only when missing, and import WAF rule assets into DB"
+	@echo "  make crs-ensure                 Same as crs-install: run db-migrate, stage OWASP CRS, and import WAF rule assets into DB (always re-imports)"
 	@echo "  make install TARGET=linux-systemd INSTALL_ROLE=gateway|center|center-protected Install binary runtime onto this Linux host"
 	@echo "    - optional: PREFIX=/opt/tukuyomi INSTALL_USER=<user> INSTALL_ENABLE_SCHEDULED_TASKS=0(disable) INSTALL_DB_SEED=auto|always|never"
+	@echo "    - optional: INSTALL_REFRESH_WAF_ASSETS=0 (keep current WAF rule assets; installed environments only, default 1 re-imports and replaces them) CRS_VERSION=<tag>"
 	@echo "  make deploy-render TARGET=ecs|kubernetes|azure-container-apps|container-image IMAGE_URI=... Render deploy artifacts"
 	@echo "    - optional: DEPLOY_RENDER_OUT_DIR=dist/deploy DEPLOY_RENDER_OVERWRITE=1"
 	@echo ""
@@ -441,6 +442,9 @@ crs-install: db-migrate
 		config_file="$(ROOT_DIR)/$$config_file"; \
 	fi; \
 	stage_root="$$workdir/tmp/waf-rule-assets"; \
+	if [[ "$$stage_root" != /* ]]; then \
+		stage_root="$(ROOT_DIR)/$$stage_root"; \
+	fi; \
 	rm -rf "$$stage_root"; \
 	mkdir -p "$$stage_root"; \
 	trap 'rm -rf "$$stage_root"' EXIT; \
@@ -457,6 +461,9 @@ crs-ensure: db-migrate
 		config_file="$(ROOT_DIR)/$$config_file"; \
 	fi; \
 	stage_root="$$workdir/tmp/waf-rule-assets"; \
+	if [[ "$$stage_root" != /* ]]; then \
+		stage_root="$(ROOT_DIR)/$$stage_root"; \
+	fi; \
 	rm -rf "$$stage_root"; \
 	mkdir -p "$$stage_root"; \
 	trap 'rm -rf "$$stage_root"' EXIT; \

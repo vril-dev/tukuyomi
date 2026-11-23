@@ -45,6 +45,10 @@ make db-migrate
 make crs-install
 ```
 
+`make crs-install` は、既定のバージョンの OWASP CRS を stage します。別の
+バージョンの選び方と、すでに使っている環境の更新は第13章 13.8 節で扱います。import の
+たびに、DB 上のすべての WAF rule asset が置き換わる点に注意してください。
+
 ## 2.3　Preset を適用する
 
 tukuyomi では、よくある初期構成を **preset** という単位で同梱しています。preview を

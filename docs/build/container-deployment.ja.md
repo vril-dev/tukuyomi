@@ -147,7 +147,7 @@ docker build -f server/Dockerfile -t tukuyomi:local server
 docker build -f docs/build/Dockerfile.example -t tukuyomi:deploy .
 ```
 
-この方法では、Gateway ／ Center UI のビルド、Go バイナリのビルド、ランタイム設定のコピー、CRS インストールまでをイメージビルド内で完結させます。
+この方法では、Gateway ／ Center UI のビルド、Go バイナリのビルド、ランタイム設定のコピー、CRS インストール（既定のバージョン）までをイメージビルド内で完結させます。別の CRS バージョンに固定する場合は、Dockerfile の `stage_waf_rule_assets.sh` の行に、バージョンを 2 番目の引数として追加します。導入済みの環境を更新する場合は、[OWASP CRS の更新](binary-deployment.ja.md#owasp-crs-の更新) を参照してください。
 
 ## 配備アーティファクトの生成
 
@@ -182,7 +182,7 @@ make deploy-render TARGET=azure-container-apps IMAGE_URI=registry.example.com/tu
 `/options`、`/runtime-apps`、またはスケジュール実行する PHP CLI ジョブで同梱の PHP ランタイムを使う場合は、`/app/data/php-fpm` もマウントしてください。
 内部レスポンスキャッシュストアをノード入れ替え後も残したい場合は、`cache_store.store_dir` に合わせて `/app/cache/response` などもマウントしてください。これはあくまでキャッシュであり、DB ／ランタイムの正となるソースではありません。
 
-WAF／CRS のインポート素材は `/app/data/tmp` 配下にステージングし、DB `waf_rule_assets` へインポートします。ランタイムは、マウントしたルールディレクトリではなく DB 上の有効な WAF／CRS アセットを読み込みます。
+WAF／CRS のインポート素材は `/app/data/tmp` 配下にステージングし、DB `waf_rule_assets` へインポートします。ランタイムは、マウントしたルールディレクトリではなく DB 上の有効な WAF／CRS アセットを読み込みます。インポートをやり直すと、UI で編集したルールを含め、DB 上のすべての WAF ルールアセットが置き換わります。稼働中の配備の CRS バージョンを変える前に、[OWASP CRS の更新](binary-deployment.ja.md#owasp-crs-の更新) を読んでください。
 
 ## 設定とシークレット
 
@@ -242,7 +242,7 @@ WAF log archive は、同じ `persistent_storage` バックエンド内の
 - 非ループバックリスナー上で `full_external` に上書きする場合は、フロント側の許可リスト／認証を必須として扱ってください
 - `admin.trusted_cidrs` を公開／包括的なネットワークまで広げた場合、埋め込みの管理 UI／API はその信頼ソースに対しても再公開され、起動時には警告が出るのみです
 - ベース WAF と CRS のアセットは、インポート後は DB `waf_rule_assets` を正として保持します。イメージにベイクされたファイルはシード素材であり、ランタイムの参照元ではありません
-- マネージドなバイパスのオーバーライドルールは DB `override_rules` です。`extra_rule` の値は、論理的な互換参照として残ります
+- マネージドなバイパスのオーバーライドルールは、DB `waf_rule_assets` の種別 `bypass_extra_rule` として保存され、WAF ルールアセットを再インポートすると置き換わります。`extra_rule` の値は、論理的な互換参照として残ります
 
 ## プラットフォーム別の対応
 
@@ -387,7 +387,7 @@ make compose-up-scheduled-tasks
 ## 補足
 
 - 埋め込みの Gateway ／ Center UI はイメージビルド時に生成され、ランタイムでビルドされることはありません
-- `scripts/install_crs.sh` は、イメージビルド時にも起動時にも実行できます
+- `scripts/install_crs.sh` は、イメージビルド時にも起動時にも実行できます。1 番目の引数で別のタグを渡さない限り、既定のバージョンの CRS をインストールします
 - ランタイムでポリシーファイルを変更したい場合は `/app/conf` をマウントしてください。WAF／CRS アセットは `/app/data/tmp` のステージングから DB へインポートします
 - リポジトリ同梱の `docker-compose.yml` には、`scheduled-tasks` プロファイル配下に `scheduled-task-runner` サイドカーが含まれます
 - 現在のサイドカー実装は明示的です。イメージ内のプロキシバイナリを `run-scheduled-tasks` 付きで呼び出し、次の minute 境界までスリープします

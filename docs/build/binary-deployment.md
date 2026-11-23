@@ -177,7 +177,12 @@ Behavior:
 - `INSTALL_DB_SEED=auto` runs `db-import` only when the SQLite DB is not present yet
 - the first DB seed creates a default upstream named `primary`; update it to
   the real backend endpoint before exposing the proxy to traffic
-- rerunning against an existing DB migrates schema and refreshes WAF/CRS assets
+- rerunning against an existing DB migrates schema and re-imports WAF/CRS assets,
+  which replaces every WAF rule asset, including rules edited in the UI. On an
+  installed environment, set `INSTALL_REFRESH_WAF_ASSETS=0` to keep the current
+  assets (a first install has none and cannot start without the import), or
+  `CRS_VERSION=<tag>` to choose the CRS version. See
+  [Updating the OWASP CRS](#updating-the-owasp-crs)
 - for an empty MySQL / PostgreSQL DB, set `INSTALL_DB_SEED=always` explicitly
 - the scheduled-task timer is enabled by default; use
   `INSTALL_ENABLE_SCHEDULED_TASKS=0` when this host should not execute scheduled
@@ -287,7 +292,7 @@ Notes:
 - the public release bundle ships `conf/config.json` and the bundled empty-DB runtime seed at `seeds/conf/config-bundle.json`
 - when configured files such as `conf/proxy.json` or policy JSON are absent, `make db-import` reads `seeds/conf/config-bundle.json` before falling back to built-in compatibility defaults
 - `make crs-install` stages the default base WAF rule seed from `seeds/waf/rules/tukuyomi.conf` and imports it into DB
-- CRS files are temporary import material for DB `waf_rule_assets`; `make crs-install` stages them under `data/tmp` and cleans up
+- CRS files are temporary import material for DB `waf_rule_assets`; `make crs-install` downloads the default CRS version, stages it under `data/tmp`, and removes the staging directory after the import. To use another version, see [Updating the OWASP CRS](#updating-the-owasp-crs)
 - the config bundle domains for sites, scheduled tasks, upstream runtime,
   policies, cache rules, WAF bypass, and PHP-FPM/PSGI manifests are DB
   seed/export artifacts after DB bootstrap
@@ -298,7 +303,7 @@ Notes:
 - `GEOIPUPDATE_BIN` remains available if you want to override the bundled updater path
 - the official managed-country refresh wrapper is `./scripts/update_country_db.sh`
 - managed GeoIP country DB, `GeoIP.conf`, and update status are DB-backed; do not ship a `data/geoip` fallback directory
-- managed bypass override rules are DB `override_rules`; do not ship a `conf/rules` fallback directory
+- managed bypass override rules (`extra_rule` bodies) are DB `waf_rule_assets` of kind `bypass_extra_rule`; do not ship a `conf/rules` fallback directory. Re-importing WAF rule assets replaces them
 - WAF/access events are written to DB `waf_events`; `paths.log_file` is only a legacy import source when you intentionally ingest an old `waf-events.ndjson`
 - `extra_rule` values remain logical compatibility references to DB-managed override rules
 
@@ -596,6 +601,232 @@ shutdown. Long-lived Upgrade/WebSocket connections are tracked and waited on up
 to `server.graceful_shutdown_timeout_sec` before force close. HTTP/3 UDP socket
 handoff is supported, but existing QUIC connections do not survive process
 replacement.
+
+## Updating the OWASP CRS
+
+OWASP CRS is not part of the binary. The staging script downloads it, and the
+running service reads it from DB `waf_rule_assets`. To move an existing
+installation to another CRS version, or to re-import the same version, import
+the WAF rule assets into that installation's DB again.
+
+- the default version is `v4.23.0`
+- `make install` takes the version from `CRS_VERSION=<tag>`;
+  `scripts/stage_waf_rule_assets.sh <stage-root> [crs-version]` and
+  `scripts/install_crs.sh [crs-version]` take it as an argument
+- `make crs-install` and `make crs-ensure` always stage the default version
+- staging downloads the CRS archive from GitHub, so the host that runs it needs
+  `curl`, `tar`, and outbound HTTPS
+
+### What an import replaces and keeps
+
+An import (`tukuyomi db-import-waf-rule-assets`, which `make crs-install`,
+`make crs-ensure`, `make install`, and the image build in
+[Dockerfile.example](Dockerfile.example) all run) does not merge. It writes a
+new active set of **all** WAF rule assets built only from the staged files: the
+base rule seed `tukuyomi.conf`, the CRS rules and data, and `crs-setup.conf`.
+This also happens when the CRS version does not change.
+
+Replaced by the staged files:
+
+- base rules edited on the `Rules` screen, including exclusions written by FP
+  Tuner; `tukuyomi.conf` returns to the seed's content, and to enabled even if
+  you had disabled it on the `Rules` screen
+- base rule files added on the `Rules` screen, with their enabled state and order
+- bypass snippets (`Rules` > Advanced > `Bypass snippets`), which are stored as
+  rule assets of kind `bypass_extra_rule`
+- `crs-setup.conf` additions. When
+  `WAF_RULE_SEED_CRS_SETUP_OVERRIDE=<file>` is set at staging time, the content
+  of that file is appended to the end of `crs-setup.conf`; pass the same file
+  again
+
+Kept:
+
+- the CRS rule-set selection: the list of disabled CRS rule file names (DB
+  `crs_disabled_rules`) stays after an import. Files added by the new version
+  start enabled, and a name that was removed or renamed no longer has any
+  effect. Check the selection on the `Rules` screen after updating
+- bypass entries, but not their snippets: right after the import, a bypass path
+  whose snippet is gone is inspected with the default rules, and the log shows
+  `[BYPASS][RULE][WARN] ... (fallback=default-rules)`
+- proxy, sites, TLS, and admin settings, admin users, and WAF events
+
+The imported base rules and CRS are in use once the service restarts.
+
+Older versions of the rule assets stay in the DB, but the admin UI and API have
+no way to list or restore them, so an import cannot be undone from there. Back
+up the DB first.
+
+### With `make install`
+
+`make install` runs this import every time, because `INSTALL_REFRESH_WAF_ASSETS`
+defaults to `1`. Re-running the installer to upgrade the binary therefore also
+replaces local rule edits.
+
+```bash
+# keep the current WAF rule assets (only on an installation that already has them)
+make install TARGET=linux-systemd INSTALL_REFRESH_WAF_ASSETS=0
+
+# choose the CRS version explicitly
+make install TARGET=linux-systemd CRS_VERSION=<crs-version>
+```
+
+- use `INSTALL_REFRESH_WAF_ASSETS=0` only on an installed environment; on a first
+  install there are no rule assets yet and the service cannot start
+- by default the installer restarts a running service at the end, which loads the
+  imported rules
+- `INSTALL_ROLE=center` does not import WAF rule assets
+- a `WAF_RULE_SEED_CRS_SETUP_OVERRIDE` file does not reach the staging script when
+  the installer escalates with `sudo`, because `sudo` drops the variable by
+  default; run the installer as root, or use the procedure below
+
+### Without local rule edits
+
+The installed tree (`/opt/tukuyomi` by default) has no `install_crs.sh`, no
+`stage_waf_rule_assets.sh`, and no `seeds/waf/`. Use the `scripts/` and
+`seeds/waf/rules/` of the extracted release tarball, and run the commands below
+from that directory.
+
+First back up the DB. For SQLite, take an online backup of the file set in
+`storage.db_path` (`db/tukuyomi.db` under the deployment root by default). This
+needs the `sqlite3` command-line tool, and `umask 077` keeps the copy private:
+
+```bash
+sudo -u tukuyomi sh -c 'umask 077; sqlite3 /opt/tukuyomi/db/tukuyomi.db ".backup /opt/tukuyomi/db/tukuyomi.db.bak.$(date +%Y%m%d%H%M%S)"'
+```
+
+Or stop the service and copy `tukuyomi.db` together with `tukuyomi.db-wal` and
+`tukuyomi.db-shm` when they exist. For MySQL / PostgreSQL use your normal dump.
+
+Then stage, import, and restart. The import runs as the runtime user from the
+deployment root, like the installer does. The commands are chained with `&&` so
+that a failed step stops the rest, and the subshell keeps `cd` from leaking:
+
+```bash
+ROOT=/opt/tukuyomi
+STAGE="$ROOT/data/tmp/waf-rule-assets"
+
+sudo rm -rf "$STAGE" &&
+sudo install -d -m 755 "$STAGE" &&
+sudo ./scripts/stage_waf_rule_assets.sh "$STAGE" <crs-version> &&
+sudo chown -R tukuyomi:tukuyomi "$STAGE" &&
+(cd "$ROOT" && sudo -H -u tukuyomi env \
+  WAF_CONFIG_FILE=conf/config.json \
+  WAF_RULE_ASSET_FS_ROOT=data/tmp/waf-rule-assets \
+  ./bin/tukuyomi db-import-waf-rule-assets) &&
+sudo rm -rf "$STAGE" &&
+sudo systemctl restart tukuyomi
+```
+
+If a step fails, the staging directory stays; the first line removes it on the
+next run.
+
+To carry over a `WAF_RULE_SEED_CRS_SETUP_OVERRIDE` file, run the staging line as
+`sudo env WAF_RULE_SEED_CRS_SETUP_OVERRIDE=<file> ./scripts/stage_waf_rule_assets.sh "$STAGE" <crs-version>`;
+a variable set in front of `sudo` does not reach the script.
+
+When the deployment root is under the login user's home directory, the runtime
+user is that user: drop `sudo` and `chown` from the staging and import
+commands. Restarting the service still needs `sudo`.
+
+### With local rule edits
+
+Rules changed in the UI (edits to `tukuyomi.conf`, FP Tuner exclusions, added base
+rule files, and bypass snippets) exist only in the DB, so the import replaces
+them. Before the import, save the full response of
+`GET <admin.api_base_path>/rules` (`/tukuyomi-api/rules` by default). The `files`
+array has the `path`, `kind`, `raw`, and `enabled` of each file, in order. Open
+the URL in a browser that is signed in to the admin UI and save the JSON; the
+admin API also accepts a personal access token with `admin:read` (create one
+under *Personal access tokens* on the admin UI `User` page), but do not
+put the token on a command line that others can see.
+
+After the import, put the rules back on the `Rules` screen, or with
+`PUT <admin.api_base_path>/rules` (`{path, kind, raw}`, plus `enabled` for base
+rules; `PUT .../rules:order` restores the order of base rule files). Put the
+bypass snippets back first: while the snippet that a bypass entry refers to is
+missing, a bypass configuration that contains that entry cannot be saved from
+the UI or API. Then restart the service.
+
+The saved base rule overwrites the new release's seed `tukuyomi.conf`. Compare
+the saved file with that seed first, and merge a change in the seed by hand.
+`PUT .../rules` validates each file against the imported CRS, so a rule that
+does not load under the new version is rejected.
+
+### Containers
+
+- If the DB is the SQLite file baked into the image at build time, as in
+  [Dockerfile.example](Dockerfile.example), rebuild the image and replace the
+  container. The image build stages the default CRS version; to pin another one,
+  add the version as the second argument of the `stage_waf_rule_assets.sh` line.
+  Replacing the container also discards everything else in that DB: admin users,
+  settings, and events, not only the rules.
+- If the DB lives outside the image (a volume, MySQL, or PostgreSQL), import once
+  with the new image, then recreate the container. Stage on the host with the
+  scripts of the release tarball, mount the stage directory read-only into a
+  one-off container that has the same `conf/config.json` and DB access as the
+  service, and run `db-import-waf-rule-assets` with `WAF_RULE_ASSET_FS_ROOT`
+  pointing at it:
+
+  ```bash
+  STAGE="$(mktemp -d)" &&
+  ./scripts/stage_waf_rule_assets.sh "$STAGE" <crs-version> &&
+  chmod -R a+rX "$STAGE" &&
+  docker run --rm \
+    -v "$STAGE:/waf-rule-assets:ro" \
+    -e WAF_RULE_ASSET_FS_ROOT=/waf-rule-assets \
+    -e WAF_CONFIG_FILE=/app/conf/config.json \
+    <the same -v / -e / network options as the service> \
+    <image> /app/tukuyomi db-import-waf-rule-assets &&
+  rm -rf "$STAGE"
+  ```
+
+  The binary is `/app/tukuyomi` in the image built from `Dockerfile.example` and
+  `/app/server` in the repository `server/Dockerfile` image.
+- Every replica that shares the DB loads the imported rules when it restarts.
+
+### Development tree
+
+```bash
+make crs-install
+```
+
+then restart the process. For another version, stage it by hand and import it
+from the `data` work directory:
+
+```bash
+./scripts/stage_waf_rule_assets.sh data/tmp/waf-rule-assets <crs-version> &&
+WAF_RULE_ASSET_FS_ROOT=tmp/waf-rule-assets make db-import-waf-rule-assets &&
+rm -rf data/tmp/waf-rule-assets
+```
+
+`make db-import-waf-rule-assets` only imports what is already staged under
+`WAF_RULE_ASSET_FS_ROOT`; it does not download CRS and it fails when nothing is
+staged.
+
+### Gateways with Center-assigned WAF rules
+
+Update the rule bundle in Center and assign it again, instead of importing on
+the Gateway. If the Gateway's rules change after an assignment, that assignment
+is not applied: it stays `blocked` with `local WAF rules changed after
+assignment`. After the Gateway has sent its new rules to Center, assign again.
+
+### Verify the active version
+
+Open the `Rules` screen and look for the `OWASP CRS ver.` line at the top of
+`crs-setup.conf`. This shows what the DB holds, so check it after the restart.
+The `[WAF] Reloaded base rules (N files)` log line only counts files; it does
+not show the CRS version.
+
+### Roll back
+
+The admin UI and API cannot restore an older version of the rule assets. Restore
+the DB backup taken before the import (stop the service, restore, start it;
+settings and WAF events written after the backup are lost too). When restoring
+a `.backup` copy, delete `tukuyomi.db-wal` and `tukuyomi.db-shm` first, or the
+old WAL can be applied on top of it; a copy taken with the service stopped is
+restored as all three files together. Alternatively, or import the
+previous CRS version again with the procedure above, which replaces local rule
+edits in the same way.
 
 ## Notes
 

@@ -174,6 +174,59 @@ func TestParseServerMaxHeaderBytes(t *testing.T) {
 	}
 }
 
+func TestParseServerMaxHeaderCount(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+	}{
+		{in: "", want: 100},
+		{in: "0", want: 100},
+		{in: "-1", want: 100},
+		{in: "1", want: 1},
+		{in: "100", want: 100},
+		{in: "500", want: 500},
+		{in: "32767", want: 32767},
+		{in: "999999999", want: 32767},
+		{in: "abc", want: 100},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.in, func(t *testing.T) {
+			if got := parseServerMaxHeaderCount(tc.in); got != tc.want {
+				t.Fatalf("parseServerMaxHeaderCount(%q)=%d want=%d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseServerMaxCookieLimits(t *testing.T) {
+	cases := []struct {
+		in        string
+		wantBytes int
+		wantPairs int
+	}{
+		{in: "", wantBytes: 16 << 10, wantPairs: 200},
+		{in: "0", wantBytes: 16 << 10, wantPairs: 200},
+		{in: "-1", wantBytes: 16 << 10, wantPairs: 200},
+		{in: "1", wantBytes: 1, wantPairs: 1},
+		{in: "4096", wantBytes: 4096, wantPairs: 4096},
+		{in: "32767", wantBytes: 32767, wantPairs: 32767},
+		{in: "999999999", wantBytes: 16 << 20, wantPairs: 32767},
+		{in: "abc", wantBytes: 16 << 10, wantPairs: 200},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.in, func(t *testing.T) {
+			if got := parseServerMaxCookieBytes(tc.in); got != tc.wantBytes {
+				t.Fatalf("parseServerMaxCookieBytes(%q)=%d want=%d", tc.in, got, tc.wantBytes)
+			}
+			if got := parseServerMaxCookiePairs(tc.in); got != tc.wantPairs {
+				t.Fatalf("parseServerMaxCookiePairs(%q)=%d want=%d", tc.in, got, tc.wantPairs)
+			}
+		})
+	}
+}
+
 func TestParseServerConcurrency(t *testing.T) {
 	cases := []struct {
 		in   string

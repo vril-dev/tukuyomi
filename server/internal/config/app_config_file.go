@@ -83,6 +83,9 @@ type appServerConfig struct {
 	IdleTimeoutSec              int                             `json:"idle_timeout_sec"`
 	GracefulShutdownTimeoutSec  int                             `json:"graceful_shutdown_timeout_sec"`
 	MaxHeaderBytes              int                             `json:"max_header_bytes"`
+	MaxHeaderCount              int                             `json:"max_header_count"`
+	MaxCookieBytes              int                             `json:"max_cookie_bytes"`
+	MaxCookiePairs              int                             `json:"max_cookie_pairs"`
 	MaxConcurrentRequests       int                             `json:"max_concurrent_requests"`
 	MaxQueuedRequests           int                             `json:"max_queued_requests"`
 	QueuedRequestTimeoutMS      int                             `json:"queued_request_timeout_ms"`
@@ -391,6 +394,9 @@ func defaultAppConfigFile() appConfigFile {
 			IdleTimeoutSec:              120,
 			GracefulShutdownTimeoutSec:  30,
 			MaxHeaderBytes:              1 << 20,
+			MaxHeaderCount:              DefaultServerMaxHeaderCount,
+			MaxCookieBytes:              DefaultServerMaxCookieBytes,
+			MaxCookiePairs:              DefaultServerMaxCookiePairs,
 			MaxConcurrentRequests:       0,
 			MaxQueuedRequests:           0,
 			QueuedRequestTimeoutMS:      0,
@@ -921,6 +927,9 @@ func validateAppConfigFile(cfg appConfigFile) error {
 		return fmt.Errorf("server timeout values must be >= 0")
 	}
 	if cfg.Server.MaxHeaderBytes < 0 ||
+		cfg.Server.MaxHeaderCount < 0 ||
+		cfg.Server.MaxCookieBytes < 0 ||
+		cfg.Server.MaxCookiePairs < 0 ||
 		cfg.Server.MaxConcurrentRequests < 0 ||
 		cfg.Server.MaxQueuedRequests < 0 ||
 		cfg.Server.QueuedRequestTimeoutMS < 0 ||

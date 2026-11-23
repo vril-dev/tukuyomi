@@ -4,7 +4,7 @@ subtitle: "Deploying and operating an application-edge control plane built aroun
 language: en
 audience: "Engineers who deploy and operate tukuyomi (infra / SRE / platform)"
 version: "based on 1.3.0"
-build: "pandoc → HTML → Chrome headless"
+build: "pandoc → HTML → Chrome headless (PDF); pandoc (EPUB)"
 ---
 
 # tukuyomi Operation Guide (English Edition)
@@ -151,11 +151,18 @@ this book with the relative path `../../images/ui-samples/`.
 ## Build notes
 
 - Single PDF: chapter files are concatenated by pandoc in the order listed in
-  this file; cover, table of contents, and chapter numbers are generated
-  automatically.
+  `docs/guide/lib/guide_book.sh`; cover, table of contents, and chapter
+  numbers are generated automatically.
 - HTML intermediate: pandoc HTML5 output is rendered with Noto Sans CJK / IPAex
   fonts, chapter-front page-break CSS, and monospace styling for code blocks.
 - Print: `google-chrome --headless --print-to-pdf` writes the final PDF; A4
   margins are unified via `@page`, with the page number centered in the
   footer.
 - Build script: `make guide-pdf` or `docs/guide/build-pdf.sh en`.
+- EPUB: pandoc writes EPUB 3 directly from the same chapter files, styled by
+  `docs/guide/epub.css`. Text reflows to the reader's screen and font
+  settings, and no fonts are embedded. The title page shows the title, the
+  subtitle with the base version, and the build date; there is no cover image.
+  Build script: `make guide-epub` or `docs/guide/build-epub.sh en`.
+- The PDF and EPUB builders share the chapter list and the title, subtitle,
+  and version label in `docs/guide/lib/guide_book.sh`.

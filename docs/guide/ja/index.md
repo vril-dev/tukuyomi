@@ -4,7 +4,7 @@ subtitle: "Coraza + CRS WAF を中核とする application-edge control plane �
 language: ja
 audience: "tukuyomi を導入・運用するエンジニア（インフラ／SRE／プラットフォーム担当）"
 version: "1.3.0 ベース"
-build: "pandoc → HTML → Chrome headless で PDF 化"
+build: "pandoc → HTML → Chrome headless で PDF 化、pandoc で EPUB 化"
 ---
 
 # tukuyomi 運用ガイド（日本語版）
@@ -148,9 +148,16 @@ books/tukuyomi/
 
 ## ビルド方針（メモ）
 
-- 単一 PDF: 章ファイルを `index.md` の順に pandoc で連結し、目次・扉・章番号を生成。
+- 単一 PDF: 章ファイルを `docs/guide/lib/guide_book.sh` に並べた順に pandoc で連結し、
+  目次・扉・章番号を生成。
 - HTML 中間: pandoc の HTML5 出力に Noto Sans CJK / IPAex フォント、章扉の改ページ
   CSS、code block の monospace を当てる。
 - 印刷: `google-chrome --headless --print-to-pdf` で PDF を出力。`@page` で A4 余白
   を統一し、ヘッダ／フッタにタイトルとページ番号を入れる。
 - ビルドスクリプトは `make guide-pdf` または `docs/guide/build-pdf.sh ja`。
+- EPUB: 同じ章ファイルから pandoc で EPUB 3 を直接出力し、`docs/guide/epub.css` を
+  当てる。本文は読書アプリの画面と文字の設定に合わせて折り返し、フォントは埋め込まない。
+  扉にはタイトル・サブタイトル（ベースのバージョンを含む）・作成日を出し、表紙の画像は
+  付けない。ビルドスクリプトは `make guide-epub` または `docs/guide/build-epub.sh ja`。
+- 章の順番と、タイトル・サブタイトル・バージョンの表記は `docs/guide/lib/guide_book.sh`
+  に置き、PDF と EPUB のビルドで共通にする。

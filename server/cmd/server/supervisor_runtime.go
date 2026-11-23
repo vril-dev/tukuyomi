@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -1052,12 +1053,7 @@ func (w *managedWorkerProcess) Drain(grace time.Duration) error {
 			return closeErr
 		}
 	} else if err := w.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		select {
-		case waitErr := <-w.waitCh:
-			return normalizeWorkerStopError(waitErr)
-		default:
-		}
-		return err
+		return w.signalFailed(err)
 	}
 	select {
 	case err := <-w.waitCh:
@@ -1091,12 +1087,7 @@ func (w *managedWorkerProcess) Stop(grace time.Duration) error {
 	default:
 	}
 	if err := w.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		select {
-		case waitErr := <-w.waitCh:
-			return normalizeWorkerStopError(waitErr)
-		default:
-		}
-		return err
+		return w.signalFailed(err)
 	}
 	select {
 	case err := <-w.waitCh:
@@ -1107,6 +1098,23 @@ func (w *managedWorkerProcess) Stop(grace time.Duration) error {
 		}
 		return normalizeWorkerStopError(<-w.waitCh)
 	}
+}
+
+// signalFailed handles a failed SIGTERM in Drain and Stop. When the worker has
+// already finished, the exit goroutine in watchExit has returned from Wait and
+// is about to send the result and close waitCh, so wait for it: another
+// receiver may have taken the result and the close may not have happened yet.
+// Any other signal error is returned unless the exit is already visible.
+func (w *managedWorkerProcess) signalFailed(err error) error {
+	if errors.Is(err, os.ErrProcessDone) {
+		return normalizeWorkerStopError(<-w.waitCh)
+	}
+	select {
+	case waitErr := <-w.waitCh:
+		return normalizeWorkerStopError(waitErr)
+	default:
+	}
+	return err
 }
 
 func normalizeWorkerStopError(err error) error {

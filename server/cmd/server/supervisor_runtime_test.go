@@ -541,6 +541,34 @@ func TestManagedWorkerProcessExitIsVisibleAfterAnotherReceiverTakesIt(t *testing
 	}
 }
 
+// Covers the window in which the exit goroutine has returned from Wait and
+// another receiver has taken the result, but waitCh is not closed yet: Drain
+// and Stop must wait for the close instead of returning the failed SIGTERM.
+func TestManagedWorkerProcessDrainAndStopWaitForExitCloseAfterSignalFails(t *testing.T) {
+	for name, call := range map[string]func(*managedWorkerProcess) error{
+		"Drain": func(w *managedWorkerProcess) error { return w.Drain(10 * time.Second) },
+		"Stop":  func(w *managedWorkerProcess) error { return w.Stop(10 * time.Second) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd := exec.Command("sh", "-c", "exit 0")
+			if err := cmd.Start(); err != nil {
+				t.Fatalf("start worker: %v", err)
+			}
+			if err := cmd.Wait(); err != nil {
+				t.Fatalf("wait worker: %v", err)
+			}
+			worker := &managedWorkerProcess{cmd: cmd, waitCh: make(chan error, 1)}
+			go func() {
+				time.Sleep(50 * time.Millisecond)
+				close(worker.waitCh)
+			}()
+			if err := call(worker); err != nil {
+				t.Fatalf("%s returned %v; want it to wait for the exit to be closed", name, err)
+			}
+		})
+	}
+}
+
 func startDrainableWorkerProcessForTest(t *testing.T) *managedWorkerProcess {
 	t.Helper()
 	drainReader, drainWriter, err := os.Pipe()

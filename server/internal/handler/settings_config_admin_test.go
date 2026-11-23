@@ -157,6 +157,9 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	next.Server.ReadTimeoutSec = 45
 	next.Server.GracefulShutdownTimeoutSec = 60
 	next.Server.MaxHeaderBytes = 2097152
+	next.Server.MaxHeaderCount = 250
+	next.Server.MaxCookieBytes = 32768
+	next.Server.MaxCookiePairs = 300
 	next.Runtime.GOMAXPROCS = 4
 	next.Runtime.MemoryLimitMB = 512
 	next.RequestMeta.Country.Mode = "mmdb"
@@ -243,6 +246,12 @@ func TestPutSettingsListenerAdminSavesSubsetAndPreservesSecrets(t *testing.T) {
 	}
 	if saved.Server.MaxHeaderBytes != 2097152 {
 		t.Fatalf("saved max_header_bytes=%d want=2097152", saved.Server.MaxHeaderBytes)
+	}
+	if saved.Server.MaxHeaderCount != 250 {
+		t.Fatalf("saved max_header_count=%d want=250", saved.Server.MaxHeaderCount)
+	}
+	if saved.Server.MaxCookieBytes != 32768 || saved.Server.MaxCookiePairs != 300 {
+		t.Fatalf("saved max_cookie_bytes=%d max_cookie_pairs=%d want=32768 300", saved.Server.MaxCookieBytes, saved.Server.MaxCookiePairs)
 	}
 	if saved.Runtime.GOMAXPROCS != 4 {
 		t.Fatalf("saved gomaxprocs=%d want=4", saved.Runtime.GOMAXPROCS)
@@ -597,6 +606,9 @@ func createEmptySettingsTestConfig() settingsListenerAdminConfig {
 			IdleTimeoutSec:              120,
 			GracefulShutdownTimeoutSec:  30,
 			MaxHeaderBytes:              1048576,
+			MaxHeaderCount:              100,
+			MaxCookieBytes:              16384,
+			MaxCookiePairs:              200,
 			MaxConcurrentRequests:       0,
 			MaxQueuedRequests:           0,
 			QueuedRequestTimeoutMS:      0,

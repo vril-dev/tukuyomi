@@ -59,6 +59,36 @@ Container startup usually needs only:
   rather than allowed to hold a data-plane goroutine indefinitely.
 - `server.idle_timeout_sec` bounds keep-alive idle time between requests.
 - `server.graceful_shutdown_timeout_sec` bounds deploy/reload drain time before force-closing live connections.
+- `server.max_header_bytes` bounds the request line and headers together
+  (default 1 MiB, kept between 1 KiB and 16 MiB). HTTP/2 and HTTP/3 use it as
+  the header list limit.
+- `server.max_header_count` bounds the number of header fields in one public
+  request (default 100, at most 32767; `0` means the default). A request with
+  more fields gets `431 Request Header Fields Too Large` before the
+  `max_concurrent_*` caps and WAF inspection. Each rejection increments
+  `tukuyomi_proxy_request_header_limit_rejected_total`, and a
+  `[PROXY][HEADER_LIMIT][WARN]` line is logged at most once a minute with the
+  connecting address (behind a CDN or proxy, its address). Raise the limit when
+  a CDN or proxy in front adds many headers. Cookies that HTTP/2 and HTTP/3
+  clients split into several fields count as one. Admin paths and `/healthz` on
+  a shared listener are not counted; they do not reach the WAF. Changing it
+  requires a restart.
+- `server.max_cookie_bytes` bounds the total size of the `Cookie` header values
+  in one public request (default 16384, at most 16 MiB), and
+  `server.max_cookie_pairs` bounds the number of cookies, counted as
+  `;`-separated parts that are not just spaces (default 200, at most 32767).
+  Several `Cookie` lines are added together, and `0` means the default. A
+  request over either bound gets `431 Request Header Fields Too Large` before
+  the `max_concurrent_*` caps and WAF inspection, also on routes that do not
+  use the WAF. The WAF inspects every cookie name and value, so a cookie header
+  costs it far more per byte than other headers; without these bounds one
+  request could use many seconds of CPU time and gigabytes of memory. Each
+  rejection increments `tukuyomi_proxy_request_cookie_limit_rejected_total`,
+  and a `[PROXY][COOKIE_LIMIT][WARN]` line naming the exceeded setting is
+  logged at most once a minute with the connecting address. As with
+  `server.max_header_count`, admin paths and `/healthz` on a shared listener
+  are not checked. Raise them only for applications that need larger cookies.
+  Changing them requires a restart.
 - TLS public listeners advertise HTTP/1.1 by default. When
   `server.http2.enabled=true`, HTTPS public listeners advertise `h2` and
   `http/1.1` through ALPN; HTTP/1.1 remains available for clients and WebSocket

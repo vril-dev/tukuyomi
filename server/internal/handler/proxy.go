@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -23,6 +24,7 @@ import (
 	"tukuyomi/internal/bottelemetry"
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/cacheconf"
+	"tukuyomi/internal/config"
 	"tukuyomi/internal/observability"
 	"tukuyomi/internal/proxyaccesslog"
 	"tukuyomi/internal/proxycompression"
@@ -865,6 +867,136 @@ func ProxyHandler(c *gin.Context) {
 
 func ServeProxyHTTP(w http.ResponseWriter, r *http.Request) {
 	serveProxyRequest(newProxyServeContext(w, r))
+}
+
+var (
+	// requestHeaderLimitRejectedTotal counts public requests rejected because
+	// they carried more header field values than server.max_header_count.
+	requestHeaderLimitRejectedTotal atomic.Uint64
+	// requestCookieLimitRejectedTotal counts public requests rejected because
+	// their Cookie values exceeded server.max_cookie_bytes or
+	// server.max_cookie_pairs.
+	requestCookieLimitRejectedTotal atomic.Uint64
+	// lastRequestHeaderLimitWarning and lastRequestCookieLimitWarning hold the
+	// UnixNano time of the last rejection warning of each kind, so a flood of
+	// such requests logs at most once a minute.
+	lastRequestHeaderLimitWarning atomic.Int64
+	lastRequestCookieLimitWarning atomic.Int64
+)
+
+// RequestHeaderLimits bounds what a public request may carry before the WAF
+// sees it. A field <= 0 means its default, so a handler built before the
+// config is applied still checks.
+type RequestHeaderLimits struct {
+	MaxCount       int
+	MaxCookieBytes int
+	MaxCookiePairs int
+}
+
+// RejectExcessRequestHeaders answers 431 when r carries more header field
+// values than limits.MaxCount, or Cookie values over limits.MaxCookieBytes or
+// limits.MaxCookiePairs, and reports whether it did. The public listener calls
+// it before the concurrency guards and the WAF, whose cost grows with every
+// header value and, far faster, with every cookie byte and pair. Values are
+// counted, not names, so repeating one name does not get around the limit.
+func RejectExcessRequestHeaders(w http.ResponseWriter, r *http.Request, limits RequestHeaderLimits) bool {
+	if w == nil || r == nil {
+		return false
+	}
+	if limits.MaxCount <= 0 {
+		limits.MaxCount = config.DefaultServerMaxHeaderCount
+	}
+	if limits.MaxCookieBytes <= 0 {
+		limits.MaxCookieBytes = config.DefaultServerMaxCookieBytes
+	}
+	if limits.MaxCookiePairs <= 0 {
+		limits.MaxCookiePairs = config.DefaultServerMaxCookiePairs
+	}
+	count := 0
+	for _, values := range r.Header {
+		count += len(values)
+		if count > limits.MaxCount {
+			break
+		}
+	}
+	if count > limits.MaxCount {
+		requestHeaderLimitRejectedTotal.Add(1)
+		logRejectedRequestHeaders(&lastRequestHeaderLimitWarning, "[PROXY][HEADER_LIMIT][WARN]", r, "server.max_header_count", limits.MaxCount)
+		writeRequestHeaderFieldsTooLarge(w)
+		return true
+	}
+	if setting, limit := cookieLimitExceeded(r.Header["Cookie"], limits.MaxCookieBytes, limits.MaxCookiePairs); setting != "" {
+		requestCookieLimitRejectedTotal.Add(1)
+		logRejectedRequestHeaders(&lastRequestCookieLimitWarning, "[PROXY][COOKIE_LIMIT][WARN]", r, setting, limit)
+		writeRequestHeaderFieldsTooLarge(w)
+		return true
+	}
+	return false
+}
+
+// cookieLimitExceeded returns the setting whose limit values exceed and that
+// limit, or "" when they fit. Several HTTP/1 Cookie lines are summed. It stops
+// at the first limit exceeded.
+//
+// A pair is a ";"-separated fragment that is not empty after trimming ASCII
+// control characters and spaces, the same trim the WAF (Coraza
+// internal/cookies) uses before it adds a fragment to REQUEST_COOKIES. A wider
+// trim such as strings.TrimSpace would let fragments of Unicode spaces through
+// uncounted while the WAF still inspects each of them. Fragments that are only
+// "=" are counted here and skipped by the WAF, which errs on the safe side.
+func cookieLimitExceeded(values []string, maxBytes, maxPairs int) (string, int) {
+	total, pairs := 0, 0
+	for _, value := range values {
+		total += len(value)
+		if total > maxBytes {
+			return "server.max_cookie_bytes", maxBytes
+		}
+		for rest := value; rest != ""; {
+			var part string
+			part, rest, _ = strings.Cut(rest, ";")
+			if cookieFragmentEmpty(part) {
+				continue
+			}
+			pairs++
+			if pairs > maxPairs {
+				return "server.max_cookie_pairs", maxPairs
+			}
+		}
+	}
+	return "", 0
+}
+
+// cookieFragmentEmpty reports whether part holds only ASCII control
+// characters and spaces (bytes <= 0x20 and 0x7f).
+func cookieFragmentEmpty(part string) bool {
+	for i := 0; i < len(part); i++ {
+		if part[i] > 0x20 && part[i] != 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func writeRequestHeaderFieldsTooLarge(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusRequestHeaderFieldsTooLarge)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": "request header fields too large"})
+}
+
+// logRejectedRequestHeaders logs the peer of a rejected request and the
+// exceeded setting at most once a minute per kind. It does not log header
+// names, values or cookies, which the client controls.
+func logRejectedRequestHeaders(last *atomic.Int64, tag string, r *http.Request, setting string, limit int) {
+	now := time.Now().UnixNano()
+	prev := last.Load()
+	if now-prev < int64(time.Minute) || !last.CompareAndSwap(prev, now) {
+		return
+	}
+	peer := strings.TrimSpace(r.RemoteAddr)
+	if host, _, err := net.SplitHostPort(peer); err == nil {
+		peer = host
+	}
+	log.Printf("%s rejected a request from %s over %s=%d (431); raise it if legitimate clients send more", tag, peer, setting, limit)
 }
 
 func newProxyServeContext(w http.ResponseWriter, r *http.Request) *proxyServeContext {

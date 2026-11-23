@@ -515,3 +515,48 @@ func TestAppForwardedClientIPConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestRequestHeaderLimitsLoadAndApply(t *testing.T) {
+	prevCount, prevBytes, prevPairs := ServerMaxHeaderCount, ServerMaxCookieBytes, ServerMaxCookiePairs
+	defer func() {
+		ServerMaxHeaderCount, ServerMaxCookieBytes, ServerMaxCookiePairs = prevCount, prevBytes, prevPairs
+	}()
+
+	for _, tc := range []struct {
+		name                        string
+		raw                         string
+		wantCount, wantBytes, wantP int
+	}{
+		{name: "keys missing", raw: `{}`, wantCount: 100, wantBytes: 16384, wantP: 200},
+		{name: "zero means default", raw: `{"server":{"max_header_count":0,"max_cookie_bytes":0,"max_cookie_pairs":0}}`, wantCount: 100, wantBytes: 16384, wantP: 200},
+		{name: "explicit", raw: `{"server":{"max_header_count":50,"max_cookie_bytes":8192,"max_cookie_pairs":120}}`, wantCount: 50, wantBytes: 8192, wantP: 120},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(tc.raw), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := loadAppConfigFile(path)
+			if err != nil {
+				t.Fatalf("loadAppConfigFile: %v", err)
+			}
+			applyAppConfig(cfg)
+			if ServerMaxHeaderCount != tc.wantCount || ServerMaxCookieBytes != tc.wantBytes || ServerMaxCookiePairs != tc.wantP {
+				t.Fatalf("runtime max_header_count=%d max_cookie_bytes=%d max_cookie_pairs=%d want %d %d %d",
+					ServerMaxHeaderCount, ServerMaxCookieBytes, ServerMaxCookiePairs, tc.wantCount, tc.wantBytes, tc.wantP)
+			}
+		})
+	}
+
+	for _, key := range []string{"max_header_count", "max_cookie_bytes", "max_cookie_pairs"} {
+		t.Run("rejects negative "+key, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(`{"server":{"`+key+`":-1}}`), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			if _, err := loadAppConfigFile(path); err == nil || !strings.Contains(err.Error(), "server resource limits must be >= 0") {
+				t.Fatalf("loadAppConfigFile err=%v want the resource limit error", err)
+			}
+		})
+	}
+}

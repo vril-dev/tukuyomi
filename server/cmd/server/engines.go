@@ -317,7 +317,7 @@ type publicProxyHandler struct {
 	splitAdmin             bool
 	globalConcurrencyGuard *middleware.ConcurrencyGuard
 	proxyConcurrencyGuard  *middleware.ConcurrencyGuard
-	maxHeaderCount         int
+	headerLimits           handler.RequestHeaderLimits
 }
 
 func buildPublicHandler(globalConcurrencyGuard *middleware.ConcurrencyGuard, proxyConcurrencyGuard *middleware.ConcurrencyGuard, splitAdmin bool) (http.Handler, error) {
@@ -334,7 +334,11 @@ func buildPublicHandler(globalConcurrencyGuard *middleware.ConcurrencyGuard, pro
 		splitAdmin:             splitAdmin,
 		globalConcurrencyGuard: globalConcurrencyGuard,
 		proxyConcurrencyGuard:  proxyConcurrencyGuard,
-		maxHeaderCount:         config.ServerMaxHeaderCount,
+		headerLimits: handler.RequestHeaderLimits{
+			MaxCount:       config.ServerMaxHeaderCount,
+			MaxCookieBytes: config.ServerMaxCookieBytes,
+			MaxCookiePairs: config.ServerMaxCookiePairs,
+		},
 	}
 	h.proxyHandler = http.HandlerFunc(h.serveProxy)
 	h.tracedProxyHandler = observability.HTTPTracingHandler(h.proxyHandler)
@@ -382,9 +386,9 @@ func (h *publicProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *publicProxyHandler) serveProxy(w http.ResponseWriter, r *http.Request) {
-	// Reject before the concurrency guards and the WAF, which allocates per
-	// header value.
-	if handler.RejectExcessRequestHeaders(w, r, h.maxHeaderCount) {
+	// Reject before the concurrency guards and the WAF, whose cost grows with
+	// every header value and every cookie byte and pair.
+	if handler.RejectExcessRequestHeaders(w, r, h.headerLimits) {
 		return
 	}
 	var globalResult middleware.ConcurrencyAcquireResult

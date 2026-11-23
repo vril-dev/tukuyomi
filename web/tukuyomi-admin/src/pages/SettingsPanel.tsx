@@ -35,6 +35,8 @@ type ListenerAdminConfig = {
     graceful_shutdown_timeout_sec: number;
     max_header_bytes: number;
     max_header_count: number;
+    max_cookie_bytes: number;
+    max_cookie_pairs: number;
     max_concurrent_requests: number;
     max_queued_requests: number;
     queued_request_timeout_ms: number;
@@ -323,6 +325,8 @@ function createEmptyListenerAdminConfig(): ListenerAdminConfig {
       graceful_shutdown_timeout_sec: 30,
       max_header_bytes: 1048576,
       max_header_count: 100,
+      max_cookie_bytes: 16384,
+      max_cookie_pairs: 200,
       max_concurrent_requests: 0,
       max_queued_requests: 0,
       queued_request_timeout_ms: 0,
@@ -1434,6 +1438,32 @@ export default function SettingsPanel() {
                     }
                     hint={tx(
                       "Maximum number of header fields in a public request. Requests with more get 431 before the WAF. 0 uses the default (100).",
+                    )}
+                  />
+                  <NumberField
+                    label={tx("Max Cookie Bytes")}
+                    value={listenerAdminConfig.server.max_cookie_bytes}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: { ...current.server, max_cookie_bytes: value },
+                      }))
+                    }
+                    hint={tx(
+                      "Maximum total size of the Cookie header values in a public request. Larger requests get 431 before the WAF. 0 uses the default (16384).",
+                    )}
+                  />
+                  <NumberField
+                    label={tx("Max Cookie Pairs")}
+                    value={listenerAdminConfig.server.max_cookie_pairs}
+                    onChange={(value) =>
+                      setListenerAdminConfig((current) => ({
+                        ...current,
+                        server: { ...current.server, max_cookie_pairs: value },
+                      }))
+                    }
+                    hint={tx(
+                      "Maximum number of cookies in a public request. Requests with more get 431 before the WAF. 0 uses the default (200).",
                     )}
                   />
                 </div>

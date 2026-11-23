@@ -255,8 +255,16 @@ func TestPublicHandlerRejectsExcessRequestHeadersBeforeConcurrencyGuards(t *test
 	restore := saveListenerConfigForTest()
 	defer restore()
 	prevMaxHeaderCount := config.ServerMaxHeaderCount
+	prevMaxCookieBytes := config.ServerMaxCookieBytes
+	prevMaxCookiePairs := config.ServerMaxCookiePairs
 	config.ServerMaxHeaderCount = 4
-	defer func() { config.ServerMaxHeaderCount = prevMaxHeaderCount }()
+	config.ServerMaxCookieBytes = 64
+	config.ServerMaxCookiePairs = 3
+	defer func() {
+		config.ServerMaxHeaderCount = prevMaxHeaderCount
+		config.ServerMaxCookieBytes = prevMaxCookieBytes
+		config.ServerMaxCookiePairs = prevMaxCookiePairs
+	}()
 
 	for _, tc := range []struct {
 		name  string
@@ -305,6 +313,29 @@ func assertHeaderLimitBeforeGuard(t *testing.T, publicHandler http.Handler) {
 	}
 	if !strings.Contains(rec.Body.String(), "request header fields too large") {
 		t.Fatalf("over the limit: body=%s", rec.Body.String())
+	}
+
+	// Both cookie limits come from the config and are checked at the same
+	// point; the configured values (64 bytes, 3 pairs) are far below the
+	// defaults, so a handler that ignored them would let these through.
+	for name, cookie := range map[string]string{
+		"bytes": strings.Repeat("a", 64) + "=1",
+		"pairs": "a=1; b=2; c=3; d=4",
+	} {
+		rec = httptest.NewRecorder()
+		req := newRequest(1)
+		req.Header.Set("Cookie", cookie)
+		publicHandler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusRequestHeaderFieldsTooLarge {
+			t.Fatalf("cookie %s over the limit: status=%d want=%d body=%s", name, rec.Code, http.StatusRequestHeaderFieldsTooLarge, rec.Body.String())
+		}
+	}
+	rec = httptest.NewRecorder()
+	req := newRequest(1)
+	req.Header.Set("Cookie", "a=1; b=2; c=3")
+	publicHandler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("cookie at the limits: status=%d want=%d (reaches the guard) body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
 	}
 }
 

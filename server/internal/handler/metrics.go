@@ -100,6 +100,7 @@ func MetricsHandler(c *gin.Context) {
 	writePromGauge(&b, "tukuyomi_native_http1_active_connections", int(nativeHTTP1Status.ActiveConnections))
 	writePromGauge(&b, "tukuyomi_native_http1_idle_connections", int(nativeHTTP1Status.IdleConnections))
 	writePromCounter(&b, "tukuyomi_proxy_request_header_limit_rejected_total", requestHeaderLimitRejectedTotal.Load())
+	writePromCounter(&b, "tukuyomi_proxy_request_cookie_limit_rejected_total", requestCookieLimitRejectedTotal.Load())
 	writeOverloadMetrics(&b, globalOverload)
 	writeOverloadMetrics(&b, proxyOverload)
 	writePromGauge(&b, "tukuyomi_proxy_response_compression_enabled", boolGauge(proxyCompressionEnabled))

@@ -84,6 +84,8 @@ type appServerConfig struct {
 	GracefulShutdownTimeoutSec  int                             `json:"graceful_shutdown_timeout_sec"`
 	MaxHeaderBytes              int                             `json:"max_header_bytes"`
 	MaxHeaderCount              int                             `json:"max_header_count"`
+	MaxCookieBytes              int                             `json:"max_cookie_bytes"`
+	MaxCookiePairs              int                             `json:"max_cookie_pairs"`
 	MaxConcurrentRequests       int                             `json:"max_concurrent_requests"`
 	MaxQueuedRequests           int                             `json:"max_queued_requests"`
 	QueuedRequestTimeoutMS      int                             `json:"queued_request_timeout_ms"`
@@ -393,6 +395,8 @@ func defaultAppConfigFile() appConfigFile {
 			GracefulShutdownTimeoutSec:  30,
 			MaxHeaderBytes:              1 << 20,
 			MaxHeaderCount:              DefaultServerMaxHeaderCount,
+			MaxCookieBytes:              DefaultServerMaxCookieBytes,
+			MaxCookiePairs:              DefaultServerMaxCookiePairs,
 			MaxConcurrentRequests:       0,
 			MaxQueuedRequests:           0,
 			QueuedRequestTimeoutMS:      0,
@@ -924,6 +928,8 @@ func validateAppConfigFile(cfg appConfigFile) error {
 	}
 	if cfg.Server.MaxHeaderBytes < 0 ||
 		cfg.Server.MaxHeaderCount < 0 ||
+		cfg.Server.MaxCookieBytes < 0 ||
+		cfg.Server.MaxCookiePairs < 0 ||
 		cfg.Server.MaxConcurrentRequests < 0 ||
 		cfg.Server.MaxQueuedRequests < 0 ||
 		cfg.Server.QueuedRequestTimeoutMS < 0 ||

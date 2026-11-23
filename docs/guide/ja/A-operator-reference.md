@@ -76,6 +76,16 @@ container 起動で通常必要になる env:
   warning log は 1 分に 1 回まで出る。前段の CDN や proxy が header を多く
   足す構成では上げる。HTTP/2・HTTP/3 のクライアントが分けて送った Cookie は
   1 本と数える。変更には再起動が必要
+- `server.max_cookie_bytes`・`server.max_cookie_pairs`: public request 1 件の
+  `Cookie` header について、値の合計の大きさ（既定 16384 bytes、最大 16 MiB）
+  と cookie の数（`;` で区切った空白だけではない部分、既定 200、最大 32767）
+  の上限。`Cookie` の行が複数あれば合計する。`0` は既定値。WAF は cookie の
+  名前と値をすべて検査し、Cookie header はほかの header よりバイトあたりの
+  負荷がずっと大きいので、どちらかを超えた request は WAF 検査の前に `431`
+  で拒否する。WAF を使わない route でも同じ。拒否のたびに
+  `tukuyomi_proxy_request_cookie_limit_rejected_total` が増え、超えた設定の
+  名前を書いた warning log が 1 分に 1 回まで出る。大きな cookie を使う
+  application の場合だけ上げる。変更には再起動が必要
 - TLS public listener は既定で HTTP/1.1 を advertise します。
   `server.http2.enabled=true` の場合は `h2` と `http/1.1` を advertise します。
   HTTP/3 は **専用 listener** で処理します。

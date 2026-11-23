@@ -421,6 +421,8 @@ func StatusHandler(c *gin.Context) {
 		"server_idle_timeout_sec":                             int(config.ServerIdleTimeout / time.Second),
 		"server_max_header_bytes":                             config.ServerMaxHeaderBytes,
 		"server_max_header_count":                             config.ServerMaxHeaderCount,
+		"server_max_cookie_bytes":                             config.ServerMaxCookieBytes,
+		"server_max_cookie_pairs":                             config.ServerMaxCookiePairs,
 		"server_max_concurrent_requests":                      config.ServerMaxConcurrentReqs,
 		"server_max_queued_requests":                          globalOverload.QueueCapacity,
 		"server_queued_request_timeout_ms":                    globalOverload.QueueTimeoutMS,

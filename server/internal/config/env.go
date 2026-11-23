@@ -73,6 +73,8 @@ var (
 	ServerGracefulShutdownTimeout          time.Duration
 	ServerMaxHeaderBytes                   int
 	ServerMaxHeaderCount                   int
+	ServerMaxCookieBytes                   int
+	ServerMaxCookiePairs                   int
 	ServerMaxConcurrentReqs                int
 	ServerMaxQueuedReqs                    int
 	ServerQueuedRequestTimeout             time.Duration
@@ -358,6 +360,8 @@ func applyAppConfig(cfg appConfigFile) {
 	ServerGracefulShutdownTimeout = time.Duration(parseServerTimeoutSec(strconv.Itoa(cfg.Server.GracefulShutdownTimeoutSec), 30, false)) * time.Second
 	ServerMaxHeaderBytes = parseServerMaxHeaderBytes(strconv.Itoa(cfg.Server.MaxHeaderBytes))
 	ServerMaxHeaderCount = parseServerMaxHeaderCount(strconv.Itoa(cfg.Server.MaxHeaderCount))
+	ServerMaxCookieBytes = parseServerMaxCookieBytes(strconv.Itoa(cfg.Server.MaxCookieBytes))
+	ServerMaxCookiePairs = parseServerMaxCookiePairs(strconv.Itoa(cfg.Server.MaxCookiePairs))
 	ServerMaxConcurrentReqs = parseServerConcurrency(strconv.Itoa(cfg.Server.MaxConcurrentRequests))
 	ServerMaxQueuedReqs = parseServerQueueSize(strconv.Itoa(cfg.Server.MaxQueuedRequests))
 	ServerQueuedRequestTimeout = time.Duration(parseServerQueueTimeoutMS(strconv.Itoa(cfg.Server.QueuedRequestTimeoutMS))) * time.Millisecond
@@ -811,8 +815,13 @@ func parseServerMaxHeaderBytes(v string) int {
 	return n
 }
 
-// DefaultServerMaxHeaderCount is the default for server.max_header_count.
-const DefaultServerMaxHeaderCount = 100
+// Defaults for server.max_header_count, server.max_cookie_bytes and
+// server.max_cookie_pairs.
+const (
+	DefaultServerMaxHeaderCount = 100
+	DefaultServerMaxCookieBytes = 16 << 10
+	DefaultServerMaxCookiePairs = 200
+)
 
 // parseServerMaxHeaderCount treats 0 as the default, so a settings update that
 // omits server.max_header_count keeps the limit instead of removing it.
@@ -820,6 +829,32 @@ func parseServerMaxHeaderCount(v string) int {
 	n := parseIntDefault(v, DefaultServerMaxHeaderCount)
 	if n <= 0 {
 		return DefaultServerMaxHeaderCount
+	}
+	if n > 32767 {
+		return 32767
+	}
+	return n
+}
+
+// parseServerMaxCookieBytes treats 0 as the default, like
+// parseServerMaxHeaderCount.
+func parseServerMaxCookieBytes(v string) int {
+	n := parseIntDefault(v, DefaultServerMaxCookieBytes)
+	if n <= 0 {
+		return DefaultServerMaxCookieBytes
+	}
+	if n > 16<<20 {
+		return 16 << 20
+	}
+	return n
+}
+
+// parseServerMaxCookiePairs treats 0 as the default, like
+// parseServerMaxHeaderCount.
+func parseServerMaxCookiePairs(v string) int {
+	n := parseIntDefault(v, DefaultServerMaxCookiePairs)
+	if n <= 0 {
+		return DefaultServerMaxCookiePairs
 	}
 	if n > 32767 {
 		return 32767

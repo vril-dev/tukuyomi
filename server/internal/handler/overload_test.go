@@ -206,16 +206,16 @@ func TestRejectExcessRequestHeadersCountsValuesAndWarnsOncePerMinute(t *testing.
 	}
 
 	rec := httptest.NewRecorder()
-	if RejectExcessRequestHeaders(rec, newRequest(3), 3) {
+	if RejectExcessRequestHeaders(rec, newRequest(3), RequestHeaderLimits{MaxCount: 3}) {
 		t.Fatalf("rejected a request at the limit: status=%d", rec.Code)
 	}
 	if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
 		t.Fatalf("wrote a response for an allowed request: status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if RejectExcessRequestHeaders(httptest.NewRecorder(), newRequest(config.DefaultServerMaxHeaderCount), 0) {
+	if RejectExcessRequestHeaders(httptest.NewRecorder(), newRequest(config.DefaultServerMaxHeaderCount), RequestHeaderLimits{}) {
 		t.Fatal("limit 0 must mean the default: rejected a request at the default limit")
 	}
-	if !RejectExcessRequestHeaders(httptest.NewRecorder(), newRequest(config.DefaultServerMaxHeaderCount+1), 0) {
+	if !RejectExcessRequestHeaders(httptest.NewRecorder(), newRequest(config.DefaultServerMaxHeaderCount+1), RequestHeaderLimits{}) {
 		t.Fatal("limit 0 must mean the default: allowed a request over the default limit")
 	}
 	before = requestHeaderLimitRejectedTotal.Load()
@@ -235,7 +235,7 @@ func TestRejectExcessRequestHeadersCountsValuesAndWarnsOncePerMinute(t *testing.
 	mixed.Header.Add("X-C", "1")
 	for name, req := range map[string]*http.Request{"distinct": distinct, "mixed": mixed} {
 		rec := httptest.NewRecorder()
-		if !RejectExcessRequestHeaders(rec, req, 3) || rec.Code != http.StatusRequestHeaderFieldsTooLarge {
+		if !RejectExcessRequestHeaders(rec, req, RequestHeaderLimits{MaxCount: 3}) || rec.Code != http.StatusRequestHeaderFieldsTooLarge {
 			t.Fatalf("%s names: allowed 4 header values with limit 3 (status=%d)", name, rec.Code)
 		}
 	}
@@ -245,7 +245,7 @@ func TestRejectExcessRequestHeadersCountsValuesAndWarnsOncePerMinute(t *testing.
 
 	for i := 0; i < 3; i++ {
 		rec := httptest.NewRecorder()
-		if !RejectExcessRequestHeaders(rec, newRequest(4), 3) {
+		if !RejectExcessRequestHeaders(rec, newRequest(4), RequestHeaderLimits{MaxCount: 3}) {
 			t.Fatal("allowed a request over the limit with one repeated header name")
 		}
 		if rec.Code != http.StatusRequestHeaderFieldsTooLarge {
@@ -264,5 +264,106 @@ func TestRejectExcessRequestHeadersCountsValuesAndWarnsOncePerMinute(t *testing.
 	}
 	if !strings.Contains(logs.String(), "203.0.113.9") || strings.Contains(logs.String(), "secret-value") || strings.Contains(logs.String(), "X-Repeat") {
 		t.Fatalf("warning must name the peer and no header names or values: %s", logs.String())
+	}
+}
+
+func TestRejectExcessRequestHeadersLimitsCookieBytesAndPairs(t *testing.T) {
+	lastRequestCookieLimitWarning.Store(0)
+	headerBefore := requestHeaderLimitRejectedTotal.Load()
+	cookieBefore := requestCookieLimitRejectedTotal.Load()
+
+	var logs bytes.Buffer
+	prevOutput := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(prevOutput)
+
+	limits := RequestHeaderLimits{MaxCount: 100, MaxCookieBytes: 32, MaxCookiePairs: 3}
+	withCookies := func(values ...string) *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = "203.0.113.9:4000"
+		for _, value := range values {
+			req.Header.Add("Cookie", value)
+		}
+		return req
+	}
+	allowed := map[string]*http.Request{
+		"bytes at the limit":        withCookies(strings.Repeat("a", 30) + "=1"),
+		"pairs at the limit":        withCookies("a=1; b=2; c=3"),
+		"empty fragments not pairs": withCookies("a=1;; ; b=2;c=3;"),
+		"lines summed at the limit": withCookies("a=1; b=2", "c=3"),
+		"no cookie":                 withCookies(),
+		"bare names count as pairs": withCookies("a; b; c"),
+		"ascii space fragments":     withCookies("a=1; \t ; ;b=2; c=3"),
+	}
+	for name, req := range allowed {
+		rec := httptest.NewRecorder()
+		if RejectExcessRequestHeaders(rec, req, limits) {
+			t.Fatalf("%s: rejected (status=%d)", name, rec.Code)
+		}
+	}
+	rejected := map[string]*http.Request{
+		"bytes over the limit":        withCookies(strings.Repeat("a", 31) + "=1"),
+		"pairs over the limit":        withCookies("a=1; b=2; c=3; d=4"),
+		"bare names over the limit":   withCookies("a;b;c;d"),
+		"lines summed over the pairs": withCookies("a=1; b=2", "c=3", "d=4"),
+		"lines summed over the bytes": withCookies(strings.Repeat("a", 20), strings.Repeat("b", 13)),
+		// The WAF trims only ASCII control characters and spaces, so these
+		// fragments are cookies it inspects and must be counted.
+		"no-break space fragments":    withCookies(strings.Repeat("\u00a0;", 4)),
+		"ideographic space fragments": withCookies(strings.Repeat("\u3000;", 4)),
+		"next-line fragments":         withCookies(strings.Repeat("\u0085;", 4)),
+	}
+	for name, req := range rejected {
+		rec := httptest.NewRecorder()
+		if !RejectExcessRequestHeaders(rec, req, limits) || rec.Code != http.StatusRequestHeaderFieldsTooLarge {
+			t.Fatalf("%s: allowed (status=%d)", name, rec.Code)
+		}
+	}
+	if got := requestCookieLimitRejectedTotal.Load() - cookieBefore; got != uint64(len(rejected)) {
+		t.Fatalf("cookie counter grew by %d want %d", got, len(rejected))
+	}
+	if got := requestHeaderLimitRejectedTotal.Load() - headerBefore; got != 0 {
+		t.Fatalf("header field counter grew by %d for cookie rejections", got)
+	}
+	if got := strings.Count(logs.String(), "[PROXY][COOKIE_LIMIT][WARN]"); got != 1 {
+		t.Fatalf("cookie warnings=%d want 1 logs=%s", got, logs.String())
+	}
+	if strings.Contains(logs.String(), "aaaa") || strings.Contains(logs.String(), "d=4") {
+		t.Fatalf("warning logged cookie data: %s", logs.String())
+	}
+
+	// The warning names the setting that was exceeded.
+	for _, tc := range []struct {
+		req  *http.Request
+		want string
+	}{
+		{req: withCookies(strings.Repeat("a", 40)), want: "server.max_cookie_bytes=32"},
+		{req: withCookies("a;b;c;d"), want: "server.max_cookie_pairs=3"},
+	} {
+		lastRequestCookieLimitWarning.Store(0)
+		logs.Reset()
+		RejectExcessRequestHeaders(httptest.NewRecorder(), tc.req, limits)
+		if !strings.Contains(logs.String(), tc.want) {
+			t.Fatalf("warning=%q want it to name %s", logs.String(), tc.want)
+		}
+	}
+
+	// Zero limits mean the defaults.
+	if RejectExcessRequestHeaders(httptest.NewRecorder(), withCookies(strings.Repeat("a", config.DefaultServerMaxCookieBytes-2)+"=1"), RequestHeaderLimits{}) {
+		t.Fatal("zero limits: rejected cookie bytes at the default limit")
+	}
+	if !RejectExcessRequestHeaders(httptest.NewRecorder(), withCookies(strings.Repeat("a", config.DefaultServerMaxCookieBytes-1)+"=1"), RequestHeaderLimits{}) {
+		t.Fatal("zero limits: allowed cookie bytes over the default limit")
+	}
+	pairs := make([]string, 0, config.DefaultServerMaxCookiePairs+1)
+	for i := 0; i < config.DefaultServerMaxCookiePairs; i++ {
+		pairs = append(pairs, "a")
+	}
+	if RejectExcessRequestHeaders(httptest.NewRecorder(), withCookies(strings.Join(pairs, ";")), RequestHeaderLimits{}) {
+		t.Fatal("zero limits: rejected cookie pairs at the default limit")
+	}
+	pairs = append(pairs, "a")
+	if !RejectExcessRequestHeaders(httptest.NewRecorder(), withCookies(strings.Join(pairs, ";")), RequestHeaderLimits{}) {
+		t.Fatal("zero limits: allowed cookie pairs over the default limit")
 	}
 }

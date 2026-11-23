@@ -38,15 +38,28 @@ make crs-install
 
 `make crs-install` runs after `db-migrate`. It:
 
-- Places the CRS seed file under the configured workdir.
+- Downloads CRS (the **default version**) and stages it, together with
+  the base rule seed, under `tmp/waf-rule-assets` in the workdir (`data`
+  by default).
 - **Imports the base WAF and CRS `.conf` / `.data` assets into DB
   `waf_rule_assets`**.
 
-To refresh DB rule assets from existing seed files without
-re-downloading CRS:
+`make crs-ensure` does the same. **Every import replaces all WAF rule
+assets in the DB**, including rules edited in the UI and bypass snippets;
+read §13.8 before importing into a DB that is already in use.
+
+`make db-import-waf-rule-assets` is **not** a way to refresh from seed
+files on its own. It downloads nothing and imports whatever is staged
+under `WAF_RULE_ASSET_FS_ROOT` (relative to the workdir); without that
+variable it looks in the workdir itself and fails. To import a CRS version other than the
+default, stage it with
+`scripts/stage_waf_rule_assets.sh <stage-root> <crs-version>` and import
+the staged files:
 
 ```bash
-make db-import-waf-rule-assets
+./scripts/stage_waf_rule_assets.sh data/tmp/waf-rule-assets <crs-version> &&
+WAF_RULE_ASSET_FS_ROOT=tmp/waf-rule-assets make db-import-waf-rule-assets &&
+rm -rf data/tmp/waf-rule-assets
 ```
 
 To prepare a DB from existing bootstrap / export files, run import
@@ -168,7 +181,9 @@ domains:
 - `ip_reputation_scopes` / `ip_reputation_scope_values`
 - `response_cache_config`
 - `crs_disabled_rules`
-- `override_rules` / `override_rule_versions`
+- `override_rules` / `override_rule_versions` (legacy tables kept as a
+  migration source; managed bypass `extra_rule` bodies live in
+  `waf_rule_assets` as kind `bypass_extra_rule`)
 - `php_runtime_inventory` / `php_runtime_modules` /
   `php_runtime_default_disabled_modules`
 
@@ -185,7 +200,7 @@ content artifacts that are not config authority.
 Representative remaining blobs:
 
 - `waf_rule_assets` / `waf_rule_asset_contents` (base WAF and CRS rule
-  / data assets)
+  / data assets, and managed bypass `extra_rule` bodies)
 
 The **only file required for production startup after import** is:
 
@@ -278,15 +293,26 @@ For each driver, use the standard backup flow.
 
 ### 13.5.1 SQLite
 
-Snapshot the DB file before significant changes:
+The DB file is the path set in `storage.db_path`. The default
+`db/tukuyomi.db` is relative to the runtime working directory:
+`data/db/tukuyomi.db` in a development tree, and `db/tukuyomi.db` under
+the deployment root (`/opt/tukuyomi` by default) after `make install`.
+
+SQLite runs in **WAL mode**, so recent writes can still be in
+`tukuyomi.db-wal`. Copying only `tukuyomi.db` while the service is
+running can miss them. Take an online backup with the `sqlite3`
+command-line tool, as the runtime user (`umask 077` keeps the copy
+private):
+
+```bash
+sudo -u tukuyomi sh -c 'umask 077; sqlite3 /opt/tukuyomi/db/tukuyomi.db ".backup /opt/tukuyomi/db/tukuyomi.db.bak.$(date +%Y%m%d%H%M%S)"'
+```
+
+Or stop the service and copy the DB file together with its WAL files.
+In a development tree:
 
 ```bash
 cp data/db/tukuyomi.db data/db/tukuyomi.db.bak.$(date +%Y%m%d%H%M%S)
-```
-
-If WAL files exist, back them up too:
-
-```bash
 cp data/db/tukuyomi.db-wal data/db/tukuyomi.db-wal.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
 cp data/db/tukuyomi.db-shm data/db/tukuyomi.db-shm.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
 ```
@@ -335,7 +361,82 @@ If the DB has been reset:
 4. New WAF / access events go directly to `waf_events`. Call the logs
    endpoint only when you explicitly want to ingest a legacy log file.
 
-## 13.8 Recap
+## 13.8 Updating the OWASP CRS
+
+tukuyomi does **not carry the OWASP CRS inside the binary**. The CRS is
+downloaded when the WAF rule assets are staged, imported into DB
+`waf_rule_assets`, and the running service reads it from there. Moving an
+existing installation to another CRS version, or re-importing the same
+version, therefore means **importing the WAF rule assets into that
+installation's DB again**.
+
+`make install` takes the CRS version from `CRS_VERSION=<tag>`, and
+`scripts/stage_waf_rule_assets.sh` / `scripts/install_crs.sh` take it as
+an argument. `make crs-install` and `make crs-ensure` always stage the
+default version.
+
+### 13.8.1 What an import replaces and keeps
+
+The import **does not merge**. It writes a new active set of **all** WAF
+rule assets built only from the staged files, even when the CRS version
+does not change.
+
+**Replaced** by the staged files:
+
+- Base rules edited on the `Rules` screen, including exclusions written
+  by FP Tuner (Chapter 8). `tukuyomi.conf` returns to the seed's content,
+  and to enabled even if you had disabled it.
+- Base rule files added on the `Rules` screen.
+- Bypass snippets (`Rules > Advanced > Bypass snippets`).
+- Additions to `crs-setup.conf`. `WAF_RULE_SEED_CRS_SETUP_OVERRIDE=<file>`
+  appends the content of that file to the end of `crs-setup.conf` when
+  staging, so pass the same file again.
+
+**Kept**:
+
+- The CRS rule-set selection. The list of disabled CRS rule file names
+  stays after an import. Files added by the new version start enabled,
+  and a name that was removed or renamed no longer has any effect, so
+  check the selection on the `Rules` screen after updating.
+- Bypass entries, but **not their snippets**. Right after the import, a
+  bypass path whose snippet is gone is inspected with the default rules,
+  and the log shows `[BYPASS][RULE][WARN] ... (fallback=default-rules)`.
+- Proxy, sites, TLS, and admin settings, admin users, and WAF events.
+
+### 13.8.2 Before, during, and after the import
+
+- **Back up the DB first (§13.5).** Older versions of the rule assets
+  stay in the DB, but the admin UI and API have no way to list or
+  restore them, so they cannot undo an import. To roll back, restore the
+  DB backup (when restoring a `.backup` copy, delete `tukuyomi.db-wal`
+  and `tukuyomi.db-shm` first) or import the previous CRS version again.
+- **`make install` imports every time**, because
+  `INSTALL_REFRESH_WAF_ASSETS` defaults to `1`, so re-running it to
+  upgrade the binary also replaces local rule edits. On an installed
+  environment, `INSTALL_REFRESH_WAF_ASSETS=0` keeps the current assets;
+  a first install has none and cannot start without the import. By
+  default the installer restarts a running service at the end.
+- **The imported rules are in use once the service restarts.**
+- **Rules fixed in the UI exist only in the DB.** Before the import, save
+  the full response of `GET <admin.api_base_path>/rules`
+  (`/tukuyomi-api/rules` by default). After it, put the rules back on the
+  `Rules` screen or with `PUT <admin.api_base_path>/rules`, bypass
+  snippets first: while the snippet that a bypass entry refers to is
+  missing, a bypass configuration that contains that entry cannot be
+  saved from the UI or API.
+- **Gateways whose WAF rules Center assigns** should not import locally.
+  Update the rule bundle in Center and assign it again. If the Gateway's
+  rules change after an assignment, that assignment is not applied: it
+  stays `blocked` with `local WAF rules changed after assignment`. After
+  the Gateway has sent its new rules to Center, assign again.
+- **To check the version**, open the `Rules` screen and look at the
+  `OWASP CRS ver.` line at the top of `crs-setup.conf`, after the restart.
+
+The commands for staging, importing as the runtime user, containers, and
+the development tree are in `docs/build/binary-deployment.md`
+("Updating the OWASP CRS").
+
+## 13.9 Recap
 
 - Runtime storage is **DB-only**. If the DB is broken, fail to start
   rather than fall back to files.
@@ -347,8 +448,11 @@ If the DB has been reset:
 - After import, the only file the runtime needs is
   **`data/conf/config.json`**. Other seed JSON can be deleted.
 - Retention applies **only to `waf_events`** (30 days by default).
+- Every import of WAF rule assets (`make crs-install`, `make install`)
+  **replaces all rule assets in the DB**, including rules edited in the
+  UI. Back up the DB first, and follow §13.8 to update the CRS.
 
-## 13.9 Bridge to the next chapter
+## 13.10 Bridge to the next chapter
 
 With DB operations covered, the next decision is **listener and
 reuse-port**. Chapter 14 explains why tukuyomi defaults to a single

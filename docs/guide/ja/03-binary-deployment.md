@@ -189,8 +189,12 @@ tukuyomi Gateway を前段に置かず Center を直接公開する場合は、�
 - 初回 DB seed では、`primary` という名前の default upstream が作成されます。
   proxy に traffic を流す前に、これを実際の backend endpoint に向けて調整して
   ください。
-- 既存 DB がある状態で再実行した場合は、DB migrate と WAF/CRS asset refresh
-  だけを行います。
+- 既存 DB がある状態で再実行した場合は、DB migrate と WAF/CRS asset の再 import
+  だけを行います。この再 import は、UI で編集した rule を含め、**すべての WAF
+  rule asset を置き換えます**。導入済みの環境では、現在の asset を保持する
+  ために `INSTALL_REFRESH_WAF_ASSETS=0` を指定できます（初回の install には
+  asset が無く、import しないと起動できません）。CRS のバージョンを指定する
+  には `CRS_VERSION=<tag>` を指定します。第13章 13.8 節を参照してください。
 - MySQL / PostgreSQL の空 DB を初期投入する場合は、`INSTALL_DB_SEED=always` を
   明示的に指定してください。
 - migration 後、host install は導入対象 role ごとの DB に初期 owner bootstrap を実行します。`TUKUYOMI_ADMIN_BOOTSTRAP_PASSWORD` が未指定、または開発用プレースホルダーのままの場合は、ランダムな初期パスワードを生成してインストールログの最後に 1 回だけ表示します。既存の管理ユーザーはリセットしません。
@@ -345,7 +349,9 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
 - 既定の base WAF rule seed は、`make crs-install` が
   `seeds/waf/rules/tukuyomi.conf` から一時 stage して DB へ import します。
 - CRS file は DB `waf_rule_assets` 向けの一時 import material です。
-  `make crs-install` が `data/tmp` で staging と cleanup を行います。
+  `make crs-install` が既定のバージョンの CRS をダウンロードし、`data/tmp` で
+  staging します。別のバージョンを使う場合は第13章 13.8 節を参照して
+  ください。
 - `sites.json` / `scheduled-tasks.json` / `upstream-runtime.json`、policy JSON、
   cache-rules JSON、WAF bypass JSON、PHP-FPM JSON manifest は、DB bootstrap
   以後はすべて DB seed / export artifact です。
@@ -364,8 +370,9 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
   です。
 - managed GeoIP country DB、`GeoIP.conf`、update status はすべて DB-backed
   です。`data/geoip` fallback directory は配備しません。
-- managed bypass override rule は DB `override_rules` に保存します。
-  `conf/rules` fallback directory は配備しません。
+- managed bypass override rule は DB `waf_rule_assets` に種別
+  `bypass_extra_rule` として保存し、WAF rule asset を再 import すると置き換わり
+  ます。`conf/rules` fallback directory は配備しません。
 - WAF / access event は DB `waf_events` へ直接書き込みます。`paths.log_file` は
   古い `waf-events.ndjson` を明示的に取り込むときだけの legacy import source
   です。

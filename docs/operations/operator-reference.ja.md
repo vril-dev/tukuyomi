@@ -246,6 +246,8 @@ make compose-up
 
 管理 UI は `http://localhost:${CORAZA_PORT:-9090}/tukuyomi-ui` で開きます。
 
+`make crs-install` は、既定のバージョンの OWASP CRS をステージングし、DB `waf_rule_assets` へインポートします。インポートのたびに、UI で編集したルールを含め、すべての WAF ルールアセットが置き換わります。別のバージョンの選び方と、導入済みの環境の更新については、[OWASP CRS の更新](../build/binary-deployment.ja.md#owasp-crs-の更新) を参照してください。
+
 ### よく使う Make ターゲット
 
 ```bash
@@ -633,7 +635,7 @@ curl -sS \
 }
 ```
 
-マネージドな `extra_rule` の本体は DB `override_rules` に保存し、`Rules` > Advanced > `Bypass snippets` で編集します。`conf/rules` ディレクトリへのフォールバックはありません。起動時のベース WAF ルールセットには含めず、バイパスエントリから論理的な `extra_rule` 名で参照されたときのみロードします。
+マネージドな `extra_rule` の本体は DB `waf_rule_assets` に種別 `bypass_extra_rule` として保存し、`Rules` > Advanced > `Bypass snippets` で編集します。WAF ルールアセットをインポートすると置き換わります。`conf/rules` ディレクトリへのフォールバックはありません。起動時のベース WAF ルールセットには含めず、バイパスエントリから論理的な `extra_rule` 名で参照されたときのみロードします。
 ホストスコープの優先順序は、完全一致の `host:port`、次にホスト名のみ、最後に `default` です。ホスト固有のスコープは default をマージせず置き換えます。
 
 1.6.0 から、エントリでそのパスのリクエストボディ検査を変更できます。WAF は無効になりません。
@@ -765,6 +767,7 @@ curl -sS \
 - `/rules` は有効な DB ベースのベースルールアセットを編集します
 - ベース WAF ルールアセットは無効化できます。無効化されたアセットは編集可能なまま、稼働中の WAF ロードセットからは外れます
 - `/rules` は、論理的な `rules/crs/rules/*.conf` 名を持つ DB ベースの CRS アセットを切り替えます
+- WAF ルールアセットのインポート（`make crs-install`、`make install`）は、編集済みのベースルール、追加したベースルールファイル、バイパススニペットを、ステージングしたファイルで置き換えます
 - 保存に成功すると、WAF はホットリロードされます
 - リロードに失敗した場合は、自動でロールバックします
 

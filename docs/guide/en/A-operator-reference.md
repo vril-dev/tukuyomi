@@ -322,6 +322,11 @@ make compose-up
 Open the admin UI at
 `http://localhost:${CORAZA_PORT:-9090}/tukuyomi-ui`.
 
+`make crs-install` stages the default OWASP CRS version and imports
+it into DB `waf_rule_assets`. Each import replaces all WAF rule assets,
+including rules edited in the UI; see Chapter 13 §13.8 for choosing another
+version and for updating an installation that is already in use.
+
 ### A.2.2 Common Make targets
 
 ```bash
@@ -604,8 +609,10 @@ groups:
 }
 ```
 
-- Managed `extra_rule` bodies are stored in **DB `override_rules`**
-  and edited from `Rules > Advanced > Bypass snippets`.
+- Managed `extra_rule` bodies are stored in **DB `waf_rule_assets`** as
+  kind `bypass_extra_rule` and edited from
+  `Rules > Advanced > Bypass snippets`. Importing WAF rule assets replaces
+  them.
 - There is **no** filesystem fallback at `conf/rules`.
 - `extra_rule` is **not** mixed into the base WAF rule set at
   startup; it is loaded only when a bypass entry references its

@@ -287,6 +287,8 @@ make compose-up
 
 Open the embedded admin UI at `http://localhost:${CORAZA_PORT:-9090}/tukuyomi-ui`.
 
+`make crs-install` stages the default OWASP CRS version and imports it into DB `waf_rule_assets`. Each import replaces all WAF rule assets, including rules edited in the UI; see [Updating the OWASP CRS](../build/binary-deployment.md#updating-the-owasp-crs) for choosing another version and for updating an existing installation.
+
 ### Common Make Targets
 
 ```bash
@@ -691,7 +693,7 @@ Main endpoint groups:
 }
 ```
 
-Managed `extra_rule` bodies are stored in DB `override_rules` and edited from `Rules` > Advanced > `Bypass snippets`. There is no `conf/rules` filesystem fallback. They are not added to the base WAF rule set at startup; they are loaded only when a bypass entry references their logical `extra_rule` name.
+Managed `extra_rule` bodies are stored in DB `waf_rule_assets` as kind `bypass_extra_rule` and edited from `Rules` > Advanced > `Bypass snippets`; importing WAF rule assets replaces them. There is no `conf/rules` filesystem fallback. They are not added to the base WAF rule set at startup; they are loaded only when a bypass entry references their logical `extra_rule` name.
 Host scope precedence is exact `host:port`, then bare `host`, then `default`. Host-specific entries replace the default scope; they do not merge with it.
 
 Since 1.6.0, an entry can also change request body inspection for its path without turning the WAF off:
@@ -824,6 +826,7 @@ Capabilities include:
 - base WAF rule assets can be disabled; disabled assets stay editable but are
   excluded from the live WAF load set
 - `/rules` toggles DB-backed CRS assets under logical `rules/crs/rules/*.conf` names
+- importing WAF rule assets (`make crs-install`, `make install`) replaces edited base rules, added base rule files, and bypass snippets with the staged files
 - successful saves hot-reload WAF
 - failed reloads auto-rollback
 

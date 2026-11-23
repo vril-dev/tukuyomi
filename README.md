@@ -50,6 +50,11 @@ make db-migrate
 make crs-install
 ```
 
+`make crs-install` stages OWASP CRS `v4.23.0` by default. Each import replaces
+all WAF rule assets in the DB, including rules edited in the UI. To choose
+another version or to update an existing installation, see
+[Updating the OWASP CRS](docs/build/binary-deployment.md#updating-the-owasp-crs).
+
 Use a prepared baseline if you want a copy-ready preset for the embedded admin UI and
 default upstream wiring:
 
@@ -92,7 +97,10 @@ Go binary, creates the runtime tree, runs DB migration, imports WAF/CRS assets,
 seeds first-run DB config, and installs systemd units for the local host. The
 scheduled-task timer is enabled by default; set
 `INSTALL_ENABLE_SCHEDULED_TASKS=0` if this host should not execute scheduled
-tasks.
+tasks. Running the installer again on an existing installation imports the
+WAF/CRS assets again, which replaces rules edited in the UI; on an installed
+environment, set `INSTALL_REFRESH_WAF_ASSETS=0` to keep them (a first install
+has no rule assets and cannot start without the import).
 
 Install Center on a control-plane host with the same target and a different
 role:
@@ -134,9 +142,11 @@ make preset-apply PRESET=minimal
 make gateway-preview-up
 ```
 
-`make gateway-preview-up` runs the CRS ensure flow automatically; that flow runs
-`make db-migrate`, installs CRS seed files when missing, and imports WAF rule
-assets into DB.
+`make gateway-preview-up` creates the preview DB when it does not exist yet:
+it stages CRS, imports WAF rule assets, and seeds the preview configuration.
+Without `GATEWAY_PREVIEW_PERSIST=1` it recreates the preview DB on every run.
+With `GATEWAY_PREVIEW_PERSIST=1`, an existing preview DB is kept and the import
+is skipped.
 
 Then open:
 
@@ -181,8 +191,7 @@ against the preview Center DB.
 - `data/conf/upstream-runtime.json`: seed/import/export material for opt-in runtime overrides from `Proxy Rules > Upstreams`
 - `data/conf/sites.json`: site ownership and TLS binding seed/import/export material
 - DB `vhosts` / `vhost_*`: live Runtime Apps config; storage names remain `vhost` for compatibility
-- DB `waf_rule_assets`: base WAF and CRS rule/data assets
-- DB `override_rules`: managed bypass `extra_rule` rule bodies
+- DB `waf_rule_assets`: base WAF and CRS rule/data assets, and managed bypass `extra_rule` rule bodies (kind `bypass_extra_rule`)
 - DB `php_runtime_inventory` / `php_runtime_modules`: PHP-FPM runtime inventory and module metadata
 - DB `psgi_runtime_inventory` / `psgi_runtime_modules`: Perl/Starman runtime inventory and module metadata
 - `data/php-fpm/inventory.json` and `data/php-fpm/vhosts.json`: PHP-FPM and Runtime Apps seed/import/export material
@@ -190,7 +199,7 @@ against the preview Center DB.
 - `data/conf/scheduled-tasks.json`: scheduled task seed/import/export material
 
 Base WAF/CRS assets and managed bypass overrides are DB-backed. `make crs-install`
-stages rule import material under `data/tmp`, imports it, and removes the stage.
+stages rule import material under `data/tmp` and imports it.
 The configured paths remain logical asset names and compatibility references;
 runtime does not use `data/rules`, `data/conf/rules`, or `data/geoip` fallback
 directories. The same applies to startup, policy, site, Runtime Apps, scheduled task,

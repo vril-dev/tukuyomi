@@ -24,14 +24,27 @@ the DB:
 make crs-install
 ```
 
-`make crs-install` runs after `db-migrate`, installs CRS seed files under the
-configured workdir, and imports base WAF plus CRS `.conf` / `.data` assets into
-DB `waf_rule_assets`. To refresh DB rule assets from existing seed files without
-downloading CRS again, use:
+`make crs-install` runs after `db-migrate`, downloads CRS (the default
+version), stages it with the base rule seed under `tmp/waf-rule-assets` in the
+workdir (`data` by default), and imports base WAF plus CRS `.conf` / `.data`
+assets into DB `waf_rule_assets`. `make crs-ensure` does the same. Every import replaces all WAF rule assets in
+the DB, including rules edited in the UI and bypass snippets; see
+[Updating the OWASP CRS](../build/binary-deployment.md#updating-the-owasp-crs)
+before importing into a DB that is already in use.
+
+`make crs-install` always stages the default version. To import another
+version, stage it with `scripts/stage_waf_rule_assets.sh <stage-root>
+<crs-version>` and import the staged files:
 
 ```bash
-make db-import-waf-rule-assets
+./scripts/stage_waf_rule_assets.sh data/tmp/waf-rule-assets <crs-version> &&
+WAF_RULE_ASSET_FS_ROOT=tmp/waf-rule-assets make db-import-waf-rule-assets &&
+rm -rf data/tmp/waf-rule-assets
 ```
+
+`make db-import-waf-rule-assets` does not download CRS. It imports the files
+staged under `WAF_RULE_ASSET_FS_ROOT` (relative to the workdir); without that
+variable it looks for them in the workdir itself and fails.
 
 Import the current bootstrap/export files after migrations when preparing a DB
 from file material:
@@ -137,7 +150,9 @@ Feature-owned rows carry `version_id`. Current normalized domains include:
 - `ip_reputation_scopes`, `ip_reputation_scope_values`
 - `response_cache_config`
 - `crs_disabled_rules`
-- `override_rules`, `override_rule_versions`
+- `override_rules`, `override_rule_versions` (legacy tables kept as a migration
+  source; managed bypass `extra_rule` bodies are stored in `waf_rule_assets` as
+  kind `bypass_extra_rule`)
 - `php_runtime_inventory`, `php_runtime_modules`,
   `php_runtime_default_disabled_modules`
 
@@ -149,7 +164,8 @@ artifacts that are not configuration authority.
 
 Remaining blob examples:
 
-- `waf_rule_assets`, `waf_rule_asset_contents` (base WAF and CRS rule/data assets)
+- `waf_rule_assets`, `waf_rule_asset_contents` (base WAF and CRS rule/data
+  assets, and managed bypass `extra_rule` bodies)
 
 The only file required by production startup after import is:
 
@@ -227,15 +243,25 @@ behavior.
 
 ### SQLite
 
-Before major changes, snapshot DB file:
+The DB file is the path set in `storage.db_path`. The default `db/tukuyomi.db`
+is relative to the runtime working directory: `data/db/tukuyomi.db` in a
+development tree, and `db/tukuyomi.db` under the deployment root (`/opt/tukuyomi`
+by default) after `make install`.
+
+SQLite runs in WAL mode, so recent writes can still be in `tukuyomi.db-wal`.
+Copying only `tukuyomi.db` while the service is running can miss them. Take an
+online backup with the `sqlite3` command-line tool, as the runtime user
+(`umask 077` keeps the copy private):
+
+```bash
+sudo -u tukuyomi sh -c 'umask 077; sqlite3 /opt/tukuyomi/db/tukuyomi.db ".backup /opt/tukuyomi/db/tukuyomi.db.bak.$(date +%Y%m%d%H%M%S)"'
+```
+
+Or stop the service and copy the DB file together with its WAL files. In a
+development tree:
 
 ```bash
 cp data/db/tukuyomi.db data/db/tukuyomi.db.bak.$(date +%Y%m%d%H%M%S)
-```
-
-If WAL files exist, back them up together:
-
-```bash
 cp data/db/tukuyomi.db-wal data/db/tukuyomi.db-wal.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
 cp data/db/tukuyomi.db-shm data/db/tukuyomi.db-shm.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
 ```

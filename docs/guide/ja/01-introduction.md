@@ -72,7 +72,7 @@ Node アプリなど、自分が運用しているアプリケーションのす
 - WAF / CRS のルール資産（`waf_rule_assets`）
 - proxy ルートと transport 設定（`proxy_*`）
 - Runtime Apps の vhost 設定（`vhosts` / `vhost_*`）
-- managed bypass（`override_rules`）
+- managed bypass の snippet（`waf_rule_assets`、種別 `bypass_extra_rule`）
 - PHP-FPM / PSGI runtime の inventory（`php_runtime_*` / `psgi_runtime_*`）
 - グローバル / listener / admin / storage / paths の各 block（`app_config_*`）
 
@@ -144,8 +144,8 @@ ON にする optional な機能です。詳細は第16章で扱います。
   などの product-wide 設定
 - DB `proxy_*`：live の proxy transport / routing 設定
 - DB `vhosts` / `vhost_*`：live の Runtime Apps 設定
-- DB `waf_rule_assets`：base WAF と CRS の rule / data asset
-- DB `override_rules`：managed bypass の rule body
+- DB `waf_rule_assets`：base WAF と CRS の rule / data asset、および managed
+  bypass の rule body（種別 `bypass_extra_rule`）
 - DB `php_runtime_*` / `psgi_runtime_*`：PHP-FPM / PSGI runtime の inventory
 - `seeds/conf/config-bundle.json`：空 DB 向けに同梱される本番 seed
 - `data/conf/proxy.json`、`sites.json`、`upstream-runtime.json`、

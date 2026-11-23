@@ -58,7 +58,7 @@ build: "pandoc → HTML → Chrome headless で PDF 化、pandoc で EPUB 化"
 ### 第IV部　WAF と Request Security
 
 - **第7章　WAF 誤検知チューニング** — 証跡採取、影響範囲の切り分け、狭い緩和
-  （`override_rules` / managed bypass）、CRS 設定の見直し、検証、変更管理。
+  （managed bypass）、CRS 設定の見直し、検証、変更管理。
   （source: docs/operations/waf-tuning.ja.md）
 - **第8章　FP Tuner API と AI 連携** — Propose / Apply エンドポイントの契約、
   simulate と real apply、関連 env、OpenAI 互換 / Claude Messages の Command
@@ -87,7 +87,7 @@ build: "pandoc → HTML → Chrome headless で PDF 化、pandoc で EPUB 化"
 
 - **第13章　DB 運用（SQLite / MySQL / PostgreSQL）** — Driver Selection、
   保存対象（waf_events、versioned runtime config、config_blobs、schema_migrations）、
-  retention / pruning、backup、SQLite vacuum、recovery。
+  retention / pruning、backup、SQLite vacuum、recovery、OWASP CRS の更新。
   （source: docs/operations/db-ops.ja.md）
 - **第14章　リスナートポロジと Reuse-Port** — 現時点の判断、評価止まりとした理由、
   当面の方針、再検討条件、Host/runtime matrix、Docker published-port policy、

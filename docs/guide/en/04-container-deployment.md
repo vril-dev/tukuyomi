@@ -159,7 +159,7 @@ This uses the repository Dockerfile together with the up-to-date
 ### 4.6.2 Use a deployment-style Dockerfile
 
 `docs/build/Dockerfile.example` does the UI build, the Go build, runtime
-config copy, and CRS install all inside the image build.
+config copy, and CRS install (the default version) all inside the image build.
 
 ```bash
 docker build -f docs/build/Dockerfile.example -t tukuyomi:deploy .
@@ -245,8 +245,9 @@ Typical production pattern:
   configured files like `conf/proxy.json` or policy JSON are present, they
   take precedence.
 - Before the first start, run `make db-migrate` then `make crs-install` to
-  install / import WAF rule assets, then `make db-import` for the rest of
-  the seed material. `db-import` does not re-import WAF rule assets.
+  install / import WAF rule assets, then
+  `make db-import` for the rest of the seed material. `db-import` does not
+  re-import WAF rule assets.
 - Treat `conf/sites.json` / `conf/scheduled-tasks.json` /
   `conf/upstream-runtime.json` as seed / export files for an empty DB; the
   authoritative source after bootstrap is the normalized DB row.
@@ -295,8 +296,9 @@ Values to keep server-side only:
   embedded admin UI / API; the startup warning alone is not a safeguard
 - Base WAF and CRS assets become DB `waf_rule_assets` after import.
   Image-baked files are seed material, not the runtime authority
-- Managed bypass override rules live in DB `override_rules`; `extra_rule`
-  values remain as logical compatibility references
+- Managed bypass override rules live in DB `waf_rule_assets` as kind
+  `bypass_extra_rule`, and re-importing WAF rule assets replaces them;
+  `extra_rule` values remain as logical compatibility references
 
 ## 4.10 Per-platform topologies
 
@@ -449,7 +451,10 @@ enable built-in HTTP/3, **open both TCP and UDP** on the listener port.
 
 - The embedded Gateway / Center UI is generated at image build time, not
   at runtime.
-- `scripts/install_crs.sh` runs at image build time or at startup.
+- `scripts/install_crs.sh` runs at image build time or at startup. It
+  installs the default CRS version unless you pass another tag as its first
+  argument.
+  Chapter 13 §13.8 covers updating the CRS of a running deployment.
 - To change policy files at runtime, mount `/app/conf`. WAF / CRS assets
   are imported into the DB from the staging area under `/app/data/tmp`.
 - The repository `docker-compose.yml` includes a

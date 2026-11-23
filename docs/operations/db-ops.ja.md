@@ -20,11 +20,17 @@ make db-migrate
 make crs-install
 ```
 
-`make crs-install` は `db-migrate` 後に動作し、設定された作業ディレクトリ配下に CRS シードファイルを配置したうえで、ベース WAF と CRS の `.conf` ／ `.data` アセットを DB `waf_rule_assets` へインポートします。CRS を再ダウンロードせず、既存のシードファイルから DB のルールアセットのみを更新する場合は次を使用します。
+`make crs-install` は `db-migrate` 後に動作し、CRS（既定のバージョン）をダウンロードして、ベースルールのシードとともに作業ディレクトリ（既定は `data`）配下の `tmp/waf-rule-assets` にステージングし、ベース WAF と CRS の `.conf` ／ `.data` アセットを DB `waf_rule_assets` へインポートします。`make crs-ensure` も同じ動作です。インポートのたびに、UI で編集したルールやバイパススニペットを含め、DB 上のすべての WAF ルールアセットが置き換わります。すでに使っている DB へインポートする前に、[OWASP CRS の更新](../build/binary-deployment.ja.md#owasp-crs-の更新) を参照してください。
+
+`make crs-install` は常に既定のバージョンをステージングします。別のバージョンをインポートする場合は、`scripts/stage_waf_rule_assets.sh <stage-root> <crs-version>` でステージングし、そのファイルをインポートします。
 
 ```bash
-make db-import-waf-rule-assets
+./scripts/stage_waf_rule_assets.sh data/tmp/waf-rule-assets <crs-version> &&
+WAF_RULE_ASSET_FS_ROOT=tmp/waf-rule-assets make db-import-waf-rule-assets &&
+rm -rf data/tmp/waf-rule-assets
 ```
+
+`make db-import-waf-rule-assets` は CRS をダウンロードしません。`WAF_RULE_ASSET_FS_ROOT`（作業ディレクトリからの相対パス）配下にステージングされたファイルをインポートします。この変数を指定しないと作業ディレクトリの直下を探すため、失敗します。
 
 既存のブートストラップ／エクスポートファイルから DB を準備する場合は、マイグレーション後にインポートします。
 
@@ -107,7 +113,7 @@ DSN の要件:
 - `ip_reputation_scopes`、`ip_reputation_scope_values`
 - `response_cache_config`
 - `crs_disabled_rules`
-- `override_rules`、`override_rule_versions`
+- `override_rules`、`override_rule_versions`（移行元として残るレガシーテーブルです。マネージドなバイパスの `extra_rule` の本体は、`waf_rule_assets` に種別 `bypass_extra_rule` として保存されます）
 - `php_runtime_inventory`、`php_runtime_modules`、`php_runtime_default_disabled_modules`
 
 ### 3. `config_blobs`
@@ -116,7 +122,7 @@ DSN の要件:
 
 残っている blob の例:
 
-- `waf_rule_assets`、`waf_rule_asset_contents`（ベース WAF と CRS のルール／データアセット）
+- `waf_rule_assets`、`waf_rule_asset_contents`（ベース WAF と CRS のルール／データアセット、およびマネージドなバイパスの `extra_rule` の本体）
 
 インポート後の本番起動で必要なファイルは次のみです。
 
@@ -175,15 +181,18 @@ data/persistent/log-archives/waf/yyyy=<YYYY>/mm=<MM>/dd=<DD>/part-000001.ndjson.
 
 ### SQLite
 
-大きな変更を行う前には、DB ファイルをスナップショットしておきます。
+DB ファイルは `storage.db_path` で指定したパスです。既定の `db/tukuyomi.db` はランタイムの作業ディレクトリからの相対パスで、開発ツリーでは `data/db/tukuyomi.db`、`make install` で導入した環境では配備ルート（既定は `/opt/tukuyomi`）配下の `db/tukuyomi.db` です。
+
+SQLite は WAL モードで動作するため、直近の書き込みが `tukuyomi.db-wal` にだけ残っていることがあります。サービスの稼働中に `tukuyomi.db` だけをコピーすると、それらを取りこぼすおそれがあります。ランタイムユーザーとして、`sqlite3` コマンドラインツールでオンラインバックアップを取ります（`umask 077` で、コピーを他のユーザーから読めなくします）。
+
+```bash
+sudo -u tukuyomi sh -c 'umask 077; sqlite3 /opt/tukuyomi/db/tukuyomi.db ".backup /opt/tukuyomi/db/tukuyomi.db.bak.$(date +%Y%m%d%H%M%S)"'
+```
+
+または、サービスを止めてから、DB ファイルを WAL ファイルとあわせてコピーします。開発ツリーでは次のとおりです。
 
 ```bash
 cp data/db/tukuyomi.db data/db/tukuyomi.db.bak.$(date +%Y%m%d%H%M%S)
-```
-
-WAL ファイルが存在する場合は、合わせてバックアップしてください。
-
-```bash
 cp data/db/tukuyomi.db-wal data/db/tukuyomi.db-wal.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
 cp data/db/tukuyomi.db-shm data/db/tukuyomi.db-shm.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
 ```

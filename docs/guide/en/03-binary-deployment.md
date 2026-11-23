@@ -198,7 +198,11 @@ not `X-Forwarded-For`.
   Adjust it to your real backend endpoint before pointing real proxy
   traffic at it.
 - When re-run with an existing DB, only `db migrate` and a WAF/CRS
-  asset refresh happen.
+  asset re-import happen. The re-import **replaces every WAF rule asset**,
+  including rules edited in the UI. On an installed environment, pass
+  `INSTALL_REFRESH_WAF_ASSETS=0` to keep the current assets (a first install
+  has none and cannot start without the import), or `CRS_VERSION=<tag>` to
+  choose the CRS version. See Chapter 13 §13.8.
 - For an empty MySQL or PostgreSQL DB, pass `INSTALL_DB_SEED=always`
   explicitly.
 - After migration, host install bootstraps the first owner for each
@@ -364,7 +368,8 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
   `seeds/waf/rules/tukuyomi.conf` and imported to the DB by
   `make crs-install`.
 - CRS files are temporary import material for DB `waf_rule_assets`;
-  `make crs-install` stages them under `data/tmp` and cleans up.
+  `make crs-install` downloads the default CRS version and stages it under
+  `data/tmp`. To use another version, see Chapter 13 §13.8.
 - `sites.json` / `scheduled-tasks.json` / `upstream-runtime.json`,
   policy JSON, cache-rules JSON, WAF bypass JSON, and PHP-FPM JSON
   manifests are all DB seed / export artifacts after the DB
@@ -386,8 +391,9 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
   `./scripts/update_country_db.sh`.
 - The managed GeoIP country DB, `GeoIP.conf`, and update status are
   all DB-backed. There is no `data/geoip` fallback directory.
-- Managed bypass override rules live in DB `override_rules`. There is
-  no `conf/rules` fallback directory.
+- Managed bypass override rules live in DB `waf_rule_assets` as kind
+  `bypass_extra_rule`, and re-importing WAF rule assets replaces them.
+  There is no `conf/rules` fallback directory.
 - WAF / access events are written directly to DB `waf_events`.
   `paths.log_file` is a legacy import source used only when you
   explicitly want to ingest an old `waf-events.ndjson`.

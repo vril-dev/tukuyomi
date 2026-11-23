@@ -35,15 +35,26 @@ make crs-install
 
 `make crs-install` は `db-migrate` 後に動き、
 
-- 設定 workdir 配下に CRS seed file を配置
+- CRS（**既定のバージョン**）をダウンロードし、base rule の seed とともに
+  workdir（既定は `data`）配下の `tmp/waf-rule-assets` に stage
 - base WAF と CRS の `.conf` / `.data` asset を **DB `waf_rule_assets` へ
   import**
 
-を行います。CRS を再ダウンロードせず、既存 seed file から DB rule asset
-だけを更新したい場合は次を使います。
+を行います。`make crs-ensure` も同じ動作です。**import のたびに、DB 上のすべての
+WAF rule asset が置き換わります**。UI で編集した rule や bypass snippet も
+含まれるため、すでに使っている DB へ import する前に第13.8 節を読んでください。
+
+`make db-import-waf-rule-assets` は、それだけで seed file から更新するための
+ものでは **ありません**。ダウンロードはせず、`WAF_RULE_ASSET_FS_ROOT`（workdir
+からの相対 path）配下に stage されている file を import します。この変数を
+指定しないと workdir の直下を探すため、失敗します。既定以外の CRS バージョンを import する場合は、
+`scripts/stage_waf_rule_assets.sh <stage-root> <crs-version>` で stage して、
+その file を import します。
 
 ```bash
-make db-import-waf-rule-assets
+./scripts/stage_waf_rule_assets.sh data/tmp/waf-rule-assets <crs-version> &&
+WAF_RULE_ASSET_FS_ROOT=tmp/waf-rule-assets make db-import-waf-rule-assets &&
+rm -rf data/tmp/waf-rule-assets
 ```
 
 既存の bootstrap / export file から DB を準備する場合は、migration 後に
@@ -160,7 +171,9 @@ domain は次のとおりです。
 - `ip_reputation_scopes` / `ip_reputation_scope_values`
 - `response_cache_config`
 - `crs_disabled_rules`
-- `override_rules` / `override_rule_versions`
+- `override_rules` / `override_rule_versions`（移行元として残る legacy table。
+  managed bypass の `extra_rule` body は、`waf_rule_assets` に種別
+  `bypass_extra_rule` として保存されます）
 - `php_runtime_inventory` / `php_runtime_modules` /
   `php_runtime_default_disabled_modules`
 
@@ -177,7 +190,7 @@ authority ではありません**。legacy import 互換と、config authority �
 残っている代表的な blob は次のとおりです。
 
 - `waf_rule_assets` / `waf_rule_asset_contents`（base WAF と CRS の rule /
-  data asset）
+  data asset、および managed bypass の `extra_rule` body）
 
 import 後の本番起動で **必要な file** は、
 
@@ -267,15 +280,26 @@ driver ごとに、通常の DB backup flow をそのまま使います。
 
 ### 13.5.1　SQLite
 
-大きな変更の前には DB file を snapshot しておきます。
+DB file は `storage.db_path` で指定した path です。既定の `db/tukuyomi.db` は
+runtime の作業 directory からの相対 path で、開発環境では
+`data/db/tukuyomi.db`、`make install` で導入した環境では deployment root（既定は
+`/opt/tukuyomi`）配下の `db/tukuyomi.db` です。
+
+SQLite は **WAL mode** で動作するため、直近の書き込みが `tukuyomi.db-wal` に
+だけ残っていることがあります。service の稼働中に `tukuyomi.db` だけをコピーする
+と、それらを取りこぼすおそれがあります。runtime user として、`sqlite3` の
+command-line tool で online backup を取ります（`umask 077` で、コピーを他の
+user から読めなくします）。
+
+```bash
+sudo -u tukuyomi sh -c 'umask 077; sqlite3 /opt/tukuyomi/db/tukuyomi.db ".backup /opt/tukuyomi/db/tukuyomi.db.bak.$(date +%Y%m%d%H%M%S)"'
+```
+
+または、service を止めてから、DB file を WAL file とあわせてコピーします。
+開発環境では次のとおりです。
 
 ```bash
 cp data/db/tukuyomi.db data/db/tukuyomi.db.bak.$(date +%Y%m%d%H%M%S)
-```
-
-WAL file がある場合は一緒に backup します。
-
-```bash
 cp data/db/tukuyomi.db-wal data/db/tukuyomi.db-wal.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
 cp data/db/tukuyomi.db-shm data/db/tukuyomi.db-shm.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true
 ```
@@ -323,7 +347,78 @@ DB が reset された場合:
 4. 新しい WAF / access event は `waf_events` に直接書き込まれる。legacy
    log file を明示的に取り込む場合だけ、logs endpoint を呼ぶ。
 
-## 13.8　ここまでの整理
+## 13.8　OWASP CRS の更新
+
+tukuyomi は OWASP CRS を **バイナリに同梱していません**。CRS は WAF rule
+asset を stage するときにダウンロードされ、DB `waf_rule_assets` へ import
+されて、稼働中の service はそこから読み込みます。したがって、導入済みの環境
+で別の CRS バージョンへ移る場合も、同じバージョンを入れ直す場合も、
+**その環境の DB へ WAF rule asset をもう一度 import する** ことになります。
+
+`make install` は `CRS_VERSION=<tag>` で CRS のバージョンを指定します。
+`scripts/stage_waf_rule_assets.sh` と `scripts/install_crs.sh` は引数で指定
+します。`make crs-install` と `make crs-ensure` は、常に既定のバージョンを
+stage します。
+
+### 13.8.1　import で置き換わるもの、残るもの
+
+import は既存の内容と **merge しません**。stage した file だけから、
+**すべて**の WAF rule asset を新しく作り直して有効にします。CRS のバージョ
+ンが同じでも同様です。
+
+stage した file で **置き換わる** もの:
+
+- `Rules` 画面で編集した base rule（FP Tuner が書き込んだ除外を含みます。
+  第8章）。`tukuyomi.conf` は seed の内容に戻り、無効にしていた場合も有効に
+  戻ります
+- `Rules` 画面で追加した base rule file
+- bypass snippet（`Rules > Advanced > Bypass snippets`）
+- `crs-setup.conf` への追記。stage 時に `WAF_RULE_SEED_CRS_SETUP_OVERRIDE=<file>`
+  を指定すると、その file の内容が `crs-setup.conf` の末尾に追記されます。同じ
+  file を指定し直してください
+
+**残る** もの:
+
+- CRS rule set の選択。無効にした CRS rule file 名の一覧は、import 後も残り
+  ます。新しいバージョンで増えた file は有効で始まり、名前が消えた、または
+  変わったものは反映されません。更新後に `Rules` 画面で確かめてください
+- bypass の entry。ただし **snippet は消えます**。import の直後から、snippet が
+  無くなった path は default の rule で検査され、log に
+  `[BYPASS][RULE][WARN] ... (fallback=default-rules)` が出ます
+- proxy、sites、TLS、admin の設定、admin user、WAF event
+
+### 13.8.2　import の前、最中、後
+
+- **先に DB を backup します（第13.5 節）。** rule asset の旧版は DB に残り
+  ますが、管理 UI と API から参照・復元する手段はなく、import を元に戻せま
+  せん。戻すには、backup から DB を復元する（`.backup` で取った file を戻すときは、
+  先に `tukuyomi.db-wal` と `tukuyomi.db-shm` を消します）か、前の CRS バージョンをもう一度
+  import します。
+- **`make install` は毎回 import します。** `INSTALL_REFRESH_WAF_ASSETS` の
+  既定値が `1` のため、binary の更新のために再実行すると、ローカルで編集した
+  rule も置き換わります。導入済みの環境では、`INSTALL_REFRESH_WAF_ASSETS=0`
+  で現在の asset を保持できます。初回の install には asset が無く、import
+  しないと起動できません。既定では、installer は最後に稼働中の service を再
+  起動します。
+- **import した rule は、service を再起動した後に使われます。**
+- **UI で直した rule は DB にしかありません。** import の前に、
+  `GET <admin.api_base_path>/rules`（既定は `/tukuyomi-api/rules`）のレスポン
+  スを内容ごと保存します。import の後で、`Rules` 画面または
+  `PUT <admin.api_base_path>/rules` で入れ直します。bypass snippet を先に戻し
+  てください。bypass の entry が参照する snippet が無い間は、その entry を含む
+  bypass 設定を UI や API から保存できないためです。
+- **Center が WAF rule を割り当てる Gateway** では、ローカルで import しない
+  でください。Center で rule bundle を更新して、もう一度割り当てます。割り当て
+  の後で Gateway の rule が変わると、その割り当ては適用されず、
+  `local WAF rules changed after assignment` で `blocked` になります。Gateway
+  が新しい rule を Center へ送った後に、割り当て直してください。
+- **バージョンの確認** は、再起動の後に `Rules` 画面で、`crs-setup.conf` の
+  先頭にある `OWASP CRS ver.` の行を見ます。
+
+stage、runtime user としての import、container、開発環境のコマンドは、
+`docs/build/binary-deployment.ja.md` の「OWASP CRS の更新」にあります。
+
+## 13.9　ここまでの整理
 
 - runtime storage は **DB-only**。DB が壊れていれば起動を失敗させ、file
   に fallback しない。
@@ -335,8 +430,11 @@ DB が reset された場合:
 - import 後の runtime に必要な file は **`data/conf/config.json` だけ**。
   ほかの seed JSON は削除可。
 - retention が効くのは **`waf_events` のみ**（既定 30 日）。
+- WAF rule asset の import（`make crs-install`、`make install`）は、**DB 上の
+  すべての rule asset を置き換えます**。UI で編集した rule も含まれます。先に
+  DB を backup し、CRS の更新は第13.8 節に従ってください。
 
-## 13.9　次章への橋渡し
+## 13.10　次章への橋渡し
 
 DB 運用で「事故を起こさない」備えができたら、次は **listener と
 reuse-port** に関する判断です。第14章では、なぜ tukuyomi が現時点で

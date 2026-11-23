@@ -39,6 +39,8 @@ make db-migrate
 make crs-install
 ```
 
+`make crs-install` は、既定で OWASP CRS `v4.23.0` をステージングします。インポートのたびに、UI で編集したルールを含め、DB 上のすべての WAF ルールアセットが置き換わります。別のバージョンの選び方と、導入済みの環境の更新については、[OWASP CRS の更新](docs/build/binary-deployment.ja.md#owasp-crs-の更新) を参照してください。
+
 組み込み管理 UI と既定のアップストリームを含む最小構成で始める場合は、プリセットを適用します。
 
 ```bash
@@ -70,6 +72,7 @@ make install TARGET=linux-systemd
 
 これが Gateway のインストール経路です。Gateway／Center UI を埋め込んだ Go バイナリをビルドし、ランタイムツリーを作成したうえで、DB マイグレーション、WAF／CRS アセットのインポート、初回 DB 設定のシード投入、ローカルホスト向け systemd ユニットのインストールまでを一括で実行します。
 スケジュールタスク用タイマーは既定で有効になります。このホストでスケジュールタスクを実行しない場合は、`INSTALL_ENABLE_SCHEDULED_TASKS=0` を指定してください。
+導入済みの環境でインストーラーをもう一度実行すると、WAF／CRS アセットが再インポートされ、UI で編集したルールは置き換わります。導入済みの環境では、保持するために `INSTALL_REFRESH_WAF_ASSETS=0` を指定できます（初回のインストールにはルールアセットが無く、インポートしないと起動できません）。
 
 Center をコントロールプレーンホストへ導入する場合は、同じ `TARGET` にロールを指定します。
 
@@ -93,8 +96,8 @@ make preset-apply PRESET=minimal
 make gateway-preview-up
 ```
 
-`make gateway-preview-up` は CRS の ensure フローを自動的に実行します。
-このフローでは、`make db-migrate` の実行、CRS シードファイルが存在しない場合の配置、および WAF ルールアセットの DB へのインポートまでをまとめて行います。
+`make gateway-preview-up` は、プレビュー用 DB がまだ無い場合に作成します。CRS のステージング、WAF ルールアセットのインポート、プレビュー用設定のシード投入を行います。
+`GATEWAY_PREVIEW_PERSIST=1` を指定しない場合は、実行のたびにプレビュー用 DB を作り直します。`GATEWAY_PREVIEW_PERSIST=1` を指定した場合は、既存のプレビュー用 DB を保持し、インポートは行いません。
 
 その後、既定では以下にアクセスします。
 
@@ -118,8 +121,7 @@ make gateway-preview-up
 - `data/conf/upstream-runtime.json`: `Proxy Rules > Upstreams` で定義したオプトイン方式のランタイムオーバーライド用、シード／インポート／エクスポート素材
 - `data/conf/sites.json`: サイトオーナーシップと TLS バインディングのシード／インポート／エクスポート素材
 - DB `vhosts` ／ `vhost_*`: 稼働中の Runtime Apps 設定。ストレージ名は互換性のため `vhost` のままです
-- DB `waf_rule_assets`: ベース WAF と CRS のルール／データアセット
-- DB `override_rules`: 管理されたバイパスである `extra_rule` のルール本体
+- DB `waf_rule_assets`: ベース WAF と CRS のルール／データアセット、および管理されたバイパスである `extra_rule` のルール本体（種別 `bypass_extra_rule`）
 - DB `php_runtime_inventory` ／ `php_runtime_modules`: PHP-FPM ランタイムインベントリとモジュールメタデータ
 - DB `psgi_runtime_inventory` ／ `psgi_runtime_modules`: Perl／Starman ランタイムインベントリとモジュールメタデータ
 - `data/php-fpm/inventory.json` ／ `data/php-fpm/vhosts.json`: PHP-FPM と Runtime Apps のシード／インポート／エクスポート素材
@@ -127,7 +129,7 @@ make gateway-preview-up
 - `data/conf/scheduled-tasks.json`: スケジュールタスクのシード／インポート／エクスポート素材
 
 ベース WAF／CRS アセットと管理されたバイパスのオーバーライドは、DB を正として保持します。
-`make crs-install` はルールのインポート素材を `data/tmp` 配下に一時ステージングし、DB へのインポート後にステージを削除します。設定上のパスは論理的なアセット名および互換参照として残りますが、ランタイムは `data/rules`、`data/conf/rules`、`data/geoip` のフォールバックディレクトリを使用しません。同様に、起動時設定、ポリシー、サイト、Runtime Apps、スケジュールタスク、アップストリームランタイム、レスポンスキャッシュ、PHP-FPM インベントリ各ドメインも、`make db-import` 実行後は DB から直接読み込みます。
+`make crs-install` はルールのインポート素材を `data/tmp` 配下に一時ステージングし、DB へインポートします。設定上のパスは論理的なアセット名および互換参照として残りますが、ランタイムは `data/rules`、`data/conf/rules`、`data/geoip` のフォールバックディレクトリを使用しません。同様に、起動時設定、ポリシー、サイト、Runtime Apps、スケジュールタスク、アップストリームランタイム、レスポンスキャッシュ、PHP-FPM インベントリ各ドメインも、`make db-import` 実行後は DB から直接読み込みます。
 
 運用面の詳細は以下を参照してください。
 

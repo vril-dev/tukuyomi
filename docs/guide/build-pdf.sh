@@ -83,7 +83,7 @@ EOF
 
   TMP_DIR="$tmp" CSS_PATH="$CSS" COVER_HTML="$cover_html" \
   pandoc \
-    --from gfm+yaml_metadata_block \
+    --from gfm+yaml_metadata_block+east_asian_line_breaks \
     --to html5 \
     --standalone \
     --toc \

@@ -174,6 +174,31 @@ func TestParseServerMaxHeaderBytes(t *testing.T) {
 	}
 }
 
+func TestParseServerMaxHeaderCount(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+	}{
+		{in: "", want: 100},
+		{in: "0", want: 100},
+		{in: "-1", want: 100},
+		{in: "1", want: 1},
+		{in: "100", want: 100},
+		{in: "500", want: 500},
+		{in: "32767", want: 32767},
+		{in: "999999999", want: 32767},
+		{in: "abc", want: 100},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.in, func(t *testing.T) {
+			if got := parseServerMaxHeaderCount(tc.in); got != tc.want {
+				t.Fatalf("parseServerMaxHeaderCount(%q)=%d want=%d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseServerConcurrency(t *testing.T) {
 	cases := []struct {
 		in   string

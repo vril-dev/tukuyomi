@@ -51,6 +51,8 @@
 - `server.write_timeout_sec` はレスポンス書き込みの上限です。slow client がデータプレーンの goroutine を保持し続けることなくクローズします
 - `server.idle_timeout_sec` は keep-alive のリクエスト間アイドル時間の上限です
 - `server.graceful_shutdown_timeout_sec` は、デプロイ／リロード時に稼働中のコネクションをドレインする上限時間です。超過後は強制クローズします
+- `server.max_header_bytes` は、リクエストラインとヘッダーを合わせた大きさの上限です（既定 1 MiB、1 KiB〜16 MiB の範囲に収めます）。HTTP/2 と HTTP/3 では、ヘッダーリストの上限として使います
+- `server.max_header_count` は、公開側のリクエスト 1 件に含められるヘッダーの本数の上限です（既定 100、最大 32767。`0` は既定値の意味です）。超えたリクエストは、`max_concurrent_*` の上限と WAF の検査の前に `431 Request Header Fields Too Large` で拒否します。拒否のたびに `tukuyomi_proxy_request_header_limit_rejected_total` が増え、`[PROXY][HEADER_LIMIT][WARN]` の行を 1 分に 1 回まで、接続元のアドレス（CDN やプロキシの後ろでは、そのアドレス）とともにログに出します。前段の CDN やプロキシがヘッダーを多く足す構成では、上限を上げてください。HTTP/2 と HTTP/3 のクライアントが分けて送った Cookie は 1 本と数えます。リスナーを共有する構成の管理用のパスと `/healthz` は数えません（WAF に届かないため）。変更には再起動が必要です
 - TLS 公開リスナーは既定で HTTP/1.1 をアドバタイズします。`server.http2.enabled=true`
   の場合は、HTTPS 公開リスナーが ALPN で `h2` と `http/1.1` を提示します。
   HTTP/1.1 は残るため、HTTP/1.1 の Upgrade を使う WebSocket 経路も引き続き利用できます。

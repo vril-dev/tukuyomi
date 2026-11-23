@@ -542,12 +542,13 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 			http2Status := serverruntime.HTTP2StatusSnapshot()
 			log.Printf("[SERVER] http2 enabled advertised=%t", http2Status.Advertised)
 		}
-		log.Printf("[SERVER] read_timeout=%s read_header_timeout=%s write_timeout=%s idle_timeout=%s max_header_bytes=%d",
+		log.Printf("[SERVER] read_timeout=%s read_header_timeout=%s write_timeout=%s idle_timeout=%s max_header_bytes=%d max_header_count=%d",
 			config.ServerReadTimeout,
 			config.ServerReadHeaderTimeout,
 			config.ServerWriteTimeout,
 			config.ServerIdleTimeout,
 			config.ServerMaxHeaderBytes,
+			config.ServerMaxHeaderCount,
 		)
 		if config.ServerProxyProtocolEnabled {
 			log.Printf("[SERVER] public proxy protocol enabled trusted_cidrs=%s", strings.Join(config.ServerProxyProtocolTrustedCIDRs, ","))
@@ -569,12 +570,13 @@ func runServerWithConfig(workerReady *workerReadyNotifier, configLoaded bool) {
 	}
 
 	log.Printf("[INFO] starting server on %s inherited=%t engine=native_http1", config.ListenAddr, publicInherited)
-	log.Printf("[SERVER] read_timeout=%s read_header_timeout=%s write_timeout=%s idle_timeout=%s max_header_bytes=%d",
+	log.Printf("[SERVER] read_timeout=%s read_header_timeout=%s write_timeout=%s idle_timeout=%s max_header_bytes=%d max_header_count=%d",
 		config.ServerReadTimeout,
 		config.ServerReadHeaderTimeout,
 		config.ServerWriteTimeout,
 		config.ServerIdleTimeout,
 		config.ServerMaxHeaderBytes,
+		config.ServerMaxHeaderCount,
 	)
 	if config.ServerProxyProtocolEnabled {
 		log.Printf("[SERVER] public proxy protocol enabled trusted_cidrs=%s", strings.Join(config.ServerProxyProtocolTrustedCIDRs, ","))

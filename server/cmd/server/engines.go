@@ -317,6 +317,7 @@ type publicProxyHandler struct {
 	splitAdmin             bool
 	globalConcurrencyGuard *middleware.ConcurrencyGuard
 	proxyConcurrencyGuard  *middleware.ConcurrencyGuard
+	maxHeaderCount         int
 }
 
 func buildPublicHandler(globalConcurrencyGuard *middleware.ConcurrencyGuard, proxyConcurrencyGuard *middleware.ConcurrencyGuard, splitAdmin bool) (http.Handler, error) {
@@ -333,6 +334,7 @@ func buildPublicHandler(globalConcurrencyGuard *middleware.ConcurrencyGuard, pro
 		splitAdmin:             splitAdmin,
 		globalConcurrencyGuard: globalConcurrencyGuard,
 		proxyConcurrencyGuard:  proxyConcurrencyGuard,
+		maxHeaderCount:         config.ServerMaxHeaderCount,
 	}
 	h.proxyHandler = http.HandlerFunc(h.serveProxy)
 	h.tracedProxyHandler = observability.HTTPTracingHandler(h.proxyHandler)
@@ -380,6 +382,11 @@ func (h *publicProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *publicProxyHandler) serveProxy(w http.ResponseWriter, r *http.Request) {
+	// Reject before the concurrency guards and the WAF, which allocates per
+	// header value.
+	if handler.RejectExcessRequestHeaders(w, r, h.maxHeaderCount) {
+		return
+	}
 	var globalResult middleware.ConcurrencyAcquireResult
 	globalQueued := false
 	if guard := h.globalConcurrencyGuard; guard != nil {

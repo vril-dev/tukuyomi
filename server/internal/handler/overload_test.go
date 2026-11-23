@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -181,5 +184,85 @@ func saveOverloadConfig() func() {
 		config.ServerMaxConcurrentProxy = oldServerMaxConcurrentProxy
 		config.ServerMaxQueuedProxy = oldServerMaxQueuedProxy
 		config.ServerQueuedProxyRequestTimeout = oldServerQueuedProxyRequestTimeout
+	}
+}
+
+func TestRejectExcessRequestHeadersCountsValuesAndWarnsOncePerMinute(t *testing.T) {
+	lastRequestHeaderLimitWarning.Store(0)
+	before := requestHeaderLimitRejectedTotal.Load()
+
+	var logs bytes.Buffer
+	prevOutput := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(prevOutput)
+
+	newRequest := func(values int) *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = "203.0.113.9:4000"
+		for i := 0; i < values; i++ {
+			req.Header.Add("X-Repeat", "secret-value")
+		}
+		return req
+	}
+
+	rec := httptest.NewRecorder()
+	if RejectExcessRequestHeaders(rec, newRequest(3), 3) {
+		t.Fatalf("rejected a request at the limit: status=%d", rec.Code)
+	}
+	if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
+		t.Fatalf("wrote a response for an allowed request: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if RejectExcessRequestHeaders(httptest.NewRecorder(), newRequest(config.DefaultServerMaxHeaderCount), 0) {
+		t.Fatal("limit 0 must mean the default: rejected a request at the default limit")
+	}
+	if !RejectExcessRequestHeaders(httptest.NewRecorder(), newRequest(config.DefaultServerMaxHeaderCount+1), 0) {
+		t.Fatal("limit 0 must mean the default: allowed a request over the default limit")
+	}
+	before = requestHeaderLimitRejectedTotal.Load()
+	lastRequestHeaderLimitWarning.Store(0)
+	logs.Reset()
+
+	// Distinct names and a mix of repeated and distinct names are counted
+	// together, value by value.
+	distinct := httptest.NewRequest(http.MethodGet, "/", nil)
+	mixed := httptest.NewRequest(http.MethodGet, "/", nil)
+	for i := 0; i < 4; i++ {
+		distinct.Header.Add("X-Field-"+strconv.Itoa(i), "v")
+	}
+	mixed.Header.Add("X-A", "1")
+	mixed.Header.Add("X-A", "2")
+	mixed.Header.Add("X-B", "1")
+	mixed.Header.Add("X-C", "1")
+	for name, req := range map[string]*http.Request{"distinct": distinct, "mixed": mixed} {
+		rec := httptest.NewRecorder()
+		if !RejectExcessRequestHeaders(rec, req, 3) || rec.Code != http.StatusRequestHeaderFieldsTooLarge {
+			t.Fatalf("%s names: allowed 4 header values with limit 3 (status=%d)", name, rec.Code)
+		}
+	}
+	before = requestHeaderLimitRejectedTotal.Load()
+	lastRequestHeaderLimitWarning.Store(0)
+	logs.Reset()
+
+	for i := 0; i < 3; i++ {
+		rec := httptest.NewRecorder()
+		if !RejectExcessRequestHeaders(rec, newRequest(4), 3) {
+			t.Fatal("allowed a request over the limit with one repeated header name")
+		}
+		if rec.Code != http.StatusRequestHeaderFieldsTooLarge {
+			t.Fatalf("status=%d want=%d", rec.Code, http.StatusRequestHeaderFieldsTooLarge)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["error"] != "request header fields too large" {
+			t.Fatalf("body=%q err=%v", rec.Body.String(), err)
+		}
+	}
+	if got := requestHeaderLimitRejectedTotal.Load() - before; got != 3 {
+		t.Fatalf("rejected counter grew by %d want 3", got)
+	}
+	if got := strings.Count(logs.String(), "[PROXY][HEADER_LIMIT][WARN]"); got != 1 {
+		t.Fatalf("warnings=%d want 1 logs=%s", got, logs.String())
+	}
+	if !strings.Contains(logs.String(), "203.0.113.9") || strings.Contains(logs.String(), "secret-value") || strings.Contains(logs.String(), "X-Repeat") {
+		t.Fatalf("warning must name the peer and no header names or values: %s", logs.String())
 	}
 }

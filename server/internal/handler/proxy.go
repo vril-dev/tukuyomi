@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -23,6 +24,7 @@ import (
 	"tukuyomi/internal/bottelemetry"
 	"tukuyomi/internal/bypassconf"
 	"tukuyomi/internal/cacheconf"
+	"tukuyomi/internal/config"
 	"tukuyomi/internal/observability"
 	"tukuyomi/internal/proxyaccesslog"
 	"tukuyomi/internal/proxycompression"
@@ -865,6 +867,62 @@ func ProxyHandler(c *gin.Context) {
 
 func ServeProxyHTTP(w http.ResponseWriter, r *http.Request) {
 	serveProxyRequest(newProxyServeContext(w, r))
+}
+
+var (
+	// requestHeaderLimitRejectedTotal counts public requests rejected because
+	// they carried more header field values than server.max_header_count.
+	requestHeaderLimitRejectedTotal atomic.Uint64
+	// lastRequestHeaderLimitWarning holds the UnixNano time of the last
+	// rejection warning, so a flood of such requests logs at most once a
+	// minute.
+	lastRequestHeaderLimitWarning atomic.Int64
+)
+
+// RejectExcessRequestHeaders answers 431 when r carries more header field
+// values than limit, and reports whether it did. A limit <= 0 means the
+// default, so a handler built before the config is applied still checks. The
+// public listener calls it before the concurrency guards and the WAF, whose
+// cost grows with every header value. Values are counted, not names, so
+// repeating one name does not get around the limit.
+func RejectExcessRequestHeaders(w http.ResponseWriter, r *http.Request, limit int) bool {
+	if w == nil || r == nil {
+		return false
+	}
+	if limit <= 0 {
+		limit = config.DefaultServerMaxHeaderCount
+	}
+	count := 0
+	for _, values := range r.Header {
+		count += len(values)
+		if count > limit {
+			break
+		}
+	}
+	if count <= limit {
+		return false
+	}
+	requestHeaderLimitRejectedTotal.Add(1)
+	logRejectedRequestHeaders(r, limit)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusRequestHeaderFieldsTooLarge)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": "request header fields too large"})
+	return true
+}
+
+// logRejectedRequestHeaders logs the peer of a rejected request at most once
+// a minute. It does not log header names or values, which the client controls.
+func logRejectedRequestHeaders(r *http.Request, limit int) {
+	now := time.Now().UnixNano()
+	last := lastRequestHeaderLimitWarning.Load()
+	if now-last < int64(time.Minute) || !lastRequestHeaderLimitWarning.CompareAndSwap(last, now) {
+		return
+	}
+	peer := strings.TrimSpace(r.RemoteAddr)
+	if host, _, err := net.SplitHostPort(peer); err == nil {
+		peer = host
+	}
+	log.Printf("[PROXY][HEADER_LIMIT][WARN] rejected a request from %s with more than %d header fields (431); raise server.max_header_count if legitimate clients send more", peer, limit)
 }
 
 func newProxyServeContext(w http.ResponseWriter, r *http.Request) *proxyServeContext {

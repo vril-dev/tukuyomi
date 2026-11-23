@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"tukuyomi/internal/config"
 	"tukuyomi/internal/handler"
+	"tukuyomi/internal/middleware"
 )
 
 func TestBuildPublicEngineSingleListenerKeepsAdminRoutes(t *testing.T) {
@@ -246,6 +248,63 @@ func TestBuildAdminEngineExposesRuntimeAppsWithoutVhostsAlias(t *testing.T) {
 		if _, ok := routes[legacy]; ok {
 			t.Fatalf("unexpected legacy route %s", legacy)
 		}
+	}
+}
+
+func TestPublicHandlerRejectsExcessRequestHeadersBeforeConcurrencyGuards(t *testing.T) {
+	restore := saveListenerConfigForTest()
+	defer restore()
+	prevMaxHeaderCount := config.ServerMaxHeaderCount
+	config.ServerMaxHeaderCount = 4
+	defer func() { config.ServerMaxHeaderCount = prevMaxHeaderCount }()
+
+	for _, tc := range []struct {
+		name  string
+		build func(*middleware.ConcurrencyGuard) (http.Handler, error)
+	}{
+		{name: "global", build: func(g *middleware.ConcurrencyGuard) (http.Handler, error) { return buildPublicHandler(g, nil, false) }},
+		{name: "proxy", build: func(g *middleware.ConcurrencyGuard) (http.Handler, error) { return buildPublicHandler(nil, g, false) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A full guard: any request that reaches it gets 503.
+			guard := middleware.NewConcurrencyGuard(1, tc.name)
+			if held := guard.AcquireContext(context.Background()); !held.Allowed {
+				t.Fatalf("could not fill the %s concurrency guard", tc.name)
+			}
+			defer guard.Release()
+			publicHandler, err := tc.build(guard)
+			if err != nil {
+				t.Fatalf("buildPublicHandler error = %v", err)
+			}
+			assertHeaderLimitBeforeGuard(t, publicHandler)
+		})
+	}
+}
+
+func assertHeaderLimitBeforeGuard(t *testing.T, publicHandler http.Handler) {
+	t.Helper()
+	newRequest := func(values int) *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "/app", nil)
+		req.RemoteAddr = "198.51.100.7:40000"
+		for i := 0; i < values; i++ {
+			req.Header.Add("X-Repeat", "v")
+		}
+		return req
+	}
+
+	rec := httptest.NewRecorder()
+	publicHandler.ServeHTTP(rec, newRequest(4))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("at the limit: status=%d want=%d (reaches the guard) body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	publicHandler.ServeHTTP(rec, newRequest(5))
+	if rec.Code != http.StatusRequestHeaderFieldsTooLarge {
+		t.Fatalf("over the limit: status=%d want=%d body=%s", rec.Code, http.StatusRequestHeaderFieldsTooLarge, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "request header fields too large") {
+		t.Fatalf("over the limit: body=%s", rec.Body.String())
 	}
 }
 

@@ -72,6 +72,7 @@ var (
 	ServerIdleTimeout                      time.Duration
 	ServerGracefulShutdownTimeout          time.Duration
 	ServerMaxHeaderBytes                   int
+	ServerMaxHeaderCount                   int
 	ServerMaxConcurrentReqs                int
 	ServerMaxQueuedReqs                    int
 	ServerQueuedRequestTimeout             time.Duration
@@ -356,6 +357,7 @@ func applyAppConfig(cfg appConfigFile) {
 	ServerIdleTimeout = time.Duration(parseServerTimeoutSec(strconv.Itoa(cfg.Server.IdleTimeoutSec), 120, false)) * time.Second
 	ServerGracefulShutdownTimeout = time.Duration(parseServerTimeoutSec(strconv.Itoa(cfg.Server.GracefulShutdownTimeoutSec), 30, false)) * time.Second
 	ServerMaxHeaderBytes = parseServerMaxHeaderBytes(strconv.Itoa(cfg.Server.MaxHeaderBytes))
+	ServerMaxHeaderCount = parseServerMaxHeaderCount(strconv.Itoa(cfg.Server.MaxHeaderCount))
 	ServerMaxConcurrentReqs = parseServerConcurrency(strconv.Itoa(cfg.Server.MaxConcurrentRequests))
 	ServerMaxQueuedReqs = parseServerQueueSize(strconv.Itoa(cfg.Server.MaxQueuedRequests))
 	ServerQueuedRequestTimeout = time.Duration(parseServerQueueTimeoutMS(strconv.Itoa(cfg.Server.QueuedRequestTimeoutMS))) * time.Millisecond
@@ -805,6 +807,22 @@ func parseServerMaxHeaderBytes(v string) int {
 	}
 	if n > 16<<20 {
 		return 16 << 20
+	}
+	return n
+}
+
+// DefaultServerMaxHeaderCount is the default for server.max_header_count.
+const DefaultServerMaxHeaderCount = 100
+
+// parseServerMaxHeaderCount treats 0 as the default, so a settings update that
+// omits server.max_header_count keeps the limit instead of removing it.
+func parseServerMaxHeaderCount(v string) int {
+	n := parseIntDefault(v, DefaultServerMaxHeaderCount)
+	if n <= 0 {
+		return DefaultServerMaxHeaderCount
+	}
+	if n > 32767 {
+		return 32767
 	}
 	return n
 }

@@ -65,6 +65,17 @@ container 起動で通常必要になる env:
 - `server.idle_timeout_sec`: keep-alive の request 間 idle 時間の上限
 - `server.graceful_shutdown_timeout_sec`: deploy / reload 時に live
   connection を drain する上限。**超過後は force close**
+- `server.max_header_bytes`: request line と header を合わせた上限（既定
+  1 MiB、1 KiB〜16 MiB の範囲に収める）。HTTP/2・HTTP/3 では header list の
+  上限として使う
+- `server.max_header_count`: public request 1 件の header field 数の上限
+  （既定 100、最大 32767。`0` は既定値）。超えた request は、
+  `max_concurrent_*` の上限と WAF 検査の前に `431 Request Header Fields Too
+  Large` で拒否する。
+  拒否のたびに `tukuyomi_proxy_request_header_limit_rejected_total` が増え、
+  warning log は 1 分に 1 回まで出る。前段の CDN や proxy が header を多く
+  足す構成では上げる。HTTP/2・HTTP/3 のクライアントが分けて送った Cookie は
+  1 本と数える。変更には再起動が必要
 - TLS public listener は既定で HTTP/1.1 を advertise します。
   `server.http2.enabled=true` の場合は `h2` と `http/1.1` を advertise します。
   HTTP/3 は **専用 listener** で処理します。

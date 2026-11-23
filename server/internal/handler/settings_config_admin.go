@@ -65,6 +65,7 @@ type settingsListenerAdminServerConfig struct {
 	IdleTimeoutSec              int                                         `json:"idle_timeout_sec"`
 	GracefulShutdownTimeoutSec  int                                         `json:"graceful_shutdown_timeout_sec"`
 	MaxHeaderBytes              int                                         `json:"max_header_bytes"`
+	MaxHeaderCount              int                                         `json:"max_header_count"`
 	MaxConcurrentRequests       int                                         `json:"max_concurrent_requests"`
 	MaxQueuedRequests           int                                         `json:"max_queued_requests"`
 	QueuedRequestTimeoutMS      int                                         `json:"queued_request_timeout_ms"`
@@ -614,6 +615,7 @@ func buildSettingsListenerAdminConfig(cfg config.AppConfigFile) settingsListener
 			IdleTimeoutSec:              cfg.Server.IdleTimeoutSec,
 			GracefulShutdownTimeoutSec:  cfg.Server.GracefulShutdownTimeoutSec,
 			MaxHeaderBytes:              cfg.Server.MaxHeaderBytes,
+			MaxHeaderCount:              cfg.Server.MaxHeaderCount,
 			MaxConcurrentRequests:       cfg.Server.MaxConcurrentRequests,
 			MaxQueuedRequests:           cfg.Server.MaxQueuedRequests,
 			QueuedRequestTimeoutMS:      cfg.Server.QueuedRequestTimeoutMS,
@@ -822,6 +824,7 @@ func applySettingsListenerAdminConfig(cfg *config.AppConfigFile, next settingsLi
 	cfg.Server.IdleTimeoutSec = next.Server.IdleTimeoutSec
 	cfg.Server.GracefulShutdownTimeoutSec = next.Server.GracefulShutdownTimeoutSec
 	cfg.Server.MaxHeaderBytes = next.Server.MaxHeaderBytes
+	cfg.Server.MaxHeaderCount = next.Server.MaxHeaderCount
 	cfg.Server.MaxConcurrentRequests = next.Server.MaxConcurrentRequests
 	cfg.Server.MaxQueuedRequests = next.Server.MaxQueuedRequests
 	cfg.Server.QueuedRequestTimeoutMS = next.Server.QueuedRequestTimeoutMS

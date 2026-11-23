@@ -72,6 +72,19 @@ Env typically required for container startup:
 - `server.graceful_shutdown_timeout_sec`: upper bound for draining
   live connections on deploy / reload. **Force-close after the
   budget.**
+- `server.max_header_bytes`: upper bound for the request line and
+  headers together (default 1 MiB, kept between 1 KiB and 16 MiB).
+  HTTP/2 and HTTP/3 use it as the header list limit.
+- `server.max_header_count`: upper bound for the number of header
+  fields in one public request (default 100, at most 32767; `0` means
+  the default). A request with more fields gets `431 Request Header
+  Fields Too Large` before the `max_concurrent_*` caps and WAF
+  inspection.
+  Each rejection increments
+  `tukuyomi_proxy_request_header_limit_rejected_total`, and a warning is
+  logged at most once a minute. Raise it when a CDN or proxy in front
+  adds many headers. Cookies that HTTP/2 and HTTP/3 clients split into
+  several fields count as one. Changing it requires a restart.
 - The TLS public listener advertises HTTP/1.1 by default. With
   `server.http2.enabled=true`, it advertises `h2` and `http/1.1`.
   **HTTP/3 lives on a dedicated listener.**

@@ -199,7 +199,8 @@ against the preview Center DB.
 - `data/conf/scheduled-tasks.json`: scheduled task seed/import/export material
 
 Base WAF/CRS assets and managed bypass overrides are DB-backed. `make crs-install`
-stages rule import material under `data/tmp` and imports it.
+stages rule import material under `data/tmp`, imports it, and removes the
+staging directory.
 The configured paths remain logical asset names and compatibility references;
 runtime does not use `data/rules`, `data/conf/rules`, or `data/geoip` fallback
 directories. The same applies to startup, policy, site, Runtime Apps, scheduled task,

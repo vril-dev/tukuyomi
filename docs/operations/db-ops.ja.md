@@ -20,7 +20,7 @@ make db-migrate
 make crs-install
 ```
 
-`make crs-install` は `db-migrate` 後に動作し、CRS（既定のバージョン）をダウンロードして、ベースルールのシードとともに作業ディレクトリ（既定は `data`）配下の `tmp/waf-rule-assets` にステージングし、ベース WAF と CRS の `.conf` ／ `.data` アセットを DB `waf_rule_assets` へインポートします。`make crs-ensure` も同じ動作です。インポートのたびに、UI で編集したルールやバイパススニペットを含め、DB 上のすべての WAF ルールアセットが置き換わります。すでに使っている DB へインポートする前に、[OWASP CRS の更新](../build/binary-deployment.ja.md#owasp-crs-の更新) を参照してください。
+`make crs-install` は `db-migrate` 後に動作し、CRS（既定のバージョン）をダウンロードして、ベースルールのシードとともに作業ディレクトリ（既定は `data`）配下の `tmp/waf-rule-assets` にステージングし、ベース WAF と CRS の `.conf` ／ `.data` アセットを DB `waf_rule_assets` へインポートし、その後 `tmp/waf-rule-assets` を削除します。`make crs-ensure` も同じ動作です。インポートのたびに、UI で編集したルールやバイパススニペットを含め、DB 上のすべての WAF ルールアセットが置き換わります。すでに使っている DB へインポートする前に、[OWASP CRS の更新](../build/binary-deployment.ja.md#owasp-crs-の更新) を参照してください。
 
 `make crs-install` は常に既定のバージョンをステージングします。別のバージョンをインポートする場合は、`scripts/stage_waf_rule_assets.sh <stage-root> <crs-version>` でステージングし、そのファイルをインポートします。
 

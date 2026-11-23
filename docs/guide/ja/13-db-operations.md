@@ -39,6 +39,7 @@ make crs-install
   workdir（既定は `data`）配下の `tmp/waf-rule-assets` に stage
 - base WAF と CRS の `.conf` / `.data` asset を **DB `waf_rule_assets` へ
   import**
+- import 後の `tmp/waf-rule-assets` の削除
 
 を行います。`make crs-ensure` も同じ動作です。**import のたびに、DB 上のすべての
 WAF rule asset が置き換わります**。UI で編集した rule や bypass snippet も

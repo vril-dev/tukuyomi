@@ -129,7 +129,7 @@ make gateway-preview-up
 - `data/conf/scheduled-tasks.json`: スケジュールタスクのシード／インポート／エクスポート素材
 
 ベース WAF／CRS アセットと管理されたバイパスのオーバーライドは、DB を正として保持します。
-`make crs-install` はルールのインポート素材を `data/tmp` 配下に一時ステージングし、DB へインポートします。設定上のパスは論理的なアセット名および互換参照として残りますが、ランタイムは `data/rules`、`data/conf/rules`、`data/geoip` のフォールバックディレクトリを使用しません。同様に、起動時設定、ポリシー、サイト、Runtime Apps、スケジュールタスク、アップストリームランタイム、レスポンスキャッシュ、PHP-FPM インベントリ各ドメインも、`make db-import` 実行後は DB から直接読み込みます。
+`make crs-install` はルールのインポート素材を `data/tmp` 配下に一時ステージングし、DB へのインポート後に削除します。設定上のパスは論理的なアセット名および互換参照として残りますが、ランタイムは `data/rules`、`data/conf/rules`、`data/geoip` のフォールバックディレクトリを使用しません。同様に、起動時設定、ポリシー、サイト、Runtime Apps、スケジュールタスク、アップストリームランタイム、レスポンスキャッシュ、PHP-FPM インベントリ各ドメインも、`make db-import` 実行後は DB から直接読み込みます。
 
 運用面の詳細は以下を参照してください。
 

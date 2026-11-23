@@ -292,7 +292,7 @@ Notes:
 - the public release bundle ships `conf/config.json` and the bundled empty-DB runtime seed at `seeds/conf/config-bundle.json`
 - when configured files such as `conf/proxy.json` or policy JSON are absent, `make db-import` reads `seeds/conf/config-bundle.json` before falling back to built-in compatibility defaults
 - `make crs-install` stages the default base WAF rule seed from `seeds/waf/rules/tukuyomi.conf` and imports it into DB
-- CRS files are temporary import material for DB `waf_rule_assets`; `make crs-install` downloads the default CRS version and stages it under `data/tmp`. To use another version, see [Updating the OWASP CRS](#updating-the-owasp-crs)
+- CRS files are temporary import material for DB `waf_rule_assets`; `make crs-install` downloads the default CRS version, stages it under `data/tmp`, and removes the staging directory after the import. To use another version, see [Updating the OWASP CRS](#updating-the-owasp-crs)
 - the config bundle domains for sites, scheduled tasks, upstream runtime,
   policies, cache rules, WAF bypass, and PHP-FPM/PSGI manifests are DB
   seed/export artifacts after DB bootstrap

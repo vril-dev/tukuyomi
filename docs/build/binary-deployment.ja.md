@@ -225,7 +225,7 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
 - 公開リリースバンドルには `conf/config.json` と、空 DB 向けランタイムシードである `seeds/conf/config-bundle.json` が同梱されます
 - `conf/proxy.json` やポリシー JSON など設定済みファイルが存在しない場合、`make db-import` は `seeds/conf/config-bundle.json` を読み込み、その後ビルトインの互換デフォルトへフォールバックします
 - 既定のベース WAF ルールシードは、`make crs-install` が `seeds/waf/rules/tukuyomi.conf` から一時ステージングして DB へインポートします
-- CRS ファイルは DB `waf_rule_assets` 向けの一時インポート素材であり、`make crs-install` が既定のバージョンの CRS をダウンロードし、`data/tmp` にステージングします。別のバージョンを使う場合は [OWASP CRS の更新](#owasp-crs-の更新) を参照してください
+- CRS ファイルは DB `waf_rule_assets` 向けの一時インポート素材であり、`make crs-install` が既定のバージョンの CRS をダウンロードして `data/tmp` にステージングし、インポート後に削除します。別のバージョンを使う場合は [OWASP CRS の更新](#owasp-crs-の更新) を参照してください
 - config bundle 内の sites、scheduled tasks、upstream runtime、policy、cache rules、WAF bypass、PHP-FPM/PSGI マニフェストは、DB ブートストラップ後は DB のシード／エクスポート用アーティファクトです
 - 本番では `storage.db_driver`、`storage.db_path`、`storage.db_dsn` 用の `config.json` を、シークレットマネージャー／構成管理から生成・マウントしてください
 - 初回起動前に `make db-migrate`、`make crs-install` の順で WAF ルールアセットをインストール／インポートし、その後に残りのシード素材用として `make db-import` を実行します。`db-import` は WAF ルールアセットを再インポートしません

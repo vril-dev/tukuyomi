@@ -26,8 +26,9 @@ make crs-install
 
 `make crs-install` runs after `db-migrate`, downloads CRS (the default
 version), stages it with the base rule seed under `tmp/waf-rule-assets` in the
-workdir (`data` by default), and imports base WAF plus CRS `.conf` / `.data`
-assets into DB `waf_rule_assets`. `make crs-ensure` does the same. Every import replaces all WAF rule assets in
+workdir (`data` by default), imports base WAF plus CRS `.conf` / `.data`
+assets into DB `waf_rule_assets`, and then removes `tmp/waf-rule-assets`.
+`make crs-ensure` does the same. Every import replaces all WAF rule assets in
 the DB, including rules edited in the UI and bypass snippets; see
 [Updating the OWASP CRS](../build/binary-deployment.md#updating-the-owasp-crs)
 before importing into a DB that is already in use.

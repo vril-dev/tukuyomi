@@ -442,6 +442,9 @@ crs-install: db-migrate
 		config_file="$(ROOT_DIR)/$$config_file"; \
 	fi; \
 	stage_root="$$workdir/tmp/waf-rule-assets"; \
+	if [[ "$$stage_root" != /* ]]; then \
+		stage_root="$(ROOT_DIR)/$$stage_root"; \
+	fi; \
 	rm -rf "$$stage_root"; \
 	mkdir -p "$$stage_root"; \
 	trap 'rm -rf "$$stage_root"' EXIT; \
@@ -458,6 +461,9 @@ crs-ensure: db-migrate
 		config_file="$(ROOT_DIR)/$$config_file"; \
 	fi; \
 	stage_root="$$workdir/tmp/waf-rule-assets"; \
+	if [[ "$$stage_root" != /* ]]; then \
+		stage_root="$(ROOT_DIR)/$$stage_root"; \
+	fi; \
 	rm -rf "$$stage_root"; \
 	mkdir -p "$$stage_root"; \
 	trap 'rm -rf "$$stage_root"' EXIT; \

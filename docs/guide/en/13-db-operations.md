@@ -43,6 +43,7 @@ make crs-install
   by default).
 - **Imports the base WAF and CRS `.conf` / `.data` assets into DB
   `waf_rule_assets`**.
+- Removes `tmp/waf-rule-assets` after the import.
 
 `make crs-ensure` does the same. **Every import replaces all WAF rule
 assets in the DB**, including rules edited in the UI and bypass snippets;

@@ -368,8 +368,9 @@ sudo install -o root -g tukuyomi -m 640 /dev/null /opt/tukuyomi/conf/crs-disable
   `seeds/waf/rules/tukuyomi.conf` and imported to the DB by
   `make crs-install`.
 - CRS files are temporary import material for DB `waf_rule_assets`;
-  `make crs-install` downloads the default CRS version and stages it under
-  `data/tmp`. To use another version, see Chapter 13 §13.8.
+  `make crs-install` downloads the default CRS version, stages it under
+  `data/tmp`, and removes the staging directory after the import. To use
+  another version, see Chapter 13 §13.8.
 - `sites.json` / `scheduled-tasks.json` / `upstream-runtime.json`,
   policy JSON, cache-rules JSON, WAF bypass JSON, and PHP-FPM JSON
   manifests are all DB seed / export artifacts after the DB

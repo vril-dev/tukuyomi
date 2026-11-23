@@ -79,7 +79,7 @@ export PUID GUID CORAZA_PORT HOST_CORAZA_PORT WAF_LISTEN_PORT WAF_ADMIN_USERNAME
 	install deploy-render install-smoke deploy-render-smoke \
 	go-test go-fuzz-short go-build db-migrate db-import db-import-waf-rule-assets build \
 	release-linux-amd64 release-linux-arm64 release-linux-all release-assets release-artifacts \
-	guide-pdf guide-pdf-ja guide-pdf-en \
+	guide-pdf guide-pdf-ja guide-pdf-en guide-epub guide-epub-ja guide-epub-en \
 	ui-install ui-test ui-build ui-sync ui-build-sync center-ui-install center-ui-test center-ui-build center-ui-sync center-ui-build-sync \
 	fleet-preview-up fleet-preview-down gateway-preview-up gateway-preview-down gateway-preview-smoke center-preview-up center-preview-down \
 	php-fpm-build php-fpm-copy php-fpm-prune php-fpm-remove php-fpm-up php-fpm-down php-fpm-reload php-fpm-test php-fpm-smoke \
@@ -113,7 +113,8 @@ help:
 	@echo "  make release-linux-arm64        Build release tarball for linux/arm64 via docker buildx"
 	@echo "  make release-linux-all          Build linux/amd64 + linux/arm64 and combined checksums"
 	@echo "  make guide-pdf                  Build Japanese + English operator guide PDFs"
-	@echo "  make release-assets             Build release tarballs + operator guide PDFs"
+	@echo "  make guide-epub                 Build Japanese + English operator guide EPUBs"
+	@echo "  make release-assets             Build release tarballs + operator guide PDFs and EPUBs"
 	@echo ""
 	@echo "  make ui-install                 Install Gateway UI dependencies"
 	@echo "  make ui-test                    Run Gateway UI tests"
@@ -597,7 +598,16 @@ guide-pdf-ja:
 guide-pdf-en:
 	docs/guide/build-pdf.sh en
 
-release-assets release-artifacts: release-linux-all guide-pdf
+guide-epub:
+	docs/guide/build-epub.sh all
+
+guide-epub-ja:
+	docs/guide/build-epub.sh ja
+
+guide-epub-en:
+	docs/guide/build-epub.sh en
+
+release-assets release-artifacts: release-linux-all guide-pdf guide-epub
 	@echo "[release] assets ready in $(abspath $(RELEASE_DIR)) and docs/dist"
 
 ui-install:

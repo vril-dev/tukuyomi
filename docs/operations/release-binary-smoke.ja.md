@@ -61,7 +61,7 @@ GitHub Release tag に添付する成果物をまとめて用意する場合は�
 make release-assets
 ```
 
-Linux 向けリリース tarball と、`docs/dist/` 配下の運用ガイド PDF 2 ファイルを作成します。
+Linux 向けリリース tarball と、`docs/dist/` 配下の運用ガイドの PDF 2 ファイル・EPUB 2 ファイルを作成します。
 リリースディレクトリには、追跡用のバージョン付き tarball と、GitHub Release tag
 に添付しやすい `tukuyomi-linux-amd64.tar.gz` 形式のファイル名も出力されます。
 

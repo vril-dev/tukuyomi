@@ -60,9 +60,10 @@ To prepare the files commonly attached to a GitHub Release tag, run:
 make release-assets
 ```
 
-This builds the Linux release tarballs and both operator guide PDFs under
-`docs/dist/`. The release directory contains versioned tarballs for traceability
-and stable per-tag aliases such as `tukuyomi-linux-amd64.tar.gz`.
+This builds the Linux release tarballs and the English and Japanese operator
+guide PDFs and EPUBs under `docs/dist/`. The release directory contains
+versioned tarballs for traceability and stable per-tag aliases such as
+`tukuyomi-linux-amd64.tar.gz`.
 
 ## Multi-arch policy
 

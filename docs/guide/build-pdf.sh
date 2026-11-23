@@ -17,6 +17,9 @@ DIST="$DOCS_ROOT/dist"
 TMP_BASE="$DOCS_ROOT/.tmp/build-pdf"
 CSS="$SCRIPT_DIR/book.css"
 
+# shellcheck source=./lib/guide_book.sh
+source "$SCRIPT_DIR/lib/guide_book.sh"
+
 mkdir -p "$DIST" "$TMP_BASE"
 
 DOC_VERSION="${VERSION:-}"
@@ -24,31 +27,6 @@ if [[ -z "$DOC_VERSION" ]]; then
   DOC_VERSION="$("$REPO_ROOT/scripts/detect_version.sh")"
 fi
 TODAY="$(date +%Y-%m-%d)"
-
-CHAPTERS=(
-  "00-preface.md"
-  "01-introduction.md"
-  "02-quickstart.md"
-  "03-binary-deployment.md"
-  "04-container-deployment.md"
-  "05-routing-upstream-pool.md"
-  "06-upstream-http2.md"
-  "07-waf-tuning.md"
-  "08-fp-tuner-api.md"
-  "09-request-security-plugins.md"
-  "10-php-fpm-runtime-apps.md"
-  "11-psgi-runtime.md"
-  "12-scheduled-tasks.md"
-  "13-db-operations.md"
-  "14-listener-reuseport.md"
-  "15-http3-tls.md"
-  "16-iot-edge-enrollment.md"
-  "17-remote-ssh.md"
-  "18-benchmark-regression.md"
-  "19-static-fastpath.md"
-  "A-operator-reference.md"
-  "B-release-notes.md"
-)
 
 usage() {
   echo "usage: $0 all|ja|en" >&2
@@ -58,28 +36,16 @@ build_one() {
   local lang="$1"
   local book title subtitle cover_tagline meta_version out
 
-  case "$lang" in
-    ja)
-      book="$SCRIPT_DIR/ja"
-      title="tukuyomi 運用ガイド（日本語版）"
-      subtitle="Coraza + CRS WAF を中核とする application-edge control plane の導入と運用"
-      cover_tagline="運用ガイド ── 日本語版"
-      meta_version="${DOC_VERSION} ベース"
-      out="$DIST/tukuyomi-guide-ja.pdf"
-      ;;
-    en)
-      book="$SCRIPT_DIR/en"
-      title="tukuyomi Operation Guide (English Edition)"
-      subtitle="Deploying and operating an application-edge control plane built around Coraza + CRS WAF"
-      cover_tagline="Operation Guide ── English Edition"
-      meta_version="based on ${DOC_VERSION}"
-      out="$DIST/tukuyomi-guide-en.pdf"
-      ;;
-    *)
-      usage
-      exit 64
-      ;;
-  esac
+  if ! guide_book_load "$lang" "$DOC_VERSION"; then
+    usage
+    exit 64
+  fi
+  book="$GUIDE_BOOK_DIR"
+  title="$GUIDE_BOOK_TITLE"
+  subtitle="$GUIDE_BOOK_SUBTITLE"
+  cover_tagline="$GUIDE_BOOK_COVER_TAGLINE"
+  meta_version="$GUIDE_BOOK_META_VERSION"
+  out="$DIST/tukuyomi-guide-${lang}.pdf"
 
   local tmp="$TMP_BASE-$lang"
   rm -rf "$tmp"
@@ -87,7 +53,7 @@ build_one() {
 
   local files=()
   local chapter
-  for chapter in "${CHAPTERS[@]}"; do
+  for chapter in "${GUIDE_BOOK_CHAPTERS[@]}"; do
     local path="$book/$chapter"
     if [[ ! -f "$path" ]]; then
       echo "missing: $path" >&2
